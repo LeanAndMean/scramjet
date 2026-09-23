@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Model } from "../src/types.js";
 
 const initialExitCode = process.exitCode;
+const initialCandidatePath = process.env.SCRAMJET_MODEL_CANDIDATE;
 const { writeFileSync } = vi.hoisted(() => ({ writeFileSync: vi.fn() }));
 vi.mock("fs", async (importOriginal) => ({ ...(await importOriginal<typeof import("fs")>()), writeFileSync }));
 
@@ -130,6 +131,7 @@ async function generate(
 		failedCatalog?: string;
 		expectFailure?: boolean;
 		openRouterEndpoints?: unknown;
+		openRouterEndpointFor?: string;
 		openRouterEndpointError?: boolean;
 		vercelEndpoints?: unknown;
 		unsettledEndpoint?: string;
@@ -138,9 +140,13 @@ async function generate(
 		modelsDevChange?: (data: Record<string, any>) => void;
 		openRouterChange?: (data: any[]) => void;
 		vercelChange?: (data: any[]) => void;
+		candidatePath?: string;
+		expectedFetchCount?: number;
 	} = {},
 ) {
 	vi.resetModules();
+	if (options.candidatePath) process.env.SCRAMJET_MODEL_CANDIDATE = options.candidatePath;
+	else delete process.env.SCRAMJET_MODEL_CANDIDATE;
 	writeFileSync.mockClear();
 	const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 	vi.spyOn(console, "log").mockImplementation(() => {});
@@ -184,12 +190,18 @@ async function generate(
 			url === options.unsettledEndpointBody ? waitForAbort : async () => value;
 		if (url === options.failedCatalog) return { ok: false, status: 503 };
 		if (url.startsWith("https://openrouter.ai/api/v1/models/") && url.endsWith("/endpoints")) {
+			if (url.includes("/models/openrouter/") && url.endsWith("/endpoints")) {
+				return { ok: true, json: async () => ({ data: { endpoints: [] } }) };
+			}
 			return {
 				ok: !options.openRouterEndpointError,
 				status: options.openRouterEndpointError ? 503 : 200,
 				json: endpointJson({
 					data: {
-						endpoints: options.openRouterEndpoints ?? [
+						endpoints: (options.openRouterEndpoints &&
+						(!options.openRouterEndpointFor || url.includes(`/${options.openRouterEndpointFor}/endpoints`))
+							? options.openRouterEndpoints
+							: undefined) ?? [
 							{ context_length: 1500000, max_prompt_tokens: 1200000, supported_parameters: ["tools"] },
 							{ context_length: 1400000, max_prompt_tokens: null, supported_parameters: ["tools"] },
 						],
@@ -350,8 +362,12 @@ async function generate(
 	if (errors.mock.calls.length) throw errors.mock.calls.at(-1)?.[0];
 	expect(writeFileSync).toHaveBeenCalledTimes(1);
 	expect(errors).not.toHaveBeenCalled();
-	expect(fetch).toHaveBeenCalledTimes(7);
+	expect(fetch).toHaveBeenCalledTimes(options.expectedFetchCount ?? 7);
 	const output = writeFileSync.mock.calls[0][1] as string;
+	if (options.candidatePath) {
+		expect(writeFileSync.mock.calls[0][0]).toBe(options.candidatePath);
+		return JSON.parse(output);
+	}
 	const compiled = ts.transpileModule(output, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
 	const exports: { MODELS?: Record<string, Record<string, Model<any>>> } = {};
 	runInNewContext(compiled, { exports });
@@ -360,11 +376,234 @@ async function generate(
 
 afterEach(() => {
 	process.exitCode = initialExitCode;
+	if (initialCandidatePath === undefined) delete process.env.SCRAMJET_MODEL_CANDIDATE;
+	else process.env.SCRAMJET_MODEL_CANDIDATE = initialCandidatePath;
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
 
 describe("real generator context corrections", () => {
+	it("emits unresolved cache prices only in a separate review candidate", async () => {
+		const candidatePath = "/tmp/scramjet-569-candidate.json";
+		const candidate = (await generate(true, {
+			candidatePath,
+			modelsDevChange: (data) => {
+				delete data.google.models.example.cost.cache_write;
+			},
+			openRouterChange: (items) => {
+				delete items[1].pricing.input_cache_read;
+			},
+			vercelChange: (items) => {
+				delete items[0].pricing.input_cache_write;
+			},
+		}))!;
+		expect(candidate.models.google.example.cost.cacheWrite).toBeNull();
+		expect(candidate.models.openrouter["openai/gpt-5.4"].cost.cacheRead).toBeNull();
+		expect(candidate.models["vercel-ai-gateway"]["openai/gpt-5.4"].cost.cacheWrite).toBeNull();
+		expect(candidate.unresolvedCosts).toContainEqual({ provider: "google", id: "example", fields: ["cacheWrite"] });
+		expect(candidate.unresolvedCosts).toContainEqual({
+			provider: "openrouter",
+			id: "openai/gpt-5.4",
+			fields: ["cacheRead"],
+		});
+		expect(candidate.unresolvedCosts).toContainEqual({
+			provider: "vercel-ai-gateway",
+			id: "openai/gpt-5.4",
+			fields: ["cacheWrite"],
+		});
+		await generate(true, {
+			modelsDevChange: (data) => {
+				delete data.google.models.example.cost.cache_write;
+			},
+			expectFailure: true,
+			expectedError: "models.dev/google/example cache write",
+		});
+	});
+
+	it("records missing required source prices without asserting free rates in a review candidate", async () => {
+		const candidate = (await generate(true, {
+			candidatePath: "/tmp/scramjet-569-missing-input.json",
+			modelsDevChange: (data) => {
+				delete data.google.models.example.cost.input;
+			},
+			openRouterChange: (items) => {
+				delete items[1].pricing.completion;
+			},
+			vercelChange: (items) => {
+				delete items[0].pricing.input;
+			},
+		}))!;
+		expect(candidate.models.google.example.cost.input).toBeNull();
+		expect(candidate.models.openrouter["openai/gpt-5.4"].cost.output).toBeNull();
+		expect(candidate.models["vercel-ai-gateway"]["openai/gpt-5.4"].cost.input).toBeNull();
+		expect(candidate.unresolvedCosts).toContainEqual({ provider: "google", id: "example", fields: ["input"] });
+		await generate(true, {
+			modelsDevChange: (data) => {
+				delete data.google.models.example.cost.input;
+			},
+			expectFailure: true,
+			expectedError: "models.dev/google/example input",
+		});
+	});
+
+	it("rejects invalid explicit candidate pricing and endpoint failures without writing", async () => {
+		await generate(true, {
+			candidatePath: "/tmp/scramjet-569-candidate.json",
+			openRouterChange: (items) => {
+				items[1].pricing.input_cache_write = "garbage";
+			},
+			expectFailure: true,
+			expectedError: "openrouter/openai/gpt-5.4 cache write",
+		});
+		await generate(true, {
+			candidatePath: "/tmp/scramjet-569-candidate.json",
+			openRouterEndpointError: true,
+			expectFailure: true,
+		});
+		await generate(true, {
+			candidatePath: "/tmp/scramjet-569-candidate.json",
+			openRouterChange: (items) => items.push({ ...items[1] }),
+			expectFailure: true,
+		});
+	});
+
+	it("records unpriced dynamic routers with no endpoints without dropping other records", async () => {
+		const dynamic = {
+			id: "openrouter/auto",
+			name: "Auto Router",
+			context_length: 2000000,
+			pricing: { prompt: "-1", completion: "-1" },
+			supported_parameters: ["tools"],
+			top_provider: { max_completion_tokens: null },
+		};
+		const candidate = (await generate(true, {
+			candidatePath: "/tmp/scramjet-569-dynamic.json",
+			expectedFetchCount: 9,
+			openRouterChange: (items) =>
+				items.push(dynamic, {
+					...dynamic,
+					id: "openrouter/free",
+					name: "Free Models Router",
+					pricing: { prompt: "0", completion: "0" },
+				}),
+		}))!;
+		expect(candidate.models.openrouter["openrouter/auto"]).toBeUndefined();
+		expect(candidate.models.openrouter["openrouter/free"]).toBeUndefined();
+		expect(candidate.models.openrouter["openai/gpt-5.4"]).toBeDefined();
+		expect(candidate.unresolvedSources).toContainEqual({
+			source: "openrouter",
+			id: "openrouter/auto",
+			reason: "unpriced dynamic route without declared endpoints",
+		});
+		expect(candidate.unresolvedSources).toContainEqual({
+			source: "openrouter",
+			id: "openrouter/free",
+			reason: "dynamic route without declared output limit",
+		});
+		await generate(true, {
+			openRouterChange: (items) => items.push(dynamic),
+			expectFailure: true,
+		});
+	});
+
+	it("isolates a known zero-limit endpoint only in a review candidate", async () => {
+		const candidate = (await generate(true, {
+			candidatePath: "/tmp/scramjet-569-zero-limit.json",
+			expectedFetchCount: 8,
+			openRouterChange: (items) =>
+				items.push({
+					id: "qwen/qwen3-coder-30b-a3b-instruct",
+					context_length: 1500000,
+					pricing: { prompt: "0", completion: "0", input_cache_read: "0", input_cache_write: "0" },
+					supported_parameters: ["tools"],
+					top_provider: { max_completion_tokens: 4096 },
+				}),
+			openRouterEndpointFor: "qwen/qwen3-coder-30b-a3b-instruct",
+			openRouterEndpoints: [
+				{ context_length: 1500000, max_prompt_tokens: 1200000, supported_parameters: ["tools"] },
+				{
+					name: "Amazon Bedrock | qwen/qwen3-coder-30b-a3b-instruct",
+					context_length: 0,
+					max_completion_tokens: 0,
+					supported_parameters: ["tools"],
+				},
+			],
+		}))!;
+		expect(candidate.models.openrouter["qwen/qwen3-coder-30b-a3b-instruct"].contextWindow).toBe(1500000);
+		expect(candidate.unresolvedSources).toContainEqual({
+			source: "openrouter endpoint",
+			id: "qwen/qwen3-coder-30b-a3b-instruct/Amazon Bedrock | qwen/qwen3-coder-30b-a3b-instruct",
+			reason: "zero declared context and output limits",
+		});
+		const onlyBadEndpoint = (await generate(true, {
+			candidatePath: "/tmp/scramjet-569-only-bad-endpoint.json",
+			expectedFetchCount: 8,
+			openRouterChange: (items) =>
+				items.push({
+					id: "qwen/qwen3-coder-30b-a3b-instruct",
+					context_length: 1500000,
+					pricing: { prompt: "0", completion: "0", input_cache_read: "0", input_cache_write: "0" },
+					supported_parameters: ["tools"],
+					top_provider: { max_completion_tokens: 4096 },
+				}),
+			openRouterEndpointFor: "qwen/qwen3-coder-30b-a3b-instruct",
+			openRouterEndpoints: [
+				{
+					name: "Amazon Bedrock | qwen/qwen3-coder-30b-a3b-instruct",
+					context_length: 0,
+					max_completion_tokens: 0,
+					supported_parameters: ["tools"],
+				},
+			],
+		}))!;
+		expect(onlyBadEndpoint.models.openrouter["qwen/qwen3-coder-30b-a3b-instruct"]).toBeUndefined();
+		expect(onlyBadEndpoint.unresolvedSources).toContainEqual({
+			source: "openrouter",
+			id: "qwen/qwen3-coder-30b-a3b-instruct",
+			reason: "no valid declared endpoints",
+		});
+		await generate(true, {
+			openRouterEndpoints: [
+				{
+					name: "Amazon Bedrock | qwen/qwen3-coder-30b-a3b-instruct",
+					context_length: 0,
+					max_completion_tokens: 0,
+					supported_parameters: ["tools"],
+				},
+			],
+			expectFailure: true,
+		});
+	});
+
+	it("separates Vercel non-text records from language records with missing tags", async () => {
+		const candidate = (await generate(true, {
+			candidatePath: "/tmp/scramjet-569-vercel-tags.json",
+			vercelChange: (items) => {
+				items.push({ id: "example/embed", type: "embedding", pricing: { input: "1" } });
+				items.push({ id: "example/language", type: "language", pricing: { input: "1" } });
+			},
+		}))!;
+		expect(candidate.models["vercel-ai-gateway"]["example/embed"]).toBeUndefined();
+		expect(candidate.models["vercel-ai-gateway"]["example/language"]).toBeUndefined();
+		expect(candidate.unresolvedSources).toContainEqual({
+			source: "vercel-ai-gateway",
+			id: "example/language",
+			reason: "language model without capability tags",
+		});
+		await generate(true, {
+			vercelChange: (items) => items.push({ id: "example/language", type: "language" }),
+			expectFailure: true,
+		});
+	});
+
+	it("rejects candidate output directed at the canonical snapshot", async () => {
+		await generate(true, {
+			candidatePath: new URL("../src/models.generated.ts", import.meta.url).pathname,
+			expectFailure: true,
+			expectedError: "Candidate output must be an absolute path outside the canonical catalog",
+		});
+	});
+
 	it("rejects loss of required models.dev sections and malformed optional sections", async () => {
 		await generate(true, {
 			modelsDevChange: (data) => {
@@ -502,6 +741,31 @@ describe("real generator context corrections", () => {
 			expectedError: "groq/example",
 		});
 	});
+	it("does not offer a Realtime-only OpenAI model through Responses", async () => {
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				data.openai.models["gpt-realtime-2.1"] = feedModel("gpt-realtime-2.1", 128000);
+			},
+		}))!;
+		expect(models.openai["gpt-realtime-2.1"]).toBeUndefined();
+	});
+
+	it("preserves provider-documented OpenCode Go Qwen 3.7 Messages routing", async () => {
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				for (const id of ["qwen3.7-plus", "qwen3.7-max"]) {
+					data["opencode-go"].models[id] = feedModel(id, 1000000, { provider: undefined });
+				}
+			},
+		}))!["opencode-go"];
+		for (const id of ["qwen3.7-plus", "qwen3.7-max"]) {
+			expect(models[id]).toMatchObject({
+				api: "anthropic-messages",
+				baseUrl: "https://opencode.ai/zen/go",
+			});
+		}
+	});
+
 	it("emits exact verified GitHub Copilot additions", async () => {
 		const models = (await generate(true))!["github-copilot"];
 		for (const [id, expected] of Object.entries(copilotAdditions)) {

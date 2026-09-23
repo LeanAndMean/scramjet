@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
 import { writeFileSync } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, isAbsolute, resolve } from "path";
 import { fileURLToPath } from "url";
 import { validateModelRequestLimits } from "../src/models.js";
 import {
@@ -26,6 +26,8 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const packageRoot = join(__dirname, "..");
+const candidatePath = process.env.SCRAMJET_MODEL_CANDIDATE;
+const unresolvedSources: { source: string; id: string; reason: string }[] = [];
 
 interface ModelsDevModel {
 	id: string;
@@ -53,6 +55,7 @@ interface ModelsDevModel {
 interface AiGatewayModel {
 	id: string;
 	name?: string;
+	type?: string;
 	max_tokens?: number;
 	tags?: string[];
 	pricing?: {
@@ -420,18 +423,28 @@ function getBedrockBaseUrl(modelId: string): string {
 
 // SCRAMJET-DIVERGENCE: Preserve endpoint feasibility without copying routing identities or live availability.
 function endpointRequestLimits(endpoints: any[], provider: string, id: string): NonNullable<Model<any>["requestLimits"]> {
-	const requestLimits = endpoints.map((endpoint) => {
+	const requestLimits = endpoints.flatMap((endpoint) => {
+		if (candidatePath && provider === "openrouter" && id === "qwen/qwen3-coder-30b-a3b-instruct" &&
+			endpoint?.name === "Amazon Bedrock | qwen/qwen3-coder-30b-a3b-instruct" &&
+			endpoint.context_length === 0 && endpoint.max_completion_tokens === 0) {
+			unresolvedSources.push({
+				source: "openrouter endpoint",
+				id: `${id}/${endpoint.name}`,
+				reason: "zero declared context and output limits",
+			});
+			return [];
+		}
 		if (!endpoint || (!Array.isArray(endpoint.supported_parameters) && !Array.isArray(endpoint.tags)) ||
 			[endpoint.supported_parameters, endpoint.tags].some((values) => values !== undefined &&
 				(!Array.isArray(values) || values.some((value) => typeof value !== "string")))) {
 			throw new Error(`${provider}/${id}: invalid endpoint capability declarations`);
 		}
-		return {
+		return [{
 			maxTotalTokens: endpoint.context_length,
 			...(endpoint.max_prompt_tokens != null ? { maxInputTokens: endpoint.max_prompt_tokens } : {}),
 			...(endpoint.max_completion_tokens != null ? { maxOutputTokens: endpoint.max_completion_tokens } : {}),
 			supportsTools: endpoint.supported_parameters?.includes("tools") || endpoint.tags?.includes("tool-use") || false,
-		};
+		}];
 	});
 	if (requestLimits.length) validateModelRequestLimits({ provider, id, requestLimits });
 	return requestLimits;
@@ -455,11 +468,22 @@ async function withModelAcquisitionTimeout<T>(
 }
 
 function price(value: unknown, label: string): number {
+	if (candidatePath && value === undefined) return Number.NaN;
 	if ((typeof value !== "string" && typeof value !== "number") || (typeof value === "string" && value.trim() === "") ||
 		!Number.isFinite(Number(value)) || Number(value) < 0) {
 		throw new Error(`${label}: missing or invalid price`);
 	}
 	return Number(value);
+}
+
+function modelsDevCost(cost?: ModelsDevModel["cost"]): Model<any>["cost"] {
+	const unknown = candidatePath ? Number.NaN : 0;
+	return {
+		input: cost?.input ?? unknown,
+		output: cost?.output ?? unknown,
+		cacheRead: cost?.cache_read ?? unknown,
+		cacheWrite: cost?.cache_write ?? unknown,
+	};
 }
 
 async function fetchOpenRouterModels(): Promise<Model<any>[]> {
@@ -498,7 +522,24 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 			if (!Array.isArray(endpointData.data?.endpoints)) {
 				throw new Error(`Invalid OpenRouter endpoint catalog for ${model.id}`);
 			}
+			if (candidatePath && model.id.startsWith("openrouter/") && endpointData.data.endpoints.length === 0 &&
+				model.top_provider?.max_completion_tokens == null &&
+				(model.pricing?.prompt === "-1" || model.pricing?.prompt === "0") &&
+				model.pricing?.completion === model.pricing.prompt) {
+				unresolvedSources.push({
+					source: "openrouter",
+					id: model.id,
+					reason: model.pricing.prompt === "-1"
+						? "unpriced dynamic route without declared endpoints"
+						: "dynamic route without declared output limit",
+				});
+				continue;
+			}
 			const requestLimits = endpointRequestLimits(endpointData.data.endpoints, "openrouter", model.id);
+			if (candidatePath && requestLimits.length === 0) {
+				unresolvedSources.push({ source: "openrouter", id: model.id, reason: "no valid declared endpoints" });
+				continue;
+			}
 			const endpointContext = Math.max(...requestLimits.map((endpoint) => endpoint.maxTotalTokens));
 			const endpointInput = Math.max(...requestLimits.map((endpoint) =>
 				Math.min(endpoint.maxTotalTokens, endpoint.maxInputTokens ?? endpoint.maxTotalTokens),
@@ -567,6 +608,13 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 
 		const items = data.data as AiGatewayModel[];
 		for (const model of items) {
+			if (candidatePath && model && model.tags === undefined && typeof model.id === "string" && model.id) {
+				if (["embedding", "video", "speech", "reranking", "transcription", "realtime", "evaluation", "image"].includes(model.type ?? "")) continue;
+				if (model.type === "language") {
+					unresolvedSources.push({ source: "vercel-ai-gateway", id: model.id, reason: "language model without capability tags" });
+					continue;
+				}
+			}
 			if (!model || !Array.isArray(model.tags) || model.tags.some((tag) => typeof tag !== "string")) {
 				throw new Error(`vercel-ai-gateway/${model?.id ?? "unknown"}: invalid tags`);
 			}
@@ -655,6 +703,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 				if (!model || typeof model !== "object") throw new Error(`models.dev/${key}/${id}: invalid model`);
 				const m = model as ModelsDevModel;
 				if (m.tool_call !== true ||
+					(key === "openai" && id === "gpt-realtime-2.1") ||
 					(["github-copilot", "opencode", "opencode-go", "together", "togetherai", "together-ai"].includes(key) &&
 						(m as ModelsDevModel & { status?: string }).status === "deprecated") ||
 					(key === "amazon-bedrock" && (id.startsWith("ai21.jamba") || id.startsWith("mistral.mistral-7b-instruct-v0"))) ||
@@ -700,12 +749,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: getBedrockBaseUrl(id),
 					reasoning: m.reasoning === true,
 					input: (m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"]) as ("text" | "image")[],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -726,12 +770,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.anthropic.com",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -752,12 +791,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -768,7 +802,8 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		if (data.openai?.models) {
 			for (const [modelId, model] of Object.entries(data.openai.models)) {
 				const m = model as ModelsDevModel;
-				if (m.tool_call !== true) continue;
+				// SCRAMJET-DIVERGENCE: OpenAI lists this model on Realtime, not the Responses API.
+				if (m.tool_call !== true || modelId === "gpt-realtime-2.1") continue;
 
 				models.push({
 					id: modelId,
@@ -778,12 +813,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.openai.com/v1",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -804,12 +834,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.groq.com/openai/v1",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -830,12 +855,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.cerebras.ai/v1",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -856,12 +876,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: CLOUDFLARE_WORKERS_AI_BASE_URL,
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 					compat: { sendSessionAffinityHeaders: true },
@@ -911,12 +926,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl,
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 					...(compat ? { compat } : {}),
@@ -938,12 +948,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.x.ai/v1",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -965,12 +970,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.z.ai/api/coding/paas/v4",
 					reasoning: m.reasoning === true,
 					input: supportsImage ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					compat: {
 						supportsDeveloperRole: false,
 						thinkingFormat: "zai",
@@ -996,12 +996,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.mistral.ai",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -1022,12 +1017,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://router.huggingface.co/v1",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					compat: {
 						supportsDeveloperRole: false,
 					},
@@ -1052,12 +1042,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.fireworks.ai/inference",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 					// Fireworks prompt caching uses automatic prefix matching + session affinity.
@@ -1093,12 +1078,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					reasoning,
 					...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					compat: getTogetherCompat(modelId, reasoning),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
@@ -1150,6 +1130,13 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl = `${variant.basePath}/v1`;
 				}
 
+				// SCRAMJET-DIVERGENCE: Go Qwen 3.7 uses Messages even when models.dev omits provider.npm.
+				if (variant.provider === "opencode-go" && ["qwen3.7-plus", "qwen3.7-max"].includes(modelId)) {
+					api = "anthropic-messages";
+					baseUrl = variant.basePath;
+					compat = undefined;
+				}
+
 				// Fix known mismatches between models.dev npm data and actual
 				// OpenCode Go endpoint behaviour. models.dev reports these models
 				// as @ai-sdk/anthropic, but the OpenCode Go endpoints either don't
@@ -1178,12 +1165,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl,
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					...(compat ? { compat } : {}),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
@@ -1224,12 +1206,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.individual.githubcopilot.com",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 8192,
 					headers: { ...COPILOT_STATIC_HEADERS },
@@ -1269,12 +1246,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						baseUrl,
 						reasoning: m.reasoning === true,
 						input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-						cost: {
-							input: m.cost?.input || 0,
-							output: m.cost?.output || 0,
-							cacheRead: m.cost?.cache_read || 0,
-							cacheWrite: m.cost?.cache_write || 0,
-						},
+						cost: modelsDevCost(m.cost),
 						contextWindow: m.limit?.context ?? Number.NaN,
 						maxTokens: m.limit?.output || 4096,
 					});
@@ -1309,12 +1281,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					headers: { ...KIMI_STATIC_HEADERS },
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -1349,12 +1316,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl,
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: modelsDevCost(m.cost),
 					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 					compat: moonshotCompat,
@@ -1387,12 +1349,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						baseUrl,
 						reasoning: m.reasoning === true,
 						input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-						cost: {
-							input: m.cost?.input || 0,
-							output: m.cost?.output || 0,
-							cacheRead: m.cost?.cache_read || 0,
-							cacheWrite: m.cost?.cache_write || 0,
-						},
+						cost: modelsDevCost(m.cost),
 						contextWindow: m.limit?.context ?? Number.NaN,
 						maxTokens: m.limit?.output || 4096,
 					});
@@ -1408,6 +1365,9 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 }
 
 async function generateModels() {
+	if (candidatePath && (!isAbsolute(candidatePath) || resolve(candidatePath) === join(packageRoot, "src/models.generated.ts"))) {
+		throw new Error("Candidate output must be an absolute path outside the canonical catalog");
+	}
 	// Fetch models from both sources
 	// models.dev: Anthropic, Google, OpenAI, Groq, Cerebras
 	// OpenRouter: xAI and other providers (excluding Anthropic, Google, OpenAI)
@@ -2457,13 +2417,32 @@ async function generateModels() {
 			!Number.isFinite(model.maxTokens) || model.maxTokens <= 0 ||
 			(model.maxInputTokens !== undefined && (!Number.isFinite(model.maxInputTokens) || model.maxInputTokens <= 0)) ||
 			!model.cost || [model.cost.input, model.cost.output, model.cost.cacheRead, model.cost.cacheWrite]
-				.some((value) => !Number.isFinite(value) || value < 0)) {
+				.some((value) => (!Number.isFinite(value) || value < 0) &&
+					!(candidatePath && Number.isNaN(value)))) {
 			throw new Error(`${label}: invalid normalized model limits, identity or cost`);
 		}
 		validateModelRequestLimits(model);
 		providers[model.provider] ??= Object.create(null);
 		if (Object.hasOwn(providers[model.provider], model.id)) throw new Error(`Duplicate ${label}`);
 		providers[model.provider][model.id] = model;
+	}
+
+	// SCRAMJET-DIVERGENCE: Keep unresolved live-feed metadata in review output, never in the runtime catalog.
+	if (candidatePath) {
+		const unresolvedCosts = Object.entries(providers).flatMap(([provider, models]) =>
+			Object.entries(models).flatMap(([id, model]) => {
+				const fields = (["input", "output", "cacheRead", "cacheWrite"] as const).filter((field) =>
+					Number.isNaN(model.cost[field]));
+				return fields.length ? [{ provider, id, fields }] : [];
+			}),
+		);
+		const models = Object.fromEntries(Object.keys(providers).sort().map((provider) => [
+			provider,
+			Object.fromEntries(Object.keys(providers[provider]).sort().map((id) => [id, providers[provider][id]])),
+		]));
+		writeFileSync(candidatePath, JSON.stringify({ models, unresolvedCosts, unresolvedSources }, null, 2) + "\n", { flag: "wx" });
+		console.log(`Generated review candidate at ${candidatePath} (${unresolvedCosts.length} unresolved cost records)`);
+		return;
 	}
 
 	// Generate TypeScript file

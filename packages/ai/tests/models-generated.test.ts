@@ -8,9 +8,59 @@ describe("generated catalog invariants", () => {
 			for (const model of getModels(provider)) {
 				expect(Number.isFinite(model.contextWindow), `${provider}/${model.id}`).toBe(true);
 				expect(model.contextWindow).toBeGreaterThan(0);
+				expect(Number.isFinite(model.maxTokens) && model.maxTokens > 0, `${provider}/${model.id} output`).toBe(
+					true,
+				);
+				for (const value of Object.values(model.cost)) {
+					expect(Number.isFinite(value), `${provider}/${model.id} price`).toBe(true);
+					if (provider !== "openrouter" || model.id !== "openrouter/auto") {
+						expect(value, `${provider}/${model.id} price`).toBeGreaterThanOrEqual(0);
+					}
+				}
 				expect(model).not.toHaveProperty("contextWindowBudget");
 			}
 		}
+	});
+});
+
+describe("generated catalog - reviewed provider additions and retentions", () => {
+	it.each([
+		["anthropic", "claude-fable-5-1", "anthropic-messages", 1000000, 128000],
+		["anthropic", "claude-opus-5", "anthropic-messages", 1000000, 128000],
+		["anthropic", "claude-opus-5-5", "anthropic-messages", 1000000, 128000],
+		["openai", "gpt-6-sol", "openai-responses", 1050000, 128000],
+		["openai", "gpt-6-luna", "openai-responses", 1050000, 128000],
+	] as const)("includes current %s/%s on its direct route", (provider, id, api, contextWindow, maxTokens) => {
+		expect(getModel(provider, id)).toMatchObject({ api, contextWindow, maxTokens });
+	});
+
+	it("retains Kimi and dynamic OpenRouter routes despite incomplete source sections", () => {
+		for (const id of ["k2p7", "kimi-for-coding", "kimi-k2-thinking"]) {
+			expect(getModel("kimi-coding", id)).toBeDefined();
+		}
+		for (const id of ["openrouter/auto", "openrouter/free"]) {
+			expect(getModel("openrouter", id)).toBeDefined();
+		}
+	});
+
+	it("excludes proposals with unsupported API routing or no same-route price estimate", () => {
+		expect(getModels("openai").find((model) => model.id === "gpt-realtime-2.1")).toBeUndefined();
+		expect(getModels("opencode").find((model) => model.id === "grok-4.7")).toBeUndefined();
+		expect(getModels("fireworks").find((model) => model.id === "accounts/fireworks/models/kimi-k3")).toBeUndefined();
+	});
+});
+
+describe("generated catalog - OpenCode Zen routing", () => {
+	it.each([
+		["grok-4.5", { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 }],
+		["grok-build-0.1", { input: 1, output: 2, cacheRead: 0.2, cacheWrite: 0 }],
+	] as const)("routes %s through Responses with the reviewed scalar estimate", (id, cost) => {
+		expect(getModel("opencode", id)).toMatchObject({
+			api: "openai-responses",
+			baseUrl: "https://opencode.ai/zen/v1",
+			cost,
+		});
+		expect(getModel("xai", id).api).toBe("openai-completions");
 	});
 });
 
@@ -39,7 +89,7 @@ describe("generated catalog - approved context corrections", () => {
 		["openrouter", "google/gemini-3.1-pro-preview-customtools", 1048576],
 		["openrouter", "kwaipilot/kat-coder-pro-v2", 262144],
 		["openrouter", "meta-llama/llama-4-scout", 1310720],
-		["openrouter", "mistralai/mistral-small-3.2-24b-instruct", 131072],
+		["openrouter", "mistralai/mistral-small-3.2-24b-instruct", 256000],
 		["openrouter", "mistralai/voxtral-small-24b-2507", 32768],
 		["openrouter", "nvidia/nemotron-3-super-120b-a12b", 262144],
 		["openrouter", "nvidia/nemotron-3-super-120b-a12b:free", 262144],
@@ -81,7 +131,7 @@ describe("generated catalog - approved context corrections", () => {
 		["vercel-ai-gateway", "google/gemma-4-26b-a4b-it", 1048576],
 		["vercel-ai-gateway", "google/gemma-4-31b-it", 1048576],
 		["vercel-ai-gateway", "meta/llama-3.1-70b", 131072],
-		["vercel-ai-gateway", "meta/llama-3.1-8b", 131072],
+		["vercel-ai-gateway", "meta/llama-3.1-8b", 128000],
 		["vercel-ai-gateway", "meta/llama-4-maverick", 131072],
 		["vercel-ai-gateway", "meta/llama-4-scout", 131072],
 		["vercel-ai-gateway", "minimax/minimax-m2.5", 1000000],
@@ -143,8 +193,15 @@ describe("generated catalog - Azure independent input limits", () => {
 		expect(model.maxInputTokens).toBe(maxInputTokens);
 		expect(model.maxTokens).toBe(128000);
 		expect(model.contextWindow).toBe(maxInputTokens === 922000 ? 1050000 : 400000);
-		expect(getModels("openai").find((model) => model.id === id)).not.toHaveProperty("maxInputTokens");
+		expect(getModels("openai").find((model) => model.id === id)?.maxInputTokens).toBeUndefined();
 	});
+	it.each(["gpt-5-codex", "gpt-5.1-codex-mini", "gpt-5.2-codex"])(
+		"does not transfer direct API retirement to Azure %s",
+		(id) => {
+			expect(getModel("azure-openai-responses", id)).toBeDefined();
+			expect(getModels("openai").find((model) => model.id === id)).toBeUndefined();
+		},
+	);
 	it("preserves the GPT-5.5 Responses combined constraint", () => {
 		expect(getModel("azure-openai-responses", "gpt-5.5").requestLimits).toEqual([
 			{ maxTotalTokens: 922000, maxInputTokens: 922000, maxOutputTokens: 128000, supportsTools: true },
@@ -181,7 +238,7 @@ describe("generated catalog - joint endpoint constraints", () => {
 		expect(getModel("openrouter", "qwen/qwen3-14b")).toMatchObject({
 			contextWindow: 131072,
 			maxInputTokens: 98304,
-			maxTokens: 40960,
+			maxTokens: 16384,
 			requestLimits: [
 				{ maxTotalTokens: 40960, maxOutputTokens: 36864, supportsTools: false },
 				{ maxTotalTokens: 40960, maxOutputTokens: 16384, supportsTools: true },
@@ -535,11 +592,11 @@ describe("generated catalog - GPT-5.6 Sol (openai)", () => {
 		expect(model.provider).toBe("openai");
 	});
 
-	it("has correct pricing with non-zero cacheWrite", () => {
-		expect(model.cost.input).toBe(5);
-		expect(model.cost.output).toBe(30);
-		expect(model.cost.cacheRead).toBe(0.5);
-		expect(model.cost.cacheWrite).toBe(6.25);
+	it("has current scalar base-tier pricing with non-zero cacheWrite", () => {
+		expect(model.cost.input).toBe(4);
+		expect(model.cost.output).toBe(20);
+		expect(model.cost.cacheRead).toBe(0.4);
+		expect(model.cost.cacheWrite).toBe(5);
 	});
 
 	it("has documented context and output limits", () => {
@@ -572,11 +629,11 @@ describe("generated catalog - GPT-5.6 Terra (openai)", () => {
 		expect(model.api).toBe("openai-responses");
 	});
 
-	it("has correct pricing", () => {
-		expect(model.cost.input).toBe(2.5);
-		expect(model.cost.output).toBe(15);
-		expect(model.cost.cacheRead).toBe(0.25);
-		expect(model.cost.cacheWrite).toBe(3.125);
+	it("has current scalar base-tier pricing", () => {
+		expect(model.cost.input).toBe(2);
+		expect(model.cost.output).toBe(12);
+		expect(model.cost.cacheRead).toBe(0.2);
+		expect(model.cost.cacheWrite).toBe(2.5);
 	});
 
 	it("has documented context and output limits", () => {
@@ -605,11 +662,11 @@ describe("generated catalog - GPT-5.6 Luna (openai)", () => {
 		expect(model.api).toBe("openai-responses");
 	});
 
-	it("has correct pricing", () => {
-		expect(model.cost.input).toBe(1);
-		expect(model.cost.output).toBe(6);
-		expect(model.cost.cacheRead).toBe(0.1);
-		expect(model.cost.cacheWrite).toBe(1.25);
+	it("has current scalar base-tier pricing", () => {
+		expect(model.cost.input).toBe(0.2);
+		expect(model.cost.output).toBe(1.2);
+		expect(model.cost.cacheRead).toBe(0.02);
+		expect(model.cost.cacheWrite).toBe(0.25);
 	});
 
 	it("has documented context and output limits", () => {
