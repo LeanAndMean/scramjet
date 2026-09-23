@@ -130,6 +130,7 @@ function mapAnchor(anchor: Anchor, old: RenderedBlock, next: RenderedBlock): Anc
 			oldTokens.map((token) => token.text),
 			newTokens.map((token) => token.text),
 			index,
+			64,
 		);
 		if (mapped && (mapped.exact || !rows)) {
 			const token = newTokens[mapped.position];

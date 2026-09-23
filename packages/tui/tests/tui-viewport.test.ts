@@ -373,6 +373,64 @@ describe("viewport interactions", () => {
 });
 
 describe("retained viewport", () => {
+	it("repaints every row after a rejected viewport flush before certifying a retry", async () => {
+		const rows = new Rows(["before", "stable"]);
+		const { tui, terminal, frame, text } = await setup([{ component: rows }]);
+		const log = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		try {
+			const dropped = vi.spyOn(terminal, "write").mockImplementation(() => {});
+			const rejected = vi.spyOn(terminal, "flush").mockRejectedValueOnce(new Error("lost frame"));
+			rows.lines = ["after", "stable"];
+			await expect(frame()).rejects.toThrow("lost frame");
+			await vi.waitFor(() => expect(log).toHaveBeenCalled());
+			expect(tui.isViewportFrameFlushed()).toBe(false);
+			dropped.mockRestore();
+			rejected.mockRestore();
+			const mark = terminal.markWrites();
+			await frame();
+			const output = terminal.writesSince(mark);
+			expect(output).toContain("\x1b[1;1H\x1b[2Kafter");
+			expect(output).toContain("\x1b[2;1H\x1b[2Kstable");
+			expect(text()[0]).toBe("after");
+			expect(tui.isViewportFrameFlushed()).toBe(true);
+		} finally {
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("fails closed when an older flush rejects after a newer flush", async () => {
+		const rows = new Rows(["before"]);
+		const { tui, terminal, frame, text } = await setup([{ component: rows }]);
+		let rejectOld!: (error: Error) => void;
+		const log = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		try {
+			const flush = terminal.flush.bind(terminal);
+			vi.spyOn(terminal, "flush")
+				.mockImplementationOnce(
+					() =>
+						new Promise<void>((_resolve, reject) => {
+							rejectOld = reject;
+						}),
+				)
+				.mockImplementation(() => flush());
+			vi.spyOn(terminal, "write").mockImplementationOnce(() => {});
+			rows.lines = ["after"];
+			const first = frame().catch((error: Error) => error);
+			await frame();
+			expect(tui.isViewportFrameFlushed()).toBe(true);
+			rejectOld(new Error("old frame lost"));
+			expect(await first).toEqual(new Error("old frame lost"));
+			await vi.waitFor(() => expect(log).toHaveBeenCalled());
+			expect(tui.isViewportFrameFlushed()).toBe(false);
+			const mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).toContain("\x1b[1;1H\x1b[2Kafter");
+			expect(text()[0]).toBe("after");
+		} finally {
+			vi.restoreAllMocks();
+		}
+	});
+
 	it("bounds raw-row search on a large padding-only resize without losing the content anchor", () => {
 		const text = new Text(Array.from({ length: 6000 }, (_, i) => `numbered line ${i}`).join("\n"), 0, 0);
 		const viewport = new RetainedViewport({ getBlocks: () => [{ component: text, finalized: true }] });
@@ -383,8 +441,35 @@ describe("retained viewport", () => {
 			const rows = viewport.update(79, 24);
 			expect(search.mock.calls[0][2]).toEqual({ maxEditLength: 64 });
 			expect(search.mock.results[0].value).toBeUndefined();
+			expect(search.mock.calls[1][2]).toEqual({ maxEditLength: 64 });
 			expect(viewport.state.offset).toBe(3000);
 			expect(rows[viewport.state.offset]).toBe("numbered line 3000".padEnd(79));
+		} finally {
+			search.mockRestore();
+		}
+	});
+
+	it("bounds changed-token correspondence while preserving a detached anchor", () => {
+		const rows = new Rows(Array.from({ length: 250 }, (_, i) => `old-${i}-${"a".repeat(70)}`));
+		const viewport = new RetainedViewport({ getBlocks: () => [{ component: rows }] });
+		viewport.update(80, 12);
+		viewport.scrollTo(120);
+		const search = vi.spyOn(diff, "diffArrays");
+		try {
+			rows.lines = Array.from({ length: 250 }, (_, i) => `new-${i}-${"b".repeat(70)}`);
+			const next = viewport.update(80, 12);
+			expect(search.mock.calls.every((call) => call[2]?.maxEditLength === 64)).toBe(true);
+			expect(viewport.state.offset).toBe(120);
+			expect(next[viewport.state.offset]).toContain("new-120-");
+			const short = new Rows(Array.from({ length: 40 }, (_, i) => `first-${i}-${"a".repeat(60)}`));
+			const smaller = new RetainedViewport({ getBlocks: () => [{ component: short }] });
+			smaller.update(80, 8);
+			smaller.scrollTo(20);
+			search.mockClear();
+			short.lines = Array.from({ length: 40 }, (_, i) => `second-${i}-${"b".repeat(60)}`);
+			smaller.update(80, 8);
+			expect(search.mock.calls).toHaveLength(2);
+			expect(search.mock.calls.every((call) => call[2]?.maxEditLength === 64)).toBe(true);
 		} finally {
 			search.mockRestore();
 		}

@@ -265,9 +265,15 @@ class SettingsSearchReadinessTests(unittest.TestCase):
         function = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "open_settings")
         ready = {"painted": ["> dock", "→ Dock input area false"], "frameFlushed": True}
         observations = []
+        waits = 0
         def wait_for(predicate):
-            if len(observations) == 0:
-                current.update(painted=["→ Auto-compact true"], frameFlushed=True)
+            nonlocal waits
+            waits += 1
+            if waits == 1:
+                current.update(editorActive=True, painted=[], frameFlushed=True)
+                return predicate()
+            if not observations:
+                current.update(painted=["→ Auto-compact true"], editorActive=False)
                 observations.append(predicate())
             else:
                 for frame in (
@@ -285,6 +291,30 @@ class SettingsSearchReadinessTests(unittest.TestCase):
         context["open_settings"]("dock")
         self.assertEqual(observations, [True, False, False, True])
         context["key"].assert_called_once_with("enter")
+
+
+class SettingsCloseReadinessTests(unittest.TestCase):
+    def test_waits_for_selector_to_disappear_after_escape(self):
+        function = next(node for node in interaction_source().body
+                        if isinstance(node, ast.FunctionDef) and node.name == "close_settings")
+        frames = [
+            {"editorActive": True, "frameFlushed": True, "painted": ["> dock", "Type to search · Esc to cancel"]},
+            {"editorActive": True, "frameFlushed": False, "painted": ["editor"]},
+            {"editorActive": True, "frameFlushed": True, "painted": ["editor"]},
+        ]
+        observations = []
+        def wait_for(predicate):
+            for frame in frames:
+                current.update(frame)
+                observations.append(predicate())
+            return observations[-1]
+        current = {}
+        press = Mock()
+        context = {"key": press, "state": lambda: current, "wait_for": wait_for}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "terminal-probe.py", "exec"), context)
+        context["close_settings"]()
+        self.assertEqual(observations, [False, False, True])
+        press.assert_called_once_with("escape")
 
 
 class InteractionCleanupTests(unittest.TestCase):

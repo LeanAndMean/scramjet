@@ -234,6 +234,9 @@ def fixture_command(action):
 
 def open_settings(query):
     fixture_command("editor")
+    if not wait_for(lambda: state().get("editorActive") is True and not any(
+            "Type to search" in row for row in state().get("painted", []))):
+        raise RuntimeError("Editor was not ready before opening settings")
     type_text("/settings")
     key("enter")
     if not wait_for(lambda: any("Auto-compact" in row for row in state().get("painted", []))):
@@ -248,7 +251,8 @@ def open_settings(query):
 
 def close_settings():
     key("escape")
-    if not wait_for(lambda: state().get("editorActive") is True and state().get("frameFlushed") is True):
+    if not wait_for(lambda: state().get("editorActive") is True and state().get("frameFlushed") is True
+                    and not any("Type to search" in row for row in state().get("painted", []))):
         raise RuntimeError("Settings selector did not release focus after Escape")
 
 

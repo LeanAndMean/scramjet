@@ -1540,7 +1540,12 @@ export class TUI extends Container {
 				this.reportedViewportFlushFailure = false;
 			},
 			(error: unknown) => {
-				if (this.viewportPaint !== paint || this.stopped || this.reportedViewportFlushFailure) return;
+				if (this.stopped) return;
+				this.viewportPaint = undefined;
+				this.previousLines = [];
+				this.previousWidth = -1;
+				this.previousHeight = -1;
+				if (this.reportedViewportFlushFailure) return;
 				this.reportedViewportFlushFailure = true;
 				const reason = stripVTControlCharacters(error instanceof Error ? error.message : String(error)).slice(
 					0,
