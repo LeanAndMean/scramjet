@@ -14,6 +14,7 @@ function feedModel(id: string, context: number, overrides: Record<string, unknow
 		tool_call: true,
 		reasoning: true,
 		limit: { context, output: 128000 },
+		cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
 		modalities: { input: ["text", "image"] },
 		provider: { npm: id.startsWith("claude") ? "@ai-sdk/anthropic" : "@ai-sdk/openai" },
 		...overrides,
@@ -134,6 +135,9 @@ async function generate(
 		unsettledEndpoint?: string;
 		unsettledEndpointBody?: string;
 		expectedError?: string;
+		modelsDevChange?: (data: Record<string, any>) => void;
+		openRouterChange?: (data: any[]) => void;
+		vercelChange?: (data: any[]) => void;
 	} = {},
 ) {
 	vi.resetModules();
@@ -209,95 +213,119 @@ async function generate(
 			};
 		}
 		if (url === "https://models.dev/api.json") {
-			return {
-				ok: true,
-				json: endpointJson({
-					"zai-coding-plan": {
-						models: Object.fromEntries(
-							["glm-4.7", "glm-5.1", "glm-5-turbo"].map((id) => [id, feedModel(id, 200000)]),
-						),
+			const catalog: Record<string, any> = {
+				"zai-coding-plan": {
+					models: Object.fromEntries(
+						["glm-4.7", "glm-5.1", "glm-5-turbo"].map((id) => [id, feedModel(id, 200000)]),
+					),
+				},
+				"cloudflare-ai-gateway": {
+					models: {
+						"workers-ai/@cf/moonshotai/kimi-k2.6": feedModel("workers-ai/@cf/moonshotai/kimi-k2.6", 256000),
 					},
-					"cloudflare-ai-gateway": {
-						models: {
-							"workers-ai/@cf/moonshotai/kimi-k2.6": feedModel("workers-ai/@cf/moonshotai/kimi-k2.6", 256000),
-						},
+				},
+				"fireworks-ai": {
+					models: Object.fromEntries(
+						["deepseek-v4-flash", "deepseek-v4-pro", "glm-5p1"].map((id) => [
+							`accounts/fireworks/models/${id}`,
+							feedModel(id, id === "glm-5p1" ? 202800 : 1000000),
+						]),
+					),
+				},
+				google: { models: { example: feedModel("example", 500000) } },
+				cerebras: { models: { example: feedModel("example", 500000) } },
+				groq: {
+					models: {
+						example: feedModel("example", "invalidContext" in options ? options.invalidContext! : 500000),
 					},
-					"fireworks-ai": {
-						models: Object.fromEntries(
-							["deepseek-v4-flash", "deepseek-v4-pro", "glm-5p1"].map((id) => [
-								`accounts/fireworks/models/${id}`,
-								feedModel(id, id === "glm-5p1" ? 202800 : 1000000),
-							]),
-						),
-					},
-					groq: {
-						models: {
-							example: feedModel("example", "invalidContext" in options ? options.invalidContext! : 500000),
-						},
-					},
-					together: { models: { "zai-org/GLM-5.2": feedModel("zai-org/GLM-5.2", 262144) } },
-					xai: { models: present ? { "grok-code-fast-1": feedModel("grok-code-fast-1", 32768) } : {} },
-					anthropic: { models },
-					openai: { models: present ? models : {} },
-					opencode: { models },
-					"opencode-go": { models },
-					"github-copilot": {
-						models: {
-							"gpt-5.2-codex": feedModel("gpt-5.2-codex", 400000),
-							...Object.fromEntries(
-								Object.keys(copilotAdditions)
-									.filter((id) => id !== options.omittedCopilotCorrection)
-									.map((id) => [
+				},
+				together: { models: { "zai-org/GLM-5.2": feedModel("zai-org/GLM-5.2", 262144) } },
+				xai: { models: present ? { "grok-code-fast-1": feedModel("grok-code-fast-1", 32768) } : {} },
+				anthropic: { models },
+				openai: { models: present ? models : {} },
+				opencode: { models },
+				"opencode-go": { models },
+				"github-copilot": {
+					models: {
+						"gpt-5.2-codex": feedModel("gpt-5.2-codex", 400000),
+						...Object.fromEntries(
+							Object.keys(copilotAdditions)
+								.filter((id) => id !== options.omittedCopilotCorrection)
+								.map((id) => [
+									id,
+									feedModel(
 										id,
-										feedModel(
-											id,
-											id === "gemini-3.8-flash" ? 1000000 : 200000,
-											id === "gpt-6-sol" ? options.correctedCopilotOverride : undefined,
-										),
-									]),
-							),
-							"deprecated-copilot-candidate": feedModel("deprecated-copilot-candidate", 200000, {
-								status: "deprecated",
-							}),
-							"no-tools-copilot-candidate": feedModel("no-tools-copilot-candidate", 200000, {
-								tool_call: false,
-							}),
-							...(present
-								? {
-										...models,
-										...Object.fromEntries(
-											[
-												"claude-opus-4.7",
-												"claude-opus-4.8",
-												"gemini-3.5-flash",
-												"claude-fable-5",
-												"claude-sonnet-5",
-											].map((id) => [id, feedModel(id, 200000)]),
-										),
-									}
-								: {}),
-						},
+										id === "gemini-3.8-flash" ? 1000000 : 200000,
+										id === "gpt-6-sol" ? options.correctedCopilotOverride : undefined,
+									),
+								]),
+						),
+						"deprecated-copilot-candidate": feedModel("deprecated-copilot-candidate", 200000, {
+							status: "deprecated",
+						}),
+						"no-tools-copilot-candidate": feedModel("no-tools-copilot-candidate", 200000, {
+							tool_call: false,
+						}),
+						...(present
+							? {
+									...models,
+									...Object.fromEntries(
+										[
+											"claude-opus-4.7",
+											"claude-opus-4.8",
+											"gemini-3.5-flash",
+											"claude-fable-5",
+											"claude-sonnet-5",
+										].map((id) => [id, feedModel(id, 200000)]),
+									),
+								}
+							: {}),
 					},
-				}),
+				},
 			};
+			options.modelsDevChange?.(catalog);
+			return { ok: true, json: endpointJson(catalog) };
 		}
 		if (url === "https://openrouter.ai/api/v1/models") {
-			return {
-				ok: true,
-				json: endpointJson({
-					data: [
-						{ id: "x-ai/grok-code-fast-1", context_length: 32768, supported_parameters: ["tools"] },
-						{ id: "openai/gpt-5.4", name: "First", context_length: 1500000, supported_parameters: ["tools"] },
-						{ id: "openai/gpt-5.4", name: "Second", context_length: 2000000, supported_parameters: ["tools"] },
-					],
-				}),
-			};
+			const freePricing = { prompt: "0", completion: "0", input_cache_read: "0", input_cache_write: "0" };
+			const items: any[] = [
+				{
+					id: "x-ai/grok-code-fast-1",
+					context_length: 32768,
+					pricing: { ...freePricing },
+					supported_parameters: ["tools"],
+				},
+				{
+					id: "openai/gpt-5.4",
+					name: "First",
+					context_length: 1500000,
+					pricing: { ...freePricing },
+					supported_parameters: ["tools"],
+				},
+				{
+					id: "openai/gpt-5.5",
+					name: "Second",
+					context_length: 2000000,
+					pricing: { ...freePricing },
+					supported_parameters: ["tools"],
+				},
+			];
+			for (const item of items) item.top_provider = { max_completion_tokens: 4096 };
+			options.openRouterChange?.(items);
+			return { ok: true, json: endpointJson({ data: items }) };
 		}
 		if (url === "https://ai-gateway.vercel.sh/v1/models") {
-			return {
-				ok: true,
-				json: endpointJson({ data: [{ id: "openai/gpt-5.4", context_window: 1600000, tags: ["tool-use"] }] }),
-			};
+			const items: any[] = [
+				{
+					id: "openai/gpt-5.4",
+					context_window: 1600000,
+					max_tokens: 4096,
+					pricing: { input: "0", output: "0", input_cache_read: "0", input_cache_write: "0" },
+					tags: ["tool-use"],
+				},
+			];
+			options.vercelChange?.(items);
+			return { ok: true, json: endpointJson({ data: items }) };
 		}
 		throw new Error(`Unexpected fetch: ${url}`);
 	});
@@ -319,6 +347,7 @@ async function generate(
 		}
 		return null;
 	}
+	if (errors.mock.calls.length) throw errors.mock.calls.at(-1)?.[0];
 	expect(writeFileSync).toHaveBeenCalledTimes(1);
 	expect(errors).not.toHaveBeenCalled();
 	expect(fetch).toHaveBeenCalledTimes(7);
@@ -336,6 +365,143 @@ afterEach(() => {
 });
 
 describe("real generator context corrections", () => {
+	it("rejects loss of required models.dev sections and malformed optional sections", async () => {
+		await generate(true, {
+			modelsDevChange: (data) => {
+				delete data.anthropic;
+			},
+			expectFailure: true,
+			expectedError: "models.dev/anthropic",
+		});
+		await generate(true, {
+			modelsDevChange: (data) => {
+				data.mistral = { models: [] };
+			},
+			expectFailure: true,
+			expectedError: "models.dev/mistral",
+		});
+	});
+
+	it.each([undefined, "garbage", -1, Infinity])(
+		"rejects missing or invalid OpenRouter prompt price %s",
+		async (prompt) => {
+			await generate(true, {
+				openRouterChange: (items) => {
+					items[1].pricing = { prompt, completion: "0" };
+				},
+				expectFailure: true,
+				expectedError: "openrouter/openai/gpt-5.4",
+			});
+		},
+	);
+
+	it("rejects whitespace prices instead of interpreting them as free", async () => {
+		await generate(true, {
+			openRouterChange: (items) => {
+				items[1].pricing.prompt = "  ";
+			},
+			expectFailure: true,
+			expectedError: "openrouter/openai/gpt-5.4 prompt",
+		});
+	});
+
+	it("validates selected Together aliases but ignores intentionally excluded records", async () => {
+		await generate(true, {
+			modelsDevChange: (data) => {
+				data.togetherai = { models: { broken: feedModel("broken", 100000, { cost: undefined }) } };
+				delete data.together;
+			},
+			expectFailure: true,
+			expectedError: "models.dev/togetherai/broken",
+		});
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				data["github-copilot"].models["deprecated-copilot-candidate"].cost = undefined;
+			},
+		}))!;
+		expect(models["github-copilot"]["deprecated-copilot-candidate"]).toBeUndefined();
+	});
+
+	it("accepts explicit zero price and rejects missing Vercel output price", async () => {
+		const models = (await generate(true, {
+			vercelChange: (items) => {
+				items[0].pricing = { input: "0", output: "0", input_cache_read: "0", input_cache_write: "0" };
+			},
+		}))!;
+		expect(models["vercel-ai-gateway"]["openai/gpt-5.4"].cost.input).toBe(0);
+		await generate(true, {
+			vercelChange: (items) => {
+				items[0].pricing = { input: "0", input_cache_read: "0", input_cache_write: "0" };
+			},
+			expectFailure: true,
+			expectedError: "vercel-ai-gateway/openai/gpt-5.4",
+		});
+	});
+
+	it("rejects absent output ceilings instead of synthesizing 4096", async () => {
+		await generate(true, {
+			openRouterChange: (items) => {
+				delete items[0].top_provider;
+			},
+			expectFailure: true,
+			expectedError: "openrouter/x-ai/grok-code-fast-1",
+		});
+		await generate(true, {
+			vercelChange: (items) => {
+				delete items[0].max_tokens;
+			},
+			expectFailure: true,
+			expectedError: "vercel-ai-gateway/openai/gpt-5.4",
+		});
+	});
+
+	it("rejects duplicate normalized models.dev aliases", async () => {
+		await generate(true, {
+			modelsDevChange: (data) => {
+				data["kimi-for-coding"] = { models: { k2p5: feedModel("k2p5", 256000), k2p6: feedModel("k2p6", 256000) } };
+			},
+			expectFailure: true,
+			expectedError: "Duplicate kimi-coding/kimi-for-coding",
+		});
+	});
+
+	it("rejects duplicate route identities before writing", async () => {
+		await generate(true, {
+			openRouterChange: (items) => {
+				items.push({ ...items[1] });
+			},
+			expectFailure: true,
+			expectedError: "Duplicate openrouter/openai/gpt-5.4",
+		});
+	});
+
+	it("round-trips hostile source identifiers and names as literal strings", async () => {
+		const id = 'unsafe"\\n\\\\model';
+		const name = 'value"\\n}; globalThis.injected = true; //';
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				data.groq.models[id] = feedModel(id, 500000, { name });
+			},
+		}))!;
+		expect(models.groq[id].name).toBe(name);
+	});
+
+	it("rejects invalid model output and cost before writing", async () => {
+		await generate(true, {
+			modelsDevChange: (data) => {
+				data.groq.models.example.limit.output = 0;
+			},
+			expectFailure: true,
+			expectedError: "groq/example",
+		});
+		await generate(true, {
+			modelsDevChange: (data) => {
+				data.groq.models.example.cost = { input: -1 };
+			},
+			expectFailure: true,
+			expectedError: "groq/example",
+		});
+	});
 	it("emits exact verified GitHub Copilot additions", async () => {
 		const models = (await generate(true))!["github-copilot"];
 		for (const [id, expected] of Object.entries(copilotAdditions)) {

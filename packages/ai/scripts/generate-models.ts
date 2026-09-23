@@ -454,6 +454,14 @@ async function withModelAcquisitionTimeout<T>(
 	}
 }
 
+function price(value: unknown, label: string): number {
+	if ((typeof value !== "string" && typeof value !== "number") || (typeof value === "string" && value.trim() === "") ||
+		!Number.isFinite(Number(value)) || Number(value) < 0) {
+		throw new Error(`${label}: missing or invalid price`);
+	}
+	return Number(value);
+}
+
 async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from OpenRouter API...");
@@ -462,13 +470,22 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 			if (!response.ok) throw new Error(`OpenRouter model catalog: HTTP ${response.status}`);
 			return response.json();
 		});
-		if (!Array.isArray(data.data)) throw new Error("Invalid OpenRouter model catalog");
+		if (!Array.isArray(data.data) || data.data.length === 0) throw new Error("Invalid OpenRouter model catalog");
 
 		const models: Model<any>[] = [];
+		const seen = new Set<string>();
 
 		for (const model of data.data) {
 			// Only include models that support tools
-			if (!model.supported_parameters?.includes("tools")) continue;
+			if (!model || !Array.isArray(model.supported_parameters) ||
+				model.supported_parameters.some((item: unknown) => typeof item !== "string")) {
+				throw new Error(`openrouter/${model?.id ?? "unknown"}: invalid capabilities`);
+			}
+			if (!model.supported_parameters.includes("tools")) continue;
+			if (typeof model.id !== "string" || !model.id || seen.has(model.id)) {
+				throw new Error(`Duplicate openrouter/${model.id}`);
+			}
+			seen.add(model.id);
 
 			// SCRAMJET-DIVERGENCE: Input-only constraints must cover every route, not just the default endpoint.
 			const endpointData = await withModelAcquisitionTimeout(`openrouter/${model.id}: endpoint discovery`, async (signal) => {
@@ -502,14 +519,14 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 			}
 
 			// Convert pricing from $/token to $/million tokens
-			const inputCost = parseFloat(model.pricing?.prompt || "0") * 1_000_000;
-			const outputCost = parseFloat(model.pricing?.completion || "0") * 1_000_000;
-			const cacheReadCost = parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000;
-			const cacheWriteCost = parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000;
+			const inputCost = price(model.pricing?.prompt, `openrouter/${model.id} prompt`) * 1_000_000;
+			const outputCost = price(model.pricing?.completion, `openrouter/${model.id} completion`) * 1_000_000;
+			const cacheReadCost = price(model.pricing?.input_cache_read, `openrouter/${model.id} cache read`) * 1_000_000;
+			const cacheWriteCost = price(model.pricing?.input_cache_write, `openrouter/${model.id} cache write`) * 1_000_000;
 
 			const normalizedModel: Model<any> = {
 				id: modelKey,
-				name: model.name,
+				name: model.name ?? model.id,
 				api: "openai-completions",
 				baseUrl: "https://openrouter.ai/api/v1",
 				provider,
@@ -524,7 +541,7 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 				contextWindow: model.context_length ?? Number.NaN,
 				...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
 				...(requestLimits.length ? { requestLimits } : {}),
-				maxTokens: model.top_provider?.max_completion_tokens || 4096,
+				maxTokens: model.top_provider?.max_completion_tokens ?? Math.max(...requestLimits.map((limit) => limit.maxOutputTokens ?? 0)),
 			};
 			models.push(normalizedModel);
 		}
@@ -544,22 +561,21 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 			if (!response.ok) throw new Error(`Vercel model catalog: HTTP ${response.status}`);
 			return response.json();
 		});
-		if (!Array.isArray(data.data)) throw new Error("Invalid Vercel model catalog");
+		if (!Array.isArray(data.data) || data.data.length === 0) throw new Error("Invalid Vercel model catalog");
 		const models: Model<any>[] = [];
-
-		const toNumber = (value: string | number | undefined): number => {
-			if (typeof value === "number") {
-				return Number.isFinite(value) ? value : 0;
-			}
-			const parsed = parseFloat(value ?? "0");
-			return Number.isFinite(parsed) ? parsed : 0;
-		};
+		const seen = new Set<string>();
 
 		const items = data.data as AiGatewayModel[];
 		for (const model of items) {
-			const tags = Array.isArray(model.tags) ? model.tags : [];
-			// Only include models that support tools
+			if (!model || !Array.isArray(model.tags) || model.tags.some((tag) => typeof tag !== "string")) {
+				throw new Error(`vercel-ai-gateway/${model?.id ?? "unknown"}: invalid tags`);
+			}
+			const tags = model.tags;
 			if (!tags.includes("tool-use")) continue;
+			if (typeof model.id !== "string" || !model.id || seen.has(model.id)) {
+				throw new Error(`Duplicate vercel-ai-gateway/${model.id}`);
+			}
+			seen.add(model.id);
 
 			// SCRAMJET-DIVERGENCE: The aggregate catalog can describe a shorter default route.
 			const endpointData = await withModelAcquisitionTimeout(
@@ -585,10 +601,10 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 				input.push("image");
 			}
 
-			const inputCost = toNumber(model.pricing?.input) * 1_000_000;
-			const outputCost = toNumber(model.pricing?.output) * 1_000_000;
-			const cacheReadCost = toNumber(model.pricing?.input_cache_read) * 1_000_000;
-			const cacheWriteCost = toNumber(model.pricing?.input_cache_write) * 1_000_000;
+			const inputCost = price(model.pricing?.input, `vercel-ai-gateway/${model.id} input`) * 1_000_000;
+			const outputCost = price(model.pricing?.output, `vercel-ai-gateway/${model.id} output`) * 1_000_000;
+			const cacheReadCost = price(model.pricing?.input_cache_read, `vercel-ai-gateway/${model.id} cache read`) * 1_000_000;
+			const cacheWriteCost = price(model.pricing?.input_cache_write, `vercel-ai-gateway/${model.id} cache write`) * 1_000_000;
 
 			models.push({
 				id: model.id,
@@ -606,7 +622,7 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 				},
 				contextWindow,
 				requestLimits,
-				maxTokens: model.max_tokens || 4096,
+				maxTokens: model.max_tokens ?? Math.max(...endpoints.map((endpoint) => endpoint.maxOutputTokens ?? 0)),
 			});
 		}
 
@@ -626,6 +642,35 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			return response.json();
 		});
 		if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid models.dev catalog");
+		const required = ["anthropic", "google", "openai", "groq", "cerebras"];
+		const sections = [...required, "amazon-bedrock", "cloudflare-workers-ai", "cloudflare-ai-gateway", "xai", "zai-coding-plan", "mistral", "huggingface", "fireworks-ai", "github-copilot", "minimax", "minimax-cn", "kimi-for-coding", "xiaomi", "opencode", "opencode-go", "together", "togetherai", "together-ai", "moonshotai", "moonshotai-cn"];
+		for (const key of sections) {
+			const section = data[key];
+			if (section === undefined && !required.includes(key)) continue;
+			if (!section || typeof section !== "object" || !section.models ||
+				typeof section.models !== "object" || Array.isArray(section.models)) {
+				throw new Error(`models.dev/${key}: missing or invalid models section`);
+			}
+			for (const [id, model] of Object.entries(section.models)) {
+				if (!model || typeof model !== "object") throw new Error(`models.dev/${key}/${id}: invalid model`);
+				const m = model as ModelsDevModel;
+				if (m.tool_call !== true ||
+					(["github-copilot", "opencode", "opencode-go", "together", "togetherai", "together-ai"].includes(key) &&
+						(m as ModelsDevModel & { status?: string }).status === "deprecated") ||
+					(key === "amazon-bedrock" && (id.startsWith("ai21.jamba") || id.startsWith("mistral.mistral-7b-instruct-v0"))) ||
+					(key === "cloudflare-ai-gateway" && !/^(openai|anthropic|workers-ai)\/.+/.test(id)) ||
+					(key === "kimi-for-coding" && ["k2p5", "k2p6"].includes(id) &&
+						Object.hasOwn(section.models, "kimi-for-coding"))) continue;
+				if (!Number.isFinite(m.limit?.context) || !Number.isFinite(m.limit?.output) ||
+					(m.limit?.context ?? 0) <= 0 || (m.limit?.output ?? 0) <= 0) {
+					throw new Error(`models.dev/${key}/${id}: invalid context or output limit`);
+				}
+				price(m.cost?.input, `models.dev/${key}/${id} input`);
+				price(m.cost?.output, `models.dev/${key}/${id} output`);
+				price(m.cost?.cache_read, `models.dev/${key}/${id} cache read`);
+				price(m.cost?.cache_write, `models.dev/${key}/${id} cache write`);
+			}
+		}
 
 		const models: Model<any>[] = [];
 
@@ -2403,17 +2448,22 @@ async function generateModels() {
 		applyAnthropicAdaptiveCompat(model);
 	}
 
-	// Group by provider and deduplicate by model ID
-	const providers: Record<string, Record<string, Model<any>>> = {};
+	const providers: Record<string, Record<string, Model<any>>> = Object.create(null);
 	for (const model of allModels) {
-		if (!providers[model.provider]) {
-			providers[model.provider] = {};
+		const label = `${model.provider}/${model.id}`;
+		if (typeof model.provider !== "string" || !model.provider || typeof model.id !== "string" || !model.id ||
+			typeof model.name !== "string" || !model.name || typeof model.api !== "string" || !model.api ||
+			!Number.isFinite(model.contextWindow) || model.contextWindow <= 0 ||
+			!Number.isFinite(model.maxTokens) || model.maxTokens <= 0 ||
+			(model.maxInputTokens !== undefined && (!Number.isFinite(model.maxInputTokens) || model.maxInputTokens <= 0)) ||
+			!model.cost || [model.cost.input, model.cost.output, model.cost.cacheRead, model.cost.cacheWrite]
+				.some((value) => !Number.isFinite(value) || value < 0)) {
+			throw new Error(`${label}: invalid normalized model limits, identity or cost`);
 		}
-		// Use model ID as key to automatically deduplicate
-		// Only add if not already present (models.dev takes priority over OpenRouter)
-		if (!providers[model.provider][model.id]) {
-			providers[model.provider][model.id] = model;
-		}
+		validateModelRequestLimits(model);
+		providers[model.provider] ??= Object.create(null);
+		if (Object.hasOwn(providers[model.provider], model.id)) throw new Error(`Duplicate ${label}`);
+		providers[model.provider][model.id] = model;
 	}
 
 	// Generate TypeScript file
@@ -2437,13 +2487,13 @@ export const MODELS = {
 			if (!Number.isFinite(model.contextWindow) || model.contextWindow <= 0) {
 				throw new Error(`Unresolved contextWindow for ${providerId}/${modelId}: ${model.contextWindow}`);
 			}
-			output += `\t\t"${model.id}": {\n`;
-			output += `\t\t\tid: "${model.id}",\n`;
-			output += `\t\t\tname: "${model.name}",\n`;
-			output += `\t\t\tapi: "${model.api}",\n`;
-			output += `\t\t\tprovider: "${model.provider}",\n`;
+			output += `\t\t${JSON.stringify(model.id)}: {\n`;
+			output += `\t\t\tid: ${JSON.stringify(model.id)},\n`;
+			output += `\t\t\tname: ${JSON.stringify(model.name)},\n`;
+			output += `\t\t\tapi: ${JSON.stringify(model.api)},\n`;
+			output += `\t\t\tprovider: ${JSON.stringify(model.provider)},\n`;
 			if (model.baseUrl !== undefined) {
-				output += `\t\t\tbaseUrl: "${model.baseUrl}",\n`;
+				output += `\t\t\tbaseUrl: ${JSON.stringify(model.baseUrl)},\n`;
 			}
 			if (model.headers) {
 				output += `\t\t\theaders: ${JSON.stringify(model.headers)},\n`;
@@ -2456,7 +2506,7 @@ export const MODELS = {
 			if (model.thinkingLevelMap) {
 				output += `\t\t\tthinkingLevelMap: ${JSON.stringify(model.thinkingLevelMap)},\n`;
 			}
-			output += `\t\t\tinput: [${model.input.map(i => `"${i}"`).join(", ")}],\n`;
+			output += `\t\t\tinput: ${JSON.stringify(model.input)},\n`;
 			output += `\t\t\tcost: {\n`;
 			output += `\t\t\t\tinput: ${model.cost.input},\n`;
 			output += `\t\t\t\toutput: ${model.cost.output},\n`;
@@ -2476,7 +2526,7 @@ export const MODELS = {
 				output += `\t\t\trequestLimits: ${JSON.stringify(limits)},\n`;
 			}
 			output += `\t\t\tmaxTokens: ${model.maxTokens},\n`;
-			output += `\t\t} satisfies Model<"${model.api}">,\n`;
+			output += `\t\t} satisfies Model<${JSON.stringify(model.api)}>,\n`;
 		}
 
 		output += `\t},\n`;
