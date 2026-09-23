@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.100.0 — Add new Copilot model contracts
+
+Adds reviewed GitHub Copilot model metadata and preserves explicit reasoning-off selections. Fixes [#567](https://github.com/LeanAndMean/scramjet/issues/567).
+
+### Added
+
+- Add GPT-6 Sol, GPT-6 Luna, and Claude Opus 5.5 Copilot model contracts while preserving Claude Opus 5.
+
+### Changed
+
+- Serialize explicit supported Responses `off` selections through each model's declared `none` effort mapping.
+- Document provider evidence boundaries for the new Copilot offerings.
+
+### Tests
+
+- Add generated-catalog, request-serialization, authenticated-registry, CLI-listing, and selector coverage for the new models and reasoning behavior.
+
 ## 0.99.0 — Preserve Responses errors and retry diagnostics
 
 Preserves privacy-safe provider failure evidence and makes persisted assistant outcomes authoritative for automatic retry decisions. Fixes [#553](https://github.com/LeanAndMean/scramjet/issues/553).
