@@ -32,6 +32,7 @@ function assistantShell(): AssistantMessage {
 
 const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
 const openaiModel = getModel("openai", "gpt-6-astra");
+const openaiNoneModel = getModel("openai", "gpt-5.1");
 const copilotModel = getModel("github-copilot", "gpt-6-astra");
 const azureModel = getModel("azure-openai-responses", "gpt-4");
 const copilotHeaders = copilotModel.headers;
@@ -1069,14 +1070,21 @@ describe("OpenAI Responses failure normalization", () => {
 	});
 });
 
-describe("GitHub Copilot exact Responses model contracts", () => {
-	it("serializes explicit off through the declared none mapping", async () => {
+describe("Explicit none Responses request contract", () => {
+	it.each([
+		["OpenAI", openaiNoneModel],
+		["GitHub Copilot", gpt6SolModel],
+	])("serializes explicit off for %s without reasoning artifacts", async (_provider, model) => {
 		const requests = stubFetch([completedResponse()]);
-		await streamSimpleOpenAIResponses(gpt6SolModel, context, { apiKey, explicitReasoningOff: true }).result();
+		await streamSimpleOpenAIResponses(model, context, { apiKey, explicitReasoningOff: true }).result();
 
-		expect((await requestBody(requests[0])).reasoning).toEqual(expect.objectContaining({ effort: "none" }));
+		const body = await requestBody(requests[0]);
+		expect(body.reasoning).toEqual({ effort: "none" });
+		expect(body.include).toBeUndefined();
 	});
+});
 
+describe("GitHub Copilot exact Responses model contracts", () => {
 	it.each([
 		[grok46Model, "xhigh", "xhigh"],
 		[grok46Model, "minimal", "low"],

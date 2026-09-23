@@ -312,11 +312,15 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 					? "none"
 					: (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
 				: "medium";
-			params.reasoning = {
-				effort: effort as NonNullable<typeof params.reasoning>["effort"],
-				summary: options?.reasoningSummary || "auto",
-			};
-			params.include = ["reasoning.encrypted_content"];
+			if (effort === "none") {
+				params.reasoning = { effort };
+			} else {
+				params.reasoning = {
+					effort: effort as NonNullable<typeof params.reasoning>["effort"],
+					summary: options?.reasoningSummary || "auto",
+				};
+				params.include = ["reasoning.encrypted_content"];
+			}
 		} else if (model.provider !== "github-copilot" && model.thinkingLevelMap?.off !== null) {
 			params.reasoning = {
 				effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<typeof params.reasoning>["effort"],
