@@ -319,10 +319,12 @@ class SpaceInvadersComponent {
 
 	handleInput(data: string): void {
 		const released = isKeyRelease(data);
+		// SCRAMJET-DIVERGENCE: viewport terminals explicitly encode printable quit keys.
+		const quit = matchesKey(data, "q") || matchesKey(data, "shift+q");
 
 		// Pause handling
 		if (this.paused && !released) {
-			if (matchesKey(data, Key.escape) || data === "q" || data === "Q") {
+			if (matchesKey(data, Key.escape) || quit) {
 				this.dispose();
 				this.onClose();
 				return;
@@ -341,7 +343,7 @@ class SpaceInvadersComponent {
 		}
 
 		// Q to quit without saving
-		if (!released && (data === "q" || data === "Q")) {
+		if (!released && quit) {
 			this.dispose();
 			this.onSave(null);
 			this.onClose();

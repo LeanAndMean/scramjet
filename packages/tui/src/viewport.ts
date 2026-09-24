@@ -118,6 +118,11 @@ function correspondence(
 
 function mapAnchor(anchor: Anchor, old: RenderedBlock, next: RenderedBlock): Anchor | undefined {
 	if (old.lines === next.lines) return anchor;
+	// An unchanged prefix survives even when later edits exhaust the correspondence budget.
+	for (let row = 0; row <= anchor.row && row < next.lines.length; row++) {
+		if (old.lines[row] !== next.lines[row]) break;
+		if (row === anchor.row) return anchor;
+	}
 	const rows = correspondence(old.lines, next.lines, anchor.row, 64);
 	if (rows?.exact) return { ...anchor, row: rows.position };
 
