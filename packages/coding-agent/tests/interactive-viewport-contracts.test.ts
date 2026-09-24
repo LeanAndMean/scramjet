@@ -67,6 +67,58 @@ afterEach(async () => {
 });
 
 describe("retained interactive contracts", () => {
+	it.each([
+		["literal j", ["j"], false],
+		["encoded j", ["\x1b[106u"], false],
+		["literal k", ["\x1b[B", "k"], true],
+		["encoded k", ["\x1b[B", "\x1b[107u"], true],
+		["down arrow", ["\x1b[B"], false],
+		["up arrow", ["\x1b[B", "\x1b[A"], true],
+		["modified j", ["\x1b[106;5u"], true],
+		["modified k", ["\x1b[B", "\x1b[107;5u"], false],
+		["released j", ["\x1b[106;1:3u"], true],
+		["released k", ["\x1b[B", "\x1b[107;1:3u"], false],
+	] as const)("preserves extension confirmation navigation for %s", async (_name, inputs, expected) => {
+		const h = await setup();
+		const result = h.extensionUI.confirm("Confirm?", "Choose Yes or No");
+		await h.frame();
+		for (const input of inputs) {
+			h.terminal.sendInput(input);
+			await h.frame();
+		}
+		h.terminal.sendInput("\x1b[13u");
+		expect(await result).toBe(expected);
+	});
+
+	it("preserves configured binding precedence over extension selector aliases", async () => {
+		const h = await setup();
+		const kb = getKeybindings();
+		const previous = kb.getUserBindings();
+		try {
+			kb.setUserBindings({ "app.tools.expand": "j", "tui.select.up": "k", "tui.select.down": "n" });
+			const expanded = h.extensionUI.getToolsExpanded();
+			const result = h.extensionUI.select("Pick", ["First", "Second"]);
+			await h.frame();
+			h.terminal.sendInput("\x1b[106u");
+			await h.frame();
+			expect(h.extensionUI.getToolsExpanded()).toBe(!expanded);
+			h.terminal.sendInput("\x1b[13u");
+			expect(await result).toBe("First");
+
+			kb.setUserBindings({ "tui.select.up": "j" });
+			const remapped = h.extensionUI.select("Pick", ["First", "Second"]);
+			await h.frame();
+			h.terminal.sendInput("\x1b[B");
+			await h.frame();
+			h.terminal.sendInput("\x1b[106u");
+			await h.frame();
+			h.terminal.sendInput("\x1b[13u");
+			expect(await remapped).toBe("First");
+		} finally {
+			kb.setUserBindings(previous);
+		}
+	});
+
 	it("keeps the default dock and draft visible while browsing and typing", async () => {
 		const h = await setup();
 		await history(h);

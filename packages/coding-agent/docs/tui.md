@@ -919,6 +919,11 @@ class VimEditor extends CustomEditor {
       return;
     }
 
+    if (matchesKey(data, "enter")) {
+      super.handleInput(data);
+      return;
+    }
+
     // Normal mode: vim-style navigation
     const key = decodeKittyPrintable(data) ?? data;
     switch (key) {
