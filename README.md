@@ -94,6 +94,8 @@ Requires Node >= 20. See [`CLAUDE.md`](CLAUDE.md) for build commands, local deve
 - [`packages/scramjet/README.md`](packages/scramjet/README.md) — Current user-facing behavior, installation, and usage
 - [`packages/scramjet/docs/scramjet-vision.md`](packages/scramjet/docs/scramjet-vision.md) — Product vision, capabilities, principles, and non-goals
 - [`packages/scramjet/docs/command-authoring.md`](packages/scramjet/docs/command-authoring.md) — Command-set authoring reference
+- [Terminal setup](packages/coding-agent/docs/terminal-setup.md) — Browsing, copying, compatibility choices, and terminal configuration
+- [Terminal verification](packages/coding-agent/docs/terminal-verification.md) — Maintainer guidance and historical native-terminal evidence
 - [`CLAUDE.md`](CLAUDE.md) — Contributor workflow and repository conventions
 - [`UPSTREAM_DIVERGENCE.md`](UPSTREAM_DIVERGENCE.md) — Pi fork tracking
 
