@@ -203,6 +203,10 @@ describe("generated catalog - Azure independent input limits", () => {
 			expect(getModels("openai").find((model) => model.id === id)).toBeUndefined();
 		},
 	);
+	it.each(["gpt-6-luna", "gpt-6-sol"])("keeps unverified Azure %s metadata out of built-ins", (id) => {
+		expect(getModels("azure-openai-responses").find((model) => model.id === id)).toBeUndefined();
+		expect(getModel("openai", id)).toBeDefined();
+	});
 	it("preserves the GPT-5.5 Responses combined constraint", () => {
 		expect(getModel("azure-openai-responses", "gpt-5.5").requestLimits).toEqual([
 			{ maxTotalTokens: 922000, maxInputTokens: 922000, maxOutputTokens: 128000, supportsTools: true },

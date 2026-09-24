@@ -145,7 +145,7 @@ async function generate(
 	} = {},
 ) {
 	vi.resetModules();
-	if (options.candidatePath) process.env.SCRAMJET_MODEL_CANDIDATE = options.candidatePath;
+	if (options.candidatePath !== undefined) process.env.SCRAMJET_MODEL_CANDIDATE = options.candidatePath;
 	else delete process.env.SCRAMJET_MODEL_CANDIDATE;
 	writeFileSync.mockClear();
 	const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -252,7 +252,11 @@ async function generate(
 					},
 				},
 				together: { models: { "zai-org/GLM-5.2": feedModel("zai-org/GLM-5.2", 262144) } },
-				xai: { models: present ? { "grok-code-fast-1": feedModel("grok-code-fast-1", 32768) } : {} },
+				xai: {
+					models: present
+						? { "grok-code-fast-1": feedModel("grok-code-fast-1", 32768) }
+						: { "fixture-source-model": feedModel("fixture-source-model", 32768) },
+				},
 				anthropic: { models },
 				openai: { models: present ? models : { "other-supported": feedModel("other-supported", 128000) } },
 				opencode: { models },
@@ -295,6 +299,20 @@ async function generate(
 					},
 				},
 			};
+			for (const key of [
+				"amazon-bedrock",
+				"cloudflare-workers-ai",
+				"huggingface",
+				"kimi-for-coding",
+				"minimax",
+				"minimax-cn",
+				"mistral",
+				"moonshotai",
+				"moonshotai-cn",
+				"xiaomi",
+			]) {
+				catalog[key] ??= { models: { "fixture-source-model": feedModel("fixture-source-model", 200000) } };
+			}
 			options.modelsDevChange?.(catalog);
 			return { ok: true, json: endpointJson(catalog) };
 		}
@@ -346,6 +364,7 @@ async function generate(
 	await vi.waitFor(() => expect(writeFileSync.mock.calls.length + errors.mock.calls.length).toBeGreaterThan(0));
 	if (options.expectFailure) {
 		expect(errors).toHaveBeenCalled();
+		if (options.expectedFetchCount !== undefined) expect(fetch).toHaveBeenCalledTimes(options.expectedFetchCount);
 		expect(writeFileSync).not.toHaveBeenCalled();
 		expect(process.exitCode).toBe(1);
 		if (options.expectedError) {
@@ -364,7 +383,7 @@ async function generate(
 	expect(errors).not.toHaveBeenCalled();
 	expect(fetch).toHaveBeenCalledTimes(options.expectedFetchCount ?? 7);
 	const output = writeFileSync.mock.calls[0][1] as string;
-	if (options.candidatePath) {
+	if (options.candidatePath !== undefined) {
 		expect(writeFileSync.mock.calls[0][0]).toBe(options.candidatePath);
 		expect(writeFileSync.mock.calls[0][2]).toEqual({ flag: "wx" });
 		return JSON.parse(output);
@@ -597,6 +616,15 @@ describe("real generator context corrections", () => {
 		});
 	});
 
+	it("rejects an explicitly empty candidate path before acquisition or writing", async () => {
+		await generate(true, {
+			candidatePath: "",
+			expectFailure: true,
+			expectedFetchCount: 0,
+			expectedError: "Candidate output must be an absolute path outside the canonical catalog",
+		});
+	});
+
 	it("rejects candidate output directed at the canonical snapshot", async () => {
 		await generate(true, {
 			candidatePath: new URL("../src/models.generated.ts", import.meta.url).pathname,
@@ -630,6 +658,54 @@ describe("real generator context corrections", () => {
 		expect(togetherGaps).toEqual([
 			{ source: "models.dev/together", id: "*", reason: "Previously supported source section missing" },
 		]);
+	});
+
+	it.each(["absent", "empty", "non-tool"])("guards previously supported optional source when %s", async (state) => {
+		const modelsDevChange = (data: Record<string, any>) => {
+			if (state === "absent") delete data["kimi-for-coding"];
+			else
+				data["kimi-for-coding"].models =
+					state === "empty"
+						? {}
+						: { "fixture-source-model": feedModel("fixture-source-model", 200000, { tool_call: false }) };
+		};
+		const reason =
+			state === "absent"
+				? "Previously supported source section missing"
+				: "Previously supported source section has no usable models";
+		const candidate = await generate(true, { candidatePath: "/tmp/scramjet-569-optional-gap.json", modelsDevChange });
+		expect(candidate.unresolvedSources).toContainEqual({ source: "models.dev/kimi-for-coding", id: "*", reason });
+		await generate(true, {
+			modelsDevChange,
+			expectFailure: true,
+			expectedError: `models.dev/kimi-for-coding: ${reason}`,
+		});
+	});
+
+	it("allows intentionally empty optional sections without supported built-ins and alternate Together aliases", async () => {
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				data.togetherai = { models: {} };
+				data["together-ai"] = { models: {} };
+			},
+		}))!;
+		expect(models.together["zai-org/GLM-5.2"]).toBeDefined();
+	});
+
+	it("selects a usable Together alias when the primary section is empty", async () => {
+		const modelsDevChange = (data: Record<string, any>) => {
+			data.together.models = {};
+			data.togetherai = { models: { "zai-org/GLM-5.2": feedModel("zai-org/GLM-5.2", 262144) } };
+		};
+		const models = (await generate(true, { modelsDevChange }))!;
+		expect(models.together["zai-org/GLM-5.2"]).toBeDefined();
+		const candidate = await generate(true, {
+			candidatePath: "/tmp/scramjet-569-together-alias.json",
+			modelsDevChange,
+		});
+		expect(candidate.unresolvedSources).not.toContainEqual(
+			expect.objectContaining({ source: "models.dev/together" }),
+		);
 	});
 
 	it("rejects loss of required models.dev sections and malformed optional sections", async () => {
@@ -776,6 +852,18 @@ describe("real generator context corrections", () => {
 			expectedError: "groq/example",
 		});
 	});
+	it("does not copy new direct GPT-6 numerical metadata onto Azure Responses", async () => {
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				for (const id of ["gpt-6-luna", "gpt-6-sol"]) data.openai.models[id] = feedModel(id, 1050000);
+			},
+		}))!;
+		for (const id of ["gpt-6-luna", "gpt-6-sol"]) {
+			expect(models.openai[id]).toBeDefined();
+			expect(models["azure-openai-responses"][id]).toBeUndefined();
+		}
+	});
+
 	it("does not offer a Realtime-only OpenAI model through Responses", async () => {
 		const models = (await generate(true, {
 			modelsDevChange: (data) => {
@@ -1061,6 +1149,27 @@ describe("real generator context corrections", () => {
 			});
 		},
 	);
+	it("does not publish an OpenRouter aggregate whose endpoints all deny tools", async () => {
+		const openRouterEndpoints = [{ context_length: 40960, max_completion_tokens: 2048, supported_parameters: [] }];
+		const candidate = await generate(true, {
+			candidatePath: "/tmp/scramjet-569-no-tools.json",
+			openRouterEndpoints,
+			openRouterEndpointFor: "openai/gpt-5.4",
+		});
+		expect(candidate.models.openrouter["openai/gpt-5.4"]).toBeUndefined();
+		expect(candidate.unresolvedSources).toContainEqual({
+			source: "openrouter",
+			id: "openai/gpt-5.4",
+			reason: "no tool-capable endpoints",
+		});
+		await generate(true, {
+			openRouterEndpoints,
+			openRouterEndpointFor: "openai/gpt-5.4",
+			expectFailure: true,
+			expectedError: "openrouter/openai/gpt-5.4: no tool-capable endpoints",
+		});
+	});
+
 	it("retains joint endpoint constraints and tool capability instead of independent maxima", async () => {
 		const models = (await generate(true, {
 			openRouterEndpoints: [

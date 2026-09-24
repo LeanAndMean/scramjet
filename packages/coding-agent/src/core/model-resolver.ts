@@ -536,6 +536,8 @@ export async function findInitialModel(options: {
 	}
 
 	// 3. Try saved default from settings
+	// SCRAMJET-DIVERGENCE: A removed configured identity must not silently switch routes at startup.
+	let missingDefault: string | undefined;
 	if (defaultProvider && defaultModelId) {
 		const found = modelRegistry.find(defaultProvider, defaultModelId);
 		if (found) {
@@ -545,6 +547,7 @@ export async function findInitialModel(options: {
 			}
 			return { model, thinkingLevel, fallbackMessage: undefined };
 		}
+		missingDefault = `Configured default model ${defaultProvider}/${defaultModelId} is not in the model registry.`;
 	}
 
 	// 4. Try first available model with valid API key
@@ -556,16 +559,25 @@ export async function findInitialModel(options: {
 			const defaultId = defaultModelPerProvider[provider];
 			const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
 			if (match) {
-				return { model: match, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+				return {
+					model: match,
+					thinkingLevel: DEFAULT_THINKING_LEVEL,
+					fallbackMessage: missingDefault ? `${missingDefault} Using ${match.provider}/${match.id}.` : undefined,
+				};
 			}
 		}
 
 		// If no default found, use first available
-		return { model: availableModels[0], thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+		const fallback = availableModels[0];
+		return {
+			model: fallback,
+			thinkingLevel: DEFAULT_THINKING_LEVEL,
+			fallbackMessage: missingDefault ? `${missingDefault} Using ${fallback.provider}/${fallback.id}.` : undefined,
+		};
 	}
 
 	// 5. No model found
-	return { model: undefined, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+	return { model: undefined, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: missingDefault };
 }
 
 /**

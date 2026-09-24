@@ -541,6 +541,12 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 				unresolvedSources.push({ source: "openrouter", id: model.id, reason: "no valid declared endpoints" });
 				continue;
 			}
+			// SCRAMJET-DIVERGENCE: An aggregate tool claim needs a tool-capable route.
+			if (requestLimits.length > 0 && !requestLimits.some((endpoint) => endpoint.supportsTools)) {
+				if (!candidatePath) throw new Error(`openrouter/${model.id}: no tool-capable endpoints`);
+				unresolvedSources.push({ source: "openrouter", id: model.id, reason: "no tool-capable endpoints" });
+				continue;
+			}
 			const endpointContext = Math.max(...requestLimits.map((endpoint) => endpoint.maxTotalTokens));
 			const endpointInput = Math.max(...requestLimits.map((endpoint) =>
 				Math.min(endpoint.maxTotalTokens, endpoint.maxInputTokens ?? endpoint.maxTotalTokens),
@@ -695,22 +701,14 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		const sections = [...required, "amazon-bedrock", "cloudflare-workers-ai", "cloudflare-ai-gateway", "xai", "zai-coding-plan", "mistral", "huggingface", "fireworks-ai", "github-copilot", "minimax", "minimax-cn", "kimi-for-coding", "xiaomi", "opencode", "opencode-go", "together", "togetherai", "together-ai", "moonshotai", "moonshotai-cn"];
 		for (const key of sections) {
 			const section = data[key];
-			if (section === undefined && !required.includes(key)) {
-				const provider = key === "kimi-for-coding" ? "kimi-coding" : key === "zai-coding-plan" ? "zai" :
-					key === "fireworks-ai" ? "fireworks" : key.startsWith("together") ? "together" : key;
-				if (candidatePath && provider in MODELS &&
-					(!key.startsWith("together") ||
-						(key === "together" && !["togetherai", "together-ai"].some((alias) => data[alias])))) {
-					unresolvedSources.push({ source: `models.dev/${key}`, id: "*", reason: "Previously supported source section missing" });
+			if (section !== undefined || required.includes(key)) {
+				if (!section || typeof section !== "object" || !section.models ||
+					typeof section.models !== "object" || Array.isArray(section.models)) {
+					throw new Error(`models.dev/${key}: missing or invalid models section`);
 				}
-				continue;
-			}
-			if (!section || typeof section !== "object" || !section.models ||
-				typeof section.models !== "object" || Array.isArray(section.models)) {
-				throw new Error(`models.dev/${key}: missing or invalid models section`);
 			}
 			let usableModels = 0;
-			for (const [id, model] of Object.entries(section.models)) {
+			for (const [id, model] of Object.entries(section?.models ?? {})) {
 				if (!model || typeof model !== "object") throw new Error(`models.dev/${key}/${id}: invalid model`);
 				const m = model as ModelsDevModel;
 				if (m.tool_call !== true ||
@@ -731,8 +729,25 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 				price(m.cost?.cache_read, `models.dev/${key}/${id} cache read`);
 				price(m.cost?.cache_write, `models.dev/${key}/${id} cache write`);
 			}
-			if (required.includes(key) && key in MODELS && usableModels === 0) {
-				throw new Error(`models.dev/${key}: no usable models for a supported provider`);
+			// SCRAMJET-DIVERGENCE: An optional feed cannot silently erase supported built-ins.
+			if (usableModels === 0) {
+				if (required.includes(key) && key in MODELS) {
+					throw new Error(`models.dev/${key}: no usable models for a supported provider`);
+				}
+				const provider = key === "kimi-for-coding" ? "kimi-coding" : key === "zai-coding-plan" ? "zai" :
+					key === "fireworks-ai" ? "fireworks" : key.startsWith("together") ? "together" : key;
+				const togetherAliases = ["together", "togetherai", "together-ai"];
+				const alternateTogetherSource = key.startsWith("together") && togetherAliases.some((alias) =>
+					alias !== key && Object.values(data[alias]?.models ?? {}).some((model) =>
+						(model as ModelsDevModel & { status?: string }).tool_call === true &&
+						(model as ModelsDevModel & { status?: string }).status !== "deprecated"));
+				if (!required.includes(key) && provider in MODELS && !alternateTogetherSource &&
+					(!key.startsWith("together") || key === "together")) {
+					const reason = section === undefined ? "Previously supported source section missing" :
+						"Previously supported source section has no usable models";
+					if (!candidatePath) throw new Error(`models.dev/${key}: ${reason}`);
+					unresolvedSources.push({ source: `models.dev/${key}`, id: "*", reason });
+				}
 			}
 		}
 
@@ -1074,8 +1089,11 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			}
 		}
 
-		// Process Together AI models
-		const togetherProvider = data.together ?? data.togetherai ?? data["together-ai"];
+		// SCRAMJET-DIVERGENCE: A present but empty primary Together section must not mask a populated alias.
+		const togetherProvider = [data.together, data.togetherai, data["together-ai"]].find((section) =>
+			Object.values(section?.models ?? {}).some((model) =>
+				(model as ModelsDevModel & { status?: string }).tool_call === true &&
+				(model as ModelsDevModel & { status?: string }).status !== "deprecated"));
 		if (togetherProvider?.models) {
 			for (const [modelId, model] of Object.entries(togetherProvider.models)) {
 				const m = model as ModelsDevModel & { status?: string };
@@ -1380,7 +1398,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 }
 
 async function generateModels() {
-	if (candidatePath && (!isAbsolute(candidatePath) || resolve(candidatePath) === join(packageRoot, "src/models.generated.ts"))) {
+	if (candidatePath !== undefined && (!candidatePath || !isAbsolute(candidatePath) || resolve(candidatePath) === join(packageRoot, "src/models.generated.ts"))) {
 		throw new Error("Candidate output must be an absolute path outside the canonical catalog");
 	}
 	// Fetch models from both sources
@@ -2397,9 +2415,11 @@ async function generateModels() {
 		"gpt-5-codex": 272000,
 		"gpt-5-pro": 272000,
 	};
+	// SCRAMJET-DIVERGENCE: Do not transfer new direct-route limits or prices to Azure without deployment evidence.
 	const azureOpenAiModels: Model<Api>[] = allModels
 		.filter(
-			(model) => model.provider === "openai" && model.api === "openai-responses" && model.id !== "gpt-6-astra",
+			(model) => model.provider === "openai" && model.api === "openai-responses" &&
+				!["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"].includes(model.id),
 		)
 		.map((model) => ({
 			...model,

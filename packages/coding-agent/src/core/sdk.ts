@@ -299,10 +299,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			modelRegistry,
 		});
 		model = result.model;
+		// SCRAMJET-DIVERGENCE: Carry configured-default warnings without replacing restoration diagnostics.
 		if (!model) {
-			modelFallbackMessage = formatNoModelsAvailableMessage();
+			modelFallbackMessage = [modelFallbackMessage, result.fallbackMessage, formatNoModelsAvailableMessage()]
+				.filter(Boolean)
+				.join(" ");
 		} else if (modelFallbackMessage) {
 			modelFallbackMessage += `. Using ${model.provider}/${model.id}`;
+		} else {
+			modelFallbackMessage = result.fallbackMessage;
 		}
 	}
 
