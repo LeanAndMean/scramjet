@@ -187,7 +187,19 @@ async function generate(
 	vi.resetModules();
 	for (const provider of Object.keys(committedModels)) delete committedModels[provider];
 	for (const provider of committedProviderIds) committedModels[provider] = {};
-	for (const [provider, models] of Object.entries(options.committedModels ?? {})) committedModels[provider] = models;
+	committedModels["azure-openai-responses"] = Object.fromEntries(
+		[
+			"gpt-5.1-codex",
+			"gpt-5.4",
+			"gpt-5.6-luna",
+			"gpt-5.6-sol",
+			"gpt-5.6-terra",
+			...(present ? ["gpt-5.5", "gpt-5-pro"] : []),
+		].map((id) => [id, {}]),
+	);
+	for (const [provider, models] of Object.entries(options.committedModels ?? {})) {
+		committedModels[provider] = { ...committedModels[provider], ...models };
+	}
 	if (options.candidatePath !== undefined) process.env.SCRAMJET_MODEL_CANDIDATE = options.candidatePath;
 	else delete process.env.SCRAMJET_MODEL_CANDIDATE;
 	writeFileSync.mockClear();
@@ -931,16 +943,37 @@ describe("real generator context corrections", () => {
 			expectedError,
 		});
 	});
-	it("does not copy new direct GPT-6 numerical metadata onto Azure Responses", async () => {
+	it("uses Azure-specific GPT-6 Responses limits without including unsupported routes", async () => {
 		const models = (await generate(true, {
 			modelsDevChange: (data) => {
-				for (const id of ["gpt-6-luna", "gpt-6-sol"]) data.openai.models[id] = feedModel(id, 1050000);
+				for (const id of ["gpt-6-luna", "gpt-6-sol", "gpt-7-unreviewed"]) {
+					data.openai.models[id] = feedModel(id, 1050000);
+				}
 			},
 		}))!;
 		for (const id of ["gpt-6-luna", "gpt-6-sol"]) {
-			expect(models.openai[id]).toBeDefined();
-			expect(models["azure-openai-responses"][id]).toBeUndefined();
+			expect(models.openai[id].thinkingLevelMap).toMatchObject({
+				off: "none",
+				minimal: null,
+				xhigh: "xhigh",
+				max: "max",
+			});
 		}
+		for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"]) {
+			expect(models["azure-openai-responses"][id]).toMatchObject({
+				api: "azure-openai-responses",
+				provider: "azure-openai-responses",
+				contextWindow: 1050000,
+				maxInputTokens: 922000,
+				maxTokens: 128000,
+			});
+		}
+		for (const id of ["gpt-6-luna", "gpt-6-sol"]) {
+			expect(models["azure-openai-responses"][id].thinkingLevelMap).toBeUndefined();
+		}
+		expect(models.openai["gpt-7-unreviewed"]).toBeDefined();
+		expect(models["azure-openai-responses"]["gpt-7-unreviewed"]).toBeUndefined();
+		expect(models["azure-openai-responses"]["gpt-realtime-2.1"]).toBeUndefined();
 	});
 
 	it("does not offer a Realtime-only OpenAI model through Responses", async () => {
@@ -951,6 +984,41 @@ describe("real generator context corrections", () => {
 		}))!;
 		expect(models.openai["gpt-realtime-2.1"]).toBeUndefined();
 		expect(models["azure-openai-responses"]["gpt-realtime-2.1"]).toBeUndefined();
+	});
+
+	it("reconciles Codex's listed GPT-6 routes and retired GPT-5.4 IDs", async () => {
+		const models = (await generate(true))!["openai-codex"];
+		for (const id of ["gpt-6-sol", "gpt-6-luna"]) {
+			expect(models[id], id).toMatchObject({
+				api: "openai-codex-responses",
+				baseUrl: "https://chatgpt.com/backend-api",
+				contextWindow: 872000,
+				maxTokens: 128000,
+				thinkingLevelMap: { max: "max", xhigh: "xhigh" },
+			});
+		}
+		for (const id of ["gpt-5.4", "gpt-5.4-mini"]) expect(models[id]).toBeUndefined();
+	});
+
+	it("includes documented tool-capable Vertex routes and omits retired or tool-incapable models", async () => {
+		const models = (await generate(true))!["google-vertex"];
+		for (const id of [
+			"gemini-3.1-flash-lite",
+			"gemini-3.5-flash",
+			"gemini-3.5-flash-lite",
+			"gemini-3.6-flash",
+			"gemini-3.7-flash",
+			"gemini-3.8-flash",
+		]) {
+			expect(models[id], id).toMatchObject({
+				api: "google-vertex",
+				contextWindow: 1048576,
+				maxTokens: 65536,
+			});
+		}
+		for (const id of ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-3.8-flash-cyber"]) {
+			expect(models[id]).toBeUndefined();
+		}
 	});
 
 	it("preserves provider-documented OpenCode Go Qwen 3.7 Messages routing", async () => {
@@ -1064,7 +1132,11 @@ describe("real generator context corrections", () => {
 		}
 		expect(models.openai["gpt-6-astra"].contextWindow).toBe(1050000);
 		expect(models.openai["gpt-6-astra"]).not.toHaveProperty("contextWindowBudget");
-		expect(models["azure-openai-responses"]["gpt-6-astra"]).toBeUndefined();
+		expect(models["azure-openai-responses"]["gpt-6-astra"]).toMatchObject({
+			contextWindow: 1050000,
+			maxInputTokens: 922000,
+			maxTokens: 128000,
+		});
 		expect(models.opencode["gpt-5.4"].contextWindow).toBe(1050000);
 		expect(models.opencode["claude-sonnet-4-5"].contextWindow).toBe(200000);
 		expect(models.opencode["claude-sonnet-4"].contextWindow).toBe(200000);
@@ -1089,13 +1161,13 @@ describe("real generator context corrections", () => {
 			"gpt-5.2-codex": 400000,
 			"gpt-5.3-codex": 272000,
 			"gpt-5.3-codex-spark": 128000,
-			"gpt-5.4": 1000000,
-			"gpt-5.4-mini": 272000,
 			"gpt-5.5": 272000,
 			"gpt-5.6-sol": 872000,
 			"gpt-5.6-terra": 872000,
 			"gpt-5.6-luna": 872000,
 			"gpt-6-astra": 872000,
+			"gpt-6-sol": 872000,
+			"gpt-6-luna": 872000,
 		};
 		for (const model of Object.values(models["openai-codex"])) {
 			expect(model.contextWindow, model.id).toBe(codexContexts[model.id]);

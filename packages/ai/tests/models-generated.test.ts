@@ -83,6 +83,8 @@ describe("generated catalog - approved context corrections", () => {
 		["opencode", "claude-sonnet-4-5", 200000],
 		["openai-codex", "gpt-5.5", 272000],
 		["openai-codex", "gpt-6-astra", 872000],
+		["openai-codex", "gpt-6-sol", 872000],
+		["openai-codex", "gpt-6-luna", 872000],
 		["xai", "grok-code-fast-1", 256000],
 		["cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6", 262144],
 		["openrouter", "~moonshotai/kimi-latest", 1048576],
@@ -154,7 +156,6 @@ describe("generated catalog - approved context corrections", () => {
 		["vercel-ai-gateway", "zai/glm-5.1", 204800],
 		["vercel-ai-gateway", "zai/glm-5.2", 1048576],
 		["together", "zai-org/GLM-5.2", 1000000],
-		["openai-codex", "gpt-5.4", 1000000],
 		["openai-codex", "gpt-5.6-sol", 872000],
 		["openai-codex", "gpt-5.6-terra", 872000],
 		["openai-codex", "gpt-5.6-luna", 872000],
@@ -211,9 +212,14 @@ describe("generated catalog - Azure independent input limits", () => {
 			expect(getModels("openai").find((model) => model.id === id)).toBeUndefined();
 		},
 	);
-	it.each(["gpt-6-luna", "gpt-6-sol"])("keeps unverified Azure %s metadata out of built-ins", (id) => {
-		expect(getModels("azure-openai-responses").find((model) => model.id === id)).toBeUndefined();
-		expect(getModel("openai", id)).toBeDefined();
+	it.each(["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"])("uses Azure-specific limits for %s", (id) => {
+		expect(getModel("azure-openai-responses", id)).toMatchObject({
+			api: "azure-openai-responses",
+			contextWindow: 1_050_000,
+			maxInputTokens: 922_000,
+			maxTokens: 128_000,
+		});
+		expect(getModel("openai", id).maxInputTokens).toBeUndefined();
 	});
 	it("preserves the GPT-5.5 Responses combined constraint", () => {
 		expect(getModel("azure-openai-responses", "gpt-5.5").requestLimits).toEqual([
@@ -761,9 +767,59 @@ describe("generated catalog - GPT-6 Astra", () => {
 		expectAstraThinking(model);
 	});
 
-	it("does not expose Astra through Azure", () => {
-		expect(getModels("azure-openai-responses").some((model) => model.id === "gpt-6-astra")).toBe(false);
+	it("exposes Azure Astra with Azure-specific input metadata", () => {
+		expect(getModel("azure-openai-responses", "gpt-6-astra")).toMatchObject({
+			contextWindow: 1_050_000,
+			maxInputTokens: 922_000,
+			maxTokens: 128_000,
+		});
 	});
+});
+
+describe("generated catalog - direct GPT-6 reasoning", () => {
+	it.each(["gpt-6-sol", "gpt-6-luna"])("supports the documented reasoning choices for openai/%s", (id) => {
+		const model = getModel("openai", id);
+		expect(model.thinkingLevelMap).toMatchObject({ off: "none", minimal: null, xhigh: "xhigh", max: "max" });
+		expect(getSupportedThinkingLevels(model)).toContain("max");
+	});
+});
+
+describe("generated catalog - Codex route inventory", () => {
+	it.each(["gpt-6-sol", "gpt-6-luna"])("exposes %s on Codex with its declared total context", (id) => {
+		const model = getModel("openai-codex", id);
+		expect(model).toMatchObject({
+			api: "openai-codex-responses",
+			baseUrl: "https://chatgpt.com/backend-api",
+			contextWindow: 872_000,
+			maxTokens: 128_000,
+		});
+		expect(getSupportedThinkingLevels(model)).toContain("max");
+	});
+	it.each(["gpt-5.4", "gpt-5.4-mini"])("omits retired Codex %s without removing direct OpenAI", (id) => {
+		expect(getModels("openai-codex").find((model) => model.id === id)).toBeUndefined();
+		expect(getModel("openai", id)).toBeDefined();
+	});
+});
+
+describe("generated catalog - manually curated Vertex routes", () => {
+	it.each([
+		"gemini-3.1-flash-lite",
+		"gemini-3.5-flash",
+		"gemini-3.5-flash-lite",
+		"gemini-3.6-flash",
+		"gemini-3.7-flash",
+		"gemini-3.8-flash",
+	])("includes tool-capable %s at Vertex's documented limits", (id) => {
+		expect(getModel("google-vertex", id)).toMatchObject({
+			api: "google-vertex",
+			contextWindow: 1_048_576,
+			maxTokens: 65_536,
+		});
+	});
+	it.each(["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-3.8-flash-cyber"])(
+		"does not offer retired or tool-incapable %s",
+		(id) => expect(getModels("google-vertex").some((model) => model.id === id)).toBe(false),
+	);
 });
 
 describe("generated catalog - GPT-5.6 Codex variants", () => {

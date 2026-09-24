@@ -348,6 +348,10 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	) {
 		mergeThinkingLevelMap(model, { off: null, minimal: null, xhigh: "xhigh", max: "max" });
 	}
+	if (model.provider === "openai" && model.api === "openai-responses" &&
+		["gpt-6-sol", "gpt-6-luna"].includes(model.id)) {
+		mergeThinkingLevelMap(model, { off: "none", minimal: null, xhigh: "xhigh", max: "max" });
+	}
 	if (
 		(model.api === "openai-responses" || model.api === "azure-openai-responses") &&
 		model.id.startsWith("gpt-5")
@@ -397,6 +401,9 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	}
 	if (model.provider === "openai-codex" && supportsOpenAiXhigh(model.id)) {
 		mergeThinkingLevelMap(model, { minimal: "low" });
+	}
+	if (model.provider === "openai-codex" && ["gpt-6-sol", "gpt-6-luna"].includes(model.id)) {
+		mergeThinkingLevelMap(model, { off: null, minimal: "low", xhigh: "xhigh", max: "max" });
 	}
 	if (model.provider === "openai-codex" && model.id === "gpt-5.1-codex-mini") {
 		mergeThinkingLevelMap(model, { minimal: "medium", low: "medium", medium: "medium", high: "high" });
@@ -2052,18 +2059,6 @@ async function generateModels() {
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
-			id: "gpt-5.4",
-			name: "GPT-5.4",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-			contextWindow: 1000000,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
 			id: "gpt-5.5",
 			name: "GPT-5.5",
 			api: "openai-codex-responses",
@@ -2085,6 +2080,31 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+			contextWindow: CODEX_EXTENDED_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		// SCRAMJET-DIVERGENCE: GPT-6 Codex output uses the direct-API allowance provisionally, not a Codex-route maximum.
+		{
+			id: "gpt-6-sol",
+			name: "GPT-6 Sol",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+			contextWindow: CODEX_EXTENDED_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-6-luna",
+			name: "GPT-6 Luna",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
 			contextWindow: CODEX_EXTENDED_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
@@ -2122,18 +2142,6 @@ async function generateModels() {
 			input: ["text", "image"],
 			cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 },
 			contextWindow: CODEX_EXTENDED_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.4-mini",
-			name: "GPT-5.4 Mini",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
-			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -2296,30 +2304,6 @@ async function generateModels() {
 			maxTokens: 65536,
 		},
 		{
-			id: "gemini-2.0-flash",
-			name: "Gemini 2.0 Flash (Vertex)",
-			api: "google-vertex",
-			provider: "google-vertex",
-			baseUrl: VERTEX_BASE_URL,
-			reasoning: false,
-			input: ["text", "image"],
-			cost: { input: 0.15, output: 0.6, cacheRead: 0.0375, cacheWrite: 0 },
-			contextWindow: 1048576,
-			maxTokens: 8192,
-		},
-		{
-			id: "gemini-2.0-flash-lite",
-			name: "Gemini 2.0 Flash Lite (Vertex)",
-			api: "google-vertex",
-			provider: "google-vertex",
-			baseUrl: VERTEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 0.075, output: 0.3, cacheRead: 0.01875, cacheWrite: 0 },
-			contextWindow: 1048576,
-			maxTokens: 65536,
-		},
-		{
 			id: "gemini-2.5-pro",
 			name: "Gemini 2.5 Pro (Vertex)",
 			api: "google-vertex",
@@ -2403,11 +2387,33 @@ async function generateModels() {
 			contextWindow: 1000000,
 			maxTokens: 8192,
 		},
+		...([
+			["gemini-3.1-flash-lite", 0.25, 1.5, 0.025],
+			["gemini-3.5-flash", 1.5, 9, 0.15],
+			["gemini-3.5-flash-lite", 0.3, 2.5, 0.03],
+			["gemini-3.6-flash", 0.75, 3.75, 0.075],
+			["gemini-3.7-flash", 0.75, 3.75, 0.075],
+			["gemini-3.8-flash", 0.75, 3.75, 0.075],
+		] as const).map(([id, input, output, cacheRead]) => ({
+			id,
+			name: `${id} (Vertex)`,
+			api: "google-vertex" as const,
+			provider: "google-vertex" as const,
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"] as ("text" | "image")[],
+			cost: { input, output, cacheRead, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 65536,
+		})),
 	];
 	allModels.push(...vertexModels);
 
 	// SCRAMJET-DIVERGENCE: Azure documents input limits and a separate GPT-5.5 Responses combined budget.
 	const azureInputLimits: Record<string, number> = {
+		"gpt-6-astra": 922000,
+		"gpt-6-luna": 922000,
+		"gpt-6-sol": 922000,
 		"gpt-5.6-sol": 922000,
 		"gpt-5.6-terra": 922000,
 		"gpt-5.6-luna": 922000,
@@ -2429,12 +2435,16 @@ async function generateModels() {
 		"gpt-5-codex": 272000,
 		"gpt-5-pro": 272000,
 	};
-	// SCRAMJET-DIVERGENCE: Exclude GPT-6 copies whose direct-route numbers lack Azure deployment evidence.
+	// SCRAMJET-DIVERGENCE: Keep Azure GPT-6 deployment metadata independent of the public OpenAI route.
+	const azureGpt6: Record<string, Pick<Model<Api>, "contextWindow" | "maxTokens" | "cost">> = {
+		"gpt-6-astra": { contextWindow: 1050000, maxTokens: 128000, cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 } },
+		"gpt-6-sol": { contextWindow: 1050000, maxTokens: 128000, cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 } },
+		"gpt-6-luna": { contextWindow: 1050000, maxTokens: 128000, cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 } },
+	};
 	const azureOpenAiModels: Model<Api>[] = allModels
-		.filter(
-			(model) => model.provider === "openai" && model.api === "openai-responses" &&
-				!["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"].includes(model.id),
-		)
+		// SCRAMJET-DIVERGENCE: New public API IDs need Azure-specific review before entering the built-in catalog.
+		.filter((model) => model.provider === "openai" && model.api === "openai-responses" &&
+			(Object.hasOwn(MODELS["azure-openai-responses"], model.id) || Object.hasOwn(azureGpt6, model.id)))
 		.map((model) => ({
 			...model,
 			api: "azure-openai-responses",
@@ -2449,6 +2459,8 @@ async function generateModels() {
 					}
 				: {}),
 			maxTokens: model.id === "gpt-5-pro" ? 128000 : model.maxTokens,
+			...azureGpt6[model.id],
+			...(azureGpt6[model.id] ? { thinkingLevelMap: undefined } : {}),
 		}));
 	allModels.push(...azureOpenAiModels);
 
