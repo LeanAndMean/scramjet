@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.102.0 — Browse and copy live terminal output
+
+Makes running output reachable through an application-managed retained transcript, with stable reading anchors and explicit selection copying. Fixes [#551](https://github.com/LeanAndMean/scramjet/issues/551).
+
+### Added
+
+- Add transcript scrolling, a scrollbar, keyboard browsing, grapheme-aware selection and copying that removes known padding and rejoins soft wraps.
+- Keep input docked while browsing, with live docking, input-height and wheel-step settings.
+
+### Changed
+
+- Use retained mode by default in interactive sessions; retain restart-only `tuiMode: "committed"` as the native-history compatibility option with its separate live-output limitation.
+- Cache finalized rendering and prepare visible text ranges while preserving live-card identity, reading anchors, held selections and graphics containment.
+- Restore terminal modes across external-editor and suspend/resume handoffs, and append one plain-text transcript on orderly exit.
+
+### Fixed
+
+- Require current visible-frame flush evidence before approval activation, and reveal hidden controls before allowing a subsequent activation.
+- Remove orphan spacing from fully hidden tools, reject stale autocomplete acceptance, and preserve encoded-key navigation and shipped example actions.
+
+### Tests
+
+- Add production-composition, long-session, copy, input-framing, approval and terminal-restoration regressions, plus native interaction and graphics verification drivers.
+- Document tested terminal configurations, committed-mode compatibility, and deferred native-selection parity rather than claiming universal terminal support.
+
 ## 0.101.0 — Refresh built-in model catalogs
 
 Refreshes reviewed model metadata across providers and clarifies default-model fallback behavior. Fixes [#569](https://github.com/LeanAndMean/scramjet/issues/569).
