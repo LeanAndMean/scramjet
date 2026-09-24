@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.101.0 — Refresh built-in model catalogs
+
+Refreshes reviewed model metadata across providers and clarifies default-model fallback behavior. Fixes [#569](https://github.com/LeanAndMean/scramjet/issues/569).
+
+### Added
+
+- Add reviewed Codex, Azure Responses, and Vertex Flash model routes with route-specific limits, pricing qualifications, and tool capabilities.
+- Record catalog source provenance and unresolved feed and endpoint qualifications.
+
+### Changed
+
+- Reconcile the checked-in catalog across 32 providers while keeping incomplete, malformed, and unreviewed feed updates out of normal builds.
+- Disclose headless default-model fallback and correct direct OpenAI reasoning options.
+
+### Tests
+
+- Add generator, catalog, route-pricing, and default-model fallback regression coverage.
+
 ## 0.100.0 — Add new Copilot model contracts
 
 Adds reviewed GitHub Copilot model metadata and preserves explicit reasoning-off selections. Fixes [#567](https://github.com/LeanAndMean/scramjet/issues/567).
