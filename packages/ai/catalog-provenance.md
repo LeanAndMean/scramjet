@@ -2,9 +2,29 @@
 
 `src/models.generated.ts` is the checked-in runtime catalog. Normal builds do not fetch live feeds. This file records source qualifications and review decisions for the snapshot, not a second runtime authority or a promise that every model is available to every account.
 
-## Snapshot reviewed 2026-09-23
+## Source observation 2026-09-23; final snapshot review completed 2026-09-24
 
 The previous post-#568 snapshot had 32 providers / 1,062 records (SHA-256 `089e634c71fc3b6bbdbb6563114851aa500d633a0d71e9876aa0728a42dd33dc`). The corrected snapshot has **32 providers / 1,358 records** (SHA-256 `c45d18e7f74f113ce89d0226ac98ef3f91ea139fabe10bf8252a02914563eba8`): compared with the previous committed snapshot, 457 additions, 161 removals, 263 changed shared records and 638 unchanged shared records. These counts compare provider/ID objects in the two committed catalogs; the earlier 482-changed/393-unchanged inventory did not match that comparison. The 26 retentions against live feed omission are a *separate candidate-versus-snapshot* classification, not another category of the committed baseline diff. The checked-in generated diff supplies exact old/new provider/ID/field values; the dispositions below explain the material groups.
+
+| Provider | Unchanged | Provider | Unchanged |
+| --- | ---: | --- | ---: |
+| Amazon Bedrock | 48 | Anthropic | 12 |
+| Azure OpenAI Responses | 38 | Cerebras | 1 |
+| Cloudflare AI Gateway | 7 | Cloudflare Workers AI | 12 |
+| DeepSeek | 2 | Fireworks | 9 |
+| GitHub Copilot | 28 | Google | 11 |
+| Google Vertex | 13 | Groq | 5 |
+| Hugging Face | 47 | Kimi Coding | 3 |
+| MiniMax | 2 | MiniMax China | 2 |
+| Mistral | 2 | Moonshot AI | 3 |
+| Moonshot AI China | 3 | OpenAI | 36 |
+| OpenAI Codex | 14 | OpenCode Zen | 44 |
+| OpenCode Go | 9 | OpenRouter | 133 |
+| Together | 14 | Vercel AI Gateway | 105 |
+| xAI | 7 | Xiaomi | 6 |
+| Xiaomi Token Plan AMS | 6 | Xiaomi Token Plan China | 6 |
+| Xiaomi Token Plan Singapore | 6 | Zai | 4 |
+| **Total** | **638** | | |
 
 Sources observed on 2026-09-23: live `https://models.dev/api.json`, `https://openrouter.ai/api/v1/models` with per-tool-model endpoint discovery, and `https://ai-gateway.vercel.sh/v1/models` with endpoint discovery. The isolated normalized review candidate had SHA-256 `d1a33269e9808e59c26d4d9678d452173b13f9dc4f005deccc1eaca469eea276` (31 providers / 1,366 records). The upstream Pi comparison used `earendil-works/pi` commit `7fd564cbb78f35f3de14d5382fea692b87ec4026` and published MIT `@earendil-works/pi-ai@0.87.1` data (tarball SHA-256 `35b4432f27cc2665f86beebb9af6a39b1251970883c3044bd8be4f4e8c731ca0`; manifest generated `2026-09-22T19:31:44Z`). **471 of 491 candidate additions** appeared in that Pi release. Live feeds change; the hashes identify observations, not reproducible historical feed inputs. No paid model calls were made.
 
@@ -41,4 +61,4 @@ A repository check of removed provider/ID pairs against configured defaults, tes
 
 ## Future refreshes
 
-Run the generator with `SCRAMJET_MODEL_CANDIDATE=<absolute-new-path>` in an isolated checkout to produce a non-runtime JSON inventory. Missing prices are `null` and listed in `unresolvedCosts`; unqualified dynamic routes/endpoints and missing or zero-usable previously supported optional models.dev sections (including `kimi-for-coding` → `kimi-coding`) are listed in `unresolvedSources`. Strict generation refuses such supported-provider source loss before writing; optional sections without previously supported built-ins remain optional. The candidate is never the canonical TypeScript catalog. Normal `npm run generate-models` remains strict and refuses missing/malformed prices or acquisition failures before its canonical write; normal builds never run it. Compare the candidate with the checked-in snapshot and current, route-applicable sources before accepting a new snapshot. Runtime `Model.cost` still requires finite numeric estimates; zero is not a verified-free label. Offline tests check catalog structure and request metadata, not entitlements, provider charges or maximum-request acceptance.
+Run the generator with `SCRAMJET_MODEL_CANDIDATE=<absolute-new-path>` in an isolated checkout to produce a non-runtime JSON inventory. Missing prices are `null` and listed in `unresolvedCosts`; unqualified dynamic routes/endpoints and missing or zero-usable previously supported optional models.dev sections (including `kimi-for-coding` → `kimi-coding`) are listed in `unresolvedSources`; committed provider/ID pairs absent from the candidate are listed in `unexplainedLosses`. Strict generation refuses any such exact catalog loss before writing; optional sections without previously supported built-ins remain optional. The candidate is never the canonical TypeScript catalog. Normal `npm run generate-models` remains strict and refuses missing/malformed prices or acquisition failures before its canonical write; normal builds never run it. Compare the candidate with the checked-in snapshot and current, route-applicable sources before accepting a new snapshot. Runtime `Model.cost` still requires finite numeric estimates; zero is not a verified-free label. Offline tests check catalog structure and request metadata, not entitlements, provider charges or maximum-request acceptance.

@@ -537,7 +537,8 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 				continue;
 			}
 			const requestLimits = endpointRequestLimits(endpointData.data.endpoints, "openrouter", model.id);
-			if (candidatePath && requestLimits.length === 0) {
+			if (requestLimits.length === 0) {
+				if (!candidatePath) throw new Error(`openrouter/${model.id}: no valid declared endpoints`);
 				unresolvedSources.push({ source: "openrouter", id: model.id, reason: "no valid declared endpoints" });
 				continue;
 			}
@@ -648,7 +649,11 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 			}
 			const requestLimits = endpointRequestLimits(endpointData.data.endpoints, "vercel-ai-gateway", model.id);
 			const endpoints = requestLimits.filter((endpoint) => endpoint.supportsTools);
-			if (endpoints.length === 0) throw new Error(`Unresolved endpoint context maximum for ${model.id}`);
+			if (endpoints.length === 0) {
+				if (!candidatePath) throw new Error(`Unresolved endpoint context maximum for ${model.id}`);
+				unresolvedSources.push({ source: "vercel-ai-gateway", id: model.id, reason: "no tool-capable endpoints" });
+				continue;
+			}
 			const contextWindow = Math.max(...endpoints.map((endpoint) => endpoint.maxTotalTokens));
 
 			const input: ("text" | "image")[] = ["text"];
@@ -723,6 +728,15 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 				if (!Number.isFinite(m.limit?.context) || !Number.isFinite(m.limit?.output) ||
 					(m.limit?.context ?? 0) <= 0 || (m.limit?.output ?? 0) <= 0) {
 					throw new Error(`models.dev/${key}/${id}: invalid context or output limit`);
+				}
+				if (m.reasoning !== undefined && typeof m.reasoning !== "boolean") {
+					throw new Error(`models.dev/${key}/${id}: invalid reasoning capability`);
+				}
+				if (m.modalities !== undefined &&
+					(!m.modalities || typeof m.modalities !== "object" || Array.isArray(m.modalities) ||
+						(m.modalities.input !== undefined &&
+							(!Array.isArray(m.modalities.input) || m.modalities.input.some((item) => typeof item !== "string"))))) {
+					throw new Error(`models.dev/${key}/${id}: invalid input modalities`);
 				}
 				price(m.cost?.input, `models.dev/${key}/${id} input`);
 				price(m.cost?.output, `models.dev/${key}/${id} output`);
@@ -2415,7 +2429,7 @@ async function generateModels() {
 		"gpt-5-codex": 272000,
 		"gpt-5-pro": 272000,
 	};
-	// SCRAMJET-DIVERGENCE: Do not transfer new direct-route limits or prices to Azure without deployment evidence.
+	// SCRAMJET-DIVERGENCE: Exclude GPT-6 copies whose direct-route numbers lack Azure deployment evidence.
 	const azureOpenAiModels: Model<Api>[] = allModels
 		.filter(
 			(model) => model.provider === "openai" && model.api === "openai-responses" &&
@@ -2462,6 +2476,12 @@ async function generateModels() {
 		providers[model.provider][model.id] = model;
 	}
 
+	const unexplainedLosses = Object.entries(MODELS).flatMap(([provider, models]) =>
+		Object.keys(models)
+			.filter((id) => !Object.hasOwn(providers[provider] ?? {}, id))
+			.map((id) => `${provider}/${id}`),
+	).sort();
+
 	// SCRAMJET-DIVERGENCE: Keep unresolved live-feed metadata in review output, never in the runtime catalog.
 	if (candidatePath) {
 		const unresolvedCosts = Object.entries(providers).flatMap(([provider, models]) =>
@@ -2475,9 +2495,13 @@ async function generateModels() {
 			provider,
 			Object.fromEntries(Object.keys(providers[provider]).sort().map((id) => [id, providers[provider][id]])),
 		]));
-		writeFileSync(candidatePath, JSON.stringify({ models, unresolvedCosts, unresolvedSources }, null, 2) + "\n", { flag: "wx" });
+		writeFileSync(candidatePath, JSON.stringify({ models, unresolvedCosts, unresolvedSources, unexplainedLosses }, null, 2) + "\n", { flag: "wx" });
 		console.log(`Generated review candidate at ${candidatePath} (${unresolvedCosts.length} unresolved cost records)`);
 		return;
+	}
+
+	if (unexplainedLosses.length > 0) {
+		throw new Error(`Unreviewed catalog losses: ${unexplainedLosses.join(", ")}`);
 	}
 
 	// Generate TypeScript file

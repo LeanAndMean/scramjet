@@ -5,8 +5,47 @@ import type { Model } from "../src/types.js";
 
 const initialExitCode = process.exitCode;
 const initialCandidatePath = process.env.SCRAMJET_MODEL_CANDIDATE;
-const { writeFileSync } = vi.hoisted(() => ({ writeFileSync: vi.fn() }));
+const { writeFileSync, committedModels } = vi.hoisted(() => ({
+	writeFileSync: vi.fn(),
+	committedModels: {} as Record<string, Record<string, unknown>>,
+}));
 vi.mock("fs", async (importOriginal) => ({ ...(await importOriginal<typeof import("fs")>()), writeFileSync }));
+vi.mock("../src/models.generated.js", () => ({ MODELS: committedModels }));
+
+const committedProviderIds = [
+	"amazon-bedrock",
+	"anthropic",
+	"azure-openai-responses",
+	"cerebras",
+	"cloudflare-ai-gateway",
+	"cloudflare-workers-ai",
+	"deepseek",
+	"fireworks",
+	"github-copilot",
+	"google",
+	"google-vertex",
+	"groq",
+	"huggingface",
+	"kimi-coding",
+	"minimax",
+	"minimax-cn",
+	"mistral",
+	"moonshotai",
+	"moonshotai-cn",
+	"openai",
+	"openai-codex",
+	"opencode",
+	"opencode-go",
+	"openrouter",
+	"together",
+	"vercel-ai-gateway",
+	"xai",
+	"xiaomi",
+	"xiaomi-token-plan-ams",
+	"xiaomi-token-plan-cn",
+	"xiaomi-token-plan-sgp",
+	"zai",
+];
 
 function feedModel(id: string, context: number, overrides: Record<string, unknown> = {}) {
 	return {
@@ -141,10 +180,14 @@ async function generate(
 		openRouterChange?: (data: any[]) => void;
 		vercelChange?: (data: any[]) => void;
 		candidatePath?: string;
+		committedModels?: Record<string, Record<string, unknown>>;
 		expectedFetchCount?: number;
 	} = {},
 ) {
 	vi.resetModules();
+	for (const provider of Object.keys(committedModels)) delete committedModels[provider];
+	for (const provider of committedProviderIds) committedModels[provider] = {};
+	for (const [provider, models] of Object.entries(options.committedModels ?? {})) committedModels[provider] = models;
 	if (options.candidatePath !== undefined) process.env.SCRAMJET_MODEL_CANDIDATE = options.candidatePath;
 	else delete process.env.SCRAMJET_MODEL_CANDIDATE;
 	writeFileSync.mockClear();
@@ -463,6 +506,27 @@ describe("real generator context corrections", () => {
 			},
 			expectFailure: true,
 			expectedError: "models.dev/google/example input",
+		});
+	});
+
+	it("reports exact committed identities missing from a candidate and blocks canonical replacement", async () => {
+		const committedModels = { groq: { example: {} } };
+		const modelsDevChange = (data: Record<string, any>) => {
+			data.groq.models.kept = feedModel("kept", 500000);
+			delete data.groq.models.example;
+		};
+		const candidate = await generate(true, {
+			candidatePath: "/tmp/scramjet-569-truncated.json",
+			committedModels,
+			modelsDevChange,
+		});
+		expect(candidate.unexplainedLosses).toEqual(["groq/example"]);
+		expect(candidate.models.groq.kept).toBeDefined();
+		await generate(true, {
+			committedModels,
+			modelsDevChange,
+			expectFailure: true,
+			expectedError: "Unreviewed catalog losses: groq/example",
 		});
 	});
 
@@ -852,6 +916,21 @@ describe("real generator context corrections", () => {
 			expectedError: "groq/example",
 		});
 	});
+
+	it.each([
+		["reasoning", "true", "invalid reasoning capability"],
+		["input modalities", "image", "invalid input modalities"],
+		["input modality entries", ["text", 1], "invalid input modalities"],
+	] as const)("rejects malformed models.dev %s before writing", async (_label, value, expectedError) => {
+		await generate(true, {
+			modelsDevChange: (data) => {
+				if (_label === "reasoning") data.groq.models.example.reasoning = value;
+				else data.groq.models.example.modalities.input = value;
+			},
+			expectFailure: true,
+			expectedError,
+		});
+	});
 	it("does not copy new direct GPT-6 numerical metadata onto Azure Responses", async () => {
 		const models = (await generate(true, {
 			modelsDevChange: (data) => {
@@ -1068,8 +1147,28 @@ describe("real generator context corrections", () => {
 		expect(models.openai["gpt-5.4"].name).toBe(present ? "Feed gpt-5.4" : "GPT-5.4");
 	});
 
+	it("records an empty OpenRouter endpoint aggregate only in candidate output", async () => {
+		const openRouterEndpoints: unknown[] = [];
+		const candidate = await generate(true, {
+			candidatePath: "/tmp/scramjet-569-empty-openrouter-endpoints.json",
+			openRouterEndpoints,
+			openRouterEndpointFor: "openai/gpt-5.4",
+		});
+		expect(candidate.models.openrouter["openai/gpt-5.4"]).toBeUndefined();
+		expect(candidate.unresolvedSources).toContainEqual({
+			source: "openrouter",
+			id: "openai/gpt-5.4",
+			reason: "no valid declared endpoints",
+		});
+		await generate(true, {
+			openRouterEndpoints,
+			openRouterEndpointFor: "openai/gpt-5.4",
+			expectFailure: true,
+			expectedError: "openrouter/openai/gpt-5.4: no valid declared endpoints",
+		});
+	});
+
 	it.each([
-		{ openRouterEndpoints: [] },
 		{ openRouterEndpoints: [{ context_length: 1500000, supported_parameters: ["tools"] }] },
 		{
 			openRouterEndpoints: [
@@ -1099,6 +1198,25 @@ describe("real generator context corrections", () => {
 		{ openRouterEndpoints: [{ max_prompt_tokens: 98304 }] },
 	])("rejects malformed endpoint constraints $openRouterEndpoints before writing", async ({ openRouterEndpoints }) => {
 		await generate(true, { openRouterEndpoints, expectFailure: true });
+	});
+
+	it("records a Vercel tool-capability contradiction only in candidate output", async () => {
+		const vercelEndpoints = [{ context_length: 1600000, supported_parameters: [] }];
+		const candidate = await generate(true, {
+			candidatePath: "/tmp/scramjet-569-no-tools-vercel.json",
+			vercelEndpoints,
+		});
+		expect(candidate.models["vercel-ai-gateway"]?.["openai/gpt-5.4"]).toBeUndefined();
+		expect(candidate.unresolvedSources).toContainEqual({
+			source: "vercel-ai-gateway",
+			id: "openai/gpt-5.4",
+			reason: "no tool-capable endpoints",
+		});
+		await generate(true, {
+			vercelEndpoints,
+			expectFailure: true,
+			expectedError: "Unresolved endpoint context maximum for openai/gpt-5.4",
+		});
 	});
 
 	it("retains Vercel joint output constraints without selecting a smaller total context", async () => {

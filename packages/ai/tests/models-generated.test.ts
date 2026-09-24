@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { clampThinkingLevel, getModel, getModels, getProviders, getSupportedThinkingLevels } from "../src/models.js";
+import {
+	clampThinkingLevel,
+	getModel,
+	getModels,
+	getProviders,
+	getSupportedThinkingLevels,
+	validateModelContextLimits,
+} from "../src/models.js";
 import type { AnthropicMessagesCompat } from "../src/types.js";
 
 describe("generated catalog invariants", () => {
 	it("has one finite positive context field and no obsolete budget", () => {
 		for (const provider of getProviders()) {
 			for (const model of getModels(provider)) {
+				expect(() => validateModelContextLimits(model), `${provider}/${model.id}`).not.toThrow();
 				expect(Number.isFinite(model.contextWindow), `${provider}/${model.id}`).toBe(true);
 				expect(model.contextWindow).toBeGreaterThan(0);
 				expect(Number.isFinite(model.maxTokens) && model.maxTokens > 0, `${provider}/${model.id} output`).toBe(

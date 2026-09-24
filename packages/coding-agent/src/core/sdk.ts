@@ -305,7 +305,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				.filter(Boolean)
 				.join(" ");
 		} else if (modelFallbackMessage) {
-			modelFallbackMessage += `. Using ${model.provider}/${model.id}`;
+			modelFallbackMessage += result.fallbackMessage
+				? `. ${result.fallbackMessage}`
+				: `. Using ${model.provider}/${model.id}`;
 		} else {
 			modelFallbackMessage = result.fallbackMessage;
 		}
