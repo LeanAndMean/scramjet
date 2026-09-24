@@ -79,7 +79,17 @@ describe("GitHub Copilot selector visibility", () => {
 		);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		const ids = (selector as any).allModels.map((item: { id: string }) => item.id);
-		for (const id of ["claude-fable-5.1", "kimi-k3", "grok-4.6", "mai-code-1.1-flash", "gpt-6-astra"]) {
+		for (const id of [
+			"claude-fable-5.1",
+			"claude-opus-5",
+			"claude-opus-5.5",
+			"gpt-6-sol",
+			"gpt-6-luna",
+			"kimi-k3",
+			"grok-4.6",
+			"mai-code-1.1-flash",
+			"gpt-6-astra",
+		]) {
 			expect(ids).toContain(id);
 		}
 	});

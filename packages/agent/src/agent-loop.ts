@@ -239,6 +239,13 @@ async function runLoop(
 							: nextTurnSnapshot.thinkingLevel === "off"
 								? undefined
 								: nextTurnSnapshot.thinkingLevel,
+					// SCRAMJET-DIVERGENCE: Refresh explicit-off provenance atomically with reasoning (#567).
+					explicitReasoningOff:
+						nextTurnSnapshot.thinkingLevel === undefined
+							? config.explicitReasoningOff
+							: nextTurnSnapshot.thinkingLevel === "off" && nextTurnSnapshot.explicitReasoningOff !== false
+								? true
+								: undefined,
 				};
 			}
 

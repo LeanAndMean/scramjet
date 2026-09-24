@@ -1,8 +1,14 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getModel, getSupportedThinkingLevels } from "@leanandmean/ai";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { defaultModelPerProvider, findInitialModel, resolveCliModel } from "../src/core/model-resolver.js";
+import { createAgentSession } from "../src/core/sdk.js";
+import { SessionManager } from "../src/core/session-manager.js";
+import { SettingsManager } from "../src/core/settings-manager.js";
 
 function createRegistry(authProviders: string[]): ModelRegistry {
 	const authData: Record<string, { type: "api_key"; key: string }> = {};
@@ -13,6 +19,11 @@ function createRegistry(authProviders: string[]): ModelRegistry {
 }
 
 describe("defaultModelPerProvider - catalog existence", () => {
+	it("cerebras default remains in the catalog after removal", () => {
+		expect(defaultModelPerProvider.cerebras).toBe("gpt-oss-120b");
+		expect(getModel("cerebras", defaultModelPerProvider.cerebras)).toBeDefined();
+	});
+
 	it("anthropic default exists in generated catalog", () => {
 		expect(defaultModelPerProvider.anthropic).toBe("claude-opus-4-8");
 		const model = getModel("anthropic", "claude-opus-4-8");
@@ -70,6 +81,34 @@ describe("findInitialModel", () => {
 		expect(result.model!.id).toBe("us.anthropic.claude-opus-4-8");
 	});
 
+	it("warns when a removed configured default selects another route", async () => {
+		const registry = createRegistry(["cerebras"]);
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			defaultProvider: "cerebras",
+			defaultModelId: "zai-glm-4.7",
+			modelRegistry: registry,
+		});
+		expect(result.model).toMatchObject({ provider: "cerebras", id: "gpt-oss-120b" });
+		expect(result.fallbackMessage).toBe(
+			"Configured default model cerebras/zai-glm-4.7 is not in the model registry. Using cerebras/gpt-oss-120b.",
+		);
+	});
+
+	it("does not warn for a configured default that exists", async () => {
+		const registry = createRegistry(["cerebras"]);
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			defaultProvider: "cerebras",
+			defaultModelId: "gpt-oss-120b",
+			modelRegistry: registry,
+		});
+		expect(result.model?.id).toBe("gpt-oss-120b");
+		expect(result.fallbackMessage).toBeUndefined();
+	});
+
 	it("falls back to first available model when no default matches", async () => {
 		const registry = createRegistry(["openai"]);
 		const result = await findInitialModel({
@@ -118,6 +157,121 @@ describe("findInitialModel", () => {
 		});
 		expect(result.model).toBeDefined();
 		expect(result.model!.id).toBe("claude-opus-4-8");
+	});
+});
+
+describe("startup configured default fallback", () => {
+	it("surfaces the removed identity and chosen model from the SDK", async () => {
+		const root = mkdtempSync(join(tmpdir(), "missing-default-"));
+		const cwd = join(root, "cwd");
+		const authStorage = AuthStorage.inMemory({ cerebras: { type: "api_key", key: "test-key" } });
+		try {
+			const { session, modelFallbackMessage } = await createAgentSession({
+				cwd,
+				agentDir: join(root, "agent"),
+				authStorage,
+				modelRegistry: ModelRegistry.inMemory(authStorage),
+				sessionManager: SessionManager.inMemory(cwd),
+				settingsManager: SettingsManager.inMemory({ defaultProvider: "cerebras", defaultModel: "zai-glm-4.7" }),
+			});
+			try {
+				expect(session.model).toBeDefined();
+				expect(modelFallbackMessage).toBe(
+					`Configured default model cerebras/zai-glm-4.7 is not in the model registry. Using ${session.model!.provider}/${session.model!.id}.`,
+				);
+			} finally {
+				session.dispose();
+			}
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves both stale session and configured-default diagnostics", async () => {
+		const root = mkdtempSync(join(tmpdir(), "missing-restored-default-"));
+		const cwd = join(root, "cwd");
+		const authStorage = AuthStorage.inMemory({ cerebras: { type: "api_key", key: "test-key" } });
+		const sessionManager = SessionManager.inMemory(cwd);
+		sessionManager.appendModelChange("missing-session-provider", "missing-session-model");
+		sessionManager.appendMessage({ role: "user", content: "resume", timestamp: Date.now() });
+		try {
+			const { session, modelFallbackMessage } = await createAgentSession({
+				cwd,
+				agentDir: join(root, "agent"),
+				authStorage,
+				modelRegistry: ModelRegistry.inMemory(authStorage),
+				sessionManager,
+				settingsManager: SettingsManager.inMemory({ defaultProvider: "cerebras", defaultModel: "missing-default" }),
+			});
+			try {
+				expect(modelFallbackMessage).toBe(
+					`Could not restore model missing-session-provider/missing-session-model. ` +
+						`Configured default model cerebras/missing-default is not in the model registry. ` +
+						`Using ${session.model!.provider}/${session.model!.id}.`,
+				);
+			} finally {
+				session.dispose();
+			}
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reports a stale restored model when the configured default resolves", async () => {
+		const root = mkdtempSync(join(tmpdir(), "missing-restored-valid-default-"));
+		const cwd = join(root, "cwd");
+		const authStorage = AuthStorage.inMemory({ cerebras: { type: "api_key", key: "test-key" } });
+		const sessionManager = SessionManager.inMemory(cwd);
+		sessionManager.appendModelChange("missing-session-provider", "missing-session-model");
+		sessionManager.appendMessage({ role: "user", content: "resume", timestamp: Date.now() });
+		try {
+			const { session, modelFallbackMessage } = await createAgentSession({
+				cwd,
+				agentDir: join(root, "agent"),
+				authStorage,
+				modelRegistry: ModelRegistry.inMemory(authStorage),
+				sessionManager,
+				settingsManager: SettingsManager.inMemory({ defaultProvider: "cerebras", defaultModel: "gpt-oss-120b" }),
+			});
+			try {
+				expect(session.model?.id).toBe("gpt-oss-120b");
+				expect(modelFallbackMessage).toBe(
+					"Could not restore model missing-session-provider/missing-session-model. Using cerebras/gpt-oss-120b",
+				);
+			} finally {
+				session.dispose();
+			}
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("retains the missing configured identity when no model is available", async () => {
+		const root = mkdtempSync(join(tmpdir(), "missing-default-no-model-"));
+		const cwd = join(root, "cwd");
+		const authStorage = AuthStorage.inMemory();
+		const modelRegistry = ModelRegistry.inMemory(authStorage);
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([]);
+		try {
+			const { session, modelFallbackMessage } = await createAgentSession({
+				cwd,
+				agentDir: join(root, "agent"),
+				authStorage,
+				modelRegistry,
+				sessionManager: SessionManager.inMemory(cwd),
+				settingsManager: SettingsManager.inMemory({ defaultProvider: "cerebras", defaultModel: "missing-default" }),
+			});
+			try {
+				expect(modelFallbackMessage).toContain(
+					"Configured default model cerebras/missing-default is not in the model registry.",
+				);
+				expect(modelFallbackMessage).toContain("No models available");
+			} finally {
+				session.dispose();
+			}
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 

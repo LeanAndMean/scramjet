@@ -61,6 +61,7 @@ type ProxySerializableStreamOptions = Pick<
 	| "temperature"
 	| "maxTokens"
 	| "reasoning"
+	| "explicitReasoningOff"
 	| "cacheRetention"
 	| "sessionId"
 	| "headers"
@@ -103,6 +104,8 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
 		temperature: options.temperature,
 		maxTokens: options.maxTokens,
 		reasoning: options.reasoning,
+		// SCRAMJET-DIVERGENCE: Preserve explicit-off provenance across proxy transport (#567).
+		explicitReasoningOff: options.explicitReasoningOff,
 		cacheRetention: options.cacheRetention,
 		sessionId: options.sessionId,
 		headers: options.headers,

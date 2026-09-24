@@ -700,9 +700,13 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createAgentSession");
 
+	// SCRAMJET-DIVERGENCE: Headless fallback warnings go to stderr, never JSON/RPC stdout.
 	if (appMode !== "interactive" && !session.model) {
-		console.error(chalk.red(formatNoModelsAvailableMessage()));
+		console.error(chalk.red(modelFallbackMessage ?? formatNoModelsAvailableMessage()));
 		process.exit(1);
+	}
+	if (appMode !== "interactive" && modelFallbackMessage) {
+		console.error(chalk.yellow(`Warning: ${modelFallbackMessage}`));
 	}
 
 	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
