@@ -471,6 +471,76 @@ $results | ConvertTo-Json -Depth 6 -Compress
         self.assertFalse(self.results["window"]["verified"]["windowClosed"])
 
 
+class LinuxTerminalStartupTests(unittest.TestCase):
+    def setUp(self):
+        source = ast.parse((ROOT / ".github/scripts/terminal-probe.py").read_text())
+        function = next((node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "wait_for_linux_window"), None)
+        if function is None:
+            for node in ast.walk(source):
+                if not isinstance(node, ast.If):
+                    continue
+                for index, statement in enumerate(node.orelse):
+                    if isinstance(statement, ast.If) and any(isinstance(part, ast.Constant) and part.value == "Owned terminal window did not appear" for part in ast.walk(statement)):
+                        body = "\n".join(ast.unparse(part) for part in node.orelse[index:index + 2])
+                        function = ast.parse("def wait_for_linux_window():\n" + "\n".join("    " + line for line in body.splitlines()) + "\n    return window_id\n").body[0]
+                        break
+                if function is not None:
+                    break
+        self.assertIsNotNone(function)
+        self.child = Mock(pid=321)
+        self.child.poll.return_value = None
+        self.process = Mock()
+        self.process.run.return_value = subprocess.CompletedProcess([], 0, "123\n", "")
+        self.wait = Mock(side_effect=lambda predicate, **_kwargs: bool(predicate()))
+        clock = Mock()
+        clock.monotonic.return_value = 10
+        self.context = {"terminal_process": self.child, "terminal_kind": "kitty", "subprocess": self.process,
+                        "wait_for": self.wait, "run": Mock(return_value="123"), "time": clock,
+                        "os": Mock(environ={"DISPLAY": ":99"}), "report": {}}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "terminal-probe.py", "exec"), self.context)
+
+    def test_success_uses_the_observed_window_and_original_deadline(self):
+        self.assertEqual(self.context["wait_for_linux_window"](), "123")
+        self.assertEqual(self.wait.call_args.kwargs["timeout"], 15)
+        self.process.run.assert_called_once()
+        startup = self.context["report"]["terminalStartup"]
+        self.assertEqual((startup["pid"], startup["window"], startup["attempts"]), (321, "123", 1))
+        self.assertIsNone(startup["exitBeforeCleanup"])
+
+    def test_exited_child_cannot_be_accepted_as_a_started_terminal(self):
+        self.child.poll.return_value = 7
+        with self.assertRaisesRegex(RuntimeError, "exited.*7"):
+            self.context["wait_for_linux_window"]()
+        self.assertEqual(self.context["report"]["terminalStartup"]["exitBeforeCleanup"], 7)
+
+    def test_timeout_stays_failed_even_if_diagnostics_find_a_window(self):
+        self.process.run.side_effect = [subprocess.CompletedProcess([], 1, "", "")] + [subprocess.CompletedProcess([], 0, "999\n", "")] * 3
+        with self.assertRaisesRegex(RuntimeError, "Owned terminal window did not appear"):
+            self.context["wait_for_linux_window"]()
+        self.assertEqual(self.wait.call_args.kwargs["timeout"], 15)
+        startup = self.context["report"]["terminalStartup"]
+        self.assertIsNone(startup["exitBeforeCleanup"])
+        self.assertEqual(startup["lastSearch"]["exit"], 1)
+        self.assertEqual(startup["diagnostics"]["classWindows"]["stdout"], "999\n")
+        self.assertNotIn("window", startup)
+
+    def test_failed_search_is_preserved_without_acceptance(self):
+        self.process.run.return_value = subprocess.CompletedProcess([], 2, "", "synthetic display failure")
+        with self.assertRaisesRegex(RuntimeError, "Owned terminal window did not appear"):
+            self.context["wait_for_linux_window"]()
+        self.assertEqual(self.context["report"]["terminalStartup"]["lastSearch"], {
+            "exit": 2, "stdout": "", "stderr": "synthetic display failure",
+        })
+
+    def test_diagnostic_failure_does_not_mask_the_original_error(self):
+        self.process.run.side_effect = [subprocess.TimeoutExpired("xdotool", 5)] + [OSError("diagnostic unavailable")] * 3
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.context["wait_for_linux_window"]()
+        startup = self.context["report"]["terminalStartup"]
+        self.assertEqual(startup["diagnostics"]["windowManager"], {"error": "diagnostic unavailable"})
+        self.assertIsNone(startup["exitBeforeCleanup"])
+
+
 class TerminalReadinessTests(unittest.TestCase):
     def setUp(self):
         source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())

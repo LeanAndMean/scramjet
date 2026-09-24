@@ -232,6 +232,46 @@ def fixture_command(action):
         raise RuntimeError(state()["error"])
 
 
+def wait_for_linux_window():
+    started = time.monotonic()
+    startup = {"pid": terminal_process.pid, "timeoutSeconds": 15, "attempts": 0,
+               "environment": {key: os.environ.get(key) for key in
+                               ("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "LIBGL_ALWAYS_SOFTWARE", "GALLIUM_DRIVER")}}
+    report["terminalStartup"] = startup
+
+    def visible():
+        code = terminal_process.poll()
+        if code is not None:
+            raise RuntimeError(f"Owned terminal process exited during startup ({code}); see terminal stderr/stdout logs")
+        found = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "ScramjetProbe"],
+                               capture_output=True, text=True, timeout=5)
+        startup["attempts"] += 1
+        startup["lastSearch"] = {"exit": found.returncode, "stdout": found.stdout, "stderr": found.stderr}
+        return found.returncode == 0 and bool(found.stdout.splitlines())
+
+    try:
+        if not wait_for(visible, timeout=15):
+            raise RuntimeError("Owned terminal window did not appear")
+        startup["window"] = startup["lastSearch"]["stdout"].splitlines()[-1]
+        return startup["window"]
+    except Exception:
+        startup["waitSeconds"] = time.monotonic() - started
+        startup["diagnostics"] = {}
+        for name, argv in [
+                ("namedWindows", ["xdotool", "search", "--name", "ScramjetProbe"]),
+                ("classWindows", ["xdotool", "search", "--class", {"kitty": "kitty", "xterm": "XTerm", "vte": "Xfce4-terminal"}[terminal_kind]]),
+                ("windowManager", ["xprop", "-root", "_NET_CLIENT_LIST", "_NET_SUPPORTING_WM_CHECK"])]:
+            try:
+                result = subprocess.run(argv, capture_output=True, text=True, timeout=1)
+                startup["diagnostics"][name] = {"exit": result.returncode, "stdout": result.stdout[:4000], "stderr": result.stderr[:4000]}
+            except Exception as error:
+                startup["diagnostics"][name] = {"error": str(error)}
+        raise
+    finally:
+        startup.setdefault("waitSeconds", time.monotonic() - started)
+        startup["exitBeforeCleanup"] = terminal_process.poll()
+
+
 def open_settings(query):
     fixture_command("editor")
     if not wait_for(lambda: state().get("editorActive") is True and not any(
@@ -424,11 +464,11 @@ try:
         else:
             report["terminalConfiguration"] = {"font": "DejaVu Sans Mono 12", "geometry": "80x24", "selectToClipboard": True, "paste": "Shift+Insert"}
             launch = ["xterm", "-fa", "DejaVu Sans Mono", "-fs", "12", "-geometry", "80x24", "-T", "ScramjetProbe", "-xrm", "XTerm*selectToClipboard: true", "-e"]
-        terminal_process = subprocess.Popen([*launch, "bash", "--noprofile", "--norc"], env={**os.environ, "XDG_CONFIG_HOME": str(config_home)})
+        with (output / "terminal.stdout.log").open("w") as stdout, (output / "terminal.stderr.log").open("w") as stderr:
+            terminal_process = subprocess.Popen([*launch, "bash", "--noprofile", "--norc"],
+                                                env={**os.environ, "XDG_CONFIG_HOME": str(config_home)}, stdout=stdout, stderr=stderr)
         terminal_started = True
-        if not wait_for(lambda: subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "ScramjetProbe"], capture_output=True, timeout=5).returncode == 0, timeout=15):
-            raise RuntimeError("Owned terminal window did not appear")
-        window_id = run("xdotool", "search", "--onlyvisible", "--name", "ScramjetProbe").splitlines()[-1]
+        window_id = wait_for_linux_window()
         run("xdotool", "windowactivate", "--sync", window_id)
         if tmux_command:
             run("xdotool", "type", "--clearmodifiers", "--delay", "20", tmux_command)

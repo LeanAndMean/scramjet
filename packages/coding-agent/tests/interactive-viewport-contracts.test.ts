@@ -8,6 +8,7 @@ import {
 	getCapabilities,
 	getCellDimensions,
 	getKeybindings,
+	StdinBuffer,
 	setCapabilities,
 	setCellDimensions,
 	Text,
@@ -655,6 +656,42 @@ describe("retained interactive contracts", () => {
 		expect(h.extensionUI.getEditorText()).toBe(draft);
 		h.extensionUI.setWidget("adjacent", undefined);
 		expect((await h.frame()).filter((line) => line.includes("INPUT-")).length).toBe(12);
+	});
+
+	it.each([false, true])("opens settings from current input with stale autocomplete and hidden=%s", async (hidden) => {
+		const h = await setup(24, settings({ dockEditor: !hidden }));
+		await history(h);
+		h.internals.ui.scrollViewportTo(20);
+		h.extensionUI.setEditorText("");
+		const editor = h.internals.editorContainer.children[0] as EditorComponent;
+		const submit = vi.fn(editor.onSubmit!);
+		editor.onSubmit = submit;
+		const input = new StdinBuffer();
+		input.on("data", (data) => h.terminal.sendInput(data));
+		try {
+			input.process("/settin");
+			await vi.waitFor(() => expect(editor.isShowingAutocomplete?.()).toBe(true));
+			await h.frame();
+			expect(h.internals.ui.isViewportFrameFlushed()).toBe(true);
+			if (hidden) {
+				h.internals.ui.scrollViewportTo(0);
+				await h.frame();
+				expect(h.internals.ui.isComponentVisible(h.internals.editorContainer)).toBe(false);
+			}
+			input.process("gs");
+			expect(h.extensionUI.getEditorText()).toBe("/settings");
+			input.process("\r");
+			if (hidden) {
+				expect(submit).not.toHaveBeenCalled();
+				await h.frame();
+				input.process("\r");
+			}
+			expect.soft(submit).toHaveBeenCalledExactlyOnceWith("/settings");
+			expect.soft((await h.frame()).join("\n")).toContain("Auto-compact");
+			expect(h.internals.ui.isComponentFocused(editor)).toBe(false);
+		} finally {
+			input.destroy();
+		}
 	});
 
 	it("gives focused settings navigation precedence over a viewport paging remap", async () => {

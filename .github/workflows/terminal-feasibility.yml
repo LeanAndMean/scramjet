@@ -122,7 +122,8 @@ jobs:
           PROBE_TERMINAL: ${{ matrix.terminal }}
         run: |
           xvfb-run -a -s '-screen 0 1280x900x24' dbus-run-session -- bash -c '
-            openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
+            mkdir -p "$RUNNER_TEMP/terminal-evidence"
+            openbox > "$RUNNER_TEMP/terminal-evidence/openbox.log" 2>&1 &
             args=()
             if [[ "$PROBE_TMUX" == true ]]; then args+=(--tmux); fi
             python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal="$PROBE_TERMINAL" "${args[@]}"

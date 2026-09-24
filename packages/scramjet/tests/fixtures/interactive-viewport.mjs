@@ -443,16 +443,19 @@ async function runProduction() {
 		if (journey) {
 			const editorInput = mode.defaultEditor.handleInput.bind(mode.defaultEditor);
 			mode.defaultEditor.handleInput = (data) => {
+				const beforeLength = mode.defaultEditor.getText().length;
+				const completionPrefixLength = mode.defaultEditor.autocompletePrefix.length;
 				editorInput(data);
 				safetyState.editorInputTrace ??= [];
 				const text = mode.defaultEditor.getText();
-				safetyState.editorInputTrace.push({ kind: matchesKey(data, "enter") ? "enter" : data.length === 1 ? "character" : "other", length: text.length, settingsPrefix: "/settings".startsWith(text), editorFocused: mode.ui.isComponentFocused(mode.editor) });
+				safetyState.editorInputTrace.push({ kind: matchesKey(data, "enter") ? "enter" : data.length === 1 ? "character" : "other", beforeLength, completionPrefixLength, length: text.length, settingsPrefix: "/settings".startsWith(text), editorFocused: mode.ui.isComponentFocused(mode.editor) });
 				if (safetyState.editorInputTrace.length > 24) safetyState.editorInputTrace.shift();
 			};
 			const submit = mode.defaultEditor.onSubmit;
 			mode.defaultEditor.onSubmit = async (text) => {
 				safetyState.submissions = (safetyState.submissions ?? 0) + 1;
 				safetyState.lastSubmission = text.trim() === "/settings" ? "settings" : "other";
+				safetyState.lastSubmissionLength = text.length;
 				await submit?.(text);
 				safetyState.editorFocusedAfterSubmit = mode.ui.isComponentFocused(mode.editor);
 			};

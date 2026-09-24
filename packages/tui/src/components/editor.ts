@@ -288,6 +288,7 @@ export class Editor implements Component, Focusable {
 	private autocompleteList?: SelectList;
 	private autocompleteState: "regular" | "force" | null = null;
 	private autocompletePrefix: string = "";
+	private autocompleteSnapshot?: { text: string; line: number; col: number };
 	private autocompleteMaxVisible: number = 5;
 	private autocompleteAbort?: AbortController;
 	private autocompleteDebounceTimer?: ReturnType<typeof setTimeout>;
@@ -713,6 +714,19 @@ export class Editor implements Component, Focusable {
 		if (kb.matches(data, "tui.editor.undo")) {
 			this.undo();
 			return;
+		}
+
+		// SCRAMJET-DIVERGENCE: an older menu can remain visible while its replacement request is pending.
+		if (
+			this.autocompleteState &&
+			this.autocompleteList &&
+			(kb.matches(data, "tui.input.tab") || kb.matches(data, "tui.select.confirm")) &&
+			(this.autocompleteSnapshot?.text !== this.getText() ||
+				this.autocompleteSnapshot?.line !== this.state.cursorLine ||
+				this.autocompleteSnapshot?.col !== this.state.cursorCol)
+		) {
+			this.cancelAutocomplete();
+			if (!kb.matches(data, "tui.input.tab") && !kb.matches(data, "tui.input.submit")) return;
 		}
 
 		// Handle autocomplete mode
@@ -2395,6 +2409,7 @@ export class Editor implements Component, Focusable {
 		}
 
 		this.autocompleteState = state;
+		this.autocompleteSnapshot = { text: this.getText(), line: this.state.cursorLine, col: this.state.cursorCol };
 	}
 
 	private cancelAutocompleteRequest(): void {
@@ -2411,6 +2426,7 @@ export class Editor implements Component, Focusable {
 		this.autocompleteState = null;
 		this.autocompleteList = undefined;
 		this.autocompletePrefix = "";
+		this.autocompleteSnapshot = undefined;
 	}
 
 	private cancelAutocomplete(): void {
