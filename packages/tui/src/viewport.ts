@@ -5,7 +5,7 @@ import { getKeybindings, type KeybindingsManager } from "./keybindings.js";
 import { isKeyModifier, isKeyRelease, matchesKey } from "./keys.js";
 import { getRenderedCopy, hasRenderedCopy, type RenderedCopyRow } from "./render-copy.js";
 import { isImageLine } from "./terminal-image.js";
-import type { Component } from "./tui.js";
+import { type Component, CURSOR_MARKER } from "./tui.js";
 import {
 	extractAnsiCode,
 	getSegmenter,
@@ -49,6 +49,8 @@ interface RenderedBlock extends ViewportBlock {
 	rawRows: string[];
 	sourceCopy: readonly RenderedCopyRow[] | undefined;
 	complete: boolean;
+	hasImages: boolean;
+	cursorRow: number;
 	start: number;
 	width: number;
 	height: number;
@@ -181,7 +183,7 @@ export class RetainedViewport {
 	private width = 0;
 	private terminalColumns = 0;
 	private screenHeight = 0;
-	private logical: string[] = [];
+	private logicalRows: string[] | undefined;
 	private logicalCopy: readonly RenderedCopyRow[] = [];
 	private dockHeight = 0;
 	private paintedDockTop = 0;
@@ -353,11 +355,12 @@ export class RetainedViewport {
 					this.dragThumb(y - 1);
 				} else if (
 					(y <= this.paintedHeight || (this.dockHeight > 0 && y > this.paintedDockTop)) &&
-					this.logical.length > 0 &&
+					this.totalRows + this.dockHeight > 0 &&
 					this.screenHeight > 1
 				) {
 					this.cancelInteraction();
 					this.selectionInDock = this.dockHeight > 0 && y > this.paintedDockTop;
+					this.logicalCopy = this.blocks.flatMap((block) => block.copyRows);
 					const point = this.point(x - 1, y - 1);
 					this.offset = this.paintedOffset;
 					this.selection = { start: point, end: point };
@@ -490,7 +493,7 @@ export class RetainedViewport {
 
 	reset(): void {
 		this.cancelInteraction();
-		this.logical = [];
+		this.logicalRows = undefined;
 		this.logicalCopy = [];
 		this.blocks = [];
 		this.visibleComponents.clear();
@@ -551,7 +554,7 @@ export class RetainedViewport {
 		return this.isTooSmall() ? 0 : this.copyError ? this.screenHeight - 1 : this.height;
 	}
 
-	update(width: number, height: number, terminalColumns = width + 1): string[] {
+	update(width: number, height: number, terminalColumns = width + 1): void {
 		if (width !== this.width || height !== this.screenHeight) this.cancelInteraction();
 		this.width = width;
 		this.terminalColumns = terminalColumns;
@@ -559,7 +562,7 @@ export class RetainedViewport {
 		if (this.isTooSmall()) {
 			this.height = 0;
 			this.visibleComponents.clear();
-			return this.logical;
+			return;
 		}
 		const previous = new Map(this.blocks.map((block) => [block.component, block]));
 		const next = new Map<Component, RenderedBlock>();
@@ -599,6 +602,8 @@ export class RetainedViewport {
 					rawRows: old.rawRows,
 					sourceCopy,
 					complete: old.complete,
+					hasImages: old.hasImages,
+					cursorRow: old.cursorRow,
 					start: 0,
 					width,
 					height: availableHeight,
@@ -613,7 +618,11 @@ export class RetainedViewport {
 				return sliceByColumn(normalized, 0, width, true);
 			});
 			if (!complete) lines.push(truncateToWidth("Clipped output: component exceeded width", width, ""));
+			let hasImages = false;
+			let cursorRow = -1;
 			const copyRows = lines.map((line, index) => {
+				if (isImageLine(line)) hasImages = true;
+				if (cursorRow === -1 && line.includes(CURSOR_MARKER)) cursorRow = index;
 				const row = sourceCopy?.[index];
 				const size = visibleWidth(line);
 				if (row === undefined || rendered[index]?.includes("\t")) return { start: 0, end: size };
@@ -634,6 +643,8 @@ export class RetainedViewport {
 				rawRows: [...rendered],
 				sourceCopy,
 				complete,
+				hasImages,
+				cursorRow,
 				start: 0,
 				width,
 				height: availableHeight,
@@ -667,7 +678,7 @@ export class RetainedViewport {
 			next.set(block.component, rendered);
 			start += rendered.lines.length;
 		}
-		if (this.selection) return this.logical;
+		if (this.selection) return;
 		this.dockHeight = dockHeight;
 		this.dockSuspended = suspended;
 		this.height = renderHeight;
@@ -707,14 +718,35 @@ export class RetainedViewport {
 				? this.maxOffset
 				: Math.max(0, Math.min(this.offset, this.maxOffset));
 		if (!this.followingTail && !this.anchor) this.anchor = this.anchorAt(this.offset, 0);
+		this.logicalRows = undefined;
+		this.logicalCopy = [];
+	}
+
+	get cursorRow(): number {
+		const block = this.blocks.find((block) => block.cursorRow >= 0);
+		return block ? block.start + block.cursorRow : -1;
+	}
+
+	private get logical(): string[] {
+		if (!this.logicalRows) {
+			this.logicalRows = [];
+			for (const block of this.blocks) for (const line of block.lines) this.logicalRows.push(line);
+		}
+		return this.logicalRows;
+	}
+
+	private sliceRows(start: number, end: number): string[] {
 		const lines: string[] = [];
-		for (const block of this.blocks) for (const line of block.lines) lines.push(line);
-		this.logical = lines;
-		this.logicalCopy = this.blocks.flatMap((block) => block.copyRows);
+		for (const block of this.blocks) {
+			if (block.start >= end) break;
+			const from = Math.max(0, start - block.start);
+			const to = Math.min(block.lines.length, end - block.start);
+			for (let row = from; row < to; row++) lines.push(block.lines[row]);
+		}
 		return lines;
 	}
 
-	slice(logical: string[], width: number, hideImages: boolean): { lines: string[]; images: ImagePlacement[] } {
+	slice(width: number, hideImages: boolean): { lines: string[]; images: ImagePlacement[] } {
 		if (this.isTooSmall()) {
 			this.visibleComponents.clear();
 			return { lines: [], images: [] };
@@ -735,17 +767,20 @@ export class RetainedViewport {
 			: this.selection
 				? "[Image hidden by selection]"
 				: undefined;
-		const { lines, images } = sliceImagePlacements(
-			logical.slice(0, this.totalRows),
-			this.offset,
-			this.height,
-			width,
-			hiddenLabel,
-		);
+		// iTerm placements can start above their payload row, including outside the visible slice.
+		const logical = this.selection || this.blocks.some((block) => block.hasImages) ? this.logical : undefined;
+		const { lines, images } = logical
+			? sliceImagePlacements(logical.slice(0, this.totalRows), this.offset, this.height, width, hiddenLabel)
+			: {
+					lines: this.sliceRows(this.offset, Math.min(this.totalRows, this.offset + this.height)),
+					images: [] as ImagePlacement[],
+				};
 		const dockTop = this.screenHeight - this.dockHeight;
 		if (this.dockHeight > 0) {
 			while (lines.length < dockTop) lines.push("");
-			const dock = sliceImagePlacements(logical.slice(this.totalRows), 0, this.dockHeight, width, hiddenLabel);
+			const dock = logical
+				? sliceImagePlacements(logical.slice(this.totalRows), 0, this.dockHeight, width, hiddenLabel)
+				: { lines: this.sliceRows(this.totalRows, this.totalRows + this.dockHeight), images: [] };
 			lines.push(...dock.lines);
 			images.push(...dock.images.map((image) => ({ ...image, row: image.row + dockTop })));
 		}

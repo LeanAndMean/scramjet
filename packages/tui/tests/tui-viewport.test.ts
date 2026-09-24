@@ -47,6 +47,121 @@ async function setup(blocks: ViewportBlock[], width = 21, height = 4, options: P
 const mouse = (button: number, x: number, y: number, action = "M") => `\x1b[<${button};${x};${y}${action}`;
 
 describe("viewport interactions", () => {
+	it.each([1_000, 10_000, 100_000])(
+		"reads only visible cached text rows while updating a %i-row transcript",
+		async (count) => {
+			const history = Array.from(
+				{ length: 100 },
+				(_, block) =>
+					new Rows(Array.from({ length: count / 100 }, (_, row) => `row-${block * (count / 100) + row}`)),
+			);
+			const status = new Rows(["tick-0"]);
+			const editor = { render: () => [`${CURSOR_MARKER}editor`], invalidate() {}, handleInput: vi.fn() };
+			const { tui, terminal, frame, text } = await setup(
+				[
+					...history.map((component) => ({ component, finalized: true })),
+					{ component: status },
+					{ component: editor, dock: true },
+				],
+				80,
+				24,
+				{ keepReadingOnInput: () => true },
+			);
+			const cached = (tui as unknown as { viewport: { blocks: { lines: string[]; copyRows: unknown[] }[] } })
+				.viewport.blocks;
+			let reads = 0;
+			let copyReads = 0;
+			for (const block of cached.slice(0, history.length)) {
+				block.lines = new Proxy(block.lines, {
+					get(target, key, receiver) {
+						if (typeof key === "string" && /^\d+$/.test(key)) reads++;
+						return Reflect.get(target, key, receiver);
+					},
+				});
+				block.copyRows = new Proxy(block.copyRows, {
+					get(target, key, receiver) {
+						if (typeof key === "string" && /^\d+$/.test(key)) copyReads++;
+						return Reflect.get(target, key, receiver);
+					},
+				});
+			}
+			for (const offset of [count - 22, Math.floor(count / 2), 0]) {
+				tui.scrollViewportTo(offset);
+				reads = 0;
+				copyReads = 0;
+				status.lines = [`tick-${offset}`];
+				await frame();
+				const expected = Array.from({ length: Math.min(23, count - offset) }, (_, i) => `row-${offset + i}`);
+				if (expected.length < 23) expected.push(`tick-${offset}`);
+				expect(text()).toEqual([...expected, "editor"]);
+				expect(reads).toBeLessThanOrEqual(48);
+				expect(copyReads).toBe(0);
+			}
+			tui.setFocus(editor);
+			reads = 0;
+			terminal.sendInput("a");
+			await frame();
+			expect(text()).toEqual([...Array.from({ length: 23 }, (_, i) => `row-${i}`), "editor"]);
+			expect(terminal.cursorPosition()).toEqual({ row: 23, col: 0 });
+			expect(reads).toBeLessThanOrEqual(48);
+			expect(copyReads).toBe(0);
+			for (const block of history) expect(block.render).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("holds text and dock copy snapshots while live producers change", async () => {
+		const card = new Text("alpha beta", 0, 0);
+		const dock = new Text("dock", 0, 0);
+		const copy = vi.fn(async (_text: string) => {});
+		const { terminal, frame, text } = await setup([{ component: card }, { component: dock, dock: true }], 6, 5, {
+			copy,
+		});
+		terminal.sendInput(mouse(0, 1, 1));
+		terminal.sendInput(mouse(32, 6, 2));
+		terminal.sendInput(mouse(0, 6, 2, "m"));
+		card.setText("other\nwords");
+		dock.setText("new");
+		await frame();
+		expect(text()).toEqual(["alpha", "beta", "", "", "dock"]);
+		terminal.sendInput("\x03");
+		await Promise.resolve();
+		await frame();
+		expect(copy).toHaveBeenCalledExactlyOnceWith("alpha beta");
+		expect(text()).toEqual(["other", "words", "", "", "new"]);
+	});
+
+	it.each([false, true])("refreshes image and cursor summaries when finalized=%s", async (finalized) => {
+		const card = new Rows(["prefix", "one", "two", "three", "four", "five"]);
+		const block = { component: card, finalized, revision: 0 };
+		const { tui, terminal, frame, text } = await setup([block], 41, 3);
+		const image = "\x1b]1337;File=inline=1;width=2;height=3:aW1hZ2U=\x07";
+		card.lines = ["prefix", "", "", `\x1b[2A${image}`, "four", "five"];
+		block.revision++;
+		tui.scrollViewportTo(0);
+		let mark = terminal.markWrites();
+		await frame();
+		expect(text()).toEqual(["prefix", "[Image clipped; scroll to view]", ""]);
+		expect(terminal.writesSince(mark)).not.toContain(image);
+		tui.scrollViewportTo(1);
+		mark = terminal.markWrites();
+		await frame();
+		expect(terminal.writesSince(mark)).toContain(`\x1b[1;1H${image}`);
+
+		card.lines = ["prefix", `${CURSOR_MARKER}input`, "two", "three", "four", "five"];
+		block.revision++;
+		tui.setFocus({ render: () => [], invalidate() {}, handleInput() {} });
+		terminal.sendInput("a");
+		await frame();
+		expect(text()).toEqual(["input", "two", "three"]);
+		expect(terminal.cursorPosition()).toEqual({ row: 0, col: 0 });
+		card.lines = ["prefix", "one", `${CURSOR_MARKER}moved`, "three", "four", "five"];
+		tui.invalidate();
+		terminal.sendInput("a");
+		await frame();
+		expect(text()).toEqual(["moved", "three", "four"]);
+		expect(terminal.cursorPosition()).toEqual({ row: 0, col: 0 });
+	});
+
 	it("drags a ten-thousand-row transcript without discarding history or rerendering finalized blocks", async () => {
 		const history = Array.from(
 			{ length: 1000 },
@@ -455,12 +570,12 @@ describe("retained viewport", () => {
 		viewport.scrollTo(3000);
 		const search = vi.spyOn(diff, "diffArrays");
 		try {
-			const rows = viewport.update(79, 24);
+			viewport.update(79, 24);
 			expect(search.mock.calls[0][2]).toEqual({ maxEditLength: 64 });
 			expect(search.mock.results[0].value).toBeUndefined();
 			expect(search.mock.calls[1][2]).toEqual({ maxEditLength: 64 });
 			expect(viewport.state.offset).toBe(3000);
-			expect(rows[viewport.state.offset]).toBe("numbered line 3000".padEnd(79));
+			expect(viewport.slice(79, false).lines[0]).toBe("numbered line 3000".padEnd(79));
 		} finally {
 			search.mockRestore();
 		}
@@ -474,10 +589,10 @@ describe("retained viewport", () => {
 		const search = vi.spyOn(diff, "diffArrays");
 		try {
 			rows.lines = Array.from({ length: 250 }, (_, i) => `new-${i}-${"b".repeat(70)}`);
-			const next = viewport.update(80, 12);
+			viewport.update(80, 12);
 			expect(search.mock.calls.every((call) => call[2]?.maxEditLength === 64)).toBe(true);
 			expect(viewport.state.offset).toBe(120);
-			expect(next[viewport.state.offset]).toContain("new-120-");
+			expect(viewport.slice(80, false).lines[0]).toContain("new-120-");
 			const short = new Rows(Array.from({ length: 40 }, (_, i) => `first-${i}-${"a".repeat(60)}`));
 			const smaller = new RetainedViewport({ getBlocks: () => [{ component: short }] });
 			smaller.update(80, 8);

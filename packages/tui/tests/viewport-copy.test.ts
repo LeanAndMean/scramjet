@@ -91,7 +91,8 @@ describe("retained copy provenance", () => {
 		const viewport = new RetainedViewport({ getBlocks: () => [{ component }], copy });
 		viewport.update(5, 5);
 		lines[0] = "other";
-		expect(viewport.update(5, 5)[0]).toBe("other");
+		viewport.update(5, 5);
+		expect(viewport.slice(5, false).lines[0]).toBe("other");
 		setRenderedCopy(lines, [
 			{ start: 0, end: 5, after: " " },
 			{ start: 0, end: 4 },
@@ -167,13 +168,11 @@ describe("retained copy provenance", () => {
 		const viewport = new RetainedViewport({
 			getBlocks: () => [{ component: { render: () => [line], invalidate() {} } }],
 		});
-		const logical = viewport.update(12, 5);
+		viewport.update(12, 5);
 		viewport.markPainted();
 		viewport.handleInput("\x1b[<0;1;1M", false, false);
 		viewport.handleInput(`\x1b[<32;${end};1M`, false, false);
-		expect(stripVTControlCharacters(viewport.slice(logical, 12, false).lines[0])).toBe(
-			stripVTControlCharacters(line),
-		);
+		expect(stripVTControlCharacters(viewport.slice(12, false).lines[0])).toBe(stripVTControlCharacters(line));
 		viewport.cancelInteraction();
 	});
 

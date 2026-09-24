@@ -1487,7 +1487,7 @@ export class TUI extends Container {
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 		const contentWidth = Math.max(1, width - 1);
-		const logical = viewport.update(contentWidth, height, width);
+		viewport.update(contentWidth, height, width);
 		const tooSmall = viewport.isTooSmall();
 		if (tooSmall) this.viewportMinimumPainted = true;
 		if (!tooSmall && this.viewportRevealComponent) {
@@ -1496,10 +1496,10 @@ export class TUI extends Container {
 		}
 		if (!tooSmall && this.viewportRevealFocus) {
 			this.viewportRevealFocus = false;
-			const cursorRow = logical.findIndex((line) => line.includes(CURSOR_MARKER));
+			const cursorRow = viewport.cursorRow;
 			if (cursorRow >= 0) viewport.revealRow(cursorRow);
 		}
-		const frame = viewport.slice(logical, contentWidth, this.hasOverlay());
+		const frame = viewport.slice(contentWidth, this.hasOverlay());
 		let lines = frame.lines;
 		while (lines.length < height) lines.push("");
 		if (viewport.notice)

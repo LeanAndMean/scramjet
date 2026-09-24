@@ -58,8 +58,8 @@ function gestureFixture(count = 100) {
 	const viewport = new RetainedViewport({ getBlocks: () => [{ component: card }] }, render);
 	viewports.push(viewport);
 	const paint = () => {
-		const logical = viewport.update(30, 5);
-		viewport.slice(logical, 30, false);
+		viewport.update(30, 5);
+		viewport.slice(30, false);
 		viewport.markPainted();
 	};
 	const input = (data: string) => viewport.handleInput(data, false, false);
@@ -515,8 +515,8 @@ describe("overwidth containment contracts", () => {
 		const copy = vi.fn(async (_text: string) => {});
 		const viewport = new RetainedViewport({ getBlocks: () => [{ component: card }], copy });
 		viewports.push(viewport);
-		const logical = viewport.update(12, 6);
-		const projected = viewport.slice(logical, 12, false).lines;
+		viewport.update(12, 6);
+		const projected = viewport.slice(12, false).lines;
 		const displayedMiddle = stripVTControlCharacters(sliceByColumn(projected[1], 0, 12, true));
 		expect(displayedMiddle).toContain("AB界e\u0301");
 		viewport.markPainted();
