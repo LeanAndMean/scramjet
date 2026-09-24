@@ -34,6 +34,7 @@ import modalEditor from "../examples/extensions/modal-editor.js";
 import overlayExamples from "../examples/extensions/overlay-qa-tests.js";
 import overlayExample from "../examples/extensions/overlay-test.js";
 import snakeExample from "../examples/extensions/snake.js";
+import invadersExample from "../examples/extensions/space-invaders.js";
 import { createToolHtmlRenderer } from "../src/core/export-html/tool-renderer.js";
 import { defineTool } from "../src/core/extensions/index.js";
 import { ArminComponent } from "../src/modes/interactive/components/armin.js";
@@ -199,6 +200,40 @@ function createInteractiveHarness(): {
 }
 
 describe("shipped printable-key consumers", () => {
+	it("quits Space Invaders without saving on literal and encoded Q, but not releases or modifiers", async () => {
+		for (const input of ["q", "\x1b[113u"]) {
+			const h = await createProductionInteractiveHarness(100, 50, invadersExample);
+			const editor = h.internals.editorContainer.children[0];
+			vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+			const work = h.session.prompt("/invaders").catch((error: Error) => error);
+			try {
+				await new Promise((resolve) => setImmediate(resolve));
+				const painted = (await h.frame()).join("\n");
+				expect(painted).toContain("SPACE INVADERS");
+				expect(painted).toContain("Q quit");
+				expect(h.internals.ui.isComponentFocused(editor)).toBe(false);
+				h.terminal.sendInput("\x1b[113;1:3u");
+				h.terminal.sendInput("\x1b[113;5u");
+				await h.frame();
+				expect(h.internals.ui.isComponentFocused(editor)).toBe(false);
+				h.terminal.sendInput(input);
+				await h.frame();
+				expect(h.internals.ui.isComponentFocused(editor), JSON.stringify(input)).toBe(true);
+				expect(await work).toBeUndefined();
+				expect(
+					h.session.sessionManager
+						.getEntries()
+						.filter((entry) => entry.type === "custom" && entry.customType === "space-invaders-save"),
+				).toEqual([expect.objectContaining({ data: null })]);
+			} finally {
+				h.terminal.sendInput("\x1b");
+				await work;
+				vi.useRealTimers();
+				await h.dispose();
+			}
+		}
+	});
+
 	it.each(["\r", "\x1b[13u", "\x1b[57414u"])("confirms overlay search with Enter %j", async (input) => {
 		const h = await createProductionInteractiveHarness(100, 36, overlayExample);
 		const work = h.session.prompt("/overlay-test").catch((error: Error) => error);

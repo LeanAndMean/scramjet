@@ -582,6 +582,30 @@ describe("retained viewport", () => {
 		}
 	});
 
+	it("preserves an unchanged reading anchor when a live block receives a large append", async () => {
+		const labels = Array.from({ length: 200 }, (_, i) => `live-${String(i).padStart(3, "0")}`);
+		const card = new Text(labels.slice(0, 100).join("\n"), 0, 0);
+		const status = new Text("status-0\nstatus-1\nstatus-2\nstatus-3", 0, 0);
+		const { tui, frame, text } = await setup([{ component: card }, { component: status }], 21, 4);
+		tui.scrollViewportTo(20);
+		await frame();
+		expect(text()).toEqual(["live-020", "live-021", "live-022", "live-023"]);
+
+		card.setText(labels.join("\n"));
+		await frame();
+		expect({
+			rows: text(),
+			offset: tui.getViewportState()!.offset,
+			total: tui.getViewportState()!.totalRows,
+			following: tui.getViewportState()!.followingTail,
+		}).toEqual({
+			rows: ["live-020", "live-021", "live-022", "live-023"],
+			offset: 20,
+			total: 204,
+			following: false,
+		});
+	});
+
 	it("retains tall mutable output, paints exact slices, and follows only an explicit return to the tail", async () => {
 		const card = new Rows(Array.from({ length: 12 }, (_, i) => `card-${i}`));
 		const { tui, terminal, frame, text } = await setup([{ component: card }]);
