@@ -134,7 +134,7 @@ afterEach(() => {
 describe("output defaults", () => {
 	it("does not restrict OpenRouter routes using an aggregate output maximum", () => {
 		const model = getModel("openrouter", "qwen/qwen3-14b");
-		expect(model.maxTokens).toBe(40960);
+		expect(model.maxTokens).toBe(16384);
 		expect(buildBaseOptions(model).maxTokens).toBeUndefined();
 		expect(buildBaseOptions(model, { maxTokens: 8192 }).maxTokens).toBe(8192);
 	});
