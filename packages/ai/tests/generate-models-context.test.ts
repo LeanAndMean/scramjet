@@ -943,6 +943,16 @@ describe("real generator context corrections", () => {
 			expectedError,
 		});
 	});
+	it("rejects malformed models.dev tool capability before writing", async () => {
+		await generate(true, {
+			modelsDevChange: (data) => {
+				data.groq.models["invalid-tools"] = feedModel("invalid-tools", 500000, { tool_call: "true" });
+			},
+			expectFailure: true,
+			expectedError: "models.dev/groq/invalid-tools: invalid tool capability",
+		});
+	});
+
 	it("uses Azure-specific GPT-6 Responses limits without including unsupported routes", async () => {
 		const models = (await generate(true, {
 			modelsDevChange: (data) => {
@@ -959,8 +969,13 @@ describe("real generator context corrections", () => {
 				max: "max",
 			});
 		}
-		for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"]) {
+		for (const [id, cost] of Object.entries({
+			"gpt-6-astra": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+			"gpt-6-luna": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+			"gpt-6-sol": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+		})) {
 			expect(models["azure-openai-responses"][id]).toMatchObject({
+				cost,
 				api: "azure-openai-responses",
 				provider: "azure-openai-responses",
 				contextWindow: 1050000,
@@ -971,6 +986,8 @@ describe("real generator context corrections", () => {
 		for (const id of ["gpt-6-luna", "gpt-6-sol"]) {
 			expect(models["azure-openai-responses"][id].thinkingLevelMap).toBeUndefined();
 		}
+		expect(models.openai["gpt-6-sol"].cost.input).toBe(0);
+		expect(models["azure-openai-responses"]["gpt-6-sol"].cost.input).toBe(2);
 		expect(models.openai["gpt-7-unreviewed"]).toBeDefined();
 		expect(models["azure-openai-responses"]["gpt-7-unreviewed"]).toBeUndefined();
 		expect(models["azure-openai-responses"]["gpt-realtime-2.1"]).toBeUndefined();

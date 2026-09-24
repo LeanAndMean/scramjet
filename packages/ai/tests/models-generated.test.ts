@@ -212,12 +212,17 @@ describe("generated catalog - Azure independent input limits", () => {
 			expect(getModels("openai").find((model) => model.id === id)).toBeUndefined();
 		},
 	);
-	it.each(["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"])("uses Azure-specific limits for %s", (id) => {
+	it.each([
+		["gpt-6-astra", { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }],
+		["gpt-6-luna", { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }],
+		["gpt-6-sol", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }],
+	] as const)("uses Azure-specific limits and prices for %s", (id, cost) => {
 		expect(getModel("azure-openai-responses", id)).toMatchObject({
 			api: "azure-openai-responses",
 			contextWindow: 1_050_000,
 			maxInputTokens: 922_000,
 			maxTokens: 128_000,
+			cost,
 		});
 		expect(getModel("openai", id).maxInputTokens).toBeUndefined();
 	});

@@ -723,6 +723,9 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			for (const [id, model] of Object.entries(section?.models ?? {})) {
 				if (!model || typeof model !== "object") throw new Error(`models.dev/${key}/${id}: invalid model`);
 				const m = model as ModelsDevModel;
+				if (m.tool_call !== undefined && typeof m.tool_call !== "boolean") {
+					throw new Error(`models.dev/${key}/${id}: invalid tool capability`);
+				}
 				if (m.tool_call !== true ||
 					(key === "openai" && id === "gpt-realtime-2.1") ||
 					(["github-copilot", "opencode", "opencode-go", "together", "togetherai", "together-ai"].includes(key) &&
