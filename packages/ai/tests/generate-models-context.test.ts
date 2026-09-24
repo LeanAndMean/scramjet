@@ -983,8 +983,8 @@ describe("real generator context corrections", () => {
 				maxTokens: 128000,
 			});
 		}
-		for (const id of ["gpt-6-luna", "gpt-6-sol"]) {
-			expect(models["azure-openai-responses"][id].thinkingLevelMap).toBeUndefined();
+		for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"]) {
+			expect(models["azure-openai-responses"][id].thinkingLevelMap).toEqual({ minimal: null });
 		}
 		expect(models.openai["gpt-6-sol"].cost.input).toBe(0);
 		expect(models["azure-openai-responses"]["gpt-6-sol"].cost.input).toBe(2);
@@ -1011,8 +1011,9 @@ describe("real generator context corrections", () => {
 				baseUrl: "https://chatgpt.com/backend-api",
 				contextWindow: 872000,
 				maxTokens: 128000,
-				thinkingLevelMap: { max: "max", xhigh: "xhigh" },
+				thinkingLevelMap: { off: null, minimal: "low", max: "max", xhigh: "xhigh" },
 			});
+			expect(models[id].thinkingLevelMap).toEqual({ off: null, minimal: "low", xhigh: "xhigh", max: "max" });
 		}
 		for (const id of ["gpt-5.4", "gpt-5.4-mini"]) expect(models[id]).toBeUndefined();
 	});

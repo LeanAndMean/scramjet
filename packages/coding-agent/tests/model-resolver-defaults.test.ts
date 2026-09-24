@@ -217,6 +217,35 @@ describe("startup configured default fallback", () => {
 		}
 	});
 
+	it("reports a stale restored model when the configured default resolves", async () => {
+		const root = mkdtempSync(join(tmpdir(), "missing-restored-valid-default-"));
+		const cwd = join(root, "cwd");
+		const authStorage = AuthStorage.inMemory({ cerebras: { type: "api_key", key: "test-key" } });
+		const sessionManager = SessionManager.inMemory(cwd);
+		sessionManager.appendModelChange("missing-session-provider", "missing-session-model");
+		sessionManager.appendMessage({ role: "user", content: "resume", timestamp: Date.now() });
+		try {
+			const { session, modelFallbackMessage } = await createAgentSession({
+				cwd,
+				agentDir: join(root, "agent"),
+				authStorage,
+				modelRegistry: ModelRegistry.inMemory(authStorage),
+				sessionManager,
+				settingsManager: SettingsManager.inMemory({ defaultProvider: "cerebras", defaultModel: "gpt-oss-120b" }),
+			});
+			try {
+				expect(session.model?.id).toBe("gpt-oss-120b");
+				expect(modelFallbackMessage).toBe(
+					"Could not restore model missing-session-provider/missing-session-model. Using cerebras/gpt-oss-120b",
+				);
+			} finally {
+				session.dispose();
+			}
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("retains the missing configured identity when no model is available", async () => {
 		const root = mkdtempSync(join(tmpdir(), "missing-default-no-model-"));
 		const cwd = join(root, "cwd");

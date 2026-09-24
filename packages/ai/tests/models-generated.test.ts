@@ -772,13 +772,19 @@ describe("generated catalog - GPT-6 Astra", () => {
 		expectAstraThinking(model);
 	});
 
-	it("exposes Azure Astra with Azure-specific input metadata", () => {
-		expect(getModel("azure-openai-responses", "gpt-6-astra")).toMatchObject({
-			contextWindow: 1_050_000,
-			maxInputTokens: 922_000,
-			maxTokens: 128_000,
-		});
-	});
+	it.each(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])(
+		"exposes Azure %s with route-specific input and effort metadata",
+		(id) => {
+			const model = getModel("azure-openai-responses", id);
+			expect(model).toMatchObject({
+				contextWindow: 1_050_000,
+				maxInputTokens: 922_000,
+				maxTokens: 128_000,
+			});
+			expect(model.thinkingLevelMap).toEqual({ minimal: null });
+			expect(getSupportedThinkingLevels(model)).toEqual(["off", "low", "medium", "high"]);
+		},
+	);
 });
 
 describe("generated catalog - direct GPT-6 reasoning", () => {
@@ -798,7 +804,8 @@ describe("generated catalog - Codex route inventory", () => {
 			contextWindow: 872_000,
 			maxTokens: 128_000,
 		});
-		expect(getSupportedThinkingLevels(model)).toContain("max");
+		expect(model.thinkingLevelMap).toEqual({ off: null, minimal: "low", xhigh: "xhigh", max: "max" });
+		expect(getSupportedThinkingLevels(model)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
 	});
 	it.each(["gpt-5.4", "gpt-5.4-mini"])("omits retired Codex %s without removing direct OpenAI", (id) => {
 		expect(getModels("openai-codex").find((model) => model.id === id)).toBeUndefined();
