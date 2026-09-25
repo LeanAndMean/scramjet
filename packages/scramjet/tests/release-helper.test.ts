@@ -50,6 +50,8 @@ function mutateJson(root: string, path: string, mutate: (value: any) => void) {
 interface FakeState {
 	packages: Record<string, { versions: string[]; distTags: Record<string, string> }>;
 	registryIntegrity?: Record<string, string>;
+	preserveRegistryIntegrity?: string;
+	packVariation?: string;
 	distOverrides?: Record<string, Record<string, unknown>>;
 	distDelays?: Record<string, number>;
 	versionOmissions?: Record<string, number>;
@@ -237,15 +239,16 @@ if (args[0] === "pack") {
     const manifest = JSON.parse(fs.readFileSync(require("node:path").join(process.cwd(), workspace, "package.json"), "utf8"));
     if (state.packManifest?.name === target.name) manifest[state.packManifest.field] = state.packManifest.value;
     fs.writeFileSync(require("node:path").join(source, "package", "package.json"), JSON.stringify(manifest));
+    if (state.packVariation === target.name) fs.writeFileSync(require("node:path").join(source, "package", "variation"), "changed");
     const archive = require("node:path").join(destination, filename);
-    require("node:child_process").execFileSync("tar", ["-czf", archive, "package/package.json"], { cwd: source });
+    require("node:child_process").execFileSync("tar", ["-czf", archive, state.packVariation === target.name ? "package" : "package/package.json"], { cwd: source });
     if (state.packSymlink === target.name) {
       fs.renameSync(archive, archive + ".original");
       fs.symlinkSync(archive + ".original", archive);
     }
     const integrity = "sha512-" + createHash("sha512").update(fs.readFileSync(archive)).digest("base64");
     state.registryIntegrity ??= {};
-    state.registryIntegrity[target.name] = integrity;
+    if (state.preserveRegistryIntegrity !== target.name) state.registryIntegrity[target.name] = integrity;
     state.packDirectory = destination;
     if (state.packFileMissing === target.name) fs.unlinkSync(archive);
     const override = state.packOutput?.name === target.name ? state.packOutput.override : {};
@@ -1208,6 +1211,39 @@ exit 1
 		expect(resumed.status).toBe(0);
 		expect(resumed.stdout).toContain("release run 36056969151 attempt 2");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	}, 20_000);
+
+	it("production CLI rejects changed candidate bytes against a retained registry digest", () => {
+		const first = runHelper("publish-cli", statePath);
+		expect(first.status).toBe(0);
+		const state = readState(statePath);
+		const retained = INVENTORY[0].name;
+		const originalDigest = state.registryIntegrity![retained];
+		state.preserveRegistryIntegrity = retained;
+		state.packVariation = retained;
+		state.calls = [];
+		writeFileSync(statePath, JSON.stringify(state));
+		const resumed = runHelper("publish-cli", statePath, [], { GITHUB_RUN_ATTEMPT: "2" });
+		expect(resumed.status).not.toBe(0);
+		expect(resumed.stderr).toMatch(/integrity|digest|content|mismatch/i);
+		const after = readState(statePath);
+		expect(after.calls.filter(([command]) => command === "pack")).toHaveLength(5);
+		expect(after.registryIntegrity![retained]).toBe(originalDigest);
+		expect(publishCalls(after)).toHaveLength(0);
+	});
+
+	it("production CLI rejects a present target on attempt 1 before packing or publishing", () => {
+		const state = initialState();
+		const first = INVENTORY[0];
+		state.packages[first.name].versions.push(first.version);
+		state.packages[first.name].distTags.latest = first.version;
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish-cli", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toMatch(/already|present|fresh|preflight|published/i);
+		const after = readState(statePath);
+		expect(after.calls.filter(([command]) => command === "pack")).toHaveLength(0);
+		expect(publishCalls(after)).toHaveLength(0);
 	});
 
 	it("production CLI captures a real-child error after landing and still observes matching content", () => {
