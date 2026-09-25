@@ -262,6 +262,53 @@ describe("shipped printable-key consumers", () => {
 		}
 	});
 
+	it("restarts Space Invaders after defeat with literal and encoded R", async () => {
+		for (const input of ["r", "\x1b[114u"]) {
+			const h = await createProductionInteractiveHarness(100, 50, invadersExample);
+			h.session.sessionManager.appendCustomEntry("space-invaders-save", {
+				player: { x: 30, lives: 1 },
+				aliens: [{ x: 4, y: 2, type: 0, alive: true }],
+				alienDirection: 1,
+				alienMoveCounter: 0,
+				alienMoveDelay: 18,
+				alienDropping: false,
+				bullets: [{ x: 30, y: 21, direction: 1 }],
+				shields: [],
+				score: 10,
+				highScore: 100,
+				level: 1,
+				gameOver: false,
+				victory: false,
+				alienShootCounter: 0,
+			});
+			vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+			const work = h.session.prompt("/invaders").catch((error: Error) => error);
+			try {
+				await new Promise((resolve) => setImmediate(resolve));
+				expect((await h.frame()).join("\n")).toContain("PAUSED");
+				h.terminal.sendInput("\x1b[D");
+				vi.advanceTimersByTime(50);
+				expect((await h.frame()).join("\n")).toContain("GAME OVER! Press R to restart");
+				h.terminal.sendInput("\x1b[114;1:3u");
+				expect((await h.frame()).join("\n")).toContain("GAME OVER!");
+				h.terminal.sendInput(input);
+				const restarted = (await h.frame()).join("\n");
+				expect(restarted, JSON.stringify(input)).not.toContain("GAME OVER!");
+				expect(restarted).toContain("SPACE/F to fire");
+				expect(h.session.sessionManager.getEntries().at(-1)).toMatchObject({
+					type: "custom",
+					customType: "space-invaders-save",
+					data: null,
+				});
+			} finally {
+				h.terminal.sendInput("\x1b");
+				await work;
+				vi.useRealTimers();
+				await h.dispose();
+			}
+		}
+	});
+
 	it.each(["\r", "\x1b[13u", "\x1b[57414u"])("confirms overlay search with Enter %j", async (input) => {
 		const h = await createProductionInteractiveHarness(100, 36, overlayExample);
 		const work = h.session.prompt("/overlay-test").catch((error: Error) => error);

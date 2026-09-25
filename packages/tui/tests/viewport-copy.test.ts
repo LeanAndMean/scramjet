@@ -231,6 +231,28 @@ describe("retained copy provenance", () => {
 		viewport.cancelInteraction();
 	});
 
+	it("preserves the crossed hard break when selection ends at the next line start", async () => {
+		const component = new Text("alpha\nbeta", 0, 0);
+		const copy = vi.fn(async (_text: string) => {});
+		const viewport = new RetainedViewport({ getBlocks: () => [{ component }], copy });
+		try {
+			viewport.update(12, 5);
+			viewport.markPainted();
+			expect(
+				viewport
+					.slice(12, false)
+					.lines.slice(0, 2)
+					.map((line) => line.trimEnd()),
+			).toEqual(["alpha", "beta"]);
+			for (const event of ["\x1b[<0;1;1M", "\x1b[<32;1;2M", "\x1b[<0;1;2m", "\x03"])
+				viewport.handleInput(event, false, false);
+			await Promise.resolve();
+			expect(copy).toHaveBeenCalledExactlyOnceWith("alpha\n");
+		} finally {
+			viewport.cancelInteraction();
+		}
+	});
+
 	it("does not let a padding-only copy fall through to editor clearing", async () => {
 		const copy = vi.fn(async (_text: string) => {});
 		const viewport = new RetainedViewport({ getBlocks: () => [{ component: new Text("body", 2, 0) }], copy });
