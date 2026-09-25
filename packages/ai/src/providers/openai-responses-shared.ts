@@ -247,6 +247,18 @@ interface FailureScalars {
 export interface SafeResponsesFailure {
 	message: string;
 	diagnostic: ResponsesProviderFailureV1;
+	liveDetail?: string;
+}
+
+// SCRAMJET-DIVERGENCE: final-message diagnostics identity carries sanitized live detail without serializing it (#575).
+const liveFailureDetails = new WeakMap<object, string>();
+const UNSAFE_DETAIL =
+	/[{}<>[\]"]|\b(?:password|token|secret|api[-_ ]?key|authorization|cookie|body|prompt|input)[\s"']*[:=]|(?:^|\s)[\w.-]+\s*=/i;
+
+export function liveResponsesFailureDetail(message: AssistantMessage): string | undefined {
+	return message.stopReason === "error" && message.diagnostics
+		? liveFailureDetails.get(message.diagnostics)
+		: undefined;
 }
 
 type ResponsesSdkRetryAttempt =
@@ -320,8 +332,11 @@ function readFailureScalars(value: unknown): { top: FailureScalars; nested: Fail
 	return { top: read(topRecord), nested: read(nestedRecord) };
 }
 
-function sanitizeProviderDetail(message: string | undefined): string | undefined {
-	if (!message) return undefined;
+function sanitizeProviderDetail(
+	message: string | undefined,
+	maxLength = PROVIDER_DETAIL_MAX_LENGTH,
+): string | undefined {
+	if (!message || UNSAFE_DETAIL.test(message)) return undefined;
 	let detail = message;
 	for (const pattern of PROVIDER_DETAIL_REDACTIONS) detail = detail.replace(pattern, "[redacted]");
 	detail = detail
@@ -329,8 +344,29 @@ function sanitizeProviderDetail(message: string | undefined): string | undefined
 		.replace(/\s+/g, " ")
 		.trim();
 	if (detail.length === 0 || /^(?:undefined|null)$/i.test(detail)) return undefined;
-	if (detail.length > PROVIDER_DETAIL_MAX_LENGTH) detail = `${detail.slice(0, PROVIDER_DETAIL_MAX_LENGTH - 1)}…`;
+	if (detail.length > maxLength) detail = `${detail.slice(0, maxLength - 1)}…`;
 	return detail;
+}
+
+function liveProviderDetail(message: string | undefined, code: string | undefined, type: string | undefined): string {
+	const reason =
+		message ??
+		[code, type].find(
+			(value) => value && /^[a-z][a-z0-9_.-]{0,63}$/i.test(value) && !["error", "response.failed"].includes(value),
+		);
+	if (!reason) return "Provider supplied no displayable failure detail.";
+	if (UNSAFE_DETAIL.test(reason)) {
+		return "Provider detail withheld because it may contain request content or credentials.";
+	}
+	const safe = sanitizeProviderDetail(reason, 512);
+	if (!safe) return "Provider detail withheld because it could not be safely displayed.";
+	const changed =
+		safe !==
+		reason
+			.replace(/[\u0000-\u001f\u007f]+/g, " ")
+			.replace(/\s+/g, " ")
+			.trim();
+	return `Provider detail: ${safe}${changed ? " (Some content was redacted or shortened for security.)" : ""}`;
 }
 
 function composeFailureMessage(category: ResponsesFailureCategory, detail: string | undefined): string {
@@ -541,7 +577,11 @@ function makeFailure(
 		kind === "malformed_event" || category === "context_overflow"
 			? undefined
 			: sanitizeProviderDetail(top.message ?? nested.message);
-	return { message: composeFailureMessage(category, detail), diagnostic };
+	return {
+		message: composeFailureMessage(category, detail),
+		diagnostic,
+		liveDetail: liveProviderDetail(top.message ?? nested.message, top.code ?? nested.code, top.type ?? nested.type),
+	};
 }
 
 export function normalizeResponsesFailure(value: unknown, phase: "request" | "stream"): SafeResponsesFailure {
@@ -690,6 +730,7 @@ export function appendResponsesFailureDiagnostics(
 		...(sdkRetry ? [{ type: "sdk_request_retry", timestamp: Date.now(), details: { ...sdkRetry } }] : []),
 		{ type: "gateway_observability", timestamp: Date.now(), details: { ...GATEWAY_OBSERVABILITY } },
 	];
+	if (failure.liveDetail) liveFailureDetails.set(output.diagnostics, failure.liveDetail);
 }
 
 function isProviderFailureDetails(value: unknown): value is ResponsesProviderFailureV1 {

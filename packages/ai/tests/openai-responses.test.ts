@@ -10,7 +10,9 @@ import {
 } from "../src/providers/openai-responses.js";
 import {
 	abortedResponsesFailureMessage,
+	appendResponsesFailureDiagnostics,
 	createResponsesSdkRequestObserver,
+	liveResponsesFailureDetail,
 	normalizeResponsesFailure,
 } from "../src/providers/openai-responses-shared.js";
 import type { AssistantMessage, Context, Model, ModelThinkingLevel, ToolResultMessage } from "../src/types.js";
@@ -535,6 +537,25 @@ describe("OpenAI Responses failure normalization", () => {
 			const failure = normalizeResponsesFailure(error, "request");
 			expect(failure.diagnostic).toEqual(expect.objectContaining({ category, kind }));
 			expect(JSON.stringify(failure)).not.toMatch(/private123456|Bearer secret/);
+		}
+	});
+
+	it("keeps bounded provider detail in memory across the final shallow copy, not serialized history", () => {
+		for (const [input, expected] of [
+			[{ message: "capacity exhausted for this deployment" }, "capacity exhausted for this deployment"],
+			[{ message: "request body: password=veryprivate" }, "withheld"],
+			[{ message: 'Request failed: {"password":"hunter2"}' }, "withheld"],
+			[{ message: `${"Unavailable. ".repeat(18)} {"password":"hunter2"}` }, "withheld"],
+			[{ message: "temporarily unavailable at https://private.example.org/path" }, "[redacted]"],
+			[{}, "no displayable failure detail"],
+		] as const) {
+			const output = assistantShell();
+			appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(input, "stream"));
+			const final = { ...output };
+			const detail = liveResponsesFailureDetail(final);
+			expect(detail).toContain(expected);
+			expect(liveResponsesFailureDetail(JSON.parse(JSON.stringify(final)))).toBeUndefined();
+			expect(JSON.stringify(final)).not.toMatch(/veryprivate|hunter2|private\.example\.org|liveDetail/);
 		}
 	});
 

@@ -2,6 +2,10 @@ import type { AgentMessage } from "@leanandmean/agent";
 import type { AssistantMessage } from "@leanandmean/ai";
 import { type Component, Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	appendResponsesFailureDiagnostics,
+	normalizeResponsesFailure,
+} from "../../ai/dist/providers/openai-responses-shared.js";
 
 const imageConversion = vi.hoisted(() => ({
 	convertToPng: vi.fn(),
@@ -563,6 +567,35 @@ describe("interactive assistant history", () => {
 		expect(output).toContain("\x1b[3J");
 		expect(output).toContain("COMPACTED-SESSION");
 		expect(terminal.bufferLines().join("\n")).not.toContain("TREE-SESSION");
+	});
+
+	it("shows live-only provider detail with failed partial tool calls, but keeps history and tool rows safe", async () => {
+		const { terminal, emit, mode } = createInteractiveHarness();
+		terminal.resize(120, 30);
+		const output = assistant("", "error");
+		output.content = [{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "safe" } }];
+		appendResponsesFailureDiagnostics(
+			output,
+			normalizeResponsesFailure({ message: "unavailable at https://private.example.org/secret" }, "stream"),
+		);
+		const final = { ...output };
+		await emit({ type: "message_start", message: { ...final, content: [] } });
+		await emit({ type: "message_update", message: final });
+		await emit({ type: "message_end", message: final });
+		await render(terminal);
+		const visible = terminal.bufferLines().join(" ");
+		expect(visible).toContain("[redacted]");
+		expect(visible).toContain("redacted or shortened for security");
+		expect(visible).not.toContain("private.example.org");
+		expect(JSON.stringify(final)).not.toContain("private.example.org");
+		expect((mode.pendingTools as Map<string, unknown>).size).toBe(0);
+		const persisted = JSON.parse(JSON.stringify(final));
+		const history = createInteractiveHarness();
+		history.terminal.resize(120, 30);
+		history.setSessionMessages([persisted]);
+		(history.mode.renderInitialMessages as () => void).call(history.mode);
+		await render(history.terminal);
+		expect(history.terminal.bufferLines().join(" ")).not.toContain("Provider detail:");
 	});
 
 	it("suppresses transcript zones on mutable previews and emits complete zones after finalization", () => {

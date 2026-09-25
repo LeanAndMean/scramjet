@@ -12,6 +12,7 @@ import {
 	type AssistantMessage,
 	getProviders,
 	type ImageContent,
+	liveResponsesFailureDetail,
 	type Message,
 	type Model,
 	type OAuthProviderId,
@@ -2939,6 +2940,8 @@ export class InteractiveMode {
 								: "Operation aborted";
 						this.streamingMessage.errorMessage = errorMessage;
 					}
+					// SCRAMJET-DIVERGENCE: live-only provider detail never enters persisted assistant or pending tool rows (#575).
+					this.streamingComponent.setLiveFailureDetail(liveResponsesFailureDetail(this.streamingMessage));
 					this.streamingComponent.updateContent(this.streamingMessage);
 					this.streamingComponent.setFinalized(true);
 					this.setChatComponentMutable(this.streamingComponent, false);
