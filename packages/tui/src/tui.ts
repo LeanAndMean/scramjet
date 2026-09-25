@@ -393,6 +393,7 @@ export class TUI extends Container {
 			);
 			if (this.viewport?.handleInput(data, overlayFocused, this.hasOverlay())) {
 				this.viewportRevealFocus = false;
+				this.viewportRevealComponent = undefined;
 				return { consume: true };
 			}
 			return undefined;
@@ -452,6 +453,7 @@ export class TUI extends Container {
 
 	scrollViewportTo(offset: number, anchorScreenRow = 0): void {
 		this.viewportRevealFocus = false;
+		this.viewportRevealComponent = undefined;
 		this.viewport?.scrollTo(offset, anchorScreenRow);
 		this.requestRender();
 	}

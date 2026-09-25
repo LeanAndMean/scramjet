@@ -372,9 +372,10 @@ export class RetainedViewport {
 			if (!match) return true;
 			const [button, x, y] = match.slice(1, 4).map(Number);
 			if (match[4] === "m") {
-				const wasThumb = this.gesture?.kind === "thumb";
+				const thumb = this.gesture?.kind === "thumb" ? this.gesture : undefined;
+				const resumeTail = thumb && this.offset === thumb.maximum;
 				this.endGesture();
-				if (wasThumb) this.scrollTo(this.offset);
+				if (thumb) this.scrollTo(resumeTail ? this.maxOffset : this.offset);
 				if (
 					this.selection &&
 					this.selection.start.row === this.selection.end.row &&
