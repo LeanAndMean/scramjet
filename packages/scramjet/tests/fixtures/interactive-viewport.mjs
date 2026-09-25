@@ -2,9 +2,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { release, platform, tmpdir } from "node:os";
 import { join } from "node:path";
-import { stripVTControlCharacters as stripAnsi } from "node:util";
+import { stripVTControlCharacters } from "node:util";
 import { decodeKittyPrintable, isKeyRelease, matchesKey, ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
 import { copyToClipboard } from "../../../coding-agent/dist/utils/clipboard.js";
+
+const stripAnsi = (text) => stripVTControlCharacters(text.replace(/\x1b\[[0-9;:]*m/g, ""));
 
 const help = `Retained TUI interaction fixture for #551.
 Run from the repository after npm run build:
