@@ -6,11 +6,13 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const WORKFLOW_PATH = resolve(import.meta.dirname, "../../../.github/workflows/release.yml");
+const REGISTRY_GUARD = resolve(import.meta.dirname, "../../../.github/scripts/validate-registry.sh");
 const source = readFileSync(WORKFLOW_PATH, "utf8");
 const workflow = parse(source);
-const steps = workflow.jobs.publish.steps as Array<Record<string, any>>;
+const publishSteps = workflow.jobs.publish.steps as Array<Record<string, any>>;
+const verifySteps = workflow.jobs.verify.steps as Array<Record<string, any>>;
 
-function step(name: string) {
+function step(name: string, steps = publishSteps) {
 	return steps.find((candidate) => candidate.name === name)!;
 }
 
@@ -47,7 +49,7 @@ esac
 					!(/^(?:NPM|NODE).*TOKEN$/i.test(name) || /^NPM_CONFIG_.*(?:AUTH|PASSWORD|USERNAME)/i.test(name)),
 			),
 		);
-		return spawnSync("bash", ["-euo", "pipefail", "-c", step("Validate registry configuration").run], {
+		return spawnSync("bash", [REGISTRY_GUARD], {
 			cwd: workDir,
 			encoding: "utf8",
 			env: {
@@ -78,7 +80,7 @@ function runRegistryValidationWithNpm({ projectNpmrc, userNpmrc }: { projectNpmr
 					value !== undefined && !(/^NPM_CONFIG_/i.test(name) || /^(?:NPM|NODE).*TOKEN$/i.test(name)),
 			),
 		);
-		return spawnSync("bash", ["-euo", "pipefail", "-c", step("Validate registry configuration").run], {
+		return spawnSync("bash", [REGISTRY_GUARD], {
 			cwd: project,
 			encoding: "utf8",
 			env: {
@@ -98,57 +100,81 @@ describe("release workflow", () => {
 		expect(workflow.concurrency).toEqual({ group: "npm-publication", "cancel-in-progress": false });
 	});
 
-	it("uses exact least privilege, immutable actions, an event-ref checkout, and a bounded job", () => {
-		expect(workflow.permissions).toEqual({ contents: "read", "id-token": "write" });
-		expect(workflow.jobs.publish.permissions).toBeUndefined();
+	it("separates publication privilege from dependent verification without changing trigger or concurrency", () => {
+		expect(workflow.permissions).toEqual({ contents: "read" });
+		expect(workflow.jobs.publish.permissions).toEqual({ contents: "read", "id-token": "write" });
+		expect(workflow.jobs.verify.permissions).toBeUndefined();
 		expect(workflow.jobs.publish["timeout-minutes"]).toBe(360);
-		const checkout = steps.find(
-			(candidate) => candidate.uses === "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-		)!;
-		expect(checkout.with?.ref).toBeUndefined();
-		expect(
-			steps.some((candidate) => candidate.uses === "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020"),
-		).toBe(true);
-		for (const action of steps.filter((candidate) => candidate.uses)) {
-			expect(action.uses).toMatch(/@[0-9a-f]{40}$/);
+		expect(workflow.jobs.verify["timeout-minutes"]).toBe(120);
+		expect(workflow.jobs.verify.needs).toBe("publish");
+		for (const steps of [publishSteps, verifySteps]) {
+			const checkout = steps.find((candidate) => candidate.uses?.startsWith("actions/checkout@"))!;
+			expect(checkout.uses).toBe("actions/checkout@11d5960a326750d5838078e36cf38b85af677262");
+			expect(checkout.with?.ref).toBeUndefined();
+			const setup = steps.find((candidate) => candidate.uses?.startsWith("actions/setup-node@"))!;
+			expect(setup.uses).toBe("actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020");
+			expect(setup.with["node-version"]).toBe("22");
+			for (const action of steps.filter((candidate) => candidate.uses))
+				expect(action.uses).toMatch(/@[0-9a-f]{40}$/);
 		}
-	});
-
-	it("pins and verifies the release runtime", () => {
-		expect(workflow.jobs.publish["runs-on"]).toBe("ubuntu-latest");
-		const setup = steps.find(
-			(candidate) => candidate.uses === "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-		)!;
-		expect(setup.with["node-version"]).toBe("22");
-		expect(step("Pin release tooling").run).toContain("Node 22.14.0 or newer is required");
-		expect(step("Pin release tooling").run).toContain(
-			"npm install --global npm@11.5.1 --registry https://registry.npmjs.org/",
+		expect(step("Validate registry configuration").run).toBe("bash .github/scripts/validate-registry.sh");
+		expect(step("Validate registry configuration", verifySteps).run).toBe(
+			"bash .github/scripts/validate-registry.sh",
 		);
-		expect(step("Pin release tooling").run).toContain("node --version");
-		expect(step("Pin release tooling").run).toContain("npm --version");
 	});
 
-	it("validates identity and registry state, pins tooling, preflights, publishes once, then verifies", () => {
-		const names = steps.map((candidate) => candidate.name);
-		expect(names.indexOf("Validate release identity")).toBeLessThan(names.indexOf("Validate registry configuration"));
-		expect(names.indexOf("Validate registry configuration")).toBeLessThan(names.indexOf("Pin release tooling"));
+	it("pins and verifies tooling in both jobs without a repository install in verification", () => {
+		for (const [job, steps] of [
+			[workflow.jobs.publish, publishSteps],
+			[workflow.jobs.verify, verifySteps],
+		] as const) {
+			expect(job["runs-on"]).toBe("ubuntu-latest");
+			const pin = step("Pin release tooling", steps).run;
+			expect(pin).toContain("Node 22.14.0 or newer is required");
+			expect(pin).toContain("npm install --global npm@11.5.1 --registry https://registry.npmjs.org/");
+			expect(pin).toContain("node --version");
+			expect(pin).toContain("npm --version");
+		}
+		expect(step("Pin release tooling", verifySteps).run).toBe(step("Pin release tooling").run);
+		expect(
+			verifySteps.find((candidate) => candidate.uses?.startsWith("actions/setup-node@"))!.with.cache,
+		).toBeUndefined();
+		expect(publishSteps.find((candidate) => candidate.uses?.startsWith("actions/setup-node@"))!.with.cache).toBe(
+			"npm",
+		);
+	});
+
+	it("preflights only the initial attempt and never builds, packs or publishes in the verify job", () => {
+		for (const steps of [publishSteps, verifySteps]) {
+			const names = steps.map((candidate) => candidate.name);
+			expect(names.indexOf("Validate release identity")).toBeLessThan(
+				names.indexOf("Validate registry configuration"),
+			);
+			expect(names.indexOf("Validate registry configuration")).toBeLessThan(names.indexOf("Pin release tooling"));
+			expect(step("Validate release identity", steps).run).toBe("node .github/scripts/release.mjs validate");
+		}
+		const names = publishSteps.map((candidate) => candidate.name);
 		expect(names.indexOf("Pin release tooling")).toBeLessThan(names.indexOf("Preflight release candidate"));
 		expect(names.indexOf("Preflight release candidate")).toBeLessThan(names.indexOf("Install dependencies"));
 		expect(names.indexOf("Install dependencies")).toBeLessThan(names.indexOf("Build"));
 		expect(names.indexOf("Build")).toBeLessThan(names.indexOf("Publish packages"));
-		expect(names.indexOf("Publish packages")).toBeLessThan(names.indexOf("Verify published release"));
-		expect(step("Validate release identity").run).toBe("node .github/scripts/release.mjs validate");
-		expect(step("Validate registry configuration").run).toContain("https://registry.npmjs.org/");
-		expect(step("Validate registry configuration").run).toContain("npm config get @leanandmean:registry");
-		expect(step("Validate registry configuration").run).toMatch(/_password\|username/);
+		expect(step("Preflight release candidate").if).toBe("github.run_attempt == 1");
 		expect(step("Preflight release candidate").run).toBe('node .github/scripts/release.mjs preflight "$GITHUB_SHA"');
 		expect(step("Install dependencies").run).toBe("npm ci --ignore-scripts");
 		expect(step("Build").run).toBe("npm run build");
 		expect(step("Publish packages").run).toBe("node .github/scripts/release.mjs publish");
-		expect(step("Verify published release").run).toBe("node .github/scripts/release.mjs verify");
+		expect(verifySteps.map((candidate) => candidate.name)).toEqual([
+			undefined,
+			undefined,
+			"Validate release identity",
+			"Validate registry configuration",
+			"Pin release tooling",
+			"Verify published release",
+		]);
+		expect(step("Verify published release", verifySteps).run).toBe("node .github/scripts/release.mjs verify");
 		expect(source.match(/release\.mjs publish/g)).toHaveLength(1);
 		expect(source.match(/release\.mjs verify/g)).toHaveLength(1);
-		expect(source.match(/npm publish/g)).toBeNull();
+		expect(source).not.toMatch(/npm publish|upload-artifact|download-artifact/);
 	});
 
 	it("executes registry and credential validation fail-closed", () => {
