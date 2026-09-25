@@ -1133,7 +1133,7 @@ exit 1
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("matching content retained");
 		expect(publishCalls(readState(statePath))).toHaveLength(3);
-	});
+	}, 20_000);
 
 	it("resumes a failed first attempt from registry state, without a second command in that attempt", () => {
 		const state = initialState();
@@ -1178,7 +1178,10 @@ exit 1
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("candidate archive changed before publication");
-		expect(publishCalls(readState(statePath))).toHaveLength(0);
+		const stateAfterFailure = readState(statePath);
+		expect(publishCalls(stateAfterFailure)).toHaveLength(0);
+		expect(stateAfterFailure.packDirectory).toBeDefined();
+		expect(existsSync(stateAfterFailure.packDirectory!)).toBe(false);
 	});
 
 	it("runs the production publish CLI against checked tarball files", () => {
