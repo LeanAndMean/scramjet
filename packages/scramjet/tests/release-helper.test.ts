@@ -9,8 +9,10 @@ import {
 	isTransientReadError,
 	loadInventory,
 	loadPreflightInventory,
+	packCandidates,
 	pollRead,
 	publishPackage,
+	reconcileCandidates,
 	run,
 	validateIdentity,
 } from "../../../.github/scripts/release.mjs";
@@ -46,9 +48,26 @@ function mutateJson(root: string, path: string, mutate: (value: any) => void) {
 
 interface FakeState {
 	packages: Record<string, { versions: string[]; distTags: Record<string, string> }>;
+	registryIntegrity?: Record<string, string>;
+	distOverrides?: Record<string, Record<string, unknown>>;
+	distDelays?: Record<string, number>;
+	versionOmissions?: Record<string, number>;
+	latestDelays?: Record<string, number>;
+	packOutput?: { name: string; override: Record<string, unknown> };
+	packManifest?: { name: string; field: string; value: unknown };
+	packFailure?: string;
+	packFileMissing?: string;
+	packSymlink?: string;
 	targets: Record<string, { name: string; version: string }>;
 	calls: string[][];
-	failure?: { name: string; field: string; output?: string; stderrOutput?: string; status?: number };
+	failure?: {
+		name: string;
+		field: string;
+		output?: string;
+		stderrOutput?: string;
+		status?: number;
+		remaining?: number;
+	};
 	failureAfterPublish?: {
 		name: string;
 		field: string;
@@ -101,7 +120,8 @@ if (args[0] === "view") {
   const versionSeparator = spec.lastIndexOf("@");
   const name = versionSeparator > 0 ? spec.slice(0, versionSeparator) : spec;
   const field = args[2];
-  if (state.failure?.name === name && state.failure?.field === field) {
+  if (state.failure?.name === name && state.failure?.field === field && (state.failure.remaining ?? 1) > 0) {
+    if (state.failure.remaining !== undefined) state.failure.remaining -= 1;
     save();
     if (state.failure.status) { process.stdout.write(state.failure.output ?? ""); console.error(state.failure.stderrOutput ?? "npm registry request failed"); process.exit(state.failure.status); }
     process.stdout.write(state.failure.output ?? "not json"); process.exit(0);
@@ -115,6 +135,26 @@ if (args[0] === "view") {
   }
   const pkg = state.packages[name];
   if (!pkg) stop("unknown package");
+  if (field === "dist") {
+    const version = spec.slice(versionSeparator + 1);
+    if (!pkg.versions.includes(version)) stop("unknown package version");
+    if ((state.distDelays?.[name] ?? 0) > 0) {
+      state.distDelays[name] -= 1;
+      save(); process.stdout.write(JSON.stringify({})); process.exit(0);
+    }
+    if ((state.attestationDelays?.[name] ?? 0) > 0) {
+      state.attestationDelays[name] -= 1;
+      save(); process.stdout.write(JSON.stringify({ integrity: state.registryIntegrity?.[name] })); process.exit(0);
+    }
+    const dist = state.distOverrides?.[name] ?? {
+      integrity: state.registryIntegrity?.[name],
+      attestations: state.missingAttestation === name ? {} : {
+        url: "https://registry.npmjs.org/fake/" + encodeURIComponent(name) + "/" + version,
+        provenance: { predicateType: state.wrongAttestationPredicate === name ? "https://example.test/predicate" : "https://slsa.dev/provenance/v1" },
+      },
+    };
+    save(); process.stdout.write(JSON.stringify(dist)); process.exit(0);
+  }
   if (field === "dist.attestations.url" || field === "dist.attestations") {
     const version = spec.slice(versionSeparator + 1);
     const target = Object.values(state.targets).find((entry) => entry.name === name);
@@ -142,9 +182,19 @@ if (args[0] === "view") {
       state.visibilityDelays[name] -= 1;
       save(); process.stdout.write(JSON.stringify(pkg.versions.filter((version) => version !== target.version))); process.exit(0);
     }
+    if ((state.versionOmissions?.[name] ?? 0) > 0) {
+      state.versionOmissions[name] -= 1;
+      save(); process.stdout.write(JSON.stringify(pkg.versions.filter((version) => version !== target.version))); process.exit(0);
+    }
     save(); process.stdout.write(JSON.stringify(pkg.versions)); process.exit(0);
   }
   if (field === "dist-tags") {
+    if ((state.latestDelays?.[name] ?? 0) > 0) {
+      state.latestDelays[name] -= 1;
+      const previous = { ...pkg.distTags };
+      if (state.latestDelays[name] === 0) pkg.distTags.latest = state.targets[Object.keys(state.targets).find(workspace => state.targets[workspace].name === name)].version;
+      save(); process.stdout.write(JSON.stringify(previous)); process.exit(0);
+    }
     if ((state.publicationCounts?.[name] ?? 0) > 0 && (state.tagVisibilityDelays?.[name] ?? 0) > 0) {
       state.tagVisibilityDelays[name] -= 1;
       save(); process.stdout.write(JSON.stringify({ ...pkg.distTags, latest: state.prePublishLatest[name] })); process.exit(0);
@@ -152,6 +202,33 @@ if (args[0] === "view") {
     save(); process.stdout.write(JSON.stringify(pkg.distTags)); process.exit(0);
   }
   stop("unexpected view");
+}
+if (args[0] === "pack") {
+  const workspace = args[args.indexOf("-w") + 1];
+  const target = state.targets[workspace];
+  if (!target) stop("unknown workspace");
+  if (state.packFailure === target.name) stop("pack failed for " + target.name);
+  const destination = args[args.indexOf("--pack-destination") + 1];
+  const filename = target.name.slice(1).replace("/", "-") + "-" + target.version + ".tgz";
+  const source = fs.mkdtempSync(require("node:os").tmpdir() + "/scramjet-pack-fixture-");
+  try {
+    fs.mkdirSync(require("node:path").join(source, "package"));
+    const manifest = JSON.parse(fs.readFileSync(require("node:path").join(process.cwd(), workspace, "package.json"), "utf8"));
+    if (state.packManifest?.name === target.name) manifest[state.packManifest.field] = state.packManifest.value;
+    fs.writeFileSync(require("node:path").join(source, "package", "package.json"), JSON.stringify(manifest));
+    const archive = require("node:path").join(destination, filename);
+    require("node:child_process").execFileSync("tar", ["-czf", archive, "package/package.json"], { cwd: source });
+    if (state.packSymlink === target.name) {
+      fs.renameSync(archive, archive + ".original");
+      fs.symlinkSync(archive + ".original", archive);
+    }
+    const integrity = "sha512-" + createHash("sha512").update(fs.readFileSync(archive)).digest("base64");
+    if (state.packFileMissing === target.name) fs.unlinkSync(archive);
+    const override = state.packOutput?.name === target.name ? state.packOutput.override : {};
+    const result = { name: target.name, version: target.version, filename, integrity, ...override };
+    save(); process.stdout.write(override.invalidJson ? "not json" : JSON.stringify(override.empty ? [] : override.duplicate ? [result, result] : [result]));
+  } finally { fs.rmSync(source, { recursive: true, force: true }); }
+  process.exit(0);
 }
 if (args[0] === "publish") {
   const workspace = args[args.indexOf("-w") + 1];
@@ -650,6 +727,236 @@ try {
 	});
 
 	afterEach(() => rmSync(workDir, { recursive: true, force: true }));
+
+	async function withCandidates(
+		check: (
+			candidates: Array<(typeof INVENTORY)[number] & { tarballPath: string; integrity: string }>,
+			state: FakeState,
+		) => Promise<void> | void,
+	) {
+		const oldPath = process.env.PATH;
+		const oldState = process.env.FAKE_NPM_STATE;
+		process.env.PATH = `${workDir}:${oldPath}`;
+		process.env.FAKE_NPM_STATE = statePath;
+		try {
+			const directory = join(workDir, "candidates");
+			mkdirSync(directory, { recursive: true });
+			const candidates = packCandidates(INVENTORY, directory);
+			const state = readState(statePath);
+			state.registryIntegrity = Object.fromEntries(candidates.map(({ name, integrity }) => [name, integrity]));
+			writeFileSync(statePath, JSON.stringify(state));
+			await check(candidates, state);
+		} finally {
+			if (oldPath === undefined) delete process.env.PATH;
+			else process.env.PATH = oldPath;
+			if (oldState === undefined) delete process.env.FAKE_NPM_STATE;
+			else process.env.FAKE_NPM_STATE = oldState;
+		}
+	}
+
+	function clock(budgetMs = 5_000) {
+		let elapsedMs = 0;
+		return {
+			budgetMs,
+			delayMs: 1_000,
+			now: () => elapsedMs,
+			sleep: async (duration: number) => {
+				elapsedMs += duration;
+			},
+		};
+	}
+
+	function markPresent(state: FakeState, ...indexes: number[]) {
+		for (const index of indexes) {
+			const { name, version } = INVENTORY[index];
+			state.packages[name].versions.push(version);
+			state.packages[name].distTags.latest = version;
+		}
+		writeFileSync(statePath, JSON.stringify(state));
+	}
+
+	it("packs all five real archives with matching bytes and canonical packed manifests", async () => {
+		await withCandidates((candidates, state) => {
+			expect(candidates.map(({ workspace }) => workspace)).toEqual(INVENTORY.map(({ workspace }) => workspace));
+			for (const candidate of candidates) {
+				expect(candidate.tarballPath).toBe(
+					join(workDir, "candidates", `${candidate.name.slice(1).replace("/", "-")}-${candidate.version}.tgz`),
+				);
+				expect(candidate.integrity).toMatch(/^sha512-/);
+				expect(existsSync(candidate.tarballPath)).toBe(true);
+			}
+			expect(state.calls.filter(([command]) => command === "pack")).toHaveLength(5);
+			expect(state.calls.some(([command]) => command === "publish")).toBe(false);
+		});
+	});
+
+	it.each([
+		["malformed JSON", { invalidJson: true }],
+		["no pack results", { empty: true }],
+		["multiple pack results", { duplicate: true }],
+		["wrong name", { name: "@leanandmean/other" }],
+		["wrong version", { version: "0.0.0" }],
+		["unsafe filename", { filename: "../../outside.tgz" }],
+		["invalid integrity", { integrity: "sha512-AAAA" }],
+		["different reported digest", { integrity: `sha512-${Buffer.alloc(64).toString("base64")}` }],
+	])("rejects %s from npm pack", (_label, override) => {
+		const state = initialState();
+		state.packOutput = { name: INVENTORY[1].name, override };
+		writeFileSync(statePath, JSON.stringify(state));
+		const oldPath = process.env.PATH;
+		process.env.PATH = `${workDir}:${oldPath}`;
+		try {
+			expect(() => packCandidates(INVENTORY, workDir)).toThrow();
+		} finally {
+			process.env.PATH = oldPath;
+		}
+		expect(readState(statePath).calls.some(([command]) => command === "publish")).toBe(false);
+	});
+
+	it("rejects failed pack, symlink archives and incorrect archived manifests", () => {
+		for (const change of [
+			{ packFailure: INVENTORY[0].name },
+			{ packFileMissing: INVENTORY[0].name },
+			{ packSymlink: INVENTORY[0].name },
+			{ packManifest: { name: INVENTORY[0].name, field: "name", value: "@leanandmean/other" } },
+			{ packManifest: { name: INVENTORY[0].name, field: "version", value: "0.0.0" } },
+			{ packManifest: { name: INVENTORY[0].name, field: "repository", value: "untrusted" } },
+			{ packManifest: { name: INVENTORY[0].name, field: "publishConfig", value: { access: "restricted" } } },
+			{ packManifest: { name: INVENTORY[2].name, field: "dependencies", value: {} } },
+		]) {
+			writeFileSync(statePath, JSON.stringify({ ...initialState(), ...change }));
+			const oldPath = process.env.PATH;
+			process.env.PATH = `${workDir}:${oldPath}`;
+			try {
+				expect(() => packCandidates(INVENTORY, workDir)).toThrow();
+			} finally {
+				process.env.PATH = oldPath;
+			}
+		}
+	});
+
+	it("reconciles all missing, all matching and non-prefix retained candidates without publishing", async () => {
+		await withCandidates(async (candidates, state) => {
+			const missing = await reconcileCandidates(candidates, clock());
+			expect(missing.map(({ status }) => status)).toEqual(INVENTORY.map(() => "missing"));
+			markPresent(state, 0, 1, 2, 3, 4);
+			const retained = await reconcileCandidates(candidates, clock());
+			expect(retained.map(({ status }) => status)).toEqual(INVENTORY.map(() => "retained"));
+			expect(retained[0].distTags).toEqual({ latest: INVENTORY[0].version, scramjet: "preserved" });
+			state.packages[INVENTORY[1].name].versions.pop();
+			state.packages[INVENTORY[1].name].distTags.latest = previousVersion(INVENTORY[1].version);
+			state.packages[INVENTORY[3].name].versions.pop();
+			state.packages[INVENTORY[3].name].distTags.latest = previousVersion(INVENTORY[3].version);
+			writeFileSync(statePath, JSON.stringify(state));
+			expect((await reconcileCandidates(candidates, clock())).map(({ status }) => status)).toEqual([
+				"retained",
+				"missing",
+				"retained",
+				"missing",
+				"retained",
+			]);
+			expect(readState(statePath).calls.some(([command]) => command === "publish")).toBe(false);
+		});
+	});
+
+	it("stops a valid content mismatch or a superseding latest without mutation", async () => {
+		await withCandidates(async (candidates, state) => {
+			markPresent(state, 0);
+			state.registryIntegrity![INVENTORY[0].name] = `sha512-${Buffer.alloc(64).toString("base64")}`;
+			writeFileSync(statePath, JSON.stringify(state));
+			await expect(reconcileCandidates(candidates, clock())).rejects.toThrow(/integrity differs/);
+			state.registryIntegrity![INVENTORY[0].name] = candidates[0].integrity;
+			state.packages[INVENTORY[0].name].distTags.latest = "999.0.0";
+			writeFileSync(statePath, JSON.stringify(state));
+			await expect(reconcileCandidates(candidates, clock())).rejects.toThrow(/superseded/);
+			expect(readState(statePath).calls.some(([command]) => command === "publish")).toBe(false);
+		});
+	});
+
+	it("bounds delayed digest, attestation and contradictory omission under one clock", async () => {
+		await withCandidates(async (candidates, state) => {
+			markPresent(state, 0);
+			state.distDelays = { [INVENTORY[0].name]: 1 };
+			state.attestationDelays = { [INVENTORY[0].name]: 1 };
+			state.versionOmissions = { [INVENTORY[0].name]: 1 };
+			writeFileSync(statePath, JSON.stringify(state));
+			const result = await reconcileCandidates(candidates, clock(7_000));
+			expect(result[0].status).toBe("retained");
+			const finalState = readState(statePath);
+			expect(finalState.versionOmissions?.[INVENTORY[0].name]).toBe(0);
+			expect(finalState.distDelays?.[INVENTORY[0].name]).toBe(0);
+			expect(finalState.attestationDelays?.[INVENTORY[0].name]).toBe(0);
+		});
+	});
+
+	it("waits for latest to catch up with a visible matching target", async () => {
+		await withCandidates(async (candidates, state) => {
+			markPresent(state, 0);
+			state.packages[INVENTORY[0].name].distTags.latest = previousVersion(INVENTORY[0].version);
+			state.latestDelays = { [INVENTORY[0].name]: 1 };
+			writeFileSync(statePath, JSON.stringify(state));
+			const result = await reconcileCandidates([candidates[0]], clock());
+			expect(result[0].status).toBe("retained");
+			expect(result[0].distTags.latest).toBe(INVENTORY[0].version);
+		});
+	});
+
+	it("never turns observed presence into absence after a later versions omission", async () => {
+		await withCandidates(async (candidates, state) => {
+			markPresent(state, 0);
+			state.distDelays = { [INVENTORY[0].name]: 1 };
+			state.versionOmissions = { [INVENTORY[0].name]: 0 };
+			writeFileSync(statePath, JSON.stringify(state));
+			const seen = new Set<string>();
+			await reconcileCandidates([candidates[0]], { ...clock(), observedPresence: seen });
+			state.versionOmissions[INVENTORY[0].name] = 10;
+			state.packages[INVENTORY[0].name].distTags.latest = previousVersion(INVENTORY[0].version);
+			writeFileSync(statePath, JSON.stringify(state));
+			await expect(reconcileCandidates([candidates[0]], { ...clock(), observedPresence: seen })).rejects.toThrow(
+				/did not converge/,
+			);
+			expect(seen.has(INVENTORY[0].name)).toBe(true);
+		});
+	});
+
+	it("does not infer absence from a failed or malformed versions lookup", async () => {
+		await withCandidates(async (candidates, state) => {
+			for (const failure of [
+				{
+					name: INVENTORY[0].name,
+					field: "versions",
+					status: 1,
+					output: JSON.stringify({ error: { code: "E401" } }),
+				},
+				{ name: INVENTORY[0].name, field: "versions", output: "not json" },
+			]) {
+				state.failure = failure;
+				writeFileSync(statePath, JSON.stringify(state));
+				await expect(reconcileCandidates(candidates, clock())).rejects.toThrow();
+			}
+			expect(readState(statePath).calls.some(([command]) => command === "publish")).toBe(false);
+		});
+	});
+
+	it("retains a structured transport cause on observation exhaustion", async () => {
+		await withCandidates(async (candidates, state) => {
+			state.failure = {
+				name: INVENTORY[0].name,
+				field: "versions",
+				status: 1,
+				output: JSON.stringify({ error: { code: "E429" } }),
+			};
+			writeFileSync(statePath, JSON.stringify(state));
+			try {
+				await reconcileCandidates(candidates, clock());
+				throw new Error("expected exhaustion");
+			} catch (error) {
+				expect(error).toHaveProperty("cause");
+				expect((error as Error).message).toMatch(/did not converge within 5000ms/);
+				expect((error as Error & { cause: Error }).cause).toHaveProperty("stdout", expect.stringContaining("E429"));
+			}
+		});
+	});
 
 	it("registry-preflights all five packages without publishing", () => {
 		const result = runHelper("registry-preflight", statePath);

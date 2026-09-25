@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,7 +80,7 @@ function validateInternalDependencies(record, name, versions, description) {
 	}
 }
 
-function parseInventory(readMetadata) {
+function parseManifests(readMetadata) {
 	const manifests = new Map();
 	const inventory = INVENTORY.map(([workspace, expectedName]) => {
 		const path = `${workspace}/package.json`;
@@ -110,7 +111,12 @@ function parseInventory(readMetadata) {
 	}
 	const versions = new Map(inventory.map(({ name, version }) => [name, version]));
 	for (const { name } of inventory) validateInternalDependencies(manifests.get(name), name, versions, `${name} manifest`);
+	return inventory;
+}
 
+function parseInventory(readMetadata) {
+	const inventory = parseManifests(readMetadata);
+	const versions = new Map(inventory.map(({ name, version }) => [name, version]));
 	const lock = requireObject(parseJson(readMetadata("package-lock.json"), "package-lock.json"), "package-lock.json");
 	if (lock.lockfileVersion !== 3) fail("package-lock.json must use lockfileVersion 3");
 	const packages = requireObject(lock.packages, "package-lock.json packages");
@@ -230,6 +236,99 @@ export function compareVersions(left, right) {
 	return a.prerelease < b.prerelease ? -1 : 1;
 }
 
+function sha512Digest(integrity, description) {
+	if (typeof integrity !== "string" || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(integrity)) {
+		fail(`${description} must be a SHA-512 integrity string`);
+	}
+	const digest = Buffer.from(integrity.slice(7), "base64");
+	if (digest.length !== 64 || digest.toString("base64") !== integrity.slice(7)) {
+		fail(`${description} must contain a canonical 64-byte SHA-512 digest`);
+	}
+	return digest;
+}
+
+export function packCandidates(inventory, directory) {
+	if (inventory.length !== INVENTORY.length) fail("candidate inventory must contain all five release workspaces");
+	const destination = resolve(directory);
+	const manifests = new Map();
+	const filenames = new Set();
+	const candidates = inventory.map((pkg, index) => {
+		const [workspace, name] = INVENTORY[index];
+		if (pkg.workspace !== workspace || pkg.name !== name) fail(`candidate inventory must follow release order at ${workspace}`);
+		parseVersion(pkg.version);
+		const description = `${pkg.name}@${pkg.version}`;
+		const results = parseJson(
+			run("npm", ["pack", "--json", "-w", pkg.workspace, "--pack-destination", destination]),
+			`${description} npm pack output`,
+		);
+		if (!Array.isArray(results) || results.length !== 1 || results[0]?.name !== pkg.name || results[0]?.version !== pkg.version) {
+			fail(`${description} npm pack must report exactly the intended package`);
+		}
+		const expected = `${pkg.name.slice(1).replace("/", "-")}-${pkg.version}.tgz`;
+		if (results[0].filename !== expected || filenames.has(expected)) {
+			fail(`${description} npm pack must report a unique expected filename in the candidate directory`);
+		}
+		filenames.add(expected);
+		const tarballPath = join(destination, expected);
+		const stat = lstatSync(tarballPath);
+		if (!stat.isFile()) fail(`${description} candidate archive must be a regular non-symlink file: ${tarballPath}`);
+		const manifestPath = `${pkg.workspace}/package.json`;
+		manifests.set(manifestPath, run("tar", ["-xOzf", tarballPath, "package/package.json"]));
+		const integrity = `sha512-${createHash("sha512").update(readFileSync(tarballPath)).digest("base64")}`;
+		sha512Digest(results[0].integrity, `${description} npm pack integrity`);
+		if (results[0].integrity !== integrity) fail(`${description} npm pack integrity differs from candidate archive bytes`);
+		return { ...pkg, tarballPath, integrity };
+	});
+	const packed = parseManifests((path) => manifests.get(path));
+	for (let index = 0; index < inventory.length; index += 1) {
+		if (packed[index].version !== inventory[index].version) {
+			fail(`${inventory[index].name} packed version differs from committed inventory`);
+		}
+	}
+	return candidates;
+}
+
+export async function reconcileCandidates(candidates, dependencies = {}) {
+	const observedPresence = dependencies.observedPresence ?? new Set();
+	const results = [];
+	for (const pkg of candidates) {
+		const description = `${pkg.name}@${pkg.version}`;
+		const result = await pollRead(
+			`${description} candidate reconciliation`,
+			async ({ remainingMs }) => {
+				const readTimeout = () => {
+					const timeout = Math.floor(Math.min(READ_TIMEOUT_MS, remainingMs()));
+					if (timeout <= 0) throw registryPropagationError(`${description} observation budget expired`);
+					return timeout;
+				};
+				const versions = requireVersions(npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions`, readTimeout()), pkg.name);
+				if (versions.includes(pkg.version)) observedPresence.add(pkg.name);
+				const distTags = requireDistTags(npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags`, readTimeout()), pkg.name);
+				if (typeof distTags.latest !== "string") throw registryPropagationError(`${pkg.name} has no latest dist-tag yet`);
+				const order = compareVersions(pkg.version, distTags.latest);
+				if (order < 0) fail(`${description} is superseded by latest ${distTags.latest}`);
+				if (observedPresence.has(pkg.name)) {
+					const output = run("npm", ["view", description, "dist", "--json", "--registry", REGISTRY_URL], { timeout: readTimeout() });
+					if (output === "") throw registryPropagationError(`${description} has no dist metadata yet`);
+					const dist = requireObject(parseJson(output, `${description} dist`), `${description} dist`);
+					if (dist.integrity === undefined) throw registryPropagationError(`${description} has no integrity yet`);
+					sha512Digest(dist.integrity, `${description} registry integrity`);
+					if (dist.integrity !== pkg.integrity) fail(`${description} registry integrity differs from candidate archive`);
+					if (dist.attestations === undefined) throw registryPropagationError(`${description} has no attestations yet`);
+					requireAttestations(dist.attestations, pkg);
+					if (order !== 0) throw registryPropagationError(`${pkg.name} latest is not ${pkg.version} yet`);
+					return { ...pkg, status: "retained", distTags: { ...distTags } };
+				}
+				if (order === 0) throw registryPropagationError(`${pkg.name} latest is ${pkg.version} but versions omit it`);
+				return { ...pkg, status: "missing", distTags: { ...distTags } };
+			},
+			{ ...dependencies, retryIf: isRegistryVisibilityRetryError },
+		);
+		results.push(result);
+	}
+	return results;
+}
+
 export function preflight(inventory) {
 	const plan = inventory.map((pkg) => {
 		const versions = requireVersions(npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions`), pkg.name);
@@ -284,8 +383,9 @@ export async function pollRead(description, operation, dependencies = {}) {
 		await sleep(sleepMs);
 	}
 	const elapsedMs = Math.max(0, now() - startedAt);
-	fail(
+	throw new Error(
 		`${description} did not converge within ${budgetMs}ms after ${elapsedMs}ms and ${observations} observations: ${lastError?.message ?? String(lastError)}`,
+		{ cause: lastError },
 	);
 }
 
