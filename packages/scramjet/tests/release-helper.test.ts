@@ -29,6 +29,7 @@ const RELEASE_ENV = {
 	GITHUB_SHA: SHA,
 	GITHUB_WORKFLOW_REF: `LeanAndMean/scramjet/.github/workflows/release.yml@refs/tags/v${SCRAMJET_VERSION}`,
 	GITHUB_RUN_ATTEMPT: "1",
+	GITHUB_RUN_ID: "36056969151",
 };
 const RELEASE_METADATA_PATHS = [...INVENTORY.map(({ workspace }) => `${workspace}/package.json`), "package-lock.json"];
 
@@ -53,6 +54,7 @@ interface FakeState {
 	distDelays?: Record<string, number>;
 	versionOmissions?: Record<string, number>;
 	latestDelays?: Record<string, number>;
+	latestContradiction?: string;
 	packOutput?: { name: string; override: Record<string, unknown> };
 	packManifest?: { name: string; field: string; value: unknown };
 	packFailure?: string;
@@ -76,8 +78,12 @@ interface FakeState {
 		status?: number;
 		remaining?: number;
 	};
-	publishFailure?: string;
+	publishFailure?: { name: string; mode: "before-landing" | "after-landing-403" | "after-landing-error" };
+	publishInputs?: Array<{ path: string; integrity: string }>;
 	race?: string;
+	raceAt?: number;
+	tamperAt?: string;
+	packDirectory?: string;
 	unexpectedTagChange?: string;
 	laterTagChange?: string;
 	registryReadMs?: Record<string, number>;
@@ -137,7 +143,7 @@ if (args[0] === "view") {
   if (!pkg) stop("unknown package");
   if (field === "dist") {
     const version = spec.slice(versionSeparator + 1);
-    if (!pkg.versions.includes(version)) stop("unknown package version");
+    if (!pkg.versions.includes(version)) { save(); process.stdout.write(JSON.stringify({ error: { code: "E404" } })); process.exit(1); }
     if ((state.distDelays?.[name] ?? 0) > 0) {
       state.distDelays[name] -= 1;
       save(); process.stdout.write(JSON.stringify({})); process.exit(0);
@@ -177,7 +183,14 @@ if (args[0] === "view") {
     state.versionQueries ??= {};
     state.versionQueries[name] = (state.versionQueries[name] ?? 0) + 1;
     const target = Object.values(state.targets).find((entry) => entry.name === name);
-    if (state.race === name && state.versionQueries[name] === 2) pkg.versions.push(target.version);
+    if (state.tamperAt === name && state.versionQueries[name] === 3) {
+      const filename = target.name.slice(1).replace("/", "-") + "-" + target.version + ".tgz";
+      fs.appendFileSync(require("node:path").join(state.packDirectory, filename), "tampered");
+    }
+    if (state.race === name && state.versionQueries[name] === (state.raceAt ?? 3)) {
+      pkg.versions.push(target.version);
+      pkg.distTags.latest = target.version;
+    }
     if ((state.publicationCounts?.[name] ?? 0) > 0 && (state.visibilityDelays?.[name] ?? 0) > 0) {
       state.visibilityDelays[name] -= 1;
       save(); process.stdout.write(JSON.stringify(pkg.versions.filter((version) => version !== target.version))); process.exit(0);
@@ -189,6 +202,10 @@ if (args[0] === "view") {
     save(); process.stdout.write(JSON.stringify(pkg.versions)); process.exit(0);
   }
   if (field === "dist-tags") {
+    if (state.latestContradiction === name && state.packDirectory) {
+      delete state.latestContradiction;
+      save(); process.stdout.write(JSON.stringify({ ...pkg.distTags, latest: state.targets[Object.keys(state.targets).find(workspace => state.targets[workspace].name === name)].version })); process.exit(0);
+    }
     if ((state.latestDelays?.[name] ?? 0) > 0) {
       state.latestDelays[name] -= 1;
       const previous = { ...pkg.distTags };
@@ -223,6 +240,9 @@ if (args[0] === "pack") {
       fs.symlinkSync(archive + ".original", archive);
     }
     const integrity = "sha512-" + createHash("sha512").update(fs.readFileSync(archive)).digest("base64");
+    state.registryIntegrity ??= {};
+    state.registryIntegrity[target.name] = integrity;
+    state.packDirectory = destination;
     if (state.packFileMissing === target.name) fs.unlinkSync(archive);
     const override = state.packOutput?.name === target.name ? state.packOutput.override : {};
     const result = { name: target.name, version: target.version, filename, integrity, ...override };
@@ -231,10 +251,15 @@ if (args[0] === "pack") {
   process.exit(0);
 }
 if (args[0] === "publish") {
-  const workspace = args[args.indexOf("-w") + 1];
-  const target = state.targets[workspace];
-  if (!target) stop("unknown workspace");
-  if (state.publishFailure === target.name) stop("publish failed");
+  const archive = args[1];
+  const target = Object.values(state.targets).find(t => archive.endsWith(t.name.slice(1).replace("/", "-") + "-" + t.version + ".tgz"));
+  if (!target || !require("node:path").isAbsolute(archive)) stop("invalid candidate archive");
+  const integrity = "sha512-" + createHash("sha512").update(fs.readFileSync(archive)).digest("base64");
+  state.publishInputs ??= [];
+  state.publishInputs.push({ path: archive, integrity });
+  if (integrity !== state.registryIntegrity?.[target.name]) stop("candidate bytes differ");
+  const failure = state.publishFailure?.name === target.name ? state.publishFailure.mode : undefined;
+  if (failure === "before-landing") stop("publish failed before landing");
   const pkg = state.packages[target.name];
   state.publicationCounts ??= {};
   state.prePublishLatest ??= {};
@@ -244,7 +269,9 @@ if (args[0] === "publish") {
   pkg.distTags.latest = target.version;
   if (state.unexpectedTagChange === target.name) pkg.distTags.scramjet = target.version;
   if (state.laterTagChange) state.packages[state.laterTagChange].distTags.scramjet = "changed";
-  save(); process.stdout.write("published"); process.exit(0);
+  save();
+  if (failure) { console.error(failure === "after-landing-403" ? "E403: publish failed" : "publish command errored"); process.exit(1); }
+  process.stdout.write("published"); process.exit(0);
 }
 if (args[0] === "install") {
   state.verificationPaths = {
@@ -314,7 +341,7 @@ function runHelper(
 	const script = ["publish", "publish-and-verify", "registry-preflight", "verify", "verify-delayed"].includes(mode)
 		? join(dirname(statePath), "runner.mjs")
 		: HELPER;
-	return spawnSync(process.execPath, [script, mode, ...args], {
+	return spawnSync(process.execPath, [script, mode === "publish-cli" ? "publish" : mode, ...args], {
 		cwd: REPO_ROOT,
 		encoding: "utf8",
 		env: {
@@ -337,16 +364,10 @@ function publishCalls(state: FakeState): string[][] {
 }
 
 function expectFirstPackageObservationFailureSummary(stderr: string) {
-	expect(stderr).toContain("accepted and observed: none");
-	expect(stderr).toContain(`accepted but unobserved: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
-	expect(stderr).toContain(
-		`unattempted: ${INVENTORY.slice(1)
-			.map(({ name, version }) => `${name}@${version}`)
-			.join(", ")}`,
-	);
-	expect(stderr).toContain("failed phase: post-publish metadata observation");
+	expect(stderr).toContain(`${INVENTORY[0].name}@${INVENTORY[0].version}: command accepted; observation incomplete`);
+	for (const { name, version } of INVENTORY.slice(1)) expect(stderr).toContain(`${name}@${version}: unattempted`);
+	expect(stderr).toContain("failed phase: post-publish observation");
 	expect(stderr).toContain("final verification: not completed");
-	expect(stderr).not.toContain("acceptance ambiguous:");
 }
 
 describe("release helper package and event validation", () => {
@@ -560,7 +581,21 @@ describe("release helper package and event validation", () => {
 	});
 
 	it("accepts only an aligned push event, tag, workflow ref, SHA, attempt, and HEAD", () => {
-		expect(validateIdentity(INVENTORY, RELEASE_ENV, () => SHA)).toEqual({ ref: RELEASE_ENV.GITHUB_REF, sha: SHA });
+		expect(validateIdentity(INVENTORY, RELEASE_ENV, () => SHA)).toEqual({
+			ref: RELEASE_ENV.GITHUB_REF,
+			sha: SHA,
+			runId: RELEASE_ENV.GITHUB_RUN_ID,
+			attempt: "1",
+		});
+	});
+
+	it("accepts a canonical later attempt with run correlation", () => {
+		expect(validateIdentity(INVENTORY, { ...RELEASE_ENV, GITHUB_RUN_ATTEMPT: "2" }, () => SHA)).toEqual({
+			ref: RELEASE_ENV.GITHUB_REF,
+			sha: SHA,
+			runId: RELEASE_ENV.GITHUB_RUN_ID,
+			attempt: "2",
+		});
 	});
 
 	it("validates a clean checkout before dependencies are installed", () => {
@@ -599,7 +634,10 @@ describe("release helper package and event validation", () => {
 		],
 		["invalid SHA", { GITHUB_SHA: "not-a-sha" }],
 		["missing run attempt", { GITHUB_RUN_ATTEMPT: undefined }],
-		["a repeated run attempt", { GITHUB_RUN_ATTEMPT: "2" }],
+		["missing run ID", { GITHUB_RUN_ID: undefined }],
+		["noncanonical run ID", { GITHUB_RUN_ID: "01" }],
+		["zero attempt", { GITHUB_RUN_ATTEMPT: "0" }],
+		["noncanonical attempt", { GITHUB_RUN_ATTEMPT: "02" }],
 	])("rejects %s", (_label, override) => {
 		expect(() => validateIdentity(INVENTORY, { ...RELEASE_ENV, ...override }, () => SHA)).toThrow();
 	});
@@ -646,6 +684,7 @@ if (process.env.IN_PROCESS_NPM === "1") {
   childProcess.execFileSync = (command, args, options) => {
     if (command === "git") return realExec(command, args, options);
     const cli = command.endsWith("/node_modules/.bin/scramjet");
+    if (command === "tar") return realExec(command, args, options);
     if (command !== "npm" && !cli) throw new Error("Unexpected fixture command: " + command);
     const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
     if (command === "npm" && args[0] === "view" && Object.values(state.publicationCounts ?? {}).some(count => count > 0)) {
@@ -682,7 +721,8 @@ if (process.env.IN_PROCESS_NPM === "1") {
 const { loadInventory, preflight, publish, validateIdentity, verify } = await import(${JSON.stringify(new URL("../../../.github/scripts/release.mjs", import.meta.url))});
 try {
   const inventory = loadInventory();
-  validateIdentity(inventory);
+  const identity = validateIdentity(inventory);
+  if (["publish", "publish-and-verify"].includes(process.argv[2]) && identity.attempt === "1") preflight(inventory);
   const pollDependencies = {
     budgetMs: 600_000,
     delayMs: Number(process.env.POLL_DELAY_MS ?? 10_000),
@@ -901,6 +941,16 @@ try {
 		});
 	});
 
+	it("does not publish after latest briefly names a target omitted by versions", () => {
+		const state = initialState();
+		state.latestContradiction = INVENTORY[0].name;
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath, [], { POLL_DELAY_MS: "300000" });
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain(`${INVENTORY[0].name}@${INVENTORY[0].version}`);
+		expect(publishCalls(readState(statePath))).toHaveLength(0);
+	});
+
 	it("never turns observed presence into absence after a later versions omission", async () => {
 		await withCandidates(async (candidates, state) => {
 			markPresent(state, 0);
@@ -1030,18 +1080,132 @@ exit 1
 		}
 	});
 
+	it("resumes partial publication on attempt 2 without republishing matching targets", () => {
+		const first = runHelper("publish", statePath);
+		expect(first.status).toBe(0);
+		const state = readState(statePath);
+		for (const { name, version } of INVENTORY.slice(2)) {
+			state.packages[name].versions = state.packages[name].versions.filter((value) => value !== version);
+			state.packages[name].distTags.latest = previousVersion(version);
+		}
+		state.calls = [];
+		state.publicationCounts = {};
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath, [], { GITHUB_RUN_ATTEMPT: "2" });
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("matching content retained");
+		expect(publishCalls(readState(statePath))).toHaveLength(3);
+	});
+
+	it("resumes a failed first attempt from registry state, without a second command in that attempt", () => {
+		const state = initialState();
+		state.publishFailure = { name: INVENTORY[1].name, mode: "before-landing" };
+		writeFileSync(statePath, JSON.stringify(state));
+		const failed = runHelper("publish", statePath, [], { IN_PROCESS_NPM: "1", POLL_DELAY_MS: "300000" });
+		expect(failed.status).not.toBe(0);
+		expect(failed.stderr).toContain("publish failed before landing");
+		expect(failed.stderr).toContain("acceptance ambiguous");
+		const afterFailure = readState(statePath);
+		expect(publishCalls(afterFailure)).toHaveLength(2);
+		expect(afterFailure.packages[INVENTORY[0].name].versions).toContain(INVENTORY[0].version);
+		delete afterFailure.publishFailure;
+		afterFailure.calls = [];
+		writeFileSync(statePath, JSON.stringify(afterFailure));
+		const resumed = runHelper("publish", statePath, [], { GITHUB_RUN_ATTEMPT: "2" });
+		expect(resumed.status).toBe(0);
+		expect(resumed.stdout).toContain(`${INVENTORY[0].name}@${INVENTORY[0].version}: matching content retained`);
+		expect(publishCalls(readState(statePath))).toHaveLength(4);
+	});
+
+	it.each(["after-landing-403", "after-landing-error"] as const)(
+		"observes a %s publish error without retrying the command",
+		(mode) => {
+			const state = initialState();
+			state.publishFailure = { name: INVENTORY[0].name, mode };
+			writeFileSync(statePath, JSON.stringify(state));
+			const result = runHelper("publish", statePath);
+			expect(result.status).toBe(0);
+			expect(result.stderr).toContain(mode === "after-landing-403" ? "E403" : "publish command errored");
+			expect(result.stdout).toContain(
+				`${INVENTORY[0].name}@${INVENTORY[0].version}: command errored; matching content observed`,
+			);
+			expect(publishCalls(readState(statePath))).toHaveLength(5);
+		},
+	);
+
+	it("stops on a changed checked archive before invoking npm publish", () => {
+		const state = initialState();
+		state.tamperAt = INVENTORY[0].name;
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("candidate archive changed before publication");
+		expect(publishCalls(readState(statePath))).toHaveLength(0);
+	});
+
+	it("runs the production publish CLI against checked tarball files", () => {
+		const result = runHelper("publish-cli", statePath);
+		expect(result.status).toBe(0);
+		const state = readState(statePath);
+		expect(state.calls.filter(([command]) => command === "pack")).toHaveLength(5);
+		expect(publishCalls(state)).toHaveLength(5);
+		for (const { path, integrity } of state.publishInputs ?? []) {
+			expect(path).toMatch(/^\/.*\.tgz$/);
+			expect(Object.values(state.registryIntegrity ?? {})).toContain(integrity);
+			expect(existsSync(path)).toBe(false);
+		}
+		expect(result.stdout).toContain("release run 36056969151 attempt 1");
+		expect(result.stdout).toContain("final verification: pending");
+	});
+
+	it("production CLI accepts attempt 2 only after rechecking committed inventory and retained content", () => {
+		const first = runHelper("publish-cli", statePath);
+		expect(first.status).toBe(0);
+		const state = readState(statePath);
+		state.calls = [];
+		const last = INVENTORY.at(-1)!;
+		state.packages[last.name].versions = state.packages[last.name].versions.filter(
+			(version) => version !== last.version,
+		);
+		state.packages[last.name].distTags.latest = previousVersion(last.version);
+		writeFileSync(statePath, JSON.stringify(state));
+		const resumed = runHelper("publish-cli", statePath, [], { GITHUB_RUN_ATTEMPT: "2" });
+		expect(resumed.status).toBe(0);
+		expect(resumed.stdout).toContain("release run 36056969151 attempt 2");
+		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	});
+
+	it("production CLI captures a real-child error after landing and still observes matching content", () => {
+		const state = initialState();
+		state.publishFailure = { name: INVENTORY[0].name, mode: "after-landing-403" };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish-cli", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("E403: publish failed");
+		expect(result.stdout).toContain("command errored; matching content observed");
+		expect(publishCalls(readState(statePath))).toHaveLength(5);
+	});
+
+	it("rejects invalid production CLI identity before packing or registry access", () => {
+		const result = runHelper("publish-cli", statePath, [], { GITHUB_RUN_ATTEMPT: "02" });
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("canonical positive decimal attempt");
+		expect(readState(statePath).calls).toHaveLength(0);
+	});
+
 	it("publishes all missing packages in dependency order with explicit latest and provenance", () => {
 		const result = runHelper("publish", statePath);
 		expect(result.stderr).toBe("");
 		expect(result.status).toBe(0);
 		const state = readState(statePath);
 		const calls = publishCalls(state);
-		expect(calls.map((args) => args[args.indexOf("-w") + 1])).toEqual(INVENTORY.map(({ workspace }) => workspace));
+		expect(calls.map((args) => args[1].split("/").at(-1))).toEqual(
+			INVENTORY.map(({ name, version }) => `${name.slice(1).replace("/", "-")}-${version}.tgz`),
+		);
 		for (const args of calls) {
 			expect(args).toEqual([
 				"publish",
-				"-w",
-				expect.any(String),
+				expect.stringMatching(/^\/.*\.tgz$/),
 				"--access",
 				"public",
 				"--provenance",
@@ -1054,10 +1218,9 @@ exit 1
 		for (const { name, version } of INVENTORY) {
 			expect(state.packages[name].versions).toContain(version);
 			expect(state.packages[name].distTags).toEqual({ latest: version, scramjet: "preserved" });
-			expect(result.stdout).toContain(`${name}@${version}: publish command accepted after`);
-			expect(result.stdout).toContain(`${name}@${version}: post-publish metadata observed after`);
+			expect(result.stdout).toContain(`${name}@${version}: command accepted; matching content observed`);
 		}
-		expect(result.stdout).toContain("publication summary: accepted and observed:");
+		expect(result.stdout).toContain("publication summary:");
 		expect(result.stdout).toContain("final verification: pending");
 	});
 
@@ -1109,53 +1272,51 @@ exit 1
 		expect(publishCalls(readState(statePath))).toHaveLength(0);
 	});
 
-	it("stops when a target appears between preflight and publication", () => {
+	it("skips a matching target appearing at the immediate reread", () => {
 		const state = initialState();
 		state.race = INVENTORY[0].name;
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
-		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("appeared after preflight");
-		expect(publishCalls(readState(statePath))).toHaveLength(0);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`${INVENTORY[0].name}@${INVENTORY[0].version}: matching content retained`);
+		expect(publishCalls(readState(statePath))).toHaveLength(4);
 	});
 
-	it("reports forward-only recovery when a later target appears after publication began", () => {
+	it("stops on a different late candidate after publication began", () => {
 		const state = initialState();
 		state.race = INVENTORY[1].name;
+		state.distOverrides = { [INVENTORY[1].name]: { integrity: `sha512-${Buffer.alloc(64).toString("base64")}` } };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain(`${INVENTORY[1].name}@${INVENTORY[1].version} appeared after preflight`);
-		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("Do not retry publication");
-		expect(result.stderr).toContain("another five-fresh forward release");
-		expect(publishCalls(readState(statePath)).map((args) => args[args.indexOf("-w") + 1])).toEqual([
-			INVENTORY[0].workspace,
+		expect(result.stderr).toContain(`${INVENTORY[1].name}@${INVENTORY[1].version}`);
+		expect(result.stderr).toContain("same-run rerun");
+		expect(result.stderr).toContain("five-fresh forward release");
+		expect(publishCalls(readState(statePath)).map((args) => args[1].split("/").at(-1))).toEqual([
+			`${INVENTORY[0].name.slice(1).replace("/", "-")}-${INVENTORY[0].version}.tgz`,
 		]);
 	});
 
 	it("treats every publish failure as ambiguous without retrying", () => {
 		const state = initialState();
-		state.publishFailure = INVENTORY[1].name;
+		state.publishFailure = { name: INVENTORY[1].name, mode: "before-landing" };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("Do not retry publication");
-		expect(result.stderr).toContain("another five-fresh forward release");
+		expect(result.stderr).toContain("acceptance ambiguous");
+		expect(result.stderr).toContain("same-run rerun");
 		expect(result.stderr).toContain("publish failed");
-		expect(result.stderr).toContain(`accepted and observed: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
-		expect(result.stderr).toContain(`acceptance ambiguous: ${INVENTORY[1].name}@${INVENTORY[1].version}`);
 		expect(result.stderr).toContain(
-			`unattempted: ${INVENTORY.slice(2)
-				.map(({ name, version }) => `${name}@${version}`)
-				.join(", ")}`,
+			`${INVENTORY[0].name}@${INVENTORY[0].version}: command accepted; matching content observed`,
 		);
-		expect(result.stderr).toContain("failed phase: publish command");
+		expect(result.stderr).toContain(`${INVENTORY[1].name}@${INVENTORY[1].version}: acceptance ambiguous`);
+		for (const { name, version } of INVENTORY.slice(2))
+			expect(result.stderr).toContain(`${name}@${version}: unattempted`);
+		expect(result.stderr).toContain("failed phase: post-publish observation");
 		expect(result.stderr).toContain("final verification: not completed");
 		const calls = publishCalls(readState(statePath));
-		expect(calls.map((args) => args[args.indexOf("-w") + 1])).toEqual(
-			INVENTORY.slice(0, 2).map(({ workspace }) => workspace),
+		expect(calls.map((args) => args[1].split("/").at(-1))).toEqual(
+			INVENTORY.slice(0, 2).map(({ name, version }) => `${name.slice(1).replace("/", "-")}-${version}.tgz`),
 		);
 	});
 
@@ -1166,8 +1327,8 @@ exit 1
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("non-latest dist-tags changed");
-		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("another five-fresh forward release");
+		expect(result.stderr).toContain("command accepted; observation incomplete");
+		expect(result.stderr).toContain("five-fresh forward release");
 		expectFirstPackageObservationFailureSummary(result.stderr);
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
@@ -1180,11 +1341,11 @@ exit 1
 		expect(result.stderr).toBe("");
 		expect(result.status).toBe(0);
 		const finalState = readState(statePath);
-		expect(publishCalls(finalState).map((args) => args[args.indexOf("-w") + 1])).toEqual(
-			INVENTORY.map(({ workspace }) => workspace),
+		expect(publishCalls(finalState).map((args) => args[1].split("/").at(-1))).toEqual(
+			INVENTORY.map(({ name, version }) => `${name.slice(1).replace("/", "-")}-${version}.tgz`),
 		);
 		expect(Object.values(finalState.publicationCounts ?? {})).toEqual(INVENTORY.map(() => 1));
-		expect(finalState.versionQueries?.[INVENTORY[1].name]).toBe(36);
+		expect(finalState.versionQueries?.[INVENTORY[1].name]).toBe(37);
 		expect(result.stdout).toContain("final verification: completed");
 		expectVerificationPathsRemoved(finalState);
 		expect(finalState.calls.some(([command]) => command === "install")).toBe(true);
@@ -1216,7 +1377,7 @@ exit 1
 	it("forwards the shrinking shared remainder to actual registry subprocess options", () => {
 		const state = initialState();
 		state.visibilityDelays = { [INVENTORY[0].name]: 1 };
-		state.registryReadMs = { versions: 10000, "dist-tags": 10000, "dist.attestations.url": 1000 };
+		state.registryReadMs = { versions: 10000, "dist-tags": 10000, dist: 1000 };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath, [], { IN_PROCESS_NPM: "1", POLL_DELAY_MS: "550000" });
 		expect(result.stderr).toBe("");
@@ -1224,9 +1385,9 @@ exit 1
 		const finalState = readState(statePath);
 		expect(finalState.registryTimeouts?.slice(0, 4)).toEqual([
 			{ field: "versions", timeout: 60000, elapsedMs: 0 },
-			{ field: "versions", timeout: 40000, elapsedMs: 560000 },
-			{ field: "dist-tags", timeout: 30000, elapsedMs: 570000 },
-			{ field: "dist.attestations.url", timeout: 20000, elapsedMs: 580000 },
+			{ field: "dist-tags", timeout: 60000, elapsedMs: 10000 },
+			{ field: "versions", timeout: 30000, elapsedMs: 570000 },
+			{ field: "dist-tags", timeout: 20000, elapsedMs: 580000 },
 		]);
 		expect(publishCalls(finalState)).toHaveLength(5);
 	});
@@ -1237,16 +1398,15 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath, [], { IN_PROCESS_NPM: "1" });
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain(`${INVENTORY[1].name} dist-tags changed after preflight`);
-		expect(result.stderr).toContain("Do not retry publication");
-		expect(result.stderr).toContain("another five-fresh forward release");
-		expect(result.stderr).toContain(`accepted and observed: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
+		expect(result.stderr).toContain(`${INVENTORY[1].name} dist-tags changed after reconciliation`);
+		expect(result.stderr).toContain("same-run rerun");
+		expect(result.stderr).toContain("five-fresh forward release");
 		expect(result.stderr).toContain(
-			`unattempted: ${INVENTORY.slice(1)
-				.map(({ name, version }) => `${name}@${version}`)
-				.join(", ")}`,
+			`${INVENTORY[0].name}@${INVENTORY[0].version}: command accepted; matching content observed`,
 		);
-		expect(result.stderr).toContain("failed phase: pre-publish validation");
+		for (const { name, version } of INVENTORY.slice(1))
+			expect(result.stderr).toContain(`${name}@${version}: unattempted`);
+		expect(result.stderr).toContain("failed phase: immediate reread");
 		expect(result.stderr).toContain("final verification: not completed");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
@@ -1258,7 +1418,7 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath, [], { POLL_DELAY_MS: "60000" });
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} post-publish metadata not ready`);
+		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} candidate reconciliation not ready`);
 		const finalState = readState(statePath);
 		expect(finalState.publicationCounts?.[first]).toBe(1);
 		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
@@ -1275,12 +1435,12 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("observation failed");
 		expectFirstPackageObservationFailureSummary(result.stderr);
 		const calls = readState(statePath).calls.filter(
 			(args) => args[0] === "view" && args[1] === first.name && args[2] === field,
 		);
-		expect(calls).toHaveLength(3);
+		expect(calls).toHaveLength(4);
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
@@ -1289,29 +1449,28 @@ exit 1
 		const state = initialState();
 		state.failureAfterPublish = {
 			name: first.name,
-			field: "dist.attestations.url",
-			output: JSON.stringify(""),
+			field: "dist",
+			output: JSON.stringify({}),
 			remaining: 1,
 		};
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first.name}@${first.version} post-publish metadata not ready`);
+		expect(result.stdout).toContain(`${first.name}@${first.version} candidate reconciliation not ready`);
 		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
 	});
 
 	it("fails malformed attestation metadata without retrying", () => {
 		const first = INVENTORY[0];
 		const state = initialState();
-		state.failureAfterPublish = { name: first.name, field: "dist.attestations.url", output: "{}" };
+		state.failureAfterPublish = { name: first.name, field: "dist", output: "[]" };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("attestation URL must be a string");
+		expect(result.stderr).toContain("dist must be a JSON object");
 		expectFirstPackageObservationFailureSummary(result.stderr);
 		const calls = readState(statePath).calls.filter(
-			(args) =>
-				args[0] === "view" && args[1] === `${first.name}@${first.version}` && args[2] === "dist.attestations.url",
+			(args) => args[0] === "view" && args[1] === `${first.name}@${first.version}` && args[2] === "dist",
 		);
 		expect(calls).toHaveLength(1);
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
@@ -1330,7 +1489,7 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first.name}@${first.version} post-publish metadata not ready`);
+		expect(result.stdout).toContain(`${first.name}@${first.version} candidate reconciliation not ready`);
 		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
 	});
 
@@ -1348,7 +1507,7 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first.name}@${first.version} post-publish metadata not ready`);
+		expect(result.stdout).toContain(`${first.name}@${first.version} candidate reconciliation not ready`);
 		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
 	});
 
@@ -1368,7 +1527,7 @@ exit 1
 		const calls = readState(statePath).calls.filter(
 			(args) => args[0] === "view" && args[1] === first.name && args[2] === "versions",
 		);
-		expect(calls).toHaveLength(3);
+		expect(calls).toHaveLength(4);
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
@@ -1384,12 +1543,12 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("observation failed");
 		expectFirstPackageObservationFailureSummary(result.stderr);
 		const calls = readState(statePath).calls.filter(
 			(args) => args[0] === "view" && args[1] === first.name && args[2] === "versions",
 		);
-		expect(calls).toHaveLength(3);
+		expect(calls).toHaveLength(4);
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
@@ -1399,16 +1558,15 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath, [], { POLL_DELAY_MS: "300000" });
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("post-publish metadata did not converge within 600000ms");
-		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("another five-fresh forward release");
-		expect(result.stderr).toContain(`accepted but unobserved: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
+		expect(result.stderr).toContain("candidate reconciliation did not converge within 600000ms");
+		expect(result.stderr).toContain("observation failed");
+		expect(result.stderr).toContain("five-fresh forward release");
 		expect(result.stderr).toContain(
-			`unattempted: ${INVENTORY.slice(1)
-				.map(({ name, version }) => `${name}@${version}`)
-				.join(", ")}`,
+			`${INVENTORY[0].name}@${INVENTORY[0].version}: command accepted; observation incomplete`,
 		);
-		expect(result.stderr).toContain("failed phase: post-publish metadata observation");
+		for (const { name, version } of INVENTORY.slice(1))
+			expect(result.stderr).toContain(`${name}@${version}: unattempted`);
+		expect(result.stderr).toContain("failed phase: post-publish observation");
 		expect(result.stderr).toContain("budget 600000ms");
 		expect(result.stderr).toContain("final verification: not completed");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
@@ -1420,9 +1578,9 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath, [], { POLL_DELAY_MS: "300000" });
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("post-publish metadata did not converge within 600000ms");
-		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("another five-fresh forward release");
+		expect(result.stderr).toContain("candidate reconciliation did not converge within 600000ms");
+		expect(result.stderr).toContain("observation failed");
+		expect(result.stderr).toContain("five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	}, 10_000);
 
@@ -1432,9 +1590,9 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath, [], { POLL_DELAY_MS: "300000" });
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("post-publish metadata did not converge within 600000ms");
-		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("another five-fresh forward release");
+		expect(result.stderr).toContain("candidate reconciliation did not converge within 600000ms");
+		expect(result.stderr).toContain("observation failed");
+		expect(result.stderr).toContain("five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	}, 10_000);
 
@@ -1591,7 +1749,7 @@ describe("release operation bounds and post-publish polling", () => {
 		let thrown: Error | undefined;
 		try {
 			publishPackage(
-				INVENTORY[0],
+				{ ...INVENTORY[0], tarballPath: join(tmpdir(), "checked-candidate.tgz") },
 				(...args: any[]) => {
 					calls.push(args);
 					throw failure;
@@ -1601,10 +1759,10 @@ describe("release operation bounds and post-publish polling", () => {
 		} catch (error) {
 			thrown = error as Error;
 		}
-		expect(thrown?.message).toMatch(/state is ambiguous.*Do not retry publication.*five-fresh forward release/);
+		expect(thrown?.message).toContain(`npm publish for ${INVENTORY[0].name}@${INVENTORY[0].version} failed`);
 		expect((thrown as Error & { cause?: unknown }).cause).toBe(failure);
 		expect(calls).toHaveLength(1);
-		expect(calls[0][2]).toMatchObject({ timeout: 25 });
+		expect(calls[0][2]).toMatchObject({ timeout: 25, encoding: "utf8" });
 	});
 
 	it("uses the production polling interval by default", async () => {

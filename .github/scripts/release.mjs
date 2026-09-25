@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -162,7 +162,8 @@ export function loadPreflightInventory(confirmedSha, git = (args) => run("git", 
 
 export function validateIdentity(inventory, env = process.env, git = (args) => run("git", args)) {
 	if (env.GITHUB_EVENT_NAME !== "push") fail("GITHUB_EVENT_NAME must be push");
-	if (env.GITHUB_RUN_ATTEMPT !== "1") fail("GITHUB_RUN_ATTEMPT must be 1");
+	if (!/^[1-9]\d*$/.test(env.GITHUB_RUN_ID ?? "")) fail("GITHUB_RUN_ID must be a canonical positive decimal ID");
+	if (!/^[1-9]\d*$/.test(env.GITHUB_RUN_ATTEMPT ?? "")) fail("GITHUB_RUN_ATTEMPT must be a canonical positive decimal attempt");
 	const scramjet = inventory.find(({ name }) => name === "@leanandmean/scramjet");
 	const expectedRef = `refs/tags/v${scramjet.version}`;
 	if (env.GITHUB_REF !== expectedRef) fail(`GITHUB_REF must be ${expectedRef}`);
@@ -171,7 +172,7 @@ export function validateIdentity(inventory, env = process.env, git = (args) => r
 	if (env.GITHUB_WORKFLOW_REF !== expectedWorkflowRef) fail(`GITHUB_WORKFLOW_REF must be ${expectedWorkflowRef}`);
 	const head = git(["rev-parse", "HEAD"]);
 	if (head !== env.GITHUB_SHA) fail("checked-out HEAD must equal GITHUB_SHA");
-	return { ref: expectedRef, sha: env.GITHUB_SHA };
+	return { ref: expectedRef, sha: env.GITHUB_SHA, runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT };
 }
 
 function npmJson(args, description, timeout = READ_TIMEOUT_MS) {
@@ -307,7 +308,11 @@ export async function reconcileCandidates(candidates, dependencies = {}) {
 				if (typeof distTags.latest !== "string") throw registryPropagationError(`${pkg.name} has no latest dist-tag yet`);
 				const order = compareVersions(pkg.version, distTags.latest);
 				if (order < 0) fail(`${description} is superseded by latest ${distTags.latest}`);
+				if (order === 0) observedPresence.add(pkg.name);
 				if (observedPresence.has(pkg.name)) {
+					if (!versions.includes(pkg.version) && order === 0) {
+						throw registryPropagationError(`${pkg.name} latest is ${pkg.version} but versions omit it`);
+					}
 					const output = run("npm", ["view", description, "dist", "--json", "--registry", REGISTRY_URL], { timeout: readTimeout() });
 					if (output === "") throw registryPropagationError(`${description} has no dist metadata yet`);
 					const dist = requireObject(parseJson(output, `${description} dist`), `${description} dist`);
@@ -319,7 +324,7 @@ export async function reconcileCandidates(candidates, dependencies = {}) {
 					if (order !== 0) throw registryPropagationError(`${pkg.name} latest is not ${pkg.version} yet`);
 					return { ...pkg, status: "retained", distTags: { ...distTags } };
 				}
-				if (order === 0) throw registryPropagationError(`${pkg.name} latest is ${pkg.version} but versions omit it`);
+				if (dependencies.requirePresence) throw registryPropagationError(`${description} was not visible after publish`);
 				return { ...pkg, status: "missing", distTags: { ...distTags } };
 			},
 			{ ...dependencies, retryIf: isRegistryVisibilityRetryError },
@@ -432,148 +437,105 @@ export function isTransientReadError(error) {
 	return isRegistryVisibilityRetryError(error);
 }
 
-export function publishPackage(pkg, command = run, timeoutMs = PUBLISH_TIMEOUT_MS) {
+export function publishPackage(pkg, command = spawnSync, timeoutMs = PUBLISH_TIMEOUT_MS) {
+	if (typeof pkg.tarballPath !== "string" || !pkg.tarballPath.startsWith("/")) {
+		fail(`${pkg.name}@${pkg.version} requires a checked absolute candidate archive`);
+	}
+	let result;
 	try {
-		command(
+		result = command(
 			"npm",
-			[
-				"publish",
-				"-w",
-				pkg.workspace,
-				"--access",
-				"public",
-				"--provenance",
-				"--tag",
-				"latest",
-				"--registry",
-				REGISTRY_URL,
-			],
-			{ stdio: "inherit", timeout: timeoutMs },
+			["publish", pkg.tarballPath, "--access", "public", "--provenance", "--tag", "latest", "--registry", REGISTRY_URL],
+			{ cwd: REPO_ROOT, encoding: "utf8", timeout: timeoutMs },
 		);
 	} catch (error) {
-		const output = [error?.stderr, error?.stdout]
-			.map((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
-			.filter((value) => typeof value === "string" && value.trim().length > 0)
-			.map((value) => value.trim())
-			.join("\n");
-		const detail = output || error?.message;
-		throw new Error(
-			`npm publish for ${pkg.name}@${pkg.version} failed after publication began; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release.${detail ? ` Cause: ${detail}` : ""}`,
-			{ cause: error },
-		);
+		throw new Error(`npm publish for ${pkg.name}@${pkg.version} failed: ${error?.message ?? String(error)}`, { cause: error });
+	}
+	if (result.stdout) process.stdout.write(result.stdout);
+	if (result.stderr) process.stderr.write(result.stderr);
+	if (result.error || result.status !== 0 || result.signal) {
+		const detail = [result.error?.message, result.stderr, result.stdout, `status=${result.status}; signal=${result.signal}`]
+			.filter(Boolean).join("; ");
+		throw new Error(`npm publish for ${pkg.name}@${pkg.version} failed: ${detail}`, { cause: result });
 	}
 }
 
+function checkCandidateBytes(pkg) {
+	const stat = lstatSync(pkg.tarballPath);
+	if (!stat.isFile()) fail(`${pkg.name}@${pkg.version} candidate archive is no longer a regular file`);
+	const integrity = `sha512-${createHash("sha512").update(readFileSync(pkg.tarballPath)).digest("base64")}`;
+	if (integrity !== pkg.integrity) fail(`${pkg.name}@${pkg.version} candidate archive changed before publication`);
+}
+
 export async function publish(inventory, dependencies = {}) {
-	const plan = preflight(inventory);
+	const directory = mkdtempSync(join(tmpdir(), "scramjet-release-candidates-"));
 	const now = dependencies.pollDependencies?.now ?? (() => performance.now());
 	const startedAt = now();
-	const accepted = [];
-	const observed = [];
-	let currentIndex = 0;
-	let ambiguous;
-	let phase = "pre-publish validation";
+	const states = inventory.map(() => "unattempted");
+	const observedPresence = new Set();
+	let phase = "candidate preparation";
 	const elapsed = () => Math.max(0, Math.round(now() - startedAt));
-	const refs = (packages) => packages.map(({ name, version }) => `${name}@${version}`).join(", ") || "none";
 	try {
+		const candidates = packCandidates(inventory, directory);
+		phase = "complete-set reconciliation";
+		const plan = await reconcileCandidates(candidates, { ...dependencies.pollDependencies, observedPresence });
 		for (const [index, pkg] of plan.entries()) {
-			currentIndex = index;
-			phase = "pre-publish validation";
-			const currentVersions = requireVersions(
-				npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions before publish`),
-				pkg.name,
-			);
-			if (currentVersions.includes(pkg.version)) {
-				const recovery = accepted.length > 0
-					? "; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release"
-					: "";
-				fail(`${pkg.name}@${pkg.version} appeared after preflight${recovery}`);
+			phase = `immediate reread for ${pkg.name}@${pkg.version}`;
+			const [current] = await reconcileCandidates([pkg], { ...dependencies.pollDependencies, observedPresence });
+			if (current.status === "retained") {
+				if (pkg.status === "missing") {
+					const before = { ...pkg.distTags };
+					const after = { ...current.distTags };
+					delete before.latest;
+					delete after.latest;
+					if (!tagsEqual(before, after)) fail(`${pkg.name} non-latest dist-tags changed before publication`);
+				} else if (!tagsEqual(current.distTags, pkg.distTags)) {
+					fail(`${pkg.name} dist-tags changed after reconciliation`);
+				}
+				states[index] = "matching content retained; skipped (original publisher not established)";
+				console.log(`${pkg.name}@${pkg.version}: ${states[index]}`);
+				continue;
 			}
-			const currentTags = requireDistTags(
-				npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags before publish`),
-				pkg.name,
-			);
-			if (!tagsEqual(currentTags, pkg.distTags)) fail(`${pkg.name} dist-tags changed after preflight`);
-			if (typeof currentTags.latest !== "string" || compareVersions(pkg.version, currentTags.latest) <= 0) {
-				fail(`${pkg.name}@${pkg.version} is not newer than latest ${currentTags.latest}`);
-			}
-			phase = "publish command";
+			if (pkg.status === "retained") fail(`${pkg.name}@${pkg.version} previously observed present but is now missing`);
+			if (!tagsEqual(current.distTags, pkg.distTags)) fail(`${pkg.name} dist-tags changed after reconciliation`);
+			if (compareVersions(pkg.version, current.distTags.latest) <= 0) fail(`${pkg.name}@${pkg.version} is not newer than latest`);
+			checkCandidateBytes(pkg);
+			phase = `publish command for ${pkg.name}@${pkg.version}`;
+			let commandError;
 			try {
-				publishPackage(pkg);
+				publishPackage(pkg, dependencies.publishCommand);
 			} catch (error) {
-				ambiguous = pkg;
-				throw error;
+				commandError = error;
 			}
-			accepted.push(pkg);
-			const acceptedAt = now();
-			console.log(`${pkg.name}@${pkg.version}: publish command accepted after ${elapsed()}ms`);
-			phase = "post-publish metadata observation";
+			states[index] = commandError ? "acceptance ambiguous" : "command accepted; observation incomplete";
+			phase = `post-publish observation for ${pkg.name}@${pkg.version}`;
 			try {
-				await pollRead(
-					`${pkg.name}@${pkg.version} post-publish metadata`,
-					async ({ remainingMs }) => {
-						const readTimeout = () => {
-							const timeout = Math.floor(Math.min(READ_TIMEOUT_MS, remainingMs()));
-							if (timeout <= 0) throw registryPropagationError(`${pkg.name}@${pkg.version} observation budget expired`);
-							return timeout;
-						};
-						const publishedVersions = requireVersions(
-							npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`, readTimeout()),
-							pkg.name,
-						);
-						if (!publishedVersions.includes(pkg.version)) {
-							throw registryPropagationError(`${pkg.name}@${pkg.version} was not visible after publish`);
-						}
-						const tags = requireDistTags(
-							npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`, readTimeout()),
-							pkg.name,
-						);
-						if (tags.latest !== pkg.version) {
-							throw registryPropagationError(`${pkg.name} latest did not move to ${pkg.version}`);
-						}
-						const beforeNonLatest = { ...pkg.distTags };
-						const afterNonLatest = { ...tags };
-						delete beforeNonLatest.latest;
-						delete afterNonLatest.latest;
-						if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
-						const output = run(
-							"npm",
-							["view", `${pkg.name}@${pkg.version}`, "dist.attestations.url", "--json", "--registry", REGISTRY_URL],
-							{ timeout: readTimeout() },
-						);
-						if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
-						const url = parseJson(output, `${pkg.name}@${pkg.version} attestation URL`);
-						if (typeof url !== "string") fail(`${pkg.name}@${pkg.version} attestation URL must be a string`);
-						if (url.length === 0) throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
-					},
-					{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
-				);
-			} catch (error) {
+				const [observed] = await reconcileCandidates([pkg], { ...dependencies.pollDependencies, observedPresence, requirePresence: true });
+				if (observed.status !== "retained") throw registryPropagationError(`${pkg.name}@${pkg.version} was not visible after publish`);
+				const before = { ...pkg.distTags };
+				const after = { ...observed.distTags };
+				delete before.latest;
+				delete after.latest;
+				if (!tagsEqual(before, after)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
+			} catch (observationError) {
 				throw new Error(
-					`Post-publish verification for ${pkg.name}@${pkg.version} failed; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release. Cause: ${error?.message ?? String(error)}`,
-					{ cause: error },
+					`${pkg.name}@${pkg.version} observation failed: ${observationError.message}${commandError ? `; publish command: ${commandError.message}` : ""}`,
+					{ cause: new AggregateError([...(commandError ? [commandError] : []), observationError]) },
 				);
 			}
-			observed.push(pkg);
-			console.log(`${pkg.name}@${pkg.version}: post-publish metadata observed after ${Math.max(0, Math.round(now() - acceptedAt))}ms`);
+			states[index] = commandError ? "command errored; matching content observed (publisher not established)" : "command accepted; matching content observed";
+			console.log(`${pkg.name}@${pkg.version}: ${states[index]} after ${elapsed()}ms`);
 		}
+		console.log(`publication summary: ${states.map((status, index) => `${inventory[index].name}@${inventory[index].version}: ${status}`).join("; ")}; final verification: pending`);
 	} catch (error) {
-		if (accepted.length > 0 || ambiguous !== undefined) {
-			const acceptedUnobserved = accepted.filter((pkg) => !observed.includes(pkg));
-			const unattempted = plan.slice(currentIndex + (ambiguous === undefined && acceptedUnobserved.length === 0 ? 0 : 1));
-			const details = [
-				`accepted and observed: ${refs(observed)}`,
-				ambiguous === undefined ? null : `acceptance ambiguous: ${refs([ambiguous])}`,
-				acceptedUnobserved.length === 0 ? null : `accepted but unobserved: ${refs(acceptedUnobserved)}`,
-				`unattempted: ${refs(unattempted)}`,
-				`failed phase: ${phase}; elapsed ${elapsed()}ms; budget ${POST_PUBLISH_BUDGET_MS}ms`,
-				"final verification: not completed",
-			].filter(Boolean);
-			throw new Error(`${error?.message ?? String(error)}\nDo not retry publication; inspect registry state read-only and prepare another five-fresh forward release.\nPublication summary: ${details.join("; ")}`, { cause: error });
-		}
-		throw error;
+		const summary = states.map((status, index) => `${inventory[index].name}@${inventory[index].version}: ${status}`).join("; ");
+		throw new Error(
+			`${error.message}\nPublication summary: ${summary}; failed phase: ${phase}; elapsed ${elapsed()}ms; budget ${POST_PUBLISH_BUDGET_MS}ms; final verification: not completed. Inspect the cause and prior attempt facts before authorizing a same-run rerun. A differing candidate cannot be retained or overwritten: diagnose build drift; if intended content differs, use a new five-fresh forward release. Superseded latest or altered tags must not be repaired. If publication cannot be authorized, use forward recovery.`,
+			{ cause: error },
+		);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
 	}
-	console.log(`publication summary: accepted and observed: ${refs(observed)}; final verification: pending`);
 }
 
 function commandFailureDetail(error) {
@@ -697,9 +659,14 @@ async function main() {
 	}
 	if (args.length !== 0) fail(`usage: release.mjs ${mode}`);
 	const inventory = loadInventory();
-	validateIdentity(inventory);
+	const identity = validateIdentity(inventory);
+	console.log(`release run ${identity.runId} attempt ${identity.attempt}`);
 	if (mode === "validate") return;
-	if (mode === "publish") await publish(inventory);
+	if (mode === "publish") {
+		const committedInventory = loadPreflightInventory(identity.sha);
+		if (identity.attempt === "1") preflight(committedInventory);
+		await publish(committedInventory);
+	}
 	if (mode === "verify") await verify(inventory);
 }
 
