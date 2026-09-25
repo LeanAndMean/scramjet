@@ -30,6 +30,9 @@ vi.mock("../src/modes/interactive/components/settings-selector.js", () => ({
 }));
 
 import { HeadlessTerminal } from "../../tui/tests/helpers/headless-terminal.js";
+import { DoomOverlayComponent } from "../examples/extensions/doom-overlay/doom-component.js";
+import type { DoomEngine } from "../examples/extensions/doom-overlay/doom-engine.js";
+import { DoomKeys } from "../examples/extensions/doom-overlay/doom-keys.js";
 import modalEditor from "../examples/extensions/modal-editor.js";
 import overlayExamples from "../examples/extensions/overlay-qa-tests.js";
 import overlayExample from "../examples/extensions/overlay-test.js";
@@ -200,6 +203,31 @@ function createInteractiveHarness(): {
 }
 
 describe("shipped printable-key consumers", () => {
+	it.each(["q", "Q", "\x1b[113u", "\x1b[113;2u"])("pauses and exits the DOOM overlay on Q %j", (input) => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		const engine = { pushKey: vi.fn(), tick: vi.fn() };
+		const exit = vi.fn();
+		const component = new DoomOverlayComponent(
+			{ requestRender: vi.fn() } as unknown as TUI,
+			engine as unknown as DoomEngine,
+			exit,
+		);
+		try {
+			component.handleInput("\x1b[113;1:3u");
+			expect(exit).not.toHaveBeenCalled();
+			expect(engine.pushKey).not.toHaveBeenCalled();
+			component.handleInput(input);
+			expect.soft(exit).toHaveBeenCalledTimes(1);
+			expect(engine.pushKey.mock.calls).toEqual([
+				[true, DoomKeys.KEY_PAUSE],
+				[false, DoomKeys.KEY_PAUSE],
+			]);
+		} finally {
+			component.dispose();
+			vi.useRealTimers();
+		}
+	});
+
 	it("quits Space Invaders without saving on literal and encoded Q, but not releases or modifiers", async () => {
 		for (const input of ["q", "\x1b[113u"]) {
 			const h = await createProductionInteractiveHarness(100, 50, invadersExample);
