@@ -349,6 +349,39 @@ describe("viewport interactions", () => {
 		expect(tui.getViewportState()).toMatchObject({ offset: 5, totalRows: 9, followingTail: true });
 	});
 
+	it("does not select transcript text through blank screen space above the dock", async () => {
+		const copy = vi.fn().mockResolvedValue(undefined);
+		const { terminal, frame, text } = await setup(
+			[{ component: new Text("error: build failed", 0, 0) }, { component: new Text("prompt", 0, 0), dock: true }],
+			31,
+			6,
+			{ copy },
+		);
+		expect(text()).toEqual(["error: build failed", "", "", "", "", "prompt"]);
+		terminal.sendInput(mouse(0, 1, 3));
+		terminal.sendInput(mouse(32, 6, 3));
+		terminal.sendInput(mouse(0, 6, 3, "m"));
+		await frame();
+		expect.soft(terminal.cell(0, 0).inverse).toBe(false);
+		terminal.sendInput(mouse(2, 6, 3));
+		await frame();
+		expect(copy).not.toHaveBeenCalled();
+	});
+
+	it("keeps following live output after a click without a selection", async () => {
+		const card = new Rows(Array.from({ length: 8 }, (_, i) => `row-${i}`));
+		const { tui, terminal, frame, text } = await setup([{ component: card }], 21, 4);
+		expect(tui.getViewportState()).toMatchObject({ offset: 4, followingTail: true });
+		terminal.sendInput(mouse(0, 2, 2));
+		terminal.sendInput(mouse(0, 2, 2, "m"));
+		await frame();
+		expect(terminal.cell(1, 1).inverse).toBe(false);
+		card.lines.push("row-8");
+		await frame();
+		expect.soft(text().at(-1)).toBe("row-8");
+		expect(tui.getViewportState()).toMatchObject({ offset: 5, followingTail: true });
+	});
+
 	it("keeps thumb mapping stable through growth and supports track clicks", async () => {
 		const card = new Rows(Array.from({ length: 100 }, (_, i) => `row-${i}`));
 		const { tui, terminal, frame } = await setup([{ component: card }], 21, 10);
