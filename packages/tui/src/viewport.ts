@@ -191,7 +191,7 @@ export class RetainedViewport {
 	private dockSuspended = false;
 	private selectionInDock = false;
 	private visibleComponents = new Set<Component>();
-	private selection: { start: SelectionPoint; end: SelectionPoint } | undefined;
+	private selection: { start: SelectionPoint; end: SelectionPoint; followOnCopy: boolean } | undefined;
 	private copyError: string | undefined;
 	private copying = false;
 	private gesture:
@@ -287,7 +287,9 @@ export class RetainedViewport {
 			if (!this.options.copy) throw new Error("No clipboard callback configured");
 			await this.options.copy(text);
 			if (this.selection !== selection) return;
+			const resumeTail = selection?.followOnCopy && this.offset === this.maxOffset;
 			this.cancelInteraction();
+			if (resumeTail) this.scrollTo(this.maxOffset);
 		} catch (error) {
 			if (this.selection !== selection) return;
 			this.copyError = plainText(error instanceof Error ? error.message : String(error));
@@ -363,7 +365,7 @@ export class RetainedViewport {
 					this.logicalCopy = this.blocks.flatMap((block) => block.copyRows);
 					const point = this.point(x - 1, y - 1);
 					this.offset = this.paintedOffset;
-					this.selection = { start: point, end: point };
+					this.selection = { start: point, end: point, followOnCopy: this.followingTail };
 					this.followingTail = false;
 					this.anchor = this.anchorAt(this.offset, 0);
 					this.gesture = { kind: "selection", dragged: false, scrolled: false };
