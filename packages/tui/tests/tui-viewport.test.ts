@@ -327,6 +327,28 @@ describe("viewport interactions", () => {
 		expect(handleInput).toHaveBeenLastCalledWith("\x1b[A");
 	});
 
+	it("resumes following after copying a selection made at the bottom", async () => {
+		const copy = vi.fn().mockResolvedValue(undefined);
+		const card = new Rows(Array.from({ length: 8 }, (_, i) => `row-${i}`));
+		const { tui, terminal, frame, text } = await setup([{ component: card }], 21, 4, { copy });
+		terminal.sendInput("\x1b[1;5F");
+		await frame();
+		expect(tui.getViewportState()).toMatchObject({ offset: 4, totalRows: 8, followingTail: true });
+		terminal.sendInput(mouse(0, 1, 4));
+		terminal.sendInput(mouse(32, 6, 4));
+		terminal.sendInput(mouse(0, 6, 4, "m"));
+		await frame();
+		terminal.sendInput("\x03");
+		await vi.waitFor(() => expect(copy).toHaveBeenCalledExactlyOnceWith("row-7"));
+		await frame();
+		expect(text().at(-1)).toBe("row-7");
+		expect(terminal.cell(3, 0).inverse).toBe(false);
+		card.lines.push("row-8");
+		await frame();
+		expect.soft(text().at(-1)).toBe("row-8");
+		expect(tui.getViewportState()).toMatchObject({ offset: 5, totalRows: 9, followingTail: true });
+	});
+
 	it("keeps thumb mapping stable through growth and supports track clicks", async () => {
 		const card = new Rows(Array.from({ length: 100 }, (_, i) => `row-${i}`));
 		const { tui, terminal, frame } = await setup([{ component: card }], 21, 10);
