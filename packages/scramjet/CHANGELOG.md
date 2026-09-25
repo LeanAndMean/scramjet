@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.102.0 — Recover interrupted npm releases safely
+
+Adds exact-content recovery for interrupted npm releases and separates publication from verification-only reruns. Fixes [#573](https://github.com/LeanAndMean/scramjet/issues/573).
+
+### Changed
+
+- Pack and validate all five release candidates before publication, retaining already-published versions only when their exact content and release metadata match.
+- Separate the OIDC-capable publication job from dependent verification so failed verification can rerun without republishing.
+- Retry exact package installation only for bounded transient failures while preserving immutable evidence from prior release attempts.
+
+### Tests
+
+- Add release-helper, workflow, cleanup, recovery-gate, and changed-candidate regression coverage.
+
 ## 0.101.0 — Refresh built-in model catalogs
 
 Refreshes reviewed model metadata across providers and clarifies default-model fallback behavior. Fixes [#569](https://github.com/LeanAndMean/scramjet/issues/569).
