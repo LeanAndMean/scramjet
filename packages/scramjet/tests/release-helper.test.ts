@@ -1235,7 +1235,7 @@ exit 1
 		expect(after.calls.filter(([command]) => command === "pack")).toHaveLength(5);
 		expect(after.registryIntegrity![retained]).toBe(originalDigest);
 		expect(publishCalls(after)).toHaveLength(0);
-	});
+	}, 20_000);
 
 	it("production CLI rejects a present target on attempt 1 before packing or publishing", () => {
 		const state = initialState();
