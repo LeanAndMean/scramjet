@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
 import type { AssistantMessage, Model } from "@leanandmean/ai";
-import { createAssistantMessageEventStream } from "@leanandmean/ai";
+import { createAssistantMessageEventStream, getModel, streamSimpleOpenAIResponses } from "@leanandmean/ai";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../src/core/agent-session.js";
@@ -820,6 +820,85 @@ describe("AgentSession persisted retry authority", () => {
 
 		expect(rejection).toBeInstanceOf(AggregateError);
 		expect(rejection).toMatchObject({ cause: promptError, errors: [promptError, settlementError] });
+	});
+
+	it("retries a provider-produced accepted stream termination and not a provider rejection", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		let fetchCount = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				fetchCount++;
+				if (fetchCount === 1) {
+					return new Response(
+						new ReadableStream<Uint8Array>({
+							start(controller) {
+								controller.enqueue(
+									new TextEncoder().encode('data: {"type":"response.created","response":{"id":"resp_1"}}\n\n'),
+								);
+								controller.error(new Error("terminated"));
+							},
+						}),
+						{ headers: { "content-type": "text/event-stream" } },
+					);
+				}
+				return new Response('data: {"type":"response.completed","response":{"status":"completed"}}\n\n', {
+					headers: { "content-type": "text/event-stream" },
+				});
+			}),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{
+							messages: [{ role: "user", content: "hello", timestamp: 0 }],
+						},
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			expect(fetchCount).toBe(2);
+			expect(retryRecords(session)).toEqual([
+				expect.objectContaining({ outcome: "scheduled", evidence: "provider_failure" }),
+				expect.objectContaining({ outcome: "succeeded" }),
+			]);
+			expect(events).toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
+			fetchCount = 0;
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => {
+					fetchCount++;
+					return new Response(
+						'data: {"type":"response.failed","response":{"error":{"code":"new_code","message":"terminated","status":403}}}\n\n',
+						{
+							headers: { "content-type": "text/event-stream" },
+						},
+					);
+				}),
+			);
+			const rejected = await createFixture(() => assistantText("unused"), {
+				model,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{
+							messages: [{ role: "user", content: "hello", timestamp: 0 }],
+						},
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await rejected.session.prompt("hello");
+			expect(fetchCount).toBe(1);
+			expect(retryEvents(rejected.events)).toEqual([]);
+			expect(retryRecords(rejected.session)).toEqual([
+				expect.objectContaining({ outcome: "not_attempted", reason: "structured_non_transient" }),
+			]);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("uses valid structured transient evidence instead of message text", async () => {

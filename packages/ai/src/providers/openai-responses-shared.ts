@@ -1,4 +1,5 @@
 import type OpenAI from "openai";
+import { APIConnectionError, APIConnectionTimeoutError, APIUserAbortError } from "openai";
 import type {
 	Tool as OpenAITool,
 	ResponseCreateParamsStreaming,
@@ -410,23 +411,69 @@ function makeFailure(
 	const status = top.status ?? nested.status;
 	const statusCategory = categoryFromStatus(status);
 	const messageCategory = categoryFromMessage(top.message) ?? categoryFromMessage(nested.message);
+	const sdkConnection = value instanceof APIConnectionError;
+	const sdkAbort = value instanceof APIUserAbortError;
+	const cause = recordOf(recordOf(value)?.cause);
+	const transportCause = ["ECONNRESET", "EPIPE", "ETIMEDOUT", "UND_ERR_SOCKET"].includes(
+		finiteString(cause?.code) ?? "",
+	);
+	const unsupportedEvidence = Boolean(
+		Object.keys(recordOf(value) ?? {}).some(
+			(key) =>
+				![
+					"code",
+					"type",
+					"message",
+					"status",
+					"param",
+					"error",
+					"headers",
+					"requestID",
+					"cause",
+					"stack",
+					"name",
+					"id",
+					"sequence_number",
+				].includes(key),
+		) ||
+			Object.keys(recordOf(recordOf(value)?.error) ?? {}).some(
+				(key) => !["code", "type", "message", "status", "param"].includes(key),
+			) ||
+			(top.code && !providerCode) ||
+			(top.type && top.type !== "error" && top.type !== "response.failed" && !providerCode) ||
+			(nested.code && !providerCode) ||
+			(nested.type && !providerCode) ||
+			["param", "reason", "incomplete_details"].some((key) => recordOf(value)?.[key] !== undefined),
+	);
 	let category: ResponsesFailureCategory;
 	let detailSource: ResponsesFailureDetailSource;
 	if (contextOverflow) {
 		category = "context_overflow";
 		detailSource = providerCode === "context_length_exceeded" ? "provider_code" : "message_category";
+	} else if (
+		statusCategory &&
+		CATEGORY_DISPOSITIONS[statusCategory] === "non_transient" &&
+		providerCode &&
+		CATEGORY_DISPOSITIONS[PROVIDER_CODE_CATEGORIES[providerCode]] === "transient"
+	) {
+		category = statusCategory;
+		detailSource = "http_status";
 	} else if (providerCode) {
 		category = PROVIDER_CODE_CATEGORIES[providerCode];
 		detailSource = matchedCode?.[1] ?? "provider_code";
 	} else if (statusCategory) {
 		category = statusCategory;
 		detailSource = "http_status";
+	} else if (unsupportedEvidence) {
+		category = "provider_error";
+		detailSource = "none";
 	} else {
 		category = messageCategory ?? (kindHint === "malformed_event" ? "malformed_event" : "unknown");
 		detailSource = messageCategory ? "message_category" : "none";
 	}
 	const hasEvidence = Boolean(
-		top.code ||
+		unsupportedEvidence ||
+			top.code ||
 			(top.type !== "error" && top.type !== "response.failed" && top.type) ||
 			top.message ||
 			top.status ||
@@ -437,20 +484,37 @@ function makeFailure(
 	);
 	const errorName = value instanceof Error ? value.name.toLowerCase() : "";
 	const inferredTransport =
-		phase === "request" &&
+		kindHint !== "provider_event" &&
+		!sdkAbort &&
 		status === undefined &&
 		providerCode === undefined &&
-		messageCategory === undefined &&
-		(errorName.includes("connection") || errorName.includes("timeout") || errorName === "typeerror");
-	if (inferredTransport && !contextOverflow) {
-		category = errorName.includes("timeout") ? "timeout" : "transport";
+		!top.code &&
+		!nested.code &&
+		!nested.type &&
+		!contextOverflow &&
+		(phase === "request"
+			? sdkConnection ||
+				(messageCategory === undefined && (errorName.includes("connection") || errorName === "typeerror"))
+			: sdkConnection ||
+				transportCause ||
+				(value instanceof Error &&
+					/^terminated$/i.test(top.message ?? "") &&
+					!unsupportedEvidence &&
+					Object.keys(value).every((key) => ["name", "message", "stack", "cause"].includes(key))));
+	if (inferredTransport) {
+		category =
+			value instanceof APIConnectionTimeoutError
+				? "timeout"
+				: messageCategory === "timeout"
+					? "timeout"
+					: "transport";
 		detailSource = "none";
 	}
 	const kind =
 		kindHint ??
 		(status
 			? "http"
-			: (inferredTransport && !contextOverflow) || (phase === "request" && category === "transport")
+			: inferredTransport || (phase === "request" && category === "transport")
 				? "transport"
 				: hasEvidence
 					? "provider_event"
@@ -458,6 +522,8 @@ function makeFailure(
 	if (kind === "malformed_event") {
 		category = "malformed_event";
 		detailSource = "none";
+	} else if (kind === "provider_event" && category === "unknown" && !hasEvidence) {
+		category = "malformed_event";
 	}
 	const diagnostic: ResponsesProviderFailureV1 = {
 		schemaVersion: 1,
@@ -469,7 +535,7 @@ function makeFailure(
 		detailSource,
 	};
 	if (status !== undefined) diagnostic.httpStatus = status;
-	if (providerCode !== undefined) diagnostic.providerCode = providerCode;
+	if (providerCode !== undefined && detailSource !== "http_status") diagnostic.providerCode = providerCode;
 	// Overflow text stays exact so `isContextOverflow` keys on it deterministically.
 	const detail =
 		kind === "malformed_event" || category === "context_overflow"
@@ -655,9 +721,9 @@ function isProviderFailureDetails(value: unknown): value is ResponsesProviderFai
 		return category === "malformed_event" && source === "none" && status === undefined && providerCode === undefined;
 	}
 	if (kind === "transport") {
-		if (details.phase !== "request" || status !== undefined || providerCode !== undefined) return false;
+		if (status !== undefined || providerCode !== undefined) return false;
 		if (source === "none") return category === "transport" || category === "timeout";
-		return source === "message_category" && category === "transport";
+		return details.phase === "request" && source === "message_category" && category === "transport";
 	}
 	if (kind === "http" && status === undefined) return false;
 	if (kind === "provider_event" && details.phase === "request" && status !== undefined) return false;
@@ -683,9 +749,17 @@ function isProviderFailureDetails(value: unknown): value is ResponsesProviderFai
 		return statusCategory === undefined || category === "context_overflow";
 	}
 	if (providerCode !== undefined) return false;
-	if (kind === "http") return category === "unknown" && categoryFromStatus(status as number | undefined) === undefined;
+	if (kind === "http") {
+		return (
+			(category === "unknown" || category === "provider_error") &&
+			categoryFromStatus(status as number | undefined) === undefined
+		);
+	}
 	if (status !== undefined) return false;
-	return kind === "provider_event" && (category === "provider_error" || category === "unknown");
+	return (
+		kind === "provider_event" &&
+		(category === "provider_error" || category === "unknown" || category === "malformed_event")
+	);
 }
 
 export function validateResponsesProviderFailure(diagnostics: unknown): ResponsesProviderFailureValidation {
@@ -1146,7 +1220,13 @@ export async function processResponsesStream<TApi extends Api>(
 			const details = event.response?.incomplete_details;
 			if (error) throw providerEventFailure(error, "provider_event");
 			if (details?.reason) throw providerEventFailure({ message: details.reason }, "provider_event");
-			throw providerEventFailure(event, "malformed_event");
+			const response = recordOf(event.response);
+			const rich =
+				response && Object.keys(response).some((key) => !["id", "status", "output", "usage"].includes(key));
+			throw providerEventFailure(
+				rich ? { type: "response.failed", reason: "unsupported_details" } : event,
+				rich ? "provider_event" : "malformed_event",
+			);
 		}
 	}
 }

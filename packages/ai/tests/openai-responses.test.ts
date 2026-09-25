@@ -1,3 +1,4 @@
+import { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError } from "openai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.js";
@@ -477,6 +478,123 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(sdkRetryDetails(azure)).toEqual(expect.objectContaining({ outcome: "recovered" }));
 	});
 
+	it("retries an accepted stream termination only when transport provenance is affirmative", async () => {
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(
+					new TextEncoder().encode('data: {"type":"response.created","response":{"id":"resp_1"}}\n\n'),
+				);
+				controller.error(new Error("terminated"));
+			},
+		});
+		stubFetch([new Response(body, { headers: { "content-type": "text/event-stream" } })]);
+		const result = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey, maxRetries: 0 }).result();
+		expect(providerDetails(result)).toEqual(
+			expect.objectContaining({
+				phase: "stream",
+				kind: "transport",
+				category: "transport",
+				retryDisposition: "transient",
+			}),
+		);
+		expect(validateResponsesProviderFailure(result.diagnostics)).toEqual({
+			status: "valid",
+			category: "transport",
+			retryDisposition: "transient",
+		});
+	});
+
+	it("does not retry termination prose in provider rejection or unsupported rich events", async () => {
+		for (const event of [
+			{ type: "error", status: 403, message: "terminated" },
+			{ type: "response.failed", response: { error: { code: "new_provider_code", message: "terminated" } } },
+			{ type: "response.failed", response: { error: { code: "new_provider_code", message: "rate limit" } } },
+			{ type: "error", code: "new_provider_code", message: "server error" },
+			{ type: "error", new_detail: { reason: "terminated" } },
+		]) {
+			const result = await failureFrom(sse([event]));
+			expect(providerDetails(result)).toEqual(
+				expect.objectContaining({ retryDisposition: expect.not.stringMatching(/^transient$/) }),
+			);
+			expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
+		}
+	});
+
+	it("distinguishes documented SDK connection, timeout, abort and HTTP errors", () => {
+		const headers = new Headers({ "x-request-id": "req_private123456", authorization: "Bearer secret" });
+		for (const [error, category, kind] of [
+			[new APIConnectionError({ cause: new Error("terminated") }), "transport", "transport"],
+			[new APIConnectionTimeoutError({}), "timeout", "transport"],
+			[new APIUserAbortError({}), "unknown", "provider_event"],
+			[
+				APIError.generate(403, { error: { code: "new_code", message: "terminated" } }, undefined, headers),
+				"permission",
+				"http",
+			],
+		] as const) {
+			const failure = normalizeResponsesFailure(error, "request");
+			expect(failure.diagnostic).toEqual(expect.objectContaining({ category, kind }));
+			expect(JSON.stringify(failure)).not.toMatch(/private123456|Bearer secret/);
+		}
+	});
+
+	it("keeps unsupported-rich response.failed distinct from an empty event", async () => {
+		const rich = await failureFrom(
+			sse([
+				{
+					type: "response.failed",
+					response: { new_failure: { request_body: "private body" } },
+				},
+			]),
+		);
+		const novelError = await failureFrom(
+			sse([
+				{
+					type: "response.failed",
+					response: { error: { future_field: { request_body: "private body" } } },
+				},
+			]),
+		);
+		const empty = await failureFrom(sse([{ type: "response.failed", response: {} }]));
+		expect(providerDetails(rich)).toEqual(
+			expect.objectContaining({
+				kind: "provider_event",
+				category: "provider_error",
+				retryDisposition: "unknown",
+			}),
+		);
+		expect(providerDetails(empty)).toEqual(
+			expect.objectContaining({ kind: "malformed_event", category: "malformed_event" }),
+		);
+		expect(providerDetails(novelError)).toEqual(
+			expect.objectContaining({
+				kind: "provider_event",
+				category: "provider_error",
+				retryDisposition: "unknown",
+			}),
+		);
+		expect(JSON.stringify(rich)).not.toContain("private body");
+		expect(JSON.stringify(novelError)).not.toContain("private body");
+	});
+
+	it("treats SDK user abort as an abort without retry evidence", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new DOMException("aborted", "AbortError");
+			}),
+		);
+		const controller = new AbortController();
+		controller.abort();
+		const result = await streamSimpleOpenAIResponses(openaiModel, context, {
+			apiKey,
+			signal: controller.signal,
+			maxRetries: 0,
+		}).result();
+		expect(result.stopReason).toBe("aborted");
+		expect(result.diagnostics).toBeUndefined();
+	});
+
 	it("normalizes a bare provider error without undefined placeholders", async () => {
 		const result = await failureFrom(sse([{ type: "error" }]));
 
@@ -605,6 +723,26 @@ describe("OpenAI Responses failure normalization", () => {
 		);
 	});
 
+	it("keeps explicit non-transient HTTP rejection ahead of a transient provider code", () => {
+		const failure = normalizeResponsesFailure(
+			{ status: 403, code: "rate_limit_exceeded", message: "rate limit" },
+			"request",
+		);
+		expect(failure.diagnostic).toEqual(
+			expect.objectContaining({
+				kind: "http",
+				category: "permission",
+				retryDisposition: "non_transient",
+				detailSource: "http_status",
+			}),
+		);
+		expect(validateResponsesProviderFailure([{ type: "provider_failure", details: failure.diagnostic }])).toEqual({
+			status: "valid",
+			category: "permission",
+			retryDisposition: "non_transient",
+		});
+	});
+
 	it("keeps canonical overflow text detectable and free of provider prose", () => {
 		const result = normalizeResponsesFailure(
 			{ status: 400, code: "context_length_exceeded", message: "private prompt excerpt exceeds the limit" },
@@ -623,7 +761,7 @@ describe("OpenAI Responses failure normalization", () => {
 		["read ECONNRESET", "transport", "transient"],
 		["stream ended before completion", "transport", "transient"],
 	] as const)("classifies gateway prose %s as %s", async (message, category, disposition) => {
-		const result = await failureFrom(sse([{ type: "error", code: "gateway_private_code", message }]));
+		const result = await failureFrom(sse([{ type: "error", message }]));
 		expect(providerDetails(result)).toEqual(
 			expect.objectContaining({ category, retryDisposition: disposition, detailSource: "message_category" }),
 		);
@@ -903,7 +1041,7 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(serialized).not.toContain("secret-stack");
 		expect(serialized).not.toContain("unsupported_private_code");
 		expect(result.errorMessage).toBe(
-			`OpenAI Responses request failed without recognized details: The request failed ${Array(sentinels.length).fill("[redacted]").join(" ")}.`,
+			`OpenAI Responses returned a provider error: The request failed ${Array(sentinels.length).fill("[redacted]").join(" ")}.`,
 		);
 
 		const capped = normalizeResponsesFailure({ message: `Unsupported parameter ${"word ".repeat(46)}` }, "stream");
