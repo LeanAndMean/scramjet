@@ -98,7 +98,11 @@ interface FakeState {
 	missingAttestation?: string;
 	wrongAttestationPredicate?: string;
 	installFailure?: boolean;
-	auditFailure?: boolean;
+	installFailures?: Array<{ code: string; summary?: string; stderr?: string; stdout?: string }>;
+	installDurationMs?: number;
+	installTimeouts?: number[];
+	verificationRoots?: string[];
+	auditFailure?: boolean | "transient";
 	runtimeSmokeFailure?: boolean;
 	cliFailure?: boolean;
 	installedVersionOverrides?: Record<string, string>;
@@ -280,6 +284,15 @@ if (args[0] === "install") {
     home: process.env.HOME,
     xdg: process.env.XDG_DATA_HOME,
   };
+  state.verificationRoots ??= [];
+  state.verificationRoots.push(require("node:path").dirname(process.cwd()));
+  const failure = state.installFailures?.shift();
+  if (failure) {
+    save();
+    if (failure.stderr) console.error(failure.stderr);
+    process.stdout.write(failure.stdout ?? JSON.stringify({ error: { code: failure.code, summary: failure.summary } }));
+    process.exit(1);
+  }
   if (state.installFailure) stop("install failed");
   for (const target of Object.values(state.targets)) {
     const packageDir = require("node:path").join(process.cwd(), "node_modules", target.name);
@@ -304,6 +317,7 @@ if (args[0] === "install") {
   save(); process.exit(0);
 }
 if (args[0] === "audit" && args[1] === "signatures") {
+  if (state.auditFailure === "transient") { save(); process.stdout.write(JSON.stringify({ error: { code: "E408" } })); process.exit(1); }
   if (state.auditFailure) stop("audit failed");
   save(); process.exit(0);
 }
@@ -338,7 +352,14 @@ function runHelper(
 	args = mode === "preflight" ? [SHA] : [],
 	environment: Record<string, string> = {},
 ) {
-	const script = ["publish", "publish-and-verify", "registry-preflight", "verify", "verify-delayed"].includes(mode)
+	const script = [
+		"publish",
+		"publish-and-verify",
+		"registry-preflight",
+		"verify",
+		"verify-delayed",
+		"verify-cli",
+	].includes(mode)
 		? join(dirname(statePath), "runner.mjs")
 		: HELPER;
 	return spawnSync(process.execPath, [script, mode === "publish-cli" ? "publish" : mode, ...args], {
@@ -685,8 +706,20 @@ if (process.env.IN_PROCESS_NPM === "1") {
     if (command === "git") return realExec(command, args, options);
     const cli = command.endsWith("/node_modules/.bin/scramjet");
     if (command === "tar") return realExec(command, args, options);
+    if (command === process.execPath && args[0].endsWith("/installed-runtime-smoke.mjs")) {
+      const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+      state.calls.push(["installed-runtime-smoke", ...args.slice(1)]);
+      writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
+      return "";
+    }
     if (command !== "npm" && !cli) throw new Error("Unexpected fixture command: " + command);
     const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+    if (command === "npm" && args[0] === "install") {
+      state.installTimeouts ??= [];
+      state.installTimeouts.push(options.timeout);
+      elapsedMs += state.installDurationMs ?? 0;
+      writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
+    }
     if (command === "npm" && args[0] === "view" && Object.values(state.publicationCounts ?? {}).some(count => count > 0)) {
       state.registryTimeouts ??= [];
       state.registryTimeouts.push({ field: args[2], timeout: options.timeout, elapsedMs });
@@ -718,8 +751,10 @@ if (process.env.IN_PROCESS_NPM === "1") {
   };
   syncBuiltinESMExports();
 }
+const productionVerify = process.argv[2] === "verify-cli";
+if (productionVerify) { process.argv[1] = ${JSON.stringify(HELPER)}; process.argv[2] = "verify"; }
 const { loadInventory, preflight, publish, validateIdentity, verify } = await import(${JSON.stringify(new URL("../../../.github/scripts/release.mjs", import.meta.url))});
-try {
+if (!productionVerify) try {
   const inventory = loadInventory();
   const identity = validateIdentity(inventory);
   if (["publish", "publish-and-verify"].includes(process.argv[2]) && identity.attempt === "1") preflight(inventory);
@@ -1301,7 +1336,7 @@ exit 1
 		const state = initialState();
 		state.publishFailure = { name: INVENTORY[1].name, mode: "before-landing" };
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
+		const result = runHelper("publish", statePath, [], { IN_PROCESS_NPM: "1", POLL_DELAY_MS: "300000" });
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("acceptance ambiguous");
 		expect(result.stderr).toContain("same-run rerun");
@@ -1608,6 +1643,7 @@ exit 1
 	function expectVerificationPathsRemoved(state: FakeState) {
 		expect(state.verificationPaths).toBeDefined();
 		for (const path of Object.values(state.verificationPaths!)) expect(existsSync(path)).toBe(false);
+		for (const path of state.verificationRoots ?? []) expect(existsSync(path)).toBe(false);
 	}
 
 	it.each([
@@ -1630,7 +1666,7 @@ exit 1
 					.join(", ")}`,
 			);
 			expect(result.stderr).not.toContain("publication state is ambiguous");
-			expect(result.stderr).toContain("another five-fresh forward release");
+			expect(result.stderr).toContain("five-fresh forward release");
 			expect(readState(statePath).calls.some((args) => args[0] === "audit")).toBe(false);
 		},
 		10_000,
@@ -1644,6 +1680,7 @@ exit 1
 		const state = readState(statePath);
 		const install = state.calls.find(([command]) => command === "install")!;
 		expect(install).toContain(`@leanandmean/scramjet@${SCRAMJET_VERSION}`);
+		expect(install).toContain("--json");
 		expect(install).toContain("--ignore-scripts=false");
 		expect(state.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
 		const smokeIndex = state.calls.findIndex(([command]) => command === "installed-runtime-smoke");
@@ -1657,6 +1694,175 @@ exit 1
 		expect(publishCalls(state)).toHaveLength(0);
 		expect(result.stdout).toContain("final verification: completed");
 		expectVerificationPathsRemoved(state);
+	});
+
+	it("recovers final-install failure after complete publication by independently verifying without republishing", () => {
+		const first = runHelper("publish", statePath);
+		expect(first.status).toBe(0);
+		const state = readState(statePath);
+		state.installFailure = true;
+		writeFileSync(statePath, JSON.stringify(state));
+		const failed = runHelper("verify", statePath);
+		expect(failed.status).not.toBe(0);
+		const afterFailure = readState(statePath);
+		expect(publishCalls(afterFailure)).toHaveLength(5);
+		delete afterFailure.installFailure;
+		afterFailure.calls = [];
+		writeFileSync(statePath, JSON.stringify(afterFailure));
+		const recovered = runHelper("verify-cli", statePath, [], { GITHUB_RUN_ATTEMPT: "2", IN_PROCESS_NPM: "1" });
+		expect(recovered.status).toBe(0);
+		expect(recovered.stdout).toContain("release run 36056969151 attempt 2");
+		expect(recovered.stdout).toContain("final verification: completed");
+		const final = readState(statePath);
+		expect(final.calls.some(([command]) => command === "pack" || command === "publish")).toBe(false);
+		expect(final.calls.filter(([command]) => command === "install")).toHaveLength(1);
+		expect(final.calls.filter(([command]) => command === "audit")).toHaveLength(1);
+		expect(final.calls.filter(([command]) => command === "installed-runtime-smoke")).toHaveLength(1);
+		expect(final.calls.filter(([command]) => command === "installed-scramjet")).toHaveLength(1);
+		expectVerificationPathsRemoved(final);
+	});
+
+	it("retries only the exact target tarball E404 with fresh install roots, then verifies once", () => {
+		const state = publishedState();
+		const { name, version } = INVENTORY[3];
+		state.installFailures = [
+			{
+				code: "E404",
+				summary: `404 Not Found - GET https://registry.npmjs.org/${name}/-/coding-agent-${version}.tgz - not found`,
+			},
+		];
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1" });
+		expect(result.status).toBe(0);
+		const final = readState(statePath);
+		expect(final.calls.filter(([command]) => command === "install")).toHaveLength(2);
+		expect(final.verificationRoots).toHaveLength(2);
+		expect(new Set(final.verificationRoots).size).toBe(2);
+		expect(final.calls.filter(([command]) => command === "audit")).toHaveLength(1);
+		expect(final.calls.filter(([command]) => command === "installed-runtime-smoke")).toHaveLength(1);
+		expect(final.calls.filter(([command]) => command === "installed-scramjet")).toHaveLength(1);
+		expect(publishCalls(final)).toHaveLength(0);
+		expectVerificationPathsRemoved(final);
+	});
+
+	it.each(["E408", "E429", "E500", "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENETUNREACH"])(
+		"retries a structured %s install failure",
+		(code) => {
+			const state = publishedState();
+			state.installFailures = [{ code }];
+			writeFileSync(statePath, JSON.stringify(state));
+			const result = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1" });
+			expect(result.status).toBe(0);
+			const final = readState(statePath);
+			expect(final.calls.filter(([command]) => command === "install")).toHaveLength(2);
+			expectVerificationPathsRemoved(final);
+		},
+	);
+
+	it.each([
+		[
+			"other tarball",
+			{
+				code: "E404",
+				summary: "404 Not Found - GET https://registry.npmjs.org/@leanandmean/other/-/other-1.0.0.tgz - not found",
+			},
+		],
+		[
+			"near-match tarball",
+			{
+				code: "E404",
+				summary: `404 Not Found - GET https://registry.npmjs.org/${INVENTORY[3].name}/-/coding-agent-${INVENTORY[3].version}.tgz.extra - not found`,
+			},
+		],
+		[
+			"missing packument",
+			{ code: "E404", summary: `404 Not Found - GET https://registry.npmjs.org/${INVENTORY[3].name} - not found` },
+		],
+		["unknown code", { code: "ETARGET" }],
+		["integrity failure", { code: "EINTEGRITY" }],
+		["script failure", { code: "ELIFECYCLE" }],
+	] as const)("does not retry %s", (_label, failure) => {
+		const state = publishedState();
+		state.installFailures = [failure];
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1" });
+		expect(result.status).not.toBe(0);
+		const final = readState(statePath);
+		expect(final.calls.filter(([command]) => command === "install")).toHaveLength(1);
+		expect(final.calls.some(([command]) => command === "audit")).toBe(false);
+		expectVerificationPathsRemoved(final);
+	});
+
+	it("falls back to structured stderr when stdout is malformed, but rejects unparsable output", () => {
+		const state = publishedState();
+		state.installFailures = [
+			{ code: "E408", stdout: "not json", stderr: JSON.stringify({ error: { code: "E429" } }) },
+		];
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1" });
+		expect(result.status).toBe(0);
+		const malformed = readState(statePath);
+		malformed.calls = [];
+		malformed.installFailures = [{ code: "", stdout: "not json", stderr: "network failure" }];
+		writeFileSync(statePath, JSON.stringify(malformed));
+		const stopped = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1" });
+		expect(stopped.status).not.toBe(0);
+		expect(readState(statePath).calls.filter(([command]) => command === "install")).toHaveLength(1);
+	});
+
+	it("prefers a valid stdout error to a conflicting stderr error", () => {
+		const state = publishedState();
+		state.installFailures = [{ code: "ETARGET", stderr: JSON.stringify({ error: { code: "E408" } }) }];
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1" });
+		expect(result.status).not.toBe(0);
+		expect(readState(statePath).calls.filter(([command]) => command === "install")).toHaveLength(1);
+	});
+
+	it("clamps install timeouts, includes operation time and rejects a late success", () => {
+		const state = publishedState();
+		state.installDurationMs = 4_000;
+		state.installFailures = [{ code: "E408" }];
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1", POLL_DELAY_MS: "1000" });
+		expect(result.status).toBe(0);
+		const final = readState(statePath);
+		expect(final.installTimeouts).toEqual([600_000, 595_000]);
+		expectVerificationPathsRemoved(final);
+		final.calls = [];
+		final.verificationRoots = [];
+		final.installTimeouts = [];
+		final.installFailures = [];
+		final.installDurationMs = 600_000;
+		writeFileSync(statePath, JSON.stringify(final));
+		const late = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1" });
+		expect(late.status).not.toBe(0);
+		expect(late.stderr).toContain("install completed after the budget expired");
+		const expired = readState(statePath);
+		expect(expired.calls.some(([command]) => command === "audit")).toBe(false);
+		expectVerificationPathsRemoved(expired);
+	});
+
+	it("cleans every failed install root on exhausted visibility without starting consumers", () => {
+		const state = publishedState();
+		state.installFailures = Array.from({ length: 3 }, () => ({ code: "E408" }));
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1", POLL_DELAY_MS: "300000" });
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("did not converge within 600000ms");
+		const final = readState(statePath);
+		expect(final.calls.filter(([command]) => command === "install")).toHaveLength(2);
+		expect(final.calls.some(([command]) => command === "audit")).toBe(false);
+		expectVerificationPathsRemoved(final);
+	});
+
+	it("does not retry a transient-shaped signature audit failure", () => {
+		const state = publishedState();
+		state.auditFailure = "transient";
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1" });
+		expect(result.status).not.toBe(0);
+		expect(readState(statePath).calls.filter(([command]) => command === "install")).toHaveLength(1);
 	});
 
 	it("completes standalone verification after more than 31 stale metadata observations", () => {

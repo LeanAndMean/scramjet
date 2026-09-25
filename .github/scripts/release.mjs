@@ -538,6 +538,33 @@ export async function publish(inventory, dependencies = {}) {
 	}
 }
 
+function isRetryableInstallError(error, inventory) {
+	const outputs = [error?.stdout, error?.stderr];
+	let npmError;
+	for (const output of outputs) {
+		const text = Buffer.isBuffer(output) ? output.toString("utf8") : output;
+		if (typeof text !== "string") continue;
+		try {
+			const parsed = JSON.parse(text);
+			if (parsed?.error && typeof parsed.error.code === "string") {
+				npmError = parsed.error;
+				break;
+			}
+		} catch {}
+	}
+	if (!npmError) return false;
+	if (npmError.code === "E404") {
+		if (typeof npmError.summary !== "string") return false;
+		const match = /^404 Not Found - GET (https:\/\/[^\s]+?)(?: - |$)/.exec(npmError.summary);
+		if (!match) return false;
+		return inventory.some(({ name, version }) => {
+			const basename = name.slice("@leanandmean/".length);
+			return match[1] === `https://registry.npmjs.org/@leanandmean/${basename}/-/${basename}-${version}.tgz`;
+		});
+	}
+	return ["E408", "E429", "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENETUNREACH"].includes(npmError.code) || /^E5\d\d$/.test(npmError.code);
+}
+
 function commandFailureDetail(error) {
 	for (const value of [error?.stderr, error?.stdout]) {
 		const text = Buffer.isBuffer(value) ? value.toString("utf8") : value;
@@ -585,27 +612,36 @@ export async function verify(inventory, dependencies = {}) {
 		}
 
 		phase = "install";
-		root = mkdtempSync(join(tmpdir(), "scramjet-release-verification-"));
-		const project = join(root, "project");
-		const cache = join(root, "cache");
-		const home = join(root, "home");
-		const xdg = join(root, "xdg");
-		for (const path of [project, cache, home, xdg]) mkdirSync(path);
-		writeFileSync(join(project, "package.json"), JSON.stringify({ private: true }));
-		const env = { ...process.env, HOME: home, XDG_DATA_HOME: xdg, npm_config_cache: cache };
 		const scramjet = inventory.at(-1);
-		run(
-			"npm",
-			[
-				"install",
-				"--save-exact",
-				`${scramjet.name}@${scramjet.version}`,
-				"--ignore-scripts=false",
-				"--registry",
-				REGISTRY_URL,
-			],
-			{ cwd: project, env, timeout: PUBLISH_TIMEOUT_MS },
+		await pollRead(
+			"exact release install",
+			({ remainingMs }) => {
+				const attemptRoot = mkdtempSync(join(tmpdir(), "scramjet-release-verification-"));
+				try {
+					const project = join(attemptRoot, "project");
+					const cache = join(attemptRoot, "cache");
+					const home = join(attemptRoot, "home");
+					const xdg = join(attemptRoot, "xdg");
+					for (const path of [project, cache, home, xdg]) mkdirSync(path);
+					writeFileSync(join(project, "package.json"), JSON.stringify({ private: true }));
+					const env = { ...process.env, HOME: home, XDG_DATA_HOME: xdg, npm_config_cache: cache };
+					const timeout = Math.floor(Math.min(PUBLISH_TIMEOUT_MS, remainingMs()));
+					if (timeout <= 0) throw new Error("install observation budget expired");
+					run(
+						"npm",
+						["install", "--save-exact", `${scramjet.name}@${scramjet.version}`, "--ignore-scripts=false", "--json", "--registry", REGISTRY_URL],
+						{ cwd: project, env, timeout },
+					);
+					if (remainingMs() <= 0) throw new Error("install completed after the budget expired");
+					root = attemptRoot;
+				} finally {
+					if (root !== attemptRoot) rmSync(attemptRoot, { recursive: true, force: true });
+				}
+			},
+			{ ...dependencies.pollDependencies, retryIf: (error) => isRetryableInstallError(error, inventory) },
 		);
+		const project = join(root, "project");
+		const env = { ...process.env, HOME: join(root, "home"), XDG_DATA_HOME: join(root, "xdg"), npm_config_cache: join(root, "cache") };
 		phase = "installed closure";
 		for (const pkg of inventory) {
 			const manifestPath = join(project, "node_modules", pkg.name, "package.json");
@@ -639,7 +675,7 @@ export async function verify(inventory, dependencies = {}) {
 		console.log("final verification: completed");
 	} catch (error) {
 		throw new Error(
-			`Published release verification failed. Verification metadata observed: ${refs(observed)}. Inspect registry state read-only and prepare another five-fresh forward release. failed phase: ${phase}; final verification: not completed. Cause: ${commandFailureDetail(error)}`,
+			`Published release verification failed. Verification metadata observed: ${refs(observed)}. Final verification is independently rerunnable after inspecting the immutable tag/SHA, prior attempt facts and failure; it does not alter publication acceptance. Diagnose deterministic defects in immutable artifacts before a five-fresh forward release. failed phase: ${phase}; final verification: not completed. Cause: ${commandFailureDetail(error)}`,
 			{ cause: error },
 		);
 	} finally {
