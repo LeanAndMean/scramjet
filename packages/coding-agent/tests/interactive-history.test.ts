@@ -1232,9 +1232,9 @@ describe("interactive assistant history", () => {
 
 	it.each([
 		["aborted" as const, "Operation aborted"],
-		["error" as const, "Error: provider failed"],
+		["error" as const, "Request attempt failed: provider failed"],
 	])("commits complete %s decoration through the interactive event path", async (stopReason, expected) => {
-		const { terminal, emit } = createInteractiveHarness();
+		const { terminal, emit, committedChatContainer } = createInteractiveHarness();
 		const partial = assistant("partial");
 		await emit({ type: "message_start", message: partial });
 		await emit({ type: "message_update", message: partial });
@@ -1245,6 +1245,37 @@ describe("interactive assistant history", () => {
 		await emit({ type: "message_end", message: finalMessage });
 		await render(terminal);
 
-		expect(terminal.bufferLines().join("\n").match(new RegExp(expected, "g"))).toHaveLength(1);
+		expect(committedChatContainer.render(100).join("\n").match(new RegExp(expected, "g"))).toHaveLength(1);
+	});
+
+	it("labels a failed allocation as an attempt before recovery and preserves the historical wording", async () => {
+		const { emit, terminal, mode, setSessionMessages, committedChatContainer } = createInteractiveHarness();
+		const failure = assistant("", "error");
+		failure.errorMessage =
+			"context_length_exceeded: estimated input exceeds provider input limit; compact or reduce the request";
+		await emit({ type: "message_start", message: assistant("") });
+		await emit({ type: "message_end", message: failure });
+		await render(terminal);
+		expect(terminal.bufferLines().join("\n")).toContain("Request attempt failed:");
+		expect(failure.errorMessage).toContain("context_length_exceeded");
+		setSessionMessages([failure, assistant("Recovered answer")]);
+		(mode.renderInitialMessages as () => void).call(mode);
+		expect(committedChatContainer.render(100).join("\n")).toContain(
+			"Request attempt failed: context_length_exceeded",
+		);
+		expect(committedChatContainer.render(100).join("\n")).toContain("Recovered answer");
+	});
+
+	it("shows a failed attempt with partial tool calls without implying that tools ran", async () => {
+		const { emit, committedChatContainer, mode } = createInteractiveHarness();
+		const partial = assistant("");
+		partial.content = [{ type: "toolCall", id: "pending", name: "unknown", arguments: {} }];
+		const failure = { ...partial, stopReason: "error" as const, errorMessage: "provider failed" };
+		await emit({ type: "message_start", message: partial });
+		await emit({ type: "message_update", message: partial });
+		await emit({ type: "message_end", message: failure });
+		const row = committedChatContainer.children.find((child) => child instanceof AssistantMessageComponent);
+		expect(row?.render(100).join("\n")).toContain("Request attempt failed: provider failed");
+		expect((mode.pendingTools as Map<string, unknown>).size).toBe(0);
 	});
 });
