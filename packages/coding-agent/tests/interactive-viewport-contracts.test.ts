@@ -1627,6 +1627,43 @@ describe("retained interactive contracts", () => {
 		expect(h.extensionUI.getEditorText()).toBe("x");
 	});
 
+	it("preserves a later wheel return to the tail over pending completion revelation", async () => {
+		const h = await setup();
+		await history(h);
+		await h.emit({ type: "agent_start" });
+		h.extensionUI.setEditorText("");
+		const editor = h.internals.editorContainer.children[0] as EditorComponent;
+		const submit = vi.fn();
+		editor.onSubmit = submit;
+		for (const character of "/hot") h.terminal.sendInput(character);
+		await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain("→ hotkeys"));
+		h.extensionUI.setWidget("trailing", () => new Text(Array(40).fill("TRAILING").join("\n"), 0, 0), {
+			placement: "belowEditor",
+		});
+		const hidden = await h.frame();
+		expect(hidden.join("\n")).toContain("Dock suspended");
+		expect(hidden.join("\n")).not.toContain("hotkeys");
+		expect(hidden.join("\n")).toContain("FIXTURE-FOOTER");
+		expect(h.internals.ui.isComponentVisible(h.internals.editorContainer)).toBe(false);
+		const tail = h.internals.ui.getViewportState()!;
+		expect(tail).toMatchObject({ offset: tail.totalRows - tail.height, followingTail: true });
+		const mark = h.terminal.markWrites();
+		h.terminal.sendInput("\t");
+		h.terminal.sendInput(mouse(64));
+		expect(h.internals.ui.getViewportState()?.followingTail).toBe(false);
+		h.terminal.sendInput(mouse(65));
+		expect(h.internals.ui.getViewportState()).toEqual(tail);
+		expect(h.terminal.writesSince(mark)).toBe("");
+		expect(h.extensionUI.getEditorText()).toBe("/hot");
+		expect(submit).not.toHaveBeenCalled();
+		const returned = await h.frame();
+		expect.soft(h.internals.ui.getViewportState()).toEqual(tail);
+		expect.soft(returned.join("\n")).toContain("FIXTURE-FOOTER");
+		h.terminal.sendInput("\x1b[1;5F");
+		await h.frame();
+		expect(h.internals.ui.getViewportState()).toEqual(tail);
+	});
+
 	it.each(["typing", "capturing overlay", "passive overlay"])(
 		"preserves %s while hidden autocomplete waits for revelation",
 		async (kind) => {

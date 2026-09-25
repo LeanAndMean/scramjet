@@ -615,6 +615,37 @@ describe("viewport interactions", () => {
 		expect(tui.getViewportState()).toMatchObject({ offset: 5, followingTail: true });
 	});
 
+	it.each(["before bottom motion", "after bottom motion"])(
+		"resumes following on bottom thumb release with growth %s",
+		async (timing) => {
+			const card = new Rows(Array.from({ length: 100 }, (_, i) => `row-${i}`));
+			const { tui, terminal, frame, text } = await setup([{ component: card }], 21, 10);
+			terminal.sendInput("\x1b[1;5H");
+			await frame();
+			expect(tui.getViewportState()).toMatchObject({ offset: 0, followingTail: false });
+			terminal.sendInput(mouse(0, 21, 1));
+			if (timing === "after bottom motion") terminal.sendInput(mouse(32, 21, 10));
+			card.lines.push(...Array.from({ length: 100 }, (_, i) => `row-${i + 100}`));
+			await frame();
+			if (timing === "before bottom motion") terminal.sendInput(mouse(32, 21, 10));
+			await frame();
+			expect(tui.getViewportState()).toMatchObject({ offset: 90, totalRows: 200, height: 10 });
+			expect(terminal.visibleLines()[9].at(-1)).toBe("█");
+			terminal.sendInput(mouse(0, 21, 10, "m"));
+			await frame();
+			expect.soft(tui.getViewportState()).toMatchObject({ offset: 190, followingTail: true });
+			expect.soft(text()).toEqual(Array.from({ length: 10 }, (_, i) => `row-${190 + i}`));
+			card.lines.push("row-200");
+			await frame();
+			expect.soft(tui.getViewportState()).toMatchObject({ offset: 191, followingTail: true });
+			expect.soft(text().at(-1)).toBe("row-200");
+			terminal.sendInput("\x1b[1;5F");
+			await frame();
+			expect(tui.getViewportState()).toMatchObject({ offset: 191, followingTail: true });
+			expect(text().at(-1)).toBe("row-200");
+		},
+	);
+
 	it("keeps thumb mapping stable through growth and supports track clicks", async () => {
 		const card = new Rows(Array.from({ length: 100 }, (_, i) => `row-${i}`));
 		const { tui, terminal, frame } = await setup([{ component: card }], 21, 10);
