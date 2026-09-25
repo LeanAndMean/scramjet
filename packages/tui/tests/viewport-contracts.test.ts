@@ -71,6 +71,85 @@ function gestureFixture(count = 100) {
 	return { viewport, render, paint, input };
 }
 
+describe("selection origins and release", () => {
+	it.each([
+		{ docked: false, empty: false },
+		{ docked: true, empty: false },
+		{ docked: false, empty: true },
+		{ docked: true, empty: true },
+	])("ignores screen filler with docked=$docked and empty=$empty", async ({ docked, empty }) => {
+		const f = await mount(empty ? [] : ["original"]);
+		const dock = new Rows(["prompt"]);
+		f.tui.configureViewport({
+			getBlocks: () => [{ component: f.card }, ...(docked ? [{ component: dock, dock: true }] : [])],
+			copy: f.copy,
+		});
+		await f.frame();
+		f.terminal.sendInput(mouse(0, 1, 3));
+		f.terminal.sendInput(mouse(32, 7, 1));
+		f.terminal.sendInput(mouse(0, 7, 1, "m"));
+		f.terminal.sendInput(mouse(2, 7, 1));
+		await f.frame();
+		expect(f.copy).not.toHaveBeenCalled();
+		expect(f.terminal.cell(0, 0).inverse).toBe(false);
+		f.card.lines = ["updated"];
+		await f.frame();
+		expect(f.text()[0]).toBe("updated");
+		expect(f.tui.getViewportState()?.followingTail).toBe(true);
+	});
+
+	it("allows a genuine blank transcript row to begin selection", async () => {
+		const f = await mount(["first", "", "last"]);
+		f.terminal.sendInput(mouse(0, 1, 2));
+		f.terminal.sendInput(mouse(32, 5, 3));
+		f.terminal.sendInput(mouse(0, 5, 3, "m"));
+		f.terminal.sendInput(mouse(2, 5, 3));
+		await f.frame();
+		expect(f.copy).toHaveBeenCalledExactlyOnceWith("\nlast");
+	});
+
+	it.each([false, true])("preserves following=%s while an empty click holds growth", async (following) => {
+		const f = await mount(Array.from({ length: 8 }, (_, i) => `row-${i}`));
+		if (!following) f.tui.scrollViewportTo(1);
+		await f.frame();
+		f.terminal.sendInput(mouse(0, 2, 2));
+		f.card.lines.push("row-8");
+		await f.frame();
+		expect(f.text().at(-1)).toBe(following ? "row-7" : "row-5");
+		f.terminal.sendInput(mouse(0, 2, 2, "m"));
+		await f.frame();
+		expect(f.text().at(-1)).toBe(following ? "row-8" : "row-5");
+		expect(f.tui.getViewportState()).toMatchObject({ offset: following ? 4 : 1, followingTail: following });
+	});
+
+	it.each(["wheel", "programmatic"])("does not undo %s navigation on empty-click release", async (navigation) => {
+		const f = await mount(Array.from({ length: 12 }, (_, i) => `row-${i}`));
+		f.terminal.sendInput(mouse(0, 2, 2));
+		if (navigation === "wheel") f.terminal.sendInput(mouse(64, 2, 2));
+		else f.tui.scrollViewportTo(4);
+		f.terminal.sendInput(mouse(0, 2, 2, "m"));
+		f.card.lines.push("row-12");
+		await f.frame();
+		expect(f.tui.getViewportState()).toMatchObject({ offset: 4, followingTail: false });
+		expect(f.text().at(-1)).toBe("row-8");
+	});
+
+	it("resumes held live growth after an empty dock click", async () => {
+		const f = await mount(Array.from({ length: 8 }, (_, i) => `row-${i}`));
+		const dock = new Rows(["prompt"]);
+		f.tui.configureViewport({ getBlocks: () => [{ component: f.card }, { component: dock, dock: true }] });
+		await f.frame();
+		f.terminal.sendInput(mouse(0, 2, 5));
+		f.card.lines.push("row-8");
+		await f.frame();
+		expect(f.text()).toEqual(["row-4", "row-5", "row-6", "row-7", "prompt"]);
+		f.terminal.sendInput(mouse(0, 2, 5, "m"));
+		await f.frame();
+		expect(f.text()).toEqual(["row-5", "row-6", "row-7", "row-8", "prompt"]);
+		expect(f.tui.getViewportState()).toMatchObject({ offset: 5, followingTail: true });
+	});
+});
+
 describe("viewport focus contracts", () => {
 	it.each(["selection", "thumb"] as const)(
 		"focus loss cancels unfinished %s without reattaching or dispatching keys",

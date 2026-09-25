@@ -191,7 +191,7 @@ export class RetainedViewport {
 	private dockSuspended = false;
 	private selectionInDock = false;
 	private visibleComponents = new Set<Component>();
-	private selection: { start: SelectionPoint; end: SelectionPoint; followOnCopy: boolean } | undefined;
+	private selection: { start: SelectionPoint; end: SelectionPoint; followOnRelease: boolean } | undefined;
 	private copyError: string | undefined;
 	private copying = false;
 	private gesture:
@@ -225,6 +225,12 @@ export class RetainedViewport {
 		this.selection = undefined;
 		this.copyError = undefined;
 		this.copying = false;
+	}
+
+	private releaseSelection(): void {
+		const resumeTail = this.selection?.followOnRelease && this.offset === this.maxOffset;
+		this.cancelInteraction();
+		if (resumeTail) this.scrollTo(this.maxOffset);
 	}
 
 	private endGesture(): void {
@@ -287,9 +293,7 @@ export class RetainedViewport {
 			if (!this.options.copy) throw new Error("No clipboard callback configured");
 			await this.options.copy(text);
 			if (this.selection !== selection) return;
-			const resumeTail = selection?.followOnCopy && this.offset === this.maxOffset;
-			this.cancelInteraction();
-			if (resumeTail) this.scrollTo(this.maxOffset);
+			this.releaseSelection();
 		} catch (error) {
 			if (this.selection !== selection) return;
 			this.copyError = plainText(error instanceof Error ? error.message : String(error));
@@ -323,7 +327,7 @@ export class RetainedViewport {
 					this.selection.start.row === this.selection.end.row &&
 					this.selection.start.column === this.selection.end.column
 				)
-					this.cancelInteraction();
+					this.releaseSelection();
 				this.requestRender();
 				return true;
 			}
@@ -356,7 +360,8 @@ export class RetainedViewport {
 					this.gesture = { kind: "thumb", grab, travel: this.height - size, maximum: this.maxOffset };
 					this.dragThumb(y - 1);
 				} else if (
-					(y <= this.paintedHeight || (this.dockHeight > 0 && y > this.paintedDockTop)) &&
+					(y <= Math.min(this.paintedHeight, this.paintedDockStart - this.paintedOffset) ||
+						(this.dockHeight > 0 && y > this.paintedDockTop)) &&
 					this.totalRows + this.dockHeight > 0 &&
 					this.screenHeight > 1
 				) {
@@ -365,7 +370,7 @@ export class RetainedViewport {
 					this.logicalCopy = this.blocks.flatMap((block) => block.copyRows);
 					const point = this.point(x - 1, y - 1);
 					this.offset = this.paintedOffset;
-					this.selection = { start: point, end: point, followOnCopy: this.followingTail };
+					this.selection = { start: point, end: point, followOnRelease: this.followingTail };
 					this.followingTail = false;
 					this.anchor = this.anchorAt(this.offset, 0);
 					this.gesture = { kind: "selection", dragged: false, scrolled: false };
