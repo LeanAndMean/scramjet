@@ -269,8 +269,8 @@ export class RetainedViewport {
 			if (!source || isImageLine(line)) continue;
 			const left = Math.max(source.start, index === start.row ? start.column : 0);
 			const right = Math.min(source.end, index === end.row ? end.column : source.end);
-			if (right < left || (right === left && source.start !== source.end)) continue;
 			if (previous) result += previous.after ?? "\n";
+			if (right < left || (right === left && source.start !== source.end)) continue;
 			result += sliceByColumn(plainText(line), left, right - left, true);
 			previous = source;
 		}

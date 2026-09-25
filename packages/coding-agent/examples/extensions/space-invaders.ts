@@ -365,7 +365,8 @@ class SpaceInvadersComponent {
 
 		// Restart on game over or victory
 		if (!released && (this.state.gameOver || this.state.victory)) {
-			if (data === "r" || data === "R" || data === " ") {
+			// SCRAMJET-DIVERGENCE: restart keys also arrive as explicit Kitty sequences.
+			if (matchesKey(data, "r") || matchesKey(data, "shift+r") || matchesKey(data, Key.space)) {
 				const highScore = this.state.highScore;
 				const nextLevel = this.state.victory ? this.state.level + 1 : 1;
 				this.state = createInitialState(highScore, nextLevel);
