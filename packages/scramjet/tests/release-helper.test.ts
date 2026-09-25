@@ -692,7 +692,9 @@ describe("release helper registry preflight and publication", () => {
 	let workDir: string;
 	let statePath: string;
 
-	beforeEach(() => {
+	beforeEach(async () => {
+		// Keep Vitest worker RPC responsive between synchronous subprocess tests.
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		workDir = mkdtempSync(join(tmpdir(), "scramjet-release-"));
 		writeFileSync(join(workDir, "npm"), FAKE_NPM);
 		chmodSync(join(workDir, "npm"), 0o755);
