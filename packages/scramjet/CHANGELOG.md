@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.102.0 — Browse and copy live terminal output
+## Unreleased — Browse and copy live terminal output
 
 Makes running output reachable through an application-managed retained transcript, with stable reading anchors and explicit selection copying. Fixes [#551](https://github.com/LeanAndMean/scramjet/issues/551).
 
@@ -24,6 +24,20 @@ Makes running output reachable through an application-managed retained transcrip
 
 - Add production-composition, long-session, copy, input-framing, approval and terminal-restoration regressions, plus native interaction and graphics verification drivers.
 - Document tested terminal configurations, committed-mode compatibility, and deferred native-selection parity rather than claiming universal terminal support.
+
+## 0.102.0 — Recover interrupted npm releases safely
+
+Adds exact-content recovery for interrupted npm releases and separates publication from verification-only reruns. Fixes [#573](https://github.com/LeanAndMean/scramjet/issues/573).
+
+### Changed
+
+- Pack and validate all five release candidates before publication, retaining already-published versions only when their exact content and release metadata match.
+- Separate the OIDC-capable publication job from dependent verification so failed verification can rerun without republishing.
+- Retry exact package installation only for bounded transient failures while preserving immutable evidence from prior release attempts.
+
+### Tests
+
+- Add release-helper, workflow, cleanup, recovery-gate, and changed-candidate regression coverage.
 
 ## 0.101.0 — Refresh built-in model catalogs
 

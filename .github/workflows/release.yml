@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: npm-publication
@@ -17,6 +16,9 @@ jobs:
     name: publish to npm
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -29,23 +31,7 @@ jobs:
         run: node .github/scripts/release.mjs validate
 
       - name: Validate registry configuration
-        run: |
-          REGISTRY="https://registry.npmjs.org/"
-          test "$(npm config get registry)" = "$REGISTRY"
-          SCOPE_REGISTRY=$(npm config get @leanandmean:registry)
-          test "$SCOPE_REGISTRY" = "undefined" || test "$SCOPE_REGISTRY" = "$REGISTRY"
-          node --input-type=module <<'NODE'
-          const credentials = Object.keys(process.env).filter(
-            (name) => /^(?:NPM|NODE).*TOKEN$/i.test(name) || /^NPM_CONFIG_.*(?:AUTH|PASSWORD|USERNAME)/i.test(name),
-          );
-          if (credentials.length > 0) throw new Error(`npm credentials are present in: ${credentials.join(", ")}`);
-          NODE
-          for config in .npmrc "$(npm config get userconfig)" "$(npm config get globalconfig)"; do
-            if test -f "$config" && grep -Eq '(^|[/:])(_auth(Token)?|_password|username)[[:space:]]*=' "$config"; then
-              echo "Error: npm credentials are present in $config." >&2
-              exit 1
-            fi
-          done
+        run: bash .github/scripts/validate-registry.sh
 
       - name: Pin release tooling
         run: |
@@ -55,6 +41,7 @@ jobs:
           npm --version
 
       - name: Preflight release candidate
+        if: github.run_attempt == 1
         run: node .github/scripts/release.mjs preflight "$GITHUB_SHA"
 
       - name: Install dependencies
@@ -65,6 +52,31 @@ jobs:
 
       - name: Publish packages
         run: node .github/scripts/release.mjs publish
+
+  verify:
+    name: verify published release
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Validate release identity
+        run: node .github/scripts/release.mjs validate
+
+      - name: Validate registry configuration
+        run: bash .github/scripts/validate-registry.sh
+
+      - name: Pin release tooling
+        run: |
+          node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 14)) throw new Error("Node 22.14.0 or newer is required")'
+          npm install --global npm@11.5.1 --registry https://registry.npmjs.org/
+          node --version
+          npm --version
 
       - name: Verify published release
         run: node .github/scripts/release.mjs verify
