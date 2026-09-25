@@ -28,6 +28,7 @@ export interface ViewportOptions {
 	getBlocks(): readonly ViewportBlock[];
 	keybindings?: KeybindingsManager;
 	copy?(text: string): Promise<void>;
+	requestPaste?(component: Component): void;
 	getScrollWheelStep?(): number;
 	handlePresentationInput?(data: string): boolean;
 	keepReadingOnInput?(): boolean;
@@ -156,6 +157,13 @@ interface SelectionPoint {
 	column: number;
 }
 
+interface Selection {
+	start: SelectionPoint;
+	end: SelectionPoint;
+	followOnRelease: boolean;
+	seam?: number;
+}
+
 function plainText(line: string): string {
 	let result = "";
 	for (let i = 0; i < line.length; ) {
@@ -184,14 +192,21 @@ export class RetainedViewport {
 	private terminalColumns = 0;
 	private screenHeight = 0;
 	private logicalRows: string[] | undefined;
-	private logicalCopy: readonly RenderedCopyRow[] = [];
+	private paintedSelection:
+		| {
+				selection: Selection;
+				ranges: [SelectionPoint, SelectionPoint][];
+				rows: string[];
+				copy: readonly RenderedCopyRow[];
+		  }
+		| undefined;
 	private dockHeight = 0;
 	private paintedDockTop = 0;
 	private paintedDockStart = 0;
 	private dockSuspended = false;
 	private selectionInDock = false;
 	private visibleComponents = new Set<Component>();
-	private selection: { start: SelectionPoint; end: SelectionPoint; followOnRelease: boolean } | undefined;
+	private selection: Selection | undefined;
 	private copyError: string | undefined;
 	private copying = false;
 	private gesture:
@@ -201,6 +216,7 @@ export class RetainedViewport {
 	private edgeTimer: ReturnType<typeof setInterval> | undefined;
 	private edgeDirection = 0;
 	private pointerColumn = 0;
+	private pointerRow = 0;
 
 	constructor(
 		private readonly options: ViewportOptions,
@@ -223,12 +239,12 @@ export class RetainedViewport {
 	cancelInteraction(): void {
 		this.endGesture();
 		this.selection = undefined;
+		this.paintedSelection = undefined;
 		this.copyError = undefined;
-		this.copying = false;
 	}
 
 	private releaseSelection(): void {
-		const resumeTail = this.selection?.followOnRelease && this.offset === this.maxOffset;
+		const resumeTail = this.selection?.followOnRelease;
 		this.cancelInteraction();
 		if (resumeTail) this.scrollTo(this.maxOffset);
 	}
@@ -241,13 +257,16 @@ export class RetainedViewport {
 	}
 
 	private point(x: number, y: number, offset = this.paintedOffset, height = this.paintedHeight): SelectionPoint {
-		const row = this.selectionInDock
-			? Math.max(
-					this.paintedDockStart,
-					Math.min(this.logical.length - 1, this.paintedDockStart + y - this.paintedDockTop),
-				)
-			: Math.max(0, Math.min(this.totalRows - 1, offset + Math.min(y, height - 1)));
-		const text = plainText(this.logical[row] ?? "");
+		const dockTop = this.screenHeight - this.dockHeight;
+		const inDock = this.dockHeight > 0 && y >= dockTop && (this.selectionInDock || offset === this.maxOffset);
+		const row = inDock
+			? Math.min(this.logical.length - 1, this.totalRows + y - dockTop)
+			: Math.max(0, Math.min(this.totalRows - 1, offset + Math.max(0, Math.min(y, height - 1))));
+		return this.snapPoint(row, x);
+	}
+
+	private snapPoint(row: number, x: number, line = this.logical[row] ?? ""): SelectionPoint {
+		const text = plainText(line);
 		let column = 0;
 		for (const { segment } of getSegmenter().segment(text)) {
 			const size = visibleWidth(segment);
@@ -263,24 +282,57 @@ export class RetainedViewport {
 		return start.row < end.row || (start.row === end.row && start.column <= end.column) ? [start, end] : [end, start];
 	}
 
-	private selectedText(): string {
+	private selectionRanges(): [SelectionPoint, SelectionPoint][] {
 		const range = this.selectionRange();
-		if (!range) return "";
+		if (!range) return [];
 		const [start, end] = range;
-		let result = "";
-		let previous: Exclude<RenderedCopyRow, null> | undefined;
-		for (let index = start.row; index <= end.row; index++) {
-			const line = this.logical[index];
-			const source = this.logicalCopy[index];
-			if (!source || isImageLine(line)) continue;
-			const left = Math.max(source.start, index === start.row ? start.column : 0);
-			const right = Math.min(source.end, index === end.row ? end.column : source.end);
-			if (previous) result += previous.after ?? "\n";
-			if (right < left || (right === left && source.start !== source.end)) continue;
-			result += sliceByColumn(plainText(line), left, right - left, true);
-			previous = source;
+		const seam = this.selection?.seam;
+		if (seam !== undefined && seam < this.totalRows && start.row < this.totalRows && end.row >= this.totalRows) {
+			return [
+				...(start.row < seam
+					? ([[start, { row: seam - 1, column: visibleWidth(this.logical[seam - 1] ?? "") }]] as [
+							SelectionPoint,
+							SelectionPoint,
+						][])
+					: []),
+				[{ row: this.totalRows, column: 0 }, end],
+			];
 		}
-		return result;
+		return [range];
+	}
+
+	private selectedText(): string {
+		const painted = this.paintedSelection;
+		if (!painted || painted.selection !== this.selection) return "";
+		return painted.ranges
+			.map(([start, end]) => {
+				let result = "";
+				let previous: Exclude<RenderedCopyRow, null> | undefined;
+				for (let index = start.row; index <= end.row; index++) {
+					const line = painted.rows[index];
+					const source = painted.copy[index];
+					if (!source || isImageLine(line)) continue;
+					const left = Math.max(source.start, index === start.row ? start.column : 0);
+					const right = Math.min(source.end, index === end.row ? end.column : source.end);
+					if (previous) result += previous.after ?? "\n";
+					if (right < left || (right === left && source.start !== source.end)) continue;
+					result += sliceByColumn(plainText(line), left, right - left, true);
+					previous = source;
+				}
+				return result;
+			})
+			.join("\n");
+	}
+
+	private moveSelection(x: number, y: number, offset = this.offset, height = this.height): void {
+		if (!this.selection) return;
+		this.pointerColumn = x;
+		this.pointerRow = y;
+		this.selection.end = this.point(x, y, offset, height);
+		if (this.selection.start.row < this.totalRows !== this.selection.end.row < this.totalRows) {
+			this.selection.seam ??= Math.min(this.totalRows, offset + height);
+		} else this.selection.seam = undefined;
+		this.edgeDirection = y <= 0 ? -1 : !this.selectionInDock && y >= height - 1 && offset < this.maxOffset ? 1 : 0;
 	}
 
 	private async copySelection(): Promise<void> {
@@ -297,6 +349,7 @@ export class RetainedViewport {
 		} catch (error) {
 			if (this.selection !== selection) return;
 			this.copyError = plainText(error instanceof Error ? error.message : String(error));
+		} finally {
 			this.copying = false;
 		}
 		this.requestRender();
@@ -340,16 +393,26 @@ export class RetainedViewport {
 			}
 			if (button === 64 || button === 65) {
 				this.scrollTo(this.offset + (button === 64 ? -1 : 1) * (this.options.getScrollWheelStep?.() ?? 3));
-				if (this.gesture?.kind === "selection" && this.selection && !this.selectionInDock) {
+				if (
+					this.gesture?.kind === "selection" &&
+					this.selection &&
+					(!this.selectionInDock || this.selection.end.row < this.totalRows)
+				) {
 					this.gesture.scrolled = true;
-					if (this.gesture.dragged) {
-						this.pointerColumn = Math.min(x - 1, this.width);
-						this.edgeDirection = y >= this.height ? 1 : y === 1 ? -1 : 0;
-						this.selection.end = this.point(this.pointerColumn, y - 1, this.offset, this.height);
-					}
+					if (this.gesture.dragged) this.moveSelection(Math.min(x - 1, this.width), y - 1);
 				}
 			} else if (button === 2) {
-				void this.copySelection();
+				if (this.selection) void this.copySelection();
+				else if (!this.copying) {
+					const row =
+						this.dockHeight > 0 && y - 1 >= this.paintedDockTop
+							? this.paintedDockStart + y - 1 - this.paintedDockTop
+							: y <= this.paintedHeight
+								? this.paintedOffset + y - 1
+								: -1;
+					const block = this.blocks.find((block) => row >= block.start && row < block.start + block.lines.length);
+					if (block && x <= this.width) this.options.requestPaste?.(block.component);
+				}
 			} else if (button === 0) {
 				this.endGesture();
 				if (x === this.width + 1 && y <= this.paintedHeight) {
@@ -367,7 +430,6 @@ export class RetainedViewport {
 				) {
 					this.cancelInteraction();
 					this.selectionInDock = this.dockHeight > 0 && y > this.paintedDockTop;
-					this.logicalCopy = this.blocks.flatMap((block) => block.copyRows);
 					const point = this.point(x - 1, y - 1);
 					this.offset = this.paintedOffset;
 					this.selection = { start: point, end: point, followOnRelease: this.followingTail };
@@ -379,14 +441,12 @@ export class RetainedViewport {
 				if (this.gesture?.kind === "thumb") this.dragThumb(y - 1);
 				else if (this.gesture?.kind === "selection" && this.selection) {
 					this.gesture.dragged = true;
-					this.pointerColumn = Math.min(x - 1, this.width);
-					this.selection.end = this.point(
-						this.pointerColumn,
+					this.moveSelection(
+						Math.min(x - 1, this.width),
 						y - 1,
 						this.gesture.scrolled ? this.offset : this.paintedOffset,
 						this.gesture.scrolled ? this.height : this.paintedHeight,
 					);
-					this.edgeDirection = this.selectionInDock ? 0 : y >= this.height ? 1 : y === 1 ? -1 : 0;
 					if (!this.edgeTimer)
 						this.edgeTimer = setInterval(() => {
 							if (!this.selection || !this.edgeDirection || this.gesture?.kind !== "selection") return;
@@ -398,12 +458,7 @@ export class RetainedViewport {
 								return;
 							}
 							this.gesture.scrolled = true;
-							this.selection.end = this.point(
-								this.pointerColumn,
-								this.edgeDirection > 0 ? this.height - 1 : 0,
-								this.offset,
-								this.height,
-							);
+							this.moveSelection(this.pointerColumn, this.pointerRow);
 							this.requestRender();
 						}, 80);
 				}
@@ -501,7 +556,6 @@ export class RetainedViewport {
 	reset(): void {
 		this.cancelInteraction();
 		this.logicalRows = undefined;
-		this.logicalCopy = [];
 		this.blocks = [];
 		this.visibleComponents.clear();
 		this.dockHeight = 0;
@@ -518,6 +572,7 @@ export class RetainedViewport {
 		if (!Number.isFinite(offset) || !Number.isFinite(screenRow)) throw new Error("Viewport positions must be finite");
 		this.offset = Math.max(0, Math.min(Math.trunc(offset), this.maxOffset));
 		this.followingTail = this.offset === this.maxOffset;
+		if (this.selection && !this.followingTail) this.selection.followOnRelease = false;
 		const row = Math.max(0, Math.min(Math.trunc(screenRow), this.height - 1));
 		this.anchor = this.followingTail ? undefined : this.anchorAt(this.offset + row, row);
 	}
@@ -562,11 +617,12 @@ export class RetainedViewport {
 	}
 
 	update(width: number, height: number, terminalColumns = width + 1): void {
-		if (width !== this.width || height !== this.screenHeight) this.cancelInteraction();
+		if (width !== this.width || height !== this.screenHeight) this.endGesture();
 		this.width = width;
 		this.terminalColumns = terminalColumns;
 		this.screenHeight = height;
 		if (this.isTooSmall()) {
+			this.cancelInteraction();
 			this.height = 0;
 			this.visibleComponents.clear();
 			return;
@@ -685,7 +741,26 @@ export class RetainedViewport {
 			next.set(block.component, rendered);
 			start += rendered.lines.length;
 		}
-		if (this.selection) return;
+		if (this.selection) {
+			const remap = (point: SelectionPoint): SelectionPoint => {
+				const old = this.blocks.find(
+					(block) => point.row >= block.start && point.row < block.start + block.lines.length,
+				);
+				const current = old && next.get(old.component);
+				if (old && current?.lines.length) {
+					const row = Math.min(point.row - old.start, current.lines.length - 1);
+					return this.snapPoint(current.start + row, point.column, current.lines[row]);
+				}
+				const row = Math.max(0, Math.min(point.row, start - 1));
+				const block = [...next.values()].find(
+					(block) => row >= block.start && row < block.start + block.lines.length,
+				);
+				return this.snapPoint(row, point.column, block?.lines[row - block.start] ?? "");
+			};
+			this.selection.start = remap(this.selection.start);
+			this.selection.end = remap(this.selection.end);
+			if (this.selection.seam !== undefined) this.selection.seam = Math.min(this.selection.seam, start - dockHeight);
+		}
 		this.dockHeight = dockHeight;
 		this.dockSuspended = suspended;
 		this.height = renderHeight;
@@ -726,7 +801,6 @@ export class RetainedViewport {
 				: Math.max(0, Math.min(this.offset, this.maxOffset));
 		if (!this.followingTail && !this.anchor) this.anchor = this.anchorAt(this.offset, 0);
 		this.logicalRows = undefined;
-		this.logicalCopy = [];
 	}
 
 	get cursorRow(): number {
@@ -791,12 +865,10 @@ export class RetainedViewport {
 			lines.push(...dock.lines);
 			images.push(...dock.images.map((image) => ({ ...image, row: image.row + dockTop })));
 		}
-		const range = this.selectionRange();
-		if (range) {
-			const [start, end] = range;
+		for (const [start, end] of this.selectionRanges()) {
 			for (let i = 0; i < lines.length; i++) {
 				const inDock = this.dockHeight > 0 && i >= dockTop;
-				if (inDock !== this.selectionInDock || (!inDock && i >= this.height)) continue;
+				if (!inDock && (i >= this.height || this.offset + i >= this.totalRows)) continue;
 				const row = inDock ? this.totalRows + i - dockTop : this.offset + i;
 				if (row < start.row || row > end.row) continue;
 				const left = row === start.row ? start.column : 0;
@@ -810,6 +882,15 @@ export class RetainedViewport {
 	}
 
 	markPainted(): void {
+		// Copy must observe this highlight, never an unpainted pointer or producer update.
+		this.paintedSelection = this.selection
+			? {
+					selection: this.selection,
+					ranges: this.selectionRanges().map(([start, end]) => [{ ...start }, { ...end }]),
+					rows: this.logical,
+					copy: this.blocks.flatMap((block) => block.copyRows),
+				}
+			: undefined;
 		this.paintedOffset = this.offset;
 		this.paintedHeight = this.height;
 		this.paintedCopyErrorRow = this.copyError ? this.noticeRow : undefined;

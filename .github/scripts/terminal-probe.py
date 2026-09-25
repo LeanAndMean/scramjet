@@ -36,7 +36,7 @@ REQUIRED_CHECKS = {
     "ordinaryDesktopDragSelects", "productionCompositionConfigured", "readingAnchorSurvivesOtherChildUpdate",
     "readingAnchorSurvivesResize", "readingAnchorSurvivesResizeBack", "readingInsideRunningBatch",
     "rightClickClipboardExactUnicode", "rightClickRequestsCopy", "rightWithoutSelectionDoesNotCopyOrPaste",
-    "scrolledSelectionClipboardExact", "selectionAutoscrolls", "selectionHoldsDuringUpdates",
+    "scrolledSelectionClipboardExact", "selectionAutoscrolls", "selectionAllowsLiveUpdates", "editorRightClickPastesWithoutSubmit", "editorCopyOmitsSoftWraps", "selectionCrossesIntoEditor", "selectionCrossesIntoTranscript",
     "subsequentApprovalActivation", "termiosRestored", "checkoutProvenanceMatches",
     "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail", "keyboardBrowsingReturnsToTail",
     "nativePresentationTogglePreservesReading", "settingsUndocksLive", "settingsRedocksLive",
@@ -550,6 +550,14 @@ try:
     check("controlCCopiesSelection", lambda: state().get("keyCopy", 0) > 0 and clipboard() == expected)
     key("paste")
     check("desktopPasteRoundTrip", lambda: state().get("pasteMatches", 0) > 0)
+    paste_before = state()
+    paste_text = "RIGHT-PASTE café 界\nsecond line"
+    seed_clipboard(paste_text)
+    editor_row = next(i + 1 for i, line in enumerate(paste_before["painted"]) if "Synthetic editor" in line)
+    mouse("rightDown", *cell(3, editor_row))
+    mouse("rightUp", *cell(3, editor_row))
+    check("editorRightClickPastesWithoutSubmit", lambda: state()["editor"] == paste_before["editor"] + paste_text and state().get("submissions", 0) == paste_before.get("submissions", 0))
+    screenshot("editor-right-paste")
     fixture_command("editor")
     for name in ("a", "b", "c", "left", "backspace"):
         key(name)
@@ -653,7 +661,7 @@ try:
     expected_multiline = "\n".join(f"ROW-{i:03d} synthetic café 界 e\u0301 text" for i in range(2, last_number + 1))
     held_frame = state()
     fixture_command("update")
-    check("selectionHoldsDuringUpdates", lambda: state().get("selectionActive") and state()["updates"] > held_frame["updates"] and state()["painted"] == held_frame["painted"])
+    check("selectionAllowsLiveUpdates", lambda: state().get("selectionActive") and state()["updates"] > held_frame["updates"] and f"LIVE-UPDATES-{state()['updates']}" in "\n".join(state()["painted"]) and state()["painted"] != held_frame["painted"])
     screenshot("selection-across-scroll")
     key("copy")
     check("scrolledSelectionClipboardExact", lambda: clipboard() == expected_multiline and not state().get("selectionActive"))
@@ -737,6 +745,28 @@ try:
     key("g")
     key("enter")
     check("jobControlResumed", lambda: state()["phase"] == "resumed")
+    fixture_command("copy-editor")
+    copy_frame = state()["painted"]
+    start_row = next(i + 1 for i, line in enumerate(copy_frame) if "COPY-EDITOR" in line)
+    end_row = next(i + 1 for i, line in enumerate(copy_frame) if line.strip() == "café 界")
+    drag(cell(1, start_row), cell(columns - 1, end_row))
+    key("copy")
+    copy_expected = ("COPY-EDITOR " + "alpha beta gamma " * 12).rstrip() + "\n\n    café 界"
+    check("editorCopyOmitsSoftWraps", lambda: clipboard() == copy_expected and not state().get("selectionActive"))
+    for reverse in (False, True):
+        fixture_command("copy-seam")
+        seam_frame = state()["painted"]
+        start_row = next(i + 1 for i, line in enumerate(seam_frame) if line.strip() == "SEAM-ONE")
+        end_row = next(i + 1 for i, line in enumerate(seam_frame) if line.strip() == "DRAFT-SEAM")
+        start, end = cell(1, start_row), cell(11, end_row)
+        seed_clipboard("SEAM-SENTINEL")
+        copy_count = state().get("keyCopy", 0)
+        drag(end, start) if reverse else drag(start, end)
+        if not wait_for(lambda: state().get("selectionPainted") and state().get("frameFlushed")):
+            raise RuntimeError("Cross-seam selection was not painted")
+        key("copy")
+        check("selectionCrossesIntoTranscript" if reverse else "selectionCrossesIntoEditor", lambda: state().get("keyCopy", 0) == copy_count + 1 and clipboard() == "SEAM-ONE\nSEAM-TWO\n\nDRAFT-SEAM" and not state().get("selectionActive"))
+    screenshot("copy-seam")
     key("exit")
     check("orderlyExit", lambda: state().get("stopped") is True and (output / "stty-after.txt").exists() and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
     check("termiosRestored", lambda: bool(state().get("termiosBefore")) and state().get("termiosBefore") == state().get("termiosAfter"))

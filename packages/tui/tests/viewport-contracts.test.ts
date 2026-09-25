@@ -103,6 +103,7 @@ describe("selection origins and release", () => {
 		f.terminal.sendInput(mouse(0, 1, 2));
 		f.terminal.sendInput(mouse(32, 5, 3));
 		f.terminal.sendInput(mouse(0, 5, 3, "m"));
+		await f.frame();
 		f.terminal.sendInput(mouse(2, 5, 3));
 		await f.frame();
 		expect(f.copy).toHaveBeenCalledExactlyOnceWith("\nlast");
@@ -212,7 +213,7 @@ describe("viewport focus contracts", () => {
 		expect(f.copy).not.toHaveBeenCalled();
 		f.terminal.sendInput(mouse(2, 3, 2));
 		await f.frame();
-		expect(f.copy).toHaveBeenCalledExactlyOnceWith("row-11");
+		expect(f.copy).toHaveBeenCalledExactlyOnceWith("change");
 	});
 
 	it.each([
@@ -367,6 +368,7 @@ describe("held-button wheel selection", () => {
 		f.terminal.sendInput(mouse(65, 2, 3));
 		f.terminal.sendInput(mouse(32, 9, 4));
 		f.terminal.sendInput(mouse(0, 9, 4, "m"));
+		await f.frame();
 		f.terminal.sendInput(mouse(2, 9, 4));
 		await f.frame();
 		expect(f.copy).toHaveBeenCalledExactlyOnceWith(
@@ -602,6 +604,7 @@ describe("overwidth containment contracts", () => {
 		for (const data of [mouse(0, 1, 1), mouse(32, 4, 3), mouse(0, 4, 3, "m")])
 			viewport.handleInput(data, false, false);
 		expect(copy).not.toHaveBeenCalled();
+		viewport.markPainted();
 		viewport.handleInput(mouse(2, 1, 1), false, false);
 		await Promise.resolve();
 		expect(copy).toHaveBeenCalledExactlyOnceWith(`START\n${displayedMiddle}\nEND`);

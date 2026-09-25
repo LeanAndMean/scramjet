@@ -22,6 +22,10 @@ import { loadPhoton } from "../src/utils/photon.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
 
 vi.mock("../src/utils/tools-manager.js", () => ({ ensureTool: vi.fn(async () => undefined) }));
+vi.mock("../src/utils/clipboard.js", async (original) => ({
+	...(await original<typeof clipboard>()),
+	readClipboardText: vi.fn(async () => "PASTED café 界\nsecond line"),
+}));
 
 const harnesses: Awaited<ReturnType<typeof createProductionInteractiveHarness>>[] = [];
 const directories: string[] = [];
@@ -64,9 +68,142 @@ afterEach(async () => {
 	for (const h of harnesses.splice(0)) await h.dispose();
 	for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 	vi.restoreAllMocks();
+	vi.mocked(clipboard.readClipboardText).mockReset().mockResolvedValue("PASTED café 界\nsecond line");
 });
 
 describe("retained interactive contracts", () => {
+	it("shows a real waiting selector while transcript text was selected", async () => {
+		const h = await setup();
+		await history(h);
+		const frame = await h.frame();
+		const row = frame.findIndex((line) => line.includes("HISTORY-"));
+		for (const event of [mouse(0, 1, row + 1), mouse(32, 8, row + 1), `\x1b[<0;8;${row + 1}m`])
+			h.terminal.sendInput(event);
+		await h.frame();
+		const answer = h.extensionUI.confirm("Waiting for your answer", "Proceed?");
+		expect((await h.frame()).join("\n")).toContain("Waiting for your answer");
+		h.terminal.sendInput("\x1b");
+		await h.frame();
+		h.terminal.sendInput("\x1b");
+		await answer;
+	});
+
+	it("pastes terminal framing as inert text without submitting", async () => {
+		vi.mocked(clipboard.readClipboardText).mockResolvedValue("hello\x1b[201~\r/quit\x00\x1b[200~");
+		const h = await setup();
+		await history(h);
+		const row = (await h.frame()).findIndex((line) => line.includes("DRAFT"));
+		const editor = h.internals.editorContainer.children[0] as EditorComponent;
+		const submit = vi.spyOn(editor, "onSubmit");
+		h.terminal.sendInput(mouse(2, 3, row + 1));
+		await vi.waitFor(() => expect(h.extensionUI.getEditorText()).toBe("DRAFThello\n/quit"));
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("allows background tool completion while a clipboard read is pending", async () => {
+		let resolve!: (text: string) => void;
+		vi.mocked(clipboard.readClipboardText).mockImplementation(
+			() =>
+				new Promise((done) => {
+					resolve = done;
+				}),
+		);
+		const h = await setup();
+		await history(h);
+		const row = (await h.frame()).findIndex((line) => line.includes("DRAFT"));
+		h.terminal.sendInput(mouse(2, 3, row + 1));
+		h.session.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "background",
+			toolName: "synthetic",
+			content: [{ type: "text", text: "completed" }],
+			isError: false,
+			timestamp: 0,
+		});
+		resolve("PASTED");
+		await vi.waitFor(() => expect(h.extensionUI.getEditorText()).toBe("DRAFTPASTED"));
+	});
+
+	it.each(["edit and revert", "selector round trip", "reset"])("discards delayed paste after %s", async (action) => {
+		let resolve!: (text: string) => void;
+		vi.mocked(clipboard.readClipboardText).mockImplementation(
+			() =>
+				new Promise((done) => {
+					resolve = done;
+				}),
+		);
+		const h = await setup();
+		await history(h);
+		const row = (await h.frame()).findIndex((line) => line.includes("DRAFT"));
+		h.terminal.sendInput(mouse(2, 3, row + 1));
+		expect(clipboard.readClipboardText).toHaveBeenCalledOnce();
+		if (action === "edit and revert") {
+			h.extensionUI.setEditorText("edited");
+			h.extensionUI.setEditorText("DRAFT");
+		} else if (action === "selector round trip") {
+			const answer = h.extensionUI.confirm("Wait", "temporary");
+			await h.frame();
+			h.terminal.sendInput("\x1b");
+			await answer;
+		} else h.internals.clearTranscript();
+		await h.frame();
+		resolve("STALE");
+		await h.frame();
+		expect(h.extensionUI.getEditorText()).toBe("DRAFT");
+	});
+
+	it("does not read the clipboard for transcript, footer, overlay or selector clicks", async () => {
+		const h = await setup();
+		await history(h);
+		h.terminal.sendInput(mouse(2, 2, 1));
+		h.terminal.sendInput(mouse(2, 2, h.terminal.rows));
+		const answer = h.extensionUI.confirm("Waiting", "Do not paste");
+		let frame = await h.frame();
+		const row = frame.findIndex((line) => line.includes("Waiting"));
+		h.terminal.sendInput(mouse(2, 2, row + 1));
+		expect(clipboard.readClipboardText).not.toHaveBeenCalled();
+		h.terminal.sendInput("\x1b");
+		await answer;
+		frame = await h.frame();
+		const draft = frame.findIndex((line) => line.includes("DRAFT"));
+		const overlay = h.internals.ui.showOverlay(new Text("OVERLAY"));
+		await h.frame();
+		h.terminal.sendInput(mouse(2, 2, draft + 1));
+		expect(clipboard.readClipboardText).not.toHaveBeenCalled();
+		overlay.hide();
+	});
+
+	it("right-clicks the actual editor to paste clipboard text without submitting", async () => {
+		const h = await setup();
+		await history(h);
+		const frame = await h.frame();
+		const row = frame.findIndex((line) => line.includes("DRAFT"));
+		expect(row).toBeGreaterThanOrEqual(0);
+		const editor = h.internals.editorContainer.children[0] as EditorComponent;
+		const submit = vi.spyOn(editor, "onSubmit");
+		h.terminal.sendInput(mouse(2, 3, row + 1));
+		await vi.waitFor(() => expect(h.extensionUI.getEditorText()).toBe("DRAFTPASTED café 界\nsecond line"));
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it.each([24, 40])("copies editor text without padding or soft-wrap newlines at width %s", async (columns) => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
+		const h = await setup(30, settings({ editorMaxHeightPercent: 50 }), columns);
+		const draft = "  FIRST alpha beta gamma delta epsilon\n\n    LAST café 界 é";
+		h.extensionUI.setEditorText(draft);
+		const frame = await h.frame();
+		const start = frame.findIndex((line) => line.includes("FIRST"));
+		const end = frame.findIndex((line) => line.includes("LAST"));
+		expect(start).toBeGreaterThanOrEqual(0);
+		expect(end).toBeGreaterThan(start);
+		for (const event of [mouse(0, 1, start + 1), mouse(32, columns, end + 1), `\x1b[<0;${columns};${end + 1}m`])
+			h.terminal.sendInput(event);
+		await h.frame();
+		h.terminal.sendInput("\x03");
+		await h.frame();
+		expect(copy).toHaveBeenCalledExactlyOnceWith(draft);
+	});
+
 	it.each([
 		["literal j", ["j"], false],
 		["encoded j", ["\x1b[106u"], false],
@@ -247,8 +384,10 @@ describe("retained interactive contracts", () => {
 		const end = frame.findLastIndex((line) => line.slice(0, 33).trim() === "```");
 		expect(start).toBeGreaterThanOrEqual(0);
 		expect(end).toBeGreaterThan(start);
-		for (const event of [mouse(0, 1, start + 1), mouse(32, 34, end + 1), `\x1b[<0;34;${end + 1}m`, "\x03"])
+		for (const event of [mouse(0, 1, start + 1), mouse(32, 34, end + 1), `\x1b[<0;34;${end + 1}m`])
 			h.terminal.sendInput(event);
+		await h.frame();
+		h.terminal.sendInput("\x03");
 		await h.frame();
 		expect(copy).toHaveBeenCalledExactlyOnceWith(text);
 	});
@@ -276,13 +415,15 @@ describe("retained interactive contracts", () => {
 		const end = frame.findIndex((line) => line.includes("LAST"));
 		expect(start).toBeGreaterThanOrEqual(0);
 		expect(end).toBeGreaterThan(start);
-		for (const event of [mouse(0, 1, start + 1), mouse(32, 34, end + 1), `\x1b[<0;34;${end + 1}m`, "\x03"])
+		for (const event of [mouse(0, 1, start + 1), mouse(32, 34, end + 1), `\x1b[<0;34;${end + 1}m`])
 			h.terminal.sendInput(event);
+		await h.frame();
+		h.terminal.sendInput("\x03");
 		await h.frame();
 		expect(copy).toHaveBeenCalledExactlyOnceWith(visible);
 	});
 
-	it("keeps a transcript selection from crossing into the dock", async () => {
+	it("does not jump into the dock before the transcript reaches the tail", async () => {
 		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
 		const h = await setup();
 		await history(h);
@@ -343,13 +484,15 @@ describe("retained interactive contracts", () => {
 				expect(Array.from({ length: 6 }, (_, column) => h.terminal.cell(18, column).inverse)).toEqual(
 					Array(6).fill(true),
 				);
-				expect(h.terminal.cell(0, 0).inverse).toBe(false);
+				expect(h.terminal.cell(0, 0).inverse).toBe(true);
 				h.terminal.sendInput("\x1b[<0;1;1m");
 				await h.frame();
 				expect(copy).not.toHaveBeenCalled();
 				h.terminal.sendInput(route === "right click" ? mouse(2, 2, 19) : "\x19");
 				await h.frame();
-				expect(copy).toHaveBeenCalledExactlyOnceWith("\nDOCK-A");
+				expect(copy).toHaveBeenCalledExactlyOnceWith(
+					`${Array.from({ length: 17 }, (_, i) => `HISTORY-${String(i).padStart(3, "0")}`).join("\n")}\n\nDOCK-A`,
+				);
 				expect(h.extensionUI.getEditorText()).toBe("DRAFT");
 				expect(h.internals.ui.getViewportState()!.offset).toBe(0);
 				expect((await h.frame()).join("\n")).not.toContain("Selection held");
@@ -385,7 +528,7 @@ describe("retained interactive contracts", () => {
 	});
 
 	it.each(["transcript", "dock"])(
-		"holds both regions through passive geometry changes during %s selection",
+		"updates both regions through passive geometry changes during %s selection",
 		async (origin) => {
 			const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
 			const h = await setup();
@@ -413,33 +556,29 @@ describe("retained interactive contracts", () => {
 				);
 			const heldInverse = inverse();
 			expect(heldInverse[selectedRow].slice(0, expected.length)).toEqual(Array(expected.length).fill(true));
-			const assertHeld = async (copyFailed = false) => {
-				const frame = await h.frame();
-				const visibleRows = copyFailed ? 23 : 24;
-				expect(frame.slice(0, visibleRows)).toEqual(selected.slice(0, visibleRows));
-				expect(inverse().slice(0, visibleRows)).toEqual(heldInverse.slice(0, visibleRows));
-				expect(h.internals.ui.getViewportState()).toMatchObject({ offset: 0, height: 17, followingTail: false });
-				return frame;
-			};
 			h.extensionUI.setWidget("above", () => new Text("GROW-1\nGROW-2\nGROW-3", 0, 0));
-			await assertHeld();
+			expect((await h.frame()).join("\n")).toContain("GROW-3");
 			h.extensionUI.setFooter(() => new Text("FOOTER-B\nFOOTER-C", 0, 0));
-			await assertHeld();
+			expect((await h.frame()).join("\n")).toContain("FOOTER-C");
 			h.extensionUI.setWidget("above", () => new Text(Array(40).fill("OVERSIZED").join("\n"), 0, 0));
-			await assertHeld();
+			expect((await h.frame()).join("\n")).toContain("Dock suspended");
 			h.extensionUI.setWidget("above", () => new Text("LATEST", 0, 0));
-			await assertHeld();
+			await h.frame();
+			const copied = origin === "dock" ? "LATEST" : "HISTORY-000";
+			const latestRow = origin === "dock" ? 17 : 0;
+			expect(Array.from({ length: copied.length }, (_, col) => h.terminal.cell(latestRow, col).inverse)).toEqual(
+				Array(copied.length).fill(true),
+			);
 			expect(copy).not.toHaveBeenCalled();
 			if (origin === "dock") {
 				copy.mockRejectedValueOnce(new Error("synthetic clipboard failure"));
 				h.terminal.sendInput("\x03");
 				await vi.waitFor(async () => expect((await h.frame())[23]).toContain("Copy failed"));
-				await assertHeld(true);
-				expect(copy).toHaveBeenCalledExactlyOnceWith(expected);
+				expect(copy).toHaveBeenCalledExactlyOnceWith(copied);
 			}
 			h.terminal.sendInput("\x03");
 			await vi.waitFor(() => expect(copy).toHaveBeenCalledTimes(origin === "dock" ? 2 : 1));
-			expect(copy.mock.calls.every(([text]) => text === expected)).toBe(true);
+			expect(copy.mock.calls.every(([text]) => text === copied)).toBe(true);
 			const latest = await h.frame();
 			expect(latest[0].slice(0, 59).trimEnd()).toBe("HISTORY-000");
 			expect(latest.slice(16).map((line) => line.trimEnd())).toEqual([

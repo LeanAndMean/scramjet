@@ -356,7 +356,20 @@ export class TUI extends Container {
 		if (!options.minimumSize) this.viewportMinimumPainted = false;
 		this.removeViewportInput?.();
 		this.viewportRevealFocus = false;
-		this.viewport = new RetainedViewport(options, () => this.requestRender());
+		this.viewport = new RetainedViewport(
+			{
+				...options,
+				requestPaste: (component) => {
+					if (
+						this.isComponentVisible(component) &&
+						this.isComponentRenderComplete(component) &&
+						this.isViewportFrameFlushed()
+					)
+						options.requestPaste?.(component);
+				},
+			},
+			() => this.requestRender(),
+		);
 		this.removeViewportInput = this.addInputListener((data) => {
 			const protocol = data === "\x1b[I" || data === "\x1b[O" || /^\x1b\[\d+;\d+;\d+t$/.test(data);
 			if (

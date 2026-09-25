@@ -129,7 +129,7 @@ EXPECTED_INTERACTION_CHECKS = {
     "readingAnchorSurvivesOtherChildUpdate", "readingAnchorSurvivesResize", "readingAnchorSurvivesResizeBack",
     "readingInsideRunningBatch", "rightClickClipboardExactUnicode", "rightClickRequestsCopy",
     "rightWithoutSelectionDoesNotCopyOrPaste", "scrolledSelectionClipboardExact", "selectionAutoscrolls",
-    "selectionHoldsDuringUpdates", "subsequentApprovalActivation", "termiosRestored", "checkoutProvenanceMatches",
+    "selectionAllowsLiveUpdates", "editorRightClickPastesWithoutSubmit", "editorCopyOmitsSoftWraps", "selectionCrossesIntoEditor", "selectionCrossesIntoTranscript", "subsequentApprovalActivation", "termiosRestored", "checkoutProvenanceMatches",
     "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail", "keyboardBrowsingReturnsToTail",
     "nativePresentationTogglePreservesReading", "settingsUndocksLive", "settingsRedocksLive",
     "settingsWheelChangeApplies", "configuredWheelDistance", "settingsEditorHeightChangeApplies", "nativeInputHeightCeiling",
@@ -654,7 +654,9 @@ class PasteEvidenceTests(unittest.TestCase):
                     try:
                         wait_for(lambda state: state.get("phase") == "image" if "--safety" in args else state.get("totalRows", 0) > 200)
                         if "--journey" in args:
-                            os.write(master, b"\x1b[<0;1;1M\x1b[<32;8;1M\x1b[<0;8;1m\x03")
+                            os.write(master, b"\x1b[<0;1;1M\x1b[<32;8;1M\x1b[<0;8;1m")
+                            wait_for(lambda state: state.get("selectionPainted") and state.get("frameFlushed"))
+                            os.write(master, b"\x03")
                             wait_for(lambda state: state.get("keyCopy") == 1)
                             os.write(master, b"\x1b[200~ROW-001\x1b[201~")
                             wait_for(lambda state: state.get("pasteMatches") == 1)
@@ -819,6 +821,26 @@ class NativeImageConfinementTests(unittest.TestCase):
                 actual = eval(compile(ast.Expression(body=predicate), "terminal-safety.py", "eval"), context)()
                 self.assertEqual(actual, expected)
                 context["pixels"].assert_called_once_with("dock-grown")
+
+
+class SeamCopyEvidenceTests(unittest.TestCase):
+    def test_previous_clipboard_cannot_satisfy_a_new_seam_copy(self):
+        source = interaction_source()
+        predicate = next(node.args[1] for node in ast.walk(source) if isinstance(node, ast.Call)
+                         and isinstance(node.func, ast.Name) and node.func.id == "check"
+                         and node.args and isinstance(node.args[0], ast.IfExp)
+                         and isinstance(node.args[0].body, ast.Constant)
+                         and node.args[0].body.value == "selectionCrossesIntoTranscript")
+        expected_text = "SEAM-ONE\nSEAM-TWO\n\nDRAFT-SEAM"
+        for count, text, selected, expected in ((2, expected_text, False, False),
+                                               (3, expected_text, False, True),
+                                               (3, "SEAM-SENTINEL", False, False),
+                                               (3, expected_text, True, False)):
+            with self.subTest(count=count, text=text, selected=selected):
+                context = {"copy_count": 2, "state": lambda: {"keyCopy": count, "selectionActive": selected},
+                           "clipboard": lambda: text}
+                actual = eval(compile(ast.Expression(body=predicate), "terminal-probe.py", "eval"), context)()
+                self.assertEqual(actual, expected)
 
 
 class NoSelectionPasteTests(unittest.TestCase):

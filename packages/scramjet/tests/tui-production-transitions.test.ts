@@ -265,7 +265,7 @@ it("keeps card separators, reading anchors and held selection coherent during ba
 	h.terminal.sendInput("\x1b[<0;8;1m");
 	h.partialResult.details.results[2].messages[0].content[0].text = "CARD-3\nREPLACED";
 	await update();
-	expect(await rows()).toEqual(expected);
+	expect(await rows()).toEqual([expected[0], " REPLACED", ...expected.slice(2)]);
 	for (let col = 1; col < 7; col++) expect(h.terminal.cell(0, col).inverse).toBe(true);
 	expect(h.terminal.cell(0, 47).inverse).toBe(false);
 	h.terminal.sendInput("\x1b");

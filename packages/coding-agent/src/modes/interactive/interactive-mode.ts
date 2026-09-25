@@ -82,7 +82,7 @@ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.js";
-import { copyToClipboard } from "../../utils/clipboard.js";
+import { copyToClipboard, readClipboardText } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
 import { parseGitUrl } from "../../utils/git.js";
 import { getCwdRelativePath } from "../../utils/paths.js";
@@ -379,6 +379,10 @@ export class InteractiveMode {
 		this.tuiMode = this.settingsManager.getTuiMode();
 		// SCRAMJET-DIVERGENCE: retained interactive rendering and injectable terminals.
 		this.ui = new TUI(options.terminal ?? new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
+		this.ui.addInputListener((data) => {
+			if (!isKeyRelease(data) && !/^\x1b\[<\d+;\d+;\d+m$/.test(data)) this.clipboardPasteGeneration++;
+			return undefined;
+		});
 		this.headerContainer = new Container();
 		this.committedChatContainer = new Container();
 		this.chatContainer = new Container();
@@ -426,10 +430,51 @@ export class InteractiveMode {
 	}
 
 	// SCRAMJET-DIVERGENCE: preserve production ownership while making mutable overflow browseable.
+	private clipboardPastePending = false;
+	private clipboardPasteGeneration = 0;
+	private clipboardPasteOwner?: Component;
+
+	private async pasteFromClipboard(): Promise<void> {
+		const editor = this.editor;
+		const session = this.session;
+		const draft = editor.getText();
+		const generation = this.clipboardPasteGeneration;
+		const current = () =>
+			generation === this.clipboardPasteGeneration &&
+			this.editor === editor &&
+			this.session === session &&
+			editor.getText() === draft &&
+			this.editorContainer.children.length === 1 &&
+			this.editorContainer.children[0] === editor &&
+			this.ui.isComponentFocused(editor) &&
+			this.ui.isComponentVisible(this.editorContainer) &&
+			this.ui.isComponentRenderComplete(this.editorContainer);
+		if (this.clipboardPastePending || !current()) return;
+		this.clipboardPastePending = true;
+		try {
+			const text = await readClipboardText();
+			if (!current()) return;
+			const safeText = stripVTControlCharacters(text).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+			editor.handleInput(`\x1b[200~${safeText}\x1b[201~`);
+			this.ui.requestRender();
+		} catch (error) {
+			if (current()) this.showError(`Paste failed: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			this.clipboardPastePending = false;
+		}
+	}
+
 	private configureRetainedViewport(): void {
 		this.ui.configureViewport({
 			getBlocks: () =>
 				this.ui.children.flatMap((component) => {
+					if (
+						component === this.editorContainer &&
+						this.clipboardPasteOwner !== this.editorContainer.children[0]
+					) {
+						this.clipboardPasteOwner = this.editorContainer.children[0];
+						this.clipboardPasteGeneration++;
+					}
 					if (
 						component instanceof Container &&
 						(component === this.committedChatContainer || component === this.chatContainer)
@@ -464,6 +509,9 @@ export class InteractiveMode {
 				}),
 			keybindings: this.keybindings,
 			copy: copyToClipboard,
+			requestPaste: (component) => {
+				if (component === this.editorContainer) void this.pasteFromClipboard();
+			},
 			minimumSize: { columns: 12, rows: 3 },
 			handleBlockedInput: (data) => {
 				const selector = this.editorContainer.children[0];
@@ -560,6 +608,7 @@ export class InteractiveMode {
 	}
 
 	private clearTranscript(): void {
+		this.clipboardPasteGeneration++;
 		if (this.ui.getViewportState()) this.ui.resetViewport();
 		this.pendingToolFinalizations = new Set();
 		const tools = new Set([
@@ -2789,6 +2838,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 
 		this.defaultEditor.onChange = (text: string) => {
+			this.clipboardPasteGeneration++;
 			const wasBashMode = this.isBashMode;
 			this.isBashMode = text.trimStart().startsWith("!");
 			if (wasBashMode !== this.isBashMode) {

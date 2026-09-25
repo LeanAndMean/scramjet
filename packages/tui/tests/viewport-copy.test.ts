@@ -14,8 +14,10 @@ async function copyAll(component: Component, width: number) {
 	const viewport = new RetainedViewport({ getBlocks: () => [{ component }], copy });
 	viewport.update(width, rows + 1);
 	viewport.markPainted();
-	for (const event of ["\x1b[<0;1;1M", `\x1b[<32;${width + 1};${rows}M`, `\x1b[<0;${width + 1};${rows}m`, "\x03"])
+	for (const event of ["\x1b[<0;1;1M", `\x1b[<32;${width + 1};${rows}M`, `\x1b[<0;${width + 1};${rows}m`])
 		viewport.handleInput(event, false, false);
+	viewport.markPainted();
+	viewport.handleInput("\x03", false, false);
 	await Promise.resolve();
 	viewport.cancelInteraction();
 	return copy.mock.calls[0]?.[0];
@@ -104,8 +106,9 @@ describe("retained copy provenance", () => {
 		]);
 		viewport.update(5, 5);
 		viewport.markPainted();
-		for (const event of ["\x1b[<0;1;1M", "\x1b[<32;6;2M", "\x1b[<0;6;2m", "\x03"])
-			viewport.handleInput(event, false, false);
+		for (const event of ["\x1b[<0;1;1M", "\x1b[<32;6;2M", "\x1b[<0;6;2m"]) viewport.handleInput(event, false, false);
+		viewport.markPainted();
+		viewport.handleInput("\x03", false, false);
 		await Promise.resolve();
 		expect(copy).toHaveBeenCalledExactlyOnceWith("other\nbeta");
 		viewport.cancelInteraction();
@@ -204,6 +207,7 @@ describe("retained copy provenance", () => {
 		viewport.update(5, 5);
 		viewport.markPainted();
 		for (const event of ["\x1b[<0;1;1M", "\x1b[<32;6;2M", "\x1b[<0;6;2m"]) viewport.handleInput(event, false, false);
+		viewport.markPainted();
 		text.setText("alpha\nbeta");
 		viewport.update(5, 5);
 		viewport.handleInput("\x03", false, false);
@@ -224,8 +228,9 @@ describe("retained copy provenance", () => {
 		const viewport = new RetainedViewport({ getBlocks: () => [{ component: text }], copy });
 		viewport.update(6, 6);
 		viewport.markPainted();
-		for (const event of ["\x1b[<0;3;1M", "\x1b[<32;4;3M", "\x1b[<0;4;3m", "\x03"])
-			viewport.handleInput(event, false, false);
+		for (const event of ["\x1b[<0;3;1M", "\x1b[<32;4;3M", "\x1b[<0;4;3m"]) viewport.handleInput(event, false, false);
+		viewport.markPainted();
+		viewport.handleInput("\x03", false, false);
 		await Promise.resolve();
 		expect(copy).toHaveBeenCalledExactlyOnceWith("pha beta gam");
 		viewport.cancelInteraction();
@@ -244,8 +249,10 @@ describe("retained copy provenance", () => {
 					.lines.slice(0, 2)
 					.map((line) => line.trimEnd()),
 			).toEqual(["alpha", "beta"]);
-			for (const event of ["\x1b[<0;1;1M", "\x1b[<32;1;2M", "\x1b[<0;1;2m", "\x03"])
+			for (const event of ["\x1b[<0;1;1M", "\x1b[<32;1;2M", "\x1b[<0;1;2m"])
 				viewport.handleInput(event, false, false);
+			viewport.markPainted();
+			viewport.handleInput("\x03", false, false);
 			await Promise.resolve();
 			expect(copy).toHaveBeenCalledExactlyOnceWith("alpha\n");
 		} finally {
@@ -278,8 +285,9 @@ describe("retained copy provenance", () => {
 		});
 		viewport.update(10, 5);
 		viewport.markPainted();
-		for (const event of ["\x1b[<0;1;1M", "\x1b[<32;4;1M", "\x1b[<0;4;1m", "\x03"])
-			viewport.handleInput(event, false, false);
+		for (const event of ["\x1b[<0;1;1M", "\x1b[<32;4;1M", "\x1b[<0;4;1m"]) viewport.handleInput(event, false, false);
+		viewport.markPainted();
+		viewport.handleInput("\x03", false, false);
 		await Promise.resolve();
 		expect(copy).toHaveBeenCalledExactlyOnceWith("e\u0301界");
 		viewport.cancelInteraction();

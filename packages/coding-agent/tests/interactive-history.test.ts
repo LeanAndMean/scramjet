@@ -436,7 +436,7 @@ describe("shipped printable-key consumers", () => {
 });
 
 describe("retained transcript selection", () => {
-	it("copies the painted row when wheel and selection input arrive before repaint", async () => {
+	it("targets the painted row during batched selection but requires a highlight paint before copying", async () => {
 		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
 		const tool = defineTool({
 			name: "selection_rows",
@@ -462,6 +462,9 @@ describe("retained transcript selection", () => {
 			for (const data of ["\x1b[<64;2;2M", "\x1b[<0;1;2M", "\x1b[<32;7;2M", "\x1b[<0;7;2m", "\x1b[<2;2;2M"])
 				h.terminal.sendInput(data);
 			expect(h.terminal.writesSince(mark)).toBe("");
+			expect(copy).not.toHaveBeenCalled();
+			await h.frame();
+			h.terminal.sendInput("\x1b[<2;2;2M");
 			expect(copy).toHaveBeenCalledExactlyOnceWith("ROW-21");
 		} finally {
 			copy.mockRestore();
@@ -1225,6 +1228,28 @@ describe("interactive assistant history", () => {
 		expect(output).toContain("\x1b[3J");
 		expect(output).toContain("COMPACTED-SESSION");
 		expect(terminal.bufferLines().join("\n")).not.toContain("TREE-SESSION");
+	});
+
+	it("renders protocol-looking prose verbatim without serializing typed tool calls into assistant text", () => {
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", false);
+		const text =
+			'mentalassistant to=functions.report_scramjet_command_status_commentary /json {"status":"completed"}\n<tool name="functions.report_scramjet_command_status">Reported completed.</tool>';
+		const message = assistant(text);
+		message.content.push({
+			type: "toolCall",
+			id: "real-call",
+			name: "report_scramjet_command_status",
+			arguments: { summary: "STRUCTURED-ONLY", status: "completed" },
+		});
+		component.updateContent(message);
+		for (const finalized of [false, true]) {
+			component.setFinalized(finalized);
+			const rendered = component.render(240).join("\n");
+			expect(rendered).toContain("mentalassistant to=functions.report_scramjet_command_status_commentary");
+			expect(rendered).toContain("Reported completed.");
+			expect(rendered).not.toContain("STRUCTURED-ONLY");
+		}
+		expect(message.content[0]).toEqual({ type: "text", text });
 	});
 
 	it("suppresses transcript zones on mutable previews and emits complete zones after finalization", () => {

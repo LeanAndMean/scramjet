@@ -1,21 +1,30 @@
 import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
-import { execSync, spawn } from "child_process";
+import { execFile, execSync, spawn } from "child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RetainedViewport } from "../../tui/src/viewport.js";
-import { copyToClipboard } from "../src/utils/clipboard.js";
+import { copyToClipboard, readClipboardText } from "../src/utils/clipboard.js";
 
-vi.mock("child_process", () => ({ spawn: vi.fn(), execSync: vi.fn() }));
+vi.mock("child_process", () => ({ spawn: vi.fn(), execSync: vi.fn(), execFile: vi.fn() }));
 vi.mock("os", () => ({ platform: () => "linux" }));
 vi.mock("../src/utils/clipboard-native.js", () => ({ clipboard: null }));
 vi.mock("../src/utils/clipboard-image.js", () => ({ isWaylandSession: () => true }));
 
 beforeEach(() => {
 	vi.stubEnv("WAYLAND_DISPLAY", "synthetic");
-	for (const key of ["DISPLAY", "TERMUX_VERSION", "SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION"])
+	for (const key of [
+		"DISPLAY",
+		"TERMUX_VERSION",
+		"SSH_CONNECTION",
+		"SSH_CLIENT",
+		"MOSH_CONNECTION",
+		"WSL_DISTRO_NAME",
+		"WSL_INTEROP",
+	])
 		vi.stubEnv(key, "");
 	vi.mocked(execSync).mockReset().mockReturnValue(Buffer.alloc(0));
 	vi.mocked(spawn).mockReset();
+	vi.mocked(execFile).mockReset();
 });
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -35,6 +44,57 @@ function backend() {
 	vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 	return child;
 }
+
+describe("clipboard text reading", () => {
+	function respond(text: string, error: Error | null = null) {
+		vi.mocked(execFile).mockImplementationOnce(((
+			_file: string,
+			_args: string[],
+			_options: unknown,
+			callback: (error: Error | null, stdout: string) => void,
+		) => {
+			callback(error, text);
+		}) as typeof execFile);
+	}
+
+	it("reads the Windows clipboard on WSL with exact Unicode and trailing newlines", async () => {
+		vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+		respond("café 界 é\r\n\r\n");
+		expect(await readClipboardText()).toBe("café 界 é\r\n\r\n");
+		expect(execFile).toHaveBeenCalledWith(
+			"powershell.exe",
+			expect.arrayContaining(["-NoProfile", "-STA", expect.stringContaining("UTF8Encoding")]),
+			expect.objectContaining({ timeout: 5000, maxBuffer: 10 * 1024 * 1024 }),
+			expect.any(Function),
+		);
+	});
+
+	it("preserves empty text without falling through to another clipboard", async () => {
+		respond("");
+		expect(await readClipboardText()).toBe("");
+		expect(execFile).toHaveBeenCalledExactlyOnceWith(
+			"wl-paste",
+			["--no-newline", "--type", "text"],
+			expect.any(Object),
+			expect.any(Function),
+		);
+	});
+
+	it("falls back after an observable local backend failure", async () => {
+		vi.stubEnv("DISPLAY", "synthetic");
+		respond("", new Error("unavailable"));
+		respond("X11");
+		expect(await readClipboardText()).toBe("X11");
+		expect(vi.mocked(execFile).mock.calls.map(([file]) => file)).toEqual(["wl-paste", "xclip"]);
+	});
+
+	it.each(["remote", "unavailable"])("reports %s clipboard access without a remote query", async (reason) => {
+		if (reason === "remote") vi.stubEnv("SSH_CONNECTION", "synthetic");
+		else vi.stubEnv("WAYLAND_DISPLAY", "");
+		await expect(readClipboardText()).rejects.toThrow(/terminal's Paste/);
+		expect(execFile).not.toHaveBeenCalled();
+	});
+});
 
 describe("clipboard backend settlement", () => {
 	it("awaits Wayland stdin and successful parent exit with a bounded asynchronous spawn", async () => {
@@ -108,8 +168,9 @@ describe("clipboard backend settlement", () => {
 		const viewport = new RetainedViewport({ getBlocks: () => [{ component }], copy: copyToClipboard });
 		viewport.update(30, 4);
 		viewport.markPainted();
-		for (const data of ["\x1b[<0;1;1M", "\x1b[<32;10;1M", "\x1b[<0;10;1m", "\x03"])
-			viewport.handleInput(data, false, false);
+		for (const data of ["\x1b[<0;1;1M", "\x1b[<32;10;1M", "\x1b[<0;10;1m"]) viewport.handleInput(data, false, false);
+		viewport.markPainted();
+		viewport.handleInput("\x03", false, false);
 		expect(viewport.notice).toBeUndefined();
 		expect(viewport.state.height).toBe(4);
 		child.emit("exit", 7, null);

@@ -41,7 +41,7 @@ $requiredChecks = @(
     'desktopThumbDragReachesEnd', 'desktopTrackClickReachesStart', 'ordinaryDesktopDragSelects',
     'rightClickRequestsCopy', 'rightClickClipboardExactUnicode', 'rightWithoutSelectionDoesNotCopyOrPaste',
     'controlCCopiesSelection', 'desktopPasteRoundTrip', 'keyboardEditingCoexists', 'longSessionMiddleReachable',
-    'selectionAutoscrolls', 'selectionHoldsDuringUpdates', 'scrolledSelectionClipboardExact',
+    'selectionAutoscrolls', 'selectionAllowsLiveUpdates', 'scrolledSelectionClipboardExact', 'editorRightClickPastesWithoutSubmit',
     'firstFourRunningCardsReachable', 'allEightCardsReachableBeforeCompletion', 'readingInsideRunningBatch',
     'readingAnchorSurvivesOtherChildUpdate', 'nativeWidthAndHeightChanged', 'readingAnchorSurvivesResize',
     'nativeSizeRestored', 'readingAnchorSurvivesResizeBack', 'completeApprovalContextReachable',
@@ -54,7 +54,8 @@ $requiredChecks = @(
     'heldWheelDownCopiesExact', 'heldWheelUpCopiesExact', 'heldWheelReversalCopiesExact',
     'mixedWheelDownCopiesExact', 'mixedWheelUpCopiesExact', 'mixedWheelReversalCopiesExact',
     'editorHomeEndStable', 'transcriptControlHomeEnd', 'selectionKeepsLayout',
-    'newUserMessageFollowsTail', 'copyOmitsPaddingAndSoftWraps'
+    'newUserMessageFollowsTail', 'copyOmitsPaddingAndSoftWraps', 'editorCopyOmitsSoftWraps',
+    'selectionCrossesIntoEditor', 'selectionCrossesIntoTranscript'
 )
 $report.sourceRevision = $SourceRevision
 $report.viewportKeys = 'Alt+PageUp/Alt+PageDown'
@@ -341,6 +342,16 @@ try {
     [void](Check 'controlCCopiesSelection' { (State).keyCopy -gt 0 -and [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expected, [StringComparison]::Ordinal) })
     Key 86 @(17, 16)
     [void](Check 'desktopPasteRoundTrip' { (State).pasteMatches -gt 0 })
+    $pasteBefore = State
+    $pasteText = "RIGHT-PASTE caf$([char]0xE9) $([char]0x754C)`nsecond line"
+    [System.Windows.Forms.Clipboard]::SetText($pasteText)
+    $editorRow = @(0..($pasteBefore.painted.Count - 1) | Where-Object { $pasteBefore.painted[$_].Contains('Synthetic editor') })[0]
+    if ($null -eq $editorRow) { throw 'Paste target editor is not painted' }
+    $point = Cell 3 ($editorRow + 1)
+    Mouse 8 $point[0] $point[1]
+    Mouse 16 $point[0] $point[1]
+    [void](Check 'editorRightClickPastesWithoutSubmit' { (State).editor -ceq ($pasteBefore.editor + $pasteText) -and (State).submissions -eq $pasteBefore.submissions })
+    Screenshot 'editor-right-paste'
     Check-HeldWheelSelections $expected.Substring(7)
     Fixture-Command 'editor'
     foreach ($code in @(65, 66, 67, 37, 8)) { Key $code }
@@ -430,7 +441,7 @@ try {
     $expectedMultiline = ((2..$lastNumber | ForEach-Object { 'ROW-' + $_.ToString('000') + $suffix }) -join "`n")
     $heldFrame = State
     Fixture-Command 'update'
-    [void](Check 'selectionHoldsDuringUpdates' { (State).selectionActive -and (State).updates -gt $heldFrame.updates -and ((State).painted -join "`n") -ceq ($heldFrame.painted -join "`n") })
+    [void](Check 'selectionAllowsLiveUpdates' { (State).selectionActive -and (State).updates -gt $heldFrame.updates -and ((State).painted -join "`n").Contains("LIVE-UPDATES-$((State).updates)") -and ((State).painted -join "`n") -cne ($heldFrame.painted -join "`n") })
     Screenshot 'selection-across-scroll'
     Key 67 @(17)
     [void](Check 'scrolledSelectionClipboardExact' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expectedMultiline, [StringComparison]::Ordinal) -and -not (State).selectionActive })
@@ -520,6 +531,32 @@ try {
     $copyExpected = ('COPY-PROSE ' + ('alpha beta gamma ' * 18)).TrimEnd() + "`n`n" + '```ts' + "`n    const value = 1;`n" + '```'
     [void](Check 'copyOmitsPaddingAndSoftWraps' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $copyExpected, [StringComparison]::Ordinal) -and -not (State).selectionActive })
     Screenshot 'copy-prose'
+    Fixture-Command 'copy-editor'
+    $copyFrame = State
+    $last = 'caf' + [char]0xE9 + ' ' + [char]0x754C
+    $startRow = @(0..($copyFrame.painted.Count - 1) | Where-Object { $copyFrame.painted[$_].Contains('COPY-EDITOR') })[0]
+    $endRow = @(0..($copyFrame.painted.Count - 1) | Where-Object { $copyFrame.painted[$_].Trim() -ceq $last })[-1]
+    if ($null -eq $startRow -or $null -eq $endRow -or $endRow -le $startRow) { throw 'Wrapped editor draft is not fully visible' }
+    Drag (Cell 1 ($startRow + 1)) (Cell ($columns - 1) ($endRow + 1))
+    Key 67 @(17)
+    $copyExpected = ('COPY-EDITOR ' + ('alpha beta gamma ' * 12)).TrimEnd() + "`n`n    " + $last
+    [void](Check 'editorCopyOmitsSoftWraps' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $copyExpected, [StringComparison]::Ordinal) -and -not (State).selectionActive })
+    foreach ($reverse in @($false, $true)) {
+        Fixture-Command 'copy-seam'
+        $seamFrame = State
+        $startRow = @(0..($seamFrame.painted.Count - 1) | Where-Object { $seamFrame.painted[$_].Trim() -ceq 'SEAM-ONE' })[0]
+        $endRow = @(0..($seamFrame.painted.Count - 1) | Where-Object { $seamFrame.painted[$_].Trim() -ceq 'DRAFT-SEAM' })[0]
+        if ($null -eq $startRow -or $null -eq $endRow) { throw 'Seam fixture is not fully visible' }
+        [System.Windows.Forms.Clipboard]::SetText('SEAM-SENTINEL')
+        $copyCount = (State).keyCopy
+        if ($reverse) { Drag (Cell 11 ($endRow + 1)) (Cell 1 ($startRow + 1)) }
+        else { Drag (Cell 1 ($startRow + 1)) (Cell 11 ($endRow + 1)) }
+        if (-not (Wait-For { (State).selectionPainted -and (State).frameFlushed })) { throw 'Cross-seam selection was not painted' }
+        Key 67 @(17)
+        $name = if ($reverse) { 'selectionCrossesIntoTranscript' } else { 'selectionCrossesIntoEditor' }
+        [void](Check $name { (State).keyCopy -eq ($copyCount + 1) -and [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), "SEAM-ONE`nSEAM-TWO`n`nDRAFT-SEAM", [StringComparison]::Ordinal) -and -not (State).selectionActive })
+    }
+    Screenshot 'copy-seam'
     Key 81 @(17)
     [void](Check 'orderlyExit' { (State).stopped -eq $true -and (Test-Path (Join-Path $OutputDirectory 'stty-after.txt')) })
     [void](Check 'termiosRestored' { (State).termiosBefore -and (State).termiosBefore -ceq (State).termiosAfter })

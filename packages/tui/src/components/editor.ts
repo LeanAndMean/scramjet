@@ -2,6 +2,7 @@ import type { AutocompleteProvider, AutocompleteSuggestions } from "../autocompl
 import { getKeybindings } from "../keybindings.js";
 import { decodePrintableKey, matchesKey } from "../keys.js";
 import { KillRing } from "../kill-ring.js";
+import { getRenderedCopy, type RenderedCopyRow, setRenderedCopy } from "../render-copy.js";
 import type { SpellcheckProvider, SpellcheckRange } from "../spellcheck.js";
 import { type Component, CURSOR_MARKER, type Focusable, type TUI } from "../tui.js";
 import { UndoStack } from "../undo-stack.js";
@@ -542,7 +543,14 @@ export class Editor implements Component, Focusable {
 		// Emit hardware cursor marker only when focused and not showing autocomplete
 		const emitCursorMarker = this.focused && !this.autocompleteState;
 
-		for (const layoutLine of visibleLines) {
+		// SCRAMJET-DIVERGENCE: distinguish draft wraps from editor decoration when copying.
+		const copyRows: RenderedCopyRow[] = result.map(() => null);
+		for (const [index, layoutLine] of visibleLines.entries()) {
+			copyRows.push({
+				start: paddingX,
+				end: paddingX + visibleWidth(layoutLine.text),
+				after: visibleLines[index + 1]?.logicalLine === layoutLine.logicalLine ? "" : undefined,
+			});
 			let displayText = layoutLine.text;
 			let lineVisibleWidth = visibleWidth(layoutLine.text);
 			let cursorInPadding = false;
@@ -632,8 +640,9 @@ export class Editor implements Component, Focusable {
 		// Render bottom border (with scroll indicator if more content below)
 		const linesBelow = layoutLines.length - (this.scrollOffset + visibleLines.length);
 		if (maximumRows < 3) {
-			return result;
+			return setRenderedCopy(result, copyRows);
 		}
+		copyRows.push(null);
 		if (linesBelow > 0) {
 			const indicator = `─── ↓ ${linesBelow} more `;
 			const remaining = width - visibleWidth(indicator);
@@ -645,14 +654,17 @@ export class Editor implements Component, Focusable {
 		// Add autocomplete list if active
 		if (this.autocompleteState && this.autocompleteList) {
 			const autocompleteResult = this.autocompleteList.render(contentWidth);
-			for (const line of autocompleteResult) {
+			const autocompleteCopy = getRenderedCopy(autocompleteResult);
+			for (const [index, line] of autocompleteResult.entries()) {
+				const source = autocompleteCopy[index];
+				copyRows.push(source ? { ...source, start: source.start + paddingX, end: source.end + paddingX } : null);
 				const lineWidth = visibleWidth(line);
 				const linePadding = " ".repeat(Math.max(0, contentWidth - lineWidth));
 				result.push(`${leftPadding}${line}${linePadding}${rightPadding}`);
 			}
 		}
 
-		return result;
+		return setRenderedCopy(result, copyRows);
 	}
 
 	handleInput(data: string): void {

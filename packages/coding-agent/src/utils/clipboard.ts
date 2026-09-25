@@ -1,4 +1,4 @@
-import { execSync, spawn } from "child_process";
+import { execFile, execSync, spawn } from "child_process";
 import { platform } from "os";
 import { isWaylandSession } from "./clipboard-image.js";
 import { clipboard } from "./clipboard-native.js";
@@ -30,6 +30,67 @@ function emitOsc52(text: string): boolean {
 	}
 	process.stdout.write(`\x1b]52;c;${encoded}\x07`);
 	return true;
+}
+
+// SCRAMJET-DIVERGENCE: mouse reporting replaces the terminal's editor right-click paste.
+export async function readClipboardText(): Promise<string> {
+	if (isRemoteSession()) throw new Error("Use your terminal's Paste command in remote sessions");
+	const p = platform();
+	const wsl = p === "linux" && Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP);
+	if (clipboard && !wsl && p !== "linux") {
+		try {
+			return await clipboard.getText();
+		} catch {
+			// The platform command remains available if the optional addon fails.
+		}
+	}
+	const commands: [string, string[]][] =
+		wsl || p === "win32"
+			? [
+					[
+						"powershell.exe",
+						[
+							"-NoProfile",
+							"-NonInteractive",
+							"-STA",
+							"-Command",
+							"Add-Type -AssemblyName System.Windows.Forms; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::Write([System.Windows.Forms.Clipboard]::GetText())",
+						],
+					],
+				]
+			: p === "darwin"
+				? [["pbpaste", []]]
+				: process.env.TERMUX_VERSION
+					? [["termux-clipboard-get", []]]
+					: [
+							...(process.env.WAYLAND_DISPLAY
+								? [["wl-paste", ["--no-newline", "--type", "text"]] as [string, string[]]]
+								: []),
+							...(process.env.DISPLAY
+								? ([
+										["xclip", ["-selection", "clipboard", "-o"]],
+										["xsel", ["--clipboard", "--output"]],
+									] as [string, string[]][])
+								: []),
+						];
+	for (const [command, args] of commands) {
+		try {
+			return await new Promise<string>((resolve, reject) => {
+				execFile(
+					command,
+					args,
+					{ encoding: "utf8", timeout: 5000, maxBuffer: 10 * 1024 * 1024, killSignal: "SIGKILL" },
+					(error, stdout) => {
+						if (error) reject(error);
+						else resolve(stdout);
+					},
+				);
+			});
+		} catch {
+			// Try the next local backend without requesting remote clipboard access.
+		}
+	}
+	throw new Error("Cannot read clipboard text; use your terminal's Paste command");
 }
 
 export async function copyToClipboard(text: string): Promise<void> {
