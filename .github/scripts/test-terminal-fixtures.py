@@ -789,6 +789,60 @@ class MacSafetyOwnershipTests(unittest.TestCase):
         self.opener.kill.assert_not_called()
         return self.context["report"]["passed"]
 
+    def test_image_phase_does_not_bypass_unresolved_native_consent(self):
+        self.assert_unresolved_image_consent_blocks_graphics(pressed=False)
+
+    def test_successful_allow_action_does_not_bypass_persistent_native_consent(self):
+        self.assert_unresolved_image_consent_blocks_graphics(pressed=True)
+
+    def test_resolved_native_consent_permits_graphics_observation(self):
+        self.run_image_consent_journey(visible=False, pressed=False)
+
+    def assert_unresolved_image_consent_blocks_graphics(self, pressed):
+        self.run_image_consent_journey(visible=True, pressed=pressed)
+
+    def run_image_consent_journey(self, visible, pressed):
+        self.current.return_value = {"phase": "image", "protocol": "iterm2", "sourceRevision": "test-head", "sourceDirty": False}
+        self.context["report"]["commit"] = "test-head"
+        original_run = self.context["run"].side_effect
+        def run(*args, **kwargs):
+            if args[0] == str(self.output / "events"):
+                if args[1] == "image-consent-pid":
+                    self.assertEqual(args[2], "42")
+                    return json.dumps({"visible": visible, "remembered": False, "pressed": pressed})
+                if args[1] in ("press", "press-pid") and args[-1] in ("Remember my choice", "Yes"):
+                    return json.dumps({"pressed": pressed})
+            return original_run(*args, **kwargs)
+        self.context["run"].side_effect = run
+        clock = [0.0]
+        self.context["time"].monotonic.side_effect = lambda: clock[0]
+        self.context["time"].sleep.side_effect = lambda duration: clock.__setitem__(0, clock[0] + duration)
+        def wait(predicate, seconds=10):
+            deadline = clock[0] + seconds
+            while clock[0] < deadline:
+                if predicate():
+                    return True
+                self.context["time"].sleep(0.1)
+            return False
+        self.context["wait"] = wait
+        graphics = Mock(return_value=1000)
+        self.context["pixels"] = graphics
+        self.context["image_confined"] = lambda _name: True
+        self.context["check"] = lambda _name, predicate, **_kwargs: self.assertTrue(predicate())
+        startup_index = next(i for i, node in enumerate(self.outer.body) if isinstance(node, ast.If)
+                             and isinstance(node.test, ast.Name) and node.test.id == "mac")
+        graphics_index = next(i for i, node in enumerate(self.outer.body) if isinstance(node, ast.Expr)
+                              and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                              and node.value.func.id == "check" and node.value.args[0].value == "nativeOversizedImageVisible")
+        journey = compile(ast.Module(body=self.outer.body[startup_index:graphics_index + 1], type_ignores=[]), "terminal-safety.py", "exec")
+        if visible:
+            with self.assertRaisesRegex(RuntimeError, "[Cc]onsent"):
+                exec(journey, self.context)
+            graphics.assert_not_called()
+        else:
+            exec(journey, self.context)
+            graphics.assert_called_once_with("fitted-image")
+
     def test_existing_iterm_is_not_adopted(self):
         self.existing_apps = [84]
         with self.assertRaises(RuntimeError):

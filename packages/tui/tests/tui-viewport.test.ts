@@ -1046,6 +1046,34 @@ describe("retained viewport", () => {
 		});
 	});
 
+	it.each(["unchanged", "repeated and displaced", "deleted"])(
+		"preserves surviving content after earlier edits and large growth when the anchor is %s",
+		async (scenario) => {
+			const labels = Array.from({ length: 200 }, (_, i) => `live-${String(i).padStart(3, "0")}`);
+			if (scenario === "repeated and displaced") labels[5] = labels[20] = "repeated";
+			const card = new Text(labels.slice(0, 100).join("\n"), 0, 0);
+			const status = new Text("status-0\nstatus-1\nstatus-2\nstatus-3", 0, 0);
+			const { tui, frame, text } = await setup([{ component: card }, { component: status }], 21, 4);
+			tui.scrollViewportTo(20);
+			await frame();
+			expect(text()).toEqual(labels.slice(20, 24));
+
+			const next = [...labels];
+			next[0] = "changed";
+			if (scenario === "repeated and displaced") next.splice(10, 0, "inserted");
+			if (scenario === "deleted") next.splice(20, 1);
+			card.setText(next.join("\n"));
+			await frame();
+			expect({ rows: text(), ...tui.getViewportState() }).toEqual({
+				rows: scenario === "deleted" ? labels.slice(21, 25) : labels.slice(20, 24),
+				offset: scenario === "repeated and displaced" ? 21 : 20,
+				height: 4,
+				totalRows: next.length + 4,
+				followingTail: false,
+			});
+		},
+	);
+
 	it("retains tall mutable output, paints exact slices, and follows only an explicit return to the tail", async () => {
 		const card = new Rows(Array.from({ length: 12 }, (_, i) => `card-${i}`));
 		const { tui, terminal, frame, text } = await setup([{ component: card }]);
