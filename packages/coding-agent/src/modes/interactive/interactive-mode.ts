@@ -445,7 +445,7 @@ export class InteractiveMode {
 	}
 
 	// SCRAMJET-DIVERGENCE: preserve production ownership while making mutable overflow browseable.
-	private clipboardPastePending = false;
+	private clipboardPastePending?: Promise<string>;
 	private clipboardPasteGeneration = 0;
 	private clipboardPasteOwner?: Component;
 
@@ -464,10 +464,11 @@ export class InteractiveMode {
 			this.ui.isComponentFocused(editor) &&
 			this.ui.isComponentVisible(this.editorContainer) &&
 			this.ui.isComponentRenderComplete(this.editorContainer);
-		if (this.clipboardPastePending || !current()) return;
-		this.clipboardPastePending = true;
+		if (!current()) return;
+		this.clipboardPastePending ??= readClipboardText();
+		const pending = this.clipboardPastePending;
 		try {
-			const text = await readClipboardText();
+			const text = await pending;
 			if (!current()) return;
 			const safeText = stripVTControlCharacters(text).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
 			editor.handleInput(`\x1b[200~${safeText}\x1b[201~`);
@@ -475,7 +476,7 @@ export class InteractiveMode {
 		} catch (error) {
 			if (current()) this.showError(`Paste failed: ${error instanceof Error ? error.message : String(error)}`);
 		} finally {
-			this.clipboardPastePending = false;
+			if (this.clipboardPastePending === pending) this.clipboardPastePending = undefined;
 		}
 	}
 
