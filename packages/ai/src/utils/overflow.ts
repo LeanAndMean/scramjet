@@ -1,3 +1,4 @@
+import { validateResponsesProviderFailure } from "../providers/openai-responses-shared.js";
 import type { AssistantMessage } from "../types.js";
 
 /**
@@ -120,6 +121,13 @@ const NON_OVERFLOW_PATTERNS = [
  * @returns true if the message indicates a context overflow
  */
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
+	// A validated category cannot be overridden by an unrelated SDK cause or provider prose.
+	if (message.stopReason === "error") {
+		const structured = validateResponsesProviderFailure(message.diagnostics);
+		if (structured.status !== "absent")
+			return structured.status === "valid" && structured.category === "context_overflow";
+	}
+
 	// Case 1: Check error message patterns
 	if (message.stopReason === "error" && message.errorMessage) {
 		// Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)

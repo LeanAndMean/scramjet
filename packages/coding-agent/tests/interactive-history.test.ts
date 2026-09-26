@@ -2,6 +2,10 @@ import type { AgentMessage } from "@leanandmean/agent";
 import type { AssistantMessage } from "@leanandmean/ai";
 import { type Component, Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	appendResponsesFailureDiagnostics,
+	normalizeResponsesFailure,
+} from "../../ai/dist/providers/openai-responses-shared.js";
 
 const imageConversion = vi.hoisted(() => ({
 	convertToPng: vi.fn(),
@@ -563,6 +567,30 @@ describe("interactive assistant history", () => {
 		expect(output).toContain("\x1b[3J");
 		expect(output).toContain("COMPACTED-SESSION");
 		expect(terminal.bufferLines().join("\n")).not.toContain("TREE-SESSION");
+	});
+
+	it("shows the same provider error in live and restored local history with failed partial tool calls", async () => {
+		const { terminal, emit, mode } = createInteractiveHarness();
+		terminal.resize(120, 30);
+		const output = assistant("", "error");
+		output.content = [{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "safe" } }];
+		const reason = "Invalid request body: unavailable at https://private.example.org/secret";
+		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure({ message: reason }, "stream"));
+		const final = { ...output };
+		await emit({ type: "message_start", message: { ...final, content: [] } });
+		await emit({ type: "message_update", message: final });
+		await emit({ type: "message_end", message: final });
+		await render(terminal);
+		expect(terminal.bufferLines().join(" ")).toContain(reason);
+		expect((mode.pendingTools as Map<string, unknown>).size).toBe(0);
+		const persisted = JSON.parse(JSON.stringify(final));
+		expect(persisted.errorMessage).toContain(reason);
+		const history = createInteractiveHarness();
+		history.terminal.resize(120, 30);
+		history.setSessionMessages([persisted]);
+		(history.mode.renderInitialMessages as () => void).call(history.mode);
+		await render(history.terminal);
+		expect(history.terminal.bufferLines().join(" ")).toContain(reason);
 	});
 
 	it("suppresses transcript zones on mutable previews and emits complete zones after finalization", () => {
@@ -1199,9 +1227,9 @@ describe("interactive assistant history", () => {
 
 	it.each([
 		["aborted" as const, "Operation aborted"],
-		["error" as const, "Error: provider failed"],
+		["error" as const, "Request attempt failed: provider failed"],
 	])("commits complete %s decoration through the interactive event path", async (stopReason, expected) => {
-		const { terminal, emit } = createInteractiveHarness();
+		const { terminal, emit, committedChatContainer } = createInteractiveHarness();
 		const partial = assistant("partial");
 		await emit({ type: "message_start", message: partial });
 		await emit({ type: "message_update", message: partial });
@@ -1212,6 +1240,37 @@ describe("interactive assistant history", () => {
 		await emit({ type: "message_end", message: finalMessage });
 		await render(terminal);
 
-		expect(terminal.bufferLines().join("\n").match(new RegExp(expected, "g"))).toHaveLength(1);
+		expect(committedChatContainer.render(100).join("\n").match(new RegExp(expected, "g"))).toHaveLength(1);
+	});
+
+	it("labels a failed allocation as an attempt before recovery and preserves the historical wording", async () => {
+		const { emit, terminal, mode, setSessionMessages, committedChatContainer } = createInteractiveHarness();
+		const failure = assistant("", "error");
+		failure.errorMessage =
+			"context_length_exceeded: estimated input exceeds provider input limit; compact or reduce the request";
+		await emit({ type: "message_start", message: assistant("") });
+		await emit({ type: "message_end", message: failure });
+		await render(terminal);
+		expect(terminal.bufferLines().join("\n")).toContain("Request attempt failed:");
+		expect(failure.errorMessage).toContain("context_length_exceeded");
+		setSessionMessages([failure, assistant("Recovered answer")]);
+		(mode.renderInitialMessages as () => void).call(mode);
+		expect(committedChatContainer.render(100).join("\n")).toContain(
+			"Request attempt failed: context_length_exceeded",
+		);
+		expect(committedChatContainer.render(100).join("\n")).toContain("Recovered answer");
+	});
+
+	it("shows a failed attempt with partial tool calls without implying that tools ran", async () => {
+		const { emit, committedChatContainer, mode } = createInteractiveHarness();
+		const partial = assistant("");
+		partial.content = [{ type: "toolCall", id: "pending", name: "unknown", arguments: {} }];
+		const failure = { ...partial, stopReason: "error" as const, errorMessage: "provider failed" };
+		await emit({ type: "message_start", message: partial });
+		await emit({ type: "message_update", message: partial });
+		await emit({ type: "message_end", message: failure });
+		const row = committedChatContainer.children.find((child) => child instanceof AssistantMessageComponent);
+		expect(row?.render(100).join("\n")).toContain("Request attempt failed: provider failed");
+		expect((mode.pendingTools as Map<string, unknown>).size).toBe(0);
 	});
 });

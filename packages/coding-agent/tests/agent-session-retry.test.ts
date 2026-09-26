@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
 import type { AssistantMessage, Model } from "@leanandmean/ai";
-import { createAssistantMessageEventStream } from "@leanandmean/ai";
+import { createAssistantMessageEventStream, getModel, streamSimpleOpenAIResponses } from "@leanandmean/ai";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../src/core/agent-session.js";
@@ -429,6 +429,190 @@ describe("AgentSession context window", () => {
 		]);
 	});
 
+	it.each([
+		["SDK SSE", { error: "maximum context length exceeded" }],
+		["response.failed", { type: "response.failed", response: { error: "maximum context length exceeded" } }],
+	] as const)("compacts a scalar %s overflow from the actual adapter", async (_name, event) => {
+		const model = getModel("openai", "gpt-6-astra");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(`data: ${JSON.stringify(event)}\n\n`, {
+						headers: { "content-type": "text/event-stream" },
+					}),
+			),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{
+							messages: [{ role: "user", content: "hello", timestamp: 0 }],
+						},
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
+			expect(retryEvents(events)).toEqual([]);
+			expect(retryRecords(session)).toContainEqual(
+				expect.objectContaining({ outcome: "not_attempted", reason: "context_overflow_compaction" }),
+			);
+			session.dispose();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("retries a scalar token-rate-limit reason rather than compacting", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		let calls = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				calls++;
+				return new Response(
+					`data: ${JSON.stringify(
+						calls === 1
+							? { error: "Too many tokens per minute" }
+							: { type: "response.completed", response: { status: "completed" } },
+					)}\n\n`,
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			}),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			expect(calls).toBe(2);
+			expect(events).not.toContainEqual(expect.objectContaining({ type: "compaction_start" }));
+			expect(retryRecords(session)).toEqual([
+				expect.objectContaining({ outcome: "scheduled", evidence: "provider_failure" }),
+				expect.objectContaining({ outcome: "succeeded" }),
+			]);
+			session.dispose();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("retries a scalar Responses rate limit without inferring transport provenance", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		let calls = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				calls++;
+				return new Response(
+					`data: ${JSON.stringify(
+						calls === 1
+							? { error: "rate limit reached" }
+							: { type: "response.completed", response: { status: "completed" } },
+					)}\n\n`,
+					{
+						headers: { "content-type": "text/event-stream" },
+					},
+				);
+			}),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{
+							messages: [{ role: "user", content: "hello", timestamp: 0 }],
+						},
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			expect(calls).toBe(2);
+			expect(events).toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
+			expect(retryRecords(session)).toEqual([
+				expect.objectContaining({ outcome: "scheduled", evidence: "provider_failure" }),
+				expect.objectContaining({ outcome: "succeeded" }),
+			]);
+			session.dispose();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("compacts a scalar SDK HTTP context limit from the actual Responses adapter", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				return new Response(JSON.stringify({ error: "maximum context length exceeded" }), {
+					status: 400,
+					headers: { "content-type": "application/json" },
+				});
+			}),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			const persisted = session.sessionManager
+				.getBranch()
+				.find((entry) => entry.type === "message" && entry.message.role === "assistant");
+			expect(persisted).toMatchObject({
+				type: "message",
+				message: { errorMessage: expect.stringContaining("maximum context length exceeded") },
+			});
+			expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
+			expect(retryEvents(events)).toEqual([]);
+			expect(retryRecords(session)).toEqual([
+				expect.objectContaining({ outcome: "not_attempted", reason: "context_overflow_compaction" }),
+			]);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it.each(["malformed", "duplicate"])("does not compact %s Responses evidence with overflow prose", async (shape) => {
+		const diagnostic = providerFailure("transient", "rate_limit").diagnostics![0];
+		const failure = {
+			...assistantError("maximum context length exceeded"),
+			diagnostics:
+				shape === "duplicate"
+					? [diagnostic, diagnostic]
+					: [{ type: "provider_failure", timestamp: Date.now(), details: { unexpected: true } }],
+		};
+		const { session, events } = await createFixture(() => failure);
+
+		await session.prompt("hello");
+
+		expect(events).not.toContainEqual(expect.objectContaining({ type: "compaction_start" }));
+		expect(events).not.toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({
+				outcome: "not_attempted",
+				reason: shape === "duplicate" ? "duplicate_provider_diagnostic" : "malformed_provider_diagnostic",
+			}),
+		]);
+	});
+
 	it("retries when the session honors a structured transient disposition from message-derived evidence", async () => {
 		const failure: AssistantMessage = {
 			...assistantError("OpenAI Responses service returned a server error: upstream 503 Service Unavailable."),
@@ -458,27 +642,21 @@ describe("AgentSession context window", () => {
 		]);
 	});
 
-	it("gives context overflow precedence over structured transient evidence", async () => {
+	it("does not compact a validated transient failure because its text mentions overflow", async () => {
 		const model = { ...testModel, maxInputTokens: 272_000 };
-		const overflow = {
+		const failure = {
 			...providerFailure("transient", "rate_limit"),
 			errorMessage: "Provider returned error: maximum context length is 272000 tokens",
 		};
-		const { session, events } = await createFixture((i) => (i === 0 ? overflow : assistantText("ok")), { model });
+		const { session, events } = await createFixture((i) => (i === 0 ? failure : assistantText("ok")), { model });
 
 		await session.prompt("hello");
 
-		await vi.waitFor(() => {
-			expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
-		});
-		expect(events).not.toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
+		expect(events).not.toContainEqual(expect.objectContaining({ type: "compaction_start" }));
+		expect(events).toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
 		expect(retryRecords(session)).toEqual([
-			{
-				schemaVersion: 1,
-				outcome: "not_attempted",
-				reason: "context_overflow_compaction",
-				evidence: "context_overflow",
-			},
+			expect.objectContaining({ outcome: "scheduled", evidence: "provider_failure" }),
+			expect.objectContaining({ outcome: "succeeded" }),
 		]);
 	});
 });
@@ -820,6 +998,198 @@ describe("AgentSession persisted retry authority", () => {
 
 		expect(rejection).toBeInstanceOf(AggregateError);
 		expect(rejection).toMatchObject({ cause: promptError, errors: [promptError, settlementError] });
+	});
+
+	it("never executes an unfinished tool call from a completed Responses stream", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		const execute = vi.fn(async () => ({
+			content: [{ type: "text" as const, text: "executed" }],
+			details: undefined,
+		}));
+		const tool = defineTool({
+			name: "dummy",
+			label: "Dummy",
+			description: "Side-effect sentinel",
+			parameters: Type.Object({}),
+			execute,
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						[
+							'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"dummy","arguments":"","status":"in_progress"}}\n\n',
+							'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+						].join(""),
+						{ headers: { "content-type": "text/event-stream" } },
+					),
+			),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				customTools: [tool],
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			expect(session.sessionManager.buildSessionContext().messages).toContainEqual(
+				expect.objectContaining({ role: "assistant", stopReason: "error" }),
+			);
+			expect(execute).not.toHaveBeenCalled();
+			expect(events).not.toContainEqual(expect.objectContaining({ type: "tool_execution_start" }));
+			session.dispose();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("never executes a completed tool call from an incomplete Responses stream", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		const execute = vi.fn(async () => ({
+			content: [{ type: "text" as const, text: "executed" }],
+			details: undefined,
+		}));
+		const tool = defineTool({
+			name: "dummy",
+			label: "Dummy",
+			description: "Side-effect sentinel",
+			parameters: Type.Object({}),
+			execute,
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						[
+							'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"dummy","arguments":""}}\n\n',
+							'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"dummy","arguments":"{}"}}\n\n',
+							'data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}\n\n',
+						].join(""),
+						{ headers: { "content-type": "text/event-stream" } },
+					),
+			),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				customTools: [tool],
+				streamFn: (index, signal) => {
+					if (index > 0) {
+						const unexpected = assistantText("unexpected continuation");
+						const stream = createAssistantMessageEventStream();
+						stream.push({ type: "start", partial: unexpected });
+						stream.push({ type: "done", reason: "stop", message: unexpected });
+						return stream;
+					}
+					return streamSimpleOpenAIResponses(
+						model,
+						{
+							messages: [{ role: "user", content: "hello", timestamp: 0 }],
+						},
+						{ apiKey: "fake", maxRetries: 0, signal },
+					);
+				},
+			});
+			await session.prompt("hello");
+			const assistant = session.sessionManager
+				.buildSessionContext()
+				.messages.find((message) => message.role === "assistant");
+			expect(assistant).toMatchObject({
+				stopReason: "error",
+				content: [expect.objectContaining({ type: "toolCall" })],
+			});
+			expect(execute).not.toHaveBeenCalled();
+			expect(events).not.toContainEqual(expect.objectContaining({ type: "tool_execution_start" }));
+			session.dispose();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("retries a provider-produced accepted stream termination and not a provider rejection", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		let fetchCount = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				fetchCount++;
+				if (fetchCount === 1) {
+					return new Response(
+						new ReadableStream<Uint8Array>({
+							start(controller) {
+								controller.enqueue(
+									new TextEncoder().encode('data: {"type":"response.created","response":{"id":"resp_1"}}\n\n'),
+								);
+								controller.error(new Error("terminated"));
+							},
+						}),
+						{ headers: { "content-type": "text/event-stream" } },
+					);
+				}
+				return new Response('data: {"type":"response.completed","response":{"status":"completed"}}\n\n', {
+					headers: { "content-type": "text/event-stream" },
+				});
+			}),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{
+							messages: [{ role: "user", content: "hello", timestamp: 0 }],
+						},
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			expect(fetchCount).toBe(2);
+			expect(retryRecords(session)).toEqual([
+				expect.objectContaining({ outcome: "scheduled", evidence: "provider_failure" }),
+				expect.objectContaining({ outcome: "succeeded" }),
+			]);
+			expect(events).toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
+			fetchCount = 0;
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => {
+					fetchCount++;
+					return new Response(
+						'data: {"type":"response.failed","response":{"error":{"code":"new_code","message":"terminated","status":403}}}\n\n',
+						{
+							headers: { "content-type": "text/event-stream" },
+						},
+					);
+				}),
+			);
+			const rejected = await createFixture(() => assistantText("unused"), {
+				model,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{
+							messages: [{ role: "user", content: "hello", timestamp: 0 }],
+						},
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await rejected.session.prompt("hello");
+			expect(fetchCount).toBe(1);
+			expect(retryEvents(rejected.events)).toEqual([]);
+			expect(retryRecords(rejected.session)).toEqual([
+				expect.objectContaining({ outcome: "not_attempted", reason: "structured_non_transient" }),
+			]);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("uses valid structured transient evidence instead of message text", async () => {
@@ -1473,6 +1843,43 @@ describe("AgentSession persisted retry authority", () => {
 			{ role: "assistant", content: [{ type: "text", text: "sibling" }] },
 		]);
 		expect(session.sessionManager.getBranch(originalLeaf)).toEqual(originalBranch);
+	});
+
+	it("restores an adapter-produced scalar provider reason from disk", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		const reason = "Invalid deployment ID for this request";
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(`data: ${JSON.stringify({ type: "response.failed", response: { error: reason } })}\n\n`, {
+						headers: { "content-type": "text/event-stream" },
+					}),
+			),
+		);
+		try {
+			const { session } = await createFixture(() => assistantText("unused"), {
+				model,
+				persist: true,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{
+							messages: [{ role: "user", content: "hello", timestamp: 0 }],
+						},
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			const sessionFile = session.sessionManager.getSessionFile();
+			expect(sessionFile).toBeDefined();
+			session.dispose();
+			const reopened = SessionManager.open(sessionFile!);
+			const assistant = reopened.buildSessionContext().messages.find((message) => message.role === "assistant");
+			expect(assistant).toMatchObject({ stopReason: "error", errorMessage: expect.stringContaining(reason) });
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("keeps retry records durable and inert after reopening a disk-backed session", async () => {
