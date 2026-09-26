@@ -481,8 +481,10 @@ function makeFailure(
 		category = messageCategory ?? (kindHint === "malformed_event" ? "malformed_event" : "unknown");
 		detailSource = messageCategory ? "message_category" : "none";
 	}
+	const scalarError = boundedMessage(recordOf(value)?.error);
 	const hasEvidence = Boolean(
 		unsupportedEvidence ||
+			scalarError ||
 			top.code ||
 			(top.type !== "error" && top.type !== "response.failed" && top.type) ||
 			top.message ||
@@ -572,7 +574,7 @@ function makeFailure(
 	const providerMessage =
 		top.message ??
 		nested.message ??
-		boundedMessage(recordOf(value)?.error) ??
+		scalarError ??
 		boundedMessage(recordOf(recordOf(value)?.error)?.detail) ??
 		boundedMessage(recordOf(value)?.detail) ??
 		(errorFields.length ? `Unrecognized error fields: ${errorFields.join(", ")}` : undefined) ??
