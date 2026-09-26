@@ -1074,6 +1074,27 @@ describe("retained viewport", () => {
 		},
 	);
 
+	it.each(["unique", "repeated", "over budget"])("bounds witnessed-prefix anchor recovery for %s rows", (kind) => {
+		const labels = Array.from({ length: 200 }, (_, i) => (kind === "repeated" ? "repeat" : `live-${i}`));
+		const card = new Text(labels.slice(0, 100).join("\n"), 0, 0);
+		const viewport = new RetainedViewport({ getBlocks: () => [{ component: card }] });
+		viewport.update(20, 4);
+		viewport.scrollTo(kind === "over budget" ? 80 : 20);
+		const search = vi.spyOn(diff, "diffArrays");
+		try {
+			card.setText(
+				labels.map((row, i) => (i < (kind === "over budget" ? 70 : 1) ? `changed-${i}` : row)).join("\n"),
+			);
+			viewport.update(20, 4);
+			expect(search.mock.calls).toHaveLength(kind === "repeated" ? 2 : 3);
+			expect(search.mock.calls.every((call) => call[2]?.maxEditLength === 64)).toBe(true);
+			expect(search.mock.results.at(-1)?.value === undefined).toBe(kind !== "unique");
+			if (kind === "unique") expect(viewport.state.offset).toBe(20);
+		} finally {
+			search.mockRestore();
+		}
+	});
+
 	it("retains tall mutable output, paints exact slices, and follows only an explicit return to the tail", async () => {
 		const card = new Rows(Array.from({ length: 12 }, (_, i) => `card-${i}`));
 		const { tui, terminal, frame, text } = await setup([{ component: card }]);

@@ -348,13 +348,19 @@ async function runProduction() {
 			else if (command.action === "expand") mode.setToolsExpanded(true);
 			else if (command.action === "editor") extensionUI.setEditorText("");
 			else if (command.action === "copy-editor") extensionUI.setEditorText(`COPY-EDITOR ${"alpha beta gamma ".repeat(12).trimEnd()}\n\n    café 界`);
-			else if (command.action === "copy-seam") {
+			else if (command.action === "copy-seam" || command.action === "copy-seam-scrolled") {
+				const hiddenRows = command.action === "copy-seam-scrolled" ? 40 : 0;
 				mode.statusContainer.clear();
-				mode.statusContainer.addChild(new Text("SEAM-ONE\nSEAM-TWO", 0, 0));
+				mode.statusContainer.addChild(new Text(["SEAM-ONE", "SEAM-TWO", ...Array.from({ length: hiddenRows }, (_, i) => `HIDDEN-SEAM-${i}`)].join("\n"), 0, 0));
 				extensionUI.setWidget("above", undefined);
 				extensionUI.setWidget("below", undefined);
 				extensionUI.setEditorText("DRAFT-SEAM");
 				mode.ui.followViewport();
+				if (hiddenRows) {
+					await mode.ui.renderNow({ requireFlush: true });
+					const view = mode.ui.getViewportState();
+					mode.ui.scrollViewportTo(view.totalRows - view.height - hiddenRows);
+				}
 			}
 			else if (command.action === "long-editor") extensionUI.setEditorText(Array.from({ length: 50 }, (_, i) => `INPUT-${i}`).join("\n"));
 			else if (command.action === "narrow-editor") extensionUI.setEditorText("012345678901234567890123".repeat(4) + "\nTAIL");

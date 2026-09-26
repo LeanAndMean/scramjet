@@ -93,6 +93,26 @@ def key(name):
     time.sleep(0.4)
 
 
+def wait_image_consent():
+    clear_since = None
+    observations = report.setdefault("inlineImagePermission", [])
+    def ready():
+        nonlocal clear_since
+        observation = json.loads(run(str(driver), "image-consent-pid", str(child.pid)))
+        observations.append(observation)
+        if observation.get("visible") is True:
+            clear_since = None
+            observations.append(json.loads(run(str(driver), "image-consent-pid", str(child.pid), "--allow")))
+            return False
+        if observation.get("visible") is not False:
+            raise RuntimeError("Native image consent observation is unavailable")
+        if clear_since is None:
+            clear_since = time.monotonic()
+        return time.monotonic() - clear_since >= 0.5
+    if not wait(ready, seconds=15):
+        raise RuntimeError("Native image consent did not settle")
+
+
 def pixels(name):
     time.sleep(0.5)
     path = output / f"{name}.png"
@@ -267,13 +287,6 @@ try:
         run("pbcopy", input=command)
         run(str(driver), "key", "9", "1048576")
         run(str(driver), "key", "36", "0")
-        for _ in range(10):
-            time.sleep(1)
-            remember = json.loads(run(str(driver), "press", "com.googlecode.iterm2", "Remember my choice"))
-            allow = json.loads(run(str(driver), "press", "com.googlecode.iterm2", "Yes"))
-            if allow["pressed"] or state().get("phase") == "image":
-                report["inlineImagePermission"] = {"remember": remember, "allow": allow}
-                break
     else:
         report["version"] = run("kitty", "--version")
         config = output / "kitty.conf"
@@ -292,7 +305,11 @@ try:
     if not mac:
         window = run("xdotool", "search", "--onlyvisible", "--class", "kitty").splitlines()[-1]
         run("xdotool", "windowactivate", "--sync", window)
+    if mac:
+        wait_image_consent()
     key("1")
+    if mac:
+        wait_image_consent()
     check("nativeOversizedImageVisible", lambda: pixels("fitted-image") > 400 and image_confined("fitted-image"))
     original_height = state()["height"]
     original_bottom = report["pixels"]["fitted-image"]["bottom"]

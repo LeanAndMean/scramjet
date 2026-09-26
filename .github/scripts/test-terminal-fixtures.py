@@ -884,6 +884,38 @@ class MacSafetyOwnershipTests(unittest.TestCase):
         self.assertFalse(self.cleanup())
 
 
+class ImageConsentReadinessTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = 0.0
+        self.visible = lambda: self.clock < 0.2 or 0.5 <= self.clock < 0.8
+        self.time = Mock()
+        self.time.monotonic.side_effect = lambda: self.clock
+        self.time.sleep.side_effect = lambda duration: setattr(self, "clock", self.clock + duration)
+        self.queries = []
+        def run(*args):
+            self.assertEqual(args[:3], ("events", "image-consent-pid", "42"))
+            self.queries.append((self.clock, args))
+            return json.dumps({"visible": self.visible(), "remembered": True, "pressed": len(args) == 4})
+        self.context = {"time": self.time, "json": json, "run": Mock(side_effect=run),
+                        "driver": "events", "child": Mock(pid=42), "report": {}}
+        load_safety_functions({"wait", "wait_image_consent"}, self.context)
+
+    def test_reappearing_consent_restarts_the_clear_observation_interval(self):
+        self.context["wait_image_consent"]()
+        self.assertGreaterEqual(self.clock, 1.3)
+        self.assertLess(self.clock, 2)
+        actions = [instant for instant, args in self.queries if len(args) == 4]
+        self.assertTrue(any(instant < 0.2 for instant in actions))
+        self.assertTrue(any(0.5 <= instant < 0.8 for instant in actions))
+        self.assertFalse(self.context["report"]["inlineImagePermission"][-1]["visible"])
+
+    def test_unknown_observation_is_not_absent_consent(self):
+        self.context["run"].side_effect = None
+        self.context["run"].return_value = "{}"
+        with self.assertRaisesRegex(RuntimeError, "observation is unavailable"):
+            self.context["wait_image_consent"]()
+
+
 class NativeImageConfinementTests(unittest.TestCase):
     def test_source_predicate_requires_confinement_not_just_upward_movement(self):
         source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())

@@ -60,6 +60,50 @@ func pressButton(_ element: AXUIElement, title: String, depth: Int = 0) -> Bool 
     return false
 }
 
+func consentElements(_ element: AXUIElement, depth: Int = 0) -> [AXUIElement] {
+    guard depth <= 20, attribute(element, kAXRoleAttribute) is String else { fatalError("Image consent tree is unreadable") }
+    var children: CFTypeRef?
+    let result = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
+    guard [.success, .noValue, .attributeUnsupported].contains(result) else { fatalError("Image consent children are unreadable") }
+    if result != .success { return [element] }
+    guard let items = children as? [AXUIElement] else { fatalError("Image consent children are malformed") }
+    return [element] + items.flatMap { consentElements($0, depth: depth + 1) }
+}
+
+func imageConsent(_ pid: pid_t, allow: Bool) -> [String: Any] {
+    let application = AXUIElementCreateApplication(pid)
+    guard let windows = attribute(application, kAXWindowsAttribute) as? [AXUIElement], !windows.isEmpty else {
+        fatalError("Owned image consent windows are unavailable")
+    }
+    func named(_ element: AXUIElement, _ title: String) -> Bool {
+        [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].contains { attribute(element, $0) as? String == title }
+    }
+    let elements = windows.flatMap { consentElements($0) }
+    guard elements.contains(where: { named($0, "Allow Terminal-Initiated Display?") }) else { return ["visible": false] }
+    let checkboxes = elements.filter { attribute($0, kAXRoleAttribute) as? String == "AXCheckBox" }
+    let buttons = elements.filter { attribute($0, kAXRoleAttribute) as? String == "AXButton" && named($0, "Yes") }
+    guard checkboxes.count == 1, buttons.count == 1,
+          let value = attribute(checkboxes[0], kAXValueAttribute) as? NSNumber else {
+        fatalError("Image consent controls are unavailable or ambiguous")
+    }
+    var remembered = value.boolValue
+    var pressed = false
+    if allow {
+        if !remembered {
+            guard AXUIElementPerformAction(checkboxes[0], kAXPressAction as CFString) == .success else {
+                fatalError("Image consent remember action failed")
+            }
+            guard let current = attribute(checkboxes[0], kAXValueAttribute) as? NSNumber else {
+                fatalError("Image consent remember state is unavailable")
+            }
+            remembered = current.boolValue
+        }
+        guard remembered else { fatalError("Image consent choice was not remembered") }
+        pressed = AXUIElementPerformAction(buttons[0], kAXPressAction as CFString) == .success
+    }
+    return ["visible": true, "remembered": remembered, "pressed": pressed]
+}
+
 func sendKey(_ code: CGKeyCode, _ rawFlags: UInt64) {
     var flags = CGEventFlags(rawValue: rawFlags)
     // iTerm2's Kitty encoder requires device bits on physical modifier events.
@@ -138,6 +182,9 @@ case "windows-pid":
          "layer": item[kCGWindowLayer as String] as? Int ?? 0,
          "bounds": item[kCGWindowBounds as String] as? [String: Any] ?? [:]]
     })
+case "image-consent-pid":
+    guard args.count == 3 || (args.count == 4 && args[3] == "--allow") else { fatalError("Unknown image consent option") }
+    emit(imageConsent(pid_t(args[2])!, allow: args.count == 4))
 case "press-pid":
     emit(["pressed": pressButton(AXUIElementCreateApplication(pid_t(args[2])!), title: args[3])])
 case "press":

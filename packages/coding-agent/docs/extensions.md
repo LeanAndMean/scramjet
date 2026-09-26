@@ -2506,7 +2506,11 @@ const result = await ctx.ui.custom(
 );
 ```
 
-The complete immutable context is installed in the retained transcript at that pending tool's position. It remains browseable through Scramjet's scrollbar even when taller than the screen; it is not an assurance that every row is simultaneously visible or emitted into native scrollback. The editor is defocused, controls are revealed, and a required visible-frame flush must succeed before they receive focus. If browsing hides controls, the first activation reveals and flushes them without approving; only subsequent input can authorize. Missing/non-leading/settled tool rows, replaced context, missing or failed flushing, and controls that cannot fit fail closed. Context is visual-only, not persisted or sent to the model. Use this only from the sequential tool whose id is supplied.
+The complete immutable context is installed at that pending tool's transcript position. In both renderer modes, the editor is defocused and a required initial flush must succeed before controls receive focus. Missing/non-leading/settled tool rows, context replaced before that flush settles, and missing or failed flushing reject the request through attachment cleanup. Context is visual-only, not persisted or sent to the model. Use this only from the sequential tool whose id is supplied.
+
+In default **retained mode**, the context remains browseable through Scramjet's scrollbar even when taller than the screen; it need not all be simultaneously visible or emitted into native scrollback. Controls require current-paint flush evidence, complete rendering of the full context and controls, and whole-control visibility. Clipped context (including offscreen rows) or controls that cannot fit fail closed. If browsing hides controls, the first activation reveals and flushes them without approving; only subsequent input can authorize. Attachment currentness and these presentation guards are rechecked on input.
+
+With startup-only **`tuiMode: "committed"`**, `commitNow({ requireFlush: true })` emits the complete context into committed native history and waits for the initial flush before focusing controls. The mutable canvas remains tail-windowed; this mode does **not** provide Scramjet scrollbar access, retained render-completeness/whole-control-visibility checks, or reveal-before-subsequent-activation protection. Do not rely on those retained-only guarantees when supporting committed compatibility mode.
 
 See [tui.md](tui.md) for the full component API.
 

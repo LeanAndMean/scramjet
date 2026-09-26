@@ -803,7 +803,9 @@ try:
     copy_expected = ("COPY-EDITOR " + "alpha beta gamma " * 12).rstrip() + "\n\n    café 界"
     check("editorCopyOmitsSoftWraps", lambda: clipboard() == copy_expected and not state().get("selectionActive"))
     for reverse in (False, True):
-        fixture_command("copy-seam")
+        fixture_command("copy-seam-scrolled" if reverse else "copy-seam")
+        if reverse and not wait_for(session_indicator_matches):
+            raise RuntimeError("Dock-origin seam copy requires a visible flushed Session indicator")
         seam_frame = state()["painted"]
         start_row = next(i + 1 for i, line in enumerate(seam_frame) if line.strip() == "SEAM-ONE")
         end_row = next(i + 1 for i, line in enumerate(seam_frame) if line.strip() == "DRAFT-SEAM")
@@ -813,6 +815,11 @@ try:
         drag(end, start) if reverse else drag(start, end)
         if not wait_for(lambda: state().get("selectionPainted") and state().get("frameFlushed")):
             raise RuntimeError("Cross-seam selection was not painted")
+        if reverse:
+            if not session_indicator_matches():
+                raise RuntimeError("Session indicator disappeared before dock-origin seam copy")
+            report["decoratedSeamSelection"] = state()
+            screenshot("decorated-seam-selected")
         key("copy")
         check("selectionCrossesIntoTranscript" if reverse else "selectionCrossesIntoEditor", lambda: state().get("keyCopy", 0) == copy_count + 1 and clipboard() == "SEAM-ONE\nSEAM-TWO\n\nDRAFT-SEAM" and not state().get("selectionActive"))
     screenshot("copy-seam")

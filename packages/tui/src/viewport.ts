@@ -151,7 +151,23 @@ function mapAnchor(anchor: Anchor, old: RenderedBlock, next: RenderedBlock): Anc
 			return { ...anchor, row: token.row, grapheme: token.grapheme };
 		}
 	}
-	return rows ? { ...anchor, row: rows.position, grapheme: 0 } : undefined;
+	if (rows) return { ...anchor, row: rows.position, grapheme: 0 };
+	// A unique following boundary excludes distant growth without guessing among repeated anchor rows.
+	for (let boundary = anchor.row; boundary < Math.min(old.lines.length, anchor.row + 64); boundary++) {
+		const line = old.lines[boundary];
+		if (old.lines.indexOf(line) !== boundary || old.lines.lastIndexOf(line) !== boundary) continue;
+		const nextBoundary = next.lines.indexOf(line);
+		if (nextBoundary < 0 || next.lines.lastIndexOf(line) !== nextBoundary) continue;
+		if (boundary === old.lines.length - 1 && nextBoundary === next.lines.length - 1) break;
+		const mapped = correspondence(
+			old.lines.slice(0, boundary + 1),
+			next.lines.slice(0, nextBoundary + 1),
+			anchor.row,
+			64,
+		);
+		return mapped ? { ...anchor, row: mapped.position, grapheme: mapped.exact ? anchor.grapheme : 0 } : undefined;
+	}
+	return undefined;
 }
 
 interface SelectionPoint {
