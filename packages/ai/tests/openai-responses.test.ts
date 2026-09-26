@@ -545,6 +545,42 @@ describe("OpenAI Responses failure normalization", () => {
 		}
 	});
 
+	it.each([
+		["OpenAI", streamOpenAIResponses, openaiModel, {}],
+		["Azure", streamAzureOpenAIResponses, azureModel, { azureBaseUrl: "https://example.openai.azure.com/openai/v1" }],
+	] as const)(
+		"rejects %s completed responses with unfinished function calls",
+		async (_name, streamFn, model, extra) => {
+			for (const done of [undefined, "incomplete"] as const) {
+				const call = {
+					type: "function_call",
+					id: "fc_1",
+					call_id: "call_1",
+					name: "read",
+					arguments: "{}",
+					status: "in_progress",
+				};
+				stubFetch([
+					sse([
+						{ type: "response.output_item.added", item: call, output_index: 0 },
+						...(done
+							? [{ type: "response.output_item.done", item: { ...call, status: done }, output_index: 0 }]
+							: []),
+						{ type: "response.completed", response: { status: "completed" } },
+					]),
+				]);
+				const result = await streamFn(model as never, toolContext, {
+					apiKey,
+					maxRetries: 0,
+					...extra,
+				} as never).result();
+				expect(result.stopReason).toBe("error");
+				expect(result.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: "read" }));
+				expect(result.errorMessage).toMatch(/unfinished|incomplete/);
+			}
+		},
+	);
+
 	it("does not retry termination prose in provider rejection or unsupported rich events", async () => {
 		for (const event of [
 			{ type: "error", status: 403, message: "terminated" },
@@ -647,6 +683,26 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(isContextOverflow(contradictory)).toBe(false);
 	});
 
+	it("does not classify token rate-limit prose as context overflow", () => {
+		const reason = "rate limit: too many tokens per minute";
+		for (const value of [
+			{ error: reason },
+			{ message: reason },
+			{ error: "Too many tokens per minute" },
+			{ error: { message: "Too many tokens per minute" } },
+			APIError.generate(429, { error: { message: reason } }, undefined, new Headers()),
+		]) {
+			const output = assistantShell();
+			appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(value, "stream"));
+			expect(validateResponsesProviderFailure(output.diagnostics)).toEqual({
+				status: "valid",
+				category: "rate_limit",
+				retryDisposition: "transient",
+			});
+			expect(isContextOverflow(output)).toBe(false);
+		}
+	});
+
 	it("keeps the provider's specific bounded message in live and serialized local history", () => {
 		for (const text of [
 			"capacity exhausted for this deployment",
@@ -661,6 +717,28 @@ describe("OpenAI Responses failure normalization", () => {
 			expect(persisted.errorMessage).toBe(output.errorMessage);
 			expect(JSON.stringify(persisted.diagnostics)).not.toContain(text);
 		}
+	});
+
+	it("withholds JSON-encoded scalar error objects but retains scalar prose", async () => {
+		const raw = { headers: { authorization: "Bearer PRIVATE_TOKEN" }, request_body: "PRIVATE_REQUEST_BODY" };
+		for (const encoded of [JSON.stringify(raw), JSON.stringify([raw])]) {
+			for (const value of [{ error: encoded }, { message: encoded }, { error: { message: encoded } }]) {
+				const output = assistantShell();
+				appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(value, "stream"));
+				expect(output.errorMessage).toContain("withheld because they may contain request data");
+				expect(JSON.stringify(output)).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY|authorization|request_body/);
+			}
+			stubFetch([sse([{ type: "response.failed", response: { error: encoded } }])]);
+			const result = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey, maxRetries: 0 }).result();
+			expect(JSON.stringify(result)).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY|authorization|request_body/);
+			expect(result.errorMessage).toContain("withheld because they may contain request data");
+		}
+		const longObject = JSON.stringify({ ...raw, detail: "x".repeat(5000) });
+		const longFailure = normalizeResponsesFailure({ message: longObject }, "stream");
+		expect(longFailure.message).toContain("withheld because they may contain request data");
+		expect(longFailure.message).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY|authorization|request_body/);
+		const prose = normalizeResponsesFailure({ error: "[Gateway] deployment unavailable" }, "stream");
+		expect(prose.message).toContain("[Gateway] deployment unavailable");
 	});
 
 	it("does not persist the SDK's serialized error-object fallback", () => {

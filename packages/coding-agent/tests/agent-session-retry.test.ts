@@ -467,6 +467,46 @@ describe("AgentSession context window", () => {
 		}
 	});
 
+	it("retries a scalar token-rate-limit reason rather than compacting", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		let calls = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				calls++;
+				return new Response(
+					`data: ${JSON.stringify(
+						calls === 1
+							? { error: "Too many tokens per minute" }
+							: { type: "response.completed", response: { status: "completed" } },
+					)}\n\n`,
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			}),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			expect(calls).toBe(2);
+			expect(events).not.toContainEqual(expect.objectContaining({ type: "compaction_start" }));
+			expect(retryRecords(session)).toEqual([
+				expect.objectContaining({ outcome: "scheduled", evidence: "provider_failure" }),
+				expect.objectContaining({ outcome: "succeeded" }),
+			]);
+			session.dispose();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("retries a scalar Responses rate limit without inferring transport provenance", async () => {
 		const model = getModel("openai", "gpt-6-astra");
 		let calls = 0;
@@ -958,6 +998,55 @@ describe("AgentSession persisted retry authority", () => {
 
 		expect(rejection).toBeInstanceOf(AggregateError);
 		expect(rejection).toMatchObject({ cause: promptError, errors: [promptError, settlementError] });
+	});
+
+	it("never executes an unfinished tool call from a completed Responses stream", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		const execute = vi.fn(async () => ({
+			content: [{ type: "text" as const, text: "executed" }],
+			details: undefined,
+		}));
+		const tool = defineTool({
+			name: "dummy",
+			label: "Dummy",
+			description: "Side-effect sentinel",
+			parameters: Type.Object({}),
+			execute,
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						[
+							'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"dummy","arguments":"","status":"in_progress"}}\n\n',
+							'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+						].join(""),
+						{ headers: { "content-type": "text/event-stream" } },
+					),
+			),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				customTools: [tool],
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			expect(session.sessionManager.buildSessionContext().messages).toContainEqual(
+				expect.objectContaining({ role: "assistant", stopReason: "error" }),
+			);
+			expect(execute).not.toHaveBeenCalled();
+			expect(events).not.toContainEqual(expect.objectContaining({ type: "tool_execution_start" }));
+			session.dispose();
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("never executes a completed tool call from an incomplete Responses stream", async () => {
