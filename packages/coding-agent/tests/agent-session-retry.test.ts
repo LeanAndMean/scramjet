@@ -429,6 +429,45 @@ describe("AgentSession context window", () => {
 		]);
 	});
 
+	it("compacts a scalar SDK HTTP context limit from the actual Responses adapter", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				return new Response(JSON.stringify({ error: "maximum context length exceeded" }), {
+					status: 400,
+					headers: { "content-type": "application/json" },
+				});
+			}),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			const persisted = session.sessionManager
+				.getBranch()
+				.find((entry) => entry.type === "message" && entry.message.role === "assistant");
+			expect(persisted).toMatchObject({
+				type: "message",
+				message: { errorMessage: expect.stringContaining("maximum context length exceeded") },
+			});
+			expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
+			expect(retryEvents(events)).toEqual([]);
+			expect(retryRecords(session)).toEqual([
+				expect.objectContaining({ outcome: "not_attempted", reason: "context_overflow_compaction" }),
+			]);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it.each(["malformed", "duplicate"])("does not compact %s Responses evidence with overflow prose", async (shape) => {
 		const diagnostic = providerFailure("transient", "rate_limit").diagnostics![0];
 		const failure = {

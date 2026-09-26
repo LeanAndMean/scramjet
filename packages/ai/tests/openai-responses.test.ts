@@ -559,6 +559,54 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(JSON.parse(JSON.stringify(result)).errorMessage).toContain(reason);
 	});
 
+	it("classifies a scalar SDK HTTP context limit as overflow without trusting conflicting HTTP status", () => {
+		const headers = new Headers();
+		const error = APIError.generate(400, { error: "maximum context length exceeded" }, undefined, headers);
+		const output = assistantShell();
+		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, "request"));
+		expect(JSON.parse(JSON.stringify(output)).errorMessage).toContain("maximum context length exceeded");
+		expect(providerDetails(output)).toEqual(
+			expect.objectContaining({
+				kind: "http",
+				category: "context_overflow",
+				retryDisposition: "non_transient",
+				detailSource: "message_category",
+				httpStatus: 400,
+			}),
+		);
+		expect(validateResponsesProviderFailure(output.diagnostics).status).toBe("valid");
+		expect(isContextOverflow(output)).toBe(true);
+
+		const rateLimited = assistantShell();
+		appendResponsesFailureDiagnostics(
+			rateLimited,
+			normalizeResponsesFailure(
+				APIError.generate(429, { error: "maximum context length exceeded" }, undefined, headers),
+				"request",
+			),
+		);
+		expect(validateResponsesProviderFailure(rateLimited.diagnostics)).toEqual({
+			status: "valid",
+			category: "rate_limit",
+			retryDisposition: "transient",
+		});
+		expect(isContextOverflow(rateLimited)).toBe(false);
+		const contradictory = assistantShell();
+		appendResponsesFailureDiagnostics(
+			contradictory,
+			normalizeResponsesFailure(
+				APIError.generate(400, { error: "rate limit: too many tokens per minute" }, undefined, headers),
+				"request",
+			),
+		);
+		expect(validateResponsesProviderFailure(contradictory.diagnostics)).toEqual({
+			status: "valid",
+			category: "invalid_request",
+			retryDisposition: "non_transient",
+		});
+		expect(isContextOverflow(contradictory)).toBe(false);
+	});
+
 	it("keeps the provider's specific bounded message in live and serialized local history", () => {
 		for (const text of [
 			"capacity exhausted for this deployment",
@@ -588,6 +636,28 @@ describe("OpenAI Responses failure normalization", () => {
 		const scalarOutput = assistantShell();
 		appendResponsesFailureDiagnostics(scalarOutput, normalizeResponsesFailure(scalarError, "request"));
 		expect(JSON.parse(JSON.stringify(scalarOutput)).errorMessage).toContain("invalid deployment name");
+	});
+
+	it("excludes SDK-serialized fetch objects but retains independent scalar transport causes", async () => {
+		const raw = { headers: { authorization: "Bearer PRIVATE_TOKEN" }, request_body: "PRIVATE_REQUEST_BODY" };
+		for (const thrown of [raw, [raw], { headers: raw.headers, toJSON: () => "PRIVATE_REQUEST_BODY" }]) {
+			stubFetch([{ throws: thrown }]);
+			const objectFailure = await streamSimpleOpenAIResponses(openaiModel, context, {
+				apiKey,
+				maxRetries: 0,
+			}).result();
+			expect(objectFailure.stopReason).toBe("error");
+			expect(providerDetails(objectFailure)).toEqual(
+				expect.objectContaining({ kind: "transport", retryDisposition: "transient" }),
+			);
+			expect(JSON.stringify(objectFailure)).not.toMatch(
+				/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY|authorization|request_body/,
+			);
+		}
+
+		stubFetch([{ throws: new Error("socket closed by upstream") }]);
+		const scalarFailure = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey, maxRetries: 0 }).result();
+		expect(JSON.parse(JSON.stringify(scalarFailure)).errorMessage).toContain("socket closed by upstream");
 	});
 
 	it("retains bounded unknown scalar detail but never an object-valued detail", async () => {
@@ -696,6 +766,17 @@ describe("OpenAI Responses failure normalization", () => {
 		const result = await failureFrom(sse([{ error: reason }]));
 		expect(result.stopReason).toBe("error");
 		expect(providerDetails(result)).toEqual(expect.objectContaining({ retryDisposition: "unknown" }));
+		expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
+		expect(JSON.parse(JSON.stringify(result)).errorMessage).toContain(reason);
+	});
+
+	it("retains a scalar response.failed error in local history without authorizing retry", async () => {
+		const reason = "Invalid deployment ID";
+		const result = await failureFrom(sse([{ type: "response.failed", response: { error: reason } }]));
+		expect(result.stopReason).toBe("error");
+		expect(providerDetails(result)).toEqual(
+			expect.objectContaining({ kind: "provider_event", retryDisposition: "unknown" }),
+		);
 		expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
 		expect(JSON.parse(JSON.stringify(result)).errorMessage).toContain(reason);
 	});

@@ -392,6 +392,7 @@ function makeFailure(
 ): SafeResponsesFailure {
 	if (value instanceof SafeResponsesFailureError) return value.failure;
 	const { top, nested } = readFailureScalars(value);
+	const scalarError = boundedMessage(recordOf(value)?.error ?? (kindHint === "provider_event" ? value : undefined));
 	const codeCandidates = [
 		[top.code, "provider_code"],
 		[top.type, "provider_type"],
@@ -403,11 +404,17 @@ function makeFailure(
 	const conflictingCode = codeCandidates.some(
 		([code]) => code && code !== providerCode && code !== "error" && code !== "response.failed",
 	);
-	const contextOverflow = [top.code, top.type, nested.code, nested.type, top.message, nested.message].some(
-		(field) => field === "context_length_exceeded" || categoryFromMessage(field) === "context_overflow",
-	);
 	const status = top.status ?? nested.status;
 	const statusCategory = categoryFromStatus(status);
+	const contextOverflow =
+		[top.code, top.type, nested.code, nested.type, top.message, nested.message].some(
+			(field) => field === "context_length_exceeded" || categoryFromMessage(field) === "context_overflow",
+		) ||
+		(value instanceof APIError &&
+			phase === "request" &&
+			statusCategory === "invalid_request" &&
+			categoryFromMessage(scalarError) === "context_overflow" &&
+			!/(?:rate limit|too many requests)/i.test(scalarError ?? ""));
 	const messageCategory = categoryFromMessage(top.message) ?? categoryFromMessage(nested.message);
 	const sdkConnection = value instanceof APIConnectionError;
 	const sdkAbort = value instanceof APIUserAbortError;
@@ -481,7 +488,6 @@ function makeFailure(
 		category = messageCategory ?? (kindHint === "malformed_event" ? "malformed_event" : "unknown");
 		detailSource = messageCategory ? "message_category" : "none";
 	}
-	const scalarError = boundedMessage(recordOf(value)?.error);
 	const hasEvidence = Boolean(
 		unsupportedEvidence ||
 			scalarError ||
@@ -570,7 +576,10 @@ function makeFailure(
 		"id",
 		"sequence_number",
 	]);
-	const causeMessage = boundedMessage(cause?.message);
+	const causeMessage =
+		typeof cause?.message === "string" && !/^\s*(?:\{|\[|")/.test(cause.message)
+			? boundedMessage(cause.message)
+			: undefined;
 	const providerMessage =
 		top.message ??
 		nested.message ??
