@@ -691,6 +691,15 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
 	});
 
+	it("retains a scalar SDK SSE error reason in the serialized assistant without authorizing retry", async () => {
+		const reason = "Invalid deployment ID";
+		const result = await failureFrom(sse([{ error: reason }]));
+		expect(result.stopReason).toBe("error");
+		expect(providerDetails(result)).toEqual(expect.objectContaining({ retryDisposition: "unknown" }));
+		expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
+		expect(JSON.parse(JSON.stringify(result)).errorMessage).toContain(reason);
+	});
+
 	it("rejects provider prose as proof of a transport failure", async () => {
 		for (const event of [
 			{ type: "error", message: "network error" },
