@@ -124,7 +124,8 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 	// A validated category cannot be overridden by an unrelated SDK cause or provider prose.
 	if (message.stopReason === "error") {
 		const structured = validateResponsesProviderFailure(message.diagnostics);
-		if (structured.status === "valid") return structured.category === "context_overflow";
+		if (structured.status !== "absent")
+			return structured.status === "valid" && structured.category === "context_overflow";
 	}
 
 	// Case 1: Check error message patterns

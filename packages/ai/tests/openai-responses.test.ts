@@ -555,6 +555,35 @@ describe("OpenAI Responses failure normalization", () => {
 		}
 	});
 
+	it("does not persist the SDK's serialized error-object fallback", () => {
+		const headers = new Headers();
+		const error = new APIError(400, { detail: { request_body: "private request body" } }, undefined, headers);
+		const output = assistantShell();
+		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, "request"));
+		expect(output.errorMessage).toContain("invalid");
+		expect(JSON.stringify(output)).not.toContain("private request body");
+		expect(JSON.stringify(output)).not.toContain("request_body");
+
+		const scalarError = new APIError(400, { message: "invalid deployment name" }, undefined, headers);
+		const scalarOutput = assistantShell();
+		appendResponsesFailureDiagnostics(scalarOutput, normalizeResponsesFailure(scalarError, "request"));
+		expect(JSON.parse(JSON.stringify(scalarOutput)).errorMessage).toContain("invalid deployment name");
+	});
+
+	it("retains bounded unknown scalar detail but never an object-valued detail", async () => {
+		expect(normalizeResponsesFailure({ detail: "deployment unavailable" }, "request").message).toContain(
+			"deployment unavailable",
+		);
+		for (const detail of ["deployment unavailable", { request_body: "private request body" }]) {
+			const result = await failureFrom(sse([{ type: "response.failed", response: { error: { detail } } }]));
+			expect(result.errorMessage).toContain(
+				typeof detail === "string" ? "deployment unavailable" : "Unrecognized error fields: detail",
+			);
+			expect(JSON.stringify(result)).not.toContain("private request body");
+			expect(providerDetails(result)).toEqual(expect.objectContaining({ retryDisposition: "unknown" }));
+		}
+	});
+
 	it("does not interpret terminal control characters in provider text", () => {
 		const failure = normalizeResponsesFailure({ message: "failed\u001b[31m with details\nnext line" }, "stream");
 		expect(failure.message).toContain("failed [31m with details next line");
@@ -615,6 +644,19 @@ describe("OpenAI Responses failure normalization", () => {
 			apiKey,
 			signal: controller.signal,
 			maxRetries: 0,
+		}).result();
+		expect(result.stopReason).toBe("aborted");
+		expect(result.diagnostics).toBeUndefined();
+	});
+
+	it("treats an SDK-class abort without an aborted signal as cancellation", async () => {
+		stubFetch([completedResponse()]);
+		const result = await streamSimpleOpenAIResponses(openaiModel, context, {
+			apiKey,
+			maxRetries: 0,
+			onResponse: () => {
+				throw new APIUserAbortError({});
+			},
 		}).result();
 		expect(result.stopReason).toBe("aborted");
 		expect(result.diagnostics).toBeUndefined();

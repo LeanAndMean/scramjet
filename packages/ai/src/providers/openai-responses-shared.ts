@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { APIConnectionError, APIConnectionTimeoutError, APIUserAbortError } from "openai";
+import { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError } from "openai";
 import type {
 	Tool as OpenAITool,
 	ResponseCreateParamsStreaming,
@@ -301,7 +301,13 @@ function readFailureScalars(value: unknown): { top: FailureScalars; nested: Fail
 	const read = (record: Record<string, unknown> | undefined): FailureScalars => ({
 		code: finiteString(record?.code),
 		type: finiteString(record?.type),
-		message: boundedMessage(record?.message),
+		message:
+			record === topRecord &&
+			value instanceof APIError &&
+			value.error &&
+			!(typeof recordOf(value.error)?.message === "string" && recordOf(value.error)?.message)
+				? undefined
+				: boundedMessage(record?.message),
 		status: finiteStatus(record?.status),
 	});
 	return { top: read(topRecord), nested: read(nestedRecord) };
@@ -564,6 +570,8 @@ function makeFailure(
 	const providerMessage =
 		top.message ??
 		nested.message ??
+		boundedMessage(recordOf(recordOf(value)?.error)?.detail) ??
+		boundedMessage(recordOf(value)?.detail) ??
 		(errorFields.length ? `Unrecognized error fields: ${errorFields.join(", ")}` : undefined) ??
 		[top.code, nested.code].find((code) => code && code !== "error");
 	const detail =

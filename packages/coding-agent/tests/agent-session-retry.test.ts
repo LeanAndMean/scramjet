@@ -429,6 +429,29 @@ describe("AgentSession context window", () => {
 		]);
 	});
 
+	it.each(["malformed", "duplicate"])("does not compact %s Responses evidence with overflow prose", async (shape) => {
+		const diagnostic = providerFailure("transient", "rate_limit").diagnostics![0];
+		const failure = {
+			...assistantError("maximum context length exceeded"),
+			diagnostics:
+				shape === "duplicate"
+					? [diagnostic, diagnostic]
+					: [{ type: "provider_failure", timestamp: Date.now(), details: { unexpected: true } }],
+		};
+		const { session, events } = await createFixture(() => failure);
+
+		await session.prompt("hello");
+
+		expect(events).not.toContainEqual(expect.objectContaining({ type: "compaction_start" }));
+		expect(events).not.toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({
+				outcome: "not_attempted",
+				reason: shape === "duplicate" ? "duplicate_provider_diagnostic" : "malformed_provider_diagnostic",
+			}),
+		]);
+	});
+
 	it("retries when the session honors a structured transient disposition from message-derived evidence", async () => {
 		const failure: AssistantMessage = {
 			...assistantError("OpenAI Responses service returned a server error: upstream 503 Service Unavailable."),
