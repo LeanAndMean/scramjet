@@ -1,5 +1,13 @@
 import type { AssistantMessage } from "@leanandmean/ai";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@leanandmean/tui";
+import {
+	Container,
+	getRenderedCopy,
+	Markdown,
+	type MarkdownTheme,
+	Spacer,
+	setRenderedCopy,
+	Text,
+} from "@leanandmean/tui";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -71,9 +79,10 @@ export class AssistantMessageComponent extends Container {
 			return lines;
 		}
 
+		const copyRows = getRenderedCopy(lines);
 		lines[0] = OSC133_ZONE_START + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
-		return lines;
+		return setRenderedCopy(lines, copyRows);
 	}
 
 	updateContent(message: AssistantMessage): void {

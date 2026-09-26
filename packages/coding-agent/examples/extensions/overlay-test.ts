@@ -9,7 +9,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@leanandmean/coding-agent";
-import { CURSOR_MARKER, type Focusable, matchesKey, visibleWidth } from "@leanandmean/tui";
+import { CURSOR_MARKER, decodeKittyPrintable, type Focusable, matchesKey, visibleWidth } from "@leanandmean/tui";
 
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("overlay-test", {
@@ -48,6 +48,8 @@ class OverlayTestComponent implements Focusable {
 	) {}
 
 	handleInput(data: string): void {
+		// SCRAMJET-DIVERGENCE: retained terminals encode printable input explicitly.
+		const printable = decodeKittyPrintable(data) ?? data;
 		if (matchesKey(data, "escape")) {
 			this.done(undefined);
 			return;
@@ -74,8 +76,8 @@ class OverlayTestComponent implements Focusable {
 				current.cursor = Math.max(0, current.cursor - 1);
 			} else if (matchesKey(data, "right")) {
 				current.cursor = Math.min(current.text.length, current.cursor + 1);
-			} else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-				current.text = current.text.slice(0, current.cursor) + data + current.text.slice(current.cursor);
+			} else if (printable.length === 1 && printable.charCodeAt(0) >= 32) {
+				current.text = current.text.slice(0, current.cursor) + printable + current.text.slice(current.cursor);
 				current.cursor++;
 			}
 		}

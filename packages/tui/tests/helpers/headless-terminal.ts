@@ -61,6 +61,9 @@ export class HeadlessTerminal implements TerminalContract {
 	}
 	setProgress(): void {}
 	holdOscInput(): void {}
+	setViewportMode(enabled: boolean): void {
+		this.write(enabled ? "\x1b[?1049h\x1b[?1002h\x1b[?1006h" : "\x1b[?1002l\x1b[?1006l\x1b[?1049l");
+	}
 
 	async flush(): Promise<void> {
 		await this.pending;
@@ -76,10 +79,12 @@ export class HeadlessTerminal implements TerminalContract {
 
 	visibleLines(): string[] {
 		const buffer = this.emulator.buffer.active;
-		return Array.from(
-			{ length: this._rows },
-			(_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "",
-		);
+		return Array.from({ length: this._rows }, (_, row) => {
+			const line = buffer.getLine(buffer.viewportY + row);
+			let end = this._columns;
+			while (end > 0 && !line?.getCell(end - 1)?.getChars()) end--;
+			return line?.translateToString(false, 0, end) ?? "";
+		});
 	}
 
 	bufferLines(): string[] {
@@ -93,6 +98,17 @@ export class HeadlessTerminal implements TerminalContract {
 
 	scrollLines(amount: number): void {
 		this.emulator.scrollLines(amount);
+	}
+
+	cell(row: number, col: number) {
+		const buffer = this.emulator.buffer.active;
+		const cell = buffer.getLine(buffer.viewportY + row)?.getCell(col);
+		if (!cell) throw new Error(`No terminal cell at ${row},${col}`);
+		return {
+			text: cell.getChars(),
+			background: cell.isBgDefault() ? undefined : cell.getBgColor(),
+			inverse: cell.isInverse() !== 0,
+		};
 	}
 
 	cursorPosition(): { row: number; col: number } {

@@ -576,6 +576,12 @@ export function isKeyRepeat(data: string): boolean {
 	return false;
 }
 
+// SCRAMJET-DIVERGENCE: explicit Kitty modifier presses are not editing or browsing actions.
+export function isKeyModifier(data: string): boolean {
+	const codepoint = parseKittySequence(data)?.codepoint;
+	return codepoint !== undefined && codepoint >= 57441 && codepoint <= 57454;
+}
+
 function parseEventType(eventTypeStr: string | undefined): KeyEventType {
 	if (!eventTypeStr) return "press";
 	const eventType = parseInt(eventTypeStr, 10);

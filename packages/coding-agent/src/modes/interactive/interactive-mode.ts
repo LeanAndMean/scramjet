@@ -7,6 +7,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@leanandmean/agent";
 import {
 	type AssistantMessage,
@@ -34,6 +35,7 @@ import {
 	type Component,
 	Container,
 	fuzzyFilter,
+	isKeyRelease,
 	Loader,
 	type LoaderIndicatorOptions,
 	Markdown,
@@ -44,6 +46,7 @@ import {
 	Text,
 	TruncatedText,
 	TUI,
+	TUI_KEYBINDINGS,
 	visibleWidth,
 } from "@leanandmean/tui";
 import { spawn, spawnSync } from "child_process";
@@ -79,7 +82,7 @@ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.js";
-import { copyToClipboard } from "../../utils/clipboard.js";
+import { copyToClipboard, readClipboardText } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
 import { parseGitUrl } from "../../utils/git.js";
 import { getCwdRelativePath } from "../../utils/paths.js";
@@ -230,6 +233,7 @@ export interface InteractiveModeOptions {
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
+	private readonly tuiMode: "retained" | "committed";
 	private committedChatContainer: Container;
 	private chatContainer: Container;
 	private mutableChatComponents = new Set<Component>();
@@ -237,6 +241,7 @@ export class InteractiveMode {
 	private statusContainer: Container;
 	private defaultEditor: CustomEditor;
 	private editor: EditorComponent;
+	private editorAvailableRows: number | undefined;
 	private editorComponentFactory: EditorFactory | undefined;
 	private autocompleteProvider: AutocompleteProvider | undefined;
 	private autocompleteProviderWrappers: AutocompleteProviderFactory[] = [];
@@ -282,6 +287,7 @@ export class InteractiveMode {
 	private agentRunGeneration = 0;
 	private selectorOpenGeneration = 0;
 	private pendingSelectorOpenGeneration: number | undefined;
+	private layoutSettingsSettlementGeneration = 0;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -324,6 +330,9 @@ export class InteractiveMode {
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
+	private customHeightAllocation:
+		| { component: Component; notify(rows: number | undefined): void; fail(error: unknown): void }
+		| undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
 	// Extension widgets (components rendered above/below the editor)
@@ -370,8 +379,13 @@ export class InteractiveMode {
 			await this.rebindCurrentSession();
 		});
 		this.version = VERSION;
-		// SCRAMJET-DIVERGENCE: mandatory committed/live rendering and injectable terminals (#389).
+		this.tuiMode = this.settingsManager.getTuiMode();
+		// SCRAMJET-DIVERGENCE: retained interactive rendering and injectable terminals.
 		this.ui = new TUI(options.terminal ?? new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
+		this.ui.addInputListener((data) => {
+			if (!isKeyRelease(data) && !/^\x1b\[<\d+;\d+;\d+m$/.test(data)) this.clipboardPasteGeneration++;
+			return undefined;
+		});
 		this.headerContainer = new Container();
 		this.committedChatContainer = new Container();
 		this.chatContainer = new Container();
@@ -388,6 +402,7 @@ export class InteractiveMode {
 			autocompleteMaxVisible,
 		});
 		this.editor = this.defaultEditor;
+		this.configureEditorHeight(this.editor);
 		this.defaultEditor.setSpellcheckProvider(new NspellProvider());
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
@@ -407,6 +422,194 @@ export class InteractiveMode {
 		initTheme(this.settingsManager.getTheme(), true);
 	}
 
+	private configureEditorHeight(editor: EditorComponent): void {
+		editor.setHeightLimit?.(() => ({
+			rows: Math.max(1, this.editorAvailableRows ?? this.ui.terminal.rows - 3),
+			text: Math.max(
+				1,
+				Math.floor((this.ui.terminal.rows * this.settingsManager.getEditorMaxHeightPercent()) / 100),
+			),
+		}));
+	}
+
+	private renderSessionGap(width: number, below: number): string {
+		if (below === 0) return "";
+		const forms = [
+			`Session: ${below} lines below · Ctrl+End: latest`,
+			`Session: ${below} lines below`,
+			`Session: ${below} below`,
+			`Session↓${below}`,
+			"Session ↓…",
+		];
+		return theme.fg("muted", forms.find((text) => visibleWidth(text) <= width) ?? "");
+	}
+
+	// SCRAMJET-DIVERGENCE: preserve production ownership while making mutable overflow browseable.
+	private clipboardPastePending?: Promise<string>;
+	private clipboardPasteGeneration = 0;
+	private clipboardPasteOwner?: Component;
+
+	private async pasteFromClipboard(): Promise<void> {
+		const editor = this.editor;
+		const session = this.session;
+		const draft = editor.getText();
+		const generation = this.clipboardPasteGeneration;
+		const current = () =>
+			generation === this.clipboardPasteGeneration &&
+			this.editor === editor &&
+			this.session === session &&
+			editor.getText() === draft &&
+			this.editorContainer.children.length === 1 &&
+			this.editorContainer.children[0] === editor &&
+			this.ui.isComponentFocused(editor) &&
+			this.ui.isComponentVisible(this.editorContainer) &&
+			this.ui.isComponentRenderComplete(this.editorContainer);
+		if (!current()) return;
+		this.clipboardPastePending ??= readClipboardText();
+		const pending = this.clipboardPastePending;
+		try {
+			const text = await pending;
+			if (!current()) return;
+			const safeText = stripVTControlCharacters(text).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+			editor.handleInput(`\x1b[200~${safeText}\x1b[201~`);
+			this.ui.requestRender();
+		} catch (error) {
+			if (current()) this.showError(`Paste failed: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			if (this.clipboardPastePending === pending) this.clipboardPastePending = undefined;
+		}
+	}
+
+	private configureRetainedViewport(): void {
+		this.ui.configureViewport({
+			getBlocks: () =>
+				this.ui.children.flatMap((component) => {
+					if (
+						component === this.editorContainer &&
+						this.clipboardPasteOwner !== this.editorContainer.children[0]
+					) {
+						this.clipboardPasteOwner = this.editorContainer.children[0];
+						this.clipboardPasteGeneration++;
+					}
+					if (
+						component instanceof Container &&
+						(component === this.committedChatContainer || component === this.chatContainer)
+					) {
+						return component.children.map((child) => ({
+							component: child,
+							finalized: component === this.committedChatContainer,
+						}));
+					}
+					const dock =
+						this.settingsManager.getDockEditor() &&
+						this.editorContainer.children.length > 0 &&
+						[
+							this.widgetContainerAbove,
+							this.editorContainer,
+							this.widgetContainerBelow,
+							this.customFooter ?? this.footer,
+						].includes(component as Container);
+					return [
+						{
+							component,
+							finalized: false,
+							dock,
+							renderDockGap:
+								component === this.widgetContainerAbove
+									? (width: number, below: number) => this.renderSessionGap(width, below)
+									: undefined,
+							fitHeight:
+								component === this.editorContainer
+									? (rows: number) => {
+											this.editorAvailableRows = rows;
+											const allocation = this.customHeightAllocation;
+											if (allocation) {
+												if (
+													this.editorContainer.children.length === 1 &&
+													this.editorContainer.children[0] === allocation.component
+												) {
+													try {
+														allocation.notify(rows);
+													} catch (error) {
+														allocation.fail(error);
+													}
+												} else this.releaseCustomHeight();
+											}
+										}
+									: undefined,
+						},
+					];
+				}),
+			keybindings: this.keybindings,
+			copy: copyToClipboard,
+			requestPaste: (component) => {
+				if (component === this.editorContainer) void this.pasteFromClipboard();
+			},
+			minimumSize: { columns: 12, rows: 3 },
+			handleBlockedInput: (data) => {
+				const selector = this.editorContainer.children[0];
+				if (
+					selector instanceof SettingsSelectorComponent &&
+					this.ui.isComponentFocused(selector.getSettingsList()) &&
+					this.keybindings.matches(data, "tui.select.cancel")
+				) {
+					selector.cancel();
+				} else if (this.keybindings.matches(data, "app.interrupt")) {
+					this.restoreQueuedMessagesToEditor();
+					this.session.abortBash();
+					this.session.abortCompaction();
+					this.session.abortBranchSummary();
+					void this.session.abort();
+				} else if (this.keybindings.matches(data, "app.exit") && this.editor.getText().length === 0) {
+					this.handleCtrlD();
+				}
+			},
+			getScrollWheelStep: () => this.settingsManager.getScrollWheelStep(),
+			allowViewportKeys: (data) =>
+				this.ui.isComponentFocused(this.editor) ||
+				(!matchesKey(data, "space") &&
+					!(Object.keys(TUI_KEYBINDINGS) as (keyof typeof TUI_KEYBINDINGS)[]).some(
+						(action) => !action.startsWith("tui.viewport.") && this.keybindings.matches(data, action),
+					)),
+			keepReadingOnInput: () => {
+				const ownsFocus = (component: Component): boolean =>
+					this.ui.isComponentFocused(component) ||
+					(component instanceof Container && component.children.some(ownsFocus));
+				return this.editorContainer.children.some(ownsFocus);
+			},
+			handlePresentationInput: (data) => {
+				if (!this.ui.isComponentFocused(this.editor)) return false;
+				if (
+					!this.keybindings.matches(data, "app.tools.expand") &&
+					!this.keybindings.matches(data, "app.thinking.toggle")
+				)
+					return false;
+				this.editor.handleInput(data);
+				return true;
+			},
+		});
+		// SCRAMJET-DIVERGENCE: completion needs a painted slot even when its hardware cursor is hidden.
+		this.ui.addInputListener((data) => {
+			if (
+				!this.ui.isComponentFocused(this.editor) ||
+				!this.editor.isShowingAutocomplete?.() ||
+				isKeyRelease(data) ||
+				/^\x1b\[\d+;\d+;\d+t$/.test(data) ||
+				this.keybindings.matches(data, "app.tools.expand") ||
+				this.keybindings.matches(data, "app.thinking.toggle")
+			)
+				return undefined;
+			const visible = this.ui.isComponentVisible(this.editorContainer);
+			if (!visible && !this.ui.hasOverlay()) this.ui.revealComponent(this.editorContainer);
+			if (
+				(this.keybindings.matches(data, "tui.input.tab") || this.keybindings.matches(data, "tui.select.confirm")) &&
+				(!visible || !this.ui.isViewportFrameFlushed())
+			)
+				return { consume: true };
+			return undefined;
+		});
+	}
+
 	// SCRAMJET-DIVERGENCE: finalized transcript components are promoted atomically into append-only history (#389).
 	private promoteFinalizedChatPrefix(): void {
 		let promoted = false;
@@ -418,7 +621,10 @@ export class InteractiveMode {
 			this.committedChatContainer.addChild(child);
 			promoted = true;
 		}
-		if (promoted) this.ui.commit();
+		if (promoted) {
+			if (this.ui.getViewportState()) this.ui.requestRender();
+			else this.ui.commit();
+		}
 	}
 
 	private setChatComponentMutable(component: Component, mutable: boolean): void {
@@ -435,6 +641,8 @@ export class InteractiveMode {
 	}
 
 	private clearTranscript(): void {
+		this.clipboardPasteGeneration++;
+		if (this.ui.getViewportState()) this.ui.resetViewport();
 		this.pendingToolFinalizations = new Set();
 		const tools = new Set([
 			...this.pendingTools.values(),
@@ -699,7 +907,8 @@ export class InteractiveMode {
 
 		this.ui.addChild(this.committedChatContainer);
 		this.ui.addChild(this.chatContainer);
-		this.ui.setLiveRegionStart(this.chatContainer);
+		if (this.tuiMode === "retained") this.configureRetainedViewport();
+		else this.ui.setLiveRegionStart(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
 		this.renderWidgets(); // Initialize with default spacer
@@ -1908,7 +2117,21 @@ export class InteractiveMode {
 		this.renderWidgets();
 	}
 
+	// SCRAMJET-DIVERGENCE: height delivery belongs to one opted-in custom invocation, never an inferred component capability.
+	private releaseCustomHeight(): void {
+		const allocation = this.customHeightAllocation;
+		this.customHeightAllocation = undefined;
+		try {
+			allocation?.notify(undefined);
+		} catch (error) {
+			this.showError(
+				`Custom input height release failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
 	private resetExtensionUI(): void {
+		this.releaseCustomHeight();
 		if (this.extensionSelector) {
 			this.hideExtensionSelector();
 		}
@@ -2362,6 +2585,7 @@ export class InteractiveMode {
 			}
 
 			this.editor = newEditor;
+			this.configureEditorHeight(this.editor);
 		} else {
 			// Restore default editor with text from custom editor
 			this.defaultEditor.setText(currentText);
@@ -2402,16 +2626,19 @@ export class InteractiveMode {
 			};
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			onHandle?: (handle: OverlayHandle) => void;
+			onAvailableHeight?: (rows: number | undefined) => void;
 		},
 	): Promise<T> {
+		if (options?.onAvailableHeight && (options.overlay || options.toolAttachedContext))
+			throw new Error("Available height is supported only for ordinary custom input controls");
 		const savedText = this.editor.getText();
 		const isOverlay = options?.overlay ?? false;
 
-		const restoreEditor = () => {
+		const restoreEditor = (restoreFocus = true) => {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.editor.setText(savedText);
-			this.ui.setFocus(this.editor);
+			if (restoreFocus) this.ui.setFocus(this.editor);
 			this.ui.requestRender();
 		};
 
@@ -2419,14 +2646,53 @@ export class InteractiveMode {
 			let component: Component & { dispose?(): void };
 			let attachedTool: ToolExecutionComponent | undefined;
 			let committedContext: Component | undefined;
+			let removeInputGuard: (() => void) | undefined;
+			let releaseHeight = () => {};
+			let revealingControls = false;
+			let needsReveal = false;
+			const retained = this.ui.getViewportState() !== undefined;
+			const pendingFocus: Component = { render: () => [], invalidate() {} };
+			const restoreAttachedFocus = (current: boolean) => {
+				if (!retained) return;
+				this.ui.replaceFocus(pendingFocus, current ? this.editor : null);
+				if (attachedTool) this.ui.replaceFocus(attachedTool, current ? this.editor : null);
+			};
 			let closed = false;
+			const attachmentCurrent = () =>
+				attachedTool &&
+				committedContext &&
+				this.pendingTools.get(options!.toolAttachedContext!.toolCallId) === attachedTool &&
+				this.chatContainer.children.includes(attachedTool) &&
+				this.committedChatContainer.children.includes(committedContext);
+			const fail = (error: unknown) => {
+				if (closed) return;
+				closed = true;
+				removeInputGuard?.();
+				releaseHeight();
+				const current = !attachedTool || this.chatContainer.children.includes(attachedTool);
+				attachedTool?.cancelCommittedContext();
+				if (committedContext) {
+					this.committedChatContainer.removeChild(committedContext);
+					this.ui.rebuild();
+				}
+				try {
+					component?.dispose?.();
+				} catch {}
+				if (attachedTool) restoreAttachedFocus(current);
+				if (!isOverlay && current) restoreEditor(!attachedTool || !retained);
+				reject(error);
+			};
 
 			const close = (result: T) => {
 				if (closed) return;
 				closed = true;
+				removeInputGuard?.();
+				releaseHeight();
 				attachedTool?.detachCommittedContext();
+				const current = !attachedTool || this.chatContainer.children.includes(attachedTool);
+				if (attachedTool) restoreAttachedFocus(current);
 				if (isOverlay) this.ui.hideOverlay();
-				else restoreEditor();
+				else if (current) restoreEditor(!attachedTool || !retained);
 				// Note: both branches above already call requestRender
 				resolve(result);
 				try {
@@ -2454,19 +2720,63 @@ export class InteractiveMode {
 						committedContext = attachment.render(this.ui, theme);
 						this.committedChatContainer.addChild(committedContext);
 						tool.attachCommittedContext(component);
-						this.ui.setFocus(null);
+						if (retained) this.ui.replaceFocus(this.editor, pendingFocus);
+						else this.ui.setFocus(null);
 						this.editorContainer.clear();
-						try {
-							await this.ui.commitNow({ requireFlush: true });
-						} catch (error) {
-							tool.cancelCommittedContext();
-							this.committedChatContainer.removeChild(committedContext);
-							committedContext = undefined;
-							this.ui.rebuild();
-							throw error;
+						const reveal = async () => {
+							revealingControls = true;
+							this.ui.replaceFocus(tool, pendingFocus);
+							if (retained) {
+								this.ui.revealComponent(tool);
+								await this.ui.renderNow({ requireFlush: true });
+							} else await this.ui.commitNow({ requireFlush: true });
+							if (closed) return;
+							if (!attachmentCurrent())
+								throw new Error("Tool-attached context was replaced before flush settled");
+							if (retained && !this.ui.isViewportFrameFlushed()) {
+								needsReveal = true;
+								revealingControls = false;
+								return;
+							}
+							if (
+								retained &&
+								(!this.ui.isComponentRenderComplete(committedContext!) ||
+									!this.ui.isComponentRenderComplete(tool))
+							)
+								throw new Error("Approval context or controls could not be rendered completely");
+							const visibility = retained ? this.ui.getComponentVisibility(tool) : "visible";
+							if (visibility === "outside")
+								throw new Error("Approval controls do not fit in the visible viewport");
+							needsReveal = visibility === "occluded";
+							revealingControls = false;
+							if (retained) this.ui.replaceFocus(pendingFocus, tool);
+							else this.ui.setFocus(tool);
+						};
+						if (retained) {
+							// SCRAMJET-DIVERGENCE: occluded controls require a fresh reveal/flush, never overlay focus theft.
+							removeInputGuard = this.ui.addInputListener((data) => {
+								if (isKeyRelease(data) || /^\x1b\[\d+;\d+;\d+t$/.test(data)) return undefined;
+								if (!this.ui.isComponentFocused(tool) && !this.ui.isComponentFocused(pendingFocus))
+									return undefined;
+								if (!attachmentCurrent()) {
+									fail(new Error("Tool-attached context is no longer current"));
+									return { consume: true };
+								}
+								if (revealingControls) return { consume: true };
+								if (
+									!needsReveal &&
+									this.ui.isViewportFrameFlushed() &&
+									this.ui.isComponentVisible(tool) &&
+									this.ui.isComponentRenderComplete(committedContext!) &&
+									this.ui.isComponentRenderComplete(tool)
+								)
+									return undefined;
+								if (!this.ui.hasOverlay()) void reveal().catch(fail);
+								return { consume: true };
+							});
 						}
+						await reveal();
 						if (closed) return;
-						this.ui.setFocus(tool);
 						this.ui.requestRender();
 						return;
 					}
@@ -2488,27 +2798,22 @@ export class InteractiveMode {
 						// Expose handle to caller for visibility control
 						options?.onHandle?.(handle);
 					} else {
+						this.releaseCustomHeight();
+						if (options?.onAvailableHeight) {
+							const allocation = { component, notify: options.onAvailableHeight, fail };
+							this.customHeightAllocation = allocation;
+							releaseHeight = () => {
+								if (this.customHeightAllocation === allocation) this.releaseCustomHeight();
+							};
+							allocation.notify(undefined);
+						}
 						this.editorContainer.clear();
 						this.editorContainer.addChild(component);
 						this.ui.setFocus(component);
 						this.ui.requestRender();
 					}
 				})
-				.catch((err) => {
-					if (closed) return;
-					attachedTool?.cancelCommittedContext();
-					if (committedContext) {
-						this.committedChatContainer.removeChild(committedContext);
-						this.ui.rebuild();
-					}
-					try {
-						component?.dispose?.();
-					} catch {
-						/* ignore dispose errors */
-					}
-					if (!isOverlay) restoreEditor();
-					reject(err);
-				});
+				.catch(fail);
 		});
 	}
 
@@ -2595,6 +2900,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 
 		this.defaultEditor.onChange = (text: string) => {
+			this.clipboardPasteGeneration++;
 			const wasBashMode = this.isBashMode;
 			this.isBashMode = text.trimStart().startsWith("!");
 			if (wasBashMode !== this.isBashMode) {
@@ -2872,6 +3178,7 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				} else if (event.message.role === "user") {
 					this.addMessageToChat(event.message);
+					this.ui.followViewport();
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
@@ -3538,6 +3845,7 @@ export class InteractiveMode {
 		await this.ui.terminal.drainInput(1000);
 
 		this.stop();
+		await this.ui.terminal.flush?.();
 		await this.runtimeHost.dispose();
 		process.exit(0);
 	}
@@ -3635,7 +3943,7 @@ export class InteractiveMode {
 		this.signalCleanupHandlers = [];
 	}
 
-	private handleCtrlZ(): void {
+	private async handleCtrlZ(): Promise<void> {
 		if (process.platform === "win32") {
 			this.showStatus("Suspend to background is not supported on Windows");
 			return;
@@ -3660,7 +3968,8 @@ export class InteractiveMode {
 		});
 
 		try {
-			// Stop the TUI (restore terminal to normal mode)
+			// SCRAMJET-DIVERGENCE: drain releases before handing keyboard ownership back to the shell.
+			await this.ui.terminal.drainInput();
 			this.ui.stop();
 
 			// Send SIGTSTP to process group (pid=0 means all processes in group)
@@ -3772,24 +4081,21 @@ export class InteractiveMode {
 	}
 
 	private toggleThinkingBlockVisibility(): void {
-		this.hideThinkingBlock = !this.hideThinkingBlock;
-		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
-
-		// Rebuild chat from session messages
-		this.rebuildChatFromMessages();
-
-		// If streaming, re-add the streaming component with updated visibility and re-render
-		if (this.streamingComponent && this.streamingMessage) {
-			this.streamingComponent.setHideThinkingBlock(this.hideThinkingBlock);
-			this.streamingComponent.updateContent(this.streamingMessage);
-			this.chatContainer.addChild(this.streamingComponent);
-			this.setChatComponentMutable(this.streamingComponent, true);
-		}
-
+		this.setThinkingBlockVisibility(!this.hideThinkingBlock);
 		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
 	}
 
-	private openExternalEditor(): void {
+	// SCRAMJET-DIVERGENCE: presentation changes retain live tools and browsing identities.
+	private setThinkingBlockVisibility(hidden: boolean): void {
+		this.hideThinkingBlock = hidden;
+		this.settingsManager.setHideThinkingBlock(hidden);
+		for (const child of [...this.committedChatContainer.children, ...this.chatContainer.children]) {
+			if (child instanceof AssistantMessageComponent) child.setHideThinkingBlock(hidden);
+		}
+		this.ui.rebuild();
+	}
+
+	private async openExternalEditor(): Promise<void> {
 		// Determine editor (respect $VISUAL, then $EDITOR)
 		const editorCmd = process.env.VISUAL || process.env.EDITOR;
 		if (!editorCmd) {
@@ -3804,7 +4110,8 @@ export class InteractiveMode {
 			// Write current content to temp file
 			fs.writeFileSync(tmpFile, currentText, "utf-8");
 
-			// Stop TUI to release terminal
+			// SCRAMJET-DIVERGENCE: the editor must not inherit the key release that opened it.
+			await this.ui.terminal.drainInput();
 			this.ui.stop();
 
 			// Split by space to support editor arguments (e.g., "code --wait")
@@ -4088,6 +4395,27 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private async settleLayoutSettings(selector: SettingsSelectorComponent): Promise<void> {
+		const generation = ++this.layoutSettingsSettlementGeneration;
+		const settings = this.settingsManager;
+		await settings.flush();
+		// SCRAMJET-DIVERGENCE: only the latest settlement may drain a shared batch of save errors.
+		if (generation !== this.layoutSettingsSettlementGeneration) return;
+		const errors = settings.drainErrors();
+		selector.setSaveError(errors.length ? "Changes not saved; see warning" : undefined);
+		if (errors.length) {
+			const details = stripVTControlCharacters(
+				errors.map(({ scope, error }) => `${scope}: ${error.message}`).join("; "),
+			)
+				.replace(/[\r\n\t]/g, " ")
+				.slice(0, 200);
+			this.showWarning(
+				`Layout settings not saved (${details}). Changes may be lost on restart; project overrides still apply.`,
+			);
+		}
+		this.ui.requestRender();
+	}
+
 	private showSettingsSelector(): void {
 		this.showSelector((done) => {
 			const selector = new SettingsSelectorComponent(
@@ -4117,6 +4445,11 @@ export class InteractiveMode {
 					quietStartup: this.settingsManager.getQuietStartup(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
+					tuiMode: this.tuiMode,
+					dockEditor: this.settingsManager.getDockEditor(),
+					editorMaxHeightPercent: this.settingsManager.getEditorMaxHeightPercent(),
+					scrollWheelStep: this.settingsManager.getScrollWheelStep(),
+					viewportProjectOverrides: Object.keys(this.settingsManager.getProjectSettings()),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4174,16 +4507,7 @@ export class InteractiveMode {
 							this.ui.requestRender();
 						}
 					},
-					onHideThinkingBlockChange: (hidden) => {
-						this.hideThinkingBlock = hidden;
-						this.settingsManager.setHideThinkingBlock(hidden);
-						for (const child of [...this.committedChatContainer.children, ...this.chatContainer.children]) {
-							if (child instanceof AssistantMessageComponent) {
-								child.setHideThinkingBlock(hidden);
-							}
-						}
-						this.rebuildChatFromMessages();
-					},
+					onHideThinkingBlockChange: (hidden) => this.setThinkingBlockVisibility(hidden),
 					onCollapseChangelogChange: (collapsed) => {
 						this.settingsManager.setCollapseChangelog(collapsed);
 					},
@@ -4223,11 +4547,31 @@ export class InteractiveMode {
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
 					},
+					onDockEditorChange: (enabled) => {
+						this.settingsManager.setDockEditor(enabled);
+						void this.settleLayoutSettings(selector);
+						this.ui.refreshViewportLayout();
+						if (!this.settingsManager.getDockEditor()) this.ui.revealComponent(this.editorContainer);
+						return this.settingsManager.getDockEditor();
+					},
+					onEditorMaxHeightPercentChange: (percent) => {
+						this.settingsManager.setEditorMaxHeightPercent(percent);
+						void this.settleLayoutSettings(selector);
+						this.ui.refreshViewportLayout();
+						return this.settingsManager.getEditorMaxHeightPercent();
+					},
+					onScrollWheelStepChange: (step) => {
+						this.settingsManager.setScrollWheelStep(step);
+						void this.settleLayoutSettings(selector);
+						this.ui.requestRender();
+						return this.settingsManager.getScrollWheelStep();
+					},
 					onCancel: () => {
 						done();
 						this.ui.requestRender();
 					},
 				},
+				() => Math.max(1, Math.min(this.editorAvailableRows ?? Infinity, this.ui.terminal.rows - 4)),
 			);
 			return { component: selector, focus: selector.getSettingsList() };
 		});
@@ -5747,8 +6091,12 @@ export class InteractiveMode {
 			this.unsubscribe();
 		}
 		if (this.isInitialized) {
-			this.ui.stop();
 			this.isInitialized = false;
+			const transcript = [...this.committedChatContainer.children, ...this.chatContainer.children];
+			for (const component of transcript) {
+				if (component instanceof ToolExecutionComponent) component.detachCommittedContext();
+			}
+			this.ui.stop({ transcript });
 		}
 	}
 }

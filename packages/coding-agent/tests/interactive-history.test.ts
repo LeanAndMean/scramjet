@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@leanandmean/agent";
 import type { AssistantMessage } from "@leanandmean/ai";
 import { type Component, Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@leanandmean/tui";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const imageConversion = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ const settingsSelector = vi.hoisted(() => ({
 		  }
 		| undefined,
 }));
+vi.mock("../src/utils/tools-manager.js", () => ({ ensureTool: vi.fn(async () => undefined) }));
 vi.mock("../src/utils/image-convert.js", () => imageConversion);
 vi.mock("../src/modes/interactive/components/settings-selector.js", () => ({
 	SettingsSelectorComponent: class {
@@ -28,11 +30,24 @@ vi.mock("../src/modes/interactive/components/settings-selector.js", () => ({
 }));
 
 import { HeadlessTerminal } from "../../tui/tests/helpers/headless-terminal.js";
+import { DoomOverlayComponent } from "../examples/extensions/doom-overlay/doom-component.js";
+import type { DoomEngine } from "../examples/extensions/doom-overlay/doom-engine.js";
+import { DoomKeys } from "../examples/extensions/doom-overlay/doom-keys.js";
+import modalEditor from "../examples/extensions/modal-editor.js";
+import overlayExamples from "../examples/extensions/overlay-qa-tests.js";
+import overlayExample from "../examples/extensions/overlay-test.js";
+import snakeExample from "../examples/extensions/snake.js";
+import invadersExample from "../examples/extensions/space-invaders.js";
+import { createToolHtmlRenderer } from "../src/core/export-html/tool-renderer.js";
+import { defineTool } from "../src/core/extensions/index.js";
 import { ArminComponent } from "../src/modes/interactive/components/armin.js";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.js";
 import { DaxnutsComponent } from "../src/modes/interactive/components/daxnuts.js";
+import type { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
 import { initTheme, onThemeChange } from "../src/modes/interactive/theme/theme.js";
+import * as clipboard from "../src/utils/clipboard.js";
+import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
 
 function assistant(text: string, stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
 	return {
@@ -135,6 +150,10 @@ function createInteractiveHarness(): {
 					getShowHardwareCursor: () => false,
 					getEditorPaddingX: () => 0,
 					getAutocompleteMaxVisible: () => 5,
+					getDockEditor: () => false,
+					getEditorMaxHeightPercent: () => 30,
+					getScrollWheelStep: () => 3,
+					getProjectSettings: () => ({}),
 					getQuietStartup: () => false,
 					getShowTerminalProgress: () => false,
 					getWarnings: () => ({}),
@@ -182,6 +201,652 @@ function createInteractiveHarness(): {
 		emit: (event) => eventTarget.handleEvent(event),
 	};
 }
+
+describe("shipped printable-key consumers", () => {
+	it.each(["q", "Q", "\x1b[113u", "\x1b[113;2u"])("pauses and exits the DOOM overlay on Q %j", (input) => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		const engine = { pushKey: vi.fn(), tick: vi.fn() };
+		const exit = vi.fn();
+		const component = new DoomOverlayComponent(
+			{ requestRender: vi.fn() } as unknown as TUI,
+			engine as unknown as DoomEngine,
+			exit,
+		);
+		try {
+			component.handleInput("\x1b[113;1:3u");
+			expect(exit).not.toHaveBeenCalled();
+			expect(engine.pushKey).not.toHaveBeenCalled();
+			component.handleInput(input);
+			expect.soft(exit).toHaveBeenCalledTimes(1);
+			expect(engine.pushKey.mock.calls).toEqual([
+				[true, DoomKeys.KEY_PAUSE],
+				[false, DoomKeys.KEY_PAUSE],
+			]);
+		} finally {
+			component.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("quits Space Invaders without saving on literal and encoded Q, but not releases or modifiers", async () => {
+		for (const input of ["q", "\x1b[113u"]) {
+			const h = await createProductionInteractiveHarness(100, 50, invadersExample);
+			const editor = h.internals.editorContainer.children[0];
+			vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+			const work = h.session.prompt("/invaders").catch((error: Error) => error);
+			try {
+				await new Promise((resolve) => setImmediate(resolve));
+				const painted = (await h.frame()).join("\n");
+				expect(painted).toContain("SPACE INVADERS");
+				expect(painted).toContain("Q quit");
+				expect(h.internals.ui.isComponentFocused(editor)).toBe(false);
+				h.terminal.sendInput("\x1b[113;1:3u");
+				h.terminal.sendInput("\x1b[113;5u");
+				await h.frame();
+				expect(h.internals.ui.isComponentFocused(editor)).toBe(false);
+				h.terminal.sendInput(input);
+				await h.frame();
+				expect(h.internals.ui.isComponentFocused(editor), JSON.stringify(input)).toBe(true);
+				expect(await work).toBeUndefined();
+				expect(
+					h.session.sessionManager
+						.getEntries()
+						.filter((entry) => entry.type === "custom" && entry.customType === "space-invaders-save"),
+				).toEqual([expect.objectContaining({ data: null })]);
+			} finally {
+				h.terminal.sendInput("\x1b");
+				await work;
+				vi.useRealTimers();
+				await h.dispose();
+			}
+		}
+	});
+
+	it("restarts Space Invaders after defeat with literal and encoded R", async () => {
+		for (const input of ["r", "\x1b[114u"]) {
+			const h = await createProductionInteractiveHarness(100, 50, invadersExample);
+			h.session.sessionManager.appendCustomEntry("space-invaders-save", {
+				player: { x: 30, lives: 1 },
+				aliens: [{ x: 4, y: 2, type: 0, alive: true }],
+				alienDirection: 1,
+				alienMoveCounter: 0,
+				alienMoveDelay: 18,
+				alienDropping: false,
+				bullets: [{ x: 30, y: 21, direction: 1 }],
+				shields: [],
+				score: 10,
+				highScore: 100,
+				level: 1,
+				gameOver: false,
+				victory: false,
+				alienShootCounter: 0,
+			});
+			vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+			const work = h.session.prompt("/invaders").catch((error: Error) => error);
+			try {
+				await new Promise((resolve) => setImmediate(resolve));
+				expect((await h.frame()).join("\n")).toContain("PAUSED");
+				h.terminal.sendInput("\x1b[D");
+				vi.advanceTimersByTime(50);
+				expect((await h.frame()).join("\n")).toContain("GAME OVER! Press R to restart");
+				h.terminal.sendInput("\x1b[114;1:3u");
+				expect((await h.frame()).join("\n")).toContain("GAME OVER!");
+				h.terminal.sendInput(input);
+				const restarted = (await h.frame()).join("\n");
+				expect(restarted, JSON.stringify(input)).not.toContain("GAME OVER!");
+				expect(restarted).toContain("SPACE/F to fire");
+				expect(h.session.sessionManager.getEntries().at(-1)).toMatchObject({
+					type: "custom",
+					customType: "space-invaders-save",
+					data: null,
+				});
+			} finally {
+				h.terminal.sendInput("\x1b");
+				await work;
+				vi.useRealTimers();
+				await h.dispose();
+			}
+		}
+	});
+
+	it.each(["\r", "\x1b[13u", "\x1b[57414u"])("confirms overlay search with Enter %j", async (input) => {
+		const h = await createProductionInteractiveHarness(100, 36, overlayExample);
+		const work = h.session.prompt("/overlay-test").catch((error: Error) => error);
+		try {
+			await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain("Overlay Test"));
+			h.terminal.sendInput("a");
+			h.terminal.sendInput("\x1b[57414;1:3u");
+			expect((await h.frame()).join("\n")).toContain("Search: a");
+			expect(h.internals.ui.hasOverlay()).toBe(true);
+			h.terminal.sendInput(input);
+			await h.frame();
+			expect(h.internals.ui.hasOverlay()).toBe(false);
+			expect(await work).toBeUndefined();
+			expect(h.extensionUI.getEditorText()).toBe("");
+		} finally {
+			h.terminal.sendInput("\x1b");
+			await work;
+			await h.dispose();
+		}
+	});
+
+	it.each([
+		{ command: "overlay-test", extension: overlayExample, title: "Overlay Test", typed: "Search: aZ", panel: false },
+		{
+			command: "overlay-passive",
+			extension: overlayExamples,
+			title: "Non-Capturing Demo",
+			typed: "> aZ",
+			panel: false,
+		},
+		{
+			command: "overlay-streaming",
+			extension: overlayExamples,
+			title: "Streaming + Input Test",
+			typed: "> aZ",
+			panel: true,
+		},
+	])(
+		"accepts literal and encoded printable input in $command",
+		async ({ command, extension, title, typed, panel }) => {
+			for (const encoded of [false, true]) {
+				const h = await createProductionInteractiveHarness(100, 36, extension);
+				const work = h.session.prompt(`/${command}`).catch((error: Error) => error);
+				try {
+					await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain(title));
+					if (panel) {
+						h.terminal.sendInput("\t");
+						await h.frame();
+					}
+					h.terminal.sendInput(encoded ? "\x1b[97u" : "a");
+					h.terminal.sendInput(encoded ? "\x1b[90u" : "Z");
+					h.terminal.sendInput("\x1b[120;1:3u");
+					h.terminal.sendInput("\x1b[120;5u");
+					if (command !== "overlay-test") h.terminal.sendInput("\x1b[57414u");
+					expect((await h.frame()).join("\n")).toContain(typed);
+					expect(h.extensionUI.getEditorText()).toBe("");
+					h.terminal.sendInput("\x7f");
+					const after = (await h.frame()).join("\n");
+					expect(after).toContain(typed.slice(0, -1));
+					expect(after).not.toContain(typed);
+					h.terminal.sendInput("\x1b");
+					expect(await work).toBeUndefined();
+					expect(h.internals.ui.hasOverlay()).toBe(false);
+				} finally {
+					h.terminal.sendInput("\x1b");
+					await work;
+					await h.dispose();
+				}
+			}
+		},
+	);
+
+	it.each(["literal", "encoded"])("supports snake movement, restart and quit with %s keys", async (encoding) => {
+		const h = await createProductionInteractiveHarness(100, 36, snakeExample);
+		const editor = h.internals.editorContainer.children[0];
+		const random = vi.spyOn(Math, "random").mockReturnValue(0.25);
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		const work = h.session.prompt("/snake").catch((error: Error) => error);
+		const key = (character: string) => (encoding === "literal" ? character : `\x1b[${character.codePointAt(0)}u`);
+		const head = () => {
+			const frame = h.terminal.visibleLines();
+			const row = frame.findIndex((line) => line.includes("██"));
+			expect(row).toBeGreaterThanOrEqual(0);
+			return { row, col: frame[row].indexOf("██") };
+		};
+		try {
+			await new Promise((resolve) => setImmediate(resolve));
+			expect((await h.frame()).join("\n")).toContain("SNAKE");
+			const start = head();
+			for (const [input, row, col] of [
+				[key("w"), -1, 0],
+				["\x1b[115;1:3u", -2, 0],
+				["\x1b[97;5u", -3, 0],
+				[key("A"), -3, -2],
+				[key("s"), -2, -2],
+				[key("D"), -2, 0],
+			] as const) {
+				h.terminal.sendInput(input);
+				vi.advanceTimersByTime(100);
+				await h.frame();
+				expect(head()).toEqual({ row: start.row + row, col: start.col + col });
+			}
+			vi.advanceTimersByTime(3000);
+			expect((await h.frame()).join("\n")).toContain("GAME OVER");
+			h.terminal.sendInput(key(" "));
+			expect((await h.frame()).join("\n")).not.toContain("GAME OVER");
+			expect(head()).toEqual(start);
+			vi.advanceTimersByTime(3000);
+			expect((await h.frame()).join("\n")).toContain("GAME OVER");
+			h.terminal.sendInput(key("R"));
+			expect((await h.frame()).join("\n")).not.toContain("GAME OVER");
+			expect(head()).toEqual(start);
+			h.terminal.sendInput(key("Q"));
+			await h.frame();
+			expect(h.internals.ui.isComponentFocused(editor)).toBe(true);
+			expect(await work).toBeUndefined();
+		} finally {
+			h.terminal.sendInput("\x1b");
+			await work;
+			vi.useRealTimers();
+			await h.dispose();
+			random.mockRestore();
+		}
+	});
+});
+
+describe("retained transcript selection", () => {
+	it("targets the painted row during batched selection but requires a highlight paint before copying", async () => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		const tool = defineTool({
+			name: "selection_rows",
+			label: "Selection rows",
+			description: "Synthetic selection fixture",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [] }),
+			renderShell: "self",
+			renderCall: () =>
+				new Text(Array.from({ length: 80 }, (_, i) => `ROW-${String(i).padStart(2, "0")}`).join("\n"), 0, 0),
+		});
+		const h = await createProductionInteractiveHarness(32, 12, (pi) => pi.registerTool(tool));
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "selection", toolName: tool.name, args: {} });
+			await h.frame();
+			const target = h.internals.ui.render(31).findIndex((row) => row.includes("ROW-20"));
+			expect(target).toBeGreaterThanOrEqual(0);
+			h.internals.ui.scrollViewportTo(target);
+			const painted = await h.frame();
+			expect(painted[0].slice(0, 6)).toBe("ROW-20");
+			expect(painted[1].slice(0, 6)).toBe("ROW-21");
+			const mark = h.terminal.markWrites();
+			for (const data of ["\x1b[<64;2;2M", "\x1b[<0;1;2M", "\x1b[<32;7;2M", "\x1b[<0;7;2m", "\x1b[<2;2;2M"])
+				h.terminal.sendInput(data);
+			expect(h.terminal.writesSince(mark)).toBe("");
+			expect(copy).not.toHaveBeenCalled();
+			await h.frame();
+			h.terminal.sendInput("\x1b[<2;2;2M");
+			expect(copy).toHaveBeenCalledExactlyOnceWith("ROW-21");
+		} finally {
+			copy.mockRestore();
+			await h.dispose();
+		}
+	});
+});
+
+describe("retained approval and exit safety", () => {
+	it.each(["initial", "reveal"])(
+		"preserves overlay and underlying focus across %s approval flush settlement",
+		async (phase) => {
+			for (const settlement of ["success", "cancel", "reject", "replace"] as const) {
+				const h = await createProductionInteractiveHarness(60, 12);
+				let release!: () => void;
+				let rejectFlush!: (error: Error) => void;
+				const gate = new Promise<void>((resolve, reject) => {
+					release = resolve;
+					rejectFlush = reject;
+				});
+				let finish!: (value: string) => void;
+				let flushSpy: ReturnType<typeof vi.spyOn> | undefined;
+				let outcome: Promise<string | Error> | undefined;
+				try {
+					await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+					const tool = h.internals.chatContainer.children[0];
+					const activate = vi.fn();
+					const flush = h.terminal.flush.bind(h.terminal);
+					const gateFlush = () => {
+						flushSpy = vi.spyOn(h.terminal, "flush").mockImplementation(async () => {
+							await gate;
+							await flush();
+						});
+					};
+					if (phase === "initial") gateFlush();
+					let settled = false;
+					outcome = h.extensionUI
+						.custom<string>(
+							(_ui, _theme, _kb, done) => {
+								finish = done;
+								return { render: () => ["APPROVE OR CANCEL"], invalidate() {}, handleInput: activate };
+							},
+							{
+								toolAttachedContext: {
+									toolCallId: "approval",
+									render: () =>
+										new Text(Array.from({ length: 40 }, (_, i) => `PAYLOAD-${i}`).join("\n"), 0, 0),
+								},
+							},
+						)
+						.catch((error: Error) => error)
+						.then((result) => {
+							settled = true;
+							return result;
+						});
+					if (phase === "reveal") {
+						await vi.waitFor(() => expect(h.internals.ui.isComponentFocused(tool)).toBe(true));
+						h.internals.ui.scrollViewportTo(0);
+						await h.frame();
+						gateFlush();
+						h.terminal.sendInput("\r");
+					}
+					await vi.waitFor(() => expect(flushSpy).toHaveBeenCalled());
+					const input = vi.fn();
+					const overlayComponent = { render: () => ["OVERLAY"], invalidate() {}, handleInput: input };
+					const overlay = h.internals.ui.showOverlay(overlayComponent);
+					const overlayFrame = h.internals.ui.renderNow({ requireFlush: true }).catch(() => {});
+					if (settlement === "cancel") finish("cancelled");
+					if (settlement === "replace") {
+						h.internals.clearTranscript();
+						h.extensionUI.setEditorText("NEW SESSION");
+					}
+					if (settlement === "reject") rejectFlush(new Error("flush failed"));
+					else release();
+					await overlayFrame;
+					if (settlement !== "success") await outcome;
+					flushSpy?.mockRestore();
+					await h.frame();
+					expect(h.internals.ui.isComponentFocused(overlayComponent)).toBe(true);
+					h.terminal.sendInput("x");
+					expect(input).toHaveBeenCalledExactlyOnceWith("x");
+					expect(activate).not.toHaveBeenCalled();
+					overlay.hide();
+					if (settlement === "success") {
+						expect(settled).toBe(false);
+						h.terminal.sendInput("\r");
+						expect(activate).not.toHaveBeenCalled();
+						await vi.waitFor(() => expect(h.internals.ui.isComponentFocused(tool)).toBe(true));
+						await h.frame();
+						h.terminal.sendInput("\r");
+						expect(activate).toHaveBeenCalledExactlyOnceWith("\r");
+						finish("cancelled");
+					} else {
+						h.terminal.sendInput("z");
+						expect(h.extensionUI.getEditorText()).toBe(settlement === "replace" ? "NEW SESSION" : "z");
+					}
+				} finally {
+					finish?.("cancelled");
+					release();
+					await outcome;
+					flushSpy?.mockRestore();
+					await h.dispose();
+				}
+			}
+		},
+	);
+	it("dispatches to a capturing overlay while approval revelation awaits flush", async () => {
+		const h = await createProductionInteractiveHarness(60, 12);
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let finish: ((value: string) => void) | undefined;
+		let outcome: Promise<string | Error> | undefined;
+		let overlayFrame: Promise<void> | undefined;
+		let flushSpy: ReturnType<typeof vi.spyOn> | undefined;
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+			const tool = h.internals.chatContainer.children[0];
+			const approvalInput = vi.fn();
+			outcome = h.extensionUI
+				.custom<string>(
+					(_ui, _theme, _kb, done) => {
+						finish = done;
+						return { render: () => ["APPROVE OR CANCEL"], invalidate() {}, handleInput: approvalInput };
+					},
+					{
+						toolAttachedContext: {
+							toolCallId: "approval",
+							render: () => new Text(Array.from({ length: 40 }, (_, i) => `PAYLOAD-${i}`).join("\n"), 0, 0),
+						},
+					},
+				)
+				.catch((error: Error) => error);
+			await vi.waitFor(() => expect(h.internals.ui.isComponentFocused(tool)).toBe(true));
+			expect(h.internals.ui.isComponentVisible(tool)).toBe(true);
+			h.internals.ui.scrollViewportTo(0);
+			await h.frame();
+			expect(h.internals.ui.isComponentVisible(tool)).toBe(false);
+			let entered!: () => void;
+			const flushEntered = new Promise<void>((resolve) => {
+				entered = resolve;
+			});
+			const flush = h.terminal.flush.bind(h.terminal);
+			flushSpy = vi.spyOn(h.terminal, "flush").mockImplementation(async () => {
+				entered();
+				await gate;
+				await flush();
+			});
+			h.terminal.sendInput("\r");
+			await flushEntered;
+			expect(approvalInput).not.toHaveBeenCalled();
+			const overlayInput = vi.fn();
+			const overlay = { render: () => ["CAPTURING OVERLAY"], invalidate() {}, handleInput: overlayInput };
+			const mark = h.terminal.markWrites();
+			h.internals.ui.showOverlay(overlay);
+			overlayFrame = h.internals.ui.renderNow({ requireFlush: true });
+			expect(h.terminal.writesSince(mark)).toContain("CAPTURING OVERLAY");
+			expect(h.internals.ui.isComponentFocused(overlay)).toBe(true);
+			h.terminal.sendInput("\r");
+			expect(approvalInput).not.toHaveBeenCalled();
+			expect(overlayInput).toHaveBeenCalledExactlyOnceWith("\r");
+		} finally {
+			finish?.("cancelled");
+			release();
+			await outcome;
+			await overlayFrame;
+			flushSpy?.mockRestore();
+			await h.dispose();
+		}
+	});
+
+	it("drains key releases before suspending the terminal", async () => {
+		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+		let release!: () => void;
+		vi.spyOn(h.terminal, "drainInput").mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+		);
+		const stop = vi.spyOn(h.internals.ui, "stop");
+		const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+		try {
+			const suspending = h.internals.handleCtrlZ();
+			expect(stop).not.toHaveBeenCalled();
+			expect(kill).not.toHaveBeenCalled();
+			release();
+			await suspending;
+			expect(stop).toHaveBeenCalledOnce();
+			expect(kill).toHaveBeenCalledWith(0, "SIGTSTP");
+		} finally {
+			process.emit("SIGCONT");
+			kill.mockRestore();
+			await h.dispose();
+		}
+	});
+	it("flushes complete retained context and consumes activation while controls are hidden", async () => {
+		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+			const activate = vi.fn();
+			let finish!: (value: string) => void;
+			const pending = h.extensionUI.custom<string>(
+				(_ui, _theme, _kb, done) => {
+					finish = done;
+					return { render: () => ["APPROVE OR CANCEL"], invalidate() {}, handleInput: activate };
+				},
+				{
+					toolAttachedContext: {
+						toolCallId: "approval",
+						render: () => new Text(Array.from({ length: 40 }, (_, i) => `PAYLOAD-${i}`).join("\n"), 0, 0),
+					},
+				},
+			);
+			const outcome = pending.catch((error: Error) => error);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			await h.frame();
+			expect(h.terminal.visibleLines().join("\n")).toContain("APPROVE OR CANCEL");
+			const overlayInput = vi.fn();
+			const overlay = h.internals.ui.showOverlay({
+				render: () => ["CAPTURING OVERLAY"],
+				invalidate() {},
+				handleInput: overlayInput,
+			});
+			await h.frame();
+			h.terminal.sendInput("\r");
+			expect(overlayInput).toHaveBeenCalledExactlyOnceWith("\r");
+			expect(activate).not.toHaveBeenCalled();
+			overlay.hide();
+			h.internals.ui.scrollViewportTo(0);
+			await h.frame();
+			expect(h.terminal.visibleLines().join("\n")).toContain("PAYLOAD-0");
+			h.terminal.sendInput("\x1b[5;1:3~");
+			await h.frame();
+			expect(h.internals.ui.getViewportState()!.offset).toBe(0);
+			let overlayVisible = true;
+			const disappearingOverlay = h.internals.ui.showOverlay(new Text("TEMPORARY OVERLAY", 0, 0), {
+				visible: () => overlayVisible,
+			});
+			await h.frame();
+			overlayVisible = false;
+			h.terminal.sendInput("\r");
+			h.terminal.sendInput("\r");
+			expect(activate).not.toHaveBeenCalled();
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			await h.frame();
+			expect(h.terminal.visibleLines().join("\n")).toContain("APPROVE OR CANCEL");
+			h.terminal.sendInput("\r");
+			expect(activate).toHaveBeenCalledExactlyOnceWith("\r");
+			disappearingOverlay.hide();
+			finish("cancelled");
+			expect(await outcome).toBe("cancelled");
+		} finally {
+			await h.dispose();
+		}
+	});
+
+	it.each(["missing", "rejected", "cancelled", "replaced", "replaced-and-cancelled"])(
+		"fails closed across %s candidate flush",
+		async (kind) => {
+			const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+			const flush = h.terminal.flush.bind(h.terminal);
+			try {
+				await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+				let release!: () => void;
+				const gate = new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				Object.defineProperty(h.terminal, "flush", {
+					configurable: true,
+					value:
+						kind === "missing"
+							? undefined
+							: kind === "rejected"
+								? () => Promise.reject(new Error("flush failed"))
+								: () => gate,
+				});
+				let finish!: (result: string) => void;
+				const activate = vi.fn();
+				const dispose = vi.fn();
+				const pending = h.extensionUI.custom<string>(
+					(_tui, _theme, _kb, done) => {
+						finish = done;
+						return { render: () => ["LIVE"], invalidate() {}, handleInput: activate, dispose };
+					},
+					{ toolAttachedContext: { toolCallId: "approval", render: () => new Text("IMMUTABLE-CONTEXT", 0, 0) } },
+				);
+				const outcome = pending.catch((error: Error) => error.message);
+				await Promise.resolve();
+				await Promise.resolve();
+				h.terminal.sendInput("\r");
+				expect(activate).not.toHaveBeenCalled();
+				if (kind === "cancelled") finish("cancelled");
+				if (kind.startsWith("replaced")) {
+					h.internals.clearTranscript();
+					h.extensionUI.setEditorText("NEW SESSION INPUT");
+					if (kind === "replaced-and-cancelled") finish("cancelled");
+				}
+				release();
+				const result = await outcome;
+				expect(result).toMatch(kind.endsWith("cancelled") ? /cancelled/ : /flush|replaced/);
+				h.terminal.sendInput("\r");
+				expect(activate).not.toHaveBeenCalled();
+				expect(dispose).toHaveBeenCalledOnce();
+				if (kind.startsWith("replaced")) expect(h.extensionUI.getEditorText()).toBe("NEW SESSION INPUT");
+				if (kind !== "cancelled")
+					expect(h.internals.committedChatContainer.render(60).join("\n")).not.toContain("IMMUTABLE-CONTEXT");
+			} finally {
+				Object.defineProperty(h.terminal, "flush", { configurable: true, value: flush });
+				await h.dispose();
+			}
+		},
+	);
+
+	it.each(["success", "failure", "replaced"])("settles late candidate image conversion across %s", async (kind) => {
+		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let settle!: (value: { data: string; mimeType: string } | null) => void;
+		imageConversion.convertToPng.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					settle = resolve;
+				}),
+		);
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "image", toolName: "unknown", args: {} });
+			const tool = h.internals.chatContainer.children[0];
+			const result = { content: [{ type: "image", data: "synthetic-jpeg", mimeType: "image/jpeg" }] };
+			const ending = h.emit({ type: "tool_execution_end", toolCallId: "image", result, isError: false });
+			await h.frame();
+			expect(h.internals.committedChatContainer.children).not.toContain(tool);
+			if (kind === "replaced") h.internals.clearTranscript();
+			settle(kind === "failure" ? null : { data: "aW1hZ2U=", mimeType: "image/png" });
+			await ending;
+			await h.frame();
+			if (kind === "replaced") {
+				expect(h.internals.committedChatContainer.children).not.toContain(tool);
+				expect(h.internals.chatContainer.children).not.toContain(tool);
+			} else {
+				expect(h.internals.committedChatContainer.children.filter((child) => child === tool)).toHaveLength(1);
+				if (kind === "failure") expect(tool.render(59).join("\n")).toContain("[Image: [image/jpeg]]");
+				else {
+					h.internals.ui.revealComponent(tool);
+					const mark = h.terminal.markWrites();
+					await h.frame();
+					expect(h.terminal.writesSince(mark)).toContain("\x1b_Ga=T");
+				}
+			}
+		} finally {
+			await h.dispose();
+			resetCapabilitiesCache();
+			imageConversion.convertToPng.mockReset();
+		}
+	});
+
+	it("leaves one transcript on final stop but none on temporary handoff", async () => {
+		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+		try {
+			h.internals.committedChatContainer.addChild(new Text("FINAL-TRANSCRIPT", 0, 0));
+			h.extensionUI.setWidget("temporary", ["TEMPORARY-WIDGET"]);
+			h.extensionUI.setEditorText("TEMPORARY-EDITOR");
+			await h.frame();
+			h.internals.ui.stop();
+			await h.terminal.flush();
+			expect(h.terminal.bufferLines().join("\n")).not.toContain("FINAL-TRANSCRIPT");
+			h.terminal.write("SHELL-BETWEEN-HANDOFFS\r\n");
+			h.internals.ui.start();
+			await h.frame();
+			h.mode.stop();
+			h.mode.stop();
+			await h.terminal.flush();
+			const normal = h.terminal.bufferLines().join("\n");
+			expect(normal).toContain("SHELL-BETWEEN-HANDOFFS");
+			expect(normal.match(/FINAL-TRANSCRIPT/g)).toHaveLength(1);
+			expect(normal).not.toContain("TEMPORARY-WIDGET");
+			expect(normal).not.toContain("TEMPORARY-EDITOR");
+		} finally {
+			await h.dispose();
+		}
+	});
+});
 
 describe("interactive assistant history", () => {
 	beforeEach(() => {
@@ -565,6 +1230,28 @@ describe("interactive assistant history", () => {
 		expect(terminal.bufferLines().join("\n")).not.toContain("TREE-SESSION");
 	});
 
+	it("renders protocol-looking prose verbatim without serializing typed tool calls into assistant text", () => {
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", false);
+		const text =
+			'mentalassistant to=functions.report_scramjet_command_status_commentary /json {"status":"completed"}\n<tool name="functions.report_scramjet_command_status">Reported completed.</tool>';
+		const message = assistant(text);
+		message.content.push({
+			type: "toolCall",
+			id: "real-call",
+			name: "report_scramjet_command_status",
+			arguments: { summary: "STRUCTURED-ONLY", status: "completed" },
+		});
+		component.updateContent(message);
+		for (const finalized of [false, true]) {
+			component.setFinalized(finalized);
+			const rendered = component.render(240).join("\n");
+			expect(rendered).toContain("mentalassistant to=functions.report_scramjet_command_status_commentary");
+			expect(rendered).toContain("Reported completed.");
+			expect(rendered).not.toContain("STRUCTURED-ONLY");
+		}
+		expect(message.content[0]).toEqual({ type: "text", text });
+	});
+
 	it("suppresses transcript zones on mutable previews and emits complete zones after finalization", () => {
 		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", false);
 		component.updateContent(assistant("partial"));
@@ -933,6 +1620,22 @@ describe("interactive assistant history", () => {
 
 		expect(terminal.visibleLines().join("\n")).not.toContain("VISIBLE-TOOL-PREVIEW");
 		expect(committedChatContainer.children).toHaveLength(2);
+		expect(committedChatContainer.render(60)).toEqual([]);
+	});
+
+	it("preserves deliberate self-renderer blank rows and single-row attached controls", async () => {
+		const { emit, mode, chatContainer } = createInteractiveHarness();
+		mode.getRegisteredToolDefinition = () => ({
+			renderShell: "self",
+			renderCall: () => ({ render: () => [""], invalidate() {} }),
+		});
+		await emit({ type: "tool_execution_start", toolCallId: "spaced", toolName: "spaced", args: {} });
+		const tool = chatContainer.children[0] as ToolExecutionComponent;
+		expect(tool.render(60)).toEqual(["", ""]);
+		tool.attachCommittedContext(new Text("CONTROL", 0, 0));
+		expect(tool.render(60).map((row) => row.trimEnd())).toEqual(["CONTROL"]);
+		tool.detachCommittedContext();
+		expect(tool.render(60)).toEqual([]);
 	});
 
 	it("waits for Kitty conversion before committing reconstructed tool history", async () => {
@@ -1213,5 +1916,494 @@ describe("interactive assistant history", () => {
 		await render(terminal);
 
 		expect(terminal.bufferLines().join("\n").match(new RegExp(expected, "g"))).toHaveLength(1);
+	});
+});
+
+describe("production retained viewport", () => {
+	let h: Awaited<ReturnType<typeof createProductionInteractiveHarness>>;
+	beforeEach(async () => {
+		h = await createProductionInteractiveHarness(60, 12, undefined, true);
+	});
+	afterEach(async () => {
+		await h.dispose();
+	});
+
+	it("keeps exact assistant, tool, queue and widget rows through individual and coalesced updates", async () => {
+		h.terminal.resize(60, 32);
+		h.extensionUI.setHeader(() => new Text("HEADER", 0, 0));
+		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+		h.extensionUI.setEditorText("E");
+		h.extensionUI.setWidget("above", ["ABOVE"]);
+		h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+		await h.session.steer("STEER");
+		await h.session.followUp("FOLLOW");
+		h.internals.updatePendingMessagesDisplay();
+		await h.emit({ type: "agent_start" });
+		const queue = [
+			"",
+			" Steering: STEER",
+			" Follow-up: FOLLOW",
+			` ↳ ${process.platform === "darwin" ? "Option" : "Alt"}+Up to edit all queued messages`,
+		];
+		const working = ["", " ⠋ Working..."];
+		const editor = ["─".repeat(59), "E", "─".repeat(59)];
+		const check = async (
+			chat: string[],
+			tail = [...queue, ...working, "", " ABOVE", ...editor, " BELOW", "FOOTER"],
+		) => {
+			const expected = ["HEADER", ...chat, ...tail];
+			expect((await h.frame()).map((row) => row.slice(0, 59).trimEnd())).toEqual([
+				...expected,
+				...Array(32 - expected.length).fill(""),
+			]);
+			expect(h.terminal.cursorPosition()).toEqual({ row: expected.indexOf("E"), col: 1 });
+		};
+		await check([]);
+		await h.emit({ type: "message_start", message: assistant("ANSWER") });
+		await check(["", " ANSWER"]);
+		await h.emit({ type: "message_update", message: assistant("ANSWER\n\nSECOND") });
+		await check(["", " ANSWER", "", " SECOND"]);
+		await h.emit({ type: "message_update", message: assistant("ANSWER") });
+		await h.emit({ type: "message_end", message: assistant("ANSWER") });
+		await h.emit({ type: "tool_execution_start", toolCallId: "layout", toolName: "unknown", args: undefined });
+		const tool = ["", "", " unknown", ""];
+		await check(["", " ANSWER", ...tool]);
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "layout",
+			toolName: "unknown",
+			args: undefined,
+			partialResult: { content: [{ type: "text", text: "RESULT\nGROW" }] },
+		});
+		await check(["", " ANSWER", ...tool.slice(0, -1), " RESULT", " GROW", ""]);
+		const toolBackground = h.terminal.cell(5, 0).background;
+		expect(toolBackground).toBeDefined();
+		for (const row of [3, 9, 10, 11, 12, 13, 14]) expect(h.terminal.cell(row, 0).background).toBeUndefined();
+		expect(h.terminal.cell(5, 59).background).toBeUndefined();
+		const burst = h.terminal.markWrites();
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "layout",
+			toolName: "unknown",
+			args: undefined,
+			partialResult: { content: [{ type: "text", text: "UNPAINTED" }] },
+		});
+		h.extensionUI.setWidget("above", ["REPLACED", "WIDGET"]);
+		h.session.clearQueue();
+		h.internals.updatePendingMessagesDisplay();
+		await h.emit({ type: "tool_execution_end", toolCallId: "layout", result: { content: [] }, isError: false });
+		await h.emit({ type: "agent_end", messages: [] });
+		await check(["", " ANSWER", ...tool], ["", " REPLACED", " WIDGET", ...editor, " BELOW", "FOOTER"]);
+		expect(h.terminal.writesSince(burst)).not.toContain("UNPAINTED");
+		for (let row = 7; row < 32; row++) expect(h.terminal.cell(row, 0).background).toBeUndefined();
+		h.extensionUI.setWidget("above", undefined);
+		h.extensionUI.setWidget("below", undefined);
+		await check(["", " ANSWER", ...tool], ["", ...editor, "FOOTER"]);
+		h.terminal.resize(12, 3);
+		await h.frame();
+		h.internals.ui.scrollViewportTo(1);
+		expect((await h.frame()).map((row) => row.slice(0, 11).trimEnd())).toEqual(["", " ANSWER", ""]);
+		h.internals.ui.scrollViewportTo(4);
+		expect((await h.frame()).map((row) => row.slice(0, 11).trimEnd())).toEqual(["", " unknown", ""]);
+		h.terminal.sendInput("!");
+		const typed = await h.frame();
+		expect(typed[h.terminal.cursorPosition().row]).toContain("E!");
+		expect(h.terminal.cursorPosition().col).toBe(2);
+	});
+
+	it("shows and dismisses real autocomplete independently of screen-relative overlays", async () => {
+		h.terminal.resize(32, 12);
+		h.extensionUI.setHeader(() => new Text("HEADER", 0, 0));
+		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+		h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+		const editor = ["─".repeat(31), "/hot", "─".repeat(31)];
+		for (const character of "/hot") h.terminal.sendInput(character);
+		const rows = async () => (await h.frame()).map((row) => row.slice(0, 31).trimEnd());
+		const completed = ["HEADER", "", ...editor, "→ hotkeys", " BELOW", "FOOTER", ...Array(4).fill("")];
+		await vi.waitFor(async () => expect(await rows()).toEqual(completed));
+		expect(h.terminal.cell(3, 4).inverse).toBe(true);
+		const autocompleteFrame = h.terminal.markWrites();
+		await rows();
+		expect(h.terminal.writesSince(autocompleteFrame)).toContain("\x1b[?25l");
+		const input = vi.fn();
+		const overlay = h.internals.ui.showOverlay(
+			{
+				render: () => ["MODAL"],
+				invalidate() {},
+				handleInput: input,
+			},
+			{ row: 0, col: 0, width: 31 },
+		);
+		expect(await rows()).toEqual(["MODAL", ...completed.slice(1)]);
+		h.terminal.sendInput("\x1b");
+		expect(input).toHaveBeenCalledExactlyOnceWith("\x1b");
+		expect(await rows()).toEqual(["MODAL", ...completed.slice(1)]);
+		overlay.hide();
+		expect(await rows()).toEqual(completed);
+		h.terminal.sendInput("\x1b");
+		expect(await rows()).toEqual(["HEADER", "", ...editor, " BELOW", "FOOTER", ...Array(5).fill("")]);
+		expect(h.terminal.cursorPosition()).toEqual({ row: 3, col: 4 });
+		expect(h.extensionUI.getEditorText()).toBe("/hot");
+	});
+
+	it("keeps exact intermediate widget and working rows in the production projection", async () => {
+		h.extensionUI.setHeader(() => new Text("HEADER", 0, 0));
+		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+		h.extensionUI.setEditorText("EDITOR");
+		h.extensionUI.setWidget("above", ["ABOVE"]);
+		h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+		await h.emit({ type: "agent_start" });
+		const textRows = async () => (await h.frame()).map((row) => row.slice(0, 59).trimEnd());
+		const expected = [
+			"HEADER",
+			"",
+			" ⠋ Working...",
+			"",
+			" ABOVE",
+			"─".repeat(59),
+			"EDITOR",
+			"─".repeat(59),
+			" BELOW",
+			"FOOTER",
+			"",
+			"",
+		];
+		expect(await textRows()).toEqual(expected);
+		h.extensionUI.setWidget("above", ["ABOVE", "GROW"]);
+		expect(await textRows()).toEqual([...expected.slice(0, 5), " GROW", ...expected.slice(5, -1)]);
+		h.extensionUI.setWidget("above", ["ABOVE"]);
+		expect(await textRows()).toEqual(expected);
+		await h.emit({ type: "agent_end", messages: [] });
+		h.extensionUI.setWidget("above", undefined);
+		h.extensionUI.setWidget("below", undefined);
+		expect(await textRows()).toEqual([
+			"HEADER",
+			"",
+			"─".repeat(59),
+			"EDITOR",
+			"─".repeat(59),
+			"FOOTER",
+			...Array(6).fill(""),
+		]);
+	});
+
+	it("reveals the editor cursor on typing even beneath tall trailing widgets, but not passive updates", async () => {
+		h.extensionUI.setWidget("below", () => new Text(Array(30).fill("TRAILING").join("\n"), 0, 0), {
+			placement: "belowEditor",
+		});
+		expect((await h.frame()).join("\n")).not.toContain("EDIT-ME");
+		h.extensionUI.setEditorText("EDIT-ME");
+		expect((await h.frame()).join("\n")).not.toContain("EDIT-ME");
+		h.terminal.sendInput("!");
+		const typed = await h.frame();
+		expect(typed.join("\n")).toContain("EDIT-ME!");
+		expect(typed[h.terminal.cursorPosition().row]).toContain("EDIT-ME!");
+		const offset = h.internals.ui.getViewportState()!.offset;
+		await h.emit({ type: "agent_start" });
+		await h.frame();
+		expect(h.internals.ui.getViewportState()!.followingTail).toBe(false);
+		expect(h.internals.ui.getViewportState()!.offset).toBeGreaterThanOrEqual(offset);
+		h.terminal.sendInput("\x1b[<64;10;3M");
+		await h.frame();
+		expect(h.extensionUI.getEditorText()).toBe("EDIT-ME!");
+	});
+
+	it("preserves running tools and assistant identity when toggling thinking presentation", async () => {
+		const message = assistant("ANSWER");
+		message.content.unshift({ type: "thinking", thinking: "PRIVATE-THOUGHT" });
+		await h.emit({ type: "message_start", message });
+		await h.emit({ type: "message_end", message });
+		await h.emit({ type: "tool_execution_start", toolCallId: "pending", toolName: "unknown", args: {} });
+		const committed = [...h.internals.committedChatContainer.children];
+		const pending = [...h.internals.chatContainer.children];
+		h.internals.toggleThinkingBlockVisibility();
+		await h.frame();
+		expect(h.internals.committedChatContainer.children.slice(0, committed.length)).toEqual(committed);
+		expect(h.internals.chatContainer.children.slice(0, pending.length)).toEqual(pending);
+		expect(h.internals.committedChatContainer.render(59).join("\n")).not.toContain("PRIVATE-THOUGHT");
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "pending",
+			result: { content: [{ type: "text", text: "DONE" }] },
+			isError: false,
+		});
+		expect(h.internals.committedChatContainer.children).toContain(pending[0]);
+	});
+
+	it("keeps reverse-completed tools ordered and anchored through progress, queues, reflow and promotion", async () => {
+		const { ui, chatContainer, committedChatContainer } = h.internals;
+		await h.emit({ type: "agent_start" });
+		for (const id of ["first", "second"]) {
+			await h.emit({ type: "tool_execution_start", toolCallId: id, toolName: "unknown", args: {} });
+		}
+		const [first, second] = chatContainer.children;
+		const text = Array.from(
+			{ length: 45 },
+			(_, i) => `ANCHOR-${String(i).padStart(2, "0")} labelled content for wrapped reflow`,
+		).join("\n");
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "first",
+			toolName: "unknown",
+			args: {},
+			partialResult: { content: [{ type: "text", text }] },
+		});
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "second",
+			result: { content: [{ type: "text", text: "SECOND-FAILED" }] },
+			isError: true,
+		});
+		await h.frame();
+		expect(chatContainer.children).toEqual([first, second]);
+		expect(committedChatContainer.children).not.toContain(second);
+		const logical = ui.render(59);
+		const target = logical.findIndex((row) => row.includes("ANCHOR-20"));
+		expect(target).toBeGreaterThan(0);
+		ui.scrollViewportTo(target);
+		expect((await h.frame())[0]).toContain("ANCHOR-20");
+		await h.session.steer("QUEUED-STEER");
+		await h.session.followUp("QUEUED-FOLLOWUP");
+		h.internals.updatePendingMessagesDisplay();
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "first",
+			toolName: "unknown",
+			args: {},
+			partialResult: { content: [{ type: "text", text: `INSERTED\n${text}\nAPPENDED` }] },
+		});
+		expect((await h.frame())[0]).toContain("ANCHOR-20");
+		for (const width of [38, 72, 60]) {
+			h.terminal.resize(width, 12);
+			expect((await h.frame())[0]).toContain("ANCHOR-20");
+		}
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "first",
+			result: { content: [{ type: "text", text: `INSERTED\n${text}\nAPPENDED` }] },
+			isError: false,
+		});
+		expect((await h.frame())[0]).toContain("ANCHOR-20");
+		expect(committedChatContainer.children).toEqual([first, second]);
+		expect(chatContainer.children).toEqual([]);
+		const renderFirst = vi.spyOn(first, "render");
+		await h.frame();
+		expect(renderFirst).not.toHaveBeenCalled();
+		ui.scrollViewportTo(Number.MAX_SAFE_INTEGER);
+		const bottom = (await h.frame()).join("\n");
+		expect(bottom).toContain("QUEUED-STEER");
+		expect(bottom).toContain("QUEUED-FOLLOWUP");
+		expect(
+			committedChatContainer
+				.render(59)
+				.join("\n")
+				.match(/SECOND-FAILED/g),
+		).toHaveLength(1);
+	});
+
+	it.each(["aborted", "error"] as const)("retains a single %s result during a failed turn", async (reason) => {
+		const message = assistant("PARTIAL", reason);
+		message.content.push({ type: "toolCall", id: "pending", name: "unknown", arguments: {} });
+		message.errorMessage = reason === "aborted" ? "Operation aborted" : "Provider failed";
+		await h.emit({ type: "agent_start" });
+		await h.emit({ type: "message_start", message });
+		await h.emit({ type: "tool_execution_start", toolCallId: "pending", toolName: "unknown", args: {} });
+		await h.emit({ type: "message_end", message });
+		await h.emit({ type: "agent_end", messages: [] });
+		await h.frame();
+		expect(h.internals.chatContainer.children).toHaveLength(0);
+		expect(
+			h.internals.committedChatContainer.render(59).join("\n").match(new RegExp(message.errorMessage, "g")),
+		).toHaveLength(1);
+	});
+
+	it.each(["clear", "new session", "tree", "reload"])(
+		"discards held selection, gestures and anchors on %s",
+		async (replacement) => {
+			await h.emit({ type: "message_start", message: assistant(Array(40).fill("OLD-CONTENT").join("\n")) });
+			await h.emit({ type: "message_end", message: assistant(Array(40).fill("OLD-CONTENT").join("\n")) });
+			await h.frame();
+			h.internals.ui.scrollViewportTo(2);
+			await h.frame();
+			h.terminal.sendInput("\x1b[<0;2;2M");
+			h.terminal.sendInput("\x1b[<32;8;3M");
+			await h.frame();
+			expect(h.terminal.cell(1, 2).inverse).toBe(true);
+			if (replacement === "new session") await h.internals.handleExtensionNewSession();
+			else if (replacement === "tree") h.internals.renderCurrentSessionState();
+			else if (replacement === "reload") await h.internals.handleReloadCommand();
+			else h.internals.clearTranscript();
+			const rows = await h.frame();
+			expect(rows.join("\n")).not.toContain("OLD-CONTENT");
+			expect(h.internals.ui.getViewportState()!.followingTail).toBe(true);
+			h.terminal.sendInput("\x1b[<32;8;1M");
+			await h.frame();
+			expect(h.terminal.cell(1, 2).inverse).toBe(false);
+		},
+	);
+});
+
+it("preserves third-party text rendering, standalone HTML and extension raw-input ownership", async () => {
+	const tool = defineTool({
+		name: "custom_text",
+		label: "Custom text",
+		description: "Synthetic renderer",
+		parameters: Type.Object({}),
+		execute: async () => ({ content: [], details: { hidden: false } }),
+		renderShell: "self",
+		renderCall: (_args, _theme, context) => new Text(context.isPartial ? "CUSTOM <call>" : "", 0, 0),
+		renderResult: (result, { expanded, isPartial }) => {
+			const text = result.content
+				.filter((item) => item.type === "text")
+				.map((item) => item.text)
+				.join("\n");
+			return new Text(
+				result.details.hidden ? "" : expanded || isPartial ? text : text.split("\n").slice(0, 2).join("\n"),
+				0,
+				0,
+			);
+		},
+	});
+	const h = await createProductionInteractiveHarness(32, 12, (pi) => pi.registerTool(tool), true);
+	try {
+		h.extensionUI.setHeader(() => new Text("HEADER", 0, 0));
+		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+		h.extensionUI.setWidget("above", undefined);
+		const rows = async () => (await h.frame()).map((row) => row.slice(0, 31).trimEnd());
+		const initial = ["HEADER", "", "─".repeat(31), "", "─".repeat(31), "FOOTER", ...Array(6).fill("")];
+		expect(await rows()).toEqual(initial);
+		await h.emit({ type: "tool_execution_start", toolCallId: "custom", toolName: tool.name, args: {} });
+		expect(await rows()).toEqual(["HEADER", "", "CUSTOM <call>", ...initial.slice(1, -2)]);
+		const text = Array.from({ length: 80 }, (_, i) => `ROW-${String(i).padStart(2, "0")} 界e\u0301 <&>`).join("\n");
+		const content = [{ type: "text" as const, text }];
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "custom",
+			toolName: tool.name,
+			args: {},
+			partialResult: { content, details: { hidden: false } },
+		});
+		await h.frame();
+		h.internals.ui.scrollViewportTo(3);
+		expect((await rows()).slice(0, 3)).toEqual(["ROW-00 界é <&>", "ROW-01 界é <&>", "ROW-02 界é <&>"]);
+		const listener = vi.fn((data: string) => (data === "x" ? { data: "y" } : undefined));
+		const remove = h.extensionUI.onTerminalInput(listener);
+		h.terminal.sendInput("\x1b[<64;2;2M");
+		h.terminal.sendInput("\x1b[5~");
+		expect(listener).not.toHaveBeenCalled();
+		h.terminal.sendInput("x");
+		await h.frame();
+		expect(listener).toHaveBeenLastCalledWith("x");
+		expect(h.extensionUI.getEditorText()).toBe("y");
+		remove();
+		h.terminal.sendInput("x");
+		expect(h.extensionUI.getEditorText()).toBe("yx");
+		h.extensionUI.setEditorText("");
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "custom",
+			result: { content: [], details: { hidden: true } },
+			isError: false,
+		});
+		h.internals.ui.scrollViewportTo(Number.MAX_SAFE_INTEGER);
+		expect(await rows()).toEqual(initial);
+		const html = createToolHtmlRenderer({
+			getToolDefinition: () => tool,
+			theme: h.extensionUI.theme,
+			cwd: "/synthetic",
+			width: 32,
+		});
+		expect(html.renderCall("export", tool.name, {})).toBe(
+			`<div class="ansi-line">CUSTOM &lt;call&gt;${" ".repeat(19)}</div>`,
+		);
+		const result = html.renderResult("export", tool.name, content, { hidden: false }, false)!;
+		expect(result.collapsed?.match(/class="ansi-line"/g)).toHaveLength(2);
+		expect(result.expanded?.match(/class="ansi-line"/g)).toHaveLength(80);
+		for (let i = 0; i < 80; i++)
+			expect(result.expanded).toContain(`ROW-${String(i).padStart(2, "0")} 界é &lt;&amp;&gt;`);
+		expect(result.expanded).not.toMatch(/\x1b|[█│]|Selection held/);
+		expect(html.renderResult("hidden", tool.name, [], { hidden: true }, false)).toEqual({ expanded: "" });
+	} finally {
+		await h.dispose();
+	}
+});
+
+it("keeps the modal editor example usable with explicit Kitty printable keys", async () => {
+	const h = await createProductionInteractiveHarness(60, 24, modalEditor, true);
+	try {
+		h.extensionUI.setEditorText("abc");
+		h.terminal.sendInput("\x1b");
+		h.terminal.sendInput("\x1b[104u");
+		h.terminal.sendInput("\x1b[120u");
+		expect(h.extensionUI.getEditorText()).toBe("ab");
+		h.terminal.sendInput("\x1b[105u");
+		h.terminal.sendInput("\x1b[122u");
+		expect(h.extensionUI.getEditorText()).toBe("abz");
+		const editor = h.internals.editorContainer.children[0] as { onSubmit?: (text: string) => void };
+		const onSubmit = vi.fn();
+		editor.onSubmit = onSubmit;
+		h.terminal.sendInput("\x1b");
+		h.terminal.sendInput("\x1b[57414u");
+		expect(onSubmit).toHaveBeenCalledWith("abz");
+	} finally {
+		await h.dispose();
+	}
+});
+
+describe("production interactive composition", () => {
+	it("mounts every production region and characterizes widget transition spacing", async () => {
+		const h = await createProductionInteractiveHarness(60, 24);
+		try {
+			vi.spyOn(h.session.sessionManager, "getCwd").mockReturnValue("/synthetic-layout");
+			const p = h.internals;
+			expect(p.ui.getViewportState()).toMatchObject({ followingTail: true });
+			expect(p.ui.children).toEqual([
+				p.headerContainer,
+				p.committedChatContainer,
+				p.chatContainer,
+				p.pendingMessagesContainer,
+				p.statusContainer,
+				p.widgetContainerAbove,
+				p.editorContainer,
+				p.widgetContainerBelow,
+				p.footer,
+			]);
+			h.extensionUI.setEditorText("EDITOR");
+			h.extensionUI.setWidget("above", ["ABOVE"]);
+			h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+			await h.emit({ type: "agent_start" });
+			const frame = async () => (await h.frame()).map((row) => row.slice(0, 59));
+			const appeared = await frame();
+			const expected = [
+				"",
+				" ⠋ Working...",
+				"",
+				" ABOVE",
+				"─".repeat(59),
+				"EDITOR",
+				"─".repeat(59),
+				" BELOW",
+				"/synthetic-layout",
+				"?/0 (?)                                             unknown",
+				...Array<string>(14).fill(""),
+			];
+			expect(appeared.map((row) => row.trimEnd())).toEqual(expected);
+			h.extensionUI.setWidget("above", ["ABOVE", "GROW"]);
+			const grown = await frame();
+			expect(grown.map((row) => row.trimEnd())).toEqual([
+				...expected.slice(0, 4),
+				" GROW",
+				...expected.slice(4, -1),
+			]);
+			h.extensionUI.setWidget("above", ["ABOVE"]);
+			const shrunk = await frame();
+			expect(shrunk).toEqual(appeared);
+			h.extensionUI.setWidget("above", undefined);
+			h.extensionUI.setWidget("below", undefined);
+			const removed = await frame();
+			expect(removed.join("\n")).not.toMatch(/ABOVE|BELOW|GROW/);
+		} finally {
+			await h.dispose();
+		}
 	});
 });

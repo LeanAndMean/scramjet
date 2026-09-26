@@ -307,7 +307,12 @@ export class ToolExecutionComponent extends Container {
 		if (this.hideComponent) {
 			return [];
 		}
-		return super.render(width);
+		const lines = super.render(width);
+		// SCRAMJET-DIVERGENCE: hidden self-rendered tools must not leave an orphan separator.
+		if (this.getRenderShell() === "self" && this.children.includes(this.topSpacer) && lines.length === 1) {
+			return [];
+		}
+		return lines;
 	}
 
 	private updateDisplay(): void {

@@ -649,38 +649,34 @@ function splitIntoTokensWithAnsi(text: string): string[] {
  * @returns Array of wrapped lines (NOT padded to width)
  */
 export function wrapTextWithAnsi(text: string, width: number): string[] {
-	if (!text) {
-		return [""];
-	}
-
-	// Handle newlines by processing each line separately
-	// Track ANSI state across lines so styles carry over after literal newlines
-	const inputLines = text.split("\n");
-	const result: string[] = [];
-	const tracker = new AnsiCodeTracker();
-
-	for (const inputLine of inputLines) {
-		// Prepend active ANSI codes from previous lines (except for first line)
-		const prefix = result.length > 0 ? tracker.getActiveCodes() : "";
-		result.push(...wrapSingleLine(prefix + inputLine, width));
-		// Update tracker with codes from this line for next iteration
-		updateTrackerFromText(inputLine, tracker);
-	}
-
-	return result.length > 0 ? result : [""];
+	return wrapTextWithAnsiDetailed(text, width).map((line) => line.text);
 }
 
-function wrapSingleLine(line: string, width: number): string[] {
-	if (!line) {
-		return [""];
-	}
+export interface WrappedTextLine {
+	text: string;
+	after?: string;
+}
 
-	const visibleLength = visibleWidth(line);
-	if (visibleLength <= width) {
-		return [line];
+// SCRAMJET-DIVERGENCE: preserve the whitespace replaced by each soft wrap while producing the same painted lines.
+export function wrapTextWithAnsiDetailed(text: string, width: number): WrappedTextLine[] {
+	const result: WrappedTextLine[] = [];
+	const tracker = new AnsiCodeTracker();
+	for (const inputLine of text.split("\n")) {
+		const prefix = result.length > 0 ? tracker.getActiveCodes() : "";
+		for (const line of wrapSingleLine(prefix + inputLine, width)) result.push(line);
+		updateTrackerFromText(inputLine, tracker);
 	}
+	return result;
+}
 
-	const wrapped: string[] = [];
+function wrapSingleLine(line: string, width: number): WrappedTextLine[] {
+	if (!line || visibleWidth(line) <= width) return [{ text: line }];
+
+	const wrapped: WrappedTextLine[] = [];
+	const append = (text: string, separator = "") => {
+		const displayed = text.trimEnd();
+		wrapped.push({ text: displayed, after: text.slice(displayed.length) + separator });
+	};
 	const tracker = new AnsiCodeTracker();
 	const tokens = splitIntoTokensWithAnsi(line);
 
@@ -699,14 +695,14 @@ function wrapSingleLine(line: string, width: number): string[] {
 				if (lineEndReset) {
 					currentLine += lineEndReset;
 				}
-				wrapped.push(currentLine);
+				append(currentLine);
 				currentLine = "";
 				currentVisibleLength = 0;
 			}
 
 			// Break long token - breakLongWord handles its own resets
 			const broken = breakLongWord(token, width, tracker);
-			wrapped.push(...broken.slice(0, -1));
+			for (const part of broken.slice(0, -1)) append(part);
 			currentLine = broken[broken.length - 1];
 			currentVisibleLength = visibleWidth(currentLine);
 			continue;
@@ -722,7 +718,7 @@ function wrapSingleLine(line: string, width: number): string[] {
 			if (lineEndReset) {
 				lineToWrap += lineEndReset;
 			}
-			wrapped.push(lineToWrap);
+			append(lineToWrap, currentLine.slice(currentLine.trimEnd().length) + (isWhitespace ? token : ""));
 			if (isWhitespace) {
 				// Don't start new line with whitespace
 				currentLine = tracker.getActiveCodes();
@@ -740,13 +736,10 @@ function wrapSingleLine(line: string, width: number): string[] {
 		updateTrackerFromText(token, tracker);
 	}
 
-	if (currentLine) {
-		// No reset at end of final line - let caller handle it
-		wrapped.push(currentLine);
-	}
-
-	// Trailing whitespace can cause lines to exceed the requested width
-	return wrapped.length > 0 ? wrapped.map((line) => line.trimEnd()) : [""];
+	if (currentLine) append(currentLine);
+	if (wrapped.length === 0) return [{ text: "" }];
+	wrapped[wrapped.length - 1].after = undefined;
+	return wrapped;
 }
 
 const PUNCTUATION_REGEX = /[(){}[\]<>.,;:'"!?+\-=*/\\|&%^$#@~`]/;
@@ -770,61 +763,30 @@ function breakLongWord(word: string, width: number, tracker: AnsiCodeTracker): s
 	let currentLine = tracker.getActiveCodes();
 	let currentWidth = 0;
 
-	// First, separate ANSI codes from visible content
-	// We need to handle ANSI codes specially since they're not graphemes
-	let i = 0;
-	const segments: Array<{ type: "ansi" | "grapheme"; value: string }> = [];
-
-	while (i < word.length) {
-		const ansiResult = extractAnsiCode(word, i);
-		if (ansiResult) {
-			segments.push({ type: "ansi", value: ansiResult.code });
-			i += ansiResult.length;
-		} else {
-			// Find the next ANSI code or end of string
-			let end = i;
-			while (end < word.length) {
-				const nextAnsi = extractAnsiCode(word, end);
-				if (nextAnsi) break;
-				end++;
-			}
-			// Segment this non-ANSI portion into graphemes
-			const textPortion = word.slice(i, end);
-			for (const seg of segmenter.segment(textPortion)) {
-				segments.push({ type: "grapheme", value: seg.segment });
-			}
-			i = end;
-		}
-	}
-
-	// Now process segments
-	for (const seg of segments) {
-		if (seg.type === "ansi") {
-			currentLine += seg.value;
-			tracker.process(seg.value);
-			continue;
-		}
-
-		const grapheme = seg.value;
-		// Skip empty graphemes to avoid issues with string-width calculation
-		if (!grapheme) continue;
-
-		const graphemeWidth = visibleWidth(grapheme);
-
-		if (currentWidth + graphemeWidth > width) {
-			// Add specific reset for underline only (preserves background)
-			const lineEndReset = tracker.getLineEndReset();
-			if (lineEndReset) {
-				currentLine += lineEndReset;
-			}
+	const mapped = mapStyledText(word);
+	let offset = 0;
+	for (const { segment, index } of segmenter.segment(mapped.plain)) {
+		const start = mapped.offsets[index];
+		const end = mapped.offsets[index + segment.length - 1] + 1;
+		const prefix = word.slice(offset, start);
+		currentLine += prefix;
+		updateTrackerFromText(prefix, tracker);
+		const size = graphemeWidth(segment);
+		if (currentWidth + size > width) {
+			currentLine += tracker.getLineEndReset();
 			lines.push(currentLine);
 			currentLine = tracker.getActiveCodes();
 			currentWidth = 0;
 		}
-
-		currentLine += grapheme;
-		currentWidth += graphemeWidth;
+		const styled = word.slice(start, end);
+		currentLine += styled;
+		updateTrackerFromText(styled, tracker);
+		currentWidth += size;
+		offset = end;
 	}
+	const suffix = word.slice(offset);
+	currentLine += suffix;
+	updateTrackerFromText(suffix, tracker);
 
 	if (currentLine) {
 		// No reset at end of final segment - caller handles continuation
@@ -1018,6 +980,8 @@ export function sliceWithWidth(
 	strict = false,
 ): { text: string; width: number } {
 	if (length <= 0) return { text: "", width: 0 };
+	// Styles may split a grapheme in the string, but cannot split its terminal cells.
+	if (line.includes("\x1b") && /[^\x00-\x7f]/.test(line)) return sliceStyledGraphemes(line, startCol, length, strict);
 	const endCol = startCol + length;
 	let result = "",
 		resultWidth = 0,
@@ -1056,6 +1020,52 @@ export function sliceWithWidth(
 		if (currentCol >= endCol) break;
 	}
 	return { text: result, width: resultWidth };
+}
+
+function mapStyledText(line: string): { plain: string; offsets: number[]; codes: { offset: number; text: string }[] } {
+	let plain = "";
+	const offsets: number[] = [];
+	const codes: { offset: number; text: string }[] = [];
+	for (let offset = 0; offset < line.length; ) {
+		const ansi = extractAnsiCode(line, offset);
+		if (ansi) {
+			codes.push({ offset, text: ansi.code });
+			offset += ansi.length;
+		} else {
+			offsets.push(offset);
+			plain += line[offset++];
+		}
+	}
+	return { plain, offsets, codes };
+}
+
+function sliceStyledGraphemes(
+	line: string,
+	startCol: number,
+	length: number,
+	strict: boolean,
+): { text: string; width: number } {
+	const { plain, offsets, codes } = mapStyledText(line);
+	let column = 0;
+	let first: number | undefined;
+	let last = 0;
+	let width = 0;
+	for (const { segment, index } of segmenter.segment(plain)) {
+		const size = graphemeWidth(segment);
+		if (column >= startCol && column < startCol + length && (!strict || column + size <= startCol + length)) {
+			first ??= offsets[index];
+			last = offsets[index + segment.length - 1] + 1;
+			width += size;
+		}
+		column += size;
+		if (column >= startCol + length) break;
+	}
+	if (first === undefined) return { text: "", width: 0 };
+	const prefix = codes
+		.filter((code) => code.offset < first)
+		.map((code) => code.text)
+		.join("");
+	return { text: prefix + line.slice(first, last), width };
 }
 
 // Pooled tracker instance for extractSegments (avoids allocation per call)

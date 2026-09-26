@@ -44,6 +44,7 @@ interface ComponentBag {
 	renderCalls: number;
 	thinkingLevel: string;
 	setThinkingLevelCalls: string[];
+	heightCallbacks: Array<((rows: number | undefined) => void) | undefined>;
 }
 
 function makeKeybindings(effort: string | string[] | undefined = "shift+tab") {
@@ -54,7 +55,13 @@ function makeKeybindings(effort: string | string[] | undefined = "shift+tab") {
 }
 
 function fakeCtx(effortBinding?: string | string[]): { ctx: any; bag: ComponentBag } {
-	const bag: ComponentBag = { components: [], renderCalls: 0, thinkingLevel: "high", setThinkingLevelCalls: [] };
+	const bag: ComponentBag = {
+		components: [],
+		renderCalls: 0,
+		thinkingLevel: "high",
+		setThinkingLevelCalls: [],
+		heightCallbacks: [],
+	};
 	const keybindings = makeKeybindings(effortBinding);
 	setKeybindings(keybindings);
 	const ctx = {
@@ -67,7 +74,11 @@ function fakeCtx(effortBinding?: string | string[]): { ctx: any; bag: ComponentB
 		},
 		hasUI: true,
 		ui: {
-			custom<T>(factory: (tui: any, theme: any, keybindings: any, done: (result: T) => void) => any) {
+			custom<T>(
+				factory: (tui: any, theme: any, keybindings: any, done: (result: T) => void) => any,
+				options?: { onAvailableHeight?: (rows: number | undefined) => void },
+			) {
+				bag.heightCallbacks.push(options?.onAvailableHeight);
 				return new Promise<T>((resolve) => {
 					let component: any;
 					let settled = false;
@@ -116,6 +127,36 @@ const modelB = makeModel("openai", "gpt-4o", "GPT-4o");
 const modelC = makeModel("anthropic", "claude-opus-4-20250514", "Claude Opus 4");
 
 describe("selectNextStep — model cycling", () => {
+	it.each([false, true])("frames and budgets the real selector with model cycling=%s", async (cycling) => {
+		const { ctx, bag } = fakeCtx();
+		const steps = Array.from({ length: 12 }, (_, i) =>
+			makeStep(i, `/test:choice-${i}`, { reason: `Description for choice ${i}` }),
+		);
+		const result = selectNextStep(ctx, {
+			options: steps,
+			recommended: steps[0],
+			initialModel: modelA,
+			models: cycling ? [modelA, modelB] : [modelA],
+		});
+		try {
+			const component = bag.components[0];
+			expect(component.render(80)[0]).toMatch(/^─+$/);
+			expect(bag.heightCallbacks[0]).toBeTypeOf("function");
+			bag.heightCallbacks[0]!(12);
+			const lines = component.render(80);
+			expect(lines.length).toBeLessThanOrEqual(12);
+			expect(lines[1].trimEnd()).toBe("Select next step");
+			expect(lines.at(-1)).toMatch(/^─+$/);
+			for (let i = 0; i < 9; i++) component.handleInput(ARROW_DOWN);
+			expect(component.render(80).join("\n")).toContain("→ 9: /test:choice-9");
+			component.handleInput(ENTER);
+			expect(await result).toEqual({ step: steps[9], model: null });
+		} finally {
+			bag.components[0]?.handleInput(ESCAPE);
+			await result;
+		}
+	});
+
 	describe("without model cycling", () => {
 		it("cycles effort immediately, updates rendering, cancels countdown, and retains effort on Escape", async () => {
 			vi.useFakeTimers();

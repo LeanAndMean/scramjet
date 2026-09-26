@@ -31,6 +31,14 @@ export class Image implements Component {
 
 	private cachedLines?: string[];
 	private cachedWidth?: number;
+	private viewportHeight?: number;
+
+	// SCRAMJET-DIVERGENCE: fit native placements to the bounded surface, retaining source data.
+	setViewportHeight(height: number | undefined): void {
+		if (height === this.viewportHeight) return;
+		this.viewportHeight = height;
+		this.invalidate();
+	}
 
 	constructor(
 		base64Data: string,
@@ -65,7 +73,7 @@ export class Image implements Component {
 		const maxWidth = Math.max(1, Math.min(width - 2, this.options.maxWidthCells ?? 60));
 		const cellDimensions = getCellDimensions();
 		const defaultMaxHeight = Math.max(1, Math.ceil((maxWidth * cellDimensions.widthPx) / cellDimensions.heightPx));
-		const maxHeight = this.options.maxHeightCells ?? defaultMaxHeight;
+		const maxHeight = Math.min(this.options.maxHeightCells ?? defaultMaxHeight, this.viewportHeight ?? Infinity);
 
 		const caps = getCapabilities();
 		let lines: string[];

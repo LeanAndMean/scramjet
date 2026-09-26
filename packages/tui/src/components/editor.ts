@@ -2,6 +2,7 @@ import type { AutocompleteProvider, AutocompleteSuggestions } from "../autocompl
 import { getKeybindings } from "../keybindings.js";
 import { decodePrintableKey, matchesKey } from "../keys.js";
 import { KillRing } from "../kill-ring.js";
+import { getRenderedCopy, type RenderedCopyRow, setRenderedCopy } from "../render-copy.js";
 import type { SpellcheckProvider, SpellcheckRange } from "../spellcheck.js";
 import { type Component, CURSOR_MARKER, type Focusable, type TUI } from "../tui.js";
 import { UndoStack } from "../undo-stack.js";
@@ -277,6 +278,8 @@ export class Editor implements Component, Focusable {
 
 	// Vertical scrolling support
 	private scrollOffset: number = 0;
+	private heightLimit: (() => { rows: number; text: number }) | undefined;
+	private renderedTextRows: number | undefined;
 
 	// Border color (can be changed dynamically)
 	public borderColor: (str: string) => string;
@@ -286,6 +289,7 @@ export class Editor implements Component, Focusable {
 	private autocompleteList?: SelectList;
 	private autocompleteState: "regular" | "force" | null = null;
 	private autocompletePrefix: string = "";
+	private autocompleteSnapshot?: { text: string; line: number; col: number };
 	private autocompleteMaxVisible: number = 5;
 	private autocompleteAbort?: AbortController;
 	private autocompleteDebounceTimer?: ReturnType<typeof setTimeout>;
@@ -351,6 +355,11 @@ export class Editor implements Component, Focusable {
 	/** Segment text with paste-marker awareness, only merging markers with valid IDs. */
 	private segment(text: string): Iterable<Intl.SegmentData> {
 		return segmentWithMarkers(text, this.validPasteIds());
+	}
+
+	// SCRAMJET-DIVERGENCE: input layout budgets are distinct from image viewport bounds.
+	setHeightLimit(limits: () => { rows: number; text: number }): void {
+		this.heightLimit = limits;
 	}
 
 	getPaddingX(): number {
@@ -481,9 +490,17 @@ export class Editor implements Component, Focusable {
 		// Layout the text
 		const layoutLines = this.layoutText(layoutWidth);
 
-		// Calculate max visible lines: 30% of terminal height, minimum 5 lines
 		const terminalRows = this.tui.terminal.rows;
-		const maxVisibleLines = Math.max(5, Math.floor(terminalRows * 0.3));
+		const limits = this.heightLimit?.();
+		const maximumRows = limits ? Math.max(1, Math.floor(limits.rows)) : Infinity;
+		if (maximumRows <= 3) this.cancelAutocomplete();
+		this.autocompleteList?.setMaxHeight(Number.isFinite(maximumRows) ? maximumRows - 3 : undefined);
+		const completionRows =
+			this.autocompleteState && this.autocompleteList ? this.autocompleteList.render(contentWidth).length : 0;
+		const maxVisibleLines = limits
+			? Math.max(1, Math.min(Math.floor(limits.text), maximumRows - 2 - completionRows))
+			: Math.max(5, Math.floor(terminalRows * 0.3));
+		this.renderedTextRows = maxVisibleLines;
 
 		// Find the cursor line index in layoutLines
 		let cursorLineIndex = layoutLines.findIndex((line) => line.hasCursor);
@@ -508,7 +525,9 @@ export class Editor implements Component, Focusable {
 		const rightPadding = leftPadding;
 
 		// Render top border (with scroll indicator if scrolled down)
-		if (this.scrollOffset > 0) {
+		if (maximumRows < 3) {
+			// Only the cursor row can fit; borders must not displace editable content.
+		} else if (this.scrollOffset > 0) {
 			const indicator = `─── ↑ ${this.scrollOffset} more `;
 			const remaining = width - visibleWidth(indicator);
 			if (remaining >= 0) {
@@ -524,7 +543,14 @@ export class Editor implements Component, Focusable {
 		// Emit hardware cursor marker only when focused and not showing autocomplete
 		const emitCursorMarker = this.focused && !this.autocompleteState;
 
-		for (const layoutLine of visibleLines) {
+		// SCRAMJET-DIVERGENCE: distinguish draft wraps from editor decoration when copying.
+		const copyRows: RenderedCopyRow[] = result.map(() => null);
+		for (const [index, layoutLine] of visibleLines.entries()) {
+			copyRows.push({
+				start: paddingX,
+				end: paddingX + visibleWidth(layoutLine.text),
+				after: visibleLines[index + 1]?.logicalLine === layoutLine.logicalLine ? "" : undefined,
+			});
 			let displayText = layoutLine.text;
 			let lineVisibleWidth = visibleWidth(layoutLine.text);
 			let cursorInPadding = false;
@@ -613,6 +639,10 @@ export class Editor implements Component, Focusable {
 
 		// Render bottom border (with scroll indicator if more content below)
 		const linesBelow = layoutLines.length - (this.scrollOffset + visibleLines.length);
+		if (maximumRows < 3) {
+			return setRenderedCopy(result, copyRows);
+		}
+		copyRows.push(null);
 		if (linesBelow > 0) {
 			const indicator = `─── ↓ ${linesBelow} more `;
 			const remaining = width - visibleWidth(indicator);
@@ -624,14 +654,17 @@ export class Editor implements Component, Focusable {
 		// Add autocomplete list if active
 		if (this.autocompleteState && this.autocompleteList) {
 			const autocompleteResult = this.autocompleteList.render(contentWidth);
-			for (const line of autocompleteResult) {
+			const autocompleteCopy = getRenderedCopy(autocompleteResult);
+			for (const [index, line] of autocompleteResult.entries()) {
+				const source = autocompleteCopy[index];
+				copyRows.push(source ? { ...source, start: source.start + paddingX, end: source.end + paddingX } : null);
 				const lineWidth = visibleWidth(line);
 				const linePadding = " ".repeat(Math.max(0, contentWidth - lineWidth));
 				result.push(`${leftPadding}${line}${linePadding}${rightPadding}`);
 			}
 		}
 
-		return result;
+		return setRenderedCopy(result, copyRows);
 	}
 
 	handleInput(data: string): void {
@@ -693,6 +726,19 @@ export class Editor implements Component, Focusable {
 		if (kb.matches(data, "tui.editor.undo")) {
 			this.undo();
 			return;
+		}
+
+		// SCRAMJET-DIVERGENCE: an older menu can remain visible while its replacement request is pending.
+		if (
+			this.autocompleteState &&
+			this.autocompleteList &&
+			(kb.matches(data, "tui.input.tab") || kb.matches(data, "tui.select.confirm")) &&
+			(this.autocompleteSnapshot?.text !== this.getText() ||
+				this.autocompleteSnapshot?.line !== this.state.cursorLine ||
+				this.autocompleteSnapshot?.col !== this.state.cursorCol)
+		) {
+			this.cancelAutocomplete();
+			if (!kb.matches(data, "tui.input.tab") && !kb.matches(data, "tui.input.submit")) return;
 		}
 
 		// Handle autocomplete mode
@@ -1862,8 +1908,7 @@ export class Editor implements Component, Focusable {
 	 */
 	private pageScroll(direction: -1 | 1): void {
 		this.lastAction = null;
-		const terminalRows = this.tui.terminal.rows;
-		const pageSize = Math.max(5, Math.floor(terminalRows * 0.3));
+		const pageSize = this.renderedTextRows ?? Math.max(5, Math.floor(this.tui.terminal.rows * 0.3));
 
 		const visualLines = this.buildVisualLineMap(this.lastWidth);
 		const currentVisualLine = this.findCurrentVisualLine(visualLines);
@@ -2376,6 +2421,7 @@ export class Editor implements Component, Focusable {
 		}
 
 		this.autocompleteState = state;
+		this.autocompleteSnapshot = { text: this.getText(), line: this.state.cursorLine, col: this.state.cursorCol };
 	}
 
 	private cancelAutocompleteRequest(): void {
@@ -2392,6 +2438,7 @@ export class Editor implements Component, Focusable {
 		this.autocompleteState = null;
 		this.autocompleteList = undefined;
 		this.autocompletePrefix = "";
+		this.autocompleteSnapshot = undefined;
 	}
 
 	private cancelAutocomplete(): void {

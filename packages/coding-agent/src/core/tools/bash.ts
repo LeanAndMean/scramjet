@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type { AgentTool } from "@leanandmean/agent";
-import { Container, Text, truncateToWidth } from "@leanandmean/tui";
+import { Container, getRenderedCopy, setRenderedCopy, Text, truncateToWidth } from "@leanandmean/tui";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
@@ -222,9 +222,16 @@ function rebuildBashResultRenderComponent(
 						const hint =
 							theme.fg("muted", `... (${state.cachedSkipped} earlier lines,`) +
 							` ${keyHint("app.tools.expand", "to expand")})`;
-						return ["", truncateToWidth(hint, width, "..."), ...(state.cachedLines ?? [])];
+						const hintLines = [truncateToWidth(hint, width, "...")];
+						return setRenderedCopy(
+							["", ...hintLines, ...(state.cachedLines ?? [])],
+							[null, ...getRenderedCopy(hintLines), ...getRenderedCopy(state.cachedLines ?? [])],
+						);
 					}
-					return ["", ...(state.cachedLines ?? [])];
+					return setRenderedCopy(
+						["", ...(state.cachedLines ?? [])],
+						[null, ...getRenderedCopy(state.cachedLines ?? [])],
+					);
 				},
 				invalidate: () => {
 					state.cachedWidth = undefined;

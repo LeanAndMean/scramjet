@@ -1,6 +1,6 @@
 # Keybindings
 
-All keyboard shortcuts can be customized via `~/.scramjet/agent/keybindings.json`. Each action can be bound to one or more keys.
+Action keybindings can be customized via `~/.scramjet/agent/keybindings.json`. Each action can be bound to one or more keys.
 
 The config file uses the same namespaced keybinding ids that Scramjet uses internally and that extension authors use in `keyHint()` and injected `keybindings` managers.
 
@@ -20,7 +20,29 @@ After editing `keybindings.json`, run `/reload` in Scramjet to apply the changes
 
 Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1`, etc.
 
+## Transcript browsing precedence
+
+Interactive mode's retained viewport owns mouse wheel/trackpad scrolling, the rightmost draggable scrollbar and ordinary drag selection. Right-click a nonempty selection or use `tui.input.copy` (Ctrl+C by default) to copy displayed text. Without a transcript selection, the same key keeps its focused-component/application behavior. Escape clears selection and returns to the live tail.
+
+While detached from the tail with the editor owning input, the viewport consumes this fixed set before editor bindings; focused selectors retain their own navigation and cancellation bindings:
+
+| Key | Browsing action |
+|-----|-----------------|
+| PageUp / PageDown | Scroll one viewport page |
+| Escape | Return to the live tail |
+
+Home/End retain editor line-start/end behavior at every transcript position. Ctrl+Home goes to the transcript beginning and Ctrl+End goes to its bottom and resumes following, whether currently following or detached. Docked input and configured tool/thinking presentation toggles preserve the transcript anchor; undocked ordinary editing reveals the editor cursor. A new user message appearing in the transcript resumes following; passive output does not. At the tail, unmodified paging retains its editor/list meanings. Focused overlays take precedence, and focused selector bindings take precedence over both fixed and configurable viewport actions. In particular, Escape cancels a focused settings selector rather than merely returning its transcript to the tail. If tool-attached approval controls are hidden by browsing, the first activation reveals and flushes them without approving; a later activation can approve.
+
+The fixed detached-only keys above remain separate from `tui.viewport.pageUp` and `tui.viewport.pageDown`, which default to Alt+PageUp and Alt+PageDown and work from the tail as well as while browsing. Terminal/desktop interception can require remapping these configurable actions. See [terminal-setup.md](terminal-setup.md#transcript-browsing-and-copying) for terminal-menu and clipboard requirements.
+
 ## All Actions
+
+### Transcript Navigation
+
+| Keybinding id | Default | Description |
+|--------|---------|-------------|
+| `tui.viewport.pageUp` | `alt+pageUp` | Browse one transcript page upward, including from the tail |
+| `tui.viewport.pageDown` | `alt+pageDown` | Browse one transcript page downward |
 
 ### TUI Editor Cursor Movement
 

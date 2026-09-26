@@ -47,6 +47,14 @@ Edit directly or use `/settings` for common options.
 | `editorPaddingX` | number | `0` | Horizontal padding for input editor (0-3) |
 | `autocompleteMaxVisible` | number | `5` | Max visible items in autocomplete dropdown (3-20) |
 | `showHardwareCursor` | boolean | `false` | Show terminal cursor |
+| `tuiMode` | string | `"retained"` | Startup-only `"retained"` or `"committed"` renderer; changes require restarting Scramjet |
+| `dockEditor` | boolean | `true` | Keep input, adjacent widgets and footer docked in retained mode; live `/settings` control |
+| `editorMaxHeightPercent` | number | `30` | Maximum wrapped input-text rows as 10–50% of terminal height; further reduced to fit the available space |
+| `scrollWheelStep` | number | `3` | Retained transcript rows per wheel event, 1–20; live `/settings` control |
+
+The editor-height percentage is a ceiling, not blank reserved space. Borders, autocomplete, widgets and the footer also require room; the input window shrinks before docking is suspended. Oversized extension content remains reachable in the undocked retained flow with a visible explanation. Undocking does not change renderer or terminal-buffer ownership. `committed` is an explicit compatibility choice with the older tail-windowed mutable-output limitation, not equivalent live browsing or a verified screen-reader mode; dock and wheel controls are unavailable there.
+
+Numeric layout preferences are floored and clamped to their stated ranges; invalid types/non-finite values use safe defaults with settings diagnostics. Invalid explicit `tuiMode` values are rejected. These controls preserve global-write/project-override semantics: the selector identifies project overrides and shows the effective value even when editing the global preference. Failed writes show an unsaved notice and diagnostic; an in-memory value alone does not establish successful persistence. A malformed global settings file is preserved, and every blocked save attempt reports its load error even after startup diagnostics have been consumed.
 
 ### Telemetry and update checks
 

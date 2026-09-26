@@ -26,6 +26,8 @@ export class MultiLineSelectList {
 	private items: MultiLineSelectItem[];
 	private selectedIndex = 0;
 	private maxVisible: number;
+	private maximumRows: number | undefined;
+	private rowAnchor = { itemIndex: 0, rowOffset: 0 };
 	private theme: MultiLineSelectTheme;
 	private recommendedIndex: number;
 	private maxLinesPerField: number;
@@ -51,10 +53,15 @@ export class MultiLineSelectList {
 		this.selectedIndex = Math.max(0, Math.min(index, this.items.length - 1));
 	}
 
+	setMaxHeight(rows: number | undefined): void {
+		this.maximumRows = rows === undefined ? undefined : Math.max(0, Math.floor(rows));
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
 		if (this.items.length === 0) return [];
+		if (this.maximumRows !== undefined) return this.renderRowWindow(width, this.maximumRows);
 
 		const { startIndex, endIndex } = this.computeVisibleRange();
 		const lines: string[] = [];
@@ -91,6 +98,78 @@ export class MultiLineSelectList {
 
 	getSelectedItem(): MultiLineSelectItem | null {
 		return this.items[this.selectedIndex] ?? null;
+	}
+
+	private renderRowWindow(width: number, maximumRows: number): string[] {
+		const rendered = new Map<number, string[]>();
+		const itemRows = (index: number): string[] => {
+			let rows = rendered.get(index);
+			if (!rows) {
+				rows = this.renderItem(this.items[index], index, width);
+				rendered.set(index, rows);
+			}
+			return rows;
+		};
+		const selected = itemRows(this.selectedIndex);
+		if (selected.length >= maximumRows) {
+			this.rowAnchor = { itemIndex: this.selectedIndex, rowOffset: 0 };
+			return selected;
+		}
+
+		const maxItems = Math.max(1, this.maxVisible);
+		const origin = {
+			itemIndex: this.rowAnchor.itemIndex,
+			rowOffset: Math.min(this.rowAnchor.rowOffset, itemRows(this.rowAnchor.itemIndex).length - 1),
+		};
+		const read = (start: typeof origin, capacity: number) => {
+			const lines: string[] = [];
+			let { itemIndex, rowOffset } = start;
+			const lastItem = Math.min(this.items.length, itemIndex + maxItems);
+			while (itemIndex < lastItem && lines.length < capacity) {
+				const rows = itemRows(itemIndex);
+				const take = Math.min(rows.length - rowOffset, capacity - lines.length);
+				lines.push(...rows.slice(rowOffset, rowOffset + take));
+				rowOffset += take;
+				if (rowOffset === rows.length) {
+					itemIndex++;
+					rowOffset = 0;
+				}
+			}
+			return { lines, end: { itemIndex, rowOffset } };
+		};
+		const layout = (capacity: number) => {
+			let start = { ...origin };
+			if (start.itemIndex > this.selectedIndex || (start.itemIndex === this.selectedIndex && start.rowOffset > 0))
+				start = { itemIndex: this.selectedIndex, rowOffset: 0 };
+			let window = read(start, capacity);
+			if (window.end.itemIndex <= this.selectedIndex) {
+				let remaining = capacity;
+				start = { itemIndex: this.selectedIndex, rowOffset: selected.length };
+				const firstItem = Math.max(0, this.selectedIndex - maxItems + 1);
+				while (remaining > 0) {
+					const take = Math.min(start.rowOffset, remaining);
+					start.rowOffset -= take;
+					remaining -= take;
+					if (remaining === 0 || start.itemIndex === firstItem) break;
+					start.itemIndex--;
+					start.rowOffset = itemRows(start.itemIndex).length;
+				}
+				window = read(start, capacity);
+			}
+			return { ...window, start };
+		};
+
+		let window = layout(maximumRows);
+		const hidden =
+			window.start.itemIndex > 0 || window.start.rowOffset > 0 || window.end.itemIndex < this.items.length;
+		if (hidden) {
+			window = layout(maximumRows - 1);
+			window.lines.push(
+				this.theme.scrollInfo(truncateToWidth(`  (${this.selectedIndex + 1}/${this.items.length})`, width, "")),
+			);
+		}
+		this.rowAnchor = window.start;
+		return window.lines;
 	}
 
 	private computeVisibleRange(): { startIndex: number; endIndex: number } {

@@ -19,6 +19,7 @@ import {
 } from "./lifecycle.js";
 import { MultiLineSelectList } from "./multi-line-select.js";
 import { createSelectorEffortControl } from "./selector-effort.js";
+import { renderSelectorFrame } from "./selector-presentation.js";
 import type { ChoiceCompletionDisposition, ChoiceIndicatorCoordinator } from "./terminal-indicators.js";
 import type { ScramjetState } from "./types.js";
 
@@ -280,38 +281,52 @@ async function handleConfirm(
 	model: Model<any> | undefined,
 	thinking: Pick<ExtensionAPI, "getThinkingLevel" | "setThinkingLevel">,
 ) {
-	const result = await ctx.ui.custom<"yes" | "no" | null>((tui, theme, keybindings, done) => {
-		const items = [
-			{ value: "yes", label: "Yes" },
-			{ value: "no", label: "No" },
-		];
-		const selectList = new MultiLineSelectList(items, 2, {
-			selectedText: (text) => theme.fg("accent", text),
-			description: (text) => theme.fg("muted", text),
-			scrollInfo: (text) => theme.fg("dim", text),
-		});
-		selectList.onSelect = (item) => done(item.value as "yes" | "no");
-		selectList.onCancel = () => done(null);
-		const effort = createSelectorEffortControl({ model, thinking, keybindings, protectedActions: LIST_ACTIONS });
+	let maximumRows: number | undefined;
+	const result = await ctx.ui.custom<"yes" | "no" | null>(
+		(tui, theme, keybindings, done) => {
+			const items = [
+				{ value: "yes", label: "Yes" },
+				{ value: "no", label: "No" },
+			];
+			const selectList = new MultiLineSelectList(items, 2, {
+				selectedText: (text) => theme.fg("accent", text),
+				description: (text) => theme.fg("muted", text),
+				scrollInfo: (text) => theme.fg("dim", text),
+			});
+			selectList.onSelect = (item) => done(item.value as "yes" | "no");
+			selectList.onCancel = () => done(null);
+			const effort = createSelectorEffortControl({ model, thinking, keybindings, protectedActions: LIST_ACTIONS });
 
-		return {
-			render(width: number) {
-				return [
-					...selectList.render(width),
-					effort.render(width, (text) => theme.fg("dim", text)),
-					theme.fg("dim", "enter select \u2022 esc cancel"),
-				];
+			return {
+				render(width: number) {
+					return renderSelectorFrame({
+						width,
+						maximumRows,
+						title: "Confirm",
+						list: selectList,
+						theme,
+						tailRows: [
+							effort.render(width, (text) => theme.fg("dim", text)),
+							theme.fg("dim", "enter select \u2022 esc cancel"),
+						],
+					});
+				},
+				invalidate() {
+					selectList.invalidate();
+				},
+				handleInput(data: string) {
+					if (!effort.handleInput(data)) selectList.handleInput(data);
+					tui.requestRender();
+				},
+				dispose() {},
+			};
+		},
+		{
+			onAvailableHeight: (rows) => {
+				maximumRows = rows;
 			},
-			invalidate() {
-				selectList.invalidate();
-			},
-			handleInput(data: string) {
-				if (!effort.handleInput(data)) selectList.handleInput(data);
-				tui.requestRender();
-			},
-			dispose() {},
-		};
-	});
+		},
+	);
 
 	if (result === null) {
 		return {
@@ -340,42 +355,56 @@ async function handleSelect(
 		description: opt.description,
 	}));
 
-	const selectedValue = await ctx.ui.custom<string | null>((tui, theme, keybindings, done) => {
-		const selectList = new MultiLineSelectList(
-			items,
-			Math.min(items.length, 8),
-			{
-				selectedText: (text) => theme.fg("accent", text),
-				description: (text) => theme.fg("muted", text),
-				scrollInfo: (text) => theme.fg("dim", text),
-			},
-			{ recommendedIndex: recommended },
-		);
+	let maximumRows: number | undefined;
+	const selectedValue = await ctx.ui.custom<string | null>(
+		(tui, theme, keybindings, done) => {
+			const selectList = new MultiLineSelectList(
+				items,
+				Math.min(items.length, 8),
+				{
+					selectedText: (text) => theme.fg("accent", text),
+					description: (text) => theme.fg("muted", text),
+					scrollInfo: (text) => theme.fg("dim", text),
+				},
+				{ recommendedIndex: recommended },
+			);
 
-		if (recommended !== undefined) selectList.setSelectedIndex(recommended);
+			if (recommended !== undefined) selectList.setSelectedIndex(recommended);
 
-		selectList.onSelect = (item) => done(item.value);
-		selectList.onCancel = () => done(null);
-		const effort = createSelectorEffortControl({ model, thinking, keybindings, protectedActions: LIST_ACTIONS });
+			selectList.onSelect = (item) => done(item.value);
+			selectList.onCancel = () => done(null);
+			const effort = createSelectorEffortControl({ model, thinking, keybindings, protectedActions: LIST_ACTIONS });
 
-		return {
-			render(width: number) {
-				return [
-					...selectList.render(width),
-					effort.render(width, (text) => theme.fg("dim", text)),
-					theme.fg("dim", "\u2191\u2193 navigate \u2022 enter select \u2022 esc cancel"),
-				];
+			return {
+				render(width: number) {
+					return renderSelectorFrame({
+						width,
+						maximumRows,
+						title: "Choose an option",
+						list: selectList,
+						theme,
+						tailRows: [
+							effort.render(width, (text) => theme.fg("dim", text)),
+							theme.fg("dim", "\u2191\u2193 navigate \u2022 enter select \u2022 esc cancel"),
+						],
+					});
+				},
+				invalidate() {
+					selectList.invalidate();
+				},
+				handleInput(data: string) {
+					if (!effort.handleInput(data)) selectList.handleInput(data);
+					tui.requestRender();
+				},
+				dispose() {},
+			};
+		},
+		{
+			onAvailableHeight: (rows) => {
+				maximumRows = rows;
 			},
-			invalidate() {
-				selectList.invalidate();
-			},
-			handleInput(data: string) {
-				if (!effort.handleInput(data)) selectList.handleInput(data);
-				tui.requestRender();
-			},
-			dispose() {},
-		};
-	});
+		},
+	);
 
 	if (selectedValue === null) {
 		return {

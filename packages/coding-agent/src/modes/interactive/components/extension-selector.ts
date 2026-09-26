@@ -3,7 +3,7 @@
  * Displays a list of string options with keyboard navigation.
  */
 
-import { Container, getKeybindings, Spacer, Text, type TUI } from "@leanandmean/tui";
+import { Container, getKeybindings, matchesKey, Spacer, Text, type TUI } from "@leanandmean/tui";
 import { theme } from "../theme/theme.js";
 import { CountdownTimer } from "./countdown-timer.js";
 import { DynamicBorder } from "./dynamic-border.js";
@@ -89,13 +89,14 @@ export class ExtensionSelectorComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		// SCRAMJET-DIVERGENCE: retained terminals explicitly encode printable navigation aliases.
 		const kb = getKeybindings();
 		if (kb.matches(keyData, "app.tools.expand")) {
 			this.onToggleToolsExpanded?.();
-		} else if (kb.matches(keyData, "tui.select.up") || keyData === "k") {
+		} else if (kb.matches(keyData, "tui.select.up") || matchesKey(keyData, "k")) {
 			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
 			this.updateList();
-		} else if (kb.matches(keyData, "tui.select.down") || keyData === "j") {
+		} else if (kb.matches(keyData, "tui.select.down") || matchesKey(keyData, "j")) {
 			this.selectedIndex = Math.min(this.options.length - 1, this.selectedIndex + 1);
 			this.updateList();
 		} else if (kb.matches(keyData, "tui.select.confirm") || keyData === "\n") {

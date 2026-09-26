@@ -1,0 +1,592 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { release, platform, tmpdir } from "node:os";
+import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
+import { decodeKittyPrintable, isKeyRelease, matchesKey, ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
+import { copyToClipboard } from "../../../coding-agent/dist/utils/clipboard.js";
+
+const stripAnsi = (text) => stripVTControlCharacters(text.replace(/\x1b\[[0-9;:]*m/g, ""));
+
+const help = `Retained TUI interaction fixture for #551.
+Run from the repository after npm run build:
+  node packages/scramjet/tests/fixtures/interactive-viewport.mjs
+No models, personal extensions or personal settings.
+Copy actions overwrite the clipboard with selected synthetic text; production
+editor right-click reads the local clipboard. Native drivers seed synthetic text first.
+Requires at least 60 columns and 12 rows. Ctrl+Q exits and restores the shell.
+
+Uses actual TUI/RetainedViewport/ProcessTerminal input, selection and rendering.
+1. Wheel/trackpad: labelled rows move without typing arrows.
+2. Drag the rightmost thumb to the beginning/middle/end; click the track.
+3. Drag-select Unicode without modifiers, including across the screen edge.
+4. Right-click selection; independently compare exact desktop clipboard text.
+5. Select again and Ctrl+C; successful copying clears the selection.
+6. Paste back here: only equality is recorded, never pasted content.
+7. Ctrl+Home/Ctrl+End browse the transcript; use --production to test Home/End editing.
+8. Type and use arrows/backspace; at-tail PageUp belongs to the focused component.
+9. Production editor right-click pastes without submitting; other regions do not
+   paste. Terminal menus cannot see application selection.
+10. Ctrl+U changes a synthetic row while selecting: output/highlight update live.
+    Copy captures the last painted selection. Resize ends active dragging.
+11. Ctrl+Q restores the original shell buffer and terminal modes.
+Record emulator/OS/multiplexer versions and configuration with observed results.
+Counters prove receipt only, not desktop interaction or clipboard acceptance.
+Use --production for the actual InteractiveMode composition with eight synthetic
+subagent cards, queues, widgets, editor and footer. Ctrl+N advances one child,
+Ctrl+O expands/collapses, Ctrl+Q exits. No child processes or models are invoked.
+Use --production --journey for the native activation matrix: synthetic history,
+real grouped cards, clipboard observation, and controlled updates/approval/handoffs.
+Only that mode polls <SCRAMJET_TUI_PROBE_EVIDENCE>.command for fixture actions.
+selector-confirm/select/next/model open actual Scramjet controls; their opening
+receipt precedes the eventual answer, recorded separately in selector.result.
+The default mode retains the Stage 3 desktop driver's fixed-row protocol.
+Use --safety for synthetic native image/approval/handoff checks. Keys 1/2 show or
+clip the image, 3 toggles an overlay, 4 opens approval, 5 browses its context,
+6 opens a synthetic external editor, 7 suspends (resume with fg/SIGCONT),
+8 delivers a JPEG tool result through conversion/finalization, 9 invalidates it.
+G shows a bounded image overlay; H shows a padded, clipped image overlay.
+I grows the input dock and J restores it for native image-boundary checks.
+Safety mode colors the existing above-editor row and last footer row to calibrate
+cell and dock bounds in screenshot pixels without changing their heights.
+0 exits the safety fixture through the same drain/stop path as Ctrl+Q.
+--production --committed runs a short startup/finalization/exit smoke in committed mode.
+Add --committed-handoffs to keep that smoke alive for approval, external-editor
+and suspend commands through the existing command file, then Ctrl+Q to exit.
+--inspect-screenshot <png> counts synthetic magenta pixels using installed Photon.`;
+if (process.argv.includes("--help")) {
+	console.log(help);
+	process.exit(0);
+}
+if (process.argv.includes("--inspect-screenshot")) {
+	const { loadPhoton } = await import("../../../coding-agent/dist/utils/photon.js");
+	const photon = await loadPhoton();
+	const image = photon.PhotonImage.new_from_byteslice(readFileSync(process.argv[process.argv.indexOf("--inspect-screenshot") + 1]));
+	const pixels = image.get_raw_pixels();
+	const width = image.get_width(), height = image.get_height();
+	const bounds = () => ({ count: 0, left: width, right: 0, top: height, bottom: 0 });
+	const magenta = bounds();
+	for (let i = 0; i < pixels.length; i += 4) {
+		const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+		const target = r > 220 && g < 100 && b > 220 ? magenta : undefined;
+		if (target) {
+			target.count++;
+			const x = (i / 4) % width, y = Math.floor(i / 4 / width);
+			target.left = Math.min(target.left, x); target.right = Math.max(target.right, x);
+			target.top = Math.min(target.top, y); target.bottom = Math.max(target.bottom, y);
+		}
+	}
+	function band(isColor) {
+		let longest = 0, runs = [];
+		for (let y = 0; y < height; y++) {
+			let start = -1;
+			for (let x = 0; x <= width; x++) {
+				const i = (y * width + x) * 4;
+				if (x < width && isColor(pixels[i], pixels[i + 1], pixels[i + 2])) {
+					if (start < 0) start = x;
+				} else if (start >= 0) {
+					const length = x - start;
+					if (length > longest) { longest = length; runs = []; }
+					if (length === longest) runs.push({ left: start, right: x - 1, y });
+					start = -1;
+				}
+			}
+		}
+		if (!runs.length || runs.some((row, index) => row.left !== runs[0].left || row.right !== runs[0].right || row.y !== runs[0].y + index)) return bounds();
+		return { count: longest * runs.length, left: runs[0].left, right: runs[0].right, top: runs[0].y, bottom: runs.at(-1).y };
+	}
+	const calibration = { insetColumns: 1, dock: band((r, g, b) => r < 100 && g > 220 && b > 220), bottom: band((r, g, b) => r > 220 && g > 220 && b < 100) };
+	image.free();
+	console.log(JSON.stringify({ ...magenta, width, height, calibration }));
+	process.exit(0);
+}
+if (process.argv.includes("--committed-handoffs") && (!process.argv.includes("--production") || !process.argv.includes("--committed"))) throw new Error("Committed handoffs require --production --committed");
+if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Run in an interactive terminal; use --help");
+if (process.stdout.columns < 60 || process.stdout.rows < 12) throw new Error("Resize to at least 60 columns and 12 rows");
+
+if (process.argv.includes("--production") || process.argv.includes("--safety")) {
+	await runProduction();
+} else {
+const lines = Array.from({ length: 200 }, (_, i) => `ROW-${String(i + 1).padStart(3, "0")} synthetic café 界 e\u0301 text`);
+const evidence = { candidate: true, platform: platform(), release: release(), term: process.env.TERM,
+	terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX),
+	wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0,
+	copyErrors: 0, pasteMatches: 0, pasteMismatches: 0 };
+let copied;
+let copyKind;
+let status = "Candidate viewport; copy replaces clipboard; Ctrl+Q exits.";
+let editor = "";
+let cursor = 0;
+let stopped = false;
+let lastMouse;
+let termiosBefore;
+let termiosAfter;
+let thumbGesture = false;
+const mouseSamples = [];
+const ttyState = () => execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
+const evidencePath = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
+const terminal = new ProcessTerminal();
+const tui = new TUI(terminal);
+function record() {
+	if (!evidencePath) return;
+	const viewport = tui.getViewportState();
+	writeFileSync(`${evidencePath}.tmp`, JSON.stringify({ ...evidence, columns: terminal.columns, rows: terminal.rows,
+		offset: viewport?.offset, totalRows: viewport?.totalRows, followingTail: viewport?.followingTail,
+		lastMouse, mouseSamples, editor, stopped, termiosBefore, termiosAfter }));
+	renameSync(`${evidencePath}.tmp`, evidencePath);
+}
+const content = { invalidate() {}, render: (width) => lines.map((line) => truncateToWidth(line, width)) };
+const controls = {
+	invalidate() {},
+	render: (width) => [status, "Wheel/drag to browse; select then right-click/Ctrl+C; Ctrl+Q exits", `Editor: ${editor}`].map((line) => truncateToWidth(line, width)),
+	handleInput(data) {
+		const printable = decodeKittyPrintable(data) ?? data;
+		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+			const text = data.slice(6, -6);
+			if (copied !== undefined && text === copied) { evidence.pasteMatches++; status = "Synthetic clipboard round-trip MATCH."; }
+			else { evidence.pasteMismatches++; status = "Clipboard mismatch; content not recorded."; }
+		} else if (matchesKey(data, "left")) cursor = Math.max(0, cursor - 1);
+		else if (matchesKey(data, "right")) cursor = Math.min(editor.length, cursor + 1);
+		else if (matchesKey(data, "backspace") && cursor > 0) { editor = editor.slice(0, cursor - 1) + editor.slice(cursor); cursor--; }
+		else if (/^[\x20-\x7e]$/.test(printable)) { editor = editor.slice(0, cursor) + printable + editor.slice(cursor); cursor++; }
+	}
+};
+tui.addInputListener((data) => {
+	if (isKeyRelease(data)) return { consume: true };
+	if (matchesKey(data, "ctrl+q")) { void terminal.drainInput().then(stop); return { consume: true }; }
+	if (matchesKey(data, "ctrl+u")) { lines[0] = "ROW-001 updated synthetic content"; tui.requestRender(); return { consume: true }; }
+	if (matchesKey(data, "ctrl+c")) copyKind = "keyCopy";
+	const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
+	if (mouse) {
+		const [button, x, y] = mouse.slice(1, 4).map(Number);
+		lastMouse = { button, x, y, action: mouse[4] };
+		mouseSamples.push(lastMouse);
+		if (mouseSamples.length > 64) mouseSamples.shift();
+		if (button === 64 || button === 65) evidence.wheel++;
+		if (button === 0 && mouse[4] === "M") thumbGesture = x === terminal.columns;
+		if (button === 32) evidence[thumbGesture ? "thumbDrag" : "selectionDrag"]++;
+		if (button === 2 && mouse[4] === "M") { copyKind = "rightCopy"; evidence.rightWithoutSelection++; }
+		if (mouse[4] === "m") thumbGesture = false;
+	}
+});
+tui.configureViewport({
+	getBlocks: () => [{ component: content }, { component: controls }],
+	async copy(text) {
+		const kind = copyKind;
+		try {
+			await copyToClipboard(text);
+			copied = text;
+			evidence[kind]++;
+			if (kind === "rightCopy") evidence.rightWithoutSelection--;
+			status = "Copy requested; verify desktop equality. OSC 52 emission is not proof.";
+		} catch (error) { evidence.copyErrors++; throw error; }
+	}
+});
+tui.setFocus(controls);
+const recordTimer = setInterval(record, 50);
+function stop() {
+	if (stopped) return;
+	stopped = true;
+	clearInterval(recordTimer);
+	tui.stop();
+	if (evidencePath) termiosAfter = ttyState();
+	record();
+	console.log(JSON.stringify(evidence, null, 2));
+	console.log("Candidate checks only; missing environment or behavioral evidence is not a pass.");
+}
+process.once("SIGINT", stop);
+process.once("SIGTERM", stop);
+process.once("SIGHUP", stop);
+process.once("uncaughtException", (error) => { stop(); console.error(error); process.exitCode = 1; });
+process.once("exit", stop);
+if (evidencePath) termiosBefore = ttyState();
+tui.start();
+await tui.renderNow({ requireFlush: true });
+tui.scrollViewportTo(0);
+await tui.renderNow({ requireFlush: true });
+record();
+}
+
+async function runProduction() {
+	const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: new URL("../../../../", import.meta.url), encoding: "utf8" }).trim();
+	const sourceDirty = execFileSync("git", ["status", "--porcelain"], { cwd: new URL("../../../../", import.meta.url), encoding: "utf8" }).trim().length > 0;
+	const directory = mkdtempSync(join(tmpdir(), "scramjet-production-viewport-"));
+	process.env.SCRAMJET_CODING_AGENT_DIR = directory;
+	process.env.SCRAMJET_OFFLINE = "1";
+	const functionKeyBrowsing = process.argv.includes("--function-key-browsing");
+	if (functionKeyBrowsing) writeFileSync(join(directory, "keybindings.json"), JSON.stringify({ "tui.viewport.pageUp": "f8", "tui.viewport.pageDown": "f9" }));
+	const { Agent } = await import("../../../agent/dist/index.js");
+	const { AgentSession, AuthStorage, ModelRegistry, SessionManager, SettingsManager, InteractiveMode } = await import("../../../coding-agent/dist/index.js");
+	const { createAgentSessionServices } = await import("../../../coding-agent/dist/core/agent-session-services.js");
+	const { createAgentSessionRuntime } = await import("../../../coding-agent/dist/core/agent-session-runtime.js");
+	const { stopThemeWatcher } = await import("../../../coding-agent/dist/modes/interactive/theme/theme.js");
+	const { registerSubagentTool } = await import("../../dist/subagent/index.js");
+	const { registerUserInputTool } = await import("../../dist/user-input.js");
+	const { selectNextStep } = await import("../../dist/next-step-selector.js");
+	const { createLifecycle } = await import("../../dist/lifecycle.js");
+	const selectorState = { lifecycle: createLifecycle(), lifecycleGeneration: 0, logger: { warn() {}, debug() {}, lifecycle() {} } };
+	let productAPI;
+	let selectorDone;
+	const { Text } = await import("../../../tui/dist/index.js");
+	const authStorage = AuthStorage.inMemory();
+	let extensionUI;
+	const services = await createAgentSessionServices({
+		cwd: directory, agentDir: directory, authStorage,
+		settingsManager: SettingsManager.inMemory({ tuiMode: process.argv.includes("--committed") ? "committed" : "retained", theme: "pi-dark", quietStartup: true, compaction: { enabled: false }, retry: { enabled: false } }),
+		modelRegistry: ModelRegistry.inMemory(authStorage),
+		resourceLoaderOptions: { noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+			builtinInit(pi) {
+				productAPI = pi;
+				registerSubagentTool(pi, { beginChoice: () => ({ complete() {} }) });
+				registerUserInputTool(pi, selectorState, { beginChoice: () => ({ complete() {} }) });
+				pi.registerMessageRenderer("fixture-history", (message) => ({ invalidate() {}, render: (width) => message.content.split("\n").map((line) => truncateToWidth(line, width)) }));
+				pi.on("session_start", (_event, ctx) => { extensionUI = ctx.ui; });
+			},
+		},
+	});
+	const runtime = await createAgentSessionRuntime(async ({ sessionManager }) => ({
+		services, diagnostics: services.diagnostics,
+		session: new AgentSession({ ...services, sessionManager, initialActiveToolNames: [], agent: new Agent({ streamFn() { throw new Error("Fixture must not invoke models"); } }) }),
+	}), { cwd: directory, agentDir: directory, sessionManager: SessionManager.inMemory(directory) });
+	const terminal = new ProcessTerminal();
+	const terminalStates = [];
+	const ttyState = () => execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
+	const startTerminal = terminal.start.bind(terminal);
+	const stopTerminal = terminal.stop.bind(terminal);
+	terminal.start = (...args) => { terminalStates.push({ start: ttyState() }); startTerminal(...args); };
+	terminal.stop = () => { stopTerminal(); terminalStates.push({ stop: ttyState() }); record(); };
+	const mode = new InteractiveMode(runtime, { terminal });
+	let stopped = false;
+	let finish;
+	const lifetime = new Promise((resolve) => { finish = resolve; });
+	const tasks = Array.from({ length: 8 }, (_, i) => ({ agent: `child-${i + 1}`, task: `Synthetic task ${i + 1}` }));
+	let completed = 0;
+	let updates = 0;
+	const safety = process.argv.includes("--safety");
+	const journey = process.argv.includes("--journey");
+	const interactions = { wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0, copyErrors: 0, pasteMatches: 0, pasteMismatches: 0, focusIn: 0, focusOut: 0, enterPresses: 0 };
+	const committed = process.argv.includes("--committed");
+	const committedHandoffs = process.argv.includes("--committed-handoffs");
+	if (committed && (journey || safety)) throw new Error("Committed smoke is separate from retained native journeys");
+	let copyKind;
+	let copied;
+	let thumbGesture = false;
+	let lastMouse;
+	let commandId = 0;
+	const safetyState = { protocol: undefined, phase: "starting", approved: 0, editorHandoffs: 0, suspends: 0 };
+	let imageTool;
+	let overlay;
+	let approval;
+	let approvalTool;
+	let approvalDone;
+	let safetyImage;
+	const before = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
+	let sequence = Promise.resolve();
+	const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
+	function record() {
+		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
+		if (!target) return;
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), editor: extensionUI?.getEditorText() }));
+		renameSync(`${target}.tmp`, target);
+	}
+	async function update() {
+		if (journey) extensionUI.setStatus("probe-live", `LIVE-UPDATES-${updates}`);
+		const result = { content: [{ type: "text", text: "Synthetic batch" }], details: {
+			mode: "parallel", agentScope: "user", projectAgentsDir: null,
+			results: tasks.map((task, i) => ({ ...task, agentSource: "user", exitCode: i < completed ? 0 : -1,
+				messages: i < completed + 4 ? [{ role: "assistant", content: [{ type: "text", text: `CARD-${i + 1} synthetic café 界 é\n${Array.from({ length: 16 + (i === 0 ? updates : 0) }, (_, n) => `child-${i + 1} detail-${n}`).join("\n")}` }] }] : [],
+				stderr: "", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+			})),
+		} };
+		if (completed === 8) {
+			await mode.handleEvent({ type: "tool_execution_end", toolCallId: "batch", result, isError: false });
+			await mode.handleEvent({ type: "agent_end", messages: [] });
+		} else await mode.handleEvent({ type: "tool_execution_update", toolCallId: "batch", partialResult: result });
+		await mode.ui.renderNow({ requireFlush: true });
+		record();
+	}
+	async function openSelector(kind) {
+		if (!["confirm", "select", "next", "model"].includes(kind)) throw new Error("Unknown selector kind");
+		if (selectorDone) throw new Error("A selector is already open");
+		const current = runtime.session.extensionRunner.createContext();
+		const context = { ...current, ui: { ...current.ui, custom: (factory, options) => current.ui.custom((tui, theme, keys, done) => {
+			selectorDone = done;
+			return factory(tui, theme, keys, done);
+		}, options) } };
+		const options = Array.from({ length: 12 }, (_, index) => ({ value: String(index), label: `Choice ${index}`, description: `Detail ${index}: ${"orientation context ".repeat([14, 5, 22][index % 3])}`.trimEnd() }));
+		const model = { id: "fixture-a", provider: "test", name: "Fixture A", api: "anthropic-messages", baseUrl: "", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 10000, maxTokens: 1000 };
+		const observation = { kind, phase: "opening", result: null };
+		safetyState.selector = observation;
+		const answer = kind === "confirm" || kind === "select"
+			? runtime.session.extensionRunner.getAllRegisteredTools().find((entry) => entry.definition.name === "get_scramjet_user_input").definition.execute("fixture-choice", { type: kind, message: "Synthetic selector question", options }, undefined, undefined, context)
+			: selectNextStep(context, { options: options.map((item, index) => ({ index, message: item.label, reason: item.description, freshSession: false, parsedCommand: null })), recommended: null, thinking: productAPI, initialModel: model, models: kind === "model" ? [model, { ...model, id: "fixture-b", name: "Fixture B" }] : [model] });
+		void answer.then((result) => {
+			selectorDone = undefined;
+			observation.phase = "answered";
+			observation.result = kind === "confirm" || kind === "select" ? result.details : { index: result?.step.index, model: result?.model?.id, cancelled: result === null };
+			record();
+		}, (error) => { selectorDone = undefined; safetyState.error = error.message; record(); stop(); });
+		await new Promise((resolve) => setImmediate(resolve));
+		if (mode.editorContainer.children[0] === mode.editor || !selectorDone) throw new Error("Selector did not mount");
+		await mode.ui.renderNow({ requireFlush: true });
+		observation.phase = "waiting";
+	}
+	const timer = setInterval(() => {
+		record();
+		const path = process.env.SCRAMJET_TUI_PROBE_EVIDENCE && `${process.env.SCRAMJET_TUI_PROBE_EVIDENCE}.command`;
+		if ((!journey && !committedHandoffs) || !path || !existsSync(path)) return;
+		const command = JSON.parse(readFileSync(path, "utf8"));
+		if (command.id <= commandId) return;
+		commandId = command.id;
+		sequence = sequence.then(async () => {
+			if (committedHandoffs && !["approval", "external", "suspend"].includes(command.action)) throw new Error("Unsupported committed handoff action");
+			if (command.action === "advance") { completed = Math.min(8, completed + 1); await update(); }
+			else if (command.action === "update") { updates++; await update(); }
+			else if (command.action.startsWith("selector-")) await openSelector(command.action.slice("selector-".length));
+			else if (command.action === "overlay") overlay = mode.ui.showOverlay(new Text("SYNTHETIC SELECTOR OVERLAY", 1, 1));
+			else if (command.action === "close-overlay") { overlay?.hide(); overlay = undefined; }
+			else if (command.action === "expand") mode.setToolsExpanded(true);
+			else if (command.action === "editor") extensionUI.setEditorText("");
+			else if (command.action === "copy-editor") extensionUI.setEditorText(`COPY-EDITOR ${"alpha beta gamma ".repeat(12).trimEnd()}\n\n    café 界`);
+			else if (command.action === "copy-seam" || command.action === "copy-seam-scrolled") {
+				const hiddenRows = command.action === "copy-seam-scrolled" ? 40 : 0;
+				mode.statusContainer.clear();
+				mode.statusContainer.addChild(new Text(["SEAM-ONE", "SEAM-TWO", ...Array.from({ length: hiddenRows }, (_, i) => `HIDDEN-SEAM-${i}`)].join("\n"), 0, 0));
+				extensionUI.setWidget("above", undefined);
+				extensionUI.setWidget("below", undefined);
+				extensionUI.setEditorText("DRAFT-SEAM");
+				mode.ui.followViewport();
+				if (hiddenRows) {
+					await mode.ui.renderNow({ requireFlush: true });
+					const view = mode.ui.getViewportState();
+					mode.ui.scrollViewportTo(view.totalRows - view.height - hiddenRows);
+				}
+			}
+			else if (command.action === "long-editor") extensionUI.setEditorText(Array.from({ length: 50 }, (_, i) => `INPUT-${i}`).join("\n"));
+			else if (command.action === "narrow-editor") extensionUI.setEditorText("012345678901234567890123".repeat(4) + "\nTAIL");
+			else if (command.action === "tail") mode.ui.scrollViewport(Number.MAX_SAFE_INTEGER);
+			else if (command.action === "copy-prose") await mode.handleEvent({ type: "message_start", message: { role: "user", content: ("COPY-PROSE " + "alpha beta gamma ".repeat(18)).trimEnd() + "\n\n```ts\n    const value = 1;\n```", timestamp: 0 } });
+			else if (command.action === "approval") await safetyAction("4");
+			else if (command.action === "external") await safetyAction("6");
+			else if (command.action === "suspend") { await safetyAction("7"); return; }
+			else throw new Error(`Unknown fixture action: ${command.action}`);
+			await mode.ui.renderNow({ requireFlush: true });
+			safetyState.commandDone = command.id;
+			record();
+		}).catch((error) => { safetyState.error = error.message; record(); stop(); console.error(error); process.exitCode = 1; });
+	}, 50);
+	const stop = () => { if (!stopped) { stopped = true; mode.stop(); finish(); } };
+	process.once("SIGINT", stop);
+	process.once("SIGTERM", stop);
+	process.once("SIGHUP", stop);
+	mode.ui.addInputListener((data) => {
+		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+			interactions[copied !== undefined && data.slice(6, -6) === copied ? "pasteMatches" : "pasteMismatches"]++;
+			return { consume: true };
+		}
+		if (data === "\x1b[I") interactions.focusIn++;
+		if (data === "\x1b[O") interactions.focusOut++;
+		if (matchesKey(data, "enter") && !isKeyRelease(data)) interactions.enterPresses++;
+		if (safety) {
+			safetyState.inputs ??= [];
+			safetyState.inputs.push({ data, offset: mode.ui.getViewportState()?.offset, visible: approvalTool && mode.ui.isComponentVisible(approvalTool), focused: approvalTool && mode.ui.isComponentFocused(approvalTool) });
+			if (safetyState.inputs.length > 30) safetyState.inputs.shift();
+		}
+		if (journey) {
+			safetyState.inputs ??= [];
+			safetyState.inputs.push(data);
+			if (safetyState.inputs.length > 20) safetyState.inputs.shift();
+			if (matchesKey(data, "ctrl+c")) copyKind = "keyCopy";
+			const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
+			if (mouse) {
+				const [button, x, y] = mouse.slice(1, 4).map(Number);
+				lastMouse = { button, x, y, action: mouse[4] };
+				if (button === 64 || button === 65) interactions.wheel++;
+				if (button === 0 && mouse[4] === "M") thumbGesture = x === terminal.columns;
+				if (button === 32) interactions[thumbGesture ? "thumbDrag" : "selectionDrag"]++;
+				if (button === 2 && mouse[4] === "M") { copyKind = "rightCopy"; interactions.rightWithoutSelection++; }
+				if (mouse[4] === "m") thumbGesture = false;
+			}
+		}
+		if (isKeyRelease(data)) return { consume: true };
+		if (matchesKey(data, "ctrl+q") || (safety && matchesKey(data, "0"))) { void terminal.drainInput().then(stop); return { consume: true }; }
+		const action = safety && ["1", "2", "3", "4", "5", "6", "7", "8", "9", "g", "h", "i", "j"].find((key) => matchesKey(data, key));
+		if (action) {
+			sequence = sequence.then(() => safetyAction(action)).catch((error) => { stop(); console.error(error); process.exitCode = 1; });
+			return { consume: true };
+		}
+		if (matchesKey(data, "ctrl+n")) {
+			sequence = sequence.then(async () => { if (completed < 8 && !stopped) { completed++; await update(); } }).catch((error) => { stop(); console.error(error); process.exitCode = 1; });
+			return { consume: true };
+		}
+	});
+	async function safetyAction(key) {
+		if (key === "1" || key === "2") {
+			if (overlay) { overlay.hide(); overlay = undefined; }
+			mode.ui.revealComponent(imageTool);
+			await mode.ui.renderNow({ requireFlush: true });
+			// The image is the final child, so a tail-aligned tool reveal exposes its full placement.
+			if (key === "2") mode.ui.scrollViewport(-3);
+			safetyState.phase = key === "1" ? "image" : "clipped";
+		} else if (key === "i" || key === "j") {
+			extensionUI.setEditorText(key === "i" ? Array.from({ length: 50 }, (_, i) => `INPUT-${i}`).join("\n") : "Synthetic editor");
+			mode.ui.revealComponent(imageTool);
+			safetyState.phase = key === "i" ? "dock-grown" : "dock-restored";
+		} else if (key === "3") {
+			if (overlay) { overlay.hide(); overlay = undefined; safetyState.phase = "image"; }
+			else { overlay = mode.ui.showOverlay(new Text("OVERLAY WITHOUT GRAPHICS", 1, 1)); safetyState.phase = "overlay"; }
+		} else if (key === "g" || key === "h") {
+			overlay?.hide();
+			const { Box, Image } = await import("../../../tui/dist/index.js");
+			const image = new Image(Buffer.from(safetyImage.get_bytes()).toString("base64"), "image/png", { fallbackColor: (text) => text });
+			const box = new Box(1, 1);
+			box.addChild(new Text("OVERLAY IMAGE", 0, 0));
+			box.addChild(image);
+			overlay = mode.ui.showOverlay(key === "g" ? image : box, { width: 40, maxHeight: 8, margin: 2 });
+			safetyState.phase = key === "g" ? "overlay-image" : "overlay-image-clipped";
+		} else if (key === "4" && !approval) {
+			if (journey && completed !== 8) throw new Error("Finish the batch before opening sequential approval");
+			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+			approvalTool = mode.pendingTools.get("approval");
+			approval = extensionUI.custom((_tui, _theme, _kb, done) => {
+				approvalDone = done;
+				return { invalidate() {}, render: () => ["SYNTHETIC APPROVAL — Enter records a local counter only"], handleInput(data) {
+					if (matchesKey(data, "enter")) { safetyState.approved++; safetyState.activatedWith = data; done("approved"); }
+				} };
+			}, { toolAttachedContext: { toolCallId: "approval", render: () => new Text(Array.from({ length: 60 }, (_, i) => `IMMUTABLE-SYNTHETIC-PAYLOAD-${i}`).join("\n"), 0, 0) } });
+			approval.catch((error) => { safetyState.error = error.message; record(); });
+			safetyState.phase = "approval";
+		} else if (key === "5") {
+			mode.ui.scrollViewportTo(0);
+			safetyState.phase = "browsing";
+		} else if (key === "6") {
+			const editor = join(directory, "editor.sh");
+			const receipt = join(directory, "handoff.txt");
+			writeFileSync(editor, `#!/bin/sh\nstty -g > '${receipt}'\nprintf 'SYNTHETIC EXTERNAL EDITOR\\n'\nprintf 'edited by synthetic external editor' > "$1"\n`, { mode: 0o700 });
+			process.env.VISUAL = editor;
+			await mode.openExternalEditor();
+			safetyState.handoffTermios = readFileSync(receipt, "utf8").trim();
+			safetyState.editorHandoffs++;
+			safetyState.phase = "editor-return";
+		} else if (key === "8") {
+			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "jpeg", toolName: "unknown", args: {} });
+			imageTool = mode.pendingTools.get("jpeg");
+			safetyState.phase = "converting";
+			record();
+			const result = { content: [{ type: "text", text: "CONVERTED-IMAGE-TRANSCRIPT" }, { type: "image", mimeType: "image/jpeg", data: Buffer.from(safetyImage.get_bytes_jpeg(95)).toString("base64") }] };
+			await mode.handleEvent({ type: "tool_execution_update", toolCallId: "jpeg", partialResult: result });
+			await mode.handleEvent({ type: "tool_execution_end", toolCallId: "jpeg", result, isError: false });
+			mode.ui.revealComponent(imageTool);
+			safetyState.phase = "converted";
+		} else if (key === "9") {
+			imageTool.invalidate();
+			mode.ui.rebuild();
+			mode.ui.revealComponent(imageTool);
+			safetyState.phase = "invalidated";
+		} else if (key === "7") {
+			safetyState.suspends++;
+			safetyState.phase = "suspending";
+			record();
+			process.once("SIGCONT", () => { safetyState.phase = "resumed"; setTimeout(record, 50); });
+			await mode.handleCtrlZ();
+			return;
+		}
+		await mode.ui.renderNow({ requireFlush: true });
+		safetyState.safetyAction = key;
+		safetyState.safetyActionReceipt = (safetyState.safetyActionReceipt ?? 0) + 1;
+		record();
+	}
+	try {
+		await mode.init();
+		if (journey) {
+			const editorInput = mode.defaultEditor.handleInput.bind(mode.defaultEditor);
+			mode.defaultEditor.handleInput = (data) => {
+				const beforeLength = mode.defaultEditor.getText().length;
+				const completionPrefixLength = mode.defaultEditor.autocompletePrefix.length;
+				editorInput(data);
+				safetyState.editorInputTrace ??= [];
+				const text = mode.defaultEditor.getText();
+				safetyState.editorInputTrace.push({ kind: matchesKey(data, "enter") ? "enter" : data.length === 1 ? "character" : "other", beforeLength, completionPrefixLength, length: text.length, settingsPrefix: "/settings".startsWith(text), editorFocused: mode.ui.isComponentFocused(mode.editor) });
+				if (safetyState.editorInputTrace.length > 24) safetyState.editorInputTrace.shift();
+			};
+			const submit = mode.defaultEditor.onSubmit;
+			mode.defaultEditor.onSubmit = async (text) => {
+				safetyState.submissions = (safetyState.submissions ?? 0) + 1;
+				safetyState.lastSubmission = text.trim() === "/settings" ? "settings" : "other";
+				safetyState.lastSubmissionLength = text.length;
+				await submit?.(text);
+				safetyState.editorFocusedAfterSubmit = mode.ui.isComponentFocused(mode.editor);
+			};
+
+			const line = (i) => `ROW-${String(i).padStart(3, "0")} synthetic café 界 e\u0301 text`;
+			extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth(line(1), width)] }));
+			mode.addMessageToChat({ role: "custom", customType: "fixture-history", content: Array.from({ length: 199 }, (_, i) => line(i + 2)).join("\n"), display: true, timestamp: 0 });
+			const copy = mode.ui.viewport.options.copy;
+			mode.ui.viewport.options.copy = async (text) => {
+				const kind = copyKind;
+				try {
+					await copy(text);
+					copied = text;
+					interactions[kind]++;
+					if (kind === "rightCopy") interactions.rightWithoutSelection--;
+				} catch (error) { interactions.copyErrors++; throw error; }
+			};
+		} else extensionUI.setHeader(() => new Text("Production candidate: Ctrl+N advances; Ctrl+O expands; Ctrl+Q exits", 0, 0));
+		extensionUI.setWorkingIndicator({ frames: ["⠋"] });
+		extensionUI.setWidget("above", ["ABOVE editor"]);
+		extensionUI.setWidget("below", ["BELOW editor"], { placement: "belowEditor" });
+		extensionUI.setEditorText("Synthetic editor");
+		await runtime.session.steer("Synthetic queued message");
+		mode.updatePendingMessagesDisplay();
+		await mode.handleEvent({ type: "agent_start" });
+		if (safety) {
+			extensionUI.setWidget("above", () => ({ invalidate() {}, render: (width) => [` \x1b[48;2;0;255;255m${" ".repeat(Math.max(0, width - 2))}\x1b[0m `] }));
+			extensionUI.setFooter(() => ({
+				invalidate() { mode.footer.invalidate(); },
+				render(width) {
+					const rows = mode.footer.render(width);
+					return [...rows.slice(0, -1), ` \x1b[48;2;255;255;0m${" ".repeat(Math.max(0, width - 2))}\x1b[0m `];
+				},
+			}));
+			const { loadPhoton } = await import("../../../coding-agent/dist/utils/photon.js");
+			const { getCapabilities } = await import("../../../tui/dist/index.js");
+			const photon = await loadPhoton();
+			const pixels = new Uint8Array(300 * 3000 * 4);
+			for (let i = 0; i < pixels.length; i += 4) { pixels[i] = 255; pixels[i + 2] = 255; pixels[i + 3] = 255; }
+			safetyImage = new photon.PhotonImage(pixels, 300, 3000);
+			safetyState.protocol = getCapabilities().images;
+			if (!safetyState.protocol) throw new Error("Native graphics protocol was not detected");
+			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "image", toolName: "unknown", args: {} });
+			imageTool = mode.pendingTools.get("image");
+			await mode.handleEvent({ type: "tool_execution_end", toolCallId: "image", isError: false,
+				result: { content: [{ type: "text", text: "NATIVE-IMAGE-TRANSCRIPT" }, { type: "image", mimeType: "image/png", data: Buffer.from(safetyImage.get_bytes()).toString("base64") }] } });
+			await safetyAction("1");
+		} else {
+			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "batch", toolName: "subagent", args: { tasks } });
+			await update();
+			if (journey) { mode.ui.scrollViewportTo(0); await mode.ui.renderNow({ requireFlush: true }); record(); }
+		}
+		if (committed) {
+			completed = 8;
+			await update();
+			if (!committedHandoffs) {
+				await terminal.drainInput();
+				stop();
+			}
+		}
+		await lifetime;
+	} finally {
+		stop();
+		clearInterval(timer);
+		approvalDone?.("cancelled");
+		selectorDone?.(null);
+		safetyImage?.free();
+		await sequence;
+		await runtime.dispose();
+		stopThemeWatcher();
+		const after = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
+		record();
+		rmSync(directory, { recursive: true, force: true });
+		if (before !== after) throw new Error("Production fixture did not restore terminal state");
+	}
+}

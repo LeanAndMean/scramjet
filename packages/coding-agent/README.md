@@ -126,6 +126,18 @@ The interface from top to bottom:
 
 The editor can be temporarily replaced by other UI, like built-in `/settings` or custom UI from extensions (e.g., a Q&A tool that lets the user answer model questions in a structured format). [Extensions](#extensions) can also replace the editor, add widgets above/below it, a status line, custom footer, or overlays.
 
+### Browsing and copying output
+
+Interactive mode retains the current transcript in an application-managed viewport, including running tool cards. Use the mouse wheel/trackpad or drag the **rightmost Scramjet scrollbar** to inspect offscreen output before a turn finishes. New output preserves your reading position; returning to the bottom resumes following. The editor, adjacent widgets and footer stay docked by default, so you can type while reading older output. `/settings` offers live docking, maximum input-height percentage and wheel-step controls; undocking restores the single scrolling layout without changing renderer.
+
+While content remains below the viewport, the existing gap above the dock shows `Session: N lines below · Ctrl+End: latest`; the row stays blank at the tail. This counts rendered session rows, not unread messages or hidden draft text, and does not add another editor border. Narrow terminals shorten the hint and finally show `Session ↓…` if the labelled exact count cannot fit. The indicator is decorative and excluded from application copying.
+
+Drag without modifiers to select displayed text, including across scrolling. Right-click the selection or press Ctrl+C to copy it; built-in text rendering omits known layout padding and rejoins soft wraps while preserving genuine indentation and hard breaks. Selection stays live as output changes, and Copy captures the last displayed highlight immediately. Dragging can cross between transcript and editor; a downward transcript drag reaches the transcript bottom before entering the dock. Editor copying also rejoins soft wraps. Without selection, Ctrl+C retains its normal editor/quit behavior, and right-clicking the focused editor pastes local clipboard text without submitting it. Terminal-native Copy menus cannot see application selection.
+
+Home/End always retain editor line-start/end behavior. Ctrl+Home/Ctrl+End navigate to the transcript beginning/bottom, with Ctrl+End resuming following. A new user message appearing in the transcript also resumes following. While scrolled away, PageUp/PageDown browse and Escape returns to the live tail; Alt+PageUp/Alt+PageDown enter browsing from the tail. Docked editing and presentation toggles preserve the reading position; undocked editing reveals its cursor. At the tail, ordinary editor/list bindings apply. Hidden approval controls must first be revealed before a subsequent activation can approve.
+
+Orderly exit restores the shell and leaves one readable plain-text transcript, excluding editor/widgets/temporary controls. Suspend and external-editor handoffs restore the shell without transcript copies. See [terminal setup](docs/terminal-setup.md#transcript-browsing-and-copying) for tested configurations, iTerm2's required right-click setting, clipboard limits and image behavior.
+
 ### Editor
 
 | Feature | How |
@@ -172,9 +184,9 @@ See `/hotkeys` for the full list. Customize via `~/.scramjet/agent/keybindings.j
 
 | Key | Action |
 |-----|--------|
-| Ctrl+C | Clear editor |
+| Ctrl+C | Copy transcript selection; otherwise clear editor |
 | Ctrl+C twice | Quit |
-| Escape | Cancel/abort |
+| Escape | Return from transcript browsing; otherwise cancel/abort |
 | Escape twice | Open `/tree` |
 | Ctrl+L | Open model selector |
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |

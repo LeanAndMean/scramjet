@@ -6,11 +6,28 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
-import { isKeyRelease, matchesKey } from "./keys.js";
+import { stripVTControlCharacters } from "node:util";
+import { type ImagePlacement, sliceImagePlacements } from "./image-placement.js";
+import { isKeyModifier, isKeyRelease, matchesKey } from "./keys.js";
+import { getRenderedCopy, type RenderedCopyRow, setRenderedCopy } from "./render-copy.js";
 import type { Terminal } from "./terminal.js";
 import { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
-import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.js";
-import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
+import {
+	deleteKittyImage,
+	getCapabilities,
+	getCellDimensions,
+	isImageLine,
+	setCellDimensions,
+} from "./terminal-image.js";
+import {
+	extractSegments,
+	normalizeTerminalOutput,
+	sliceByColumn,
+	sliceWithWidth,
+	truncateToWidth,
+	visibleWidth,
+} from "./utils.js";
+import { RetainedViewport, type ViewportOptions, type ViewportState } from "./viewport.js";
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
 
@@ -44,6 +61,9 @@ export interface Component {
 	 * @returns Array of strings, each representing a line
 	 */
 	render(width: number): string[];
+
+	// SCRAMJET-DIVERGENCE: optional image bounds; text remains logically unbounded.
+	setViewportHeight?(height: number | undefined): void;
 
 	/**
 	 * Optional handler for keyboard input when component has focus
@@ -200,23 +220,33 @@ export interface OverlayHandle {
  */
 export class Container implements Component {
 	children: Component[] = [];
+	private viewportHeight?: number;
+	private copyRenderCache?: string[];
+
+	setViewportHeight(height: number | undefined): void {
+		this.viewportHeight = height;
+	}
 
 	addChild(component: Component): void {
 		this.children.push(component);
+		this.copyRenderCache = undefined;
 	}
 
 	removeChild(component: Component): void {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {
 			this.children.splice(index, 1);
+			this.copyRenderCache = undefined;
 		}
 	}
 
 	clear(): void {
 		this.children = [];
+		this.copyRenderCache = undefined;
 	}
 
 	invalidate(): void {
+		this.copyRenderCache = undefined;
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
@@ -224,13 +254,22 @@ export class Container implements Component {
 
 	render(width: number): string[] {
 		const lines: string[] = [];
+		const copyRows: RenderedCopyRow[] = [];
 		for (const child of this.children) {
+			child.setViewportHeight?.(this.viewportHeight);
 			const childLines = child.render(width);
+			for (const row of getRenderedCopy(childLines)) copyRows.push(row);
 			for (const line of childLines) {
 				lines.push(line);
 			}
 		}
-		return lines;
+		const cached = this.copyRenderCache;
+		const result =
+			cached && cached.length === lines.length && lines.every((line, index) => line === cached[index])
+				? cached
+				: lines;
+		this.copyRenderCache = setRenderedCopy(result, copyRows);
+		return this.copyRenderCache;
 	}
 }
 
@@ -259,6 +298,16 @@ export class TUI extends Container {
 	private previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
 	private fullRedrawCount = 0;
 	private stopped = false;
+	private viewport: RetainedViewport | undefined;
+	private viewportHadImages = false;
+	private viewportHadOverlay = false;
+	private viewportRevealFocus = false;
+	private viewportPaint: { flushed: boolean } | undefined;
+	private viewportMinimumPainted = false;
+	private reportedViewportFlushFailure = false;
+	private viewportRevealComponent?: Component;
+	private started = false;
+	private removeViewportInput?: () => void;
 
 	// SCRAMJET-DIVERGENCE: append-only history and a bounded mutable canvas preserve terminal scrollback (#389).
 	private liveRegionStart: Component | undefined;
@@ -296,7 +345,141 @@ export class TUI extends Container {
 		return this.fullRedrawCount;
 	}
 
+	// SCRAMJET-DIVERGENCE: opt-in retained rendering stays independent of native-history modes.
+	configureViewport(options: ViewportOptions): void {
+		if (this.liveRegionStart) throw new Error("Cannot configure a viewport with a committed live region");
+		if (!this.terminal.setViewportMode) throw new Error("Terminal must support viewport mode");
+		if (options.minimumSize && !this.terminal.flush)
+			throw new Error("Minimum-size input protection requires terminal flushing");
+		this.viewport?.cancelInteraction();
+		this.viewportPaint = undefined;
+		if (!options.minimumSize) this.viewportMinimumPainted = false;
+		this.removeViewportInput?.();
+		this.viewportRevealFocus = false;
+		this.viewport = new RetainedViewport(
+			{
+				...options,
+				requestPaste: (component) => {
+					if (
+						this.isComponentVisible(component) &&
+						this.isComponentRenderComplete(component) &&
+						this.isViewportFrameFlushed()
+					)
+						options.requestPaste?.(component);
+				},
+			},
+			() => this.requestRender(),
+		);
+		this.removeViewportInput = this.addInputListener((data) => {
+			const protocol = data === "\x1b[I" || data === "\x1b[O" || /^\x1b\[\d+;\d+;\d+t$/.test(data);
+			if (
+				!protocol &&
+				(this.viewport?.isTooSmall(this.terminal.columns, this.terminal.rows) || this.viewportMinimumPainted)
+			) {
+				this.viewport?.cancelInteraction();
+				if (
+					!isKeyRelease(data) &&
+					!isKeyModifier(data) &&
+					!data.startsWith("\x1b[200~") &&
+					!data.startsWith("\x1b[<") &&
+					!data.startsWith("\x1b[M")
+				)
+					options.handleBlockedInput?.(data);
+				this.requestRender();
+				return { consume: true };
+			}
+			const overlayFocused = this.overlayStack.some(
+				(entry) => entry.component === this.focusedComponent && this.isOverlayVisible(entry),
+			);
+			if (this.viewport?.handleInput(data, overlayFocused, this.hasOverlay())) {
+				this.viewportRevealFocus = false;
+				this.viewportRevealComponent = undefined;
+				return { consume: true };
+			}
+			return undefined;
+		});
+		if (this.started) this.enterViewportMode();
+		this.requestRender(true);
+	}
+
+	// SCRAMJET-DIVERGENCE: safety controls use the painted block, not a scheduled scroll position.
+	isComponentVisible(component: Component): boolean {
+		return this.getComponentVisibility(component) === "visible";
+	}
+
+	getComponentVisibility(component: Component): "visible" | "occluded" | "outside" {
+		if (
+			this.stopped ||
+			this.previousWidth !== this.terminal.columns ||
+			this.previousHeight !== this.terminal.rows ||
+			!this.viewport?.isComponentVisible(component)
+		)
+			return "outside";
+		return this.hasOverlay() || this.viewportHadOverlay ? "occluded" : "visible";
+	}
+
+	isViewportFrameFlushed(): boolean {
+		return (
+			!this.stopped &&
+			!!this.viewport &&
+			this.previousWidth === this.terminal.columns &&
+			this.previousHeight === this.terminal.rows &&
+			this.viewportPaint?.flushed === true
+		);
+	}
+
+	isComponentRenderComplete(component: Component): boolean {
+		return (
+			!this.stopped &&
+			this.previousWidth === this.terminal.columns &&
+			this.previousHeight === this.terminal.rows &&
+			this.viewport?.isComponentRenderComplete(component) === true
+		);
+	}
+
+	revealComponent(component: Component): void {
+		this.viewport?.cancelInteraction();
+		this.viewportRevealComponent = component;
+		this.requestRender();
+	}
+
+	getViewportState(): ViewportState | undefined {
+		return this.viewport?.state;
+	}
+
+	scrollViewport(lines: number): void {
+		if (this.viewport) this.scrollViewportTo(this.viewport.state.offset + lines);
+	}
+
+	scrollViewportTo(offset: number, anchorScreenRow = 0): void {
+		this.viewportRevealFocus = false;
+		this.viewportRevealComponent = undefined;
+		this.viewport?.scrollTo(offset, anchorScreenRow);
+		this.requestRender();
+	}
+
+	followViewport(): void {
+		if (!this.viewport) return;
+		this.viewport.cancelInteraction();
+		this.scrollViewportTo(this.viewport.state.totalRows);
+	}
+
+	refreshViewportLayout(): void {
+		this.viewportPaint = undefined;
+		this.viewport?.cancelInteraction();
+		this.rebuild();
+	}
+
+	resetViewport(): void {
+		this.viewportPaint = undefined;
+		this.viewportRevealFocus = false;
+		this.viewportRevealComponent = undefined;
+		this.viewport?.reset();
+		this.requestRender(true);
+	}
+
 	setLiveRegionStart(component: Component): void {
+		if (this.viewport) throw new Error("Cannot configure a committed live region with a viewport");
 		if (!this.children.includes(component)) {
 			throw new Error("Live region start must be a direct TUI child");
 		}
@@ -318,22 +501,29 @@ export class TUI extends Container {
 	async commitNow(options?: { requireFlush?: boolean }): Promise<void> {
 		if (!this.liveRegionStart) throw new Error("Cannot commit without a live region");
 		if (this.stopped) throw new Error("Cannot commit a stopped TUI");
-		if (this.renderTimer) {
-			clearTimeout(this.renderTimer);
-			this.renderTimer = undefined;
-		}
 		this.commitRequested = true;
-		this.renderRequested = false;
-		this.lastRenderAt = performance.now();
 		try {
-			this.doRender();
+			await this.renderNow();
 			if (options?.requireFlush && !this.terminal.flush)
 				throw new Error("Terminal flush is required for committed output");
-			await this.terminal.flush?.();
 		} catch (error) {
 			this.commitRequested = false;
 			throw error;
 		}
+	}
+
+	async renderNow(options?: { requireFlush?: boolean }): Promise<void> {
+		if (this.stopped) throw new Error("Cannot render a stopped TUI");
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = undefined;
+		}
+		this.renderRequested = false;
+		this.lastRenderAt = performance.now();
+		const flushing = this.doRender();
+		if (options?.requireFlush && !this.terminal.flush)
+			throw new Error("Terminal flush is required for rendered output");
+		await (this.viewport ? flushing : this.terminal.flush?.());
 	}
 
 	rebuild(): void {
@@ -351,6 +541,18 @@ export class TUI extends Container {
 			this.terminal.hideCursor();
 		}
 		this.requestRender();
+	}
+
+	isComponentFocused(component: Component): boolean {
+		return this.focusedComponent === component;
+	}
+
+	// SCRAMJET-DIVERGENCE: asynchronous base-focus changes must preserve overlay ownership and restoration.
+	replaceFocus(expected: Component | null, component: Component | null): void {
+		for (const entry of this.overlayStack) {
+			if (entry.preFocus === expected) entry.preFocus = component;
+		}
+		if (this.focusedComponent === expected) this.setFocus(component);
 	}
 
 	setFocus(component: Component | null): void {
@@ -479,16 +681,28 @@ export class TUI extends Container {
 	}
 
 	override invalidate(): void {
-		super.invalidate();
+		if (this.viewport) this.viewport.invalidate(true);
+		else super.invalidate();
 		for (const overlay of this.overlayStack) overlay.component.invalidate?.();
 	}
 
+	private enterViewportMode(): void {
+		if (!this.terminal.setViewportMode) throw new Error("Terminal must support viewport mode");
+		this.terminal.setViewportMode(true);
+	}
+
 	start(): void {
+		if (this.started) return;
 		this.stopped = false;
+		this.started = true;
 		this.terminal.start(
 			(data) => this.handleInput(data),
 			() => this.requestRender(),
 		);
+		if (this.viewport) {
+			this.enterViewportMode();
+			this.previousLines = [];
+		}
 		this.terminal.hideCursor();
 		this.queryCellSize();
 		this.requestRender();
@@ -540,8 +754,20 @@ export class TUI extends Container {
 		return this.bgColorPromise;
 	}
 
-	stop(): void {
+	stop(options?: { transcript?: readonly Component[] }): void {
+		if (this.stopped) return;
+		this.viewportPaint = undefined;
 		this.stopped = true;
+		this.started = false;
+		this.renderRequested = false;
+		this.viewport?.cancelInteraction();
+		this.viewportRevealFocus = false;
+		this.viewportRevealComponent = undefined;
+		if (this.viewport) {
+			this.terminal.write(this.deleteKittyImages(this.previousKittyImageIds));
+			this.previousKittyImageIds.clear();
+			this.terminal.setViewportMode?.(false);
+		}
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
 			this.renderTimer = undefined;
@@ -559,7 +785,7 @@ export class TUI extends Container {
 		const renderedLineCount = this.liveRegionStart
 			? this.committedLines.length + this.previousLiveLines.length
 			: this.previousLines.length;
-		if (renderedLineCount > 0) {
+		if (!this.viewport && renderedLineCount > 0) {
 			const targetRow = renderedLineCount; // Line after the last content
 			const lineDiff = targetRow - this.hardwareCursorRow;
 			if (lineDiff > 0) {
@@ -572,10 +798,18 @@ export class TUI extends Container {
 
 		this.terminal.showCursor();
 		this.terminal.stop();
+		if (this.viewport && options?.transcript) {
+			const lines = options.transcript.flatMap((component) => component.render(this.terminal.columns));
+			const text = lines.map((line) => (isImageLine(line) ? "[Image]" : stripVTControlCharacters(line).trimEnd()));
+			if (text.length) this.terminal.write(`\r\n${text.join("\r\n")}\r\n`);
+		}
 	}
 
 	requestRender(force = false): void {
+		if (this.stopped) return;
 		if (force) {
+			this.viewportPaint = undefined;
+			this.viewport?.invalidate();
 			this.previousLines = [];
 			this.committedLines = [];
 			this.previousLiveLines = [];
@@ -630,6 +864,13 @@ export class TUI extends Container {
 			return;
 		}
 
+		// SCRAMJET-DIVERGENCE: input guards must see the recipient that will actually receive this event.
+		const focusedOverlay = this.overlayStack.find((o) => o.component === this.focusedComponent);
+		if (focusedOverlay && !this.isOverlayVisible(focusedOverlay)) {
+			const topVisible = this.getTopmostVisibleOverlay();
+			this.setFocus(topVisible?.component ?? focusedOverlay.preFocus);
+		}
+
 		if (this.inputListeners.size > 0) {
 			let current = data;
 			for (const listener of this.inputListeners) {
@@ -658,20 +899,6 @@ export class TUI extends Container {
 			return;
 		}
 
-		// If focused component is an overlay, verify it's still visible
-		// (visibility can change due to terminal resize or visible() callback)
-		const focusedOverlay = this.overlayStack.find((o) => o.component === this.focusedComponent);
-		if (focusedOverlay && !this.isOverlayVisible(focusedOverlay)) {
-			// Focused overlay is no longer visible, redirect to topmost visible overlay
-			const topVisible = this.getTopmostVisibleOverlay();
-			if (topVisible) {
-				this.setFocus(topVisible.component);
-			} else {
-				// No visible overlays, restore to preFocus
-				this.setFocus(focusedOverlay.preFocus);
-			}
-		}
-
 		// Pass input to focused component (including Ctrl+C)
 		// The focused component can decide how to handle Ctrl+C
 		if (this.focusedComponent?.handleInput) {
@@ -679,6 +906,8 @@ export class TUI extends Container {
 			if (isKeyRelease(data) && !this.focusedComponent.wantsKeyRelease) {
 				return;
 			}
+			// SCRAMJET-DIVERGENCE: only dispatched keyboard input may reveal an offscreen cursor.
+			if (this.viewport && !this.hasOverlay()) this.viewportRevealFocus = true;
 			this.focusedComponent.handleInput(data);
 			this.requestRender();
 		}
@@ -723,6 +952,9 @@ export class TUI extends Container {
 			return true;
 		}
 
+		// SCRAMJET-DIVERGENCE: repeated measurements must not rebuild graphics and disturb reading anchors.
+		const current = getCellDimensions();
+		if (current.widthPx === widthPx && current.heightPx === heightPx) return true;
 		setCellDimensions({ widthPx, heightPx });
 		// Invalidate all components so images re-render with correct dimensions.
 		this.invalidate();
@@ -739,7 +971,7 @@ export class TUI extends Container {
 		overlayHeight: number,
 		termWidth: number,
 		termHeight: number,
-	): { width: number; row: number; col: number; maxHeight: number | undefined } {
+	): { width: number; row: number; col: number; maxHeight: number | undefined; availableHeight: number } {
 		const opt = options ?? {};
 
 		// Parse margin (clamp to non-negative)
@@ -831,7 +1063,7 @@ export class TUI extends Container {
 		row = Math.max(marginTop, Math.min(row, termHeight - marginBottom - effectiveHeight));
 		col = Math.max(marginLeft, Math.min(col, termWidth - marginRight - width));
 
-		return { width, row, col, maxHeight };
+		return { width, row, col, maxHeight, availableHeight: availHeight };
 	}
 
 	private resolveAnchorRow(anchor: OverlayAnchor, height: number, availHeight: number, marginTop: number): number {
@@ -869,12 +1101,18 @@ export class TUI extends Container {
 	}
 
 	/** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
-	private compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
+	private compositeOverlays(
+		lines: string[],
+		termWidth: number,
+		termHeight: number,
+		bounded = false,
+		images: ImagePlacement[] = [],
+	): string[] {
 		if (this.overlayStack.length === 0) return lines;
 		const result = [...lines];
 
 		// Pre-render all visible overlays and calculate positions
-		const rendered: { overlayLines: string[]; row: number; col: number; w: number }[] = [];
+		const rendered: { overlayLines: string[]; row: number; col: number; w: number; images: ImagePlacement[] }[] = [];
 		let minLinesNeeded = result.length;
 
 		const visibleEntries = this.overlayStack.filter((e) => this.isOverlayVisible(e));
@@ -884,27 +1122,31 @@ export class TUI extends Container {
 
 			// Get layout with height=0 first to determine width and maxHeight
 			// (width and maxHeight don't depend on overlay height)
-			const { width, maxHeight } = this.resolveOverlayLayout(options, 0, termWidth, termHeight);
+			const { width, maxHeight, availableHeight } = this.resolveOverlayLayout(options, 0, termWidth, termHeight);
 
-			// Render component at calculated width
+			const limit = bounded ? Math.min(maxHeight ?? termHeight, availableHeight, termHeight) : maxHeight;
+			component.setViewportHeight?.(bounded ? limit : undefined);
 			let overlayLines = component.render(width);
-
-			// Apply maxHeight if specified
-			if (maxHeight !== undefined && overlayLines.length > maxHeight) {
-				overlayLines = overlayLines.slice(0, maxHeight);
+			let overlayImages: ImagePlacement[] = [];
+			if (bounded) {
+				const frame = sliceImagePlacements(overlayLines, 0, limit!, width);
+				overlayLines = frame.lines;
+				overlayImages = frame.images;
+			} else if (limit !== undefined && overlayLines.length > limit) {
+				overlayLines = overlayLines.slice(0, limit);
 			}
 
 			// Get final row/col with actual overlay height
 			const { row, col } = this.resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
 
-			rendered.push({ overlayLines, row, col, w: width });
+			rendered.push({ overlayLines, row, col, w: width, images: overlayImages });
 			minLinesNeeded = Math.max(minLinesNeeded, row + overlayLines.length);
 		}
 
 		// Pad to at least terminal height so overlays have screen-relative positions.
 		// Excludes maxLinesRendered: the historical high-water mark caused self-reinforcing
 		// inflation that pushed content into scrollback on terminal widen.
-		const workingHeight = Math.max(result.length, termHeight, minLinesNeeded);
+		const workingHeight = bounded ? termHeight : Math.max(result.length, termHeight, minLinesNeeded);
 
 		// Extend result with empty lines if content is too short for overlay placement or working area
 		while (result.length < workingHeight) {
@@ -914,7 +1156,28 @@ export class TUI extends Container {
 		const viewportStart = Math.max(0, workingHeight - termHeight);
 
 		// Composite each overlay
-		for (const { overlayLines, row, col, w } of rendered) {
+		for (const [index, { overlayLines, row, col, w, images: placements }] of rendered.entries()) {
+			for (const image of placements) {
+				const top = row + image.row;
+				const left = col + image.col;
+				const occluded = rendered
+					.slice(index + 1)
+					.some(
+						(higher) =>
+							top < higher.row + higher.overlayLines.length &&
+							top + image.rows > higher.row &&
+							left < higher.col + higher.w &&
+							left + image.columns > higher.col,
+					);
+				if (!occluded && top + image.rows <= termHeight && left + image.columns <= termWidth) {
+					images.push({ ...image, row: top, col: left });
+				} else {
+					overlayLines[image.row] = truncateToWidth(
+						occluded ? "[Image hidden by overlay]" : "[Image clipped; scroll to view]",
+						w,
+					);
+				}
+			}
 			for (let i = 0; i < overlayLines.length; i++) {
 				const idx = viewportStart + row + i;
 				if (idx >= 0 && idx < result.length) {
@@ -1066,7 +1329,7 @@ export class TUI extends Container {
 
 	private renderChildren(children: Component[], width: number): string[] {
 		const lines: string[] = [];
-		for (const child of children) lines.push(...child.render(width));
+		for (const child of children) for (const line of child.render(width)) lines.push(line);
 		return lines;
 	}
 
@@ -1233,8 +1496,105 @@ export class TUI extends Container {
 		this.previousViewportTop = 0;
 	}
 
-	private doRender(): void {
+	private doViewportRender(): Promise<void> | undefined {
+		const viewport = this.viewport!;
+		if (this.hasOverlay()) viewport.cancelInteraction();
+		const width = this.terminal.columns;
+		const height = this.terminal.rows;
+		const contentWidth = Math.max(1, width - 1);
+		viewport.update(contentWidth, height, width);
+		const tooSmall = viewport.isTooSmall();
+		if (tooSmall) this.viewportMinimumPainted = true;
+		if (!tooSmall && this.viewportRevealComponent) {
+			viewport.revealComponent(this.viewportRevealComponent);
+			this.viewportRevealComponent = undefined;
+		}
+		if (!tooSmall && this.viewportRevealFocus) {
+			this.viewportRevealFocus = false;
+			const cursorRow = viewport.cursorRow;
+			if (cursorRow >= 0) viewport.revealRow(cursorRow);
+		}
+		const frame = viewport.slice(contentWidth, this.hasOverlay());
+		let lines = frame.lines;
+		while (lines.length < height) lines.push("");
+		if (viewport.notice)
+			lines[Math.min(height - 1, viewport.noticeRow)] = truncateToWidth(viewport.notice, contentWidth);
+		if (
+			this.overlayStack.some((entry) => entry.component === this.focusedComponent && this.isOverlayVisible(entry))
+		) {
+			lines = lines.map((line) => line.replaceAll(CURSOR_MARKER, ""));
+		}
+		if (!tooSmall) lines = this.compositeOverlays(lines, contentWidth, height, true, frame.images);
+		const cursor = this.extractCursorPosition(lines, height);
+		lines = this.applyLineResets(lines.map((line) => line.replaceAll(CURSOR_MARKER, "")));
+		const reset = TUI.SEGMENT_RESET;
+		lines = lines.map((line, row) => {
+			if (visibleWidth(line) > contentWidth)
+				throw new Error(`Rendered viewport row ${row} exceeds content width ${contentWidth}`);
+			return width > 1
+				? line + " ".repeat(contentWidth - visibleWidth(line)) + reset + viewport.scrollbar(row)
+				: line;
+		});
+		const resized = width !== this.previousWidth || height !== this.previousHeight;
+		const hasImages = frame.images.length > 0 || lines.some(isImageLine);
+		let buffer = `\x1b[?2026h${this.deleteKittyImages(this.previousKittyImageIds)}`;
+		for (let row = 0; row < height; row++) {
+			if (resized || this.viewportHadImages || hasImages || lines[row] !== this.previousLines[row]) {
+				buffer += `\x1b[${row + 1};1H\x1b[2K${lines[row]}`;
+			}
+		}
+		for (const image of frame.images) buffer += `\x1b[${image.row + 1};${image.col + 1}H${image.sequence}`;
+		if (cursor) buffer += `\x1b[${cursor.row + 1};${Math.min(cursor.col, contentWidth - 1) + 1}H`;
+		buffer += cursor && this.showHardwareCursor ? "\x1b[?25h" : "\x1b[?25l";
+		buffer += "\x1b[?2026l";
+		const paint = { flushed: false };
+		this.viewportPaint = paint;
+		this.terminal.write(buffer);
+		viewport.markPainted();
+		this.viewportHadOverlay = this.hasOverlay();
+		this.previousLines = lines;
+		this.previousKittyImageIds = this.collectKittyImageIds([
+			...lines,
+			...frame.images.map((image) => image.sequence),
+		]);
+		this.viewportHadImages = hasImages;
+		this.previousWidth = width;
+		this.previousHeight = height;
+		if (!this.terminal.flush) return;
+		let flushing: Promise<void>;
+		try {
+			flushing = this.terminal.flush();
+		} catch (error) {
+			flushing = Promise.reject(error);
+		}
+		void flushing.then(
+			() => {
+				if (this.viewportPaint !== paint || this.stopped) return;
+				paint.flushed = true;
+				if (!tooSmall) this.viewportMinimumPainted = false;
+				this.reportedViewportFlushFailure = false;
+			},
+			(error: unknown) => {
+				if (this.stopped) return;
+				this.viewportPaint = undefined;
+				this.previousLines = [];
+				this.previousWidth = -1;
+				this.previousHeight = -1;
+				if (this.reportedViewportFlushFailure) return;
+				this.reportedViewportFlushFailure = true;
+				const reason = stripVTControlCharacters(error instanceof Error ? error.message : String(error)).slice(
+					0,
+					200,
+				);
+				process.stderr.write(`Terminal output flush failed: ${reason}\n`);
+			},
+		);
+		return flushing;
+	}
+
+	private doRender(): Promise<void> | undefined {
 		if (this.stopped) return;
+		if (this.viewport) return this.doViewportRender();
 		if (this.liveRegionStart && !this.children.includes(this.liveRegionStart)) {
 			this.resetDetachedLiveRegion();
 		}

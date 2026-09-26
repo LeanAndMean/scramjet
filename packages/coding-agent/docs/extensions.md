@@ -2237,6 +2237,16 @@ Extensions can interact with users via `ctx.ui` methods and customize how messag
 - Autocomplete providers layered on top of built-in slash/path completion (addAutocompleteProvider)
 - Custom footers (setFooter)
 
+### Retained viewport and input ownership
+
+InteractiveMode uses the existing component presentation in an alternate-screen retained viewport. Ordinary `render(width)`, tool `renderCall`/`renderResult`, result/session schemas and HTML export contracts are unchanged. Render the complete logical text rather than clipping it to terminal height. Components receive terminal width minus the reserved scrollbar column; images alone may use the optional `setViewportHeight` bound. Standard Container/Box propagate it; custom image wrappers must forward it. Unrecognized custom graphics envelopes display a placeholder rather than an unsafe clipped placement.
+
+`ctx.ui.onTerminalInput()` listeners run after the viewport listener. They do not receive consumed pointer packets, selection-copy keys, Ctrl+Home/Ctrl+End transcript navigation or detached PageUp/PageDown/Escape when the input owner permits viewport navigation. Ordinary Home/End pass through for editor line-start/end behavior. Do not use raw listeners to compete for transcript pointer ownership. Focused overlays keep keyboard precedence, and conflicting selector bindings precede configurable Alt+PageUp/Alt+PageDown transcript actions. Focus-in/out reports are consumed rather than delivered as ordinary input. The viewport keeps no session-journal state; session reconstruction discards browsing/selection state.
+
+The input area is docked by default, with widgets preserving their above/below-editor placement. Docking can change live without replacing component instances. Non-fitting extension content remains reachable in an explained undocked retained flow. Custom editors can implement `setHeightLimit(limits)`, where the callback returns `{ rows, text }` for the current total input budget and maximum wrapped text rows. Respect the budget without losing draft content, keep the cursor and active completion choice visible, and use the effective text-window height for paging. This is separate from the image-only `setViewportHeight` API. Editors with completion menus can also expose optional `isShowingAutocomplete(): boolean`; InteractiveMode then reveals a hidden editor slot independently of its hardware cursor and consumes acceptance until the slot is visible and its current paint has flushed. Built-in `CustomEditor` inherits this capability. See [tui.md](tui.md#retained-viewport-api) for projection, selection and geometry contracts.
+
+Kitty-capable viewport terminals explicitly encode printable keys as well as modified keys. Match actions against raw input with `matchesKey()`/the injected keybinding manager before using `decodeKittyPrintable(data) ?? data` for printable-mode mappings; decoding first can obscure special-key identities such as keypad Enter. Do not assume a printable key is one raw byte. Raw listeners must ignore `isKeyRelease(data)` unless they intentionally handle releases; focused components filter releases by default. The shipped [modal editor](../examples/extensions/modal-editor.ts) demonstrates the printable-key migration. No blanket compatibility claim is made for external raw-byte listeners or graphics wrappers; see [tui.md](tui.md) for exact viewport APIs and [terminal-setup.md](terminal-setup.md#native-compatibility-evidence) for tested configurations.
+
 ### Dialogs
 
 ```typescript
@@ -2455,18 +2465,18 @@ See [github-issue-autocomplete.ts](../examples/extensions/github-issue-autocompl
 For complex UI, use `ctx.ui.custom()`. This temporarily replaces the editor with your component until `done()` is called:
 
 ```typescript
-import { Text, Component } from "@leanandmean/tui";
+import { Text } from "@leanandmean/tui";
 
-const result = await ctx.ui.custom<boolean>((tui, theme, keybindings, done) => {
+const result = await ctx.ui.custom<boolean>((_tui, _theme, keybindings, done) => {
   const text = new Text("Press Enter to confirm, Escape to cancel", 1, 1);
-
-  text.onKey = (key) => {
-    if (key === "return") done(true);
-    if (key === "escape") done(false);
-    return true;
+  return {
+    render: (width) => text.render(width),
+    invalidate: () => text.invalidate(),
+    handleInput(data) {
+      if (keybindings.matches(data, "tui.select.confirm")) done(true);
+      else if (keybindings.matches(data, "tui.select.cancel")) done(false);
+    },
   };
-
-  return text;
 });
 
 if (result) {
@@ -2479,6 +2489,8 @@ The callback receives:
 - `theme` - Current theme for styling
 - `keybindings` - App keybinding manager (for checking shortcuts)
 - `done(value)` - Call to close component and return value
+
+Ordinary editor-slot custom UI can opt into actual layout allocation with `ctx.ui.custom(factory, { onAvailableHeight(rows) { maximumRows = rows; } })`, where `maximumRows` is invocation-local state read during rendering. The callback receives `undefined` at mounting/release and a numeric row budget before each allocated render; it can run more than once per frame. It must not request another render or change focus, and allocation does not certify docking, visibility or flushing. Retained undocked rendering can allocate rows too; committed rendering has no numeric allocation. Below-minimum geometry skips rendering rather than delivering a temporary budget, and recovery supplies a fresh allocation. Other components are unchanged unless they explicitly opt in. The option is incompatible with overlays and tool-attached context and is rejected before the factory runs; it is separate from image-only `setViewportHeight` and editor text-height preferences. Allocation-notification errors reject the owning custom UI request and release/dispose its control; release-notification errors are reported without stranding completion. See [allocated custom input height](tui.md#allocated-custom-input-height).
 
 A pending sequential tool can attach immutable long-form context to its own tool row before compact controls become interactive. Pass the current `toolCallId` from the tool's `execute()` method:
 
@@ -2494,7 +2506,11 @@ const result = await ctx.ui.custom(
 );
 ```
 
-The context is rendered at that pending tool's transcript position, the editor is defocused, and the context is committed once and flushed before its controls receive focus. The complete context is emitted to native terminal scrollback; retention depends on terminal capacity and configuration. It is visual-only and is not persisted or sent to the model. The call fails closed if the named tool row is absent or no longer pending. Use this only from the sequential tool whose id is supplied; ordinary custom UIs remain live and terminal-height bounded.
+The complete immutable context is installed at that pending tool's transcript position. In both renderer modes, the editor is defocused and a required initial flush must succeed before controls receive focus. Missing/non-leading/settled tool rows, context replaced before that flush settles, and missing or failed flushing reject the request through attachment cleanup. Context is visual-only, not persisted or sent to the model. Use this only from the sequential tool whose id is supplied.
+
+In default **retained mode**, the context remains browseable through Scramjet's scrollbar even when taller than the screen; it need not all be simultaneously visible or emitted into native scrollback. Controls require current-paint flush evidence, complete rendering of the full context and controls, and whole-control visibility. Clipped context (including offscreen rows) or controls that cannot fit fail closed. If browsing hides controls, the first activation reveals and flushes them without approving; only subsequent input can authorize. Attachment currentness and these presentation guards are rechecked on input.
+
+With startup-only **`tuiMode: "committed"`**, `commitNow({ requireFlush: true })` emits the complete context into committed native history and waits for the initial flush before focusing controls. The mutable canvas remains tail-windowed; this mode does **not** provide Scramjet scrollbar access, retained render-completeness/whole-control-visibility checks, or reveal-before-subsequent-activation protection. Do not rely on those retained-only guarantees when supporting committed compatibility mode.
 
 See [tui.md](tui.md) for the full component API.
 
@@ -2540,7 +2556,7 @@ class VimEditor extends CustomEditor {
       this.mode = "normal";
       return;
     }
-    if (this.mode === "normal" && data === "i") {
+    if (this.mode === "normal" && matchesKey(data, "i")) {
       this.mode = "insert";
       return;
     }

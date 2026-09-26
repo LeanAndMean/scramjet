@@ -1,0 +1,1524 @@
+import * as diff from "diff";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Box } from "../src/components/box.js";
+import { Image } from "../src/components/image.js";
+import { Text } from "../src/components/text.js";
+import { KeybindingsManager, TUI_KEYBINDINGS } from "../src/keybindings.js";
+import {
+	getCellDimensions,
+	resetCapabilitiesCache,
+	setCapabilities,
+	setCellDimensions,
+} from "../src/terminal-image.js";
+import { type Component, Container, CURSOR_MARKER, TUI } from "../src/tui.js";
+import { sliceByColumn } from "../src/utils.js";
+import { RetainedViewport, type ViewportBlock, type ViewportOptions } from "../src/viewport.js";
+import { HeadlessTerminal } from "./helpers/headless-terminal.js";
+
+vi.mock("diff", { spy: true });
+
+class Rows implements Component {
+	readonly render = vi.fn((_width: number) => [...this.lines]);
+	readonly invalidate = vi.fn();
+	constructor(public lines: string[]) {}
+}
+
+const running: TUI[] = [];
+afterEach(() => {
+	for (const tui of running.splice(0)) tui.stop();
+	resetCapabilitiesCache();
+	vi.useRealTimers();
+});
+
+async function setup(blocks: ViewportBlock[], width = 21, height = 4, options: Partial<ViewportOptions> = {}) {
+	const terminal = new HeadlessTerminal(width, height);
+	terminal.write("shell sentinel\r\n");
+	const tui = new TUI(terminal, true);
+	tui.configureViewport({ getBlocks: () => blocks, ...options });
+	running.push(tui);
+	tui.start();
+	await tui.renderNow({ requireFlush: true });
+	const frame = async () => tui.renderNow({ requireFlush: true });
+	const text = () =>
+		terminal.visibleLines().map((line) => sliceByColumn(line, 0, terminal.columns - 1, true).trimEnd());
+	return { tui, terminal, frame, text };
+}
+
+const mouse = (button: number, x: number, y: number, action = "M") => `\x1b[<${button};${x};${y}${action}`;
+
+describe("viewport interactions", () => {
+	it("does not copy an unpainted new selection or pass copy through to the editor", async () => {
+		const copy = vi.fn(async (_text: string) => {});
+		const { tui, terminal, frame } = await setup([{ component: new Rows(["abcdef"]) }], 21, 4, { copy });
+		const handleInput = vi.fn();
+		tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+		for (const event of [mouse(0, 1, 1), mouse(32, 4, 1), mouse(0, 4, 1, "m"), "\x03"]) terminal.sendInput(event);
+		expect(copy).not.toHaveBeenCalled();
+		expect(handleInput).not.toHaveBeenCalled();
+		await frame();
+		terminal.sendInput("\x03");
+		expect(copy).toHaveBeenCalledExactlyOnceWith("abc");
+	});
+
+	it("captures painted content before asynchronous copy and isolates a replacement selection", async () => {
+		let resolve!: () => void;
+		const copy = vi.fn(
+			(_text: string) =>
+				new Promise<void>((done) => {
+					resolve = done;
+				}),
+		);
+		const card = new Rows(["before"]);
+		const { terminal, frame, text } = await setup([{ component: card }], 21, 4, { copy });
+		for (const event of [mouse(0, 1, 1), mouse(32, 7, 1), mouse(0, 7, 1, "m")]) terminal.sendInput(event);
+		await frame();
+		card.lines = ["AFTER!"];
+		terminal.sendInput("\x03");
+		expect(copy).toHaveBeenCalledExactlyOnceWith("before");
+		await frame();
+		expect(text()[0]).toBe("AFTER!");
+		for (const event of [mouse(0, 1, 1), mouse(32, 4, 1), mouse(0, 4, 1, "m")]) terminal.sendInput(event);
+		await frame();
+		terminal.sendInput("\x03");
+		expect(copy).toHaveBeenCalledTimes(1);
+		resolve();
+		await frame();
+		expect(terminal.cell(0, 0).inverse).toBe(true);
+		terminal.sendInput("\x03");
+		expect(copy).toHaveBeenLastCalledWith("AFT");
+		resolve();
+		await frame();
+	});
+
+	it("keeps selection on a surviving block as preceding rows grow and the terminal reflows", async () => {
+		const before = new Rows(["prefix"]);
+		const card = new Rows(["A界éZ"]);
+		const copy = vi.fn(async (_text: string) => {});
+		const { terminal, frame } = await setup([{ component: before }, { component: card }], 21, 6, { copy });
+		for (const event of [mouse(0, 1, 2), mouse(32, 5, 2), mouse(0, 5, 2, "m")]) terminal.sendInput(event);
+		await frame();
+		before.lines.push("inserted");
+		terminal.resize(16, 7);
+		await frame();
+		expect(terminal.cell(2, 0).inverse).toBe(true);
+		expect(terminal.cell(2, 4).inverse).toBe(false);
+		terminal.sendInput("\x03");
+		expect(copy).toHaveBeenCalledExactlyOnceWith("A界é");
+	});
+
+	it.each([false, true])("does not add hidden streamed rows to a seam selection (reverse=%s)", async (reverse) => {
+		const card = new Rows(["one", "two", "three"]);
+		const copy = vi.fn(async (_text: string) => {});
+		const { terminal, frame } = await setup(
+			[{ component: card }, { component: new Rows(["draft"]), dock: true }],
+			21,
+			4,
+			{ copy },
+		);
+		const start = reverse ? [6, 4] : [1, 2];
+		const end = reverse ? [1, 2] : [6, 4];
+		for (const event of [mouse(0, start[0], start[1]), mouse(32, end[0], end[1]), mouse(0, end[0], end[1], "m")])
+			terminal.sendInput(event);
+		await frame();
+		card.lines.push("hidden-four", "hidden-five");
+		await frame();
+		expect(terminal.visibleLines().join("\n")).not.toContain("hidden");
+		terminal.sendInput("\x03");
+		expect(copy).toHaveBeenCalledExactlyOnceWith("two\nthree\ndraft");
+	});
+
+	it.each([false, true])(
+		"does not move the visible seam past new rows inserted before its block (reverse=%s)",
+		async (reverse) => {
+			const live = new Rows(["one", "two"]);
+			const copy = vi.fn(async (_text: string) => {});
+			const { terminal, frame } = await setup(
+				[{ component: live }, { component: new Rows(["three"]) }, { component: new Rows(["draft"]), dock: true }],
+				21,
+				4,
+				{ copy },
+			);
+			const start = reverse ? [6, 4] : [1, 2];
+			const end = reverse ? [1, 2] : [6, 4];
+			for (const event of [mouse(0, start[0], start[1]), mouse(32, end[0], end[1]), mouse(0, end[0], end[1], "m")])
+				terminal.sendInput(event);
+			await frame();
+			live.lines.push("new-visible", "UNSEEN-A", "UNSEEN-B");
+			await frame();
+			expect(terminal.visibleLines().map((line) => line.slice(0, 20).trimEnd())).toEqual([
+				"one",
+				"two",
+				"new-visible",
+				"draft",
+			]);
+			terminal.sendInput("\x03");
+			expect(copy).toHaveBeenCalledExactlyOnceWith("two\nnew-visible\ndraft");
+		},
+	);
+
+	it("keeps live output and waiting controls visible while text remains selected", async () => {
+		const history = new Rows(["selected"]);
+		const live = new Rows(["working"]);
+		const dock = new Rows(["draft"]);
+		const copy = vi.fn(async (_text: string) => {});
+		const { terminal, frame, text } = await setup(
+			[{ component: history }, { component: live }, { component: dock, dock: true }],
+			31,
+			6,
+			{ copy },
+		);
+		for (const event of [mouse(0, 1, 1), mouse(32, 9, 1), mouse(0, 9, 1, "m")]) terminal.sendInput(event);
+		await frame();
+		live.lines = ["finished"];
+		dock.lines = ["Waiting for your answer", "Approve / Cancel"];
+		await frame();
+		expect(text()).toContain("finished");
+		expect(text()).toContain("Waiting for your answer");
+		expect(terminal.cell(0, 0).inverse).toBe(true);
+		terminal.sendInput("\x03");
+		await Promise.resolve();
+		expect(copy).toHaveBeenCalledExactlyOnceWith("selected");
+	});
+
+	it("updates highlighted replacement text instead of freezing or clearing selection", async () => {
+		const card = new Rows(["before"]);
+		const copy = vi.fn(async (_text: string) => {});
+		const { terminal, frame, text } = await setup([{ component: card }], 21, 4, { copy });
+		for (const event of [mouse(0, 1, 1), mouse(32, 7, 1), mouse(0, 7, 1, "m")]) terminal.sendInput(event);
+		await frame();
+		card.lines = ["AFTER!"];
+		await frame();
+		expect(text()[0]).toBe("AFTER!");
+		expect(Array.from({ length: 6 }, (_, col) => terminal.cell(0, col).inverse)).toEqual(Array(6).fill(true));
+		terminal.sendInput("\x03");
+		await Promise.resolve();
+		expect(copy).toHaveBeenCalledExactlyOnceWith("AFTER!");
+	});
+
+	it("copies the painted highlight rather than a pending drag endpoint", async () => {
+		const copy = vi.fn(async (_text: string) => {});
+		const { terminal, frame } = await setup([{ component: new Rows(["abcdef"]) }], 21, 4, { copy });
+		terminal.sendInput(mouse(0, 1, 1));
+		terminal.sendInput(mouse(32, 4, 1));
+		await frame();
+		expect(terminal.cell(0, 2).inverse).toBe(true);
+		expect(terminal.cell(0, 3).inverse).toBe(false);
+		terminal.sendInput(mouse(32, 7, 1));
+		terminal.sendInput(mouse(0, 7, 1, "m"));
+		terminal.sendInput("\x03");
+		await Promise.resolve();
+		expect(copy).toHaveBeenCalledExactlyOnceWith("abc");
+	});
+
+	it.each([false, true])("selects across transcript and dock at the tail (reverse=%s)", async (reverse) => {
+		const copy = vi.fn(async (_text: string) => {});
+		const { terminal, frame } = await setup(
+			[{ component: new Rows(["one", "two", "three"]) }, { component: new Rows(["draft"]), dock: true }],
+			21,
+			4,
+			{ copy },
+		);
+		const start = reverse ? [6, 4] : [1, 2];
+		const end = reverse ? [1, 2] : [6, 4];
+		terminal.sendInput(mouse(0, start[0], start[1]));
+		terminal.sendInput(mouse(32, end[0], end[1]));
+		terminal.sendInput(mouse(0, end[0], end[1], "m"));
+		await frame();
+		expect(terminal.cell(1, 0).inverse).toBe(true);
+		expect(terminal.cell(3, 0).inverse).toBe(true);
+		terminal.sendInput("\x03");
+		await Promise.resolve();
+		expect(copy).toHaveBeenCalledExactlyOnceWith("two\nthree\ndraft");
+	});
+
+	it("scrolls to the tail before extending a stationary drag into the dock", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		const copy = vi.fn(async (_text: string) => {});
+		const { tui, terminal, frame } = await setup(
+			[
+				{ component: new Rows(["one", "two", "three", "four", "five"]) },
+				{ component: new Rows(["draft"]), dock: true },
+			],
+			21,
+			4,
+			{ copy },
+		);
+		tui.scrollViewportTo(0);
+		await frame();
+		terminal.sendInput(mouse(0, 1, 2));
+		terminal.sendInput(mouse(32, 6, 4));
+		await frame();
+		expect(terminal.cell(3, 0).inverse).toBe(false);
+		vi.advanceTimersByTime(240);
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(2);
+		expect(terminal.cell(3, 0).inverse).toBe(true);
+		terminal.sendInput(mouse(0, 6, 4, "m"));
+		terminal.sendInput("\x03");
+		await Promise.resolve();
+		expect(copy).toHaveBeenCalledExactlyOnceWith("two\nthree\nfour\nfive\ndraft");
+	});
+
+	it("copies a dock-origin upward drag without including the unpainted transcript gap", async () => {
+		const copy = vi.fn(async (_text: string) => {});
+		const { tui, terminal, frame } = await setup(
+			[
+				{ component: new Rows(["one", "two", "three", "HIDDEN-four", "HIDDEN-five"]) },
+				{ component: new Rows(["draft"]), dock: true },
+			],
+			21,
+			4,
+			{ copy },
+		);
+		tui.scrollViewportTo(0);
+		await frame();
+		for (const event of [mouse(0, 6, 4), mouse(32, 1, 2), mouse(0, 1, 2, "m")]) terminal.sendInput(event);
+		await frame();
+		expect(terminal.cell(1, 0).inverse).toBe(true);
+		terminal.sendInput("\x03");
+		await Promise.resolve();
+		expect(copy).toHaveBeenCalledExactlyOnceWith("two\nthree\ndraft");
+	});
+
+	it.each([1_000, 10_000, 100_000])(
+		"reads only visible cached text rows while updating a %i-row transcript",
+		async (count) => {
+			const history = Array.from(
+				{ length: 100 },
+				(_, block) =>
+					new Rows(Array.from({ length: count / 100 }, (_, row) => `row-${block * (count / 100) + row}`)),
+			);
+			const status = new Rows(["tick-0"]);
+			const editor = { render: () => [`${CURSOR_MARKER}editor`], invalidate() {}, handleInput: vi.fn() };
+			const { tui, terminal, frame, text } = await setup(
+				[
+					...history.map((component) => ({ component, finalized: true })),
+					{ component: status },
+					{ component: editor, dock: true },
+				],
+				80,
+				24,
+				{ keepReadingOnInput: () => true },
+			);
+			const cached = (tui as unknown as { viewport: { blocks: { lines: string[]; copyRows: unknown[] }[] } })
+				.viewport.blocks;
+			let reads = 0;
+			let copyReads = 0;
+			for (const block of cached.slice(0, history.length)) {
+				block.lines = new Proxy(block.lines, {
+					get(target, key, receiver) {
+						if (typeof key === "string" && /^\d+$/.test(key)) reads++;
+						return Reflect.get(target, key, receiver);
+					},
+				});
+				block.copyRows = new Proxy(block.copyRows, {
+					get(target, key, receiver) {
+						if (typeof key === "string" && /^\d+$/.test(key)) copyReads++;
+						return Reflect.get(target, key, receiver);
+					},
+				});
+			}
+			for (const offset of [count - 22, Math.floor(count / 2), 0]) {
+				tui.scrollViewportTo(offset);
+				reads = 0;
+				copyReads = 0;
+				status.lines = [`tick-${offset}`];
+				await frame();
+				const expected = Array.from({ length: Math.min(23, count - offset) }, (_, i) => `row-${offset + i}`);
+				if (expected.length < 23) expected.push(`tick-${offset}`);
+				expect(text()).toEqual([...expected, "editor"]);
+				expect(reads).toBeLessThanOrEqual(48);
+				expect(copyReads).toBe(0);
+			}
+			tui.setFocus(editor);
+			reads = 0;
+			terminal.sendInput("a");
+			await frame();
+			expect(text()).toEqual([...Array.from({ length: 23 }, (_, i) => `row-${i}`), "editor"]);
+			expect(terminal.cursorPosition()).toEqual({ row: 23, col: 0 });
+			expect(reads).toBeLessThanOrEqual(48);
+			expect(copyReads).toBe(0);
+			for (const block of history) expect(block.render).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("refreshes text and dock copy snapshots while live producers change", async () => {
+		const card = new Text("alpha beta", 0, 0);
+		const dock = new Text("dock", 0, 0);
+		const copy = vi.fn(async (_text: string) => {});
+		const { terminal, frame, text } = await setup([{ component: card }, { component: dock, dock: true }], 6, 5, {
+			copy,
+		});
+		terminal.sendInput(mouse(0, 1, 1));
+		terminal.sendInput(mouse(32, 6, 2));
+		terminal.sendInput(mouse(0, 6, 2, "m"));
+		card.setText("other\nwords");
+		dock.setText("new");
+		await frame();
+		expect(text()).toEqual(["other", "words", "", "", "new"]);
+		terminal.sendInput("\x03");
+		await Promise.resolve();
+		await frame();
+		expect(copy).toHaveBeenCalledExactlyOnceWith("other\nwords");
+		expect(text()).toEqual(["other", "words", "", "", "new"]);
+	});
+
+	it.each([false, true])("refreshes image and cursor summaries when finalized=%s", async (finalized) => {
+		const card = new Rows(["prefix", "one", "two", "three", "four", "five"]);
+		const block = { component: card, finalized, revision: 0 };
+		const { tui, terminal, frame, text } = await setup([block], 41, 3);
+		const image = "\x1b]1337;File=inline=1;width=2;height=3:aW1hZ2U=\x07";
+		card.lines = ["prefix", "", "", `\x1b[2A${image}`, "four", "five"];
+		block.revision++;
+		tui.scrollViewportTo(0);
+		let mark = terminal.markWrites();
+		await frame();
+		expect(text()).toEqual(["prefix", "[Image clipped; scroll to view]", ""]);
+		expect(terminal.writesSince(mark)).not.toContain(image);
+		tui.scrollViewportTo(1);
+		mark = terminal.markWrites();
+		await frame();
+		expect(terminal.writesSince(mark)).toContain(`\x1b[1;1H${image}`);
+
+		card.lines = ["prefix", `${CURSOR_MARKER}input`, "two", "three", "four", "five"];
+		block.revision++;
+		tui.setFocus({ render: () => [], invalidate() {}, handleInput() {} });
+		terminal.sendInput("a");
+		await frame();
+		expect(text()).toEqual(["input", "two", "three"]);
+		expect(terminal.cursorPosition()).toEqual({ row: 0, col: 0 });
+		card.lines = ["prefix", "one", `${CURSOR_MARKER}moved`, "three", "four", "five"];
+		tui.invalidate();
+		terminal.sendInput("a");
+		await frame();
+		expect(text()).toEqual(["moved", "three", "four"]);
+		expect(terminal.cursorPosition()).toEqual({ row: 0, col: 0 });
+	});
+
+	it("drags a ten-thousand-row transcript without discarding history or rerendering finalized blocks", async () => {
+		const history = Array.from(
+			{ length: 1000 },
+			(_, block) => new Rows(Array.from({ length: 10 }, (_, row) => `history-${block * 10 + row}`)),
+		);
+		const status = new Rows(["tick-0"]);
+		const { tui, terminal, frame, text } = await setup(
+			[...history.map((component) => ({ component, finalized: true })), { component: status }],
+			31,
+			21,
+		);
+		const drag = async (from: number, to: number) => {
+			terminal.sendInput(mouse(0, 31, from));
+			terminal.sendInput(mouse(32, 31, to));
+			terminal.sendInput(mouse(0, 31, to, "m"));
+			await frame();
+		};
+		await drag(21, 1);
+		expect(text()).toEqual(Array.from({ length: 21 }, (_, i) => `history-${i}`));
+		await drag(1, 11);
+		expect(text()).toEqual(Array.from({ length: 21 }, (_, i) => `history-${4990 + i}`));
+		for (let i = 1; i <= 20; i++) {
+			status.lines = [`tick-${i}`];
+			await frame();
+			expect(text()[0]).toBe("history-4990");
+		}
+		await drag(11, 21);
+		expect(text()).toEqual([...Array.from({ length: 20 }, (_, i) => `history-${9980 + i}`), "tick-20"]);
+		expect(tui.getViewportState()).toMatchObject({ totalRows: 10001, followingTail: true });
+		await drag(21, 1);
+		expect(text()[0]).toBe("history-0");
+		for (const block of history) expect(block.render).toHaveBeenCalledTimes(1);
+		expect(status.render.mock.calls.length).toBeGreaterThanOrEqual(25);
+		expect(terminal.bufferLines()).toHaveLength(21);
+	});
+
+	it("preserves raw-listener ordering, transforms, release filtering and removal around viewport ownership", async () => {
+		const terminal = new HeadlessTerminal(21, 4);
+		const tui = new TUI(terminal);
+		running.push(tui);
+		const before = vi.fn((data: string) => (data === "a" ? { data: "b" } : undefined));
+		const remove = tui.addInputListener(before);
+		const rows = new Rows(Array.from({ length: 20 }, (_, i) => `row-${i}`));
+		tui.configureViewport({ getBlocks: () => [{ component: rows }] });
+		const after = vi.fn();
+		tui.addInputListener(after);
+		const handleInput = vi.fn();
+		tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+		tui.start();
+		await tui.renderNow({ requireFlush: true });
+		terminal.sendInput(mouse(64, 2, 2));
+		expect(before).toHaveBeenLastCalledWith(mouse(64, 2, 2));
+		expect(after).not.toHaveBeenCalled();
+		terminal.sendInput("\x1b[5~");
+		expect(handleInput).not.toHaveBeenCalled();
+		terminal.sendInput("a");
+		expect(after).toHaveBeenLastCalledWith("b");
+		expect(handleInput).toHaveBeenLastCalledWith("b");
+		terminal.sendInput("\x1b[13;1:3u");
+		expect(after).toHaveBeenLastCalledWith("\x1b[13;1:3u");
+		expect(handleInput).toHaveBeenCalledTimes(1);
+		terminal.sendInput("\x1b[13;1u");
+		expect(handleInput).toHaveBeenLastCalledWith("\x1b[13;1u");
+		remove();
+		terminal.sendInput("a");
+		expect(handleInput).toHaveBeenLastCalledWith("a");
+	});
+
+	it("reveals offscreen input cursors without overriding later coalesced pointer navigation", async () => {
+		const editor = { render: () => [`${CURSOR_MARKER}editor`], invalidate() {}, handleInput: vi.fn() };
+		const { tui, terminal, frame, text } = await setup([
+			{ component: new Rows(Array(20).fill("before")) },
+			{ component: editor },
+			{ component: new Rows(Array(20).fill("after")) },
+		]);
+		tui.setFocus(editor);
+		terminal.sendInput("a");
+		await frame();
+		expect(text()).toContain("editor");
+		terminal.sendInput("b");
+		terminal.sendInput(mouse(64, 2, 2));
+		const offset = tui.getViewportState()!.offset;
+		await frame();
+		expect(tui.getViewportState()!.offset).toBe(offset);
+		expect(text()).not.toContain("editor");
+	});
+	it("restores the normal buffer across repeated stop/start without replay or mode leakage", async () => {
+		const { tui, terminal, frame } = await setup([{ component: new Rows(["candidate"]) }]);
+		const mark = terminal.markWrites();
+		tui.start();
+		expect(terminal.writesSince(mark)).toBe("");
+		tui.stop();
+		await terminal.flush();
+		expect(terminal.visibleLines()[0]).toBe("shell sentinel");
+		const stopped = terminal.markWrites();
+		tui.stop();
+		expect(terminal.writesSince(stopped)).toBe("");
+		tui.start();
+		await frame();
+		expect(terminal.visibleLines()[0]).toContain("candidate");
+	});
+	it("renders after restart even when a stale copy settles while stopped", async () => {
+		let resolve!: () => void;
+		const copy = vi.fn(
+			() =>
+				new Promise<void>((done) => {
+					resolve = done;
+				}),
+		);
+		const card = new Rows(["selected"]);
+		const { tui, terminal, frame } = await setup([{ component: card }], 31, 5, { copy });
+		terminal.sendInput(mouse(0, 1, 1));
+		terminal.sendInput(mouse(32, 9, 1));
+		terminal.sendInput(mouse(0, 9, 1, "m"));
+		await frame();
+		terminal.sendInput("\x03");
+		await frame();
+		tui.stop();
+		resolve();
+		await new Promise((done) => setTimeout(done, 30));
+		card.lines = ["resumed"];
+		tui.start();
+		await vi.waitFor(async () => {
+			await terminal.flush();
+			expect(terminal.visibleLines()[0]).toContain("resumed");
+		});
+	});
+
+	it("routes detached browsing keys without stealing editor or focused overlay input", async () => {
+		const { tui, terminal, frame } = await setup([
+			{ component: new Rows(Array.from({ length: 100 }, (_, i) => `row-${i}`)) },
+		]);
+		const handleInput = vi.fn();
+		tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+		terminal.sendInput("\x1b[5~");
+		expect(handleInput).toHaveBeenLastCalledWith("\x1b[5~");
+		terminal.sendInput(mouse(64, 2, 2));
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(93);
+		handleInput.mockClear();
+		terminal.sendInput("\x1b[5~");
+		expect(tui.getViewportState()?.offset).toBe(89);
+		expect(handleInput).not.toHaveBeenCalled();
+		const overlayInput = vi.fn();
+		const overlay = tui.showOverlay({ render: () => ["modal"], invalidate() {}, handleInput: overlayInput });
+		terminal.sendInput("\x1b[5~");
+		expect(overlayInput).toHaveBeenCalledWith("\x1b[5~");
+		expect(tui.getViewportState()?.offset).toBe(89);
+		terminal.sendInput(mouse(64, 2, 2));
+		expect(overlayInput).toHaveBeenCalledTimes(1);
+		overlay.hide();
+		terminal.sendInput("\x1b[1;5H");
+		expect(tui.getViewportState()?.offset).toBe(0);
+		terminal.sendInput("\x1b[1;5F");
+		expect(tui.getViewportState()?.followingTail).toBe(true);
+		terminal.sendInput(mouse(64, 2, 2));
+		terminal.sendInput("\x1b");
+		expect(tui.getViewportState()?.followingTail).toBe(true);
+		expect(handleInput).not.toHaveBeenCalled();
+		terminal.sendInput(mouse(64, 2, 2));
+		terminal.sendInput("\x1b[A");
+		expect(tui.getViewportState()?.followingTail).toBe(true);
+		expect(handleInput).toHaveBeenLastCalledWith("\x1b[A");
+	});
+
+	it("resumes following after copying a selection made at the bottom", async () => {
+		const copy = vi.fn().mockResolvedValue(undefined);
+		const card = new Rows(Array.from({ length: 8 }, (_, i) => `row-${i}`));
+		const { tui, terminal, frame, text } = await setup([{ component: card }], 21, 4, { copy });
+		terminal.sendInput("\x1b[1;5F");
+		await frame();
+		expect(tui.getViewportState()).toMatchObject({ offset: 4, totalRows: 8, followingTail: true });
+		terminal.sendInput(mouse(0, 1, 4));
+		terminal.sendInput(mouse(32, 6, 4));
+		terminal.sendInput(mouse(0, 6, 4, "m"));
+		await frame();
+		terminal.sendInput("\x03");
+		await vi.waitFor(() => expect(copy).toHaveBeenCalledExactlyOnceWith("row-7"));
+		await frame();
+		expect(text().at(-1)).toBe("row-7");
+		expect(terminal.cell(3, 0).inverse).toBe(false);
+		card.lines.push("row-8");
+		await frame();
+		expect.soft(text().at(-1)).toBe("row-8");
+		expect(tui.getViewportState()).toMatchObject({ offset: 5, totalRows: 9, followingTail: true });
+	});
+
+	it("does not select transcript text through blank screen space above the dock", async () => {
+		const copy = vi.fn().mockResolvedValue(undefined);
+		const { terminal, frame, text } = await setup(
+			[{ component: new Text("error: build failed", 0, 0) }, { component: new Text("prompt", 0, 0), dock: true }],
+			31,
+			6,
+			{ copy },
+		);
+		expect(text()).toEqual(["error: build failed", "", "", "", "", "prompt"]);
+		terminal.sendInput(mouse(0, 1, 3));
+		terminal.sendInput(mouse(32, 6, 3));
+		terminal.sendInput(mouse(0, 6, 3, "m"));
+		await frame();
+		expect.soft(terminal.cell(0, 0).inverse).toBe(false);
+		terminal.sendInput(mouse(2, 6, 3));
+		await frame();
+		expect(copy).not.toHaveBeenCalled();
+	});
+
+	it("keeps following live output after a click without a selection", async () => {
+		const card = new Rows(Array.from({ length: 8 }, (_, i) => `row-${i}`));
+		const { tui, terminal, frame, text } = await setup([{ component: card }], 21, 4);
+		expect(tui.getViewportState()).toMatchObject({ offset: 4, followingTail: true });
+		terminal.sendInput(mouse(0, 2, 2));
+		terminal.sendInput(mouse(0, 2, 2, "m"));
+		await frame();
+		expect(terminal.cell(1, 1).inverse).toBe(false);
+		card.lines.push("row-8");
+		await frame();
+		expect.soft(text().at(-1)).toBe("row-8");
+		expect(tui.getViewportState()).toMatchObject({ offset: 5, followingTail: true });
+	});
+
+	it.each(["before bottom motion", "after bottom motion"])(
+		"resumes following on bottom thumb release with growth %s",
+		async (timing) => {
+			const card = new Rows(Array.from({ length: 100 }, (_, i) => `row-${i}`));
+			const { tui, terminal, frame, text } = await setup([{ component: card }], 21, 10);
+			terminal.sendInput("\x1b[1;5H");
+			await frame();
+			expect(tui.getViewportState()).toMatchObject({ offset: 0, followingTail: false });
+			terminal.sendInput(mouse(0, 21, 1));
+			if (timing === "after bottom motion") terminal.sendInput(mouse(32, 21, 10));
+			card.lines.push(...Array.from({ length: 100 }, (_, i) => `row-${i + 100}`));
+			await frame();
+			if (timing === "before bottom motion") terminal.sendInput(mouse(32, 21, 10));
+			await frame();
+			expect(tui.getViewportState()).toMatchObject({ offset: 90, totalRows: 200, height: 10 });
+			expect(terminal.visibleLines()[9].at(-1)).toBe("█");
+			terminal.sendInput(mouse(0, 21, 10, "m"));
+			await frame();
+			expect.soft(tui.getViewportState()).toMatchObject({ offset: 190, followingTail: true });
+			expect.soft(text()).toEqual(Array.from({ length: 10 }, (_, i) => `row-${190 + i}`));
+			card.lines.push("row-200");
+			await frame();
+			expect.soft(tui.getViewportState()).toMatchObject({ offset: 191, followingTail: true });
+			expect.soft(text().at(-1)).toBe("row-200");
+			terminal.sendInput("\x1b[1;5F");
+			await frame();
+			expect(tui.getViewportState()).toMatchObject({ offset: 191, followingTail: true });
+			expect(text().at(-1)).toBe("row-200");
+		},
+	);
+
+	it("keeps thumb mapping stable through growth and supports track clicks", async () => {
+		const card = new Rows(Array.from({ length: 100 }, (_, i) => `row-${i}`));
+		const { tui, terminal, frame } = await setup([{ component: card }], 21, 10);
+		tui.scrollViewportTo(0);
+		await frame();
+		terminal.sendInput(mouse(0, 21, 1));
+		card.lines.push(...Array.from({ length: 100 }, (_, i) => `new-${i}`));
+		await frame();
+		terminal.sendInput(mouse(32, 21, 6));
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(50);
+		terminal.sendInput(mouse(0, 21, 6, "m"));
+		await frame();
+		expect(tui.getViewportState()).toMatchObject({ offset: 50, totalRows: 200, followingTail: false });
+		terminal.sendInput(mouse(0, 21, 10));
+		terminal.sendInput(mouse(0, 21, 10, "m"));
+		await frame();
+		expect(tui.getViewportState()).toMatchObject({ offset: 190, followingTail: true });
+	});
+
+	it.each(["pointer", "keyboard"])(
+		"copies exact ANSI-free wide/combining selection via %s and leaves empty Ctrl+C alone",
+		async (input) => {
+			const copy = vi.fn().mockResolvedValue(undefined);
+			const card = new Rows(["\x1b[31mcafé 界 e\u0301 text\x1b[0m", ...Array(8).fill("more")]);
+			const { tui, terminal, frame } = await setup([{ component: card }], 31, 5, { copy });
+			const handleInput = vi.fn();
+			tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+			tui.scrollViewportTo(0);
+			await frame();
+			terminal.sendInput(mouse(0, 1, 1));
+			terminal.sendInput(mouse(32, 30, 1));
+			terminal.sendInput(mouse(0, 30, 1, "m"));
+			await frame();
+			card.lines[0] = "changed";
+			expect(terminal.visibleLines()[0]).toContain("café 界 e\u0301 text");
+			expect(terminal.visibleLines()[4]).toContain("more");
+			expect(terminal.writes.join("")).toContain("\x1b[7m");
+			if (input === "keyboard") {
+				terminal.sendInput("\x1b[57442;5u");
+				terminal.sendInput("\x1b[99;5u");
+			} else terminal.sendInput(mouse(2, 3, 1));
+			await frame();
+			expect(copy).toHaveBeenCalledExactlyOnceWith("café 界 e\u0301 text");
+			await frame();
+			expect(terminal.visibleLines()[0]).toContain("changed");
+			terminal.sendInput("\x03");
+			expect(handleInput).toHaveBeenCalledExactlyOnceWith("\x03");
+			terminal.sendInput(mouse(2, 3, 1));
+			expect(copy).toHaveBeenCalledTimes(1);
+			expect(handleInput).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("retains selection on copy failure, honors injected copy bindings, and rejects stale completion", async () => {
+		let resolve!: () => void;
+		const copy = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("clipboard unavailable"))
+			.mockImplementationOnce(
+				() =>
+					new Promise<void>((done) => {
+						resolve = done;
+					}),
+			);
+		const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, { "tui.input.copy": "ctrl+y" });
+		const { tui, terminal, frame } = await setup(
+			[{ component: new Rows(["selected", "second", "third", "fourth"]) }],
+			61,
+			4,
+			{ copy, keybindings },
+		);
+		terminal.sendInput(mouse(0, 1, 1));
+		terminal.sendInput(mouse(32, 9, 1));
+		terminal.sendInput(mouse(0, 9, 1, "m"));
+		await frame();
+		terminal.sendInput("\x19");
+		await frame();
+		await frame();
+		expect(copy).toHaveBeenCalledWith("selected");
+		expect(terminal.visibleLines()[3]).toContain("Copy failed: clipboard unavailable");
+		terminal.sendInput("\x19");
+		tui.resetViewport();
+		await frame();
+		resolve();
+		await frame();
+		expect(terminal.visibleLines().join("\n")).not.toContain("Copy failed");
+	});
+
+	it("does not select text covered by a painted copy failure before its dismissal repaints", async () => {
+		const copy = vi.fn().mockRejectedValueOnce(new Error("unavailable")).mockResolvedValue(undefined);
+		const { terminal, frame } = await setup([{ component: new Rows(["first", "middle", "covered row"]) }], 41, 3, {
+			copy,
+		});
+		for (const event of [mouse(0, 1, 1), mouse(32, 6, 1), mouse(0, 6, 1, "m")]) terminal.sendInput(event);
+		await frame();
+		terminal.sendInput("\x03");
+		await frame();
+		await frame();
+		expect(terminal.visibleLines()[2]).toContain("Copy failed");
+		for (const event of [mouse(0, 1, 3), mouse(32, 8, 3), mouse(0, 8, 3, "m"), "\x03"]) terminal.sendInput(event);
+		await frame();
+		expect(copy.mock.calls.map(([text]) => text)).toEqual(["first", "first"]);
+		for (const event of [mouse(0, 1, 3), mouse(32, 8, 3), mouse(0, 8, 3, "m")]) terminal.sendInput(event);
+		await frame();
+		terminal.sendInput("\x03");
+		await frame();
+		expect(copy.mock.calls[2][0]).toBe("covered");
+	});
+
+	it("selects across rows with edge autoscroll and cancels gestures on resize and stop", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		try {
+			const copy = vi.fn().mockResolvedValue(undefined);
+			const { tui, terminal, frame } = await setup(
+				[{ component: new Rows(Array.from({ length: 20 }, (_, i) => `row-${i}`)) }],
+				31,
+				5,
+				{ copy },
+			);
+			tui.scrollViewportTo(0);
+			await frame();
+			terminal.sendInput(mouse(0, 1, 2));
+			terminal.sendInput(mouse(32, 6, 5));
+			await vi.advanceTimersByTimeAsync(250);
+			expect(tui.getViewportState()!.offset).toBeGreaterThan(0);
+			terminal.sendInput(mouse(0, 6, 5, "m"));
+			const offset = tui.getViewportState()!.offset;
+			await frame();
+			terminal.sendInput("\x03");
+			await frame();
+			expect(copy.mock.calls[0][0]).toBe(Array.from({ length: offset + 4 }, (_, i) => `row-${i + 1}`).join("\n"));
+			terminal.sendInput(mouse(0, 1, 1));
+			terminal.sendInput(mouse(32, 6, 5));
+			terminal.resize(25, 5);
+			await frame();
+			const resized = tui.getViewportState()?.offset;
+			await vi.advanceTimersByTimeAsync(250);
+			expect(tui.getViewportState()?.offset).toBe(resized);
+			tui.stop();
+			await vi.advanceTimersByTimeAsync(250);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops edge autoscroll when an overlay takes over the screen", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		const { tui, terminal, frame } = await setup(
+			[{ component: new Rows(Array.from({ length: 50 }, (_, i) => `row-${i}`)) }],
+			31,
+			5,
+		);
+		tui.scrollViewportTo(10);
+		await frame();
+		terminal.sendInput(mouse(0, 1, 2));
+		terminal.sendInput(mouse(32, 6, 5));
+		tui.showOverlay(new Rows(["modal"]));
+		await frame();
+		const offset = tui.getViewportState()?.offset;
+		await vi.advanceTimersByTimeAsync(250);
+		expect(tui.getViewportState()?.offset).toBe(offset);
+	});
+
+	it("rejects an unsupported terminal before configuring or starting viewport protocols", () => {
+		const terminal = new HeadlessTerminal();
+		Object.defineProperty(terminal, "setViewportMode", { value: undefined });
+		const tui = new TUI(terminal);
+		expect(() => tui.configureViewport({ getBlocks: () => [] })).toThrow("Terminal must support viewport mode");
+		expect(tui.getViewportState()).toBeUndefined();
+		expect(terminal.writes).toEqual([]);
+	});
+
+	it("consumes malformed, out-of-bounds and unsupported pointer events without editor dispatch", async () => {
+		const { tui, terminal } = await setup([{ component: new Rows(["one"]) }]);
+		const handleInput = vi.fn();
+		tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+		for (const data of ["\x1b[<", "\x1b[<1;x;2M", mouse(999, 1, 1), mouse(0, 0, 1), mouse(64, 99999, 1), "\x1b[Mabc"])
+			terminal.sendInput(data);
+		expect(handleInput).not.toHaveBeenCalled();
+	});
+});
+
+describe("retained viewport", () => {
+	it("repaints every row after a rejected viewport flush before certifying a retry", async () => {
+		const rows = new Rows(["before", "stable"]);
+		const { tui, terminal, frame, text } = await setup([{ component: rows }]);
+		const log = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		try {
+			const dropped = vi.spyOn(terminal, "write").mockImplementation(() => {});
+			const rejected = vi.spyOn(terminal, "flush").mockRejectedValueOnce(new Error("lost frame"));
+			rows.lines = ["after", "stable"];
+			await expect(frame()).rejects.toThrow("lost frame");
+			await vi.waitFor(() => expect(log).toHaveBeenCalled());
+			expect(tui.isViewportFrameFlushed()).toBe(false);
+			dropped.mockRestore();
+			rejected.mockRestore();
+			const mark = terminal.markWrites();
+			await frame();
+			const output = terminal.writesSince(mark);
+			expect(output).toContain("\x1b[1;1H\x1b[2Kafter");
+			expect(output).toContain("\x1b[2;1H\x1b[2Kstable");
+			expect(text()[0]).toBe("after");
+			expect(tui.isViewportFrameFlushed()).toBe(true);
+		} finally {
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("fails closed when an older flush rejects after a newer flush", async () => {
+		const rows = new Rows(["before"]);
+		const { tui, terminal, frame, text } = await setup([{ component: rows }]);
+		let rejectOld!: (error: Error) => void;
+		const log = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		try {
+			const flush = terminal.flush.bind(terminal);
+			vi.spyOn(terminal, "flush")
+				.mockImplementationOnce(
+					() =>
+						new Promise<void>((_resolve, reject) => {
+							rejectOld = reject;
+						}),
+				)
+				.mockImplementation(() => flush());
+			vi.spyOn(terminal, "write").mockImplementationOnce(() => {});
+			rows.lines = ["after"];
+			const first = frame().catch((error: Error) => error);
+			await frame();
+			expect(tui.isViewportFrameFlushed()).toBe(true);
+			rejectOld(new Error("old frame lost"));
+			expect(await first).toEqual(new Error("old frame lost"));
+			await vi.waitFor(() => expect(log).toHaveBeenCalled());
+			expect(tui.isViewportFrameFlushed()).toBe(false);
+			const mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).toContain("\x1b[1;1H\x1b[2Kafter");
+			expect(text()[0]).toBe("after");
+		} finally {
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("bounds raw-row search on a large padding-only resize without losing the content anchor", () => {
+		const text = new Text(Array.from({ length: 6000 }, (_, i) => `numbered line ${i}`).join("\n"), 0, 0);
+		const viewport = new RetainedViewport({ getBlocks: () => [{ component: text, finalized: true }] });
+		viewport.update(80, 24);
+		viewport.scrollTo(3000);
+		const search = vi.spyOn(diff, "diffArrays");
+		try {
+			viewport.update(79, 24);
+			expect(search.mock.calls[0][2]).toEqual({ maxEditLength: 64 });
+			expect(search.mock.results[0].value).toBeUndefined();
+			expect(search.mock.calls[1][2]).toEqual({ maxEditLength: 64 });
+			expect(viewport.state.offset).toBe(3000);
+			expect(viewport.slice(79, false).lines[0]).toBe("numbered line 3000".padEnd(79));
+		} finally {
+			search.mockRestore();
+		}
+	});
+
+	it("bounds changed-token correspondence while preserving a detached anchor", () => {
+		const rows = new Rows(Array.from({ length: 250 }, (_, i) => `old-${i}-${"a".repeat(70)}`));
+		const viewport = new RetainedViewport({ getBlocks: () => [{ component: rows }] });
+		viewport.update(80, 12);
+		viewport.scrollTo(120);
+		const search = vi.spyOn(diff, "diffArrays");
+		try {
+			rows.lines = Array.from({ length: 250 }, (_, i) => `new-${i}-${"b".repeat(70)}`);
+			viewport.update(80, 12);
+			expect(search.mock.calls.every((call) => call[2]?.maxEditLength === 64)).toBe(true);
+			expect(viewport.state.offset).toBe(120);
+			expect(viewport.slice(80, false).lines[0]).toContain("new-120-");
+			const short = new Rows(Array.from({ length: 40 }, (_, i) => `first-${i}-${"a".repeat(60)}`));
+			const smaller = new RetainedViewport({ getBlocks: () => [{ component: short }] });
+			smaller.update(80, 8);
+			smaller.scrollTo(20);
+			search.mockClear();
+			short.lines = Array.from({ length: 40 }, (_, i) => `second-${i}-${"b".repeat(60)}`);
+			smaller.update(80, 8);
+			expect(search.mock.calls).toHaveLength(2);
+			expect(search.mock.calls.every((call) => call[2]?.maxEditLength === 64)).toBe(true);
+		} finally {
+			search.mockRestore();
+		}
+	});
+
+	it.each(["kitty", "iterm2"] as const)(
+		"bounds %s overlay images and replaces partial nested placements before clipping",
+		async (protocol) => {
+			const dimensions = getCellDimensions();
+			setCapabilities({ images: protocol, trueColor: true, hyperlinks: true });
+			setCellDimensions({ widthPx: 9, heightPx: 18 });
+			try {
+				const image = new Image(
+					"aW1hZ2U=",
+					"image/png",
+					{ fallbackColor: (value) => value },
+					{ imageId: 55105 },
+					{ widthPx: 300, heightPx: 3000 },
+				);
+				const { tui, terminal, frame, text } = await setup([{ component: new Rows(Array(8).fill("base")) }], 41, 8);
+				let overlay = tui.showOverlay(image, { width: 40, margin: 1 });
+				let mark = terminal.markWrites();
+				await frame();
+				let output = terminal.writesSince(mark);
+				expect(output).toContain(protocol === "kitty" ? "r=6" : ";height=6:");
+				terminal.resize(41, 6);
+				mark = terminal.markWrites();
+				await frame();
+				output = terminal.writesSince(mark);
+				expect(output).toContain(protocol === "kitty" ? "r=4" : ";height=4:");
+				overlay.hide();
+				terminal.resize(41, 8);
+				const box = new Box(1, 1);
+				box.addChild(new Text("heading", 0, 0));
+				box.addChild(image);
+				overlay = tui.showOverlay(box, { width: 40, maxHeight: 6, row: 0, col: 0 });
+				mark = terminal.markWrites();
+				await frame();
+				output = terminal.writesSince(mark);
+				expect(output).not.toContain(protocol === "kitty" ? "\x1b_Ga=T" : "\x1b]1337;File=");
+				expect(text().join("\n")).toContain("[Image clipped; scroll to view]");
+				overlay.hide();
+				const lower = tui.showOverlay(image, { width: 40, maxHeight: 6, row: 0, col: 0 });
+				await frame();
+				const upper = tui.showOverlay(new Rows(["higher overlay"]), { width: 40, row: 2, col: 0 });
+				mark = terminal.markWrites();
+				await frame();
+				expect(terminal.writesSince(mark)).not.toContain(protocol === "kitty" ? "\x1b_Ga=T" : "\x1b]1337;File=");
+				expect(text()[2]).toBe("higher overlay");
+				upper.hide();
+				mark = terminal.markWrites();
+				await frame();
+				expect(terminal.writesSince(mark)).toContain(protocol === "kitty" ? "\x1b_Ga=T" : "\x1b]1337;File=");
+				lower.hide();
+			} finally {
+				setCellDimensions(dimensions);
+			}
+		},
+	);
+	it("deletes a built-in Kitty image when its overlay closes", async () => {
+		const dimensions = getCellDimensions();
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		setCellDimensions({ widthPx: 9, heightPx: 18 });
+		try {
+			const rows = Array.from({ length: 8 }, (_, i) => `transcript-${i}`);
+			const { tui, terminal, frame, text } = await setup([{ component: new Text(rows.join("\n"), 0, 0) }], 41, 8);
+			const image = new Image(
+				"iVBORw0KGgoAAAANSUhEUgAAADYAAAA2CAIAAAADJ/2KAAAARklEQVR4nO3OAQkAMAzAsPk3vctYD4EIyOxs3JwPFBUVFVsUFSsUFSsUFSsUFSsUFSsUFSsUFSsUFSsUFSsUFSsUFSsUFSs+KD6jF7KD27HgqAAAAABJRU5ErkJggg==",
+				"image/png",
+				{ fallbackColor: (value) => value },
+				{ imageId: 55104, maxWidthCells: 6, maxHeightCells: 3 },
+			);
+			const mark = terminal.markWrites();
+			const overlay = tui.showOverlay(image, { row: 1, col: 2, width: 10, maxHeight: 3 });
+			await frame();
+			expect(terminal.writesSince(mark)).toMatch(/\x1b_Ga=T,[^;]*i=55104[^;]*;/);
+			const hiding = terminal.markWrites();
+			overlay.hide();
+			await frame();
+			expect(text()).toEqual(rows);
+			const deletions = [...terminal.writesSince(hiding).matchAll(/\x1b_G([^;\x1b]*)\x1b\\/g)]
+				.map((match) => new Map(match[1].split(",").map((parameter) => parameter.split("=") as [string, string])))
+				.filter((parameters) => parameters.get("a") === "d");
+			expect(
+				deletions.some(
+					(parameters) =>
+						["a", "A"].includes(parameters.get("d") ?? "") ||
+						(["i", "I"].includes(parameters.get("d") ?? "") && parameters.get("i") === "55104"),
+				),
+			).toBe(true);
+		} finally {
+			setCellDimensions(dimensions);
+		}
+	});
+
+	it("preserves an unchanged reading anchor when a live block receives a large append", async () => {
+		const labels = Array.from({ length: 200 }, (_, i) => `live-${String(i).padStart(3, "0")}`);
+		const card = new Text(labels.slice(0, 100).join("\n"), 0, 0);
+		const status = new Text("status-0\nstatus-1\nstatus-2\nstatus-3", 0, 0);
+		const { tui, frame, text } = await setup([{ component: card }, { component: status }], 21, 4);
+		tui.scrollViewportTo(20);
+		await frame();
+		expect(text()).toEqual(["live-020", "live-021", "live-022", "live-023"]);
+
+		card.setText(labels.join("\n"));
+		await frame();
+		expect({
+			rows: text(),
+			offset: tui.getViewportState()!.offset,
+			total: tui.getViewportState()!.totalRows,
+			following: tui.getViewportState()!.followingTail,
+		}).toEqual({
+			rows: ["live-020", "live-021", "live-022", "live-023"],
+			offset: 20,
+			total: 204,
+			following: false,
+		});
+	});
+
+	it.each(["unchanged", "repeated and displaced", "deleted"])(
+		"preserves surviving content after earlier edits and large growth when the anchor is %s",
+		async (scenario) => {
+			const labels = Array.from({ length: 200 }, (_, i) => `live-${String(i).padStart(3, "0")}`);
+			if (scenario === "repeated and displaced") labels[5] = labels[20] = "repeated";
+			const card = new Text(labels.slice(0, 100).join("\n"), 0, 0);
+			const status = new Text("status-0\nstatus-1\nstatus-2\nstatus-3", 0, 0);
+			const { tui, frame, text } = await setup([{ component: card }, { component: status }], 21, 4);
+			tui.scrollViewportTo(20);
+			await frame();
+			expect(text()).toEqual(labels.slice(20, 24));
+
+			const next = [...labels];
+			next[0] = "changed";
+			if (scenario === "repeated and displaced") next.splice(10, 0, "inserted");
+			if (scenario === "deleted") next.splice(20, 1);
+			card.setText(next.join("\n"));
+			await frame();
+			expect({ rows: text(), ...tui.getViewportState() }).toEqual({
+				rows: scenario === "deleted" ? labels.slice(21, 25) : labels.slice(20, 24),
+				offset: scenario === "repeated and displaced" ? 21 : 20,
+				height: 4,
+				totalRows: next.length + 4,
+				followingTail: false,
+			});
+		},
+	);
+
+	it.each(["unique", "repeated", "over budget"])("bounds witnessed-prefix anchor recovery for %s rows", (kind) => {
+		const labels = Array.from({ length: 200 }, (_, i) => (kind === "repeated" ? "repeat" : `live-${i}`));
+		const card = new Text(labels.slice(0, 100).join("\n"), 0, 0);
+		const viewport = new RetainedViewport({ getBlocks: () => [{ component: card }] });
+		viewport.update(20, 4);
+		viewport.scrollTo(kind === "over budget" ? 80 : 20);
+		const search = vi.spyOn(diff, "diffArrays");
+		try {
+			card.setText(
+				labels.map((row, i) => (i < (kind === "over budget" ? 70 : 1) ? `changed-${i}` : row)).join("\n"),
+			);
+			viewport.update(20, 4);
+			expect(search.mock.calls).toHaveLength(kind === "repeated" ? 2 : 3);
+			expect(search.mock.calls.every((call) => call[2]?.maxEditLength === 64)).toBe(true);
+			expect(search.mock.results.at(-1)?.value === undefined).toBe(kind !== "unique");
+			if (kind === "unique") expect(viewport.state.offset).toBe(20);
+		} finally {
+			search.mockRestore();
+		}
+	});
+
+	it("retains tall mutable output, paints exact slices, and follows only an explicit return to the tail", async () => {
+		const card = new Rows(Array.from({ length: 12 }, (_, i) => `card-${i}`));
+		const { tui, terminal, frame, text } = await setup([{ component: card }]);
+		expect(text()).toEqual(["card-8", "card-9", "card-10", "card-11"]);
+		tui.scrollViewport(-7);
+		await frame();
+		expect(text()).toEqual(["card-1", "card-2", "card-3", "card-4"]);
+		card.lines.push("card-12");
+		card.lines.unshift("new first");
+		await frame();
+		expect(text()).toEqual(["card-1", "card-2", "card-3", "card-4"]);
+		expect(tui.getViewportState()).toMatchObject({ offset: 2, totalRows: 14, followingTail: false });
+		tui.scrollViewportTo(100);
+		await frame();
+		card.lines.push("card-13");
+		await frame();
+		expect(text()).toEqual(["card-10", "card-11", "card-12", "card-13"]);
+		expect(tui.getViewportState()?.followingTail).toBe(true);
+		expect(terminal.bufferLines()).toHaveLength(4);
+		expect(terminal.writes.join("")).not.toContain("\x1b[3J");
+	});
+
+	it("reserves a scrollbar column even when content is short and clears stale rows and cells", async () => {
+		const card = new Rows(["a", "\x1b[48;2;40;40;50mlong old row\x1b[0m", "c", "d", "e"]);
+		const { frame, text, terminal } = await setup([{ component: card }], 21, 4);
+		expect(card.render).toHaveBeenLastCalledWith(20);
+		expect(terminal.cell(0, 10).background).toBe(0x282832);
+		card.lines = ["tiny"];
+		await frame();
+		expect(text()).toEqual(["tiny", "", "", ""]);
+		expect(terminal.visibleLines()).toEqual([`tiny${" ".repeat(17)}`, ...Array(3).fill(" ".repeat(21))]);
+		for (let row = 0; row < 4; row++) {
+			for (let col = 0; col < 21; col++) {
+				expect(terminal.cell(row, col)).toMatchObject({ background: undefined, inverse: false });
+			}
+		}
+		card.lines = [];
+		await frame();
+		expect(terminal.visibleLines()).toEqual(Array(4).fill(" ".repeat(21)));
+		card.lines = ["back"];
+		await frame();
+		expect(text()).toEqual(["back", "", "", ""]);
+	});
+
+	it("keeps identity across promotion, caches finalized blocks, and distinguishes invalidation from reset", async () => {
+		const history = new Rows(Array.from({ length: 200 }, (_, i) => `history-${i}`));
+		const card = new Rows(["first", "reading", "last", "extra", "tail"]);
+		const status = new Rows(["tick"]);
+		const blocks: ViewportBlock[] = [
+			{ component: history, finalized: true },
+			{ component: card },
+			{ component: status },
+		];
+		const { tui, frame, text, terminal } = await setup(blocks);
+		tui.scrollViewportTo(201);
+		await frame();
+		expect(text()[0]).toBe("reading");
+		blocks[1] = { component: card, finalized: true };
+		await frame();
+		const finalizedCount = card.render.mock.calls.length;
+		for (let i = 0; i < 10; i++) {
+			status.lines = [`tick-${i}`];
+			await frame();
+		}
+		expect(history.render).toHaveBeenCalledTimes(1);
+		expect(card.render).toHaveBeenCalledTimes(finalizedCount);
+		expect(text()[0]).toBe("reading");
+		card.lines.unshift("inserted");
+		blocks[1] = { component: card, finalized: true, revision: 1 };
+		await frame();
+		expect(text()[0]).toBe("reading");
+		tui.invalidate();
+		await frame();
+		expect(history.render).toHaveBeenCalledTimes(2);
+		expect(text()[0]).toBe("reading");
+		tui.rebuild();
+		await frame();
+		expect(history.render).toHaveBeenCalledTimes(3);
+		expect(text()[0]).toBe("reading");
+		terminal.resize(19, 4);
+		await frame();
+		expect(history.render).toHaveBeenCalledTimes(4);
+		tui.resetViewport();
+		await frame();
+		expect(tui.getViewportState()?.followingTail).toBe(true);
+		expect(text().at(-1)).toBe("tick-9");
+	});
+
+	it("preserves the same reader anchor on height changes without silently reattaching at a clamped bottom", async () => {
+		const card = new Rows(Array.from({ length: 20 }, (_, i) => `row-${i}`));
+		const { tui, frame, terminal } = await setup([{ component: card }]);
+		tui.scrollViewportTo(12);
+		await frame();
+		terminal.resize(21, 10);
+		await frame();
+		expect(tui.getViewportState()).toMatchObject({ offset: 10, followingTail: false });
+		terminal.resize(21, 4);
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(12);
+	});
+
+	it("keeps a lower-screen anchor visible on height shrink and restores its desired position on expansion", async () => {
+		const card = new Rows(Array.from({ length: 20 }, (_, i) => `row-${i}`));
+		const { tui, frame, terminal } = await setup([{ component: card }]);
+		tui.scrollViewportTo(5, 3);
+		await frame();
+		terminal.resize(21, 2);
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(7);
+		expect(terminal.visibleLines()[1]).toMatch(/^row-8 /);
+		terminal.resize(21, 4);
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(5);
+		expect(terminal.visibleLines()[3]).toMatch(/^row-8 /);
+	});
+
+	it("maps padding-only Text reflow with zero equal raw rows without changing component spacing", async () => {
+		const text = new Text("A\nB\nC", 0, 0);
+		const wide = text.render(12);
+		expect(text.render(9).some((row) => wide.includes(row))).toBe(false);
+		const { tui, terminal, frame } = await setup(
+			[
+				{ component: new Rows(["before-0", "before-1", "before-2"]) },
+				{ component: text },
+				{ component: new Rows(["after-0", "after-1", "after-2", "after-3"]) },
+			],
+			13,
+			3,
+		);
+		tui.scrollViewportTo(4);
+		await frame();
+		expect(terminal.visibleLines()[0]).toMatch(/^B {11}/);
+		terminal.resize(10, 3);
+		await frame();
+		expect(terminal.visibleLines()[0]).toMatch(/^B {8}/);
+		expect(tui.getViewportState()?.offset).toBe(4);
+	});
+
+	it("retains an interior grapheme through complete narrower/wider Text rewrapping and repeated content", async () => {
+		const source = "0123456789".repeat(30);
+		const text = new Text(`\x1b[31m${source}\x1b[0m`, 0, 0);
+		const wide = text.render(12);
+		expect(text.render(9).some((row) => wide.includes(row))).toBe(false);
+		const { tui, terminal, frame } = await setup([{ component: text }], 13, 3);
+		tui.scrollViewportTo(10);
+		await frame();
+		// Offset 120 is the first grapheme of row 10 at width 12, not the first repeated "0".
+		terminal.resize(10, 3);
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(13);
+		expect(terminal.visibleLines()[0].slice(0, 9)).toBe(source.slice(117, 126));
+		terminal.resize(13, 3);
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(10);
+		expect(terminal.visibleLines()[0].slice(0, 12)).toBe(source.slice(120, 132));
+	});
+
+	it("anchors ANSI-styled wide and combining graphemes, retaining ordered repeated occurrences", async () => {
+		const text = new Text(`\x1b[32m${"界e\u0301x".repeat(80)}\x1b[0m`, 0, 0);
+		const { tui, terminal, frame } = await setup([{ component: text }], 13, 3);
+		tui.scrollViewportTo(10);
+		await frame();
+		// Each repetition is four cells; content cell 120 belongs to row 15 at width 8.
+		terminal.resize(9, 3);
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(15);
+		expect(terminal.visibleLines()[0]).toMatch(/^界e\u0301x界e\u0301x/);
+		terminal.resize(13, 3);
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(10);
+	});
+
+	it("falls back to surviving content in the same block before adjacent blocks", async () => {
+		const card = new Rows(["aaa", "bbb", "ccc", "ddd", "eee"]);
+		const blocks: ViewportBlock[] = [
+			{ component: new Rows(["prefix"]) },
+			{ component: card },
+			{ component: new Rows(["next-0", "next-1", "next-2", "next-3"]) },
+		];
+		const { tui, frame, text } = await setup(blocks, 21, 3);
+		tui.scrollViewportTo(3);
+		await frame();
+		card.lines.splice(2, 1);
+		await frame();
+		expect(text()[0]).toBe("ddd");
+		blocks.splice(1, 1);
+		await frame();
+		expect(text()[0]).toBe("next-0");
+	});
+
+	it("keeps a deterministic ordinal anchor within blank-only blocks", async () => {
+		const blanks = new Rows(Array(12).fill(" "));
+		const { tui, frame } = await setup([{ component: blanks }, { component: new Rows(["end"]) }]);
+		tui.scrollViewportTo(5);
+		await frame();
+		blanks.lines = Array(14).fill("  ");
+		await frame();
+		expect(tui.getViewportState()).toMatchObject({ offset: 5, followingTail: false });
+	});
+
+	it("places cursor and overlays relative to the viewed slice rather than the document tail", async () => {
+		const card = new Rows(["0", "1", `界e\u0301${CURSOR_MARKER}x`, "3", "4", "5", "6", "7", "8"]);
+		const { tui, terminal, frame, text } = await setup([{ component: card }]);
+		tui.scrollViewportTo(1);
+		await frame();
+		expect(terminal.cursorPosition()).toEqual({ row: 1, col: 3 });
+		const overlay = tui.showOverlay(new Rows([`M${CURSOR_MARKER}ODAL`]), { row: 2, col: 0, width: 5 });
+		await frame();
+		expect(text()).toEqual(["1", "界e\u0301x", "MODAL", "4"]);
+		expect(terminal.cursorPosition()).toEqual({ row: 2, col: 1 });
+		overlay.hide();
+		await frame();
+		expect(terminal.cursorPosition()).toEqual({ row: 1, col: 3 });
+		tui.scrollViewportTo(5);
+		const mark = terminal.markWrites();
+		await frame();
+		expect(terminal.writesSince(mark)).toContain("\x1b[?25l");
+	});
+
+	it("bounds oversized overlays to the screen without shifting the base slice", async () => {
+		const { tui, terminal, frame } = await setup([{ component: new Rows(["0", "1", "2", "3", "4", "5"]) }]);
+		tui.scrollViewportTo(0);
+		await frame();
+		tui.showOverlay(new Rows(["a", "b", "c", "d", "e", "f"]), { width: 2, row: 0, col: 0 });
+		await frame();
+		expect(terminal.visibleLines().map((row) => row[0])).toEqual(["a", "b", "c", "d"]);
+		expect(tui.getViewportState()?.offset).toBe(0);
+	});
+
+	it("fits tall overlays within margins and never emits an offscreen cursor row", async () => {
+		const { tui, terminal, frame, text } = await setup([{ component: new Rows(["0", "1", "2", "3", "4", "5"]) }]);
+		tui.scrollViewportTo(0);
+		await frame();
+		tui.showOverlay(new Rows(["a", "b", `${CURSOR_MARKER}c`, "d"]), { width: 1, margin: { top: 1 }, col: 0 });
+		const mark = terminal.markWrites();
+		await frame();
+		expect(text()).toEqual(["0", "a", "b", "c"]);
+		expect(terminal.cursorPosition()).toEqual({ row: 3, col: 0 });
+		expect(terminal.writesSince(mark)).not.toMatch(/\x1b\[[5-9];\d+H/);
+	});
+
+	it.each(["kitty", "iterm2"] as const)(
+		"fits nested oversized %s images and refits finalized images on height resize",
+		async (protocol) => {
+			setCapabilities({ images: protocol, trueColor: true, hyperlinks: true });
+			const image = new Image(
+				"aW1hZ2U=",
+				"image/png",
+				{ fallbackColor: (s) => s },
+				{ maxWidthCells: 60, imageId: 55 },
+				{ widthPx: 20, heightPx: 2000 },
+			);
+			const box = new Box(1, 1);
+			const container = new Container();
+			box.addChild(image);
+			container.addChild(box);
+			const { tui, terminal, frame } = await setup([{ component: container, finalized: true }], 61, 10);
+			const prefix = protocol === "kitty" ? "\x1b_Ga=T" : "\x1b]1337;File=";
+			expect(tui.getViewportState()!.totalRows).toBeLessThanOrEqual(12);
+			tui.scrollViewportTo(1);
+			let mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).toContain(prefix);
+			if (protocol === "iterm2") expect(terminal.writesSince(mark)).toContain(";height=10:");
+			terminal.resize(61, 5);
+			await frame();
+			expect(tui.getViewportState()!.totalRows).toBeLessThanOrEqual(7);
+			tui.scrollViewportTo(1);
+			mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).toContain(prefix);
+		},
+	);
+
+	it.each(["kitty", "iterm2"] as const)(
+		"paints %s placements atomically at absolute rows and exposes clipped spans",
+		async (protocol) => {
+			setCapabilities({ images: protocol, trueColor: true, hyperlinks: true });
+			const image = new Image(
+				"aW1hZ2U=",
+				"image/png",
+				{ fallbackColor: (s) => s },
+				{ maxWidthCells: 6, maxHeightCells: 3, imageId: 44 },
+				{ widthPx: 54, heightPx: 54 },
+			);
+			const { tui, terminal, frame, text } = await setup(
+				[
+					{ component: new Rows(["0", "1", "2"]) },
+					{ component: image, finalized: true },
+					{ component: new Rows(["6", "7", "8", "9", "10"]) },
+				],
+				41,
+				5,
+			);
+			tui.scrollViewportTo(2);
+			let mark = terminal.markWrites();
+			await frame();
+			const prefix = protocol === "kitty" ? "\x1b_Ga=T" : "\x1b]1337;File=";
+			expect(terminal.writesSince(mark)).toContain(prefix);
+			expect(terminal.writesSince(mark)).toContain(`\x1b[2;1H${prefix}`);
+			expect(terminal.writesSince(mark)).not.toContain("\x1b[2A");
+			expect(text()).toEqual(["2", "", "", "", "6"]);
+			terminal.sendInput(mouse(0, 1, 1));
+			terminal.sendInput(mouse(32, 2, 1));
+			terminal.sendInput(mouse(0, 2, 1, "m"));
+			mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).not.toContain(prefix);
+			expect(text()).toEqual(["2", "[Image hidden by selection]", "", "", "6"]);
+			expect(terminal.cell(0, 0).inverse).toBe(true);
+			expect(terminal.cell(1, 0).inverse).toBe(false);
+			terminal.sendInput("\x1b");
+			tui.scrollViewportTo(2);
+			await frame();
+			const overlay = tui.showOverlay(new Text("overlay", 0, 0), { row: 0, col: 0, width: 7 });
+			mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).not.toContain(prefix);
+			expect(text()).toEqual(["overlay", "[Image hidden by overlay]", "", "", "6"]);
+			overlay.hide();
+			mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).toContain(prefix);
+			tui.scrollViewportTo(4);
+			mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).not.toContain(prefix);
+			expect(text()).toEqual(["[Image clipped; scroll to view]", "", "6", "7", "8"]);
+			if (protocol === "kitty") expect(terminal.writesSince(mark)).toContain("a=d,d=I,i=44");
+			tui.scrollViewportTo(0);
+			mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).not.toContain(prefix);
+			expect(text()).toEqual(["0", "1", "2", "[Image clipped; scroll to view]", ""]);
+			tui.stop();
+			await terminal.flush();
+			expect(terminal.visibleLines()[0]).toBe("shell sentinel");
+			tui.start();
+			tui.scrollViewportTo(2);
+			mark = terminal.markWrites();
+			await frame();
+			expect(text()).toEqual(["2", "", "", "", "6"]);
+			expect(terminal.writesSince(mark)).toContain(`\x1b[2;1H${prefix}`);
+		},
+	);
+
+	it("preserves an explicitly chosen screen-row offset through growth and reflow", async () => {
+		const before = new Rows(["before-0", "before-1", "before-2"]);
+		const text = new Text("A\nB\nC", 0, 0);
+		const { tui, terminal, frame } = await setup(
+			[{ component: before }, { component: text }, { component: new Rows(["after-0", "after-1", "after-2"]) }],
+			13,
+			3,
+		);
+		tui.scrollViewportTo(3, 1);
+		await frame();
+		before.lines.unshift("inserted");
+		terminal.resize(10, 3);
+		await frame();
+		expect(terminal.visibleLines()[1]).toMatch(/^B {8}/);
+		expect(tui.getViewportState()?.offset).toBe(4);
+	});
+
+	it("survives word wrapping, restyling and edits inside an aggregate card without first-match jumps", async () => {
+		const phrase = "alpha beta gamma delta epsilon zeta ";
+		const card = new Text(phrase.repeat(20), 0, 0);
+		const { tui, terminal, frame } = await setup([{ component: card }], 18, 3);
+		tui.scrollViewportTo(20);
+		await frame();
+		const before = terminal.visibleLines()[0].slice(0, 17).trim();
+		card.setText(`\x1b[34m${"inserted header\n"}${phrase.repeat(20)}\x1b[0m`);
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(21);
+		expect(terminal.visibleLines()[0].slice(0, 17).trim()).toBe(before);
+		terminal.resize(12, 3);
+		await frame();
+		expect(tui.getViewportState()!.offset).toBeGreaterThan(21);
+		terminal.resize(18, 3);
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(21);
+	});
+
+	it("handles a single-cell viewport and blank or removed projections without stale output", async () => {
+		const blocks: ViewportBlock[] = [{ component: new Text("abcdef", 0, 0) }];
+		const { tui, terminal, frame } = await setup(blocks, 1, 1);
+		expect(terminal.visibleLines()).toEqual(["f"]);
+		tui.scrollViewportTo(2);
+		await frame();
+		expect(terminal.visibleLines()).toEqual(["c"]);
+		blocks.length = 0;
+		await frame();
+		expect(terminal.visibleLines()[0].trim()).toBe("");
+		blocks.push({ component: new Text("uvwxyz", 0, 0) });
+		await frame();
+		expect(terminal.visibleLines()).toEqual(["u"]);
+	});
+
+	it("requires unique block identities and preserves the two unconfigured rendering contracts", async () => {
+		const component = new Rows(["one"]);
+		const blocks = [{ component }];
+		const { tui, frame } = await setup(blocks);
+		blocks.push({ component });
+		await expect(frame()).rejects.toThrow("unique component");
+		blocks.pop();
+		expect(() => tui.setLiveRegionStart(component)).toThrow("with a viewport");
+		const legacy = new TUI(new HeadlessTerminal());
+		legacy.addChild(component);
+		legacy.setLiveRegionStart(component);
+		expect(() => legacy.configureViewport({ getBlocks: () => [] })).toThrow("committed live region");
+		legacy.stop();
+	});
+
+	it("rejects required flushing on unsupported terminals", async () => {
+		const { tui, terminal } = await setup([]);
+		Object.defineProperty(terminal, "flush", { value: undefined });
+		await expect(tui.renderNow({ requireFlush: true })).rejects.toThrow("Terminal flush is required");
+	});
+
+	it("supports immediate flush independently while preserving committed-mode preconditions", async () => {
+		const { tui, terminal } = await setup([]);
+		await expect(tui.commitNow()).rejects.toThrow("without a live region");
+		vi.spyOn(terminal, "flush").mockRejectedValueOnce(new Error("transport failed"));
+		await expect(tui.renderNow({ requireFlush: true })).rejects.toThrow("transport failed");
+		tui.stop();
+		await expect(tui.renderNow()).rejects.toThrow("stopped");
+	});
+});

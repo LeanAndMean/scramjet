@@ -10,6 +10,7 @@ import {
 	SettingsList,
 	Spacer,
 	Text,
+	truncateToWidth,
 } from "@leanandmean/tui";
 import type { WarningSettings } from "../../../core/settings-manager.js";
 import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.js";
@@ -56,6 +57,11 @@ export interface SettingsConfig {
 	quietStartup: boolean;
 	showTerminalProgress: boolean;
 	warnings: WarningSettings;
+	tuiMode: "retained" | "committed";
+	dockEditor: boolean;
+	editorMaxHeightPercent: number;
+	scrollWheelStep: number;
+	viewportProjectOverrides?: string[];
 }
 
 export interface SettingsCallbacks {
@@ -82,6 +88,9 @@ export interface SettingsCallbacks {
 	onQuietStartupChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
+	onDockEditorChange: (enabled: boolean) => boolean;
+	onEditorMaxHeightPercentChange: (percent: number) => number;
+	onScrollWheelStepChange: (step: number) => number;
 	onCancel: () => void;
 }
 
@@ -125,6 +134,10 @@ class WarningSettingsSubmenu extends Container {
 		this.addChild(this.settingsList);
 	}
 
+	setMaxHeight(rows: number | undefined): void {
+		this.settingsList.setMaxHeight(rows);
+	}
+
 	handleInput(data: string): void {
 		this.settingsList.handleInput(data);
 	}
@@ -132,6 +145,7 @@ class WarningSettingsSubmenu extends Container {
 
 class SelectSubmenu extends Container {
 	private selectList: SelectList;
+	private maximumRows: number | undefined;
 
 	constructor(
 		title: string,
@@ -189,6 +203,19 @@ class SelectSubmenu extends Container {
 		this.addChild(new Text(theme.fg("dim", "  Enter to select · Esc to go back"), 0, 0));
 	}
 
+	setMaxHeight(rows: number | undefined): void {
+		this.maximumRows = rows;
+	}
+
+	override render(width: number): string[] {
+		this.selectList.setMaxHeight(this.maximumRows);
+		const lines = super.render(width);
+		if (this.maximumRows === undefined || lines.length <= this.maximumRows) return lines;
+		const titleRows = this.maximumRows > 1 ? this.children[0].render(width).slice(0, 1) : [];
+		this.selectList.setMaxHeight(this.maximumRows - titleRows.length);
+		return [...titleRows, ...this.selectList.render(width)];
+	}
+
 	handleInput(data: string): void {
 		this.selectList.handleInput(data);
 	}
@@ -199,8 +226,13 @@ class SelectSubmenu extends Container {
  */
 export class SettingsSelectorComponent extends Container {
 	private settingsList: SettingsList;
+	private saveError: string | undefined;
 
-	constructor(config: SettingsConfig, callbacks: SettingsCallbacks) {
+	constructor(
+		config: SettingsConfig,
+		private readonly callbacks: SettingsCallbacks,
+		private readonly maximumRows?: () => number,
+	) {
 		super();
 
 		const supportsImages = getCapabilities().images;
@@ -435,6 +467,41 @@ export class SettingsSelectorComponent extends Container {
 			values: ["true", "false"],
 		});
 
+		const scopeHint = (key: string) =>
+			config.viewportProjectOverrides?.includes(key)
+				? " Project settings override this value; edits save the global preference for other projects."
+				: "";
+		const retained = config.tuiMode === "retained";
+		items.push(
+			{
+				id: "dock-editor",
+				label: "Dock input area",
+				currentValue: String(config.dockEditor),
+				values: retained ? ["true", "false"] : undefined,
+				description:
+					(retained
+						? "Keep editor, adjacent widgets and footer visible while browsing."
+						: "Available with retained rendering after restart.") + scopeHint("dockEditor"),
+			},
+			{
+				id: "editor-height",
+				label: "Maximum editor height",
+				currentValue: `${config.editorMaxHeightPercent}%`,
+				values: Array.from({ length: 9 }, (_, index) => `${10 + index * 5}%`),
+				description: `Maximum wrapped input-text rows as a percentage of terminal height (10–50%); reduced when space is limited.${scopeHint("editorMaxHeightPercent")}`,
+			},
+			{
+				id: "wheel-step",
+				label: "Wheel scroll lines",
+				currentValue: String(config.scrollWheelStep),
+				values: retained ? Array.from({ length: 20 }, (_, index) => String(index + 1)) : undefined,
+				description:
+					(retained
+						? "Transcript rows per wheel event (1–20)."
+						: "Native terminal scrolling controls committed mode.") + scopeHint("scrollWheelStep"),
+			},
+		);
+
 		// Add borders
 		this.addChild(new DynamicBorder());
 
@@ -444,6 +511,18 @@ export class SettingsSelectorComponent extends Container {
 			getSettingsListTheme(),
 			(id, newValue) => {
 				switch (id) {
+					case "dock-editor":
+						this.settingsList.updateValue(id, String(callbacks.onDockEditorChange(newValue === "true")));
+						break;
+					case "editor-height":
+						this.settingsList.updateValue(
+							id,
+							`${callbacks.onEditorMaxHeightPercentChange(Number.parseInt(newValue, 10))}%`,
+						);
+						break;
+					case "wheel-step":
+						this.settingsList.updateValue(id, String(callbacks.onScrollWheelStepChange(Number(newValue))));
+						break;
 					case "autocompact":
 						callbacks.onAutoCompactChange(newValue === "true");
 						break;
@@ -511,6 +590,21 @@ export class SettingsSelectorComponent extends Container {
 
 		this.addChild(this.settingsList);
 		this.addChild(new DynamicBorder());
+	}
+
+	cancel(): void {
+		this.callbacks.onCancel();
+	}
+
+	setSaveError(message: string | undefined): void {
+		this.saveError = message;
+	}
+
+	override render(width: number): string[] {
+		const rows = this.maximumRows?.();
+		const warning = this.saveError ? [truncateToWidth(theme.fg("warning", this.saveError), width)] : [];
+		this.settingsList.setMaxHeight(rows === undefined ? undefined : Math.max(1, rows - 2 - warning.length));
+		return [...warning, ...(rows !== undefined && rows < 3 ? this.settingsList.render(width) : super.render(width))];
 	}
 
 	getSettingsList(): SettingsList {

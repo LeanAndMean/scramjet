@@ -202,7 +202,7 @@ export interface ExtensionUIContext {
 		options?: {
 			overlay?: boolean;
 			// SCRAMJET-DIVERGENCE: immutable context anchored to its pending tool presentation.
-			/** Commit immutable visual context at a pending tool's transcript position before focusing controls. Not persisted. */
+			/** Install visual context at a pending tool row and flush before focusing; retained mode also guards visibility. Not persisted. */
 			toolAttachedContext?: {
 				toolCallId: string;
 				render: (tui: TUI, theme: Theme) => Component;
@@ -211,6 +211,8 @@ export interface ExtensionUIContext {
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			/** Called with the overlay handle after the overlay is shown. Use to control visibility. */
 			onHandle?: (handle: OverlayHandle) => void;
+			/** Ordinary input-slot allocation before rendering; undefined on initialization/release. Not a visibility guarantee. */
+			onAvailableHeight?: (rows: number | undefined) => void;
 		},
 	): Promise<T>;
 

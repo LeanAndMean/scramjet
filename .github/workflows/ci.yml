@@ -30,10 +30,15 @@ jobs:
         run: npm run typecheck
 
       - name: Build
+        id: build
         run: npm run build
 
       - name: Test
         run: npm test
+
+      - name: Terminal fixture and evidence tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: python3 .github/scripts/test-terminal-fixtures.py -v
 
       - name: Lint
         run: npm run lint
