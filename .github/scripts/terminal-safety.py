@@ -93,7 +93,7 @@ def key(name):
     time.sleep(0.4)
 
 
-def wait_image_consent():
+def wait_image_consent(require_image=False):
     clear_since = None
     observations = report.setdefault("inlineImagePermission", [])
     def ready():
@@ -108,7 +108,7 @@ def wait_image_consent():
             raise RuntimeError("Native image consent observation is unavailable")
         if clear_since is None:
             clear_since = time.monotonic()
-        return time.monotonic() - clear_since >= 0.5
+        return time.monotonic() - clear_since >= 0.5 and (not require_image or state().get("phase") == "image")
     if not wait(ready, seconds=15):
         raise RuntimeError("Native image consent did not settle")
 
@@ -299,14 +299,14 @@ try:
         run("xdotool", "windowactivate", "--sync", window)
         run("xdotool", "type", "--clearmodifiers", "--delay", "1", f"/bin/bash {shlex.quote(str(launcher))}")
         run("xdotool", "key", "Return")
+    if mac:
+        wait_image_consent(require_image=True)
     check("productionFixtureStarted", lambda: state().get("phase") == "image")
     check("checkoutProvenanceMatches", lambda: state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False)
     check("nativeProtocolDetected", lambda: state().get("protocol") == ("iterm2" if mac else "kitty"))
     if not mac:
         window = run("xdotool", "search", "--onlyvisible", "--class", "kitty").splitlines()[-1]
         run("xdotool", "windowactivate", "--sync", window)
-    if mac:
-        wait_image_consent()
     key("1")
     if mac:
         wait_image_consent()

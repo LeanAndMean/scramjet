@@ -78,7 +78,7 @@ func imageConsent(_ pid: pid_t, allow: Bool) -> [String: Any] {
     func named(_ element: AXUIElement, _ title: String) -> Bool {
         [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].contains { attribute(element, $0) as? String == title }
     }
-    let elements = windows.flatMap { consentElements($0) }
+    let elements = consentElements(application)
     guard elements.contains(where: { named($0, "Allow Terminal-Initiated Display?") }) else { return ["visible": false] }
     let checkboxes = elements.filter { attribute($0, kAXRoleAttribute) as? String == "AXCheckBox" }
     let buttons = elements.filter { attribute($0, kAXRoleAttribute) as? String == "AXButton" && named($0, "Yes") }

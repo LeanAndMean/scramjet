@@ -909,6 +909,21 @@ class ImageConsentReadinessTests(unittest.TestCase):
         self.assertTrue(any(0.5 <= instant < 0.8 for instant in actions))
         self.assertFalse(self.context["report"]["inlineImagePermission"][-1]["visible"])
 
+    def test_consent_is_serviced_before_waiting_for_the_fixture_image_receipt(self):
+        self.context.update({"mac": True, "state": lambda: {"phase": "image", "protocol": "iterm2", "sourceRevision": "head", "sourceDirty": False} if self.clock >= 1 else {},
+                             "check": lambda _name, predicate: self.assertTrue(predicate())})
+        self.context["report"]["commit"] = "head"
+        source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
+        body = next(node.body for node in source.body if isinstance(node, ast.Try))
+        startup = next(i for i, node in enumerate(body) if isinstance(node, ast.If)
+                       and isinstance(node.test, ast.Name) and node.test.id == "mac")
+        presentation = next(i for i, node in enumerate(body) if isinstance(node, ast.Expr)
+                            and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                            and node.value.func.id == "key" and node.value.args[0].value == "1")
+        exec(compile(ast.Module(body=body[startup + 1:presentation], type_ignores=[]), "terminal-safety.py", "exec"), self.context)
+        self.assertGreaterEqual(self.clock, 1)
+        self.assertTrue(any(len(args) == 4 for _, args in self.queries))
+
     def test_unknown_observation_is_not_absent_consent(self):
         self.context["run"].side_effect = None
         self.context["run"].return_value = "{}"
