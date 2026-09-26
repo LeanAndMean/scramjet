@@ -539,6 +539,26 @@ describe("OpenAI Responses failure normalization", () => {
 		}
 	});
 
+	it("retains a scalar SDK error reason in the persisted assistant without changing retry evidence", async () => {
+		const reason = "Invalid deployment ID";
+		const error = APIError.generate(400, { error: reason }, undefined, new Headers());
+		const output = assistantShell();
+		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, "request"));
+		expect(JSON.parse(JSON.stringify(output)).errorMessage).toContain(reason);
+		expect(providerDetails(output)).toEqual(
+			expect.objectContaining({ category: "invalid_request", retryDisposition: "non_transient" }),
+		);
+
+		stubFetch([
+			new Response(JSON.stringify({ error: reason }), {
+				status: 400,
+				headers: { "content-type": "application/json" },
+			}),
+		]);
+		const result = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey, maxRetries: 0 }).result();
+		expect(JSON.parse(JSON.stringify(result)).errorMessage).toContain(reason);
+	});
+
 	it("keeps the provider's specific bounded message in live and serialized local history", () => {
 		for (const text of [
 			"capacity exhausted for this deployment",
@@ -660,6 +680,15 @@ describe("OpenAI Responses failure normalization", () => {
 		}).result();
 		expect(result.stopReason).toBe("aborted");
 		expect(result.diagnostics).toBeUndefined();
+	});
+
+	it("rejects SDK-wrapped SSE rejection prose as transport proof", async () => {
+		const result = await failureFrom(sse([{ error: { message: "network error" } }]));
+		expect(result.errorMessage).toContain("network error");
+		expect(providerDetails(result)).toEqual(
+			expect.objectContaining({ kind: "provider_event", category: "provider_error", retryDisposition: "unknown" }),
+		);
+		expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
 	});
 
 	it("rejects provider prose as proof of a transport failure", async () => {

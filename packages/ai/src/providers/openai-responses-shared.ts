@@ -471,7 +471,9 @@ function makeFailure(
 		detailSource = "http_status";
 	} else if (
 		unsupportedEvidence ||
-		(phase === "stream" && !(value instanceof Error) && messageCategory === "transport")
+		(phase === "stream" &&
+			messageCategory === "transport" &&
+			(!(value instanceof Error) || (value instanceof APIError && !sdkConnection)))
 	) {
 		category = "provider_error";
 		detailSource = "none";
@@ -570,6 +572,7 @@ function makeFailure(
 	const providerMessage =
 		top.message ??
 		nested.message ??
+		boundedMessage(recordOf(value)?.error) ??
 		boundedMessage(recordOf(recordOf(value)?.error)?.detail) ??
 		boundedMessage(recordOf(value)?.detail) ??
 		(errorFields.length ? `Unrecognized error fields: ${errorFields.join(", ")}` : undefined) ??
