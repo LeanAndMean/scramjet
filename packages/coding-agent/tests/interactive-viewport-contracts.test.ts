@@ -72,6 +72,252 @@ afterEach(async () => {
 });
 
 describe("retained interactive contracts", () => {
+	it("allocates custom input height before rendering and releases it on close", async () => {
+		const h = await setup();
+		h.extensionUI.setWidget("above", ["ABOVE-1", "ABOVE-2"]);
+		h.extensionUI.setWidget("below", ["BELOW-1", "BELOW-2", "BELOW-3"], { placement: "belowEditor" });
+		let available: number | undefined;
+		const allocations: (number | undefined)[] = [];
+		const rendered: (number | undefined)[] = [];
+		let close!: () => void;
+		const component = {
+			invalidate() {},
+			render() {
+				rendered.push(available);
+				return ["CUSTOM"];
+			},
+		};
+		const result = h.extensionUI.custom<void>(
+			(_tui, _theme, _keys, done) => {
+				close = () => done();
+				return component;
+			},
+			{
+				onAvailableHeight(rows) {
+					available = rows;
+					allocations.push(rows);
+				},
+			},
+		);
+		try {
+			await vi.waitFor(() => expect(h.internals.editorContainer.children[0]).toBe(component));
+			await h.frame();
+			expect(allocations[0]).toBeUndefined();
+			expect(rendered.length).toBeGreaterThan(0);
+			expect(rendered.every((rows) => rows === 15)).toBe(true);
+			expect(h.internals.ui.isComponentFocused(component)).toBe(true);
+			h.terminal.resize(60, 18);
+			await h.frame();
+			expect(rendered.at(-1)).toBe(9);
+			h.terminal.resize(11, 2);
+			const before = rendered.length;
+			await h.frame();
+			expect(rendered).toHaveLength(before);
+			h.terminal.resize(60, 24);
+			await h.frame();
+			expect(rendered.at(-1)).toBe(15);
+		} finally {
+			close();
+			await result;
+		}
+		expect(allocations.at(-1)).toBeUndefined();
+		const count = allocations.length;
+		await h.frame();
+		expect(allocations).toHaveLength(count);
+	});
+
+	it.each(["overlay", "toolAttachedContext"] as const)(
+		"rejects allocated custom %s before touching the existing slot",
+		async (kind) => {
+			const h = await setup();
+			await history(h);
+			const editor = h.internals.editorContainer.children[0];
+			const factory = vi.fn(() => ({ render: () => ["INVALID"], invalidate() {} }));
+			const allocation = vi.fn();
+			const options =
+				kind === "overlay"
+					? { overlay: true, onAvailableHeight: allocation }
+					: {
+							toolAttachedContext: { toolCallId: "absent", render: () => new Text("context") },
+							onAvailableHeight: allocation,
+						};
+			await expect(h.extensionUI.custom(factory, options)).rejects.toThrow(/height.*ordinary|ordinary.*height/i);
+			expect(factory).not.toHaveBeenCalled();
+			expect(allocation).not.toHaveBeenCalled();
+			expect(h.internals.editorContainer.children[0]).toBe(editor);
+			expect(h.internals.ui.isComponentFocused(editor)).toBe(true);
+			expect(h.extensionUI.getEditorText()).toBe("DRAFT");
+		},
+	);
+
+	it.each([true, false])("forwards real retained allocation with docking=%s", async (docked) => {
+		const h = await setup(24, settings({ dockEditor: docked }));
+		const allocations: Array<number | undefined> = [];
+		let close!: () => void;
+		const result = h.extensionUI.custom<void>(
+			(_tui, _theme, _keys, done) => {
+				close = () => done();
+				return { render: () => ["CONTROL"], invalidate() {} };
+			},
+			{ onAvailableHeight: (rows) => allocations.push(rows) },
+		);
+		await h.frame();
+		await h.frame();
+		expect(allocations.at(-1)).toBe(docked ? 20 : 24);
+		close();
+		await result;
+	});
+
+	it("settles and reports a failing custom allocation release without stranding the control", async () => {
+		const h = await setup();
+		let initial = true;
+		let close!: () => void;
+		const result = h.extensionUI.custom<string>(
+			(_tui, _theme, _keys, done) => {
+				close = () => done("selected");
+				return { render: () => ["CONTROL"], invalidate() {} };
+			},
+			{
+				onAvailableHeight(rows) {
+					if (rows === undefined && !initial) throw new Error("synthetic release failure");
+					initial = false;
+				},
+			},
+		);
+		await h.frame();
+		await h.frame();
+		close();
+		expect(await result).toBe("selected");
+		expect((await h.frame()).join("\n").replace(/\s+/g, " ")).toContain("synthetic release failure");
+	});
+
+	it("rejects and disposes a custom UI when numeric allocation fails", async () => {
+		const h = await setup();
+		let failAllocation = false;
+		let close!: () => void;
+		const dispose = vi.fn();
+		const result = h.extensionUI
+			.custom<void>(
+				(_tui, _theme, _keys, done) => {
+					close = () => done();
+					return { render: () => ["CONTROL"], invalidate() {}, dispose };
+				},
+				{
+					onAvailableHeight(rows) {
+						if (rows !== undefined && failAllocation) throw new Error("allocation failed");
+					},
+				},
+			)
+			.then(
+				() => "resolved",
+				(error: Error) => error.message,
+			);
+		try {
+			await h.frame();
+			await h.frame();
+			failAllocation = true;
+			await expect(h.frame()).resolves.toBeDefined();
+			expect(await result).toBe("allocation failed");
+			expect(dispose).toHaveBeenCalledOnce();
+			await h.frame();
+		} finally {
+			close();
+			await result;
+		}
+	});
+
+	it("keeps committed custom controls unallocated", async () => {
+		const h = await createProductionInteractiveHarness(60, 24, undefined, false);
+		harnesses.push(h);
+		const allocations: Array<number | undefined> = [];
+		let close!: () => void;
+		const result = h.extensionUI.custom<void>(
+			(_tui, _theme, _keys, done) => {
+				close = () => done();
+				return { render: () => ["CONTROL"], invalidate() {} };
+			},
+			{ onAvailableHeight: (rows) => allocations.push(rows) },
+		);
+		await h.frame();
+		await h.frame();
+		expect(allocations).toEqual([undefined]);
+		close();
+		await result;
+		expect(allocations).toEqual([undefined, undefined]);
+	});
+
+	it("releases custom allocation on UI reset and ignores stale cleanup", async () => {
+		const h = await setup();
+		const previous = vi.fn();
+		const current = vi.fn();
+		let closePrevious!: () => void;
+		let closeCurrent!: () => void;
+		const first = h.extensionUI.custom<void>(
+			(_tui, _theme, _keys, done) => {
+				closePrevious = () => done();
+				return { render: () => ["FIRST"], invalidate() {} };
+			},
+			{ onAvailableHeight: previous },
+		);
+		await h.frame();
+		await h.frame();
+		(h.mode as unknown as { resetExtensionUI(): void }).resetExtensionUI();
+		expect(previous.mock.calls.at(-1)).toEqual([undefined]);
+		const second = h.extensionUI.custom<void>(
+			(_tui, _theme, _keys, done) => {
+				closeCurrent = () => done();
+				return { render: () => ["SECOND"], invalidate() {} };
+			},
+			{ onAvailableHeight: current },
+		);
+		await h.frame();
+		await h.frame();
+		closePrevious();
+		await first;
+		expect(current.mock.calls.at(-1)).not.toEqual([undefined]);
+		closeCurrent();
+		await second;
+		expect(current.mock.calls.at(-1)).toEqual([undefined]);
+	});
+
+	it("does not infer custom height participation from a component method", async () => {
+		const h = await setup();
+		const setMaxHeight = vi.fn();
+		let close!: () => void;
+		const result = h.extensionUI.custom<void>((_tui, _theme, _keys, done) => {
+			close = () => done();
+			return { render: () => ["UNOPTED"], invalidate() {}, setMaxHeight };
+		});
+		await h.frame();
+		await h.frame();
+		expect(setMaxHeight).not.toHaveBeenCalled();
+		close();
+		await result;
+	});
+
+	it.each([
+		[80, "Session: 1993 lines below · Ctrl+End: latest"],
+		[30, "Session: 1993 lines below"],
+		[20, "Session: 1993 below"],
+		[12, "Session ↓…"],
+	] as const)("keeps the Session label and complete count at width %s", async (columns, expected) => {
+		const h = await setup(12, settings(), columns);
+		h.internals.headerContainer.clear();
+		h.internals.committedChatContainer.clear();
+		h.internals.committedChatContainer.addChild(
+			new Text(Array.from({ length: 2000 }, (_, i) => `ROW-${i}`).join("\n"), 0, 0),
+		);
+		h.extensionUI.setFooter(() => new Text("F", 0, 0));
+		h.extensionUI.setEditorText("D");
+		await h.frame();
+		h.internals.ui.scrollViewportTo(0);
+		const frame = await h.frame();
+		expect(h.internals.ui.getViewportState()).toMatchObject({ totalRows: 2000, offset: 0, height: 7 });
+		expect(frame[7].trimEnd()).toBe(expected);
+		h.terminal.sendInput("\x1b[1;5F");
+		expect((await h.frame())[7].trimEnd()).toBe("");
+	});
+
 	it("shows a real waiting selector while transcript text was selected", async () => {
 		const h = await setup();
 		await history(h);
@@ -464,7 +710,7 @@ describe("retained interactive contracts", () => {
 			const initial = await h.frame();
 			expect(initial[0].slice(0, 59).trimEnd()).toBe("HISTORY-000");
 			expect(initial.slice(17).map((line) => line.trimEnd())).toEqual([
-				"",
+				"Session: 83 lines below · Ctrl+End: latest",
 				"DOCK-A",
 				"─".repeat(59),
 				"DRAFT",
@@ -582,7 +828,7 @@ describe("retained interactive contracts", () => {
 			const latest = await h.frame();
 			expect(latest[0].slice(0, 59).trimEnd()).toBe("HISTORY-000");
 			expect(latest.slice(16).map((line) => line.trimEnd())).toEqual([
-				"",
+				"Session: 84 lines below · Ctrl+End: latest",
 				"LATEST",
 				"─".repeat(59),
 				"DRAFT",

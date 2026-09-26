@@ -211,6 +211,8 @@ export interface ExtensionUIContext {
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			/** Called with the overlay handle after the overlay is shown. Use to control visibility. */
 			onHandle?: (handle: OverlayHandle) => void;
+			/** Ordinary input-slot allocation before rendering; undefined on initialization/release. Not a visibility guarantee. */
+			onAvailableHeight?: (rows: number | undefined) => void;
 		},
 	): Promise<T>;
 

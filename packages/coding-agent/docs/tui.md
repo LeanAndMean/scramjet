@@ -20,7 +20,9 @@ See [terminal-setup.md](terminal-setup.md#transcript-browsing-and-copying) for i
 
 ### Retained viewport API
 
-`TUI.configureViewport({ getBlocks, keybindings?, copy?, requestPaste?, getScrollWheelStep?, handlePresentationInput?, keepReadingOnInput?, allowViewportKeys?, minimumSize?, handleBlockedInput? })` selects the retained rendering path. InteractiveMode configures it at startup using the mounted production components; standalone TUI callers opt in explicitly. Only promoted committed components can skip producer rendering; completed tools behind a pending predecessor remain live and browseable. Live producers still render, but their normalized rows and copy spans can be reused when raw output, copy provenance and geometry remain unchanged. Promotion preserves component identity. Thinking visibility and expansion update existing components; session/tree/reload reconstruction resets browsing and selection. `getBlocks()` returns the ordered projection of existing component instances as `{ component, finalized?, revision?, dock?, fitHeight? }`. Each component must occur once, and dock-tagged blocks must form a suffix. Fixed dock occupants are measured before `fitHeight(rows)` assigns a remaining row ceiling to the input slot; an oversized band uses the scrolling flow instead. The callback does not authorize clipping arbitrary text. `EditorComponent.setHeightLimit?(limits)` is a separate optional input-sizing hook: `limits()` returns `{ rows, text }`, the current total editor budget and wrapped-text ceiling. Built-in editors use it for cursor-following and page movement and budget autocomplete separately. Optional `EditorComponent.isShowingAutocomplete()` exposes an active completion menu even when it hides the hardware cursor. InteractiveMode uses this capability to reveal a hidden input slot and gate completion acceptance until its current visible paint has flushed, without taking input from capturing overlays. Completion acceptance also checks the text/cursor snapshot that produced the displayed menu, independently of viewport visibility and flush evidence. If that snapshot is stale, Tab requests fresh completion; Enter follows normal handling of the current draft rather than applying the stale prefix, and confirmation-only remaps cannot fall through to unrelated editor actions. Custom editors must cooperate to honor the input-height preference; non-fitting custom components are not silently clipped vertically. The existing `Component.setViewportHeight` contract remains image-only. Finalization changes cache eligibility, not identity or transcript ownership. Increment `revision` when a finalized block changes; `tui.invalidate()` invalidates projected components and finalization-based reuse. Width changes and `rebuild()` refresh rendering without resetting the reader's anchor; unchanged live output may still reuse its verified normalization. Call `resetViewport()` only for genuine content/session replacement.
+`TUI.configureViewport({ getBlocks, keybindings?, copy?, requestPaste?, getScrollWheelStep?, handlePresentationInput?, keepReadingOnInput?, allowViewportKeys?, minimumSize?, handleBlockedInput? })` selects the retained rendering path. InteractiveMode configures it at startup using the mounted production components; standalone TUI callers opt in explicitly. Only promoted committed components can skip producer rendering; completed tools behind a pending predecessor remain live and browseable. Live producers still render, but their normalized rows and copy spans can be reused when raw output, copy provenance and geometry remain unchanged. Promotion preserves component identity. Thinking visibility and expansion update existing components; session/tree/reload reconstruction resets browsing and selection. `getBlocks()` returns the ordered projection of existing component instances as `{ component, finalized?, revision?, dock?, fitHeight?, renderDockGap? }`. Each component must occur once, and dock-tagged blocks must form a suffix. Fixed dock occupants are measured before `fitHeight(rows)` assigns a remaining row ceiling to the input slot; an oversized band uses the scrolling flow instead. The callback does not authorize clipping arbitrary text. `EditorComponent.setHeightLimit?(limits)` is a separate optional input-sizing hook: `limits()` returns `{ rows, text }`, the current total editor budget and wrapped-text ceiling. Built-in editors use it for cursor-following and page movement and budget autocomplete separately. Optional `EditorComponent.isShowingAutocomplete()` exposes an active completion menu even when it hides the hardware cursor. InteractiveMode uses this capability to reveal a hidden input slot and gate completion acceptance until its current visible paint has flushed, without taking input from capturing overlays. Completion acceptance also checks the text/cursor snapshot that produced the displayed menu, independently of viewport visibility and flush evidence. If that snapshot is stale, Tab requests fresh completion; Enter follows normal handling of the current draft rather than applying the stale prefix, and confirmation-only remaps cannot fall through to unrelated editor actions. Custom editors must cooperate to honor the input-height preference; non-fitting custom components are not silently clipped vertically. The existing `Component.setViewportHeight` contract remains image-only. Finalization changes cache eligibility, not identity or transcript ownership. Increment `revision` when a finalized block changes; `tui.invalidate()` invalidates projected components and finalization-based reuse. Width changes and `rebuild()` refresh rendering without resetting the reader's anchor; unchanged live output may still reuse its verified normalization. Call `resetViewport()` only for genuine content/session replacement.
+
+An optional `renderDockGap(width, rowsBelow)` on the first dock block presents one text row over that block's existing empty leading row, only while the dock fits. It runs during slicing after final layout and pending revelation, not during producer rendering. The row must contain only width-contained text and SGR styling; invalid placement/content is an error. Image-covered rows and image placeholders are not replaced. Logical rows, anchors, pointer targets and painted-copy sources remain unchanged, so this chrome is not selection-highlighted or copied. InteractiveMode uses its existing above-widget spacer for the labelled Session continuation count, leaving that row blank at the tail and omitting the indicator when undocked or suspended.
 
 The viewport retains all logical rows, renders components at terminal width minus one, and paints a bounded slice using absolute screen coordinates. The reserved last column displays a scrollbar; at a one-column terminal there is no scrollbar. `scrollViewport(delta)` and `scrollViewportTo(offset, anchorScreenRow = 0)` provide programmatic navigation. `followViewport()` releases held selection and resumes tail-following; InteractiveMode invokes it when a new user message appears, including queued messages when delivered. Scrolling to the bottom resumes tail-following; passive output updates and resize clamping do not. `getViewportState()` returns the scrollable transcript's offset, total rows, visible height, and tail-following state, excluding a fitted dock; selection does not reserve a row. `refreshViewportLayout()` clears held selection/gestures and invalidates layout without resetting the reader's anchor; use it for explicit layout-setting changes. Overlays remain screen-relative, and cursor/IME positioning uses the visible slice rather than the document tail.
 
@@ -142,9 +144,13 @@ Without this propagation, typing with an IME (Chinese, Japanese, Korean, etc.) w
 
 ```typescript
 pi.on("session_start", async (_event, ctx) => {
-  const handle = ctx.ui.custom(myComponent);
-  // handle.requestRender() - trigger re-render
-  // handle.close() - restore normal UI
+  await ctx.ui.custom<void>((_tui, theme, keybindings, done) => ({
+    render: (width) => [truncateToWidth(theme.fg("accent", "Enter to close"), width)],
+    handleInput(data) {
+      if (keybindings.matches(data, "tui.select.confirm")) done();
+    },
+    invalidate() {},
+  }));
 });
 ```
 
@@ -156,6 +162,12 @@ async execute(toolCallId, params, onUpdate, ctx, signal) {
   // ...
 }
 ```
+
+### Allocated custom input height
+
+Ordinary editor-slot `ctx.ui.custom(factory, { onAvailableHeight })` can explicitly opt into the renderer's input-row allocation. The synchronous callback receives `undefined` on mounting/release and the numeric allocation immediately before rendering; it can run more than once in a frame. Store the value for rendering without requesting another render or changing focus. Numeric allocation is not proof of docking, visibility or flushing. Retained undocked layouts can still allocate rows; committed mode does not supply a numeric budget. Below-minimum geometry suppresses rendering rather than sending a temporary budget; recovery allocates before the next render.
+
+The callback is invocation-bound and is rejected with `overlay: true` or `toolAttachedContext` before the factory runs. Components without this explicit option are unchanged, including components with a `setMaxHeight` method. This is separate from editor text-height preferences and image-only `setViewportHeight`. A selector may use the budget for a selection-following row window, including partial neighboring choices, without changing its item-based navigation or acceptance semantics.
 
 ### Tool-attached retained context
 
@@ -436,22 +448,20 @@ pi.registerCommand("pick", {
   description: "Pick an item",
   handler: async (args, ctx) => {
     const items = ["Option A", "Option B", "Option C"];
-    const selector = new MySelector(items);
-
-    let handle: { close: () => void; requestRender: () => void };
-
-    await new Promise<void>((resolve) => {
-      selector.onSelect = (item) => {
-        ctx.ui.notify(`Selected: ${item}`, "info");
-        handle.close();
-        resolve();
+    const result = await ctx.ui.custom<string | undefined>((tui, _theme, _kb, done) => {
+      const selector = new MySelector(items);
+      selector.onSelect = (item) => done(item);
+      selector.onCancel = () => done(undefined);
+      return {
+        render: (width) => selector.render(width),
+        invalidate: () => selector.invalidate(),
+        handleInput(data) {
+          selector.handleInput(data);
+          tui.requestRender();
+        },
       };
-      selector.onCancel = () => {
-        handle.close();
-        resolve();
-      };
-      handle = ctx.ui.custom(selector);
     });
+    if (result !== undefined) ctx.ui.notify(`Selected: ${result}`, "info");
   }
 });
 ```

@@ -1,10 +1,15 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Model } from "@leanandmean/ai";
+import { type ExtensionAPI, SettingsManager } from "@leanandmean/coding-agent";
+import { Text } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProductionInteractiveHarness } from "../../coding-agent/tests/helpers/interactive-harness.js";
 import { sliceByColumn } from "../../tui/src/utils.js";
+import { selectNextStep } from "../src/next-step-selector.js";
 import { registerSubagentTool } from "../src/subagent/index.js";
-import { noOpTerminalIndicators } from "./helpers.js";
+import { registerUserInputTool } from "../src/user-input.js";
+import { freshState, noOpTerminalIndicators } from "./helpers.js";
 
 vi.mock("../../coding-agent/src/utils/tools-manager.js", () => ({ ensureTool: vi.fn(async () => undefined) }));
 
@@ -14,6 +19,119 @@ afterEach(async () => {
 	await harness?.dispose();
 	harness = undefined;
 	vi.useRealTimers();
+});
+
+describe("docked product selectors", () => {
+	it.each(["confirm", "select", "next", "model"] as const)(
+		"keeps the actual %s selector framed and reachable while browsing",
+		async (kind) => {
+			let api!: ExtensionAPI;
+			harness = await createProductionInteractiveHarness(
+				80,
+				20,
+				(pi) => {
+					api = pi;
+					registerUserInputTool(pi, freshState(), noOpTerminalIndicators());
+				},
+				true,
+				SettingsManager.inMemory({
+					dockEditor: true,
+					theme: "pi-dark",
+					quietStartup: true,
+					compaction: { enabled: false },
+				}),
+			);
+			const h = harness;
+			h.internals.headerContainer.clear();
+			h.internals.committedChatContainer.addChild(
+				new Text(Array.from({ length: 80 }, (_, i) => `HISTORY-${i}`).join("\n"), 0, 0),
+			);
+			h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+			h.extensionUI.setWidget("above", ["PASSIVE WIDGET"]);
+			h.extensionUI.setEditorText("saved draft");
+			await h.frame();
+			const context = h.session.extensionRunner.createContext();
+			const options = Array.from({ length: 12 }, (_, index) => ({
+				value: String(index),
+				label: `Choice ${index}`,
+				description: `Detail ${index}: ${"context ".repeat(10)}`,
+			}));
+			const model: Model<"anthropic-messages"> = {
+				id: "fixture-a",
+				provider: "test",
+				name: "Fixture A",
+				api: "anthropic-messages",
+				baseUrl: "",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 10000,
+				maxTokens: 1000,
+			};
+			const second = { ...model, id: "fixture-b", name: "Fixture B" };
+			const steps = options.map((option, index) => ({
+				index,
+				message: option.label,
+				reason: option.description,
+				freshSession: false,
+				parsedCommand: null,
+			}));
+			let result: Promise<unknown>;
+			if (kind === "confirm" || kind === "select") {
+				const tool = h.session.extensionRunner
+					.getAllRegisteredTools()
+					.find((entry) => entry.definition.name === "get_scramjet_user_input")!.definition;
+				result = tool.execute(
+					"fixture-choice",
+					{ type: kind, message: "Transcript question", options },
+					undefined,
+					undefined,
+					context,
+				);
+			} else
+				result = selectNextStep(context, {
+					options: steps,
+					recommended: steps[0],
+					thinking: api,
+					initialModel: model,
+					models: kind === "model" ? [model, second] : [model],
+				});
+			try {
+				await vi.waitFor(async () =>
+					expect((await h.frame()).join("\n")).toContain(
+						kind === "confirm" ? "Confirm" : kind === "select" ? "Choose an option" : "Select next step",
+					),
+				);
+				h.internals.ui.scrollViewportTo(0);
+				let frame = await h.frame();
+				expect(frame.join("\n")).toContain("Session:");
+				expect(frame.join("\n")).not.toContain("Dock suspended");
+				const widget = frame.findIndex((line) => line.includes("PASSIVE WIDGET"));
+				expect(frame[widget - 1]).toContain("Session:");
+				expect(frame[widget + 1].trim()).toBe("─".repeat(79));
+				expect(frame[18].trim()).toBe("─".repeat(79));
+				expect(frame[19].trim()).toBe("FOOTER");
+				if (kind === "model") h.terminal.sendInput("\x1b[C");
+				for (let i = 0; i < (kind === "confirm" ? 1 : 9); i++) {
+					h.terminal.sendInput("\x1b[B");
+					frame = await h.frame();
+					expect(frame.join("\n")).not.toContain("Dock suspended");
+				}
+				expect(frame.join("\n")).toContain(
+					kind === "confirm" ? "→ No" : kind === "select" ? "→ Choice 9" : "→ 9: Choice 9",
+				);
+				h.terminal.sendInput("\r");
+				const answer = await result;
+				if (kind === "confirm") expect(answer).toMatchObject({ details: { confirmed: false } });
+				else if (kind === "select") expect(answer).toMatchObject({ details: { selected: "9" } });
+				else expect(answer).toEqual({ step: steps[9], model: kind === "model" ? second : null });
+				expect(h.extensionUI.getEditorText()).toBe("saved draft");
+			} finally {
+				h.terminal.sendInput("\x1b");
+				await result;
+			}
+		},
+	);
 });
 
 async function runningBatch(viewport = false) {

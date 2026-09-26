@@ -42,6 +42,9 @@ REQUIRED_CHECKS = {
     "nativePresentationTogglePreservesReading", "settingsUndocksLive", "settingsRedocksLive",
     "settingsWheelChangeApplies", "configuredWheelDistance", "settingsEditorHeightChangeApplies",
     "nativeInputHeightCeiling",
+    "sessionContinuationMatchesViewport", "productConfirmFramed", "productConfirmSelects",
+    "productSelectFramed", "productSelectPartialNeighbors", "productSelectSelects",
+    "productNextFramed", "productNextSelects", "productModelFramed", "productModelSelects",
 }
 
 
@@ -180,15 +183,60 @@ def type_text(text):
 
 def key(name):
     mac = {"viewportUp": (100, 0) if terminal_kind == "apple" else (116, 524288), "viewportDown": (101, 0) if terminal_kind == "apple" else (121, 524288), "toggleTools": (31, 262144), "paste": (9, 1048576), "enter": (36, 0), "escape": (53, 0), "copy": (8, 262144),
-           "a": (0, 0), "b": (11, 0), "c": (8, 0), "left": (123, 0), "backspace": (51, 0), "exit": (12, 262144), "close": (13, 1048576), "f": (3, 0), "g": (5, 0)}
+           "a": (0, 0), "b": (11, 0), "c": (8, 0), "left": (123, 0), "down": (125, 0), "right": (124, 0), "backspace": (51, 0), "exit": (12, 262144), "close": (13, 1048576), "f": (3, 0), "g": (5, 0)}
     linux = {"viewportUp": "alt+Prior", "viewportDown": "alt+Next", "toggleTools": "ctrl+o", "paste": "ctrl+shift+v", "enter": "Return", "escape": "Escape", "copy": "ctrl+c",
-             "left": "Left", "backspace": "BackSpace", "tab": "Tab", "exit": "ctrl+q", "close": "alt+F4"}
+             "left": "Left", "down": "Down", "right": "Right", "backspace": "BackSpace", "tab": "Tab", "exit": "ctrl+q", "close": "alt+F4"}
     if is_mac:
         events("key", *mac[name])
     else:
         binding = "shift+Insert" if terminal_kind == "xterm" and name == "paste" else linux.get(name, name)
         run("xdotool", "key", "--clearmodifiers", binding)
     time.sleep(0.1)
+
+
+def session_indicator_matches():
+    current = state()
+    below = max(0, current["totalRows"] - current["offset"] - current["height"])
+    return current.get("frameFlushed") is True and below > 0 and f"Session: {below} lines below · Ctrl+End: latest" in current["painted"]
+
+
+def selector_framed(title):
+    current = state()
+    rows = current["painted"]
+    index = next((i for i, row in enumerate(rows) if row.strip() == title), -1)
+    return (current.get("frameFlushed") is True and current.get("selector", {}).get("phase") == "waiting"
+            and not current.get("notice") and index > 0 and set(rows[index - 1]) == {"─"}
+            and any(row and set(row) == {"─"} for row in rows[index + 1:])
+            and any(row.startswith("→ ") for row in rows[index + 1:]))
+
+
+def exercise_product_selectors():
+    check("sessionContinuationMatchesViewport", session_indicator_matches)
+    for kind, title, prefix in (("confirm", "Confirm", "productConfirm"), ("select", "Choose an option", "productSelect"),
+                                ("next", "Select next step", "productNext"), ("model", "Select next step", "productModel")):
+        fixture_command("selector-" + kind)
+        check(prefix + "Framed", lambda: selector_framed(title))
+        if kind == "model":
+            key("right")
+        partial_neighbor = False
+        for index in range(9 if kind == "select" else 1):
+            key("down")
+            selected = "→ No" if kind == "confirm" else f"→ Choice {index + 1}" if kind == "select" else f"→ {index + 1}: Choice {index + 1}"
+            if not wait_for(lambda: any(row.strip() == selected for row in state()["painted"])):
+                raise RuntimeError("Selected product choice did not become visible")
+            rows = state()["painted"]
+            heading = next(i for i, row in enumerate(rows) if row.strip() == title)
+            partial_neighbor |= rows[heading + 1].startswith("     ")
+        if kind == "select":
+            check("productSelectPartialNeighbors", lambda: partial_neighbor)
+        screenshot("selector-" + kind)
+        key("enter")
+        def answered():
+            current = state()
+            result = current.get("selector", {}).get("result") or {}
+            expected = result.get("confirmed") is False if kind == "confirm" else result.get("selected") == "9" if kind == "select" else result.get("index") == 1 and (kind != "model" or result.get("model") == "fixture-b")
+            return current.get("selector", {}).get("phase") == "answered" and current.get("editorActive") is True and expected
+        check(prefix + "Selects", answered)
 
 
 def state():
@@ -517,6 +565,7 @@ try:
         if not check("desktopCellTargetVerified", lambda: state()["lastMouse"]["x"] == 10 and state()["lastMouse"]["y"] == 3):
             raise RuntimeError("Desktop cell targeting remains uncalibrated")
     screenshot("startup")
+    exercise_product_selectors()
     mouse("move", *cell(10, 3))
     events("wheel", -3)
     check("desktopWheelScrollsDocument", lambda: state().get("wheel", 0) > 0 and state().get("offset", 0) > 0)

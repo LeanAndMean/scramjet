@@ -51,6 +51,9 @@ $requiredChecks = @(
     'keyboardBrowsingReturnsToTail', 'nativePresentationTogglePreservesReading', 'settingsUndocksLive',
     'settingsRedocksLive', 'settingsWheelChangeApplies', 'configuredWheelDistance',
     'settingsEditorHeightChangeApplies', 'nativeInputHeightCeiling',
+    'sessionContinuationMatchesViewport', 'productConfirmFramed', 'productConfirmSelects',
+    'productSelectFramed', 'productSelectPartialNeighbors', 'productSelectSelects',
+    'productNextFramed', 'productNextSelects', 'productModelFramed', 'productModelSelects',
     'heldWheelDownCopiesExact', 'heldWheelUpCopiesExact', 'heldWheelReversalCopiesExact',
     'mixedWheelDownCopiesExact', 'mixedWheelUpCopiesExact', 'mixedWheelReversalCopiesExact',
     'editorHomeEndStable', 'transcriptControlHomeEnd', 'selectionKeepsLayout',
@@ -100,6 +103,46 @@ function Fixture-Command([string]$Action) {
     Move-Item -Force "$statePath.command.tmp" "$statePath.command"
     if (-not (Wait-For { (State).commandDone -eq $commandId -or ($Action -eq 'suspend' -and (State).phase -eq 'suspending') -or (State).error } 10)) { throw "Fixture command did not settle: $Action" }
     if ((State).error) { throw (State).error }
+}
+function Test-SelectorFrame([string]$Title) {
+    $current = State
+    $index = -1
+    for ($i = 0; $i -lt $current.painted.Count; $i++) { if ($current.painted[$i].Trim() -ceq $Title) { $index = $i; break } }
+    $rule = [string][char]0x2500
+    return ($current.frameFlushed -eq $true -and $current.selector.phase -ceq 'waiting' -and -not $current.notice -and $index -gt 0 -and $current.painted[$index - 1] -match "^$rule+$" -and @($current.painted[($index + 1)..($current.painted.Count - 1)] | Where-Object { $_ -match "^$rule+$" }).Count -gt 0 -and @($current.painted | Where-Object { $_.StartsWith([string][char]0x2192 + ' ') }).Count -gt 0)
+}
+function Check-ProductSelectors {
+    [void](Check 'sessionContinuationMatchesViewport' {
+        $current = State
+        $below = [Math]::Max(0, $current.totalRows - $current.offset - $current.height)
+        $expected = "Session: $below lines below $([char]0xB7) Ctrl+End: latest"
+        $current.frameFlushed -eq $true -and $below -gt 0 -and $current.painted -ccontains $expected
+    })
+    foreach ($kind in @('confirm', 'select', 'next', 'model')) {
+        $title = if ($kind -eq 'confirm') { 'Confirm' } elseif ($kind -eq 'select') { 'Choose an option' } else { 'Select next step' }
+        $prefix = @{ confirm = 'productConfirm'; select = 'productSelect'; next = 'productNext'; model = 'productModel' }[$kind]
+        Fixture-Command "selector-$kind"
+        [void](Check ($prefix + 'Framed') { Test-SelectorFrame $title })
+        if ($kind -eq 'model') { Key 39 @() -Extended }
+        $partialNeighbor = $false
+        $steps = if ($kind -eq 'select') { 9 } else { 1 }
+        for ($i = 1; $i -le $steps; $i++) {
+            Key 40 @() -Extended
+            $selected = [string][char]0x2192 + $(if ($kind -eq 'confirm') { ' No' } elseif ($kind -eq 'select') { " Choice $i" } else { " ${i}: Choice $i" })
+            if (-not (Wait-For { @((State).painted | Where-Object { $_.Trim() -ceq $selected }).Count -gt 0 })) { throw 'Selected product choice did not become visible' }
+            $painted = (State).painted
+            for ($row = 0; $row -lt ($painted.Count - 1); $row++) { if ($painted[$row].Trim() -ceq $title -and $painted[$row + 1].StartsWith('     ')) { $partialNeighbor = $true } }
+        }
+        if ($kind -eq 'select') { [void](Check 'productSelectPartialNeighbors' { $partialNeighbor }) }
+        Screenshot "selector-$kind"
+        Key 13
+        [void](Check ($prefix + 'Selects') {
+            $current = State
+            $result = $current.selector.result
+            $expected = if ($kind -eq 'confirm') { $result.confirmed -eq $false } elseif ($kind -eq 'select') { $result.selected -ceq '9' } else { $result.index -eq 1 -and ($kind -ne 'model' -or $result.model -ceq 'fixture-b') }
+            $current.selector.phase -ceq 'answered' -and $current.editorActive -eq $true -and $expected
+        })
+    }
 }
 function Assert-Focus {
     if ([ProbeDesktop]::GetForegroundWindow() -ne $handle) { throw 'Probe lost foreground focus; refusing to send input to another window.' }
@@ -311,6 +354,7 @@ try {
     if (-not (Check 'desktopCellTargetVerified' { (State).lastMouse.x -eq 10 -and (State).lastMouse.y -eq 3 })) { throw 'Desktop targeting remains uncalibrated' }
     [System.Windows.Forms.Clipboard]::SetText('SCRAMJET-PROBE-SENTINEL')
     Screenshot 'startup'
+    Check-ProductSelectors
     $point = Cell 10 3
     Mouse 2048 $point[0] $point[1] -360
     [void](Check 'desktopWheelScrollsDocument' { (State).wheel -gt 0 -and (State).offset -gt 0 })

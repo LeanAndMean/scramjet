@@ -2465,18 +2465,18 @@ See [github-issue-autocomplete.ts](../examples/extensions/github-issue-autocompl
 For complex UI, use `ctx.ui.custom()`. This temporarily replaces the editor with your component until `done()` is called:
 
 ```typescript
-import { Text, Component } from "@leanandmean/tui";
+import { Text } from "@leanandmean/tui";
 
-const result = await ctx.ui.custom<boolean>((tui, theme, keybindings, done) => {
+const result = await ctx.ui.custom<boolean>((_tui, _theme, keybindings, done) => {
   const text = new Text("Press Enter to confirm, Escape to cancel", 1, 1);
-
-  text.onKey = (key) => {
-    if (key === "return") done(true);
-    if (key === "escape") done(false);
-    return true;
+  return {
+    render: (width) => text.render(width),
+    invalidate: () => text.invalidate(),
+    handleInput(data) {
+      if (keybindings.matches(data, "tui.select.confirm")) done(true);
+      else if (keybindings.matches(data, "tui.select.cancel")) done(false);
+    },
   };
-
-  return text;
 });
 
 if (result) {
@@ -2489,6 +2489,8 @@ The callback receives:
 - `theme` - Current theme for styling
 - `keybindings` - App keybinding manager (for checking shortcuts)
 - `done(value)` - Call to close component and return value
+
+Ordinary editor-slot custom UI can opt into actual layout allocation with `ctx.ui.custom(factory, { onAvailableHeight(rows) { maximumRows = rows; } })`, where `maximumRows` is invocation-local state read during rendering. The callback receives `undefined` at mounting/release and a numeric row budget before each allocated render; it can run more than once per frame. It must not request another render or change focus, and allocation does not certify docking, visibility or flushing. Retained undocked rendering can allocate rows too; committed rendering has no numeric allocation. Below-minimum geometry skips rendering rather than delivering a temporary budget, and recovery supplies a fresh allocation. Other components are unchanged unless they explicitly opt in. The option is incompatible with overlays and tool-attached context and is rejected before the factory runs; it is separate from image-only `setViewportHeight` and editor text-height preferences. Allocation-notification errors reject the owning custom UI request and release/dispose its control; release-notification errors are reported without stranding completion. See [allocated custom input height](tui.md#allocated-custom-input-height).
 
 A pending sequential tool can attach immutable long-form context to its own tool row before compact controls become interactive. Pass the current `toolCallId` from the tool's `execute()` method:
 

@@ -330,6 +330,9 @@ export class InteractiveMode {
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
+	private customHeightAllocation:
+		| { component: Component; notify(rows: number | undefined): void; fail(error: unknown): void }
+		| undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
 	// Extension widgets (components rendered above/below the editor)
@@ -429,6 +432,18 @@ export class InteractiveMode {
 		}));
 	}
 
+	private renderSessionGap(width: number, below: number): string {
+		if (below === 0) return "";
+		const forms = [
+			`Session: ${below} lines below · Ctrl+End: latest`,
+			`Session: ${below} lines below`,
+			`Session: ${below} below`,
+			`Session↓${below}`,
+			"Session ↓…",
+		];
+		return theme.fg("muted", forms.find((text) => visibleWidth(text) <= width) ?? "");
+	}
+
 	// SCRAMJET-DIVERGENCE: preserve production ownership while making mutable overflow browseable.
 	private clipboardPastePending = false;
 	private clipboardPasteGeneration = 0;
@@ -498,10 +513,27 @@ export class InteractiveMode {
 							component,
 							finalized: false,
 							dock,
+							renderDockGap:
+								component === this.widgetContainerAbove
+									? (width: number, below: number) => this.renderSessionGap(width, below)
+									: undefined,
 							fitHeight:
 								component === this.editorContainer
 									? (rows: number) => {
 											this.editorAvailableRows = rows;
+											const allocation = this.customHeightAllocation;
+											if (allocation) {
+												if (
+													this.editorContainer.children.length === 1 &&
+													this.editorContainer.children[0] === allocation.component
+												) {
+													try {
+														allocation.notify(rows);
+													} catch (error) {
+														allocation.fail(error);
+													}
+												} else this.releaseCustomHeight();
+											}
 										}
 									: undefined,
 						},
@@ -2084,7 +2116,21 @@ export class InteractiveMode {
 		this.renderWidgets();
 	}
 
+	// SCRAMJET-DIVERGENCE: height delivery belongs to one opted-in custom invocation, never an inferred component capability.
+	private releaseCustomHeight(): void {
+		const allocation = this.customHeightAllocation;
+		this.customHeightAllocation = undefined;
+		try {
+			allocation?.notify(undefined);
+		} catch (error) {
+			this.showError(
+				`Custom input height release failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
 	private resetExtensionUI(): void {
+		this.releaseCustomHeight();
 		if (this.extensionSelector) {
 			this.hideExtensionSelector();
 		}
@@ -2579,8 +2625,11 @@ export class InteractiveMode {
 			};
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			onHandle?: (handle: OverlayHandle) => void;
+			onAvailableHeight?: (rows: number | undefined) => void;
 		},
 	): Promise<T> {
+		if (options?.onAvailableHeight && (options.overlay || options.toolAttachedContext))
+			throw new Error("Available height is supported only for ordinary custom input controls");
 		const savedText = this.editor.getText();
 		const isOverlay = options?.overlay ?? false;
 
@@ -2597,6 +2646,7 @@ export class InteractiveMode {
 			let attachedTool: ToolExecutionComponent | undefined;
 			let committedContext: Component | undefined;
 			let removeInputGuard: (() => void) | undefined;
+			let releaseHeight = () => {};
 			let revealingControls = false;
 			let needsReveal = false;
 			const retained = this.ui.getViewportState() !== undefined;
@@ -2617,6 +2667,7 @@ export class InteractiveMode {
 				if (closed) return;
 				closed = true;
 				removeInputGuard?.();
+				releaseHeight();
 				const current = !attachedTool || this.chatContainer.children.includes(attachedTool);
 				attachedTool?.cancelCommittedContext();
 				if (committedContext) {
@@ -2635,6 +2686,7 @@ export class InteractiveMode {
 				if (closed) return;
 				closed = true;
 				removeInputGuard?.();
+				releaseHeight();
 				attachedTool?.detachCommittedContext();
 				const current = !attachedTool || this.chatContainer.children.includes(attachedTool);
 				if (attachedTool) restoreAttachedFocus(current);
@@ -2745,6 +2797,15 @@ export class InteractiveMode {
 						// Expose handle to caller for visibility control
 						options?.onHandle?.(handle);
 					} else {
+						this.releaseCustomHeight();
+						if (options?.onAvailableHeight) {
+							const allocation = { component, notify: options.onAvailableHeight, fail };
+							this.customHeightAllocation = allocation;
+							releaseHeight = () => {
+								if (this.customHeightAllocation === allocation) this.releaseCustomHeight();
+							};
+							allocation.notify(undefined);
+						}
 						this.editorContainer.clear();
 						this.editorContainer.addChild(component);
 						this.ui.setFocus(component);

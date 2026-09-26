@@ -136,7 +136,38 @@ EXPECTED_INTERACTION_CHECKS = {
     "narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
     "narrowWrappedInputVisible", "narrowMultilineEditing", "narrowAutocompleteVisible", "narrowAutocompleteAccepted",
     "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration",
+    "sessionContinuationMatchesViewport", "productConfirmFramed", "productConfirmSelects",
+    "productSelectFramed", "productSelectPartialNeighbors", "productSelectSelects",
+    "productNextFramed", "productNextSelects", "productModelFramed", "productModelSelects",
 }
+
+
+class DockPresentationEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        source = ast.parse((ROOT / ".github/scripts/terminal-probe.py").read_text())
+        functions = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in ("selector_framed", "session_indicator_matches")]
+        self.current = {"totalRows": 200, "offset": 10, "height": 20, "frameFlushed": True,
+                        "selector": {"phase": "waiting"}, "notice": None,
+                        "painted": ["Session: 170 lines below · Ctrl+End: latest", "─" * 40, "Choose an option", "→ Choice 0", "─" * 40]}
+        self.context = {"state": lambda: self.current}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "terminal-probe.py", "exec"), self.context)
+
+    def test_count_must_match_the_flushed_viewport(self):
+        self.assertTrue(self.context["session_indicator_matches"]())
+        self.current["offset"] += 1
+        self.assertFalse(self.context["session_indicator_matches"]())
+        self.current["offset"] -= 1
+        self.current["frameFlushed"] = False
+        self.assertFalse(self.context["session_indicator_matches"]())
+
+    def test_title_alone_is_not_selector_evidence(self):
+        check = lambda: self.context["selector_framed"]("Choose an option")
+        self.assertTrue(check())
+        self.current["painted"][-1] = ""
+        self.assertFalse(check())
+        self.current["painted"][-1] = "─" * 40
+        self.current["selector"]["phase"] = "answered"
+        self.assertFalse(check())
 
 
 class InteractionVerdictTests(unittest.TestCase):

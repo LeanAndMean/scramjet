@@ -151,6 +151,102 @@ describe("selection origins and release", () => {
 	});
 });
 
+describe("dock gap presentation", () => {
+	it("paints final layout counts without changing rows, anchors or copying", async () => {
+		const f = await mount(
+			Array.from({ length: 100 }, (_, i) => `row-${i}`),
+			61,
+			8,
+		);
+		const dock = new Rows(["", "WIDGET", "INPUT"]);
+		const renderDockGap = vi.fn((_width: number, below: number) => (below ? `Session: ${below} lines below` : ""));
+		f.tui.configureViewport({
+			getBlocks: () => [{ component: f.card }, { component: dock, dock: true, renderDockGap }],
+			copy: f.copy,
+		});
+		await f.frame();
+		expect(f.text()[5]).toBe("");
+		f.tui.scrollViewportTo(10);
+		await f.frame();
+		expect(f.text()[5]).toBe("Session: 85 lines below");
+		expect(f.tui.getViewportState()).toMatchObject({ totalRows: 100, height: 5, offset: 10 });
+		f.card.lines.push("row-100");
+		await f.frame();
+		expect(f.text()[5]).toBe("Session: 86 lines below");
+		for (const event of [mouse(0, 6, 8), mouse(32, 1, 1), mouse(0, 1, 1, "m")]) f.terminal.sendInput(event);
+		await f.frame();
+		expect(f.terminal.cell(5, 0).inverse).toBe(false);
+		f.terminal.sendInput(mouse(2, 1, 1));
+		await f.frame();
+		expect(f.copy).toHaveBeenCalledExactlyOnceWith(
+			["row-10", "row-11", "row-12", "row-13", "row-14", "", "WIDGET", "INPUT"].join("\n"),
+		);
+		expect(dock.lines).toEqual(["", "WIDGET", "INPUT"]);
+		f.tui.followViewport();
+		await f.frame();
+		expect(f.text()[5]).toBe("");
+		f.tui.scrollViewportTo(10);
+		dock.lines.push("EXTRA");
+		await f.frame();
+		expect(f.text()[4]).toBe("Session: 87 lines below");
+		expect(f.tui.getViewportState()?.offset).toBe(10);
+	});
+
+	it.each(["not blank", "\x1b_pi:c\x07", "\x1b[31m\x1b[0m"])("rejects a nonempty dock-gap source %j", (source) => {
+		const viewport = new RetainedViewport({
+			getBlocks: () => [{ component: new Rows([source, "INPUT"]), dock: true, renderDockGap: () => "Session" }],
+		});
+		viewport.update(30, 8);
+		expect(() => viewport.slice(30, false)).toThrow(/empty leading row/);
+	});
+
+	it.each(["two\nrows", "\x1b[2J", "\x1b]52;c;QQ==\x07", "x".repeat(31)])("rejects unsafe gap output %j", (text) => {
+		const viewport = new RetainedViewport({
+			getBlocks: () => [{ component: new Rows(["", "INPUT"]), dock: true, renderDockGap: () => text }],
+		});
+		viewport.update(30, 8);
+		expect(() => viewport.slice(30, false)).toThrow(/width-contained text row/);
+	});
+
+	it("does not paint over native graphics or their hidden placeholder", () => {
+		const renderDockGap = vi.fn(() => "Session");
+		const image = "\x1b[1A\x1b]1337;File=inline=1;width=2;height=2:aW1hZ2U=\x07";
+		const viewport = new RetainedViewport({
+			getBlocks: () => [{ component: new Rows(["", image]), dock: true, renderDockGap }],
+		});
+		viewport.update(30, 8);
+		expect(viewport.slice(30, false).images).toHaveLength(1);
+		expect(viewport.slice(30, true).lines[6]).toBe("[Image hidden by overlay]");
+		expect(renderDockGap).not.toHaveBeenCalled();
+	});
+
+	it("suppresses the presenter when the dock is absent or suspended", () => {
+		const content = new Rows(Array.from({ length: 20 }, (_, i) => `row-${i}`));
+		const dock = new Rows(["", "CONTROL"]);
+		let enabled = true;
+		const renderDockGap = vi.fn(() => "Session: 12 below");
+		const viewport = new RetainedViewport({
+			getBlocks: () => [{ component: content }, { component: dock, dock: enabled, renderDockGap }],
+		});
+		viewports.push(viewport);
+		viewport.update(30, 8);
+		viewport.scrollTo(0);
+		viewport.slice(30, false);
+		expect(renderDockGap).toHaveBeenCalledOnce();
+		renderDockGap.mockClear();
+		enabled = false;
+		viewport.update(30, 8);
+		viewport.slice(30, false);
+		expect(renderDockGap).not.toHaveBeenCalled();
+		enabled = true;
+		dock.lines.push(...Array(10).fill("TALL"));
+		viewport.update(30, 8);
+		viewport.slice(30, false);
+		expect(viewport.notice).toMatch(/suspended/);
+		expect(renderDockGap).not.toHaveBeenCalled();
+	});
+});
+
 describe("viewport focus contracts", () => {
 	it.each(["selection", "thumb"] as const)(
 		"focus loss cancels unfinished %s without reattaching or dispatching keys",

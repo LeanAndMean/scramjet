@@ -20,6 +20,8 @@ export interface ViewportBlock {
 	finalized?: boolean;
 	dock?: boolean;
 	fitHeight?(rows: number): void;
+	/** Present text over the first fitted dock block's existing blank leading row, without changing retained content. */
+	renderDockGap?(width: number, rowsBelow: number): string;
 	/** Increment when a finalized component's presentation changes. */
 	revision?: number;
 }
@@ -718,6 +720,8 @@ export class RetainedViewport {
 		const firstDock = projected.findIndex((block) => block.dock);
 		if (firstDock !== -1 && projected.slice(firstDock).some((block) => !block.dock))
 			throw new Error("Dock blocks must form the document suffix");
+		if (projected.some((block, index) => block.dock && block.renderDockGap && index !== firstDock))
+			throw new Error("Dock gap presentation must belong to the first dock block");
 		const dock = new Map<Component, RenderedBlock>();
 		for (const block of projected.filter((block) => block.dock && !block.fitHeight))
 			dock.set(block.component, render(block, Math.max(1, height - 1)));
@@ -877,6 +881,22 @@ export class RetainedViewport {
 				const selected = sliceByColumn(plainText(lines[i]), left, Math.max(0, right - left), true);
 				lines[i] =
 					`${sliceByColumn(lines[i], 0, left, true)}\x1b[0m\x1b[7m${selected}\x1b[0m${sliceByColumn(lines[i], right, Math.max(0, width - right), true)}`;
+			}
+		}
+		const firstDock = this.dockHeight > 0 ? this.blocks.find((block) => block.dock) : undefined;
+		if (firstDock?.renderDockGap) {
+			if (firstDock.rawRows[0] !== "" || firstDock.lines[0] !== "")
+				throw new Error("Dock gap presentation requires an existing empty leading row");
+			if (
+				plainText(lines[dockTop]) === "" &&
+				!images.some((image) => image.row <= dockTop && image.row + image.rows > dockTop)
+			) {
+				const text = normalizeTerminalOutput(
+					firstDock.renderDockGap(width, Math.max(0, this.totalRows - this.offset - this.height)),
+				);
+				if (/[\u0000-\u001f\u007f-\u009f]/.test(text.replace(/\x1b\[[\d;:]*m/g, "")) || visibleWidth(text) > width)
+					throw new Error("Dock gap presentation must be one width-contained text row with only SGR styling");
+				lines[dockTop] = text;
 			}
 		}
 		return { lines, images };

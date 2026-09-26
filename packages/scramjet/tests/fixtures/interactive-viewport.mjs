@@ -38,6 +38,8 @@ Ctrl+O expands/collapses, Ctrl+Q exits. No child processes or models are invoked
 Use --production --journey for the native activation matrix: synthetic history,
 real grouped cards, clipboard observation, and controlled updates/approval/handoffs.
 Only that mode polls <SCRAMJET_TUI_PROBE_EVIDENCE>.command for fixture actions.
+selector-confirm/select/next/model open actual Scramjet controls; their opening
+receipt precedes the eventual answer, recorded separately in selector.result.
 The default mode retains the Stage 3 desktop driver's fixed-row protocol.
 Use --safety for synthetic native image/approval/handoff checks. Keys 1/2 show or
 clip the image, 3 toggles an overlay, 4 opens approval, 5 browses its context,
@@ -219,6 +221,12 @@ async function runProduction() {
 	const { createAgentSessionRuntime } = await import("../../../coding-agent/dist/core/agent-session-runtime.js");
 	const { stopThemeWatcher } = await import("../../../coding-agent/dist/modes/interactive/theme/theme.js");
 	const { registerSubagentTool } = await import("../../dist/subagent/index.js");
+	const { registerUserInputTool } = await import("../../dist/user-input.js");
+	const { selectNextStep } = await import("../../dist/next-step-selector.js");
+	const { createLifecycle } = await import("../../dist/lifecycle.js");
+	const selectorState = { lifecycle: createLifecycle(), lifecycleGeneration: 0, logger: { warn() {}, debug() {}, lifecycle() {} } };
+	let productAPI;
+	let selectorDone;
 	const { Text } = await import("../../../tui/dist/index.js");
 	const authStorage = AuthStorage.inMemory();
 	let extensionUI;
@@ -228,7 +236,9 @@ async function runProduction() {
 		modelRegistry: ModelRegistry.inMemory(authStorage),
 		resourceLoaderOptions: { noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
 			builtinInit(pi) {
+				productAPI = pi;
 				registerSubagentTool(pi, { beginChoice: () => ({ complete() {} }) });
+				registerUserInputTool(pi, selectorState, { beginChoice: () => ({ complete() {} }) });
 				pi.registerMessageRenderer("fixture-history", (message) => ({ invalidate() {}, render: (width) => message.content.split("\n").map((line) => truncateToWidth(line, width)) }));
 				pi.on("session_start", (_event, ctx) => { extensionUI = ctx.ui; });
 			},
@@ -295,6 +305,32 @@ async function runProduction() {
 		await mode.ui.renderNow({ requireFlush: true });
 		record();
 	}
+	async function openSelector(kind) {
+		if (!["confirm", "select", "next", "model"].includes(kind)) throw new Error("Unknown selector kind");
+		if (selectorDone) throw new Error("A selector is already open");
+		const current = runtime.session.extensionRunner.createContext();
+		const context = { ...current, ui: { ...current.ui, custom: (factory, options) => current.ui.custom((tui, theme, keys, done) => {
+			selectorDone = done;
+			return factory(tui, theme, keys, done);
+		}, options) } };
+		const options = Array.from({ length: 12 }, (_, index) => ({ value: String(index), label: `Choice ${index}`, description: `Detail ${index}: ${"orientation context ".repeat([14, 5, 22][index % 3])}`.trimEnd() }));
+		const model = { id: "fixture-a", provider: "test", name: "Fixture A", api: "anthropic-messages", baseUrl: "", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 10000, maxTokens: 1000 };
+		const observation = { kind, phase: "opening", result: null };
+		safetyState.selector = observation;
+		const answer = kind === "confirm" || kind === "select"
+			? runtime.session.extensionRunner.getAllRegisteredTools().find((entry) => entry.definition.name === "get_scramjet_user_input").definition.execute("fixture-choice", { type: kind, message: "Synthetic selector question", options }, undefined, undefined, context)
+			: selectNextStep(context, { options: options.map((item, index) => ({ index, message: item.label, reason: item.description, freshSession: false, parsedCommand: null })), recommended: null, thinking: productAPI, initialModel: model, models: kind === "model" ? [model, { ...model, id: "fixture-b", name: "Fixture B" }] : [model] });
+		void answer.then((result) => {
+			selectorDone = undefined;
+			observation.phase = "answered";
+			observation.result = kind === "confirm" || kind === "select" ? result.details : { index: result?.step.index, model: result?.model?.id, cancelled: result === null };
+			record();
+		}, (error) => { selectorDone = undefined; safetyState.error = error.message; record(); stop(); });
+		await new Promise((resolve) => setImmediate(resolve));
+		if (mode.editorContainer.children[0] === mode.editor || !selectorDone) throw new Error("Selector did not mount");
+		await mode.ui.renderNow({ requireFlush: true });
+		observation.phase = "waiting";
+	}
 	const timer = setInterval(() => {
 		record();
 		const path = process.env.SCRAMJET_TUI_PROBE_EVIDENCE && `${process.env.SCRAMJET_TUI_PROBE_EVIDENCE}.command`;
@@ -306,6 +342,9 @@ async function runProduction() {
 			if (committedHandoffs && !["approval", "external", "suspend"].includes(command.action)) throw new Error("Unsupported committed handoff action");
 			if (command.action === "advance") { completed = Math.min(8, completed + 1); await update(); }
 			else if (command.action === "update") { updates++; await update(); }
+			else if (command.action.startsWith("selector-")) await openSelector(command.action.slice("selector-".length));
+			else if (command.action === "overlay") overlay = mode.ui.showOverlay(new Text("SYNTHETIC SELECTOR OVERLAY", 1, 1));
+			else if (command.action === "close-overlay") { overlay?.hide(); overlay = undefined; }
 			else if (command.action === "expand") mode.setToolsExpanded(true);
 			else if (command.action === "editor") extensionUI.setEditorText("");
 			else if (command.action === "copy-editor") extensionUI.setEditorText(`COPY-EDITOR ${"alpha beta gamma ".repeat(12).trimEnd()}\n\n    café 界`);
@@ -534,6 +573,7 @@ async function runProduction() {
 		stop();
 		clearInterval(timer);
 		approvalDone?.("cancelled");
+		selectorDone?.(null);
 		safetyImage?.free();
 		await sequence;
 		await runtime.dispose();
