@@ -85,7 +85,7 @@ export interface ConvertResponsesToolsOptions {
 	strict?: boolean | null;
 }
 
-// SCRAMJET-DIVERGENCE: Shared Responses failures use closed privacy-safe diagnostics and fixed text (#553).
+// SCRAMJET-DIVERGENCE: Shared Responses failures use closed retry diagnostics and bounded local error text (#553, #575).
 export type ResponsesFailureCategory =
 	| "rate_limit"
 	| "quota_exhausted"
@@ -203,19 +203,6 @@ const CATEGORY_MESSAGES: Record<ResponsesFailureCategory, string> = {
 };
 
 const PROVIDER_MESSAGE_MAX_LENGTH = 4096;
-const PROVIDER_DETAIL_MAX_LENGTH = 200;
-const PROVIDER_DETAIL_REDACTIONS: RegExp[] = [
-	/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>]+/gi,
-	/[^\s@'"`<>]+@[^\s@'"`<>]+\.[a-z]{2,}/gi,
-	/\bbearer\s+[^\s'"`]+/gi,
-	/\bsk-[a-z0-9_-]{8,}/gi,
-	/\b(?:resp|req|chatcmpl|msg|rs|fc|call|sess|proj|org)[_-](?=[a-z0-9_-]*\d)[a-z0-9_-]{6,}\b/gi,
-	/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/g,
-	// All-digit labels are dotted paths (`input.0.content`) or versions, not hostnames; IPv4 has its own rule.
-	/\b(?:(?!\d+\.)[a-z0-9-]+\.){2,}(?!\d+\b)[a-z0-9-]+(?::\d{1,5})?\b/gi,
-	/(?<=^|[\s'"`(])(?:~|\/)[^\s'"`)]+/g,
-	/\b[A-Za-z0-9_-]{32,}\b/g,
-];
 
 const GATEWAY_OBSERVABILITY: GatewayObservabilityV1 = {
 	schemaVersion: 1,
@@ -247,18 +234,6 @@ interface FailureScalars {
 export interface SafeResponsesFailure {
 	message: string;
 	diagnostic: ResponsesProviderFailureV1;
-	liveDetail?: string;
-}
-
-// SCRAMJET-DIVERGENCE: final-message diagnostics identity carries sanitized live detail without serializing it (#575).
-const liveFailureDetails = new WeakMap<object, string>();
-const UNSAFE_DETAIL =
-	/[{}<>[\]"]|\b(?:password|token|secret|api[-_ ]?key|authorization|cookie|body|prompt|input)[\s"']*[:=]|(?:^|\s)[\w.-]+\s*=/i;
-
-export function liveResponsesFailureDetail(message: AssistantMessage): string | undefined {
-	return message.stopReason === "error" && message.diagnostics
-		? liveFailureDetails.get(message.diagnostics)
-		: undefined;
 }
 
 type ResponsesSdkRetryAttempt =
@@ -313,7 +288,7 @@ function finiteString(value: unknown): string | undefined {
 }
 
 function boundedMessage(value: unknown): string | undefined {
-	return typeof value === "string" && value.length > 0 ? value.slice(0, PROVIDER_MESSAGE_MAX_LENGTH) : undefined;
+	return typeof value === "string" && value.length > 0 ? value.slice(0, PROVIDER_MESSAGE_MAX_LENGTH + 1) : undefined;
 }
 
 function finiteStatus(value: unknown): number | undefined {
@@ -332,41 +307,19 @@ function readFailureScalars(value: unknown): { top: FailureScalars; nested: Fail
 	return { top: read(topRecord), nested: read(nestedRecord) };
 }
 
-function sanitizeProviderDetail(
-	message: string | undefined,
-	maxLength = PROVIDER_DETAIL_MAX_LENGTH,
-): string | undefined {
-	if (!message || UNSAFE_DETAIL.test(message)) return undefined;
-	let detail = message;
-	for (const pattern of PROVIDER_DETAIL_REDACTIONS) detail = detail.replace(pattern, "[redacted]");
-	detail = detail
-		.replace(/[\u0000-\u001f\u007f]+/g, " ")
+function readableFailureDetail(message: string | undefined): string | undefined {
+	const detail = message
+		?.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
 		.replace(/\s+/g, " ")
 		.trim();
-	if (detail.length === 0 || /^(?:undefined|null)$/i.test(detail)) return undefined;
-	if (detail.length > maxLength) detail = `${detail.slice(0, maxLength - 1)}…`;
-	return detail;
+	if (!detail || /^(?:undefined|null)$/i.test(detail)) return undefined;
+	return detail.length > PROVIDER_MESSAGE_MAX_LENGTH ? `${detail.slice(0, PROVIDER_MESSAGE_MAX_LENGTH - 1)}…` : detail;
 }
 
-function liveProviderDetail(message: string | undefined, code: string | undefined, type: string | undefined): string {
-	const reason =
-		message ??
-		[code, type].find(
-			(value) => value && /^[a-z][a-z0-9_.-]{0,63}$/i.test(value) && !["error", "response.failed"].includes(value),
-		);
-	if (!reason) return "Provider supplied no displayable failure detail.";
-	if (UNSAFE_DETAIL.test(reason)) {
-		return "Provider detail withheld because it may contain request content or credentials.";
-	}
-	const safe = sanitizeProviderDetail(reason, 512);
-	if (!safe) return "Provider detail withheld because it could not be safely displayed.";
-	const changed =
-		safe !==
-		reason
-			.replace(/[\u0000-\u001f\u007f]+/g, " ")
-			.replace(/\s+/g, " ")
-			.trim();
-	return `Provider detail: ${safe}${changed ? " (Some content was redacted or shortened for security.)" : ""}`;
+function unfamiliarFieldNames(record: Record<string, unknown> | undefined, known: readonly string[]): string[] {
+	return Object.keys(record ?? {})
+		.filter((key) => !known.includes(key) && /^[a-z_][a-z0-9_.-]{0,63}$/i.test(key))
+		.slice(0, 4);
 }
 
 function composeFailureMessage(category: ResponsesFailureCategory, detail: string | undefined): string {
@@ -375,10 +328,10 @@ function composeFailureMessage(category: ResponsesFailureCategory, detail: strin
 	return `${base.slice(0, -1)}: ${detail}${/[.!?…]$/.test(detail) ? "" : "."}`;
 }
 
-// SCRAMJET-DIVERGENCE: a user abort keeps the abort reason, stripped and capped like provider detail (#553).
+// SCRAMJET-DIVERGENCE: preserve a readable local abort reason without terminal controls (#553, #575).
 export function abortedResponsesFailureMessage(error: unknown): string {
 	return (
-		sanitizeProviderDetail(error instanceof Error ? error.message : undefined) ??
+		readableFailureDetail(error instanceof Error ? error.message : undefined) ??
 		"OpenAI Responses request was aborted."
 	);
 }
@@ -441,6 +394,9 @@ function makeFailure(
 	] as const;
 	const matchedCode = codeCandidates.find(([value]) => allowlistedProviderCode(value) !== undefined);
 	const providerCode = allowlistedProviderCode(matchedCode?.[0]);
+	const conflictingCode = codeCandidates.some(
+		([code]) => code && code !== providerCode && code !== "error" && code !== "response.failed",
+	);
 	const contextOverflow = [top.code, top.type, nested.code, nested.type, top.message, nested.message].some(
 		(field) => field === "context_length_exceeded" || categoryFromMessage(field) === "context_overflow",
 	);
@@ -494,13 +450,23 @@ function makeFailure(
 	) {
 		category = statusCategory;
 		detailSource = "http_status";
+	} else if (
+		conflictingCode &&
+		((providerCode && CATEGORY_DISPOSITIONS[PROVIDER_CODE_CATEGORIES[providerCode]] === "transient") ||
+			(statusCategory && CATEGORY_DISPOSITIONS[statusCategory] === "transient"))
+	) {
+		category = "provider_error";
+		detailSource = "none";
 	} else if (providerCode) {
 		category = PROVIDER_CODE_CATEGORIES[providerCode];
 		detailSource = matchedCode?.[1] ?? "provider_code";
 	} else if (statusCategory) {
 		category = statusCategory;
 		detailSource = "http_status";
-	} else if (unsupportedEvidence) {
+	} else if (
+		unsupportedEvidence ||
+		(phase === "stream" && !(value instanceof Error) && messageCategory === "transport")
+	) {
 		category = "provider_error";
 		detailSource = "none";
 	} else {
@@ -571,17 +537,44 @@ function makeFailure(
 		detailSource,
 	};
 	if (status !== undefined) diagnostic.httpStatus = status;
-	if (providerCode !== undefined && detailSource !== "http_status") diagnostic.providerCode = providerCode;
-	// Overflow text stays exact so `isContextOverflow` keys on it deterministically.
+	if (
+		providerCode !== undefined &&
+		(detailSource === "provider_code" ||
+			detailSource === "provider_type" ||
+			(detailSource === "message_category" && category === "context_overflow"))
+	) {
+		diagnostic.providerCode = providerCode;
+	}
+	const errorFields = unfamiliarFieldNames(recordOf(recordOf(value)?.error) ?? recordOf(value), [
+		"code",
+		"type",
+		"message",
+		"status",
+		"param",
+		"error",
+		"headers",
+		"requestID",
+		"cause",
+		"stack",
+		"name",
+		"id",
+		"sequence_number",
+	]);
+	const causeMessage = boundedMessage(cause?.message);
+	const providerMessage =
+		top.message ??
+		nested.message ??
+		(errorFields.length ? `Unrecognized error fields: ${errorFields.join(", ")}` : undefined) ??
+		[top.code, nested.code].find((code) => code && code !== "error");
 	const detail =
-		kind === "malformed_event" || category === "context_overflow"
+		kind === "malformed_event"
 			? undefined
-			: sanitizeProviderDetail(top.message ?? nested.message);
-	return {
-		message: composeFailureMessage(category, detail),
-		diagnostic,
-		liveDetail: liveProviderDetail(top.message ?? nested.message, top.code ?? nested.code, top.type ?? nested.type),
-	};
+			: readableFailureDetail(
+					causeMessage && causeMessage !== providerMessage
+						? `${providerMessage ? `${providerMessage} — ` : ""}${causeMessage}`
+						: providerMessage,
+				);
+	return { message: composeFailureMessage(category, detail), diagnostic };
 }
 
 export function normalizeResponsesFailure(value: unknown, phase: "request" | "stream"): SafeResponsesFailure {
@@ -730,7 +723,6 @@ export function appendResponsesFailureDiagnostics(
 		...(sdkRetry ? [{ type: "sdk_request_retry", timestamp: Date.now(), details: { ...sdkRetry } }] : []),
 		{ type: "gateway_observability", timestamp: Date.now(), details: { ...GATEWAY_OBSERVABILITY } },
 	];
-	if (failure.liveDetail) liveFailureDetails.set(output.diagnostics, failure.liveDetail);
 }
 
 function isProviderFailureDetails(value: unknown): value is ResponsesProviderFailureV1 {
@@ -791,12 +783,20 @@ function isProviderFailureDetails(value: unknown): value is ResponsesProviderFai
 	}
 	if (providerCode !== undefined) return false;
 	if (kind === "http") {
+		const statusCategory = categoryFromStatus(status as number);
 		return (
-			(category === "unknown" || category === "provider_error") &&
-			categoryFromStatus(status as number | undefined) === undefined
+			(category === "unknown" && statusCategory === undefined) ||
+			(category === "provider_error" &&
+				(statusCategory === undefined || CATEGORY_DISPOSITIONS[statusCategory] === "transient"))
 		);
 	}
-	if (status !== undefined) return false;
+	if (status !== undefined) {
+		return (
+			kind === "provider_event" &&
+			(category === "provider_error" || category === "unknown") &&
+			categoryFromStatus(status as number) === undefined
+		);
+	}
 	return (
 		kind === "provider_event" &&
 		(category === "provider_error" || category === "unknown" || category === "malformed_event")
@@ -1262,10 +1262,17 @@ export async function processResponsesStream<TApi extends Api>(
 			if (error) throw providerEventFailure(error, "provider_event");
 			if (details?.reason) throw providerEventFailure({ message: details.reason }, "provider_event");
 			const response = recordOf(event.response);
+			const fields = unfamiliarFieldNames(response, ["id", "status", "output", "usage"]);
 			const rich =
 				response && Object.keys(response).some((key) => !["id", "status", "output", "usage"].includes(key));
 			throw providerEventFailure(
-				rich ? { type: "response.failed", reason: "unsupported_details" } : event,
+				rich
+					? {
+							type: "response.failed",
+							reason: "unsupported_details",
+							message: `Unrecognized response fields${fields.length ? `: ${fields.join(", ")}` : ""}`,
+						}
+					: event,
 				rich ? "provider_event" : "malformed_event",
 			);
 		}

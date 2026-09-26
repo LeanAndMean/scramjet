@@ -16,7 +16,6 @@ export class AssistantMessageComponent extends Container {
 	private hiddenThinkingLabel: string;
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
-	private liveFailureDetail?: string;
 
 	constructor(
 		message?: AssistantMessage,
@@ -75,11 +74,6 @@ export class AssistantMessageComponent extends Container {
 		lines[0] = OSC133_ZONE_START + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
 		return lines;
-	}
-
-	setLiveFailureDetail(detail: string | undefined): void {
-		this.liveFailureDetail = detail;
-		if (this.lastMessage) this.updateContent(this.lastMessage);
 	}
 
 	updateContent(message: AssistantMessage): void {
@@ -156,10 +150,6 @@ export class AssistantMessageComponent extends Container {
 			this.contentContainer.addChild(
 				new Text(theme.fg("error", `Request attempt failed: ${message.errorMessage || "Unknown error"}`), 1, 0),
 			);
-		}
-		if (message.stopReason === "error" && this.liveFailureDetail) {
-			this.contentContainer.addChild(new Spacer(1));
-			this.contentContainer.addChild(new Text(theme.fg("error", this.liveFailureDetail), 1, 0));
 		}
 	}
 }

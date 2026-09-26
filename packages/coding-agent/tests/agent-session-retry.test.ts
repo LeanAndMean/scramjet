@@ -458,27 +458,21 @@ describe("AgentSession context window", () => {
 		]);
 	});
 
-	it("gives context overflow precedence over structured transient evidence", async () => {
+	it("does not compact a validated transient failure because its text mentions overflow", async () => {
 		const model = { ...testModel, maxInputTokens: 272_000 };
-		const overflow = {
+		const failure = {
 			...providerFailure("transient", "rate_limit"),
 			errorMessage: "Provider returned error: maximum context length is 272000 tokens",
 		};
-		const { session, events } = await createFixture((i) => (i === 0 ? overflow : assistantText("ok")), { model });
+		const { session, events } = await createFixture((i) => (i === 0 ? failure : assistantText("ok")), { model });
 
 		await session.prompt("hello");
 
-		await vi.waitFor(() => {
-			expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
-		});
-		expect(events).not.toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
+		expect(events).not.toContainEqual(expect.objectContaining({ type: "compaction_start" }));
+		expect(events).toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
 		expect(retryRecords(session)).toEqual([
-			{
-				schemaVersion: 1,
-				outcome: "not_attempted",
-				reason: "context_overflow_compaction",
-				evidence: "context_overflow",
-			},
+			expect.objectContaining({ outcome: "scheduled", evidence: "provider_failure" }),
+			expect.objectContaining({ outcome: "succeeded" }),
 		]);
 	});
 });
