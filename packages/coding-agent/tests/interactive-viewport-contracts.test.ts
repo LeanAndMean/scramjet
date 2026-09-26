@@ -370,6 +370,31 @@ describe("retained interactive contracts", () => {
 		await vi.waitFor(() => expect(h.extensionUI.getEditorText()).toBe("DRAFTPASTED"));
 	});
 
+	it("does not lose both right-click paste requests while a clipboard read is pending", async () => {
+		let resolve!: (text: string) => void;
+		vi.mocked(clipboard.readClipboardText).mockImplementationOnce(
+			() =>
+				new Promise((done) => {
+					resolve = done;
+				}),
+		);
+		const h = await setup();
+		await history(h);
+		const row = (await h.frame()).findIndex((line) => line.includes("DRAFT"));
+		expect(row).toBeGreaterThanOrEqual(0);
+		h.terminal.sendInput(mouse(2, 3, row + 1));
+		expect(clipboard.readClipboardText).toHaveBeenCalledOnce();
+		await h.frame();
+		const editor = h.internals.editorContainer.children[0] as EditorComponent;
+		expect(h.internals.ui.isComponentFocused(editor)).toBe(true);
+		expect(h.internals.ui.isComponentVisible(h.internals.editorContainer)).toBe(true);
+		expect(h.internals.ui.isComponentRenderComplete(h.internals.editorContainer)).toBe(true);
+		expect(h.internals.ui.isViewportFrameFlushed()).toBe(true);
+		h.terminal.sendInput(mouse(2, 3, row + 1));
+		resolve("PASTED");
+		await vi.waitFor(() => expect(h.extensionUI.getEditorText()).toContain("PASTED"));
+	});
+
 	it.each(["edit and revert", "selector round trip", "reset"])("discards delayed paste after %s", async (action) => {
 		let resolve!: (text: string) => void;
 		vi.mocked(clipboard.readClipboardText).mockImplementation(
