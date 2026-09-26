@@ -505,6 +505,46 @@ describe("OpenAI Responses failure normalization", () => {
 		});
 	});
 
+	it.each([
+		["OpenAI", streamOpenAIResponses, openaiModel, {}],
+		["Azure", streamAzureOpenAIResponses, azureModel, { azureBaseUrl: "https://example.openai.azure.com/openai/v1" }],
+	] as const)("rejects %s incomplete or unterminated tool-call streams", async (_name, streamFn, model, extra) => {
+		const call = {
+			type: "function_call",
+			id: "fc_1",
+			call_id: "call_1",
+			name: "read",
+			arguments: '{"path":"README.md"}',
+			status: "completed",
+		};
+		for (const terminal of [
+			{
+				type: "response.incomplete",
+				response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } },
+			},
+			undefined,
+		]) {
+			stubFetch([
+				sse([
+					{ type: "response.output_item.added", item: { ...call, arguments: "" }, output_index: 0 },
+					{ type: "response.output_item.done", item: call, output_index: 0 },
+					...(terminal ? [terminal] : []),
+				]),
+			]);
+			const result = await streamFn(model as never, toolContext, {
+				apiKey,
+				maxRetries: 0,
+				...extra,
+			} as never).result();
+			expect(result.stopReason).toBe("error");
+			expect(result.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: "read" }));
+			expect(result.errorMessage).toMatch(/incomplete|without a completed response/);
+			expect(validateResponsesProviderFailure(result.diagnostics)).toEqual(
+				expect.objectContaining({ status: "valid", retryDisposition: "unknown" }),
+			);
+		}
+	});
+
 	it("does not retry termination prose in provider rejection or unsupported rich events", async () => {
 		for (const event of [
 			{ type: "error", status: 403, message: "terminated" },
@@ -674,6 +714,56 @@ describe("OpenAI Responses failure normalization", () => {
 		}
 	});
 
+	it("distinguishes structured known-key reasons from empty errors and explains withheld objects", async () => {
+		const rich = await failureFrom(
+			sse([
+				{
+					type: "response.failed",
+					response: {
+						error: { message: { reason: "deployment unavailable", request_body: "private body" } },
+					},
+				},
+			]),
+		);
+		expect(rich.errorMessage).toContain("message");
+		expect(rich.errorMessage).toContain("withheld because they may contain request data");
+		expect(JSON.stringify(rich)).not.toMatch(/deployment unavailable|private body/);
+		expect(providerDetails(rich)).toEqual(
+			expect.objectContaining({
+				kind: "provider_event",
+				category: "provider_error",
+				retryDisposition: "unknown",
+			}),
+		);
+		for (const error of [{}, { message: {} }]) {
+			const empty = await failureFrom(sse([{ type: "response.failed", response: { error } }]));
+			expect(empty.errorMessage).not.toContain("withheld");
+			expect(providerDetails(empty)).toEqual(expect.objectContaining({ category: "malformed_event" }));
+		}
+	});
+
+	it("includes a bounded terminal-safe SDK validation parameter in the local message", () => {
+		const error = new APIError(
+			400,
+			{ message: "Invalid value", param: "input[0].content" },
+			undefined,
+			new Headers(),
+		);
+		const output = assistantShell();
+		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, "request"));
+		expect(JSON.parse(JSON.stringify(output)).errorMessage).toContain("input[0].content");
+		expect(providerDetails(output)).toEqual(
+			expect.objectContaining({
+				category: "invalid_request",
+				retryDisposition: "non_transient",
+			}),
+		);
+		const controls = normalizeResponsesFailure({ message: "Invalid value", param: "input\u001b[31m" }, "request");
+		expect(controls.message).not.toContain("\u001b");
+		const long = normalizeResponsesFailure({ message: "Invalid value", param: "a".repeat(1000) }, "request");
+		expect(long.message).not.toContain("a".repeat(1000));
+	});
+
 	it("does not interpret terminal control characters in provider text", () => {
 		const failure = normalizeResponsesFailure({ message: "failed\u001b[31m with details\nnext line" }, "stream");
 		expect(failure.message).toContain("failed [31m with details next line");
@@ -700,6 +790,11 @@ describe("OpenAI Responses failure normalization", () => {
 		const empty = await failureFrom(sse([{ type: "response.failed", response: {} }]));
 		expect(rich.errorMessage).toContain("Unrecognized response fields: new_failure");
 		expect(novelError.errorMessage).toContain("Unrecognized error fields: future_field");
+		expect(JSON.parse(JSON.stringify(rich)).errorMessage).toContain("withheld because they may contain request data");
+		expect(JSON.parse(JSON.stringify(novelError)).errorMessage).toContain(
+			"withheld because they may contain request data",
+		);
+		expect(empty.errorMessage).not.toContain("withheld");
 		expect(providerDetails(rich)).toEqual(
 			expect.objectContaining({
 				kind: "provider_event",
@@ -760,6 +855,38 @@ describe("OpenAI Responses failure normalization", () => {
 		);
 		expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
 	});
+
+	it.each([
+		["SDK SSE", { error: "maximum context length exceeded" }],
+		["response.failed", { type: "response.failed", response: { error: "maximum context length exceeded" } }],
+	] as const)("classifies scalar %s context overflow for compaction", async (_name, event) => {
+		const result = await failureFrom(sse([event]));
+		expect(providerDetails(result)).toEqual(
+			expect.objectContaining({
+				kind: "provider_event",
+				category: "context_overflow",
+				retryDisposition: "non_transient",
+				detailSource: "message_category",
+			}),
+		);
+		expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
+		expect(isContextOverflow(result)).toBe(true);
+	});
+
+	it.each([{ error: "rate limit reached" }, { type: "response.failed", response: { error: "rate limit reached" } }])(
+		"classifies a scalar stream rate limit without trusting transport prose",
+		async (event) => {
+			const result = await failureFrom(sse([event]));
+			expect(providerDetails(result)).toEqual(
+				expect.objectContaining({
+					category: "rate_limit",
+					retryDisposition: "transient",
+					detailSource: "message_category",
+				}),
+			);
+			expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
+		},
+	);
 
 	it("retains a scalar SDK SSE error reason in the serialized assistant without authorizing retry", async () => {
 		const reason = "Invalid deployment ID";

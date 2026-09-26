@@ -203,6 +203,7 @@ const CATEGORY_MESSAGES: Record<ResponsesFailureCategory, string> = {
 };
 
 const PROVIDER_MESSAGE_MAX_LENGTH = 4096;
+const WITHHELD_DETAILS_NOTICE = "Structured error details were withheld because they may contain request data.";
 
 const GATEWAY_OBSERVABILITY: GatewayObservabilityV1 = {
 	schemaVersion: 1,
@@ -281,6 +282,10 @@ class SafeResponsesFailureError extends Error {
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+}
+
+function hasStructuredDetail(value: unknown): boolean {
+	return Object.keys(recordOf(value) ?? {}).length > 0;
 }
 
 function finiteString(value: unknown): string | undefined {
@@ -393,6 +398,12 @@ function makeFailure(
 	if (value instanceof SafeResponsesFailureError) return value.failure;
 	const { top, nested } = readFailureScalars(value);
 	const scalarError = boundedMessage(recordOf(value)?.error ?? (kindHint === "provider_event" ? value : undefined));
+	const scalarCategory = categoryFromMessage(scalarError);
+	const topRecord = recordOf(value);
+	const nestedRecord = recordOf(topRecord?.error);
+	const richKnownFields = ["message", "code", "type", "param", "detail"].filter(
+		(key) => hasStructuredDetail(topRecord?.[key]) || hasStructuredDetail(nestedRecord?.[key]),
+	);
 	const codeCandidates = [
 		[top.code, "provider_code"],
 		[top.type, "provider_type"],
@@ -410,12 +421,13 @@ function makeFailure(
 		[top.code, top.type, nested.code, nested.type, top.message, nested.message].some(
 			(field) => field === "context_length_exceeded" || categoryFromMessage(field) === "context_overflow",
 		) ||
-		(value instanceof APIError &&
-			phase === "request" &&
-			statusCategory === "invalid_request" &&
-			categoryFromMessage(scalarError) === "context_overflow" &&
+		(scalarCategory === "context_overflow" &&
+			(status === undefined || statusCategory === "invalid_request") &&
+			![top.code, nested.code, top.type, nested.type].some(
+				(field) => field && field !== "error" && field !== "response.failed",
+			) &&
 			!/(?:rate limit|too many requests)/i.test(scalarError ?? ""));
-	const messageCategory = categoryFromMessage(top.message) ?? categoryFromMessage(nested.message);
+	const messageCategory = categoryFromMessage(top.message) ?? categoryFromMessage(nested.message) ?? scalarCategory;
 	const sdkConnection = value instanceof APIConnectionError;
 	const sdkAbort = value instanceof APIUserAbortError;
 	const cause = recordOf(recordOf(value)?.cause);
@@ -423,24 +435,25 @@ function makeFailure(
 		finiteString(cause?.code) ?? "",
 	);
 	const unsupportedEvidence = Boolean(
-		Object.keys(recordOf(value) ?? {}).some(
-			(key) =>
-				![
-					"code",
-					"type",
-					"message",
-					"status",
-					"param",
-					"error",
-					"headers",
-					"requestID",
-					"cause",
-					"stack",
-					"name",
-					"id",
-					"sequence_number",
-				].includes(key),
-		) ||
+		richKnownFields.length ||
+			Object.keys(recordOf(value) ?? {}).some(
+				(key) =>
+					![
+						"code",
+						"type",
+						"message",
+						"status",
+						"param",
+						"error",
+						"headers",
+						"requestID",
+						"cause",
+						"stack",
+						"name",
+						"id",
+						"sequence_number",
+					].includes(key),
+			) ||
 			Object.keys(recordOf(recordOf(value)?.error) ?? {}).some(
 				(key) => !["code", "type", "message", "status", "param"].includes(key),
 			) ||
@@ -584,19 +597,33 @@ function makeFailure(
 		top.message ??
 		nested.message ??
 		scalarError ??
-		boundedMessage(recordOf(recordOf(value)?.error)?.detail) ??
-		boundedMessage(recordOf(value)?.detail) ??
+		boundedMessage(nestedRecord?.detail) ??
+		boundedMessage(topRecord?.detail) ??
 		(errorFields.length ? `Unrecognized error fields: ${errorFields.join(", ")}` : undefined) ??
+		(richKnownFields.length ? `Structured error fields: ${richKnownFields.join(", ")}` : undefined) ??
 		[top.code, nested.code].find((code) => code && code !== "error");
+	const param = readableFailureDetail(finiteString(topRecord?.param) ?? finiteString(nestedRecord?.param));
 	const detail =
 		kind === "malformed_event"
 			? undefined
 			: readableFailureDetail(
-					causeMessage && causeMessage !== providerMessage
-						? `${providerMessage ? `${providerMessage} — ` : ""}${causeMessage}`
-						: providerMessage,
+					[
+						causeMessage && causeMessage !== providerMessage
+							? `${providerMessage ? `${providerMessage} — ` : ""}${causeMessage}`
+							: providerMessage,
+						param && !providerMessage?.includes(param) ? `Parameter: ${param}` : undefined,
+					]
+						.filter(Boolean)
+						.join(" — "),
 				);
-	return { message: composeFailureMessage(category, detail), diagnostic };
+	const withheld =
+		kind !== "malformed_event" &&
+		(richKnownFields.length > 0 ||
+			errorFields.some((key) => hasStructuredDetail((nestedRecord ?? topRecord)?.[key])));
+	return {
+		message: `${composeFailureMessage(category, detail)}${withheld ? ` ${WITHHELD_DETAILS_NOTICE}` : ""}`,
+		diagnostic,
+	};
 }
 
 export function normalizeResponsesFailure(value: unknown, phase: "request" | "stream"): SafeResponsesFailure {
@@ -1053,8 +1080,11 @@ export async function processResponsesStream<TApi extends Api>(
 	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
+	let completed = false;
 
 	for await (const event of openaiStream) {
+		if (completed)
+			throw providerEventFailure({ message: "Stream continued after response completion." }, "provider_event");
 		if (event.type === "response.created") {
 			output.responseId = event.response.id;
 		} else if (event.type === "response.output_item.added") {
@@ -1249,6 +1279,13 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 		} else if (event.type === "response.completed") {
 			const response = event.response;
+			if (response?.status !== "completed") {
+				throw providerEventFailure(
+					{ message: "Response completed without a successful status." },
+					"provider_event",
+				);
+			}
+			completed = true;
 			if (response?.id) {
 				output.responseId = response.id;
 			}
@@ -1278,6 +1315,12 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 		} else if (event.type === "error") {
 			throw providerEventFailure(event);
+		} else if (event.type === "response.incomplete") {
+			const reason = event.response?.incomplete_details?.reason;
+			throw providerEventFailure(
+				{ message: reason ? `Response incomplete: ${reason}` : "Response incomplete." },
+				"provider_event",
+			);
 		} else if (event.type === "response.failed") {
 			const error = event.response?.error;
 			const details = event.response?.incomplete_details;
@@ -1287,18 +1330,25 @@ export async function processResponsesStream<TApi extends Api>(
 			const fields = unfamiliarFieldNames(response, ["id", "status", "output", "usage"]);
 			const rich =
 				response && Object.keys(response).some((key) => !["id", "status", "output", "usage"].includes(key));
+			const withheld =
+				response &&
+				Object.keys(response).some(
+					(key) => !["id", "status", "output", "usage"].includes(key) && hasStructuredDetail(response[key]),
+				);
 			throw providerEventFailure(
 				rich
 					? {
 							type: "response.failed",
 							reason: "unsupported_details",
-							message: `Unrecognized response fields${fields.length ? `: ${fields.join(", ")}` : ""}`,
+							message: `Unrecognized response fields${fields.length ? `: ${fields.join(", ")}` : ""}.${withheld ? ` ${WITHHELD_DETAILS_NOTICE}` : ""}`,
 						}
 					: event,
 				rich ? "provider_event" : "malformed_event",
 			);
 		}
 	}
+	if (!completed)
+		throw providerEventFailure({ message: "Stream ended without a completed response." }, "provider_event");
 }
 
 function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {

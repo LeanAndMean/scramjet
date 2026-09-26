@@ -522,9 +522,9 @@ When a request exceeds the model's context window, scramjet can recover automati
 Detection runs on the finalized assistant message:
 
 - `stopReason === "error"`
-- `errorMessage` matches one of scramjet's known overflow patterns (see [`packages/ai/src/utils/overflow.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/utils/overflow.ts))
+- Without a Responses provider-failure diagnostic, `errorMessage` matches one of scramjet's known overflow patterns (see [`packages/ai/src/utils/overflow.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/utils/overflow.ts)). With a Responses diagnostic, its validated category determines overflow instead of message text.
 
-If your provider returns overflow errors with a message scramjet does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase scramjet recognizes. The generic fallback `context_length_exceeded` is the safest choice.
+If your provider returns overflow errors without Responses diagnostics and with a message scramjet does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase scramjet recognizes. The generic fallback `context_length_exceeded` is the safest choice. For a provider that produces Responses diagnostics, classify overflow at the provider-error source; rewriting `errorMessage` alone cannot override a present diagnostic.
 
 ```typescript
 const MY_PROVIDER_OVERFLOW_PATTERN = /your provider's overflow phrase/i;
@@ -556,7 +556,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-`message_end` runs before scramjet tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what scramjet checks. With this in place, scramjet will:
+`message_end` runs before scramjet tracks the assistant message for auto-compaction. When there is no Responses diagnostic, the rewritten `errorMessage` is what scramjet checks. With this in place, scramjet will:
 
 1. Detect the overflow from `errorMessage`.
 2. Drop the failed assistant message from live context.
