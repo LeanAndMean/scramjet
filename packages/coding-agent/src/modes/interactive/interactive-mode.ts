@@ -3614,7 +3614,18 @@ export class InteractiveMode {
 			case "user": {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
-					if (this.chatContainer.children.length > 0) {
+					// SCRAMJET-DIVERGENCE: separate user rows from visible committed results without doubling gaps (#579).
+					let committedTail: Component | undefined;
+					if (this.chatContainer.children.length === 0) {
+						for (let i = this.committedChatContainer.children.length - 1; i >= 0; i--) {
+							const child = this.committedChatContainer.children[i];
+							if (child.render(this.ui.terminal.columns).length > 0) {
+								committedTail = child;
+								break;
+							}
+						}
+					}
+					if (this.chatContainer.children.length > 0 || (committedTail && !(committedTail instanceof Spacer))) {
 						this.chatContainer.addChild(new Spacer(1));
 					}
 					// SCRAMJET-DIVERGENCE: scramjet-command block rendering (issue 82)

@@ -1,6 +1,14 @@
 import type { AgentMessage } from "@leanandmean/agent";
 import { type AssistantMessage, getModel } from "@leanandmean/ai";
-import { type Component, Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@leanandmean/tui";
+import {
+	type Component,
+	Container,
+	resetCapabilitiesCache,
+	Spacer,
+	setCapabilities,
+	Text,
+	TUI,
+} from "@leanandmean/tui";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -2113,6 +2121,125 @@ describe("interactive assistant history", () => {
 		await render(terminal);
 
 		expect(terminal.bufferLines().join("\n").match(new RegExp(expected, "g"))).toHaveLength(1);
+	});
+});
+
+describe("production user-message separator", () => {
+	it.each([true, false])("separates a committed Cancelled result from a new user in retained=%s", async (retained) => {
+		const h = await createProductionInteractiveHarness(60, 40, undefined, retained);
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "selection", toolName: "unknown", args: {} });
+			await h.emit({
+				type: "tool_execution_end",
+				toolCallId: "selection",
+				result: { content: [{ type: "text", text: "Cancelled" }] },
+				isError: false,
+			});
+			expect(h.internals.chatContainer.children).toHaveLength(0);
+			await h.emit({ type: "message_start", message: { role: "user", content: "ping", timestamp: 1 } });
+			const rows = await h.frame();
+			const cancelled = rows.findIndex((row) => row.includes("Cancelled"));
+			const ping = rows.findIndex((row) => row.includes("ping"));
+			expect(cancelled).toBeGreaterThanOrEqual(0);
+			expect(ping).toBeGreaterThan(cancelled);
+			const backgrounds = rows
+				.slice(cancelled + 1, ping)
+				.map((_, index) => h.terminal.cell(cancelled + 1 + index, 0).background);
+			expect(backgrounds).toEqual([
+				h.terminal.cell(cancelled, 0).background,
+				undefined,
+				h.terminal.cell(ping, 0).background,
+			]);
+			expect(rows.slice(cancelled + 1, ping).every((row) => row.trim() === "")).toBe(true);
+		} finally {
+			await h.dispose();
+		}
+	});
+
+	it.each(["empty", "live", "committed spacer"] as const)(
+		"does not add a leading or duplicate gap for %s",
+		async (prior) => {
+			const h = await createProductionInteractiveHarness(60, 40);
+			try {
+				if (prior === "live") {
+					await h.emit({ type: "tool_execution_start", toolCallId: "pending", toolName: "unknown", args: {} });
+				} else if (prior === "committed spacer") {
+					h.internals.committedChatContainer.addChild(new Text("PRIOR", 0, 0));
+					h.internals.committedChatContainer.addChild(new Spacer(1));
+				}
+				await h.emit({ type: "message_start", message: { role: "user", content: "ping", timestamp: 1 } });
+				const spacers = h.internals.chatContainer.children.filter((child) => child instanceof Spacer);
+				expect(spacers).toHaveLength(prior === "live" ? 1 : 0);
+				const rows = await h.frame();
+				const ping = rows.findIndex((row) => row.includes("ping"));
+				expect(ping).toBeGreaterThanOrEqual(0);
+				if (prior === "committed spacer") {
+					const priorRow = rows.findIndex((row) => row.includes("PRIOR"));
+					expect(
+						rows
+							.slice(priorRow + 1, ping)
+							.filter((_, index) => h.terminal.cell(priorRow + 1 + index, 0).background === undefined),
+					).toHaveLength(1);
+				}
+			} finally {
+				await h.dispose();
+			}
+		},
+	);
+
+	it.each([false, true])("ignores an invisible committed tail after spacer=%s", async (withSpacer) => {
+		const h = await createProductionInteractiveHarness(60, 40);
+		try {
+			if (withSpacer) {
+				h.internals.committedChatContainer.addChild(new Text("PRIOR", 0, 0));
+				h.internals.committedChatContainer.addChild(new Spacer(1));
+			}
+			const empty = assistant("");
+			(
+				h.mode as unknown as { renderSessionContext(context: { messages: AgentMessage[] }): void }
+			).renderSessionContext({
+				messages: [empty],
+			});
+			expect(h.internals.committedChatContainer.children.at(-1)?.render(59)).toEqual([]);
+			const before = h.internals.committedChatContainer.render(59).length;
+			await h.emit({ type: "message_start", message: { role: "user", content: "ping", timestamp: 2 } });
+			const after = [...h.internals.committedChatContainer.render(59), ...h.internals.chatContainer.render(59)];
+			expect(after.length - before).toBe(3);
+			expect(after.join("\n")).toContain("ping");
+		} finally {
+			await h.dispose();
+		}
+	});
+
+	it.each([true, false])("reconstructs the committed-result/user gap in retained=%s", async (retained) => {
+		const h = await createProductionInteractiveHarness(60, 40, undefined, retained);
+		try {
+			const call = assistant("");
+			call.content = [{ type: "toolCall", id: "restored", name: "unknown", arguments: {} }];
+			const result: AgentMessage = {
+				role: "toolResult",
+				toolCallId: "restored",
+				toolName: "unknown",
+				content: [{ type: "text", text: "Cancelled" }],
+				isError: false,
+				timestamp: 1,
+			};
+			(
+				h.mode as unknown as { renderSessionContext(context: { messages: AgentMessage[] }): void }
+			).renderSessionContext({
+				messages: [call, result, { role: "user", content: "ping", timestamp: 2 }],
+			});
+			const rows = await h.frame();
+			const cancelled = rows.findIndex((row) => row.includes("Cancelled"));
+			const ping = rows.findIndex((row) => row.includes("ping"));
+			expect(cancelled).toBeGreaterThanOrEqual(0);
+			expect(ping).toBeGreaterThan(cancelled);
+			expect(
+				rows.slice(cancelled + 1, ping).map((_, index) => h.terminal.cell(cancelled + 1 + index, 0).background),
+			).toEqual([h.terminal.cell(cancelled, 0).background, undefined, h.terminal.cell(ping, 0).background]);
+		} finally {
+			await h.dispose();
+		}
 	});
 });
 
