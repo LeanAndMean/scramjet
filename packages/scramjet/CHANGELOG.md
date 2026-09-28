@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.103.1 — Improve Responses failure recovery and diagnostics
+
+Preserves actionable OpenAI and Azure Responses failures without treating provider rejection as a safe transport retry. Fixes [#575](https://github.com/LeanAndMean/scramjet/issues/575).
+
+### Changed
+
+- Classify failed and incomplete Responses streams using provider diagnostics for retry and compaction decisions, independently of displayed error text.
+- Show bounded provider and SDK failure reasons in live and restored history, including unfinished tool calls; retain a separate local snapshot for unfamiliar error fields in interactive, print, and HTML output.
+- Label recoverable failures as request attempts and keep failed tool calls from executing.
+
+### Tests
+
+- Extend Responses, retry, allocation, and interactive-history regressions for incomplete streams, unfamiliar error shapes, and restored failure details.
+
 ## 0.103.0 — Browse and copy live terminal output
 
 Makes running output reachable through an application-managed retained transcript, with stable reading anchors and explicit selection copying. Fixes [#551](https://github.com/LeanAndMean/scramjet/issues/551).

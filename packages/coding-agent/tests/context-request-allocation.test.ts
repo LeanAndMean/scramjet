@@ -8,7 +8,7 @@ import {
 	type ModelRequestLimit,
 	type SimpleStreamOptions,
 } from "@leanandmean/ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader } from "../src/core/resource-loader.js";
@@ -16,7 +16,7 @@ import { type CreateAgentSessionOptions, createAgentSession } from "../src/core/
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 
-async function fixture(maxInputTokens?: number, requestLimits?: ModelRequestLimit[]) {
+async function fixture(maxInputTokens?: number, requestLimits?: ModelRequestLimit[], autoCompact = false) {
 	const root = mkdtempSync(join(tmpdir(), "context-allocation-"));
 	const authStorage = AuthStorage.inMemory();
 	const registry = ModelRegistry.inMemory(authStorage);
@@ -65,13 +65,26 @@ async function fixture(maxInputTokens?: number, requestLimits?: ModelRequestLimi
 			return stream;
 		},
 	});
-	const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
+	const settingsManager = SettingsManager.inMemory({ compaction: { enabled: autoCompact } });
 	const loader = new DefaultResourceLoader({
 		cwd: root,
 		agentDir: root,
 		settingsManager,
 		systemPromptOverride: () => "",
-		noExtensions: true,
+		noExtensions: !autoCompact,
+		extensionFactories: autoCompact
+			? [
+					(pi) => {
+						pi.on("session_before_compact", (event) => ({
+							compaction: {
+								summary: "short summary",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+							},
+						}));
+					},
+				]
+			: [],
 		noSkills: true,
 		noPromptTemplates: true,
 		agentsFilesOverride: () => ({ agentsFiles: [] }),
@@ -229,10 +242,78 @@ describe("SDK request context allocation", () => {
 	it("rejects an estimated input-limit breach before transport even when auto-compaction is disabled", async () => {
 		const f = await fixture(700);
 		try {
+			const events: string[] = [];
+			f.session.subscribe((event) => events.push(event.type));
 			f.session.agent.beforeProviderCall = (context) => ({ ...context, systemPrompt: "x".repeat(3000) });
 			await f.session.prompt("xxxx");
 			expect(f.calls).toHaveLength(0);
 			expect(f.session.agent.state.errorMessage).toContain("estimated input 751 exceeds provider input limit 700");
+			expect(events).toContain("message_end");
+			expect(events).not.toContain("compaction_start");
+			expect(
+				f.session.sessionManager
+					.getBranch()
+					.some(
+						(entry) =>
+							entry.type === "message" &&
+							entry.message.role === "assistant" &&
+							entry.message.stopReason === "error",
+					),
+			).toBe(true);
+		} finally {
+			f.dispose();
+		}
+	});
+
+	it("stops after one unsuccessful allocation compaction with an actionable outcome", async () => {
+		const f = await fixture(700, undefined, true);
+		try {
+			const events: Array<{ type: string; errorMessage?: string }> = [];
+			f.session.subscribe((event) => events.push(event));
+			f.session.agent.beforeProviderCall = (context) => ({ ...context, systemPrompt: "x".repeat(3000) });
+			await f.session.prompt("xxxx");
+			await vi.waitFor(() =>
+				expect(events).toContainEqual(
+					expect.objectContaining({
+						type: "compaction_end",
+						errorMessage: expect.stringContaining("one compact-and-retry"),
+					}),
+				),
+			);
+			expect(f.calls).toHaveLength(0);
+			expect(events.filter((event) => event.type === "compaction_start")).toHaveLength(1);
+			expect(f.session.sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+		} finally {
+			f.dispose();
+		}
+	});
+
+	it("persists a local allocation failure as an attempt, then compacts and continues successfully", async () => {
+		const f = await fixture(700, undefined, true);
+		try {
+			const events: string[] = [];
+			f.session.subscribe((event) => events.push(event.type));
+			let requests = 0;
+			f.session.agent.beforeProviderCall = (context) => ({
+				...context,
+				systemPrompt: requests++ === 0 ? "x".repeat(3000) : "short",
+			});
+			await f.session.prompt("xxxx");
+			await vi.waitFor(() => {
+				expect(f.calls).toHaveLength(1);
+				expect(f.session.agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+			});
+			const branch = f.session.sessionManager.getBranch();
+			const failed = branch.find(
+				(entry) =>
+					entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "error",
+			);
+			expect(
+				failed?.type === "message" && failed.message.role === "assistant" && failed.message.errorMessage,
+			).toContain("estimated input 751 exceeds provider input limit 700");
+			expect(branch.some((entry) => entry.type === "compaction")).toBe(true);
+			expect(events.indexOf("message_end")).toBeLessThan(events.indexOf("compaction_start"));
+			expect(events).toContain("compaction_end");
 		} finally {
 			f.dispose();
 		}

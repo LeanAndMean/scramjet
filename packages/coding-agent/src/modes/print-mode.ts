@@ -133,6 +133,12 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 				const assistantMsg = lastMessage as AssistantMessage;
 				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
 					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+					if (assistantMsg.stopReason === "error") {
+						const snapshot = assistantMsg.diagnostics?.find(
+							(diagnostic) => diagnostic.type === "provider_failure_snapshot",
+						)?.details?.text;
+						if (typeof snapshot === "string") console.error(`Error details (local):\n${snapshot}`);
+					}
 					exitCode = 1;
 				} else {
 					for (const content of assistantMsg.content) {

@@ -1,4 +1,5 @@
 import type OpenAI from "openai";
+import { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError } from "openai";
 import type {
 	Tool as OpenAITool,
 	ResponseCreateParamsStreaming,
@@ -84,7 +85,7 @@ export interface ConvertResponsesToolsOptions {
 	strict?: boolean | null;
 }
 
-// SCRAMJET-DIVERGENCE: Shared Responses failures use closed privacy-safe diagnostics and fixed text (#553).
+// SCRAMJET-DIVERGENCE: Shared Responses failures use closed retry diagnostics and bounded local error text (#553, #575).
 export type ResponsesFailureCategory =
 	| "rate_limit"
 	| "quota_exhausted"
@@ -202,19 +203,7 @@ const CATEGORY_MESSAGES: Record<ResponsesFailureCategory, string> = {
 };
 
 const PROVIDER_MESSAGE_MAX_LENGTH = 4096;
-const PROVIDER_DETAIL_MAX_LENGTH = 200;
-const PROVIDER_DETAIL_REDACTIONS: RegExp[] = [
-	/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>]+/gi,
-	/[^\s@'"`<>]+@[^\s@'"`<>]+\.[a-z]{2,}/gi,
-	/\bbearer\s+[^\s'"`]+/gi,
-	/\bsk-[a-z0-9_-]{8,}/gi,
-	/\b(?:resp|req|chatcmpl|msg|rs|fc|call|sess|proj|org)[_-](?=[a-z0-9_-]*\d)[a-z0-9_-]{6,}\b/gi,
-	/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/g,
-	// All-digit labels are dotted paths (`input.0.content`) or versions, not hostnames; IPv4 has its own rule.
-	/\b(?:(?!\d+\.)[a-z0-9-]+\.){2,}(?!\d+\b)[a-z0-9-]+(?::\d{1,5})?\b/gi,
-	/(?<=^|[\s'"`(])(?:~|\/)[^\s'"`)]+/g,
-	/\b[A-Za-z0-9_-]{32,}\b/g,
-];
+const WITHHELD_DETAILS_NOTICE = "Structured error details were withheld because they may contain request data.";
 
 const GATEWAY_OBSERVABILITY: GatewayObservabilityV1 = {
 	schemaVersion: 1,
@@ -246,6 +235,7 @@ interface FailureScalars {
 export interface SafeResponsesFailure {
 	message: string;
 	diagnostic: ResponsesProviderFailureV1;
+	snapshot?: string;
 }
 
 type ResponsesSdkRetryAttempt =
@@ -295,12 +285,16 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
 }
 
+function hasStructuredDetail(value: unknown): boolean {
+	return Object.keys(recordOf(value) ?? {}).length > 0;
+}
+
 function finiteString(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : undefined;
 }
 
 function boundedMessage(value: unknown): string | undefined {
-	return typeof value === "string" && value.length > 0 ? value.slice(0, PROVIDER_MESSAGE_MAX_LENGTH) : undefined;
+	return typeof value === "string" && value.length > 0 ? value.slice(0, PROVIDER_MESSAGE_MAX_LENGTH + 1) : undefined;
 }
 
 function finiteStatus(value: unknown): number | undefined {
@@ -313,23 +307,102 @@ function readFailureScalars(value: unknown): { top: FailureScalars; nested: Fail
 	const read = (record: Record<string, unknown> | undefined): FailureScalars => ({
 		code: finiteString(record?.code),
 		type: finiteString(record?.type),
-		message: boundedMessage(record?.message),
+		message:
+			record === topRecord &&
+			value instanceof APIError &&
+			value.error &&
+			(!(typeof recordOf(value.error)?.message === "string" && recordOf(value.error)?.message) ||
+				isSerializedErrorObject(recordOf(value.error)?.message))
+				? undefined
+				: isSerializedErrorObject(record?.message)
+					? undefined
+					: boundedMessage(record?.message),
 		status: finiteStatus(record?.status),
 	});
 	return { top: read(topRecord), nested: read(nestedRecord) };
 }
 
-function sanitizeProviderDetail(message: string | undefined): string | undefined {
-	if (!message) return undefined;
-	let detail = message;
-	for (const pattern of PROVIDER_DETAIL_REDACTIONS) detail = detail.replace(pattern, "[redacted]");
-	detail = detail
-		.replace(/[\u0000-\u001f\u007f]+/g, " ")
+function isSerializedErrorObject(value: unknown): boolean {
+	if (typeof value !== "string") return false;
+	const text = value.trim();
+	if (!(text.startsWith("{") || text.startsWith("["))) return false;
+	if (text.length > PROVIDER_MESSAGE_MAX_LENGTH) return text.endsWith(text.startsWith("{") ? "}" : "]");
+	try {
+		const parsed: unknown = JSON.parse(text);
+		return typeof parsed === "object" && parsed !== null;
+	} catch {
+		return false;
+	}
+}
+
+function snapshotFailure(value: unknown): string | undefined {
+	const seen = new WeakSet<object>();
+	let nodes = 0;
+	const visit = (input: unknown, depth: number): unknown => {
+		if (typeof input === "string") {
+			if (input.length <= PROVIDER_MESSAGE_MAX_LENGTH && isSerializedErrorObject(input)) {
+				try {
+					return visit(JSON.parse(input), depth + 1);
+				} catch {
+					// Retain the original bounded text when parsing fails.
+				}
+			}
+			const text = input.slice(0, 512).replace(/[\u007f-\u009f]/g, " ");
+			return input.length > 512 ? `${text}… [truncated]` : text;
+		}
+		if (typeof input === "number" || typeof input === "boolean" || input === null) return input;
+		if (typeof input === "bigint") return String(input);
+		if (typeof input !== "object") return undefined;
+		if (seen.has(input)) return "[circular]";
+		if (depth >= 5 || ++nodes > 80) return "[truncated]";
+		seen.add(input);
+		try {
+			const descriptors = Object.getOwnPropertyDescriptors(input);
+			const isArray = Array.isArray(input);
+			const keys = Object.keys(descriptors).filter(
+				(key) =>
+					key !== "stack" &&
+					key !== "toJSON" &&
+					key !== "output" &&
+					key !== "usage" &&
+					!(isArray && key === "length"),
+			);
+			const result: Record<string, unknown> = Object.create(null);
+			for (const key of keys.slice(0, 16)) {
+				const descriptor = descriptors[key];
+				const field = "value" in descriptor ? visit(descriptor.value, depth + 1) : "[accessor]";
+				if (field !== undefined) result[key.slice(0, 128).replace(/[\u007f-\u009f]/g, " ")] = field;
+			}
+			if (keys.length > 16) result["…"] = `[${keys.length - 16} more fields]`;
+			return isArray && keys.every((key) => /^(0|[1-9]\d*)$/.test(key)) ? Object.values(result) : result;
+		} catch {
+			return "[uninspectable]";
+		} finally {
+			seen.delete(input);
+		}
+	};
+	const snapshot = visit(value, 0);
+	if (snapshot === undefined || (typeof snapshot === "object" && Object.keys(snapshot ?? {}).length === 0))
+		return undefined;
+	const text = JSON.stringify(snapshot, null, 2);
+	return text.length > PROVIDER_MESSAGE_MAX_LENGTH
+		? `${text.slice(0, PROVIDER_MESSAGE_MAX_LENGTH - 14)}… [truncated]`
+		: text;
+}
+
+function readableFailureDetail(message: string | undefined): string | undefined {
+	const detail = message
+		?.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
 		.replace(/\s+/g, " ")
 		.trim();
-	if (detail.length === 0 || /^(?:undefined|null)$/i.test(detail)) return undefined;
-	if (detail.length > PROVIDER_DETAIL_MAX_LENGTH) detail = `${detail.slice(0, PROVIDER_DETAIL_MAX_LENGTH - 1)}…`;
-	return detail;
+	if (!detail || /^(?:undefined|null)$/i.test(detail)) return undefined;
+	return detail.length > PROVIDER_MESSAGE_MAX_LENGTH ? `${detail.slice(0, PROVIDER_MESSAGE_MAX_LENGTH - 1)}…` : detail;
+}
+
+function unfamiliarFieldNames(record: Record<string, unknown> | undefined, known: readonly string[]): string[] {
+	return Object.keys(record ?? {})
+		.filter((key) => !known.includes(key) && /^[a-z_][a-z0-9_.-]{0,63}$/i.test(key))
+		.slice(0, 4);
 }
 
 function composeFailureMessage(category: ResponsesFailureCategory, detail: string | undefined): string {
@@ -338,10 +411,10 @@ function composeFailureMessage(category: ResponsesFailureCategory, detail: strin
 	return `${base.slice(0, -1)}: ${detail}${/[.!?…]$/.test(detail) ? "" : "."}`;
 }
 
-// SCRAMJET-DIVERGENCE: a user abort keeps the abort reason, stripped and capped like provider detail (#553).
+// SCRAMJET-DIVERGENCE: preserve a readable local abort reason without terminal controls (#553, #575).
 export function abortedResponsesFailureMessage(error: unknown): string {
 	return (
-		sanitizeProviderDetail(error instanceof Error ? error.message : undefined) ??
+		readableFailureDetail(error instanceof Error ? error.message : undefined) ??
 		"OpenAI Responses request was aborted."
 	);
 }
@@ -349,9 +422,10 @@ export function abortedResponsesFailureMessage(error: unknown): string {
 function categoryFromMessage(message: string | undefined): ResponsesFailureCategory | undefined {
 	if (!message) return undefined;
 	const normalized = message.toLowerCase();
+	if (/rate.?limit|too many requests|too many tokens per (?:minute|second|hour|day)/.test(normalized))
+		return "rate_limit";
 	if (/context (length|window)|maximum context|too many tokens/.test(normalized)) return "context_overflow";
 	if (/insufficient.quota|quota.*(exhaust|exceed)|billing.*limit/.test(normalized)) return "quota_exhausted";
-	if (/rate.?limit|too many requests/.test(normalized)) return "rate_limit";
 	if (/overload|capacity/.test(normalized)) return "overloaded";
 	if (/timed? ?out|timeout/.test(normalized)) return "timeout";
 	if (/connection error|network error/.test(normalized)) return "transport";
@@ -393,9 +467,19 @@ function makeFailure(
 	value: unknown,
 	phase: "request" | "stream",
 	kindHint?: ResponsesFailureKind,
+	snapshotSource: unknown = value,
 ): SafeResponsesFailure {
 	if (value instanceof SafeResponsesFailureError) return value.failure;
 	const { top, nested } = readFailureScalars(value);
+	const rawScalarError = recordOf(value)?.error ?? (kindHint === "provider_event" ? value : undefined);
+	const scalarError = boundedMessage(rawScalarError);
+	const scalarWithheld = isSerializedErrorObject(rawScalarError);
+	const scalarCategory = scalarWithheld ? undefined : categoryFromMessage(scalarError);
+	const topRecord = recordOf(value);
+	const nestedRecord = recordOf(topRecord?.error);
+	const richKnownFields = ["message", "code", "type", "param", "detail"].filter(
+		(key) => hasStructuredDetail(topRecord?.[key]) || hasStructuredDetail(nestedRecord?.[key]),
+	);
 	const codeCandidates = [
 		[top.code, "provider_code"],
 		[top.type, "provider_type"],
@@ -404,29 +488,106 @@ function makeFailure(
 	] as const;
 	const matchedCode = codeCandidates.find(([value]) => allowlistedProviderCode(value) !== undefined);
 	const providerCode = allowlistedProviderCode(matchedCode?.[0]);
-	const contextOverflow = [top.code, top.type, nested.code, nested.type, top.message, nested.message].some(
-		(field) => field === "context_length_exceeded" || categoryFromMessage(field) === "context_overflow",
+	const conflictingCode = codeCandidates.some(
+		([code]) => code && code !== providerCode && code !== "error" && code !== "response.failed",
 	);
 	const status = top.status ?? nested.status;
 	const statusCategory = categoryFromStatus(status);
-	const messageCategory = categoryFromMessage(top.message) ?? categoryFromMessage(nested.message);
+	const explicitRateLimit = providerCode === "rate_limit_exceeded" || statusCategory === "rate_limit";
+	const isContextEvidence = (field: string | undefined) =>
+		field === "context_length_exceeded" ||
+		(categoryFromMessage(field) === "context_overflow" &&
+			(!explicitRateLimit || /context (length|window)|maximum context/i.test(field ?? "")));
+	const contextOverflow =
+		[top.code, top.type, nested.code, nested.type, top.message, nested.message].some(isContextEvidence) ||
+		(scalarCategory === "context_overflow" &&
+			!explicitRateLimit &&
+			(status === undefined || statusCategory === "invalid_request") &&
+			![top.code, nested.code, top.type, nested.type].some(
+				(field) => field && field !== "error" && field !== "response.failed",
+			) &&
+			!/(?:rate limit|too many requests)/i.test(scalarError ?? ""));
+	const messageCategory = categoryFromMessage(top.message) ?? categoryFromMessage(nested.message) ?? scalarCategory;
+	const sdkConnection = value instanceof APIConnectionError;
+	const sdkAbort = value instanceof APIUserAbortError;
+	const cause = recordOf(recordOf(value)?.cause);
+	const transportCause = ["ECONNRESET", "EPIPE", "ETIMEDOUT", "UND_ERR_SOCKET"].includes(
+		finiteString(cause?.code) ?? "",
+	);
+	const unsupportedEvidence = Boolean(
+		scalarWithheld ||
+			isSerializedErrorObject(topRecord?.message) ||
+			isSerializedErrorObject(nestedRecord?.message) ||
+			richKnownFields.length ||
+			Object.keys(recordOf(value) ?? {}).some(
+				(key) =>
+					![
+						"code",
+						"type",
+						"message",
+						"status",
+						"param",
+						"error",
+						"headers",
+						"requestID",
+						"cause",
+						"stack",
+						"name",
+						"id",
+						"sequence_number",
+					].includes(key),
+			) ||
+			Object.keys(recordOf(recordOf(value)?.error) ?? {}).some(
+				(key) => !["code", "type", "message", "status", "param"].includes(key),
+			) ||
+			(top.code && !providerCode) ||
+			(top.type && top.type !== "error" && top.type !== "response.failed" && !providerCode) ||
+			(nested.code && !providerCode) ||
+			(nested.type && !providerCode) ||
+			["param", "reason", "incomplete_details"].some((key) => recordOf(value)?.[key] !== undefined),
+	);
 	let category: ResponsesFailureCategory;
 	let detailSource: ResponsesFailureDetailSource;
 	if (contextOverflow) {
 		category = "context_overflow";
 		detailSource = providerCode === "context_length_exceeded" ? "provider_code" : "message_category";
+	} else if (
+		statusCategory &&
+		CATEGORY_DISPOSITIONS[statusCategory] === "non_transient" &&
+		providerCode &&
+		CATEGORY_DISPOSITIONS[PROVIDER_CODE_CATEGORIES[providerCode]] === "transient"
+	) {
+		category = statusCategory;
+		detailSource = "http_status";
+	} else if (
+		conflictingCode &&
+		((providerCode && CATEGORY_DISPOSITIONS[PROVIDER_CODE_CATEGORIES[providerCode]] === "transient") ||
+			(statusCategory && CATEGORY_DISPOSITIONS[statusCategory] === "transient"))
+	) {
+		category = "provider_error";
+		detailSource = "none";
 	} else if (providerCode) {
 		category = PROVIDER_CODE_CATEGORIES[providerCode];
 		detailSource = matchedCode?.[1] ?? "provider_code";
 	} else if (statusCategory) {
 		category = statusCategory;
 		detailSource = "http_status";
+	} else if (
+		unsupportedEvidence ||
+		(phase === "stream" &&
+			messageCategory === "transport" &&
+			(!(value instanceof Error) || (value instanceof APIError && !sdkConnection)))
+	) {
+		category = "provider_error";
+		detailSource = "none";
 	} else {
 		category = messageCategory ?? (kindHint === "malformed_event" ? "malformed_event" : "unknown");
 		detailSource = messageCategory ? "message_category" : "none";
 	}
 	const hasEvidence = Boolean(
-		top.code ||
+		unsupportedEvidence ||
+			scalarError ||
+			top.code ||
 			(top.type !== "error" && top.type !== "response.failed" && top.type) ||
 			top.message ||
 			top.status ||
@@ -437,20 +598,37 @@ function makeFailure(
 	);
 	const errorName = value instanceof Error ? value.name.toLowerCase() : "";
 	const inferredTransport =
-		phase === "request" &&
+		kindHint !== "provider_event" &&
+		!sdkAbort &&
 		status === undefined &&
 		providerCode === undefined &&
-		messageCategory === undefined &&
-		(errorName.includes("connection") || errorName.includes("timeout") || errorName === "typeerror");
-	if (inferredTransport && !contextOverflow) {
-		category = errorName.includes("timeout") ? "timeout" : "transport";
+		!top.code &&
+		!nested.code &&
+		!nested.type &&
+		!contextOverflow &&
+		(phase === "request"
+			? sdkConnection ||
+				(messageCategory === undefined && (errorName.includes("connection") || errorName === "typeerror"))
+			: sdkConnection ||
+				transportCause ||
+				(value instanceof Error &&
+					/^terminated$/i.test(top.message ?? "") &&
+					!unsupportedEvidence &&
+					Object.keys(value).every((key) => ["name", "message", "stack", "cause"].includes(key))));
+	if (inferredTransport) {
+		category =
+			value instanceof APIConnectionTimeoutError
+				? "timeout"
+				: messageCategory === "timeout"
+					? "timeout"
+					: "transport";
 		detailSource = "none";
 	}
 	const kind =
 		kindHint ??
 		(status
 			? "http"
-			: (inferredTransport && !contextOverflow) || (phase === "request" && category === "transport")
+			: inferredTransport || (phase === "request" && category === "transport")
 				? "transport"
 				: hasEvidence
 					? "provider_event"
@@ -458,6 +636,8 @@ function makeFailure(
 	if (kind === "malformed_event") {
 		category = "malformed_event";
 		detailSource = "none";
+	} else if (kind === "provider_event" && category === "unknown" && !hasEvidence) {
+		category = "malformed_event";
 	}
 	const diagnostic: ResponsesProviderFailureV1 = {
 		schemaVersion: 1,
@@ -469,13 +649,78 @@ function makeFailure(
 		detailSource,
 	};
 	if (status !== undefined) diagnostic.httpStatus = status;
-	if (providerCode !== undefined) diagnostic.providerCode = providerCode;
-	// Overflow text stays exact so `isContextOverflow` keys on it deterministically.
+	if (
+		providerCode !== undefined &&
+		(detailSource === "provider_code" ||
+			detailSource === "provider_type" ||
+			(detailSource === "message_category" && category === "context_overflow"))
+	) {
+		diagnostic.providerCode = providerCode;
+	}
+	const errorFields = unfamiliarFieldNames(recordOf(recordOf(value)?.error) ?? recordOf(value), [
+		"code",
+		"type",
+		"message",
+		"status",
+		"param",
+		"error",
+		"headers",
+		"requestID",
+		"cause",
+		"stack",
+		"name",
+		"id",
+		"sequence_number",
+	]);
+	const causeMessage =
+		typeof cause?.message === "string" && !/^\s*(?:\{|\[|")/.test(cause.message)
+			? boundedMessage(cause.message)
+			: undefined;
+	const providerMessage =
+		top.message ??
+		nested.message ??
+		(scalarWithheld ? undefined : scalarError) ??
+		boundedMessage(nestedRecord?.detail) ??
+		boundedMessage(topRecord?.detail) ??
+		(errorFields.length ? `Unrecognized error fields: ${errorFields.join(", ")}` : undefined) ??
+		(richKnownFields.length ? `Structured error fields: ${richKnownFields.join(", ")}` : undefined) ??
+		[top.code, nested.code].find((code) => code && code !== "error");
+	const param = readableFailureDetail(finiteString(topRecord?.param) ?? finiteString(nestedRecord?.param));
+	const requestID = value instanceof APIError ? readableFailureDetail(finiteString(value.requestID)) : undefined;
 	const detail =
-		kind === "malformed_event" || category === "context_overflow"
+		kind === "malformed_event"
 			? undefined
-			: sanitizeProviderDetail(top.message ?? nested.message);
-	return { message: composeFailureMessage(category, detail), diagnostic };
+			: readableFailureDetail(
+					[
+						causeMessage && causeMessage !== providerMessage
+							? `${providerMessage ? `${providerMessage} — ` : ""}${causeMessage}`
+							: providerMessage,
+						param && !providerMessage?.includes(param) ? `Parameter: ${param}` : undefined,
+					]
+						.filter(Boolean)
+						.join(" — "),
+				);
+	const withheld =
+		kind !== "malformed_event" &&
+		(scalarWithheld ||
+			isSerializedErrorObject(topRecord?.message) ||
+			isSerializedErrorObject(nestedRecord?.message) ||
+			richKnownFields.length > 0 ||
+			errorFields.some((key) => hasStructuredDetail((nestedRecord ?? topRecord)?.[key])));
+	const snapshot =
+		snapshotSource !== value ||
+		unsupportedEvidence ||
+		((category === "unknown" ||
+			category === "provider_error" ||
+			(category === "malformed_event" && typeof snapshotSource !== "object")) &&
+			!detail)
+			? snapshotFailure(snapshotSource)
+			: undefined;
+	return {
+		message: `${composeFailureMessage(category, detail)}${requestID ? ` Request ID: ${requestID}.` : ""}${withheld && !snapshot ? ` ${WITHHELD_DETAILS_NOTICE}` : ""}`,
+		diagnostic,
+		...(snapshot ? { snapshot } : {}),
+	};
 }
 
 export function normalizeResponsesFailure(value: unknown, phase: "request" | "stream"): SafeResponsesFailure {
@@ -621,6 +866,9 @@ export function appendResponsesFailureDiagnostics(
 	output.diagnostics = [
 		...(output.diagnostics ?? []),
 		{ type: "provider_failure", timestamp: Date.now(), details: { ...failure.diagnostic } },
+		...(failure.snapshot
+			? [{ type: "provider_failure_snapshot", timestamp: Date.now(), details: { text: failure.snapshot } }]
+			: []),
 		...(sdkRetry ? [{ type: "sdk_request_retry", timestamp: Date.now(), details: { ...sdkRetry } }] : []),
 		{ type: "gateway_observability", timestamp: Date.now(), details: { ...GATEWAY_OBSERVABILITY } },
 	];
@@ -655,9 +903,9 @@ function isProviderFailureDetails(value: unknown): value is ResponsesProviderFai
 		return category === "malformed_event" && source === "none" && status === undefined && providerCode === undefined;
 	}
 	if (kind === "transport") {
-		if (details.phase !== "request" || status !== undefined || providerCode !== undefined) return false;
+		if (status !== undefined || providerCode !== undefined) return false;
 		if (source === "none") return category === "transport" || category === "timeout";
-		return source === "message_category" && category === "transport";
+		return details.phase === "request" && source === "message_category" && category === "transport";
 	}
 	if (kind === "http" && status === undefined) return false;
 	if (kind === "provider_event" && details.phase === "request" && status !== undefined) return false;
@@ -683,9 +931,25 @@ function isProviderFailureDetails(value: unknown): value is ResponsesProviderFai
 		return statusCategory === undefined || category === "context_overflow";
 	}
 	if (providerCode !== undefined) return false;
-	if (kind === "http") return category === "unknown" && categoryFromStatus(status as number | undefined) === undefined;
-	if (status !== undefined) return false;
-	return kind === "provider_event" && (category === "provider_error" || category === "unknown");
+	if (kind === "http") {
+		const statusCategory = categoryFromStatus(status as number);
+		return (
+			(category === "unknown" && statusCategory === undefined) ||
+			(category === "provider_error" &&
+				(statusCategory === undefined || CATEGORY_DISPOSITIONS[statusCategory] === "transient"))
+		);
+	}
+	if (status !== undefined) {
+		return (
+			kind === "provider_event" &&
+			(category === "provider_error" || category === "unknown") &&
+			categoryFromStatus(status as number) === undefined
+		);
+	}
+	return (
+		kind === "provider_event" &&
+		(category === "provider_error" || category === "unknown" || category === "malformed_event")
+	);
 }
 
 export function validateResponsesProviderFailure(diagnostics: unknown): ResponsesProviderFailureValidation {
@@ -703,8 +967,12 @@ export function validateResponsesProviderFailure(diagnostics: unknown): Response
 	return { status: "valid", category: details.category, retryDisposition: details.retryDisposition };
 }
 
-function providerEventFailure(value: unknown, kindHint?: ResponsesFailureKind): SafeResponsesFailureError {
-	return new SafeResponsesFailureError(makeFailure(value, "stream", kindHint));
+function providerEventFailure(
+	value: unknown,
+	kindHint?: ResponsesFailureKind,
+	snapshotSource: unknown = value,
+): SafeResponsesFailureError {
+	return new SafeResponsesFailureError(makeFailure(value, "stream", kindHint, snapshotSource));
 }
 
 // =============================================================================
@@ -916,8 +1184,12 @@ export async function processResponsesStream<TApi extends Api>(
 	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
+	const pendingFunctionCalls = new Map<number, string>();
+	let completed = false;
 
 	for await (const event of openaiStream) {
+		if (completed)
+			throw providerEventFailure({ message: "Stream continued after response completion." }, "provider_event");
 		if (event.type === "response.created") {
 			output.responseId = event.response.id;
 		} else if (event.type === "response.output_item.added") {
@@ -933,6 +1205,7 @@ export async function processResponsesStream<TApi extends Api>(
 				output.content.push(currentBlock);
 				stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
 			} else if (item.type === "function_call") {
+				pendingFunctionCalls.set(event.output_index, item.call_id);
 				currentItem = item;
 				currentBlock = {
 					type: "toolCall",
@@ -1086,6 +1359,12 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 				currentBlock = null;
 			} else if (item.type === "function_call") {
+				if (item.status === "incomplete" || item.status === "in_progress") {
+					throw providerEventFailure({ message: "Function call item was incomplete." }, "provider_event");
+				}
+				if (pendingFunctionCalls.get(event.output_index) === item.call_id) {
+					pendingFunctionCalls.delete(event.output_index);
+				}
 				const args =
 					currentBlock?.type === "toolCall" && currentBlock.partialJson
 						? parseStreamingJson(currentBlock.partialJson)
@@ -1110,8 +1389,39 @@ export async function processResponsesStream<TApi extends Api>(
 				currentBlock = null;
 				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 			}
-		} else if (event.type === "response.completed") {
+		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
 			const response = event.response;
+			if (event.type === "response.incomplete") {
+				const reason = response?.incomplete_details?.reason;
+				if (
+					response?.status !== "incomplete" ||
+					reason !== "max_output_tokens" ||
+					blocks.some((block) => block.type === "toolCall") ||
+					response.output?.some((item) => item.type === "function_call")
+				) {
+					const failure = { message: reason ? `Response incomplete: ${reason}` : "Response incomplete." };
+					const details = recordOf(response?.incomplete_details);
+					const extra = Object.keys(details ?? {}).some((key) => key !== "reason");
+					throw providerEventFailure(failure, "provider_event", extra ? details : failure);
+				}
+			} else if (response?.status !== "completed") {
+				throw providerEventFailure(
+					{ message: "Response completed without a successful status." },
+					"provider_event",
+				);
+			}
+			if (
+				pendingFunctionCalls.size > 0 ||
+				response.output?.some(
+					(item) => item.type === "function_call" && item.status !== undefined && item.status !== "completed",
+				)
+			) {
+				throw providerEventFailure(
+					{ message: "Response contained an unfinished function call." },
+					"provider_event",
+				);
+			}
+			completed = true;
 			if (response?.id) {
 				output.responseId = response.id;
 			}
@@ -1144,11 +1454,41 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.failed") {
 			const error = event.response?.error;
 			const details = event.response?.incomplete_details;
-			if (error) throw providerEventFailure(error, "provider_event");
-			if (details?.reason) throw providerEventFailure({ message: details.reason }, "provider_event");
-			throw providerEventFailure(event, "malformed_event");
+			if (error) {
+				const response = recordOf(event.response);
+				const hasOtherDetails = Object.keys(response ?? {}).some(
+					(key) => !["id", "status", "output", "usage", "error"].includes(key),
+				);
+				throw providerEventFailure(error, "provider_event", hasOtherDetails ? response : error);
+			}
+			if (details?.reason) {
+				const response = recordOf(event.response);
+				const extra =
+					Object.keys(response ?? {}).some(
+						(key) => !["id", "status", "output", "usage", "incomplete_details"].includes(key),
+					) || Object.keys(recordOf(details) ?? {}).some((key) => key !== "reason");
+				const failure = { message: details.reason };
+				throw providerEventFailure(failure, "provider_event", extra ? response : failure);
+			}
+			const response = recordOf(event.response);
+			const fields = unfamiliarFieldNames(response, ["id", "status", "output", "usage"]);
+			const rich =
+				response && Object.keys(response).some((key) => !["id", "status", "output", "usage"].includes(key));
+			throw providerEventFailure(
+				rich
+					? {
+							type: "response.failed",
+							reason: "unsupported_details",
+							message: `Unrecognized response fields${fields.length ? `: ${fields.join(", ")}` : ""}.`,
+						}
+					: event,
+				rich ? "provider_event" : "malformed_event",
+				rich ? response : event,
+			);
 		}
 	}
+	if (!completed)
+		throw providerEventFailure({ message: "Stream ended without a completed response." }, "provider_event");
 }
 
 function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {

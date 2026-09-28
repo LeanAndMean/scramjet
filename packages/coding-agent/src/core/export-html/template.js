@@ -1248,6 +1248,10 @@
               html += '<div class="error-text">Aborted</div>';
             } else if (msg.stopReason === 'error') {
               html += `<div class="error-text">Error: ${escapeHtml(msg.errorMessage || 'Unknown error')}</div>`;
+              const snapshot = msg.diagnostics?.find(diagnostic => diagnostic.type === 'provider_failure_snapshot')?.details?.text;
+              if (typeof snapshot === 'string') {
+                html += `<pre class="error-text">Error details (local):\n${escapeHtml(snapshot)}</pre>`;
+              }
             }
 
             html += '</div>';
