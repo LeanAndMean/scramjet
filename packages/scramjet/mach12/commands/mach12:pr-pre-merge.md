@@ -201,14 +201,12 @@ Run the project's test suite:
 Report results. If tests fail, do NOT silently ignore failures. Attempt to diagnose and fix:
 
 1. **Diagnose**: Read the test output and trace each failure to its root cause. Determine whether the failure is PR-caused (introduced or exposed by this branch's changes) or pre-existing (also fails on the default branch — compare by running the failing tests against `origin/<default-branch>` using `git stash push -m "pre-merge-check"` only if the tree is dirty, then `git checkout origin/<default-branch> -- . && <run failing tests> && git checkout - -- .` and finally `git stash pop` only if a stash was pushed; alternatively use `git worktree add /tmp/baseline-check origin/<default-branch>` for an isolated comparison without touching the working tree).
-2. **Fix and re-run**: For PR-caused failures with clear fixes (updated test expectations, import paths changed by merge, renamed symbols, missing test fixtures), apply the fix and re-run the test suite once.
-3. **Escalate**: If tests still fail after one fix attempt, or if the fix requires design decisions, escalate to the user with:
+2. **Fix and re-run**: For PR-caused failures with clear fixes (updated test expectations, import paths changed by merge, renamed symbols, missing test fixtures), apply the fix and re-run the test suite. If tests still fail, inspect the new output and continue only when it supports a concrete, safe next fix.
+3. **Escalate**: If no justified next fix remains, or a fix requires a user-owned design decision, escalate to the user with:
    - Which tests failed and their output.
    - The diagnosis (root cause, whether PR-caused or pre-existing).
    - What was attempted (if a fix was tried).
    - A recommendation for next steps.
-
-Do not loop beyond one fix-and-rerun cycle — a second failure always escalates.
 
 ## Step 8: Commit checklist changes
 
@@ -253,9 +251,11 @@ Identify the root cause of each failure:
 - **Test failures**: if Step 7d already ran tests and they passed locally, these may stem from code pushed before the checklist ran, or from platform-specific differences.
 - **Other failures** (packaging, smoke tests, import guards): read the log output and diagnose accordingly.
 
+If evidence points to a transient CI or infrastructure failure, rerun the affected check when supported and verify its result for the current PR HEAD. If all required checks pass, proceed to Step 10; otherwise diagnose the new result.
+
 ### 9c. Fix and push
 
-Fix each diagnosed failure locally. For common categories:
+Fix diagnosed PR-caused failures locally. For common categories:
 
 - **Lint/format**: run the project's lint-fix command (e.g., `npx biome check --write .`, `npm run lint -- --write`). Identify the correct command from `package.json` scripts or project configuration.
 - **Type errors**: fix the type issues in the identified files.
@@ -274,12 +274,10 @@ Proceed only when the delegation confirms that the commit was pushed successfull
 
 ### 9d. Verify
 
-Wait up to 10 minutes for CI on the pushed fix. Proceed to Step 10 only when CI passes. If it does not, escalate with:
+Wait up to 10 minutes for CI on each pushed fix. Proceed to Step 10 only when CI passes. If checks still fail, inspect the new evidence and return to diagnosis while a concrete, safe next action exists. Otherwise escalate with:
 - Which checks are still unsuccessful and their log output.
 - What was attempted and why it did not resolve the issue.
 - A recommendation for next steps.
-
-Do not attempt a second fix cycle — a persistent failure after one fix always escalates.
 
 ## Step 10: Final readiness and pre-merge report
 
