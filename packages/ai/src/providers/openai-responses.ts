@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import OpenAI, { APIUserAbortError } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../models.js";
@@ -172,7 +172,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				// partialJson is only a streaming scratch buffer; never persist it.
 				delete (block as { partialJson?: string }).partialJson;
 			}
-			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+			output.stopReason = options?.signal?.aborted || error instanceof APIUserAbortError ? "aborted" : "error";
 			if (payloadCallbackFailed) {
 				output.errorMessage = "OpenAI Responses payload callback failed.";
 			} else if (responseCallbackFailed) {
