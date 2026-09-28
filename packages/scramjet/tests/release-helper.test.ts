@@ -357,6 +357,7 @@ function runHelper(
 ) {
 	const script = [
 		"publish",
+		"publish-main",
 		"publish-and-verify",
 		"registry-preflight",
 		"verify",
@@ -371,6 +372,7 @@ function runHelper(
 		env: {
 			...process.env,
 			...RELEASE_ENV,
+			...(["publish", "publish-main"].includes(mode) ? { IN_PROCESS_NPM: "1" } : {}),
 			...environment,
 			PATH: `${dirname(statePath)}:${process.env.PATH}`,
 			FAKE_NPM_STATE: statePath,
@@ -705,12 +707,16 @@ import childProcess from "node:child_process";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { runInNewContext } from "node:vm";
 let elapsedMs = 0;
+const publicationFixture = ["publish", "publish-main"].includes(process.argv[2]);
 if (process.env.IN_PROCESS_NPM === "1") {
   const realExec = childProcess.execFileSync;
   childProcess.execFileSync = (command, args, options) => {
     if (command === "git") return realExec(command, args, options);
     const cli = command.endsWith("/node_modules/.bin/scramjet");
     if (command === "tar") return realExec(command, args, options);
+    if (publicationFixture && (command !== "npm" || !["view", "pack"].includes(args[0]))) {
+      throw new Error("Unexpected publication fixture command: " + command + " " + args.join(" "));
+    }
     if (command === process.execPath && args[0].endsWith("/installed-runtime-smoke.mjs")) {
       const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
       state.calls.push(["installed-runtime-smoke", ...args.slice(1)]);
@@ -756,10 +762,13 @@ if (process.env.IN_PROCESS_NPM === "1") {
   };
   syncBuiltinESMExports();
 }
-const productionVerify = process.argv[2] === "verify-cli";
-if (productionVerify) { process.argv[1] = ${JSON.stringify(HELPER)}; process.argv[2] = "verify"; }
+const productionMain = ["publish-main", "verify-cli"].includes(process.argv[2]);
+if (productionMain) {
+  process.argv[1] = ${JSON.stringify(HELPER)};
+  process.argv[2] = process.argv[2] === "publish-main" ? "publish" : "verify";
+}
 const { loadInventory, preflight, publish, validateIdentity, verify } = await import(${JSON.stringify(new URL("../../../.github/scripts/release.mjs", import.meta.url))});
-if (!productionVerify) try {
+if (!productionMain) try {
   const inventory = loadInventory();
   const identity = validateIdentity(inventory);
   if (["publish", "publish-and-verify"].includes(process.argv[2]) && identity.attempt === "1") preflight(inventory);
@@ -1186,8 +1195,8 @@ exit 1
 		expect(existsSync(stateAfterFailure.packDirectory!)).toBe(false);
 	});
 
-	it("runs the production publish CLI against checked tarball files", () => {
-		const result = runHelper("publish-cli", statePath);
+	it("runs production publish main against checked tarball files", () => {
+		const result = runHelper("publish-main", statePath);
 		expect(result.status).toBe(0);
 		const state = readState(statePath);
 		expect(state.calls.filter(([command]) => command === "pack")).toHaveLength(5);
@@ -1201,8 +1210,8 @@ exit 1
 		expect(result.stdout).toContain("final verification: pending");
 	});
 
-	it("production CLI accepts attempt 2 only after rechecking committed inventory and retained content", () => {
-		const first = runHelper("publish-cli", statePath);
+	it("production publish main accepts attempt 2 only after rechecking committed inventory and retained content", () => {
+		const first = runHelper("publish-main", statePath);
 		expect(first.status).toBe(0);
 		const state = readState(statePath);
 		state.calls = [];
@@ -1212,14 +1221,14 @@ exit 1
 		);
 		state.packages[last.name].distTags.latest = previousVersion(last.version);
 		writeFileSync(statePath, JSON.stringify(state));
-		const resumed = runHelper("publish-cli", statePath, [], { GITHUB_RUN_ATTEMPT: "2" });
+		const resumed = runHelper("publish-main", statePath, [], { GITHUB_RUN_ATTEMPT: "2" });
 		expect(resumed.status).toBe(0);
 		expect(resumed.stdout).toContain("release run 36056969151 attempt 2");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	}, 20_000);
 
-	it("production CLI rejects changed candidate bytes against a retained registry digest", () => {
-		const first = runHelper("publish-cli", statePath);
+	it("production publish main rejects changed candidate bytes against a retained registry digest", () => {
+		const first = runHelper("publish-main", statePath);
 		expect(first.status).toBe(0);
 		const state = readState(statePath);
 		const retained = INVENTORY[0].name;
@@ -1228,7 +1237,7 @@ exit 1
 		state.packVariation = retained;
 		state.calls = [];
 		writeFileSync(statePath, JSON.stringify(state));
-		const resumed = runHelper("publish-cli", statePath, [], { GITHUB_RUN_ATTEMPT: "2" });
+		const resumed = runHelper("publish-main", statePath, [], { GITHUB_RUN_ATTEMPT: "2" });
 		expect(resumed.status).not.toBe(0);
 		expect(resumed.stderr).toMatch(/integrity|digest|content|mismatch/i);
 		const after = readState(statePath);
@@ -1237,13 +1246,13 @@ exit 1
 		expect(publishCalls(after)).toHaveLength(0);
 	}, 20_000);
 
-	it("production CLI rejects a present target on attempt 1 before packing or publishing", () => {
+	it("production publish main rejects a present target on attempt 1 before packing or publishing", () => {
 		const state = initialState();
 		const first = INVENTORY[0];
 		state.packages[first.name].versions.push(first.version);
 		state.packages[first.name].distTags.latest = first.version;
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish-cli", statePath);
+		const result = runHelper("publish-main", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toMatch(/already|present|fresh|preflight|published/i);
 		const after = readState(statePath);
@@ -1251,18 +1260,18 @@ exit 1
 		expect(publishCalls(after)).toHaveLength(0);
 	});
 
-	it("production CLI captures a real-child error after landing and still observes matching content", () => {
+	it("production publish main captures a real-child error after landing and still observes matching content", () => {
 		const state = initialState();
 		state.publishFailure = { name: INVENTORY[0].name, mode: "after-landing-403" };
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish-cli", statePath);
+		const result = runHelper("publish-main", statePath);
 		expect(result.status).toBe(0);
 		expect(result.stderr).toContain("E403: publish failed");
 		expect(result.stdout).toContain("command errored; matching content observed");
 		expect(publishCalls(readState(statePath))).toHaveLength(5);
 	});
 
-	it("rejects invalid production CLI identity before packing or registry access", () => {
+	it("rejects invalid direct publish CLI identity before packing or registry access", () => {
 		const result = runHelper("publish-cli", statePath, [], { GITHUB_RUN_ATTEMPT: "02" });
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("canonical positive decimal attempt");
