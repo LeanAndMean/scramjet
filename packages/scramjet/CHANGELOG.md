@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.104.0 — Keep assigned work with the agent and improve CI recovery
+
+Directs agents to execute authorized work themselves and permits evidence-based recovery from test and CI failures. Fixes [#565](https://github.com/LeanAndMean/scramjet/issues/565).
+
+### Changed
+
+- Keep execution with the agent when tools, environment, and authority permit it; explain concrete limitations when a user handoff is necessary.
+- Stop after a failed pre-merge push without automatically directing a manual retry, and allow additional test or CI fixes only when new evidence supports a safe action.
+- Poll CI according to observed progress and rerun checks for evidenced transient infrastructure failures without weakening final readiness gates.
+
+### Tests
+
+- Extend base-directive and pre-merge command wiring assertions; pass the full workspace suite and strict Mach 12 command lint.
+
 ## 0.103.2 — Restore user-message spacing after tool results
 
 Keeps a neutral gap before a new user message after committed output without adding duplicate gaps. Fixes [#579](https://github.com/LeanAndMean/scramjet/issues/579).

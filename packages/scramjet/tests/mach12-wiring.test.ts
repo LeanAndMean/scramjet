@@ -1748,7 +1748,9 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(pushGate).toBeGreaterThan(-1);
 		expect(pushGate).toBeLessThan(verify);
 		expect(ciSection).toContain("Otherwise report the result and stop before CI verification");
-		expect(ciSection).toContain("Wait up to 10 minutes for CI on the pushed fix");
+		expect(ciSection.slice(verify)).toContain(
+			"Check CI on each pushed fix using the same progress-aware polling and stop rule",
+		);
 	});
 
 	it("pre-merge uses current checklist references", () => {
@@ -1761,10 +1763,12 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(readinessSection(merge)).not.toContain("statusCheckRollup");
 	});
 
-	it("pre-merge bounds CI waits", () => {
+	it("pre-merge stops polling when CI progress cannot be established", () => {
 		const ciSection = preMerge.slice(preMerge.indexOf("## Step 9:"), preMerge.indexOf("## Step 10:"));
-		expect(ciSection).toContain("poll for at most 10 minutes");
-		expect(ciSection).toContain("report which checks remain pending");
+		expect(ciSection).toContain("poll periodically while provider status or logs show progress");
+		expect(ciSection).toContain(
+			"If progress stalls, inspect the provider state; if it remains unclear or continued waiting is impractical in this session, report which checks remain pending and stop without claiming readiness",
+		);
 		expect(ciSection).toContain("available logs or provider links");
 		expect(ciSection).not.toMatch(/gh pr checks[^\n]*--watch/);
 	});

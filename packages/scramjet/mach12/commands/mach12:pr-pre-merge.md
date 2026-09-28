@@ -201,14 +201,12 @@ Run the project's test suite:
 Report results. If tests fail, do NOT silently ignore failures. Attempt to diagnose and fix:
 
 1. **Diagnose**: Read the test output and trace each failure to its root cause. Determine whether the failure is PR-caused (introduced or exposed by this branch's changes) or pre-existing (also fails on the default branch — compare by running the failing tests against `origin/<default-branch>` using `git stash push -m "pre-merge-check"` only if the tree is dirty, then `git checkout origin/<default-branch> -- . && <run failing tests> && git checkout - -- .` and finally `git stash pop` only if a stash was pushed; alternatively use `git worktree add /tmp/baseline-check origin/<default-branch>` for an isolated comparison without touching the working tree).
-2. **Fix and re-run**: For PR-caused failures with clear fixes (updated test expectations, import paths changed by merge, renamed symbols, missing test fixtures), apply the fix and re-run the test suite once.
-3. **Escalate**: If tests still fail after one fix attempt, or if the fix requires design decisions, escalate to the user with:
+2. **Fix and re-run**: For PR-caused failures with clear fixes (updated test expectations, import paths changed by merge, renamed symbols, missing test fixtures), apply the fix and re-run the test suite. If tests still fail, inspect the new output and continue only when it supports a concrete, safe next fix.
+3. **Escalate**: If no justified next fix remains, or a fix requires a user-owned design decision, escalate to the user with:
    - Which tests failed and their output.
    - The diagnosis (root cause, whether PR-caused or pre-existing).
    - What was attempted (if a fix was tried).
    - A recommendation for next steps.
-
-Do not loop beyond one fix-and-rerun cycle — a second failure always escalates.
 
 ## Step 8: Commit checklist changes
 
@@ -225,7 +223,7 @@ If there are changes, assess and commit them:
    Never use `git add -A` or `git add .` — stage explicit reviewed paths individually based on the assessment above.
 2. **Stage** the files identified for inclusion (`git add <file>...`). When a version changed, stage the canonical version, required mirrors, affected tracked generated metadata, and required changelog update together. If staging fails, report the error, report the command incomplete, and stop before CI and final readiness.
 3. **Commit** with message: "Pre-merge checklist: [brief summary of what was updated]". If the commit fails (pre-commit hook, empty commit, permissions), report the error, report the command incomplete, and stop before CI and final readiness.
-4. **Push** to remote (`git push`). If the push fails, report the error, advise the user to retry manually with `git push`, report the command incomplete, and stop before CI and final readiness. Step 9 may begin only after a successful push, or when the checklist produced no changes.
+4. **Push** to remote (`git push`). If the push fails, report the error and the concrete blocker, report the command incomplete, and stop before CI and final readiness. Do not retry a failed push without evidence that retry is safe and authorized. Step 9 may begin only after a successful push, or when the checklist produced no changes.
 
 ## Step 9: CI verification
 
@@ -239,11 +237,11 @@ If the user provided a skip directive for CI (e.g., "skip CI", "no CI check"), s
 gh pr checks <pr-number> --json name,state,bucket,link
 ```
 
-If checks are pending, poll for at most 10 minutes. If the timeout expires, report which checks remain pending and stop. If no checks appear after a short wait, note that in the report. Proceed when checks pass; diagnose failures before attempting a fix.
+If checks are pending, poll periodically while provider status or logs show progress. If progress stalls, inspect the provider state; if it remains unclear or continued waiting is impractical in this session, report which checks remain pending and stop without claiming readiness. If no checks appear after a short wait, note that in the report. Proceed when checks pass; diagnose failures before attempting a fix.
 
 ### 9b. Diagnose failures
 
-Wait for running checks to settle within the same 10-minute bound, then inspect the available logs or provider links for each failure.
+Use the same progress-aware polling and stop rule for running checks, then inspect the available logs or provider links for each failure.
 
 Identify the root cause of each failure:
 
@@ -253,9 +251,11 @@ Identify the root cause of each failure:
 - **Test failures**: if Step 7d already ran tests and they passed locally, these may stem from code pushed before the checklist ran, or from platform-specific differences.
 - **Other failures** (packaging, smoke tests, import guards): read the log output and diagnose accordingly.
 
+If evidence points to a transient CI or infrastructure failure, rerun the affected check when supported and verify its result for the current PR HEAD. If all required checks pass, proceed to Step 10; otherwise diagnose the new result.
+
 ### 9c. Fix and push
 
-Fix each diagnosed failure locally. For common categories:
+Fix diagnosed PR-caused failures locally. For common categories:
 
 - **Lint/format**: run the project's lint-fix command (e.g., `npx biome check --write .`, `npm run lint -- --write`). Identify the correct command from `package.json` scripts or project configuration.
 - **Type errors**: fix the type issues in the identified files.
@@ -274,12 +274,10 @@ Proceed only when the delegation confirms that the commit was pushed successfull
 
 ### 9d. Verify
 
-Wait up to 10 minutes for CI on the pushed fix. Proceed to Step 10 only when CI passes. If it does not, escalate with:
+Check CI on each pushed fix using the same progress-aware polling and stop rule. Proceed to Step 10 only when CI passes. If checks still fail, inspect the new evidence and return to diagnosis while a concrete, safe next action exists. Otherwise escalate with:
 - Which checks are still unsuccessful and their log output.
 - What was attempted and why it did not resolve the issue.
 - A recommendation for next steps.
-
-Do not attempt a second fix cycle — a persistent failure after one fix always escalates.
 
 ## Step 10: Final readiness and pre-merge report
 

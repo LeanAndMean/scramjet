@@ -27,6 +27,9 @@ const DIRECTIVE_ANCHORS: Record<string, string> = {
 	"comment discipline": "Default to writing no comments",
 	"UI/frontend — exercise before claiming done": "use the feature in a browser before reporting",
 	"risky actions — reversibility / blast radius": "Carefully consider the reversibility and blast radius",
+	"assigned work stays with agent": "execute it rather than asking the user to run a program for you",
+	"authorization does not transfer execution": "obtain authorization, then retain execution ownership where possible",
+	"genuine handoff explains limitation": "explain the concrete limitation and why user action is necessary",
 	"area 4 — authorization sources":
 		"Authorization for such an action can come from the user, the active command's instructions, or durable project instructions",
 	"anti-shortcut (no destructive shortcuts)": "do not use destructive actions as a shortcut",
