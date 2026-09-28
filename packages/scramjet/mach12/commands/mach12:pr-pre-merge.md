@@ -237,11 +237,11 @@ If the user provided a skip directive for CI (e.g., "skip CI", "no CI check"), s
 gh pr checks <pr-number> --json name,state,bucket,link
 ```
 
-If checks are pending, poll for at most 10 minutes. If the timeout expires, report which checks remain pending and stop. If no checks appear after a short wait, note that in the report. Proceed when checks pass; diagnose failures before attempting a fix.
+If checks are pending, poll periodically while provider status or logs show progress. If progress stalls, inspect the provider state; if it remains unclear or continued waiting is impractical in this session, report which checks remain pending and stop without claiming readiness. If no checks appear after a short wait, note that in the report. Proceed when checks pass; diagnose failures before attempting a fix.
 
 ### 9b. Diagnose failures
 
-Wait for running checks to settle within the same 10-minute bound, then inspect the available logs or provider links for each failure.
+Use the same progress-aware polling and stop rule for running checks, then inspect the available logs or provider links for each failure.
 
 Identify the root cause of each failure:
 
@@ -274,7 +274,7 @@ Proceed only when the delegation confirms that the commit was pushed successfull
 
 ### 9d. Verify
 
-Wait up to 10 minutes for CI on each pushed fix. Proceed to Step 10 only when CI passes. If checks still fail, inspect the new evidence and return to diagnosis while a concrete, safe next action exists. Otherwise escalate with:
+Check CI on each pushed fix using the same progress-aware polling and stop rule. Proceed to Step 10 only when CI passes. If checks still fail, inspect the new evidence and return to diagnosis while a concrete, safe next action exists. Otherwise escalate with:
 - Which checks are still unsuccessful and their log output.
 - What was attempted and why it did not resolve the issue.
 - A recommendation for next steps.
