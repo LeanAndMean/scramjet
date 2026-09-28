@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.103.2 — Restore user-message spacing after tool results
+
+Keeps a neutral gap before a new user message after committed output without adding duplicate gaps. Fixes [#579](https://github.com/LeanAndMean/scramjet/issues/579).
+
+### Fixed
+
+- Separate user messages from committed tool results and colored padding in live and restored transcripts; preserve existing neutral spacing.
+
+### Tests
+
+- Cover retained and committed viewports, styled custom-message tails, and restored tool-result history.
+
 ## 0.103.1 — Improve Responses failure recovery and diagnostics
 
 Preserves actionable OpenAI and Azure Responses failures without treating provider rejection as a safe transport retry. Fixes [#575](https://github.com/LeanAndMean/scramjet/issues/575).
