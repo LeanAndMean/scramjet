@@ -21,7 +21,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@leanandmean/coding-agent";
 import type { Component, OverlayAnchor, OverlayHandle, OverlayOptions, TUI } from "@leanandmean/tui";
-import { matchesKey, truncateToWidth, visibleWidth } from "@leanandmean/tui";
+import { decodeKittyPrintable, matchesKey, truncateToWidth, visibleWidth } from "@leanandmean/tui";
 import { spawn } from "child_process";
 
 // Global handle for toggle demo (in real code, use a more elegant pattern)
@@ -951,15 +951,21 @@ class PassiveDemoController extends BaseOverlay {
 
 	handleInput(data: string): void {
 		this.inputCount++;
-		this.lastInputDebug = `len=${data.length} c0=${data.charCodeAt(0)}`;
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 			this.cleanup();
 			this.done();
-		} else if (matchesKey(data, "backspace")) {
-			this.typed = this.typed.slice(0, -1);
-		} else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-			this.typed += data;
+			return;
 		}
+		if (matchesKey(data, "backspace")) {
+			this.typed = this.typed.slice(0, -1);
+			return;
+		}
+		if (matchesKey(data, "enter")) return;
+
+		// SCRAMJET-DIVERGENCE: retained terminals encode printable input explicitly.
+		const printable = decodeKittyPrintable(data) ?? data;
+		this.lastInputDebug = `len=${printable.length} c0=${printable.charCodeAt(0)}`;
+		if (printable.length === 1 && printable.charCodeAt(0) >= 32) this.typed += printable;
 	}
 
 	render(width: number): string[] {
@@ -1303,13 +1309,20 @@ class StreamingInputPanel implements Component {
 	handleInput(data: string): void {
 		if (matchesKey(data, "tab")) {
 			this.onTab();
-		} else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
-			this.onClose();
-		} else if (matchesKey(data, "backspace")) {
-			this.typed = this.typed.slice(0, -1);
-		} else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-			this.typed += data;
+			return;
 		}
+		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+			this.onClose();
+			return;
+		}
+		if (matchesKey(data, "backspace")) {
+			this.typed = this.typed.slice(0, -1);
+			return;
+		}
+		if (matchesKey(data, "enter")) return;
+
+		const printable = decodeKittyPrintable(data) ?? data;
+		if (printable.length === 1 && printable.charCodeAt(0) >= 32) this.typed += printable;
 	}
 
 	render(width: number): string[] {

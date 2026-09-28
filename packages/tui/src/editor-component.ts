@@ -59,6 +59,9 @@ export interface EditorComponent extends Component {
 	/** Set the autocomplete provider */
 	setAutocompleteProvider?(provider: AutocompleteProvider): void;
 
+	// SCRAMJET-DIVERGENCE: completion gating cannot depend on hardware-cursor visibility.
+	isShowingAutocomplete?(): boolean;
+
 	// =========================================================================
 	// Appearance (optional)
 	// =========================================================================
@@ -71,4 +74,7 @@ export interface EditorComponent extends Component {
 
 	/** Set max visible items in autocomplete dropdown */
 	setAutocompleteMaxVisible?(maxVisible: number): void;
+
+	/** Bound the rendered editor and its wrapped text window without discarding input. */
+	setHeightLimit?(limits: () => { rows: number; text: number }): void;
 }

@@ -418,7 +418,8 @@ export function renderImage(
 	if (caps.images === "iterm2") {
 		const sequence = encodeITerm2(base64Data, {
 			width: size.columns,
-			height: "auto",
+			// SCRAMJET-DIVERGENCE: rounded width alone can exceed the reserved row count for tall images.
+			height: size.rows,
 			preserveAspectRatio: options.preserveAspectRatio ?? true,
 		});
 		return { sequence, rows: size.rows };

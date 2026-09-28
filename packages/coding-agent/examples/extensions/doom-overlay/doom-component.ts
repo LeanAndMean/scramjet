@@ -6,7 +6,7 @@
  */
 
 import type { Component } from "@leanandmean/tui";
-import { isKeyRelease, type TUI } from "@leanandmean/tui";
+import { isKeyRelease, matchesKey, type TUI } from "@leanandmean/tui";
 import type { DoomEngine } from "./doom-engine.js";
 import { DoomKeys, mapKeyToDoom } from "./doom-keys.js";
 
@@ -81,8 +81,8 @@ export class DoomOverlayComponent implements Component {
 	}
 
 	handleInput(data: string): void {
-		// Q to pause and exit (but not on release)
-		if (!isKeyRelease(data) && (data === "q" || data === "Q")) {
+		// SCRAMJET-DIVERGENCE: viewport terminals explicitly encode printable pause/exit keys.
+		if (!isKeyRelease(data) && (matchesKey(data, "q") || matchesKey(data, "shift+q"))) {
 			// Send DOOM's pause key before exiting
 			this.engine.pushKey(true, DoomKeys.KEY_PAUSE);
 			this.engine.pushKey(false, DoomKeys.KEY_PAUSE);

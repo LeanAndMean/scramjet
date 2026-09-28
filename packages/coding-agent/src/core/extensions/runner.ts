@@ -83,6 +83,8 @@ const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
 	"tui.select.confirm",
 	"tui.select.cancel",
 	"tui.input.copy",
+	"tui.viewport.pageUp",
+	"tui.viewport.pageDown",
 	"tui.editor.deleteToLineEnd",
 ] as const;
 
