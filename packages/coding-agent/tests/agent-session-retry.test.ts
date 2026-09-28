@@ -1255,6 +1255,46 @@ describe("AgentSession persisted retry authority", () => {
 		}
 	});
 
+	it("does not use unfamiliar snapshot text as retry or overflow evidence", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						`data: ${JSON.stringify({ type: "error", future_failure: { reason: "rate limit 429 maximum context length" } })}\n\n`,
+						{ headers: { "content-type": "text/event-stream" } },
+					),
+			),
+		);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				persist: true,
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+						{ apiKey: "fake", maxRetries: 0, signal },
+					),
+			});
+			await session.prompt("hello");
+			const failed = SessionManager.open(session.sessionManager.getSessionFile()!)
+				.buildSessionContext()
+				.messages.find(
+					(message): message is AssistantMessage => message.role === "assistant" && message.stopReason === "error",
+				);
+			expect(JSON.stringify(failed?.diagnostics)).toContain("maximum context length");
+			expect(events).not.toContainEqual(expect.objectContaining({ type: "compaction_start" }));
+			expect(retryRecords(session)).toEqual([
+				expect.objectContaining({ outcome: "not_attempted", reason: "structured_unknown" }),
+			]);
+			session.dispose();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it.each([
 		["non-retryable legacy text", assistantError("invalid request"), "legacy_non_retryable", "legacy_text"],
 		["missing error evidence", { ...assistantError(""), errorMessage: undefined }, "missing_error_evidence", "none"],

@@ -150,6 +150,11 @@ export class AssistantMessageComponent extends Container {
 			this.contentContainer.addChild(
 				new Text(theme.fg("error", `Request attempt failed: ${message.errorMessage || "Unknown error"}`), 1, 0),
 			);
+			const snapshot = message.diagnostics?.find((diagnostic) => diagnostic.type === "provider_failure_snapshot")
+				?.details?.text;
+			if (typeof snapshot === "string") {
+				this.contentContainer.addChild(new Text(theme.fg("error", `Error details (local):\n${snapshot}`), 1, 0));
+			}
 		}
 	}
 }

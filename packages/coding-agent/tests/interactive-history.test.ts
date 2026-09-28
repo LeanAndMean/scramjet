@@ -1261,16 +1261,47 @@ describe("interactive assistant history", () => {
 		expect(committedChatContainer.render(100).join("\n")).toContain("Recovered answer");
 	});
 
+	it("shows bounded unfamiliar failure details in live and restored local rows", async () => {
+		const { emit, committedChatContainer, mode, setSessionMessages } = createInteractiveHarness();
+		const failed = assistant("", "error");
+		appendResponsesFailureDiagnostics(
+			failed,
+			normalizeResponsesFailure(
+				{ error: { reason: "region unavailable", future_field: { zone: "west" } } },
+				"stream",
+			),
+		);
+		await emit({ type: "message_start", message: assistant("") });
+		await emit({ type: "message_end", message: failed });
+		const live = committedChatContainer.render(120).join("\n");
+		expect(live).toContain("Request attempt failed:");
+		expect(live).toContain("Error details (local):");
+		expect(live).toContain("region unavailable");
+		setSessionMessages([JSON.parse(JSON.stringify(failed))]);
+		(mode.renderInitialMessages as () => void).call(mode);
+		const restored = committedChatContainer.render(120).join("\n");
+		expect(restored).toContain("Error details (local):");
+		expect(restored).toContain("west");
+	});
+
 	it("shows a failed attempt with partial tool calls without implying that tools ran", async () => {
 		const { emit, committedChatContainer, mode } = createInteractiveHarness();
 		const partial = assistant("");
 		partial.content = [{ type: "toolCall", id: "pending", name: "unknown", arguments: {} }];
 		const failure = { ...partial, stopReason: "error" as const, errorMessage: "provider failed" };
+		failure.diagnostics = [
+			{
+				type: "provider_failure_snapshot",
+				timestamp: Date.now(),
+				details: { text: '{"reason":"call interrupted"}' },
+			},
+		];
 		await emit({ type: "message_start", message: partial });
 		await emit({ type: "message_update", message: partial });
 		await emit({ type: "message_end", message: failure });
 		const row = committedChatContainer.children.find((child) => child instanceof AssistantMessageComponent);
 		expect(row?.render(100).join("\n")).toContain("Request attempt failed: provider failed");
+		expect(row?.render(100).join("\n")).toContain("call interrupted");
 		expect((mode.pendingTools as Map<string, unknown>).size).toBe(0);
 	});
 });

@@ -290,6 +290,13 @@ describe("OpenAI Responses failure normalization", () => {
 		return message.diagnostics?.find((diagnostic) => diagnostic.type === "sdk_request_retry")?.details;
 	}
 
+	function failureSnapshot(message: AssistantMessage): string | undefined {
+		const details = message.diagnostics?.find(
+			(diagnostic) => diagnostic.type === "provider_failure_snapshot",
+		)?.details;
+		return typeof details?.text === "string" ? details.text : undefined;
+	}
+
 	it("records SDK recovery from an HTTP rate limit", async () => {
 		const requests = stubFetch([jsonError(429), completedResponse()]);
 		const result = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey, maxRetries: 1 }).result();
@@ -662,7 +669,8 @@ describe("OpenAI Responses failure normalization", () => {
 		] as const) {
 			const failure = normalizeResponsesFailure(error, "request");
 			expect(failure.diagnostic).toEqual(expect.objectContaining({ category, kind }));
-			expect(JSON.stringify(failure)).not.toMatch(/private123456|Bearer secret/);
+			expect(failure.message).not.toMatch(/private123456|Bearer secret/);
+			expect(JSON.stringify(failure.diagnostic)).not.toMatch(/private123456|Bearer secret/);
 		}
 	});
 
@@ -801,29 +809,152 @@ describe("OpenAI Responses failure normalization", () => {
 		}
 	});
 
-	it("withholds JSON-encoded scalar error objects but retains scalar prose", async () => {
+	it("keeps encoded objects in bounded local snapshots and retains scalar prose", async () => {
 		const raw = { headers: { authorization: "Bearer PRIVATE_TOKEN" }, request_body: "PRIVATE_REQUEST_BODY" };
 		for (const encoded of [JSON.stringify(raw), JSON.stringify([raw])]) {
 			for (const value of [{ error: encoded }, { message: encoded }, { error: { message: encoded } }]) {
 				const output = assistantShell();
 				appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(value, "stream"));
-				expect(output.errorMessage).toContain("withheld because they may contain request data");
-				expect(JSON.stringify(output)).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY|authorization|request_body/);
+				expect(output.errorMessage).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY/);
+				expect(failureSnapshot(JSON.parse(JSON.stringify(output)) as AssistantMessage)).toContain(
+					"PRIVATE_REQUEST_BODY",
+				);
 			}
 			stubFetch([sse([{ type: "response.failed", response: { error: encoded } }])]);
 			const result = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey, maxRetries: 0 }).result();
-			expect(JSON.stringify(result)).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY|authorization|request_body/);
-			expect(result.errorMessage).toContain("withheld because they may contain request data");
+			expect(result.errorMessage).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY/);
+			expect(failureSnapshot(result)).toContain("PRIVATE_REQUEST_BODY");
 		}
 		const longObject = JSON.stringify({ ...raw, detail: "x".repeat(5000) });
 		const longFailure = normalizeResponsesFailure({ message: longObject }, "stream");
-		expect(longFailure.message).toContain("withheld because they may contain request data");
-		expect(longFailure.message).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY|authorization|request_body/);
+		expect(longFailure.message).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY/);
+		expect(longFailure.snapshot).toContain("PRIVATE_REQUEST_BODY");
+		expect(longFailure.snapshot?.length).toBeLessThanOrEqual(4096);
 		const prose = normalizeResponsesFailure({ error: "[Gateway] deployment unavailable" }, "stream");
 		expect(prose.message).toContain("[Gateway] deployment unavailable");
 	});
 
-	it("does not persist the SDK's status-prefixed serialized nested message", () => {
+	it("persists bounded unfamiliar details separately from retry classification", () => {
+		const output = assistantShell();
+		appendResponsesFailureDiagnostics(
+			output,
+			normalizeResponsesFailure(
+				{ error: { code: "future_rejection", reason: "Deployment is unavailable", trace: { region: "west" } } },
+				"stream",
+			),
+		);
+		const restored = JSON.parse(JSON.stringify(output)) as AssistantMessage;
+		expect(failureSnapshot(restored)).toContain("Deployment is unavailable");
+		expect(failureSnapshot(restored)).toContain("west");
+		expect(restored.errorMessage).not.toContain("west");
+		expect(validateResponsesProviderFailure(restored.diagnostics)).toEqual({
+			status: "valid",
+			category: "provider_error",
+			retryDisposition: "unknown",
+		});
+		expect(isContextOverflow(restored)).toBe(false);
+	});
+
+	it("keeps SDK-prefixed serialized nested messages in a bounded local snapshot", () => {
+		const error = APIError.generate(
+			400,
+			{ error: { message: JSON.stringify({ message: "Deployment is unavailable", extra: "gateway detail" }) } },
+			undefined,
+			new Headers(),
+		);
+		const output = assistantShell();
+		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, "request"));
+		expect(output.errorMessage).not.toContain("gateway detail");
+		expect(failureSnapshot(JSON.parse(JSON.stringify(output)) as AssistantMessage)).toContain("gateway detail");
+		expect(providerDetails(output)).toEqual(expect.objectContaining({ category: "invalid_request" }));
+	});
+
+	it("keeps unfamiliar response.failed siblings alongside a known error", async () => {
+		const result = await failureFrom(
+			sse([
+				{
+					type: "response.failed",
+					response: {
+						error: { code: "invalid_request_error", message: "Invalid deployment" },
+						future_hints: { region: "west", action: "choose another deployment" },
+					},
+				},
+			]),
+		);
+		expect(result.errorMessage).toContain("Invalid deployment");
+		expect(failureSnapshot(JSON.parse(JSON.stringify(result)) as AssistantMessage)).toContain(
+			"choose another deployment",
+		);
+		expect(validateResponsesProviderFailure(result.diagnostics)).toEqual({
+			status: "valid",
+			category: "invalid_request",
+			retryDisposition: "non_transient",
+		});
+	});
+
+	it("keeps unfamiliar incomplete details alongside a response.failed reason", async () => {
+		const result = await failureFrom(
+			sse([
+				{
+					type: "response.failed",
+					response: { incomplete_details: { reason: "invalid request", future_hint: "switch region" } },
+				},
+			]),
+		);
+		expect(result.errorMessage).toContain("invalid request");
+		expect(failureSnapshot(result)).toContain("switch region");
+		expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
+	});
+
+	it("keeps rich response.failed details and Azure errors in local snapshots", async () => {
+		const event = { type: "response.failed", response: { future_failure: { reason: "region unavailable" } } };
+		const openai = await failureFrom(sse([event]));
+		expect(failureSnapshot(openai)).toContain("region unavailable");
+		stubFetch([sse([event])]);
+		const azure = await streamAzureOpenAIResponses(azureModel, context, {
+			apiKey,
+			azureBaseUrl: "https://example.openai.azure.com/openai/v1",
+			maxRetries: 0,
+		}).result();
+		expect(failureSnapshot(azure)).toContain("region unavailable");
+		expect(providerDetails(azure)).toEqual(expect.objectContaining({ retryDisposition: "unknown" }));
+	});
+
+	it("retains a primitive unfamiliar failure as local detail without authorizing retry", () => {
+		const output = assistantShell();
+		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure("novel gateway refusal", "stream"));
+		expect(failureSnapshot(output)).toContain("novel gateway refusal");
+		expect(validateResponsesProviderFailure(output.diagnostics)).toEqual({
+			status: "valid",
+			category: "malformed_event",
+			retryDisposition: "unknown",
+		});
+	});
+
+	it("does not invoke unknown error getters or toJSON and bounds cyclic failures", () => {
+		const input: Record<string, unknown> = { reason: `\u001b[31m${"x".repeat(8000)}` };
+		input.self = input;
+		Object.defineProperty(input, "toJSON", {
+			value: () => {
+				throw new Error("must not execute");
+			},
+		});
+		Object.defineProperty(input, "privateGetter", {
+			get: () => {
+				throw new Error("must not execute");
+			},
+		});
+		const output = assistantShell();
+		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(input, "stream"));
+		const text = failureSnapshot(JSON.parse(JSON.stringify(output)) as AssistantMessage);
+		expect(text).toContain("[circular]");
+		expect(text).toContain("[accessor]");
+		expect(text).not.toContain("\u001b");
+		expect(text?.length).toBeLessThanOrEqual(4096);
+		expect(validateResponsesProviderFailure(output.diagnostics).status).toBe("valid");
+	});
+
+	it("keeps the SDK's status-prefixed serialized nested message out of the scalar reason", () => {
 		const raw = JSON.stringify({
 			headers: { authorization: "Bearer PRIVATE_TOKEN" },
 			request_body: "PRIVATE_REQUEST_BODY",
@@ -831,19 +962,19 @@ describe("OpenAI Responses failure normalization", () => {
 		const error = APIError.generate(400, { error: { message: raw } }, undefined, new Headers());
 		const output = assistantShell();
 		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, "request"));
-		expect(output.errorMessage).toContain("withheld because they may contain request data");
-		expect(JSON.stringify(output)).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY|authorization|request_body/);
+		expect(output.errorMessage).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY/);
+		expect(failureSnapshot(JSON.parse(JSON.stringify(output)) as AssistantMessage)).toContain("PRIVATE_REQUEST_BODY");
 		expect(providerDetails(output)).toEqual(expect.objectContaining({ category: "invalid_request" }));
 	});
 
-	it("does not persist the SDK's serialized error-object fallback", () => {
+	it("keeps the SDK's serialized object separate from its scalar reason", () => {
 		const headers = new Headers();
 		const error = new APIError(400, { detail: { request_body: "private request body" } }, undefined, headers);
 		const output = assistantShell();
 		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, "request"));
 		expect(output.errorMessage).toContain("invalid");
-		expect(JSON.stringify(output)).not.toContain("private request body");
-		expect(JSON.stringify(output)).not.toContain("request_body");
+		expect(output.errorMessage).not.toContain("private request body");
+		expect(failureSnapshot(JSON.parse(JSON.stringify(output)) as AssistantMessage)).toContain("private request body");
 
 		const scalarError = new APIError(400, { message: "invalid deployment name" }, undefined, headers);
 		const scalarOutput = assistantShell();
@@ -882,7 +1013,8 @@ describe("OpenAI Responses failure normalization", () => {
 			expect(result.errorMessage).toContain(
 				typeof detail === "string" ? "deployment unavailable" : "Unrecognized error fields: detail",
 			);
-			expect(JSON.stringify(result)).not.toContain("private request body");
+			expect(result.errorMessage).not.toContain("private request body");
+			if (typeof detail === "object") expect(failureSnapshot(result)).toContain("private request body");
 			expect(providerDetails(result)).toEqual(expect.objectContaining({ retryDisposition: "unknown" }));
 		}
 	});
@@ -899,8 +1031,9 @@ describe("OpenAI Responses failure normalization", () => {
 			]),
 		);
 		expect(rich.errorMessage).toContain("message");
-		expect(rich.errorMessage).toContain("withheld because they may contain request data");
-		expect(JSON.stringify(rich)).not.toMatch(/deployment unavailable|private body/);
+		expect(rich.errorMessage).not.toContain("private body");
+		expect(failureSnapshot(rich)).toContain("deployment unavailable");
+		expect(failureSnapshot(rich)).toContain("private body");
 		expect(providerDetails(rich)).toEqual(
 			expect.objectContaining({
 				kind: "provider_event",
@@ -963,10 +1096,8 @@ describe("OpenAI Responses failure normalization", () => {
 		const empty = await failureFrom(sse([{ type: "response.failed", response: {} }]));
 		expect(rich.errorMessage).toContain("Unrecognized response fields: new_failure");
 		expect(novelError.errorMessage).toContain("Unrecognized error fields: future_field");
-		expect(JSON.parse(JSON.stringify(rich)).errorMessage).toContain("withheld because they may contain request data");
-		expect(JSON.parse(JSON.stringify(novelError)).errorMessage).toContain(
-			"withheld because they may contain request data",
-		);
+		expect(failureSnapshot(JSON.parse(JSON.stringify(rich)) as AssistantMessage)).toContain("private body");
+		expect(failureSnapshot(JSON.parse(JSON.stringify(novelError)) as AssistantMessage)).toContain("private body");
 		expect(empty.errorMessage).not.toContain("withheld");
 		expect(providerDetails(rich)).toEqual(
 			expect.objectContaining({
@@ -985,8 +1116,8 @@ describe("OpenAI Responses failure normalization", () => {
 				retryDisposition: "unknown",
 			}),
 		);
-		expect(JSON.stringify(rich)).not.toContain("private body");
-		expect(JSON.stringify(novelError)).not.toContain("private body");
+		expect(JSON.stringify(providerDetails(rich))).not.toContain("private body");
+		expect(JSON.stringify(providerDetails(novelError))).not.toContain("private body");
 	});
 
 	it("treats SDK user abort as an abort without retry evidence", async () => {
@@ -1588,7 +1719,8 @@ describe("OpenAI Responses failure normalization", () => {
 
 		for (const sentinel of sentinels) expect(result.errorMessage).toContain(sentinel);
 		expect(serialized).not.toContain("secret-stack");
-		expect(JSON.stringify(result.diagnostics)).not.toContain("unsupported_private_code");
+		expect(JSON.stringify(providerDetails(result))).not.toContain("unsupported_private_code");
+		expect(failureSnapshot(result)).toContain("unsupported_private_code");
 
 		const capped = normalizeResponsesFailure({ message: `Unsupported parameter ${"word ".repeat(46)}` }, "stream");
 		expect(capped.message.startsWith("OpenAI Responses request failed without recognized details: Unsupported")).toBe(

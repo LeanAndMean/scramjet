@@ -235,6 +235,7 @@ interface FailureScalars {
 export interface SafeResponsesFailure {
 	message: string;
 	diagnostic: ResponsesProviderFailureV1;
+	snapshot?: string;
 }
 
 type ResponsesSdkRetryAttempt =
@@ -334,6 +335,61 @@ function isSerializedErrorObject(value: unknown): boolean {
 	}
 }
 
+function snapshotFailure(value: unknown): string | undefined {
+	const seen = new WeakSet<object>();
+	let nodes = 0;
+	const visit = (input: unknown, depth: number): unknown => {
+		if (typeof input === "string") {
+			if (input.length <= PROVIDER_MESSAGE_MAX_LENGTH && isSerializedErrorObject(input)) {
+				try {
+					return visit(JSON.parse(input), depth + 1);
+				} catch {
+					// Retain the original bounded text when parsing fails.
+				}
+			}
+			const text = input.slice(0, 512).replace(/[\u007f-\u009f]/g, " ");
+			return input.length > 512 ? `${text}… [truncated]` : text;
+		}
+		if (typeof input === "number" || typeof input === "boolean" || input === null) return input;
+		if (typeof input === "bigint") return String(input);
+		if (typeof input !== "object") return undefined;
+		if (seen.has(input)) return "[circular]";
+		if (depth >= 5 || ++nodes > 80) return "[truncated]";
+		seen.add(input);
+		try {
+			const descriptors = Object.getOwnPropertyDescriptors(input);
+			const isArray = Array.isArray(input);
+			const keys = Object.keys(descriptors).filter(
+				(key) =>
+					key !== "stack" &&
+					key !== "toJSON" &&
+					key !== "output" &&
+					key !== "usage" &&
+					!(isArray && key === "length"),
+			);
+			const result: Record<string, unknown> = Object.create(null);
+			for (const key of keys.slice(0, 16)) {
+				const descriptor = descriptors[key];
+				const field = "value" in descriptor ? visit(descriptor.value, depth + 1) : "[accessor]";
+				if (field !== undefined) result[key.slice(0, 128).replace(/[\u007f-\u009f]/g, " ")] = field;
+			}
+			if (keys.length > 16) result["…"] = `[${keys.length - 16} more fields]`;
+			return isArray && keys.every((key) => /^(0|[1-9]\d*)$/.test(key)) ? Object.values(result) : result;
+		} catch {
+			return "[uninspectable]";
+		} finally {
+			seen.delete(input);
+		}
+	};
+	const snapshot = visit(value, 0);
+	if (snapshot === undefined || (typeof snapshot === "object" && Object.keys(snapshot ?? {}).length === 0))
+		return undefined;
+	const text = JSON.stringify(snapshot, null, 2);
+	return text.length > PROVIDER_MESSAGE_MAX_LENGTH
+		? `${text.slice(0, PROVIDER_MESSAGE_MAX_LENGTH - 14)}… [truncated]`
+		: text;
+}
+
 function readableFailureDetail(message: string | undefined): string | undefined {
 	const detail = message
 		?.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
@@ -411,6 +467,7 @@ function makeFailure(
 	value: unknown,
 	phase: "request" | "stream",
 	kindHint?: ResponsesFailureKind,
+	snapshotSource: unknown = value,
 ): SafeResponsesFailure {
 	if (value instanceof SafeResponsesFailureError) return value.failure;
 	const { top, nested } = readFailureScalars(value);
@@ -649,9 +706,19 @@ function makeFailure(
 			isSerializedErrorObject(nestedRecord?.message) ||
 			richKnownFields.length > 0 ||
 			errorFields.some((key) => hasStructuredDetail((nestedRecord ?? topRecord)?.[key])));
+	const snapshot =
+		snapshotSource !== value ||
+		unsupportedEvidence ||
+		((category === "unknown" ||
+			category === "provider_error" ||
+			(category === "malformed_event" && typeof snapshotSource !== "object")) &&
+			!detail)
+			? snapshotFailure(snapshotSource)
+			: undefined;
 	return {
-		message: `${composeFailureMessage(category, detail)}${withheld ? ` ${WITHHELD_DETAILS_NOTICE}` : ""}`,
+		message: `${composeFailureMessage(category, detail)}${withheld && !snapshot ? ` ${WITHHELD_DETAILS_NOTICE}` : ""}`,
 		diagnostic,
+		...(snapshot ? { snapshot } : {}),
 	};
 }
 
@@ -798,6 +865,9 @@ export function appendResponsesFailureDiagnostics(
 	output.diagnostics = [
 		...(output.diagnostics ?? []),
 		{ type: "provider_failure", timestamp: Date.now(), details: { ...failure.diagnostic } },
+		...(failure.snapshot
+			? [{ type: "provider_failure_snapshot", timestamp: Date.now(), details: { text: failure.snapshot } }]
+			: []),
 		...(sdkRetry ? [{ type: "sdk_request_retry", timestamp: Date.now(), details: { ...sdkRetry } }] : []),
 		{ type: "gateway_observability", timestamp: Date.now(), details: { ...GATEWAY_OBSERVABILITY } },
 	];
@@ -896,8 +966,12 @@ export function validateResponsesProviderFailure(diagnostics: unknown): Response
 	return { status: "valid", category: details.category, retryDisposition: details.retryDisposition };
 }
 
-function providerEventFailure(value: unknown, kindHint?: ResponsesFailureKind): SafeResponsesFailureError {
-	return new SafeResponsesFailureError(makeFailure(value, "stream", kindHint));
+function providerEventFailure(
+	value: unknown,
+	kindHint?: ResponsesFailureKind,
+	snapshotSource: unknown = value,
+): SafeResponsesFailureError {
+	return new SafeResponsesFailureError(makeFailure(value, "stream", kindHint, snapshotSource));
 }
 
 // =============================================================================
@@ -1379,26 +1453,36 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.failed") {
 			const error = event.response?.error;
 			const details = event.response?.incomplete_details;
-			if (error) throw providerEventFailure(error, "provider_event");
-			if (details?.reason) throw providerEventFailure({ message: details.reason }, "provider_event");
+			if (error) {
+				const response = recordOf(event.response);
+				const hasOtherDetails = Object.keys(response ?? {}).some(
+					(key) => !["id", "status", "output", "usage", "error"].includes(key),
+				);
+				throw providerEventFailure(error, "provider_event", hasOtherDetails ? response : error);
+			}
+			if (details?.reason) {
+				const response = recordOf(event.response);
+				const extra =
+					Object.keys(response ?? {}).some(
+						(key) => !["id", "status", "output", "usage", "incomplete_details"].includes(key),
+					) || Object.keys(recordOf(details) ?? {}).some((key) => key !== "reason");
+				const failure = { message: details.reason };
+				throw providerEventFailure(failure, "provider_event", extra ? response : failure);
+			}
 			const response = recordOf(event.response);
 			const fields = unfamiliarFieldNames(response, ["id", "status", "output", "usage"]);
 			const rich =
 				response && Object.keys(response).some((key) => !["id", "status", "output", "usage"].includes(key));
-			const withheld =
-				response &&
-				Object.keys(response).some(
-					(key) => !["id", "status", "output", "usage"].includes(key) && hasStructuredDetail(response[key]),
-				);
 			throw providerEventFailure(
 				rich
 					? {
 							type: "response.failed",
 							reason: "unsupported_details",
-							message: `Unrecognized response fields${fields.length ? `: ${fields.join(", ")}` : ""}.${withheld ? ` ${WITHHELD_DETAILS_NOTICE}` : ""}`,
+							message: `Unrecognized response fields${fields.length ? `: ${fields.join(", ")}` : ""}.`,
 						}
 					: event,
 				rich ? "provider_event" : "malformed_event",
+				rich ? response : event,
 			);
 		}
 	}
