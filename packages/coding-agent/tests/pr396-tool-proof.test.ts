@@ -13,7 +13,7 @@ it("allows a committed tool renderer to settle details requested by expansion", 
 	const mode = Object.create(InteractiveMode.prototype) as Record<string, unknown>;
 	Object.assign(mode, {
 		isInitialized: true,
-		ui: { requestRender: vi.fn(), commit: vi.fn(), rebuild },
+		ui: { requestRender: vi.fn(), commit: vi.fn(), rebuild, getViewportState: () => undefined },
 		footer: { invalidate: vi.fn() },
 		committedChatContainer,
 		chatContainer,

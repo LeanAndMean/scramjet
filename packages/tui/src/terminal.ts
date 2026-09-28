@@ -60,6 +60,8 @@ export interface Terminal {
 
 	// SCRAMJET-DIVERGENCE: holdOscInput wires TUI-level query control to StdinBuffer (#298).
 	holdOscInput(hold: boolean): void;
+	// SCRAMJET-DIVERGENCE: opt-in viewport protocol ownership.
+	setViewportMode?(enabled: boolean): void;
 }
 
 /**
@@ -67,6 +69,9 @@ export interface Terminal {
  */
 export class ProcessTerminal implements Terminal {
 	private wasRaw = false;
+	private started = false;
+	private viewportMode = false;
+	private keyboardFallback?: ReturnType<typeof setTimeout>;
 	private inputHandler?: (data: string) => void;
 	private resizeHandler?: () => void;
 	private _kittyProtocolActive = false;
@@ -94,6 +99,8 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
+		if (this.started) return;
+		this.started = true;
 		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
 
@@ -139,6 +146,7 @@ export class ProcessTerminal implements Terminal {
 	 */
 	private setupStdinBuffer(): void {
 		this.stdinBuffer = new StdinBuffer({ timeout: 10 });
+		this.stdinBuffer.setMouseReporting(this.viewportMode);
 
 		// Kitty protocol response pattern: \x1b[?<flags>u
 		const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
@@ -149,6 +157,7 @@ export class ProcessTerminal implements Terminal {
 			if (!this._kittyProtocolActive) {
 				const match = sequence.match(kittyResponsePattern);
 				if (match) {
+					if (!this.inputHandler) return;
 					this._kittyProtocolActive = true;
 					setKittyProtocolActive(true);
 
@@ -157,7 +166,8 @@ export class ProcessTerminal implements Terminal {
 					// Flag 2 = report event types (press/repeat/release)
 					// Flag 4 = report alternate keys (shifted key, base layout key)
 					// Base layout key enables shortcuts to work with non-Latin keyboard layouts
-					process.stdout.write("\x1b[>7u");
+					// SCRAMJET-DIVERGENCE: explicit Enter events prevent legacy release bytes from authorizing twice.
+					process.stdout.write(this.viewportMode ? "\x1b[>15u" : "\x1b[>7u");
 					return; // Don't forward protocol response to TUI
 				}
 			}
@@ -198,7 +208,8 @@ export class ProcessTerminal implements Terminal {
 		this.setupStdinBuffer();
 		process.stdin.on("data", this.stdinDataHandler!);
 		process.stdout.write("\x1b[?u");
-		setTimeout(() => {
+		this.keyboardFallback = setTimeout(() => {
+			this.keyboardFallback = undefined;
 			if (!this._kittyProtocolActive && !this._modifyOtherKeysActive) {
 				process.stdout.write("\x1b[>4;2m");
 				this._modifyOtherKeysActive = true;
@@ -236,6 +247,8 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
+		clearTimeout(this.keyboardFallback);
+		this.keyboardFallback = undefined;
 		if (this._kittyProtocolActive) {
 			// Disable Kitty keyboard protocol first so any late key releases
 			// do not generate new Kitty escape sequences.
@@ -273,7 +286,27 @@ export class ProcessTerminal implements Terminal {
 		}
 	}
 
+	// SCRAMJET-DIVERGENCE: modes belong to the configured viewport, not ordinary terminal callers.
+	setViewportMode(enabled: boolean): void {
+		if (enabled === this.viewportMode) return;
+		// Kitty keeps separate keyboard stacks for the normal and alternate buffers.
+		if (this._kittyProtocolActive) this.write("\x1b[<u");
+		this.viewportMode = enabled;
+		this.stdinBuffer?.setMouseReporting(enabled);
+		this.write(
+			enabled
+				? "\x1b[?1049h\x1b[?1004h\x1b[?1002h\x1b[?1006h"
+				: "\x1b[?1002l\x1b[?1006l\x1b[?1004l\x1b[0m\x1b[?1049l",
+		);
+		if (this._kittyProtocolActive) this.write(enabled ? "\x1b[>15u" : "\x1b[>7u");
+	}
+
 	stop(): void {
+		if (!this.started) return;
+		this.started = false;
+		clearTimeout(this.keyboardFallback);
+		this.keyboardFallback = undefined;
+		this.setViewportMode(false);
 		if (this.clearProgressInterval()) {
 			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}

@@ -1,5 +1,6 @@
+import { setRenderedCopy } from "../render-copy.js";
 import type { Component } from "../tui.js";
-import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
+import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsiDetailed } from "../utils.js";
 
 /**
  * Text component - displays multi-line text with word wrapping
@@ -64,14 +65,14 @@ export class Text implements Component {
 		const contentWidth = Math.max(1, width - this.paddingX * 2);
 
 		// Wrap text (this preserves ANSI codes but does NOT pad)
-		const wrappedLines = wrapTextWithAnsi(normalizedText, contentWidth);
+		const wrappedLines = wrapTextWithAnsiDetailed(normalizedText, contentWidth);
 
 		// Add margins and background to each line
 		const leftMargin = " ".repeat(this.paddingX);
 		const rightMargin = " ".repeat(this.paddingX);
 		const contentLines: string[] = [];
 
-		for (const line of wrappedLines) {
+		for (const { text: line } of wrappedLines) {
 			// Add margins
 			const lineWithMargins = leftMargin + line + rightMargin;
 
@@ -94,7 +95,18 @@ export class Text implements Component {
 			emptyLines.push(line);
 		}
 
-		const result = [...emptyLines, ...contentLines, ...emptyLines];
+		const result = setRenderedCopy(
+			[...emptyLines, ...contentLines, ...emptyLines],
+			[
+				...emptyLines.map(() => null),
+				...wrappedLines.map(({ text, after }) => ({
+					start: this.paddingX,
+					end: this.paddingX + visibleWidth(text),
+					after,
+				})),
+				...emptyLines.map(() => null),
+			],
+		);
 
 		// Update cache
 		this.cachedText = this.text;

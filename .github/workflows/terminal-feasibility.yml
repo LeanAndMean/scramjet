@@ -1,0 +1,138 @@
+name: Native terminal feasibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-terminal-result:
+    name: Native terminal result
+    if: ${{ always() }}
+    needs: [native-safety, native-terminal]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every native job to succeed
+        env:
+          SAFETY_RESULT: ${{ needs.native-safety.result }}
+          INTERACTION_RESULT: ${{ needs.native-terminal.result }}
+        run: test "$SAFETY_RESULT" = success && test "$INTERACTION_RESULT" = success
+
+  native-safety:
+    name: native-safety (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Provision disposable Kitty desktop
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kitty xvfb xdotool openbox scrot
+      - name: Provision disposable iTerm2
+        if: runner.os == 'macOS'
+        run: brew install --cask iterm2
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Check iTerm2 graphics and handoffs
+        if: runner.os == 'macOS'
+        run: python3 .github/scripts/terminal-safety.py "$RUNNER_TEMP/terminal-safety"
+      - name: Check Kitty graphics and handoffs
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a -s '-screen 0 1280x900x24' dbus-run-session -- bash -c '
+            openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
+            python3 .github/scripts/terminal-safety.py "$RUNNER_TEMP/terminal-safety"
+          '
+      - name: Preserve native safety evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-safety-${{ matrix.os }}
+          path: ${{ runner.temp }}/terminal-safety
+          if-no-files-found: error
+          retention-days: 7
+
+  native-terminal:
+    name: native-terminal (${{ matrix.terminal }}, tmux=${{ matrix.tmux }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            terminal: apple
+            tmux: false
+          - os: macos-15
+            terminal: iterm2
+            tmux: false
+          - os: ubuntu-24.04
+            terminal: vte
+            tmux: false
+          - os: ubuntu-24.04
+            terminal: vte
+            tmux: true
+          - os: ubuntu-24.04
+            terminal: xterm
+            tmux: false
+          - os: ubuntu-24.04
+            terminal: kitty
+            tmux: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Provision disposable Linux desktop
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xfce4-terminal xterm kitty xvfb xdotool x11-utils openbox xclip scrot tmux
+      - name: Provision disposable iTerm2
+        if: matrix.terminal == 'iterm2'
+        run: brew install --cask iterm2
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Probe native macOS terminal
+        if: runner.os == 'macOS'
+        run: python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal=${{ matrix.terminal }}
+      - name: Probe Linux VTE terminal
+        if: runner.os == 'Linux'
+        env:
+          PROBE_TMUX: ${{ matrix.tmux }}
+          PROBE_TERMINAL: ${{ matrix.terminal }}
+        run: |
+          xvfb-run -a -s '-screen 0 1280x900x24' dbus-run-session -- bash -c '
+            mkdir -p "$RUNNER_TEMP/terminal-evidence"
+            openbox > "$RUNNER_TEMP/terminal-evidence/openbox.log" 2>&1 &
+            args=()
+            if [[ "$PROBE_TMUX" == true ]]; then args+=(--tmux); fi
+            python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal="$PROBE_TERMINAL" "${args[@]}"
+          '
+      - name: Preserve feasibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-feasibility-${{ matrix.terminal }}-tmux-${{ matrix.tmux }}
+          path: ${{ runner.temp }}/terminal-evidence
+          if-no-files-found: error
+          retention-days: 7

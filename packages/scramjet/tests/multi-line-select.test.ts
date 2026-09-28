@@ -185,6 +185,99 @@ describe("MultiLineSelectList", () => {
 		});
 	});
 
+	describe("row-bounded viewing", () => {
+		const plain = { selectedText: identity, description: identity, scrollInfo: identity };
+		const choices = () =>
+			items({ label: "A1\nA2\nA3" }, { label: "B1\nB2" }, { label: "C1\nC2\nC3\nC4" }, { label: "D1" });
+
+		it("shows partial neighbors and moves only enough to reveal the selected choice", () => {
+			const list = new MultiLineSelectList(choices(), 8, plain);
+			list.setMaxHeight?.(8);
+			list.setSelectedIndex(1);
+			expect(list.render(40)).toEqual(["  A1", "  A2", "  A3", "→ B1", "  B2", "  C1", "  C2", "  (2/4)"]);
+			list.handleInput(DOWN);
+			expect(list.render(40)).toEqual(["  A3", "  B1", "  B2", "→ C1", "  C2", "  C3", "  C4", "  (3/4)"]);
+			list.handleInput(UP);
+			list.setMaxHeight?.(7);
+			expect(list.render(40)).toEqual(["  A3", "→ B1", "  B2", "  C1", "  C2", "  C3", "  (2/4)"]);
+			list.setMaxHeight?.(8);
+			expect(list.render(40)[0]).toBe("  A3");
+			list.handleInput(UP);
+			expect(list.render(40)[0]).toBe("→ A1");
+		});
+
+		it("prioritizes the selected representation over the optional position row", () => {
+			const list = new MultiLineSelectList(choices(), 8, plain);
+			list.setSelectedIndex(2);
+			for (const height of [4, 3, 0]) {
+				list.setMaxHeight?.(height);
+				expect(list.render(40)).toEqual(["→ C1", "  C2", "  C3", "  C4"]);
+			}
+			const select = vi.fn();
+			list.onSelect = select;
+			list.handleInput(DOWN);
+			list.handleInput(ENTER);
+			expect(select).toHaveBeenCalledWith(expect.objectContaining({ value: "3" }));
+		});
+
+		it("preserves the item cap, wraparound and distant selection without rendering the whole list", () => {
+			let descriptions = 0;
+			const data = Array.from({ length: 10000 }, (_, i) => ({
+				value: String(i),
+				label: `option-${i}`,
+				description: "detail",
+			}));
+			const list = new MultiLineSelectList(data, 3, {
+				...plain,
+				description: (text) => {
+					descriptions++;
+					return text;
+				},
+			});
+			list.setMaxHeight?.(30);
+			list.setSelectedIndex(9000);
+			const lines = list.render(40);
+			expect(lines.filter((line) => line.includes("option-"))).toHaveLength(3);
+			expect(lines).toContain("→ option-9000");
+			expect(descriptions).toBeLessThanOrEqual(8);
+			list.setSelectedIndex(0);
+			list.handleInput(UP);
+			expect(list.render(40)).toContain("→ option-9999");
+			list.handleInput(DOWN);
+			expect(list.render(40)[0]).toBe("→ option-0");
+		});
+
+		it("restores the original item window when the row budget is removed", () => {
+			const list = new MultiLineSelectList(choices(), 3, plain);
+			list.setSelectedIndex(1);
+			const original = list.render(40);
+			list.setMaxHeight?.(3);
+			expect(list.render(40).length).toBeLessThan(original.length);
+			list.setMaxHeight?.(undefined);
+			expect(list.render(40)).toEqual(original);
+		});
+
+		it("reflows and resizes without changing selection or losing selected rows", () => {
+			const data = items(
+				...Array.from({ length: 12 }, (_, i) => ({
+					label: `choice ${i} with words`,
+					description: `Description ${i} with more words and 界`,
+				})),
+			);
+			const list = new MultiLineSelectList(data, 8, plain, { recommendedIndex: 6 });
+			list.setSelectedIndex(6);
+			for (const width of [45, 16, 60]) {
+				const selected = new MultiLineSelectList([data[6]], 1, plain, { recommendedIndex: 0 }).render(width);
+				list.setMaxHeight?.(selected.length + 2);
+				const lines = list.render(width);
+				expect(lines.length).toBeLessThanOrEqual(selected.length + 2);
+				const start = lines.findIndex((line) => line.startsWith("→ "));
+				expect(lines.slice(start, start + selected.length)).toEqual(selected);
+				expect(list.getSelectedItem()?.value).toBe("6");
+			}
+		});
+	});
+
 	describe("keyboard navigation", () => {
 		it("down arrow moves selection", () => {
 			const list = new MultiLineSelectList(items({ label: "A" }, { label: "B" }), 8, theme);

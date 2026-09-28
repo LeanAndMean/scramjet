@@ -18,6 +18,8 @@ export interface Keybindings {
 	"tui.editor.jumpBackward": true;
 	"tui.editor.pageUp": true;
 	"tui.editor.pageDown": true;
+	"tui.viewport.pageUp": true;
+	"tui.viewport.pageDown": true;
 	"tui.editor.deleteCharBackward": true;
 	"tui.editor.deleteCharForward": true;
 	"tui.editor.deleteWordBackward": true;
@@ -88,6 +90,9 @@ export const TUI_KEYBINDINGS = {
 	},
 	"tui.editor.pageUp": { defaultKeys: "pageUp", description: "Page up" },
 	"tui.editor.pageDown": { defaultKeys: "pageDown", description: "Page down" },
+	// SCRAMJET-DIVERGENCE: transcript entry must not require a pointer or steal ordinary editor paging.
+	"tui.viewport.pageUp": { defaultKeys: "alt+pageUp", description: "Browse transcript up" },
+	"tui.viewport.pageDown": { defaultKeys: "alt+pageDown", description: "Browse transcript down" },
 	"tui.editor.deleteCharBackward": {
 		defaultKeys: "backspace",
 		description: "Delete character backward",

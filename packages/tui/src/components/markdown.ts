@@ -1,4 +1,5 @@
 import { Marked, type Token, Tokenizer, type Tokens } from "marked";
+import { getRenderedCopy, type RenderedCopyRow, setRenderedCopy, wrapRenderedCopy } from "../render-copy.js";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.js";
 import type { Component } from "../tui.js";
 import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
@@ -167,27 +168,20 @@ export class Markdown implements Component {
 
 		// Convert tokens to styled terminal output
 		const renderedLines: string[] = [];
+		const renderedCopy: RenderedCopyRow[] = [];
 
 		for (let i = 0; i < tokens.length; i++) {
 			const token = tokens[i];
 			const nextToken = tokens[i + 1];
 			const tokenLines = this.renderToken(token, contentWidth, nextToken?.type);
+			for (const row of getRenderedCopy(tokenLines)) renderedCopy.push(row);
 			for (const tokenLine of tokenLines) {
 				renderedLines.push(tokenLine);
 			}
 		}
 
 		// Wrap lines (NO padding, NO background yet)
-		const wrappedLines: string[] = [];
-		for (const line of renderedLines) {
-			if (isImageLine(line)) {
-				wrappedLines.push(line);
-			} else {
-				for (const wrappedLine of wrapTextWithAnsi(line, contentWidth)) {
-					wrappedLines.push(wrappedLine);
-				}
-			}
-		}
+		const wrappedLines = wrapRenderedCopy(setRenderedCopy(renderedLines, renderedCopy), contentWidth);
 
 		// Add margins and background to each wrapped line
 		const leftMargin = " ".repeat(this.paddingX);
@@ -222,7 +216,13 @@ export class Markdown implements Component {
 		}
 
 		// Combine top padding, content, and bottom padding
-		const result = emptyLines.concat(contentLines, emptyLines);
+		const result = setRenderedCopy(emptyLines.concat(contentLines, emptyLines), [
+			...emptyLines.map(() => null),
+			...getRenderedCopy(wrappedLines).map((row) =>
+				row === null ? null : { ...row, start: row.start + this.paddingX, end: row.end + this.paddingX },
+			),
+			...emptyLines.map(() => null),
+		]);
 
 		// Update cache
 		this.cachedText = this.text;
@@ -382,23 +382,26 @@ export class Markdown implements Component {
 					}
 				}
 				lines.push(this.theme.codeBlockBorder("```"));
+				const codeEnd = lines.length - 1;
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after code blocks (unless space token follows)
 				}
+				if (/^\s*$/.test(indent))
+					setRenderedCopy(
+						lines,
+						getRenderedCopy(lines).map((row, index) =>
+							row && index > 0 && index < codeEnd ? { ...row, start: visibleWidth(indent) } : row,
+						),
+					);
 				break;
 			}
 
-			case "list": {
-				const listLines = this.renderList(token as Tokens.List, 0, width, styleContext);
-				lines.push(...listLines);
-				// Don't add spacing after lists if a space token follows
-				// (the space token will handle it)
-				break;
-			}
+			case "list":
+				return this.renderList(token as Tokens.List, 0, width, styleContext);
 
 			case "table": {
 				const tableLines = this.renderTable(token as Tokens.Table, width, nextTokenType, styleContext);
-				lines.push(...tableLines);
+				for (const line of tableLines) lines.push(line);
 				break;
 			}
 
@@ -428,9 +431,13 @@ export class Markdown implements Component {
 				for (let i = 0; i < quoteTokens.length; i++) {
 					const quoteToken = quoteTokens[i];
 					const nextQuoteToken = quoteTokens[i + 1];
-					renderedQuoteLines.push(
-						...this.renderToken(quoteToken, quoteContentWidth, nextQuoteToken?.type, quoteInlineStyleContext),
-					);
+					for (const line of this.renderToken(
+						quoteToken,
+						quoteContentWidth,
+						nextQuoteToken?.type,
+						quoteInlineStyleContext,
+					))
+						renderedQuoteLines.push(line);
 				}
 
 				// Avoid rendering an extra empty quote line before the outer blockquote spacing.
@@ -586,6 +593,7 @@ export class Markdown implements Component {
 	 */
 	private renderList(token: Tokens.List, depth: number, width: number, styleContext?: InlineStyleContext): string[] {
 		const lines: string[] = [];
+		const copyRows: RenderedCopyRow[] = [];
 		const indent = "    ".repeat(depth);
 		// Use the list's start property (defaults to 1 for ordered lists)
 		const startNumber = typeof token.start === "number" ? token.start : 1;
@@ -602,27 +610,47 @@ export class Markdown implements Component {
 
 			for (const itemToken of item.tokens) {
 				if (itemToken.type === "list") {
-					lines.push(...this.renderList(itemToken as Tokens.List, depth + 1, width, styleContext));
+					const nested = this.renderList(itemToken as Tokens.List, depth + 1, width, styleContext);
+					for (const line of nested) lines.push(line);
+					for (const row of getRenderedCopy(nested)) copyRows.push(row);
 					renderedAnyLine = true;
 					continue;
 				}
 
-				const itemLines = this.renderToken(itemToken, itemWidth, undefined, styleContext);
-				for (const line of itemLines) {
-					for (const wrappedLine of wrapTextWithAnsi(line, itemWidth)) {
-						const linePrefix = renderedAnyLine ? continuationPrefix : firstPrefix;
-						lines.push(linePrefix + wrappedLine);
-						renderedAnyLine = true;
-					}
+				const itemLines = wrapRenderedCopy(
+					this.renderToken(itemToken, itemWidth, undefined, styleContext),
+					itemWidth,
+				);
+				const itemCopy = getRenderedCopy(itemLines);
+				for (const [index, line] of itemLines.entries()) {
+					const linePrefix = renderedAnyLine ? continuationPrefix : firstPrefix;
+					const prefixWidth = visibleWidth(linePrefix);
+					const source = itemCopy[index];
+					const continuation = renderedAnyLine && copyRows.at(-1)?.after !== undefined;
+					lines.push(linePrefix + line);
+					copyRows.push(
+						source === null
+							? null
+							: {
+									start:
+										continuation || (source.end === 0 && source.after === undefined)
+											? prefixWidth + source.start
+											: source.start,
+									end: prefixWidth + source.end,
+									after: source.after,
+								},
+					);
+					renderedAnyLine = true;
 				}
 			}
 
 			if (!renderedAnyLine) {
 				lines.push(firstPrefix);
+				copyRows.push({ start: 0, end: visibleWidth(firstPrefix) });
 			}
 		}
 
-		return lines;
+		return setRenderedCopy(lines, copyRows);
 	}
 
 	/**

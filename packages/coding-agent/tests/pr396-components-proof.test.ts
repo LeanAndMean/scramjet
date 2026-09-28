@@ -8,7 +8,7 @@ it("commits finalized bash output after a replaceable status", async () => {
 	const committedChatContainer = new Container();
 	const mode = Object.create(InteractiveMode.prototype) as Record<string, unknown>;
 	Object.assign(mode, {
-		ui: { requestRender: vi.fn(), commit: vi.fn() } as unknown as TUI,
+		ui: { requestRender: vi.fn(), commit: vi.fn(), getViewportState: () => undefined } as unknown as TUI,
 		committedChatContainer,
 		chatContainer: new Container(),
 		pendingMessagesContainer: new Container(),

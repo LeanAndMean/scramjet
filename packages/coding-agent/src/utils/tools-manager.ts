@@ -324,7 +324,12 @@ const TERMUX_PACKAGES: Record<string, string> = {
 
 // Ensure a tool is available, downloading if necessary
 // Returns the path to the tool, or null if unavailable
-export async function ensureTool(tool: "fd" | "rg", silent: boolean = false): Promise<string | undefined> {
+// SCRAMJET-DIVERGENCE: interactive startup owns presentation of provisioning diagnostics.
+export async function ensureTool(
+	tool: "fd" | "rg",
+	silent: boolean = false,
+	report: (message: string) => void = console.log,
+): Promise<string | undefined> {
 	const existingPath = getToolPath(tool);
 	if (existingPath) {
 		return existingPath;
@@ -335,7 +340,7 @@ export async function ensureTool(tool: "fd" | "rg", silent: boolean = false): Pr
 
 	if (isOfflineModeEnabled()) {
 		if (!silent) {
-			console.log(chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`));
+			report(chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`));
 		}
 		return undefined;
 	}
@@ -345,25 +350,25 @@ export async function ensureTool(tool: "fd" | "rg", silent: boolean = false): Pr
 	if (platform() === "android") {
 		const pkgName = TERMUX_PACKAGES[tool] ?? tool;
 		if (!silent) {
-			console.log(chalk.yellow(`${config.name} not found. Install with: pkg install ${pkgName}`));
+			report(chalk.yellow(`${config.name} not found. Install with: pkg install ${pkgName}`));
 		}
 		return undefined;
 	}
 
 	// Tool not found - download it
 	if (!silent) {
-		console.log(chalk.dim(`${config.name} not found. Downloading...`));
+		report(chalk.dim(`${config.name} not found. Downloading...`));
 	}
 
 	try {
 		const path = await downloadTool(tool);
 		if (!silent) {
-			console.log(chalk.dim(`${config.name} installed to ${path}`));
+			report(chalk.dim(`${config.name} installed to ${path}`));
 		}
 		return path;
 	} catch (e) {
 		if (!silent) {
-			console.log(chalk.yellow(`Failed to download ${config.name}: ${e instanceof Error ? e.message : e}`));
+			report(chalk.yellow(`Failed to download ${config.name}: ${e instanceof Error ? e.message : e}`));
 		}
 		return undefined;
 	}

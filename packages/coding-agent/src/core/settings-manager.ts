@@ -106,6 +106,12 @@ export interface Settings {
 	thinkingBudgets?: ThinkingBudgetsSettings; // Custom token budgets for thinking levels
 	editorPaddingX?: number; // Horizontal padding for input editor (default: 0)
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
+	// SCRAMJET-DIVERGENCE: renderer choice is startup-only; retained layout preferences are live.
+	tuiMode?: "retained" | "committed";
+	dockEditor?: boolean;
+	retainTranscriptOnExit?: boolean;
+	editorMaxHeightPercent?: number;
+	scrollWheelStep?: number;
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
@@ -266,6 +272,8 @@ export class SettingsManager {
 		this.globalSettingsLoadError = globalLoadError;
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
+		this.normalizeViewportSettings(this.globalSettings, "global");
+		this.normalizeViewportSettings(this.projectSettings, "project");
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 	}
 
@@ -433,12 +441,15 @@ export class SettingsManager {
 			this.recordError("project", projectLoad.error);
 		}
 
+		this.normalizeViewportSettings(this.globalSettings, "global");
+		this.normalizeViewportSettings(this.projectSettings, "project");
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 	}
 
 	/** Apply additional overrides on top of current settings */
 	applyOverrides(overrides: Partial<Settings>): void {
 		this.settings = deepMergeSettings(this.settings, overrides);
+		this.normalizeViewportSettings(this.settings, "global");
 	}
 
 	/** Mark a global field as modified during this session */
@@ -533,6 +544,8 @@ export class SettingsManager {
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 
 		if (this.globalSettingsLoadError) {
+			// SCRAMJET-DIVERGENCE: startup drains load errors, so every blocked save needs its own diagnostic.
+			this.recordError("global", this.globalSettingsLoadError);
 			return;
 		}
 
@@ -1010,6 +1023,80 @@ export class SettingsManager {
 	setTreeFilterMode(mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all"): void {
 		this.globalSettings.treeFilterMode = mode;
 		this.markModified("treeFilterMode");
+		this.save();
+	}
+
+	private normalizeViewportSettings(settings: Settings, scope: SettingsScope): void {
+		for (const [key, minimum, maximum, fallback] of [
+			["editorMaxHeightPercent", 10, 50, 30],
+			["scrollWheelStep", 1, 20, 3],
+		] as const) {
+			const value = settings[key];
+			if (value === undefined) continue;
+			if (typeof value !== "number" || !Number.isFinite(value)) {
+				this.recordError(scope, new Error(`${key} must be a finite number; using ${fallback}.`));
+				settings[key] = fallback;
+			} else settings[key] = Math.max(minimum, Math.min(maximum, Math.floor(value)));
+		}
+		for (const [key, fallback] of [
+			["dockEditor", true],
+			["retainTranscriptOnExit", false],
+		] as const) {
+			if (settings[key] !== undefined && typeof settings[key] !== "boolean") {
+				this.recordError(scope, new Error(`${key} must be a boolean; using ${fallback}.`));
+				settings[key] = fallback;
+			}
+		}
+	}
+
+	getTuiMode(): "retained" | "committed" {
+		const mode = this.settings.tuiMode === undefined ? "retained" : this.settings.tuiMode;
+		if (mode !== "retained" && mode !== "committed")
+			throw new Error('tuiMode must be "retained" or "committed"; correct settings.json and restart.');
+		return mode;
+	}
+
+	getRetainTranscriptOnExit(): boolean {
+		return this.settings.retainTranscriptOnExit ?? false;
+	}
+
+	setRetainTranscriptOnExit(enabled: boolean): void {
+		this.globalSettings.retainTranscriptOnExit = enabled;
+		this.normalizeViewportSettings(this.globalSettings, "global");
+		this.markModified("retainTranscriptOnExit");
+		this.save();
+	}
+
+	getDockEditor(): boolean {
+		return this.settings.dockEditor ?? true;
+	}
+
+	setDockEditor(enabled: boolean): void {
+		this.globalSettings.dockEditor = enabled;
+		this.normalizeViewportSettings(this.globalSettings, "global");
+		this.markModified("dockEditor");
+		this.save();
+	}
+
+	getEditorMaxHeightPercent(): number {
+		return this.settings.editorMaxHeightPercent ?? 30;
+	}
+
+	setEditorMaxHeightPercent(percent: number): void {
+		this.globalSettings.editorMaxHeightPercent = percent;
+		this.normalizeViewportSettings(this.globalSettings, "global");
+		this.markModified("editorMaxHeightPercent");
+		this.save();
+	}
+
+	getScrollWheelStep(): number {
+		return this.settings.scrollWheelStep ?? 3;
+	}
+
+	setScrollWheelStep(step: number): void {
+		this.globalSettings.scrollWheelStep = step;
+		this.normalizeViewportSettings(this.globalSettings, "global");
+		this.markModified("scrollWheelStep");
 		this.save();
 	}
 

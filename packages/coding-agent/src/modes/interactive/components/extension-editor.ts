@@ -110,7 +110,7 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 		this.editor.handleInput(keyData);
 	}
 
-	private openExternalEditor(): void {
+	private async openExternalEditor(): Promise<void> {
 		const editorCmd = process.env.VISUAL || process.env.EDITOR;
 		if (!editorCmd) {
 			return;
@@ -121,6 +121,8 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 
 		try {
 			fs.writeFileSync(tmpFile, currentText, "utf-8");
+			// SCRAMJET-DIVERGENCE: drain the opening key's release before the external editor takes input.
+			await this.tui.terminal.drainInput();
 			this.tui.stop();
 
 			const [editor, ...editorArgs] = editorCmd.split(" ");

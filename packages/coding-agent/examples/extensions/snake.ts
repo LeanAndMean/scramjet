@@ -3,7 +3,7 @@
  */
 
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
-import { matchesKey, visibleWidth } from "@leanandmean/tui";
+import { decodeKittyPrintable, matchesKey, visibleWidth } from "@leanandmean/tui";
 
 const GAME_WIDTH = 40;
 const GAME_HEIGHT = 15;
@@ -148,6 +148,8 @@ class SnakeComponent {
 	}
 
 	handleInput(data: string): void {
+		// SCRAMJET-DIVERGENCE: retained terminals encode printable input explicitly.
+		data = decodeKittyPrintable(data) ?? data;
 		// If paused (resuming), wait for any key
 		if (this.paused) {
 			if (matchesKey(data, "escape") || data === "q" || data === "Q") {
