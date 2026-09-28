@@ -3614,7 +3614,30 @@ export class InteractiveMode {
 			case "user": {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
-					if (this.chatContainer.children.length > 0) {
+					// SCRAMJET-DIVERGENCE: separate user rows from visible committed results without doubling gaps (#579).
+					let committedTailRow: string | undefined;
+					if (this.chatContainer.children.length === 0) {
+						for (let i = this.committedChatContainer.children.length - 1; i >= 0; i--) {
+							const lines = this.committedChatContainer.children[i].render(this.ui.terminal.columns);
+							if (lines.length > 0) {
+								committedTailRow = lines[lines.length - 1];
+								break;
+							}
+						}
+					}
+					const tailNeedsGap =
+						committedTailRow !== undefined &&
+						(stripVTControlCharacters(committedTailRow).trim() !== "" ||
+							[...committedTailRow.matchAll(/\x1b\[([\d;:]*)m/g)].some(([, params]) => {
+								const codes = params.split(";");
+								for (let i = 0; i < codes.length; i++) {
+									const code = Number(codes[i].split(":")[0]);
+									if (code === 48 || (code >= 40 && code <= 47) || (code >= 100 && code <= 107)) return true;
+									if (code === 38) i += codes[i + 1] === "2" ? 4 : codes[i + 1] === "5" ? 2 : 0;
+								}
+								return false;
+							}));
+					if (this.chatContainer.children.length > 0 || tailNeedsGap) {
 						this.chatContainer.addChild(new Spacer(1));
 					}
 					// SCRAMJET-DIVERGENCE: scramjet-command block rendering (issue 82)
