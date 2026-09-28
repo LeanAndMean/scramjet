@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@leanandmean/agent";
-import type { AssistantMessage } from "@leanandmean/ai";
+import { type AssistantMessage, getModel } from "@leanandmean/ai";
 import { type Component, Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@leanandmean/tui";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,6 +40,7 @@ import snakeExample from "../examples/extensions/snake.js";
 import invadersExample from "../examples/extensions/space-invaders.js";
 import { createToolHtmlRenderer } from "../src/core/export-html/tool-renderer.js";
 import { defineTool } from "../src/core/extensions/index.js";
+import { SettingsManager } from "../src/core/settings-manager.js";
 import { ArminComponent } from "../src/modes/interactive/components/armin.js";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.js";
 import { DaxnutsComponent } from "../src/modes/interactive/components/daxnuts.js";
@@ -47,6 +48,7 @@ import type { ToolExecutionComponent } from "../src/modes/interactive/components
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
 import { initTheme, onThemeChange } from "../src/modes/interactive/theme/theme.js";
 import * as clipboard from "../src/utils/clipboard.js";
+import { ensureTool } from "../src/utils/tools-manager.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
 
 function assistant(text: string, stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
@@ -151,6 +153,7 @@ function createInteractiveHarness(): {
 					getEditorPaddingX: () => 0,
 					getAutocompleteMaxVisible: () => 5,
 					getDockEditor: () => false,
+					getRetainTranscriptOnExit: () => false,
 					getEditorMaxHeightPercent: () => 30,
 					getScrollWheelStep: () => 3,
 					getProjectSettings: () => ({}),
@@ -818,6 +821,135 @@ describe("retained approval and exit safety", () => {
 			await h.dispose();
 			resetCapabilitiesCache();
 			imageConversion.convertToPng.mockReset();
+		}
+	});
+
+	it("keeps scoped startup inside the alternate screen", async () => {
+		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.mocked(ensureTool).mockImplementationOnce(async (_tool, _silent, report) => {
+			report?.("TOOL-PROVISIONING-NOTICE");
+			return undefined;
+		});
+		const h = await createProductionInteractiveHarness(
+			100,
+			30,
+			undefined,
+			true,
+			SettingsManager.inMemory({ theme: "pi-dark", quietStartup: false }),
+			[{ model: getModel("openai", "gpt-4o") }],
+		);
+		try {
+			expect(output).not.toHaveBeenCalled();
+			await h.frame();
+			expect(h.terminal.writes.join("")).toContain("Model scope: gpt-4o");
+			expect(h.terminal.writes.join("")).toContain("TOOL-PROVISIONING-NOTICE");
+			h.mode.stop();
+			await h.terminal.flush();
+			expect(h.terminal.bufferLines().join("\n")).not.toContain("Model scope:");
+			expect(h.terminal.bufferLines().join("\n")).not.toContain("TOOL-PROVISIONING-NOTICE");
+		} finally {
+			output.mockRestore();
+			await h.dispose();
+		}
+	});
+
+	it.each([true, false])("retains all styled rows and the dock only on final exit, docking=%s", async (dockEditor) => {
+		const h = await createProductionInteractiveHarness(
+			60,
+			20,
+			undefined,
+			true,
+			SettingsManager.inMemory({ theme: "pi-dark", quietStartup: true, dockEditor, retainTranscriptOnExit: true }),
+		);
+		const exitSignal = new Error("intercepted exit");
+		const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+			throw exitSignal;
+		});
+		try {
+			h.internals.committedChatContainer.addChild(
+				new Text(Array.from({ length: 80 }, (_, i) => `HISTORY-${String(i).padStart(3, "0")}`).join("\n"), 0, 0),
+			);
+			h.internals.chatContainer.addChild(new Text("\x1b[1;31;44mSTYLED-LIVE\x1b[0m", 0, 0));
+			h.extensionUI.setWidget("above", ["ABOVE-EDITOR"]);
+			h.extensionUI.setWidget("below", ["BELOW-EDITOR"], { placement: "belowEditor" });
+			h.extensionUI.setEditorText("EXIT-DRAFT");
+			h.extensionUI.setFooter(() => new Text("\x1b[4;32mEXIT-FOOTER\x1b[0m", 0, 0));
+			await h.frame();
+			h.internals.ui.stop();
+			await h.terminal.flush();
+			expect(h.terminal.bufferLines().join("\n")).not.toContain("HISTORY-");
+			h.terminal.write("SHELL-BEFORE\r\n");
+			h.internals.ui.start();
+			await h.frame();
+			h.internals.ui.scrollViewportTo(20);
+			await h.frame();
+			const mark = h.terminal.markWrites();
+			await expect((h.mode as unknown as { shutdown(): Promise<void> }).shutdown()).rejects.toBe(exitSignal);
+			await h.terminal.flush();
+			const rows = h.terminal.bufferLines();
+			const text = rows.join("\n");
+			let previous = text.indexOf("SHELL-BEFORE");
+			for (const sentinel of [
+				...Array.from({ length: 80 }, (_, i) => `HISTORY-${String(i).padStart(3, "0")}`),
+				"STYLED-LIVE",
+				"ABOVE-EDITOR",
+				"EXIT-DRAFT",
+				"BELOW-EDITOR",
+				"EXIT-FOOTER",
+			]) {
+				expect(text.split(sentinel)).toHaveLength(2);
+				expect(text.indexOf(sentinel)).toBeGreaterThan(previous);
+				previous = text.indexOf(sentinel);
+			}
+			expect(h.terminal.writesSince(mark)).toContain("\x1b[1;31;44m");
+			const footerRow = rows.findIndex((line) => line.includes("EXIT-FOOTER"));
+			expect(h.terminal.cell(footerRow - h.terminal.viewportY, 0).underline).toBe(true);
+			h.terminal.write("SHELL-AFTER\r\n");
+			await h.terminal.flush();
+			expect(h.terminal.cell(h.terminal.cursorPosition().row - 1, 0).underline).toBe(false);
+			const stopped = h.terminal.markWrites();
+			h.mode.stop();
+			expect(h.terminal.writesSince(stopped)).toBe("");
+		} finally {
+			exit.mockRestore();
+			await h.dispose();
+		}
+	});
+
+	it("restores and flushes the terminal before reporting a failed exit snapshot", async () => {
+		const disposed = vi.fn();
+		const h = await createProductionInteractiveHarness(
+			60,
+			20,
+			(pi) => {
+				pi.on("session_shutdown", disposed);
+			},
+			true,
+			SettingsManager.inMemory({ theme: "pi-dark", quietStartup: true, retainTranscriptOnExit: true }),
+		);
+		const exitSignal = new Error("intercepted exit");
+		const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+			throw exitSignal;
+		});
+		const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const component = new Text("LIVE", 0, 0);
+			h.internals.chatContainer.addChild(component);
+			await h.frame();
+			vi.spyOn(component, "render").mockImplementation(() => {
+				throw new Error("snapshot failed");
+			});
+			const mark = h.terminal.markWrites();
+			await expect((h.mode as unknown as { shutdown(): Promise<void> }).shutdown()).rejects.toBe(exitSignal);
+			expect(h.terminal.writesSince(mark)).toContain("\x1b[?1049l");
+			expect(h.terminal.bufferLines().join("\n")).not.toContain("LIVE");
+			expect(disposed).toHaveBeenCalledOnce();
+			expect(diagnostic).toHaveBeenCalledExactlyOnceWith("Could not retain terminal history: snapshot failed");
+			expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+		} finally {
+			exit.mockRestore();
+			diagnostic.mockRestore();
+			await h.dispose();
 		}
 	});
 

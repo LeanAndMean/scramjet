@@ -16,6 +16,7 @@ import { SessionManager } from "../../src/core/session-manager.js";
 import { SettingsManager } from "../../src/core/settings-manager.js";
 import { InteractiveMode } from "../../src/modes/interactive/interactive-mode.js";
 import { onThemeChange, stopThemeWatcher } from "../../src/modes/interactive/theme/theme.js";
+import * as clipboard from "../../src/utils/clipboard.js";
 import { ensureTool } from "../../src/utils/tools-manager.js";
 
 interface InteractiveInternals {
@@ -47,6 +48,7 @@ export async function createProductionInteractiveHarness(
 	extension?: ExtensionFactory,
 	viewport = true,
 	settings?: SettingsManager,
+	scopedModels?: AgentSession["scopedModels"],
 ) {
 	const directory = mkdtempSync(join(tmpdir(), "scramjet-interactive-test-"));
 	const terminal = new HeadlessTerminal(columns, rows);
@@ -92,6 +94,7 @@ export async function createProductionInteractiveHarness(
 				...services,
 				sessionManager,
 				initialActiveToolNames: [],
+				scopedModels,
 				agent: new Agent({
 					streamFn: () => {
 						throw new Error("Production layout tests must not invoke a model");
@@ -102,11 +105,15 @@ export async function createProductionInteractiveHarness(
 		{ cwd: directory, agentDir: directory, sessionManager: SessionManager.inMemory(directory) },
 	);
 	const keybindings = vi.spyOn(KeybindingsManager, "create").mockImplementation(() => new KeybindingsManager());
+	const clipboardFactory = vi.isMockFunction(clipboard.createWslClipboardReader)
+		? undefined
+		: vi.spyOn(clipboard, "createWslClipboardReader").mockReturnValue(undefined);
 	let mode: InteractiveMode;
 	try {
 		mode = new InteractiveMode(runtime, { terminal });
 	} finally {
 		keybindings.mockRestore();
+		clipboardFactory?.mockRestore();
 	}
 	const internals = mode as unknown as InteractiveInternals;
 	expect(vi.isMockFunction(ensureTool)).toBe(true);

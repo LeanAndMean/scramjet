@@ -82,7 +82,7 @@ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.js";
-import { copyToClipboard, readClipboardText } from "../../utils/clipboard.js";
+import { copyToClipboard, createWslClipboardReader, readClipboardText } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
 import { parseGitUrl } from "../../utils/git.js";
 import { getCwdRelativePath } from "../../utils/paths.js";
@@ -382,10 +382,20 @@ export class InteractiveMode {
 		this.tuiMode = this.settingsManager.getTuiMode();
 		// SCRAMJET-DIVERGENCE: retained interactive rendering and injectable terminals.
 		this.ui = new TUI(options.terminal ?? new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
+		this.clipboardReader = this.tuiMode === "retained" ? createWslClipboardReader() : undefined;
+		this.ui.addLifecycleListener((event) => {
+			if (event === "start") void this.clipboardReader?.start().catch(() => {});
+			else {
+				this.clipboardPasteGeneration++;
+				this.clipboardPastePending = undefined;
+				this.clipboardReader?.close();
+			}
+		});
 		this.ui.addInputListener((data) => {
 			if (
 				!isKeyRelease(data) &&
 				data !== "\x1b[I" &&
+				!/^\x1b\[<34;\d{1,5};\d{1,5}M$/.test(data) &&
 				!/^\x1b\[6;\d+;\d+t$/.test(data) &&
 				!/^\x1b\[<\d+;\d+;\d+m$/.test(data)
 			)
@@ -451,6 +461,7 @@ export class InteractiveMode {
 	}
 
 	// SCRAMJET-DIVERGENCE: preserve production ownership while making mutable overflow browseable.
+	private clipboardReader: ReturnType<typeof createWslClipboardReader>;
 	private clipboardPastePending?: Promise<string>;
 	private clipboardPasteGeneration = 0;
 	private clipboardPasteOwner?: Component;
@@ -477,7 +488,11 @@ export class InteractiveMode {
 				await this.ui.renderNow({ requireFlush: true });
 			}
 			if (!current()) return;
-			this.clipboardPastePending ??= readClipboardText();
+			if (this.clipboardReader) {
+				await this.clipboardReader.start();
+				if (!current()) return;
+			}
+			this.clipboardPastePending ??= this.clipboardReader ? this.clipboardReader.read() : readClipboardText();
 			pending = this.clipboardPastePending;
 			const text = await pending;
 			if (!current()) return;
@@ -893,23 +908,12 @@ export class InteractiveMode {
 
 		// Ensure fd and rg are available (downloads if missing, adds to PATH via getBinDir)
 		// Both are needed: fd for autocomplete, rg for grep tool and bash commands
-		const [fdPath] = await Promise.all([ensureTool("fd"), ensureTool("rg")]);
+		const startupDiagnostics: string[] = [];
+		const report = (message: string) => {
+			startupDiagnostics.push(message);
+		};
+		const [fdPath] = await Promise.all([ensureTool("fd", false, report), ensureTool("rg", false, report)]);
 		this.fdPath = fdPath;
-
-		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
-			const modelList = this.session.scopedModels
-				.map((sm) => {
-					const thinkingStr = sm.thinkingLevel ? `:${sm.thinkingLevel}` : "";
-					return `${sm.model.id}${thinkingStr}`;
-				})
-				.join(", ");
-			const cycleKeys = this.keybindings.getKeys("app.model.cycleForward");
-			const cycleHint =
-				cycleKeys.length > 0
-					? theme.fg("muted", ` (${formatKeyText(cycleKeys.join("/"), { capitalize: true })} to cycle)`)
-					: "";
-			console.log(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`));
-		}
 
 		// Add header container as first child (content built after theme detection below)
 		this.ui.addChild(this.headerContainer);
@@ -951,6 +955,15 @@ export class InteractiveMode {
 
 		// Build themed header content (after theme detection so colors are correct)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
+			if (this.session.scopedModels.length > 0) {
+				const modelList = this.session.scopedModels
+					.map(({ model, thinkingLevel }) => `${model.id}${thinkingLevel ? `:${thinkingLevel}` : ""}`)
+					.join(", ");
+				const cycleKeys = this.keybindings.getKeys("app.model.cycleForward");
+				const cycleHint =
+					cycleKeys.length > 0 ? ` (${formatKeyText(cycleKeys.join("/"), { capitalize: true })} to cycle)` : "";
+				this.headerContainer.addChild(new Text(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`), 1, 0));
+			}
 			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
 
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
@@ -1007,6 +1020,8 @@ export class InteractiveMode {
 			this.builtInHeader = new Text("", 0, 0);
 			this.headerContainer.addChild(this.builtInHeader);
 		}
+
+		for (const diagnostic of startupDiagnostics) this.headerContainer.addChild(new Text(diagnostic, 1, 0));
 
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
@@ -3855,10 +3870,17 @@ export class InteractiveMode {
 		// This prevents escape sequences from leaking to the parent shell over slow SSH.
 		await this.ui.terminal.drainInput(1000);
 
-		this.stop();
+		await this.settingsManager.flush();
+		let exitCode = 0;
+		try {
+			this.stop({ retainContent: this.settingsManager.getRetainTranscriptOnExit() });
+		} catch (error) {
+			exitCode = 1;
+			console.error(`Could not retain terminal history: ${error instanceof Error ? error.message : String(error)}`);
+		}
 		await this.ui.terminal.flush?.();
 		await this.runtimeHost.dispose();
-		process.exit(0);
+		process.exit(exitCode);
 	}
 
 	private emergencyTerminalExit(): never {
@@ -4422,7 +4444,7 @@ export class InteractiveMode {
 				.replace(/[\r\n\t]/g, " ")
 				.slice(0, 200);
 			this.showWarning(
-				`Layout settings not saved (${details}). Changes may be lost on restart; project overrides still apply.`,
+				`Display settings not saved (${details}). Changes may be lost on restart; project overrides still apply.`,
 			);
 		}
 		this.ui.requestRender();
@@ -4459,6 +4481,7 @@ export class InteractiveMode {
 					warnings: this.settingsManager.getWarnings(),
 					tuiMode: this.tuiMode,
 					dockEditor: this.settingsManager.getDockEditor(),
+					retainTranscriptOnExit: this.settingsManager.getRetainTranscriptOnExit(),
 					editorMaxHeightPercent: this.settingsManager.getEditorMaxHeightPercent(),
 					scrollWheelStep: this.settingsManager.getScrollWheelStep(),
 					viewportProjectOverrides: Object.keys(this.settingsManager.getProjectSettings()),
@@ -4558,6 +4581,11 @@ export class InteractiveMode {
 					},
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
+					},
+					onRetainTranscriptOnExitChange: (enabled) => {
+						this.settingsManager.setRetainTranscriptOnExit(enabled);
+						void this.settleLayoutSettings(selector);
+						return this.settingsManager.getRetainTranscriptOnExit();
 					},
 					onDockEditorChange: (enabled) => {
 						this.settingsManager.setDockEditor(enabled);
@@ -6085,26 +6113,29 @@ export class InteractiveMode {
 		}
 	}
 
-	stop(): void {
-		this.selectorOpenGeneration++;
-		this.pendingSelectorOpenGeneration = undefined;
-		this.unregisterSignalHandlers();
-		if (this.settingsManager.getShowTerminalProgress()) {
-			this.ui.terminal.setProgress(false);
-		}
-		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
-		}
-		this.clearExtensionTerminalInputListeners();
-		this.footer.dispose();
-		this.footerDataProvider.dispose();
-		if (this.unsubscribe) {
-			this.unsubscribe();
-		}
-		if (this.isInitialized) {
-			this.isInitialized = false;
-			this.ui.stop();
+	stop(options?: { retainContent?: boolean }): void {
+		try {
+			if (this.isInitialized) {
+				this.isInitialized = false;
+				this.ui.stop(options);
+			}
+		} finally {
+			this.selectorOpenGeneration++;
+			this.pendingSelectorOpenGeneration = undefined;
+			this.unregisterSignalHandlers();
+			if (this.settingsManager.getShowTerminalProgress()) {
+				this.ui.terminal.setProgress(false);
+			}
+			if (this.loadingAnimation) {
+				this.loadingAnimation.stop();
+				this.loadingAnimation = undefined;
+			}
+			this.clearExtensionTerminalInputListeners();
+			this.footer.dispose();
+			this.footerDataProvider.dispose();
+			if (this.unsubscribe) {
+				this.unsubscribe();
+			}
 		}
 	}
 }

@@ -59,6 +59,7 @@ export interface SettingsConfig {
 	warnings: WarningSettings;
 	tuiMode: "retained" | "committed";
 	dockEditor: boolean;
+	retainTranscriptOnExit?: boolean;
 	editorMaxHeightPercent: number;
 	scrollWheelStep: number;
 	viewportProjectOverrides?: string[];
@@ -88,6 +89,7 @@ export interface SettingsCallbacks {
 	onQuietStartupChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
+	onRetainTranscriptOnExitChange?: (enabled: boolean) => boolean;
 	onDockEditorChange: (enabled: boolean) => boolean;
 	onEditorMaxHeightPercentChange: (percent: number) => number;
 	onScrollWheelStepChange: (step: number) => number;
@@ -502,6 +504,18 @@ export class SettingsSelectorComponent extends Container {
 			},
 		);
 
+		if (callbacks.onRetainTranscriptOnExitChange)
+			items.push({
+				id: "retain-transcript-on-exit",
+				label: "Retain transcript on exit",
+				currentValue: String(config.retainTranscriptOnExit ?? false),
+				values: retained ? ["true", "false"] : undefined,
+				description:
+					(retained
+						? "Leave styled session history, widgets, editor contents and footer in terminal scrollback on final exit. Images become placeholders; temporary handoffs stay clean."
+						: "Committed rendering already retains native history.") + scopeHint("retainTranscriptOnExit"),
+			});
+
 		// Add borders
 		this.addChild(new DynamicBorder());
 
@@ -511,6 +525,12 @@ export class SettingsSelectorComponent extends Container {
 			getSettingsListTheme(),
 			(id, newValue) => {
 				switch (id) {
+					case "retain-transcript-on-exit":
+						this.settingsList.updateValue(
+							id,
+							String(callbacks.onRetainTranscriptOnExitChange!(newValue === "true")),
+						);
+						break;
 					case "dock-editor":
 						this.settingsList.updateValue(id, String(callbacks.onDockEditorChange(newValue === "true")));
 						break;

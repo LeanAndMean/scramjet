@@ -892,6 +892,12 @@ export class RetainedViewport {
 		return this.logicalRows;
 	}
 
+	// SCRAMJET-DIVERGENCE: expose normalized document rows, not screen decorations.
+	getDocumentLines(): string[] {
+		if (this.isTooSmall()) throw new Error("Terminal too small to retain the current transcript");
+		return [...this.logical];
+	}
+
 	private sliceRows(start: number, end: number): string[] {
 		const lines: string[] = [];
 		for (const block of this.blocks) {

@@ -47,6 +47,46 @@ async function setup(blocks: ViewportBlock[], width = 21, height = 4, options: P
 const mouse = (button: number, x: number, y: number, action = "M") => `\x1b[<${button};${x};${y}${action}`;
 
 describe("viewport interactions", () => {
+	it("notifies lifecycle listeners once per transition and supports unsubscription", async () => {
+		const { tui } = await setup([{ component: new Rows(["content"]) }]);
+		const listener = vi.fn();
+		const remove = tui.addLifecycleListener(listener);
+		tui.start();
+		tui.stop();
+		tui.stop();
+		tui.start();
+		expect(listener.mock.calls).toEqual([["stop"], ["start"]]);
+		remove();
+		tui.stop();
+		expect(listener).toHaveBeenCalledTimes(2);
+	});
+
+	it.each(["kitty", "iterm2"] as const)(
+		"retains text but replaces %s graphics and cursor markers on exit",
+		async (protocol) => {
+			setCapabilities({ images: protocol, trueColor: true, hyperlinks: true });
+			const image = new Image(
+				"aW1hZ2U=",
+				"image/png",
+				{ fallbackColor: (s) => s },
+				{ maxWidthCells: 6, maxHeightCells: 3, imageId: 44 },
+				{ widthPx: 54, heightPx: 54 },
+			);
+			const { tui, terminal } = await setup(
+				[{ component: image }, { component: new Rows([`${CURSOR_MARKER}TEXT-AFTER-IMAGE`]) }],
+				61,
+				10,
+			);
+			const mark = terminal.markWrites();
+			tui.stop({ retainContent: true });
+			await terminal.flush();
+			const retained = terminal.writesSince(mark).split("\x1b[?1049l")[1];
+			expect(retained).toContain("[Image omitted from terminal history]");
+			expect(retained).toContain("TEXT-AFTER-IMAGE");
+			for (const control of ["\x1b_G", "\x1b]1337;File=", CURSOR_MARKER]) expect(retained).not.toContain(control);
+		},
+	);
+
 	it.each([2, 3])("selects with %i stationary clicks, with or without intervening paints", async (count) => {
 		vi.useFakeTimers({ toFake: ["Date"] });
 		for (const paintBetween of [false, true]) {

@@ -1105,6 +1105,28 @@ describe("retained interactive contracts", () => {
 		expect(h.terminal.bufferLines().join("\n")).toContain("COMMITTED-ROW");
 	});
 
+	it("defaults exit retention off and persists a live change through /settings", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "scramjet-exit-settings-"));
+		directories.push(directory);
+		const agentDir = join(directory, "agent");
+		mkdirSync(agentDir);
+		const file = join(agentDir, "settings.json");
+		writeFileSync(file, JSON.stringify({ theme: "pi-dark", quietStartup: true }));
+		const manager = SettingsManager.create(directory, agentDir);
+		const h = await setup(24, manager);
+		await openSettings(h, "retain transcript");
+		expect(h.terminal.visibleLines().join("\n")).toMatch(/Retain transcript on exit\s+false/);
+		h.terminal.sendInput("\r");
+		await h.frame();
+		await manager.flush();
+		expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ retainTranscriptOnExit: true });
+		expect(SettingsManager.create(directory, agentDir).getRetainTranscriptOnExit()).toBe(true);
+		h.terminal.sendInput("\r");
+		await h.frame();
+		await manager.flush();
+		expect(manager.getRetainTranscriptOnExit()).toBe(false);
+	});
+
 	it("exposes live docking in the real settings selector and persists the choice", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "scramjet-viewport-settings-"));
 		directories.push(directory);
@@ -1261,17 +1283,20 @@ describe("retained interactive contracts", () => {
 		await history(h);
 		getKeybindings().setUserBindings({ "tui.viewport.pageUp": "up" });
 		await openSettings(h, "");
+		h.internals.ui.scrollViewportTo(20);
+		await h.frame();
 		const before = h.internals.ui.getViewportState()!.offset;
 		h.terminal.sendInput("\x1b[A");
 		const frame = await h.frame();
 		expect(h.internals.ui.getViewportState()!.offset).toBe(before);
-		expect(frame.find((line) => line.includes("Wheel scroll lines"))).toContain("→ Wheel scroll lines");
+		expect(frame.find((line) => line.includes("Retain transcript on exit"))).toContain("→ Retain transcript on exit");
 	});
 
 	it.each([
 		{ query: "wheel", key: "scrollWheelStep", initial: 3 },
 		{ query: "height", key: "editorMaxHeightPercent", initial: 30 },
 		{ query: "dock", key: "dockEditor", initial: true },
+		{ query: "retain", key: "retainTranscriptOnExit", initial: false },
 	])("shows an unsaved warning when a live $key write fails", async ({ query, key, initial }) => {
 		let durable = JSON.stringify({ theme: "pi-dark", quietStartup: true, [key]: initial });
 		let failWrites = false;
@@ -1612,6 +1637,33 @@ describe("retained interactive contracts", () => {
 				},
 			});
 		}
+
+		it("keeps a false project retention override authoritative after global edits", async () => {
+			const manager = scoped({ retainTranscriptOnExit: true }, { retainTranscriptOnExit: false });
+			expect(manager.getRetainTranscriptOnExit()).toBe(false);
+			manager.setRetainTranscriptOnExit(true);
+			await manager.flush();
+			expect(manager.getRetainTranscriptOnExit()).toBe(false);
+			manager.reload();
+			expect(manager.getRetainTranscriptOnExit()).toBe(false);
+		});
+
+		it.each(["true", null, 1, [], {}].map((value) => ({ value })))(
+			"defaults invalid retention $value off with a diagnostic",
+			({ value }) => {
+				for (const scope of ["global", "project"] as const) {
+					const manager =
+						scope === "global"
+							? scoped({ retainTranscriptOnExit: value })
+							: scoped({}, { retainTranscriptOnExit: value });
+					expect(manager.getRetainTranscriptOnExit()).toBe(false);
+					expect(manager.drainErrors()).toContainEqual({
+						scope,
+						error: new Error("retainTranscriptOnExit must be a boolean; using false."),
+					});
+				}
+			},
+		);
 
 		it.each([
 			{ global: undefined, project: undefined, expected: "retained" },

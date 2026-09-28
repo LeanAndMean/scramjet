@@ -109,6 +109,7 @@ export interface Settings {
 	// SCRAMJET-DIVERGENCE: renderer choice is startup-only; retained layout preferences are live.
 	tuiMode?: "retained" | "committed";
 	dockEditor?: boolean;
+	retainTranscriptOnExit?: boolean;
 	editorMaxHeightPercent?: number;
 	scrollWheelStep?: number;
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
@@ -1037,9 +1038,14 @@ export class SettingsManager {
 				settings[key] = fallback;
 			} else settings[key] = Math.max(minimum, Math.min(maximum, Math.floor(value)));
 		}
-		if (settings.dockEditor !== undefined && typeof settings.dockEditor !== "boolean") {
-			this.recordError(scope, new Error("dockEditor must be a boolean; using true."));
-			settings.dockEditor = true;
+		for (const [key, fallback] of [
+			["dockEditor", true],
+			["retainTranscriptOnExit", false],
+		] as const) {
+			if (settings[key] !== undefined && typeof settings[key] !== "boolean") {
+				this.recordError(scope, new Error(`${key} must be a boolean; using ${fallback}.`));
+				settings[key] = fallback;
+			}
 		}
 	}
 
@@ -1048,6 +1054,17 @@ export class SettingsManager {
 		if (mode !== "retained" && mode !== "committed")
 			throw new Error('tuiMode must be "retained" or "committed"; correct settings.json and restart.');
 		return mode;
+	}
+
+	getRetainTranscriptOnExit(): boolean {
+		return this.settings.retainTranscriptOnExit ?? false;
+	}
+
+	setRetainTranscriptOnExit(enabled: boolean): void {
+		this.globalSettings.retainTranscriptOnExit = enabled;
+		this.normalizeViewportSettings(this.globalSettings, "global");
+		this.markModified("retainTranscriptOnExit");
+		this.save();
 	}
 
 	getDockEditor(): boolean {

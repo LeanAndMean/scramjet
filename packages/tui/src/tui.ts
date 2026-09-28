@@ -284,6 +284,7 @@ export class TUI extends Container {
 	private previousHeight = 0;
 	private focusedComponent: Component | null = null;
 	private inputListeners = new Set<InputListener>();
+	private lifecycleListeners = new Set<(event: "start" | "stop") => void>();
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
@@ -693,6 +694,15 @@ export class TUI extends Container {
 		this.terminal.hideCursor();
 		this.queryCellSize();
 		this.requestRender();
+		for (const listener of this.lifecycleListeners) listener("start");
+	}
+
+	// SCRAMJET-DIVERGENCE: application resources follow temporary terminal handoffs too.
+	addLifecycleListener(listener: (event: "start" | "stop") => void): () => void {
+		this.lifecycleListeners.add(listener);
+		return () => {
+			this.lifecycleListeners.delete(listener);
+		};
 	}
 
 	addInputListener(listener: InputListener): () => void {
@@ -741,12 +751,34 @@ export class TUI extends Container {
 		return this.bgColorPromise;
 	}
 
-	stop(): void {
+	// SCRAMJET-DIVERGENCE: callers opt into final-exit retention, never temporary stops.
+	stop(options?: { retainContent?: boolean }): void {
 		if (this.stopped) return;
 		this.viewportPaint = undefined;
 		this.stopped = true;
 		this.started = false;
 		this.renderRequested = false;
+		let retained: string[] | undefined;
+		let retentionError: unknown;
+		try {
+			if (options?.retainContent && this.viewport) {
+				const width = Math.max(1, this.terminal.columns - 1);
+				this.viewport.update(width, this.terminal.rows, this.terminal.columns);
+				const document = this.viewport.getDocumentLines();
+				retained = this.applyLineResets(
+					sliceImagePlacements(
+						document,
+						0,
+						document.length,
+						width,
+						"[Image omitted from terminal history]",
+					).lines.map((line) => line.replaceAll(CURSOR_MARKER, "")),
+				);
+			}
+		} catch (error) {
+			retentionError = error;
+		}
+		for (const listener of this.lifecycleListeners) listener("stop");
 		this.viewport?.cancelInteraction();
 		this.viewportRevealFocus = false;
 		this.viewportRevealComponent = undefined;
@@ -785,6 +817,8 @@ export class TUI extends Container {
 
 		this.terminal.showCursor();
 		this.terminal.stop();
+		if (retained?.length) this.terminal.write(`${TUI.SEGMENT_RESET}${retained.join("\r\n")}\r\n`);
+		if (retentionError) throw retentionError;
 	}
 
 	requestRender(force = false): void {

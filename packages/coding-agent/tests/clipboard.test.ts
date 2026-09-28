@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
-import { Writable } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { execFile, execSync, spawn } from "child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RetainedViewport } from "../../tui/src/viewport.js";
-import { copyToClipboard, readClipboardText } from "../src/utils/clipboard.js";
+import { copyToClipboard, createWslClipboardReader, readClipboardText } from "../src/utils/clipboard.js";
 
 vi.mock("child_process", () => ({ spawn: vi.fn(), execSync: vi.fn(), execFile: vi.fn() }));
 vi.mock("os", () => ({ platform: () => "linux" }));
@@ -93,6 +93,157 @@ describe("clipboard text reading", () => {
 		else vi.stubEnv("WAYLAND_DISPLAY", "");
 		await expect(readClipboardText()).rejects.toThrow(/terminal's Paste/);
 		expect(execFile).not.toHaveBeenCalled();
+	});
+});
+
+describe("WSL clipboard reader lifetime", () => {
+	const children: ReturnType<typeof worker>[] = [];
+	const readers: NonNullable<ReturnType<typeof createWslClipboardReader>>[] = [];
+	function worker() {
+		const child = Object.assign(new EventEmitter(), {
+			stdin: new PassThrough(),
+			stdout: new PassThrough(),
+			stderr: null,
+			kill: vi.fn(() => true),
+		});
+		children.push(child);
+		vi.mocked(spawn).mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+		return child;
+	}
+	function reader() {
+		vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+		const result = createWslClipboardReader()!;
+		readers.push(result);
+		return result;
+	}
+	afterEach(async () => {
+		for (const item of readers.splice(0)) item.close();
+		for (const child of children.splice(0)) {
+			child.stdout.end();
+			child.emit("exit", 0, null);
+			child.emit("close", 0, null);
+		}
+		vi.useRealTimers();
+		await new Promise((resolve) => setImmediate(resolve));
+	});
+	it("prewarms without reading, then reads fresh Unicode/empty values through one process", async () => {
+		const child = worker();
+		const client = reader();
+		const ready = client.start();
+		expect(client.start()).toBe(ready);
+		expect(child.stdin.read()).toBeNull();
+		child.stdout.write("REA");
+		child.stdout.write("DY\r\n");
+		await ready;
+		expect(child.stdin.read()).toBeNull();
+		for (const text of ["café 界 é\r\n\r\n", "", "fresh"]) {
+			const request = client.read();
+			expect(client.read()).toBe(request);
+			expect(child.stdin.read().toString()).toBe("read\n");
+			const line = `OK:${Buffer.from(text).toString("base64")}\r\n`;
+			child.stdout.write(line.slice(0, 4));
+			child.stdout.write(line.slice(4));
+			expect(await request).toBe(text);
+		}
+		expect(spawn).toHaveBeenCalledOnce();
+		client.close();
+		client.close();
+		expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+	});
+	it.each(["startup", "read"])(
+		"times out %s without retrying, and permits a later explicit restart",
+		async (phase) => {
+			vi.useFakeTimers();
+			const child = worker();
+			const client = reader();
+			let request: Promise<unknown> = client.start();
+			if (phase === "read") {
+				child.stdout.write("READY\n");
+				await request;
+				request = client.read();
+			}
+			const rejected = expect(request).rejects.toThrow(/timed out/);
+			await vi.advanceTimersByTimeAsync(5000);
+			await rejected;
+			expect(child.kill).toHaveBeenCalledOnce();
+			expect(spawn).toHaveBeenCalledOnce();
+			const fresh = worker();
+			const ready = client.start();
+			fresh.stdout.write("READY\n");
+			await ready;
+			expect(spawn).toHaveBeenCalledTimes(2);
+		},
+	);
+	it.each(["ERR:read\n", "OK:!!!\n", "OK:Zg=\n", "OK:Zh==\n", "OK:Zg==\nOK:Zg==\n"])(
+		"rejects malformed or failed responses %j without retry",
+		async (response) => {
+			const child = worker();
+			const client = reader();
+			const ready = client.start();
+			child.stdout.write("READY\n");
+			await ready;
+			const request = client.read();
+			const rejected = expect(request).rejects.toThrow();
+			child.stdout.write(response);
+			await rejected;
+			expect(spawn).toHaveBeenCalledOnce();
+			expect(child.kill).toHaveBeenCalledOnce();
+		},
+	);
+	it("bounds unterminated response bytes before decoding", async () => {
+		const child = worker();
+		const client = reader();
+		const ready = client.start();
+		child.stdout.write("READY\n");
+		await ready;
+		const request = client.read();
+		const rejected = expect(request).rejects.toThrow(/size limit/);
+		child.stdout.write("A".repeat(14 * 1024 * 1024));
+		await rejected;
+	});
+	it.each(["startup", "read"])(
+		"cancels %s on close and isolates late output from a restarted worker",
+		async (phase) => {
+			const child = worker();
+			const client = reader();
+			let request: Promise<unknown> = client.start();
+			if (phase === "read") {
+				child.stdout.write("READY\n");
+				await request;
+				request = client.read();
+			}
+			const rejected = expect(request).rejects.toThrow(/stopped/);
+			client.close();
+			await rejected;
+			const next = worker();
+			const ready = client.start();
+			child.stdout.write("READY\nOK:c3RhbGU=\n");
+			next.stdout.write("READY\n");
+			await ready;
+			expect(next.stdin.read()).toBeNull();
+		},
+	);
+	it.each(["error", "exit", "stdin", "stdout"])("rejects pending work after child %s", async (event) => {
+		const child = worker();
+		const client = reader();
+		const ready = client.start();
+		child.stdout.write("READY\n");
+		await ready;
+		const request = client.read();
+		const rejected = expect(request).rejects.toThrow();
+		if (event === "exit") {
+			child.stdout.end();
+			child.emit("exit", 1, null);
+		} else if (event === "error") child.emit("error", new Error("synthetic"));
+		else child[event as "stdin" | "stdout"].emit("error", new Error("synthetic"));
+		await rejected;
+	});
+	it("never starts outside WSL or over remote connections", () => {
+		expect(createWslClipboardReader()).toBeUndefined();
+		vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+		vi.stubEnv("SSH_CONNECTION", "synthetic");
+		expect(createWslClipboardReader()).toBeUndefined();
+		expect(spawn).not.toHaveBeenCalled();
 	});
 });
 

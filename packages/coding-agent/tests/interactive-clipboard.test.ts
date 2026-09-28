@@ -80,11 +80,18 @@ it.each(["edit and revert", "selector round trip", "reset", "overlay", "caret mo
 	},
 );
 
-it.each(["focus-in", "cell-size"])(
-	"preserves a pending paste through terminal notification %s",
+it.each(["focus-in", "cell-size", "right-button motion", "stationary right-button motion"])(
+	"preserves a pending paste through inert input %s",
 	async (notification) => {
 		const { heightPx, widthPx } = getCellDimensions();
-		const packet = notification === "focus-in" ? "\x1b[I" : `\x1b[6;${heightPx};${widthPx}t`;
+		const packet =
+			notification === "focus-in"
+				? "\x1b[I"
+				: notification === "cell-size"
+					? `\x1b[6;${heightPx};${widthPx}t`
+					: notification === "right-button motion"
+						? "\x1b[<34;4;2M"
+						: "\x1b[<34;3;2M";
 		let resolve!: (text: string) => void;
 		const read = vi.spyOn(clipboard, "readClipboardText").mockImplementationOnce(
 			() =>
@@ -155,6 +162,40 @@ it.each(["unchanged", "caret movement", "selector"])(
 		}
 	},
 );
+
+it("prewarms on TUI start, cancels stale readiness, and closes on every handoff", async () => {
+	await h.dispose();
+	let ready!: () => void;
+	const startup = new Promise<void>((resolve) => {
+		ready = resolve;
+	});
+	const reader = { start: vi.fn(() => startup), read: vi.fn(async () => "PASTED"), close: vi.fn() };
+	vi.spyOn(clipboard, "createWslClipboardReader").mockReturnValue(reader);
+	h = await createProductionInteractiveHarness(
+		60,
+		24,
+		undefined,
+		true,
+		SettingsManager.inMemory({ theme: "pi-dark", quietStartup: true }),
+	);
+	h.extensionUI.setEditorText("DRAFT");
+	expect(reader.start).toHaveBeenCalledOnce();
+	expect(reader.read).not.toHaveBeenCalled();
+	await requestPaste();
+	h.terminal.sendInput("\x1b[D");
+	ready();
+	await h.frame();
+	expect(reader.read).not.toHaveBeenCalled();
+	await requestPaste();
+	await vi.waitFor(() => expect(h.extensionUI.getEditorText()).toBe("DRAFPASTEDT"));
+	h.internals.ui.stop();
+	expect(reader.close).toHaveBeenCalledOnce();
+	const starts = reader.start.mock.calls.length;
+	h.internals.ui.start();
+	expect(reader.start).toHaveBeenCalledTimes(starts + 1);
+	h.mode.stop();
+	expect(reader.close).toHaveBeenCalledTimes(2);
+});
 
 it("accepts terminal-native text paste independently of clipboard reads", async () => {
 	const read = vi.spyOn(clipboard, "readClipboardText");

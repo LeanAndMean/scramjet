@@ -136,7 +136,7 @@ Drag without modifiers to select displayed text, including across scrolling; dou
 
 Home/End always retain editor line-start/end behavior. Ctrl+Home/Ctrl+End navigate to the transcript beginning/bottom, with Ctrl+End resuming following. Submitting nonempty editor input resumes following immediately, including `!`/`!!` commands, slash commands and queued messages. A new user message appearing in the transcript also resumes following. While scrolled away, PageUp/PageDown browse and Escape returns to the live tail; Alt+PageUp/Alt+PageDown enter browsing from the tail. Docked editing and presentation toggles preserve the reading position; undocked editing reveals its cursor. At the tail, ordinary editor/list bindings apply. Hidden approval controls must first be revealed before a subsequent activation can approve.
 
-Orderly exit, suspension and external-editor handoffs restore the shell without printing a transcript. Saved sessions and `/export` remain available. See [terminal setup](docs/terminal-setup.md#transcript-browsing-and-copying) for tested configurations, iTerm2's required right-click setting, clipboard limits and image behavior.
+By default, orderly exit restores the shell without printing a transcript. Enable **Retain transcript on exit** in `/settings` to leave the full current styled history, widgets, rendered editor and footer in terminal scrollback; collapsed content stays collapsed and images become labelled placeholders. Suspension and external-editor handoffs never dump history. Saved sessions and `/export` remain available. See [terminal setup](docs/terminal-setup.md#transcript-browsing-and-copying) for tested configurations, iTerm2's required right-click setting, clipboard limits and image behavior.
 
 ### Editor
 
