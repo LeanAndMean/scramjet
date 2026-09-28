@@ -13,7 +13,7 @@ Run from the repository after npm run build:
   node packages/scramjet/tests/fixtures/interactive-viewport.mjs
 No models, personal extensions or personal settings.
 Copy actions overwrite the clipboard with selected synthetic text; production
-editor right-click reads the local clipboard. Native drivers seed synthetic text first.
+right-click paste reads the local clipboard. Native drivers seed synthetic text first.
 Requires at least 60 columns and 12 rows. Ctrl+Q exits and restores the shell.
 
 Uses actual TUI/RetainedViewport/ProcessTerminal input, selection and rendering.
@@ -25,8 +25,8 @@ Uses actual TUI/RetainedViewport/ProcessTerminal input, selection and rendering.
 6. Paste back here: only equality is recorded, never pasted content.
 7. Ctrl+Home/Ctrl+End browse the transcript; use --production to test Home/End editing.
 8. Type and use arrows/backspace; at-tail PageUp belongs to the focused component.
-9. Production editor right-click pastes without submitting; other regions do not
-   paste. Terminal menus cannot see application selection.
+9. Production right-click without selection pastes into the focused editor from
+   any content region; selectors do not paste. Terminal menus cannot see application selection.
 10. Ctrl+U changes a synthetic row while selecting: output/highlight update live.
     Copy captures the last painted selection. Resize ends active dragging.
 11. Ctrl+Q restores the original shell buffer and terminal modes.

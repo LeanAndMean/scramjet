@@ -35,7 +35,7 @@ REQUIRED_CHECKS = {
     "longSessionMiddleReachable", "nativeSizeRestored", "nativeWidthAndHeightChanged", "orderlyExit",
     "ordinaryDesktopDragSelects", "productionCompositionConfigured", "readingAnchorSurvivesOtherChildUpdate",
     "readingAnchorSurvivesResize", "readingAnchorSurvivesResizeBack", "readingInsideRunningBatch",
-    "rightClickClipboardExactUnicode", "rightClickRequestsCopy", "rightWithoutSelectionDoesNotCopyOrPaste",
+    "rightClickClipboardExactUnicode", "rightClickRequestsCopy", "rightWithoutSelectionPastesWithoutSubmit",
     "scrolledSelectionClipboardExact", "selectionAutoscrolls", "selectionAllowsLiveUpdates", "editorRightClickPastesWithoutSubmit", "editorCopyOmitsSoftWraps", "selectionCrossesIntoEditor", "selectionCrossesIntoTranscript",
     "subsequentApprovalActivation", "termiosRestored", "checkoutProvenanceMatches",
     "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail", "keyboardBrowsingReturnsToTail",
@@ -344,11 +344,13 @@ def close_settings():
         raise RuntimeError("Settings selector did not release focus after Escape")
 
 
-def right_click_unchanged(before):
+def right_click_pasted(before, text):
     current = state()
     return (current["rightWithoutSelection"] == before["rightWithoutSelection"] + 1
+            and current["editor"] == before["editor"] + text
+            and current.get("submissions", 0) == before.get("submissions", 0)
             and all(current[key] == before[key] for key in
-                    ("rightCopy", "keyCopy", "copyErrors", "pasteMatches", "pasteMismatches", "editor")))
+                    ("rightCopy", "keyCopy", "copyErrors", "pasteMatches", "pasteMismatches")))
 
 
 def stable_check(name, predicate, seconds=0.35):
@@ -587,12 +589,14 @@ try:
     if not right_copied:
         key("escape")
         time.sleep(0.6)
+    outside_paste = "RIGHT-PASTE"
+    seed_clipboard(outside_paste)
     before_right = state()
     mouse("rightDown", *cell(10, 1))
     mouse("rightUp", *cell(10, 1))
     if not wait_for(lambda: (current := state())["rightWithoutSelection"] == before_right["rightWithoutSelection"] + 1 and current.get("frameFlushed") is True):
         raise RuntimeError("No-selection right click did not reach a flushed frame")
-    stable_check("rightWithoutSelectionDoesNotCopyOrPaste", lambda: right_click_unchanged(before_right))
+    stable_check("rightWithoutSelectionPastesWithoutSubmit", lambda: right_click_pasted(before_right, outside_paste))
     drag(cell(1, 1), cell(60, 1))
     seed_clipboard("SCRAMJET-PROBE-SENTINEL")
     key("copy")

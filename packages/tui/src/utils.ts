@@ -356,7 +356,7 @@ class AnsiCodeTracker {
 	private bold = false;
 	private dim = false;
 	private italic = false;
-	private underline = false;
+	private underline: string | null = null;
 	private blink = false;
 	private inverse = false;
 	private hidden = false;
@@ -381,7 +381,7 @@ class AnsiCodeTracker {
 		}
 
 		// Extract the parameters between \x1b[ and m
-		const match = ansiCode.match(/\x1b\[([\d;]*)m/);
+		const match = ansiCode.match(/\x1b\[([\d;:]*)m/);
 		if (!match) return;
 
 		const params = match[1];
@@ -395,6 +395,12 @@ class AnsiCodeTracker {
 		const parts = params.split(";");
 		let i = 0;
 		while (i < parts.length) {
+			// SCRAMJET-DIVERGENCE: preserve underline substyles without treating other colon parameters as SGR codes.
+			if (parts[i].includes(":")) {
+				if (/^4:[0-5]$/.test(parts[i])) this.underline = parts[i] === "4:0" ? null : parts[i];
+				i++;
+				continue;
+			}
 			const code = Number.parseInt(parts[i], 10);
 
 			// Handle 256-color and RGB codes which consume multiple parameters
@@ -439,7 +445,7 @@ class AnsiCodeTracker {
 					this.italic = true;
 					break;
 				case 4:
-					this.underline = true;
+					this.underline = "4";
 					break;
 				case 5:
 					this.blink = true;
@@ -464,7 +470,7 @@ class AnsiCodeTracker {
 					this.italic = false;
 					break;
 				case 24:
-					this.underline = false;
+					this.underline = null;
 					break;
 				case 25:
 					this.blink = false;
@@ -503,7 +509,7 @@ class AnsiCodeTracker {
 		this.bold = false;
 		this.dim = false;
 		this.italic = false;
-		this.underline = false;
+		this.underline = null;
 		this.blink = false;
 		this.inverse = false;
 		this.hidden = false;
@@ -524,7 +530,7 @@ class AnsiCodeTracker {
 		if (this.bold) codes.push("1");
 		if (this.dim) codes.push("2");
 		if (this.italic) codes.push("3");
-		if (this.underline) codes.push("4");
+		if (this.underline) codes.push(this.underline);
 		if (this.blink) codes.push("5");
 		if (this.inverse) codes.push("7");
 		if (this.hidden) codes.push("8");
@@ -544,7 +550,7 @@ class AnsiCodeTracker {
 			this.bold ||
 			this.dim ||
 			this.italic ||
-			this.underline ||
+			this.underline !== null ||
 			this.blink ||
 			this.inverse ||
 			this.hidden ||

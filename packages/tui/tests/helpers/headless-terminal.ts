@@ -108,6 +108,7 @@ export class HeadlessTerminal implements TerminalContract {
 			text: cell.getChars(),
 			background: cell.isBgDefault() ? undefined : cell.getBgColor(),
 			inverse: cell.isInverse() !== 0,
+			underline: cell.isUnderline() !== 0,
 		};
 	}
 

@@ -423,11 +423,31 @@ describe("retained interactive contracts", () => {
 		expect(h.extensionUI.getEditorText()).toBe("DRAFT");
 	});
 
-	it("does not read the clipboard for transcript, footer, overlay or selector clicks", async () => {
+	it.each(["transcript", "footer", "blank space"])(
+		"pastes on the first right-click over %s into the focused editor",
+		async (region) => {
+			const h = await setup();
+			if (region !== "blank space") await history(h);
+			else {
+				h.internals.headerContainer.clear();
+				h.extensionUI.setEditorText("DRAFT");
+			}
+			await vi.waitFor(async () => {
+				await h.frame();
+				expect(h.internals.ui.isViewportFrameFlushed()).toBe(true);
+			});
+			const editor = h.internals.editorContainer.children[0] as EditorComponent;
+			const submit = vi.spyOn(editor, "onSubmit");
+			h.terminal.sendInput(mouse(2, 2, region === "footer" ? h.terminal.rows : 1));
+			await vi.waitFor(() => expect(h.extensionUI.getEditorText()).toBe("DRAFTPASTED café 界\nsecond line"));
+			expect(clipboard.readClipboardText).toHaveBeenCalledOnce();
+			expect(submit).not.toHaveBeenCalled();
+		},
+	);
+
+	it("does not read the clipboard for overlay or selector clicks", async () => {
 		const h = await setup();
 		await history(h);
-		h.terminal.sendInput(mouse(2, 2, 1));
-		h.terminal.sendInput(mouse(2, 2, h.terminal.rows));
 		const answer = h.extensionUI.confirm("Waiting", "Do not paste");
 		let frame = await h.frame();
 		const row = frame.findIndex((line) => line.includes("Waiting"));
@@ -597,6 +617,62 @@ describe("retained interactive contracts", () => {
 			expect(await h.frame()).toEqual(before);
 		},
 	);
+
+	it.each(["!git status", "!!git status", "/session", "ordinary message"])(
+		"follows on editor submission of %s before any user-message event",
+		async (draft) => {
+			const h = await setup();
+			await history(h);
+			h.extensionUI.setEditorText(draft);
+			h.internals.ui.scrollViewportTo(20);
+			await h.frame();
+			expect(h.internals.ui.getViewportState()?.followingTail).toBe(false);
+			const bash = vi.spyOn(h.session, "executeBash").mockImplementation(async (_command, onChunk) => {
+				onChunk?.("STATUS-OUTPUT");
+				return { output: "STATUS-OUTPUT", exitCode: 0, cancelled: false, truncated: false };
+			});
+			const input = draft === "ordinary message" ? h.mode.getUserInput() : undefined;
+			h.terminal.sendInput("\r");
+			if (input) expect(await input).toBe(draft);
+			if (draft.startsWith("!")) {
+				await vi.waitFor(() =>
+					expect(bash).toHaveBeenCalledExactlyOnceWith("git status", expect.any(Function), {
+						excludeFromContext: draft.startsWith("!!"),
+						operations: undefined,
+					}),
+				);
+			}
+			const frame = await h.frame();
+			const state = h.internals.ui.getViewportState()!;
+			expect.soft(state.followingTail).toBe(true);
+			expect.soft(state.offset).toBe(Math.max(0, state.totalRows - state.height));
+			if (draft.startsWith("!")) expect(frame.join("\n")).toContain("STATUS-OUTPUT");
+			if (draft === "/session") expect(frame.join("\n")).toContain("Session");
+		},
+	);
+
+	it.each([
+		["streaming", "\r", "steer"],
+		["streaming", "\x1b[13;3u", "followUp"],
+		["compacting", "\r", "steer"],
+		["compacting", "\x1b[13;3u", "followUp"],
+	] as const)("follows on %s submission using %j", async (state, key, behavior) => {
+		const h = await setup();
+		await history(h);
+		h.extensionUI.setEditorText("QUEUED-REQUEST");
+		h.internals.ui.scrollViewportTo(20);
+		await h.frame();
+		vi.spyOn(h.session, state === "streaming" ? "isStreaming" : "isCompacting", "get").mockReturnValue(true);
+		const prompt = vi.spyOn(h.session, "prompt").mockResolvedValue();
+		h.terminal.sendInput(key);
+		await h.frame();
+		if (state === "streaming")
+			expect(prompt).toHaveBeenCalledExactlyOnceWith("QUEUED-REQUEST", { streamingBehavior: behavior });
+		else expect(h.internals.pendingMessagesContainer.render(59).join("\n")).toContain("QUEUED-REQUEST");
+		const viewport = h.internals.ui.getViewportState()!;
+		expect.soft(viewport.followingTail).toBe(true);
+		expect(viewport.offset).toBe(Math.max(0, viewport.totalRows - viewport.height));
+	});
 
 	it("reattaches to the tail for a new user message but not passive output", async () => {
 		const h = await setup();

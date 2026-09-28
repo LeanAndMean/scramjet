@@ -39,7 +39,7 @@ $commandId = 0
 $requiredChecks = @(
     'productionCompositionConfigured', 'desktopCellTargetVerified', 'desktopWheelScrollsDocument',
     'desktopThumbDragReachesEnd', 'desktopTrackClickReachesStart', 'ordinaryDesktopDragSelects',
-    'rightClickRequestsCopy', 'rightClickClipboardExactUnicode', 'rightWithoutSelectionDoesNotCopyOrPaste',
+    'rightClickRequestsCopy', 'rightClickClipboardExactUnicode', 'rightWithoutSelectionPastesWithoutSubmit',
     'controlCCopiesSelection', 'desktopPasteRoundTrip', 'keyboardEditingCoexists', 'longSessionMiddleReachable',
     'selectionAutoscrolls', 'selectionAllowsLiveUpdates', 'scrolledSelectionClipboardExact', 'editorRightClickPastesWithoutSubmit',
     'firstFourRunningCardsReachable', 'allEightCardsReachableBeforeCompletion', 'readingInsideRunningBatch',
@@ -89,10 +89,11 @@ function Check([string]$Name, [scriptblock]$Predicate, [int]$StableMilliseconds 
     if (-not $passed) { throw "Failed native check: $Name" }
     return $passed
 }
-function Right-ClickUnchanged($Before) {
+function Right-ClickPasted($Before, [string]$Text) {
     $current = State
     if ($current.rightWithoutSelection -ne ($Before.rightWithoutSelection + 1)) { return $false }
-    foreach ($name in @('rightCopy', 'keyCopy', 'copyErrors', 'pasteMatches', 'pasteMismatches', 'editor')) {
+    if ($current.editor -cne ($Before.editor + $Text) -or $current.submissions -ne $Before.submissions) { return $false }
+    foreach ($name in @('rightCopy', 'keyCopy', 'copyErrors', 'pasteMatches', 'pasteMismatches')) {
         if ($current.$name -cne $Before.$name) { return $false }
     }
     return $true
@@ -375,11 +376,13 @@ try {
     [void](Check 'rightClickRequestsCopy' { (State).rightCopy -gt 0 })
     [void](Check 'rightClickClipboardExactUnicode' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expected, [StringComparison]::Ordinal) })
     Screenshot 'right-click'
+    $outsidePaste = 'RIGHT-PASTE'
+    [System.Windows.Forms.Clipboard]::SetText($outsidePaste)
     $beforeRight = State
     Mouse 8 $point[0] $point[1]
     Mouse 16 $point[0] $point[1]
     if (-not (Wait-For { $current = State; $current.rightWithoutSelection -eq ($beforeRight.rightWithoutSelection + 1) -and $current.frameFlushed -eq $true })) { throw 'No-selection right click did not reach a flushed frame' }
-    [void](Check 'rightWithoutSelectionDoesNotCopyOrPaste' { Right-ClickUnchanged $beforeRight } 350)
+    [void](Check 'rightWithoutSelectionPastesWithoutSubmit' { Right-ClickPasted $beforeRight $outsidePaste } 350)
     Drag (Cell 1 1) (Cell 60 1)
     [System.Windows.Forms.Clipboard]::SetText('SCRAMJET-PROBE-SENTINEL')
     Key 67 @(17)

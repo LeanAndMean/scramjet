@@ -30,7 +30,7 @@ export interface ViewportOptions {
 	getBlocks(): readonly ViewportBlock[];
 	keybindings?: KeybindingsManager;
 	copy?(text: string): Promise<void>;
-	requestPaste?(component: Component): void;
+	requestPaste?(): void;
 	getScrollWheelStep?(): number;
 	handlePresentationInput?(data: string): boolean;
 	keepReadingOnInput?(): boolean;
@@ -422,16 +422,8 @@ export class RetainedViewport {
 				}
 			} else if (button === 2) {
 				if (this.selection) void this.copySelection();
-				else if (!this.copying) {
-					const row =
-						this.dockHeight > 0 && y - 1 >= this.paintedDockTop
-							? this.paintedDockStart + y - 1 - this.paintedDockTop
-							: y <= this.paintedHeight
-								? this.paintedOffset + y - 1
-								: -1;
-					const block = this.blocks.find((block) => row >= block.start && row < block.start + block.lines.length);
-					if (block && x <= this.width) this.options.requestPaste?.(block.component);
-				}
+				// SCRAMJET-DIVERGENCE: paste targets the application's input owner, not the pointer's row.
+				else if (!this.copying && x <= this.width) this.options.requestPaste?.();
 			} else if (button === 0) {
 				this.endGesture();
 				if (x === this.width + 1 && y <= this.paintedHeight) {

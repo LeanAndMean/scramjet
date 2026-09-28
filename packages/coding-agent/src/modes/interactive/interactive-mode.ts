@@ -383,7 +383,13 @@ export class InteractiveMode {
 		// SCRAMJET-DIVERGENCE: retained interactive rendering and injectable terminals.
 		this.ui = new TUI(options.terminal ?? new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.addInputListener((data) => {
-			if (!isKeyRelease(data) && !/^\x1b\[<\d+;\d+;\d+m$/.test(data)) this.clipboardPasteGeneration++;
+			if (
+				!isKeyRelease(data) &&
+				data !== "\x1b[I" &&
+				!/^\x1b\[6;\d+;\d+t$/.test(data) &&
+				!/^\x1b\[<\d+;\d+;\d+m$/.test(data)
+			)
+				this.clipboardPasteGeneration++;
 			return undefined;
 		});
 		this.headerContainer = new Container();
@@ -465,9 +471,14 @@ export class InteractiveMode {
 			this.ui.isComponentVisible(this.editorContainer) &&
 			this.ui.isComponentRenderComplete(this.editorContainer);
 		if (!current()) return;
-		this.clipboardPastePending ??= readClipboardText();
-		const pending = this.clipboardPastePending;
+		let pending: Promise<string> | undefined;
 		try {
+			while (current() && !this.ui.isViewportFrameFlushed()) {
+				await this.ui.renderNow({ requireFlush: true });
+			}
+			if (!current()) return;
+			this.clipboardPastePending ??= readClipboardText();
+			pending = this.clipboardPastePending;
 			const text = await pending;
 			if (!current()) return;
 			const safeText = stripVTControlCharacters(text).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
@@ -476,7 +487,7 @@ export class InteractiveMode {
 		} catch (error) {
 			if (current()) this.showError(`Paste failed: ${error instanceof Error ? error.message : String(error)}`);
 		} finally {
-			if (this.clipboardPastePending === pending) this.clipboardPastePending = undefined;
+			if (pending && this.clipboardPastePending === pending) this.clipboardPastePending = undefined;
 		}
 	}
 
@@ -542,9 +553,7 @@ export class InteractiveMode {
 				}),
 			keybindings: this.keybindings,
 			copy: copyToClipboard,
-			requestPaste: (component) => {
-				if (component === this.editorContainer) void this.pasteFromClipboard();
-			},
+			requestPaste: () => void this.pasteFromClipboard(),
 			minimumSize: { columns: 12, rows: 3 },
 			handleBlockedInput: (data) => {
 				const selector = this.editorContainer.children[0];
@@ -2940,6 +2949,8 @@ export class InteractiveMode {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
 			if (!text) return;
+			// SCRAMJET-DIVERGENCE: submission intent precedes command routing and queued-message delivery.
+			this.ui.followViewport();
 
 			// Handle commands
 			if (text === "/settings") {
@@ -3984,6 +3995,7 @@ export class InteractiveMode {
 	private async handleFollowUp(): Promise<void> {
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
+		this.ui.followViewport();
 
 		// Queue input during compaction (extension commands execute immediately)
 		if (this.session.isCompacting) {

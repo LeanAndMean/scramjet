@@ -128,7 +128,7 @@ EXPECTED_INTERACTION_CHECKS = {
     "nativeWidthAndHeightChanged", "orderlyExit", "ordinaryDesktopDragSelects", "productionCompositionConfigured",
     "readingAnchorSurvivesOtherChildUpdate", "readingAnchorSurvivesResize", "readingAnchorSurvivesResizeBack",
     "readingInsideRunningBatch", "rightClickClipboardExactUnicode", "rightClickRequestsCopy",
-    "rightWithoutSelectionDoesNotCopyOrPaste", "scrolledSelectionClipboardExact", "selectionAutoscrolls",
+    "rightWithoutSelectionPastesWithoutSubmit", "scrolledSelectionClipboardExact", "selectionAutoscrolls",
     "selectionAllowsLiveUpdates", "editorRightClickPastesWithoutSubmit", "editorCopyOmitsSoftWraps", "selectionCrossesIntoEditor", "selectionCrossesIntoTranscript", "subsequentApprovalActivation", "termiosRestored", "checkoutProvenanceMatches",
     "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail", "keyboardBrowsingReturnsToTail",
     "nativePresentationTogglePreservesReading", "settingsUndocksLive", "settingsRedocksLive",
@@ -976,29 +976,31 @@ class SeamCopyEvidenceTests(unittest.TestCase):
 
 
 class NoSelectionPasteTests(unittest.TestCase):
-    def test_delayed_paste_cannot_pass_the_source_native_check(self):
+    def test_missing_duplicate_or_submitted_paste_cannot_pass_the_source_native_check(self):
         source = interaction_source()
         call = next(node for node in ast.walk(source) if isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Name) and node.func.id in ("check", "stable_check")
                     and node.args and isinstance(node.args[0], ast.Constant)
-                    and node.args[0].value == "rightWithoutSelectionDoesNotCopyOrPaste")
+                    and node.args[0].value == "rightWithoutSelectionPastesWithoutSubmit")
         declarations = [node for node in source.body if isinstance(node, ast.FunctionDef)
-                        and node.name in ("check", "stable_check", "right_click_unchanged")]
-        for counter in (None, "pasteMatches", "pasteMismatches", "copyErrors", "keyCopy", "rightCopy", "editor"):
+                        and node.name in ("check", "stable_check", "right_click_pasted")]
+        for counter in (None, "missing", "submissions", "pasteMatches", "pasteMismatches", "copyErrors", "keyCopy", "rightCopy", "editor"):
             with self.subTest(counter=counter):
                 baseline = {"rightWithoutSelection": 0, "rightCopy": 1, "keyCopy": 0, "copyErrors": 0,
-                            "pasteMatches": 0, "pasteMismatches": 0, "editor": "Synthetic editor", "frameFlushed": True}
+                            "pasteMatches": 0, "pasteMismatches": 0, "editor": "Synthetic editor", "submissions": 0, "frameFlushed": True}
                 clock = [0.0]
                 def state():
-                    current = {**baseline, "rightWithoutSelection": 1}
-                    if clock[0] >= 0.15 and counter:
-                        current[counter] = "changed" if counter == "editor" else current[counter] + 1
+                    current = {**baseline, "rightWithoutSelection": 1, "editor": baseline["editor"] + "RIGHT-PASTE"}
+                    if counter == "missing":
+                        current["editor"] = baseline["editor"]
+                    elif clock[0] >= 0.15 and counter:
+                        current[counter] = current["editor"] + "RIGHT-PASTE" if counter == "editor" else current[counter] + 1
                     return current
                 fake_time = Mock()
                 fake_time.monotonic.side_effect = lambda: clock[0]
                 fake_time.sleep.side_effect = lambda duration: clock.__setitem__(0, clock[0] + duration)
                 context = {"report": {"checks": {}}, "state": state, "before_right": baseline,
-                           "required_checks": lambda: {"rightWithoutSelectionDoesNotCopyOrPaste"},
+                           "outside_paste": "RIGHT-PASTE", "required_checks": lambda: {"rightWithoutSelectionPastesWithoutSubmit"},
                            "wait_for": lambda predicate: bool(predicate()), "time": fake_time}
                 exec(compile(ast.Module(body=declarations, type_ignores=[]), "terminal-probe.py", "exec"), context)
                 with patch("builtins.print"):
@@ -1006,7 +1008,7 @@ class NoSelectionPasteTests(unittest.TestCase):
                         eval(compile(ast.Expression(body=call), "terminal-probe.py", "eval"), context)
                     except RuntimeError:
                         pass
-                recorded = context["report"]["checks"]["rightWithoutSelectionDoesNotCopyOrPaste"]
+                recorded = context["report"]["checks"]["rightWithoutSelectionPastesWithoutSubmit"]
                 self.assertEqual(recorded["passed"], counter is None)
                 self.assertGreaterEqual(recorded["stableSeconds"], 0.35)
 
