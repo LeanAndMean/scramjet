@@ -701,7 +701,10 @@ try:
     check("longSessionMiddleReachable", lambda: 0.3 < state()["offset"] / (state()["totalRows"] - state()["height"]) < 0.7)
     mouse("down", *cell(columns, 1))
     mouse("up", *cell(columns, 1))
-    mouse("down", *cell(1, 3))
+    first_row = next((i + 1 for i, line in enumerate(state()["painted"][:state()["height"]]) if line.startswith("ROW-002 ")), None)
+    if first_row is None:
+        raise RuntimeError("ROW-002 is not visible at the top of synthetic history")
+    mouse("down", *cell(1, first_row))
     selection_edge = state()["height"]
     mouse("drag", *cell(60, selection_edge))
     time.sleep(0.5)

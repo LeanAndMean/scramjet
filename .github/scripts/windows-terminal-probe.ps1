@@ -474,7 +474,13 @@ try {
     $point = Cell $columns 1
     Mouse 2 $point[0] $point[1]
     Mouse 4 $point[0] $point[1]
-    $point = Cell 1 3
+    $topFrame = State
+    $firstRow = -1
+    for ($i = 0; $i -lt $topFrame.height; $i++) {
+        if ($topFrame.painted[$i].StartsWith('ROW-002 ')) { $firstRow = $i + 1; break }
+    }
+    if ($firstRow -lt 1) { throw 'ROW-002 is not visible at the top of synthetic history' }
+    $point = Cell 1 $firstRow
     Mouse 2 $point[0] $point[1]
     $point = Cell 60 (State).height
     Mouse 1 $point[0] $point[1]
