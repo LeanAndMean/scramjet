@@ -310,7 +310,8 @@ function readFailureScalars(value: unknown): { top: FailureScalars; nested: Fail
 			record === topRecord &&
 			value instanceof APIError &&
 			value.error &&
-			!(typeof recordOf(value.error)?.message === "string" && recordOf(value.error)?.message)
+			(!(typeof recordOf(value.error)?.message === "string" && recordOf(value.error)?.message) ||
+				isSerializedErrorObject(recordOf(value.error)?.message))
 				? undefined
 				: isSerializedErrorObject(record?.message)
 					? undefined
@@ -435,11 +436,15 @@ function makeFailure(
 	);
 	const status = top.status ?? nested.status;
 	const statusCategory = categoryFromStatus(status);
+	const explicitRateLimit = providerCode === "rate_limit_exceeded" || statusCategory === "rate_limit";
+	const isContextEvidence = (field: string | undefined) =>
+		field === "context_length_exceeded" ||
+		(categoryFromMessage(field) === "context_overflow" &&
+			(!explicitRateLimit || /context (length|window)|maximum context/i.test(field ?? "")));
 	const contextOverflow =
-		[top.code, top.type, nested.code, nested.type, top.message, nested.message].some(
-			(field) => field === "context_length_exceeded" || categoryFromMessage(field) === "context_overflow",
-		) ||
+		[top.code, top.type, nested.code, nested.type, top.message, nested.message].some(isContextEvidence) ||
 		(scalarCategory === "context_overflow" &&
+			!explicitRateLimit &&
 			(status === undefined || statusCategory === "invalid_request") &&
 			![top.code, nested.code, top.type, nested.type].some(
 				(field) => field && field !== "error" && field !== "response.failed",
@@ -1309,9 +1314,22 @@ export async function processResponsesStream<TApi extends Api>(
 				currentBlock = null;
 				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 			}
-		} else if (event.type === "response.completed") {
+		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
 			const response = event.response;
-			if (response?.status !== "completed") {
+			if (event.type === "response.incomplete") {
+				const reason = response?.incomplete_details?.reason;
+				if (
+					response?.status !== "incomplete" ||
+					reason !== "max_output_tokens" ||
+					blocks.some((block) => block.type === "toolCall") ||
+					response.output?.some((item) => item.type === "function_call")
+				) {
+					throw providerEventFailure(
+						{ message: reason ? `Response incomplete: ${reason}` : "Response incomplete." },
+						"provider_event",
+					);
+				}
+			} else if (response?.status !== "completed") {
 				throw providerEventFailure(
 					{ message: "Response completed without a successful status." },
 					"provider_event",
@@ -1358,12 +1376,6 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 		} else if (event.type === "error") {
 			throw providerEventFailure(event);
-		} else if (event.type === "response.incomplete") {
-			const reason = event.response?.incomplete_details?.reason;
-			throw providerEventFailure(
-				{ message: reason ? `Response incomplete: ${reason}` : "Response incomplete." },
-				"provider_event",
-			);
 		} else if (event.type === "response.failed") {
 			const error = event.response?.error;
 			const details = event.response?.incomplete_details;

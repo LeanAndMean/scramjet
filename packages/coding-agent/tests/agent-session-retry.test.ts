@@ -467,7 +467,13 @@ describe("AgentSession context window", () => {
 		}
 	});
 
-	it("retries a scalar token-rate-limit reason rather than compacting", async () => {
+	it.each([
+		["scalar token-rate-limit reason", { error: "Too many tokens per minute" }],
+		[
+			"coded ambiguous token reason",
+			{ type: "error", code: "rate_limit_exceeded", message: "Too many tokens; try again later" },
+		],
+	] as const)("retries %s rather than compacting", async (_name, failure) => {
 		const model = getModel("openai", "gpt-6-astra");
 		let calls = 0;
 		vi.stubGlobal(
@@ -476,9 +482,7 @@ describe("AgentSession context window", () => {
 				calls++;
 				return new Response(
 					`data: ${JSON.stringify(
-						calls === 1
-							? { error: "Too many tokens per minute" }
-							: { type: "response.completed", response: { status: "completed" } },
+						calls === 1 ? failure : { type: "response.completed", response: { status: "completed" } },
 					)}\n\n`,
 					{ headers: { "content-type": "text/event-stream" } },
 				);

@@ -508,6 +508,57 @@ describe("OpenAI Responses failure normalization", () => {
 	it.each([
 		["OpenAI", streamOpenAIResponses, openaiModel, {}],
 		["Azure", streamAzureOpenAIResponses, azureModel, { azureBaseUrl: "https://example.openai.azure.com/openai/v1" }],
+	] as const)("maps %s text-only max-output truncation to a length stop", async (_name, streamFn, model, extra) => {
+		stubFetch([
+			sse([
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "message", id: "msg_1", content: [] },
+				},
+				{
+					type: "response.content_part.added",
+					part: { type: "output_text", text: "", annotations: [] },
+				},
+				{ type: "response.output_text.delta", delta: "partial" },
+				{
+					type: "response.incomplete",
+					response: {
+						id: "resp_partial",
+						status: "incomplete",
+						incomplete_details: { reason: "max_output_tokens" },
+						output: [{ type: "message", id: "msg_1", content: [{ type: "output_text", text: "partial" }] }],
+						usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6 },
+					},
+				},
+			]),
+		]);
+		const result = await streamFn(model as never, context, { apiKey, maxRetries: 0, ...extra } as never).result();
+		expect(result.stopReason).toBe("length");
+		expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "partial" }));
+		expect(result.responseId).toBe("resp_partial");
+		expect(result.usage.output).toBe(2);
+		expect(result.diagnostics?.some((diagnostic) => diagnostic.type === "provider_failure")).not.toBe(true);
+	});
+
+	it("rejects unsupported incomplete reasons and unstreamed response-output calls", async () => {
+		for (const response of [
+			{ status: "incomplete", incomplete_details: { reason: "content_filter" }, output: [] },
+			{
+				status: "incomplete",
+				incomplete_details: { reason: "max_output_tokens" },
+				output: [{ type: "function_call", call_id: "call_1", id: "fc_1", name: "read", arguments: "{}" }],
+			},
+		]) {
+			const result = await failureFrom(sse([{ type: "response.incomplete", response }]));
+			expect(result.stopReason).toBe("error");
+			expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
+		}
+	});
+
+	it.each([
+		["OpenAI", streamOpenAIResponses, openaiModel, {}],
+		["Azure", streamAzureOpenAIResponses, azureModel, { azureBaseUrl: "https://example.openai.azure.com/openai/v1" }],
 	] as const)("rejects %s incomplete or unterminated tool-call streams", async (_name, streamFn, model, extra) => {
 		const call = {
 			type: "function_call",
@@ -683,6 +734,37 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(isContextOverflow(contradictory)).toBe(false);
 	});
 
+	it("prefers explicit rate-limit evidence over ambiguous token-count prose", async () => {
+		const error = APIError.generate(
+			429,
+			{ error: { code: "rate_limit_exceeded", message: "Too many tokens; try again later" } },
+			undefined,
+			new Headers(),
+		);
+		for (const value of [
+			error,
+			{ type: "error", code: "rate_limit_exceeded", message: "Too many tokens; try again later" },
+		]) {
+			const output = assistantShell();
+			appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(value, "stream"));
+			expect(validateResponsesProviderFailure(output.diagnostics)).toEqual({
+				status: "valid",
+				category: "rate_limit",
+				retryDisposition: "transient",
+			});
+			expect(isContextOverflow(output)).toBe(false);
+		}
+		const result = await failureFrom(
+			jsonError(429, { code: "rate_limit_exceeded", message: "Too many tokens; try again later" }),
+		);
+		expect(validateResponsesProviderFailure(result.diagnostics)).toEqual({
+			status: "valid",
+			category: "rate_limit",
+			retryDisposition: "transient",
+		});
+		expect(isContextOverflow(result)).toBe(false);
+	});
+
 	it("does not classify token rate-limit prose as context overflow", () => {
 		const reason = "rate limit: too many tokens per minute";
 		for (const value of [
@@ -739,6 +821,19 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(longFailure.message).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY|authorization|request_body/);
 		const prose = normalizeResponsesFailure({ error: "[Gateway] deployment unavailable" }, "stream");
 		expect(prose.message).toContain("[Gateway] deployment unavailable");
+	});
+
+	it("does not persist the SDK's status-prefixed serialized nested message", () => {
+		const raw = JSON.stringify({
+			headers: { authorization: "Bearer PRIVATE_TOKEN" },
+			request_body: "PRIVATE_REQUEST_BODY",
+		});
+		const error = APIError.generate(400, { error: { message: raw } }, undefined, new Headers());
+		const output = assistantShell();
+		appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, "request"));
+		expect(output.errorMessage).toContain("withheld because they may contain request data");
+		expect(JSON.stringify(output)).not.toMatch(/PRIVATE_TOKEN|PRIVATE_REQUEST_BODY|authorization|request_body/);
+		expect(providerDetails(output)).toEqual(expect.objectContaining({ category: "invalid_request" }));
 	});
 
 	it("does not persist the SDK's serialized error-object fallback", () => {
