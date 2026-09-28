@@ -1399,10 +1399,10 @@ export async function processResponsesStream<TApi extends Api>(
 					blocks.some((block) => block.type === "toolCall") ||
 					response.output?.some((item) => item.type === "function_call")
 				) {
-					throw providerEventFailure(
-						{ message: reason ? `Response incomplete: ${reason}` : "Response incomplete." },
-						"provider_event",
-					);
+					const failure = { message: reason ? `Response incomplete: ${reason}` : "Response incomplete." };
+					const details = recordOf(response?.incomplete_details);
+					const extra = Object.keys(details ?? {}).some((key) => key !== "reason");
+					throw providerEventFailure(failure, "provider_event", extra ? details : failure);
 				}
 			} else if (response?.status !== "completed") {
 				throw providerEventFailure(
