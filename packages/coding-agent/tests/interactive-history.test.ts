@@ -2154,6 +2154,40 @@ describe("production user-message separator", () => {
 		}
 	});
 
+	it.each([true, false])("does not double a foreground-styled blank custom tail in retained=%s", async (retained) => {
+		const h = await createProductionInteractiveHarness(
+			60,
+			40,
+			(pi) => {
+				pi.registerMessageRenderer(
+					"notice",
+					(_message, _options, theme) => new Text(`notice\n${theme.fg("dim", " ")}`, 0, 0),
+				);
+			},
+			retained,
+		);
+		try {
+			await h.emit({
+				type: "message_start",
+				message: { role: "custom", customType: "notice", content: "notice", display: true, timestamp: 1 },
+			});
+			expect(h.internals.chatContainer.children).toHaveLength(0);
+			const tail = h.internals.committedChatContainer.children.at(-1)?.render(60).at(-1);
+			expect(tail).toContain("\x1b[");
+			await h.emit({ type: "message_start", message: { role: "user", content: "ping", timestamp: 2 } });
+			const rows = await h.frame();
+			const notice = rows.findIndex((row) => row.includes("notice"));
+			const ping = rows.findIndex((row) => row.includes("ping"));
+			expect(notice).toBeGreaterThanOrEqual(0);
+			expect(ping).toBeGreaterThan(notice);
+			expect(rows.slice(notice + 1, ping)).toHaveLength(2);
+			expect(rows.slice(notice + 1, ping).every((row) => row.trim() === "")).toBe(true);
+			expect(h.terminal.cell(notice + 1, 0).background).toBeUndefined();
+		} finally {
+			await h.dispose();
+		}
+	});
+
 	it.each([true, false])("separates colored custom-renderer padding in retained=%s", async (retained) => {
 		const h = await createProductionInteractiveHarness(
 			60,
