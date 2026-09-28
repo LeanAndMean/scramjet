@@ -821,10 +821,66 @@ describe("retained approval and exit safety", () => {
 		}
 	});
 
-	it("leaves one transcript on final stop but none on temporary handoff", async () => {
+	it("drains input and flushes shell restoration before disposing and exiting without chat replay", async () => {
+		const disposed = vi.fn();
+		const h = await createProductionInteractiveHarness(60, 12, (pi) => {
+			pi.on("session_shutdown", disposed);
+		});
+		let finishDrain!: () => void;
+		let finishFlush!: () => void;
+		const exitSignal = new Error("intercepted exit");
+		const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+			throw exitSignal;
+		});
+		const drain = vi.spyOn(h.terminal, "drainInput").mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					finishDrain = resolve;
+				}),
+		);
+		const originalFlush = h.terminal.flush.bind(h.terminal);
+		let flush: ReturnType<typeof vi.spyOn> | undefined;
+		try {
+			h.internals.committedChatContainer.addChild(new Text("SHUTDOWN-CHAT", 0, 0));
+			await h.frame();
+			const mark = h.terminal.markWrites();
+			flush = vi.spyOn(h.terminal, "flush").mockImplementation(
+				() =>
+					new Promise<void>((resolve) => {
+						finishFlush = () => {
+							void originalFlush().then(resolve);
+						};
+					}),
+			);
+			const stopping = (h.mode as unknown as { shutdown(): Promise<void> }).shutdown();
+			const settlement = expect(stopping).rejects.toBe(exitSignal);
+			expect(h.terminal.writesSince(mark)).not.toContain("\x1b[?1049l");
+			expect(exit).not.toHaveBeenCalled();
+			finishDrain();
+			await vi.waitFor(() => expect(flush).toHaveBeenCalled());
+			expect(h.terminal.writesSince(mark)).toContain("\x1b[?1049l");
+			expect(disposed).not.toHaveBeenCalled();
+			expect(exit).not.toHaveBeenCalled();
+			finishFlush();
+			await settlement;
+			expect(disposed).toHaveBeenCalledOnce();
+			expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+			expect(h.terminal.writesSince(mark)).not.toContain("SHUTDOWN-CHAT");
+		} finally {
+			drain.mockRestore();
+			flush?.mockRestore();
+			exit.mockRestore();
+			await h.dispose();
+		}
+	});
+
+	it("restores the shell without replaying chat on final stop or temporary handoff", async () => {
 		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
 		try {
-			h.internals.committedChatContainer.addChild(new Text("FINAL-TRANSCRIPT", 0, 0));
+			const finalized = new Text("FINAL-TRANSCRIPT", 0, 0);
+			const mutable = new Text("MUTABLE-TRANSCRIPT", 0, 0);
+			h.internals.committedChatContainer.addChild(finalized);
+			h.internals.chatContainer.addChild(mutable);
 			h.extensionUI.setWidget("temporary", ["TEMPORARY-WIDGET"]);
 			h.extensionUI.setEditorText("TEMPORARY-EDITOR");
 			await h.frame();
@@ -832,16 +888,25 @@ describe("retained approval and exit safety", () => {
 			await h.terminal.flush();
 			expect(h.terminal.bufferLines().join("\n")).not.toContain("FINAL-TRANSCRIPT");
 			h.terminal.write("SHELL-BETWEEN-HANDOFFS\r\n");
+			await h.terminal.flush();
+			const shellRows = h.terminal.bufferLines();
+			const shellCursor = h.terminal.cursorPosition();
 			h.internals.ui.start();
 			await h.frame();
-			h.mode.stop();
+			const renders = [vi.spyOn(finalized, "render"), vi.spyOn(mutable, "render")];
+			const mark = h.terminal.markWrites();
 			h.mode.stop();
 			await h.terminal.flush();
-			const normal = h.terminal.bufferLines().join("\n");
-			expect(normal).toContain("SHELL-BETWEEN-HANDOFFS");
-			expect(normal.match(/FINAL-TRANSCRIPT/g)).toHaveLength(1);
-			expect(normal).not.toContain("TEMPORARY-WIDGET");
-			expect(normal).not.toContain("TEMPORARY-EDITOR");
+			expect(h.terminal.bufferLines()).toEqual(shellRows);
+			expect(h.terminal.cursorPosition()).toEqual(shellCursor);
+			const writes = h.terminal.writesSince(mark);
+			expect(writes).toContain("\x1b[?1049l");
+			for (const sentinel of ["FINAL-TRANSCRIPT", "MUTABLE-TRANSCRIPT", "TEMPORARY-WIDGET", "TEMPORARY-EDITOR"])
+				expect(writes).not.toContain(sentinel);
+			for (const render of renders) expect(render).not.toHaveBeenCalled();
+			const stopped = h.terminal.markWrites();
+			h.mode.stop();
+			expect(h.terminal.writesSince(stopped)).toBe("");
 		} finally {
 			await h.dispose();
 		}

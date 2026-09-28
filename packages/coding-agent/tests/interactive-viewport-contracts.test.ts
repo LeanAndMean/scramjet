@@ -72,6 +72,30 @@ afterEach(async () => {
 });
 
 describe("retained interactive contracts", () => {
+	it.each([2, 3])("selects docked editor text with %i clicks without editing or pasting", async (count) => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
+		const h = await setup(24, settings({ dockEditor: true }), 24);
+		const draft = "alpha beta gamma delta epsilon zeta";
+		h.extensionUI.setEditorText(draft);
+		const lines = await h.frame();
+		const row = lines.findIndex((line) => line.includes("alpha beta"));
+		expect(row).toBeGreaterThanOrEqual(0);
+		const column = lines[row].indexOf("beta");
+		const editor = h.internals.editorContainer.children[0];
+		for (let click = 0; click < count; click++) {
+			h.terminal.sendInput(mouse(0, column + 1, row + 1));
+			h.terminal.sendInput(`\x1b[<0;${column + 1};${row + 1}m`);
+			await h.frame();
+		}
+		expect(h.terminal.cell(row, column).inverse).toBe(true);
+		h.terminal.sendInput("\x03");
+		await h.frame();
+		expect(copy).toHaveBeenCalledExactlyOnceWith(count === 2 ? "beta" : "alpha beta gamma ");
+		expect(clipboard.readClipboardText).not.toHaveBeenCalled();
+		expect(h.extensionUI.getEditorText()).toBe(draft);
+		expect(h.internals.ui.isComponentFocused(editor)).toBe(true);
+	});
+
 	it("allocates custom input height before rendering and releases it on close", async () => {
 		const h = await setup();
 		h.extensionUI.setWidget("above", ["ABOVE-1", "ABOVE-2"]);

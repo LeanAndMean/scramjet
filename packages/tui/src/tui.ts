@@ -741,7 +741,7 @@ export class TUI extends Container {
 		return this.bgColorPromise;
 	}
 
-	stop(options?: { transcript?: readonly Component[] }): void {
+	stop(): void {
 		if (this.stopped) return;
 		this.viewportPaint = undefined;
 		this.stopped = true;
@@ -785,11 +785,6 @@ export class TUI extends Container {
 
 		this.terminal.showCursor();
 		this.terminal.stop();
-		if (this.viewport && options?.transcript) {
-			const lines = options.transcript.flatMap((component) => component.render(this.terminal.columns));
-			const text = lines.map((line) => (isImageLine(line) ? "[Image]" : stripVTControlCharacters(line).trimEnd()));
-			if (text.length) this.terminal.write(`\r\n${text.join("\r\n")}\r\n`);
-		}
 	}
 
 	requestRender(force = false): void {

@@ -9,6 +9,8 @@ import { type Component, CURSOR_MARKER } from "./tui.js";
 import {
 	extractAnsiCode,
 	getSegmenter,
+	isPunctuationChar,
+	isWhitespaceChar,
 	normalizeTerminalOutput,
 	sliceByColumn,
 	truncateToWidth,
@@ -231,6 +233,9 @@ export class RetainedViewport {
 		| { kind: "thumb"; grab: number; travel: number; maximum: number }
 		| { kind: "selection"; dragged: boolean; scrolled: boolean }
 		| undefined;
+	private click:
+		| { count: number; time: number; x: number; y: number; point: SelectionPoint; line: string; released: boolean }
+		| undefined;
 	private edgeTimer: ReturnType<typeof setInterval> | undefined;
 	private edgeDirection = 0;
 	private pointerColumn = 0;
@@ -268,6 +273,7 @@ export class RetainedViewport {
 	}
 
 	private endGesture(): void {
+		this.click = undefined;
 		this.gesture = undefined;
 		this.edgeDirection = 0;
 		if (this.edgeTimer) clearInterval(this.edgeTimer);
@@ -292,6 +298,33 @@ export class RetainedViewport {
 			column += size;
 		}
 		return { row, column };
+	}
+
+	private clickRange(point: SelectionPoint, count: number): [SelectionPoint, SelectionPoint] {
+		const line = this.logical[point.row] ?? "";
+		if (count === 1 || isImageLine(line)) return [point, point];
+		const text = plainText(line);
+		if (count === 3)
+			return [
+				{ row: point.row, column: 0 },
+				{ row: point.row, column: visibleWidth(text) },
+			];
+		let column = 0;
+		const cells = Array.from(getSegmenter().segment(text), ({ segment }) => {
+			const start = column;
+			column += visibleWidth(segment);
+			return { start, end: column, kind: isWhitespaceChar(segment) ? 0 : isPunctuationChar(segment) ? 1 : 2 };
+		});
+		const index = cells.findIndex((cell) => cell.start <= point.column && point.column < cell.end);
+		if (index === -1) return [point, point];
+		let start = index;
+		let end = index;
+		while (start > 0 && cells[start - 1].kind === cells[index].kind) start--;
+		while (end + 1 < cells.length && cells[end + 1].kind === cells[index].kind) end++;
+		return [
+			{ row: point.row, column: cells[start].start },
+			{ row: point.row, column: cells[end].end },
+		];
 	}
 
 	private selectionRange(): [SelectionPoint, SelectionPoint] | undefined {
@@ -387,9 +420,14 @@ export class RetainedViewport {
 				return true;
 			}
 			const match = /^\x1b\[<(\d{1,3});(\d{1,5});(\d{1,5})([Mm])$/.exec(data);
-			if (!match) return true;
+			if (!match) {
+				this.click = undefined;
+				return true;
+			}
 			const [button, x, y] = match.slice(1, 4).map(Number);
 			if (match[4] === "m") {
+				const click = this.click;
+				const stationary = button === 0 && click && !click.released && click.x === x && click.y === y;
 				const thumb = this.gesture?.kind === "thumb" ? this.gesture : undefined;
 				const resumeTail = thumb && this.offset === thumb.maximum;
 				this.endGesture();
@@ -400,10 +438,15 @@ export class RetainedViewport {
 					this.selection.start.column === this.selection.end.column
 				)
 					this.releaseSelection();
+				if (stationary) this.click = { ...click, released: true };
 				this.requestRender();
 				return true;
 			}
-			if (x < 1 || x > this.width + 1 || y < 1 || y > this.screenHeight) return true;
+			if (button !== 0 && button !== 32) this.click = undefined;
+			if (x < 1 || x > this.width + 1 || y < 1 || y > this.screenHeight) {
+				this.click = undefined;
+				return true;
+			}
 			if (y - 1 === this.paintedCopyErrorRow && button !== 2) {
 				if (button === 0) this.copyError = undefined;
 				this.endGesture();
@@ -425,6 +468,8 @@ export class RetainedViewport {
 				// SCRAMJET-DIVERGENCE: paste targets the application's input owner, not the pointer's row.
 				else if (!this.copying && x <= this.width) this.options.requestPaste?.();
 			} else if (button === 0) {
+				const previousClick = this.click;
+				const followOnRelease = this.selection?.followOnRelease ?? this.followingTail;
 				this.endGesture();
 				if (x === this.width + 1 && y <= this.paintedHeight) {
 					this.cancelInteraction();
@@ -442,8 +487,22 @@ export class RetainedViewport {
 					this.cancelInteraction();
 					this.selectionInDock = this.dockHeight > 0 && y > this.paintedDockTop;
 					const point = this.point(x - 1, y - 1);
+					const time = Date.now();
+					const line = this.logical[point.row] ?? "";
+					const repeated =
+						previousClick?.released &&
+						time >= previousClick.time &&
+						time - previousClick.time <= 500 &&
+						previousClick.x === x &&
+						previousClick.y === y &&
+						previousClick.point.row === point.row &&
+						previousClick.point.column === point.column &&
+						previousClick.line === line;
+					const count = repeated ? (previousClick.count % 3) + 1 : 1;
+					this.click = { count, time, x, y, point, line, released: false };
+					const [start, end] = this.clickRange(point, count);
 					this.offset = this.paintedOffset;
-					this.selection = { start: point, end: point, followOnRelease: this.followingTail };
+					this.selection = { start, end, followOnRelease: repeated ? followOnRelease : this.followingTail };
 					this.followingTail = false;
 					this.anchor = this.anchorAt(this.offset, 0);
 					this.gesture = { kind: "selection", dragged: false, scrolled: false };
@@ -451,6 +510,8 @@ export class RetainedViewport {
 			} else if (button === 32) {
 				if (this.gesture?.kind === "thumb") this.dragThumb(y - 1);
 				else if (this.gesture?.kind === "selection" && this.selection) {
+					if (this.click?.x === x && this.click.y === y) return true;
+					this.click = undefined;
 					this.gesture.dragged = true;
 					this.moveSelection(
 						Math.min(x - 1, this.width),
@@ -478,6 +539,7 @@ export class RetainedViewport {
 			return true;
 		}
 		if (overlayFocused || isKeyRelease(data) || /^\x1b\[\d+;\d+;\d+t$/.test(data)) return false;
+		this.click = undefined;
 		if (this.selection && (this.options.keybindings ?? getKeybindings()).matches(data, "tui.input.copy")) {
 			void this.copySelection();
 			this.requestRender();
@@ -581,6 +643,7 @@ export class RetainedViewport {
 
 	scrollTo(offset: number, screenRow = 0): void {
 		if (!Number.isFinite(offset) || !Number.isFinite(screenRow)) throw new Error("Viewport positions must be finite");
+		this.click = undefined;
 		this.offset = Math.max(0, Math.min(Math.trunc(offset), this.maxOffset));
 		this.followingTail = this.offset === this.maxOffset;
 		if (this.selection && !this.followingTail) this.selection.followOnRelease = false;

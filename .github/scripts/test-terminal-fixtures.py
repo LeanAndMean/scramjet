@@ -691,6 +691,13 @@ class PasteEvidenceTests(unittest.TestCase):
                             wait_for(lambda state: state.get("keyCopy") == 1)
                             os.write(master, b"\x1b[200~ROW-001\x1b[201~")
                             wait_for(lambda state: state.get("pasteMatches") == 1)
+                            for count, expected in ((2, "ROW"), (3, "ROW-001 synthetic café 界 e\u0301 text")):
+                                os.write(master, b"\x1b[<0;2;1M\x1b[<0;2;1m" * count)
+                                wait_for(lambda state: state.get("selectionPainted") and state.get("frameFlushed"))
+                                os.write(master, b"\x03")
+                                wait_for(lambda state: state.get("keyCopy") == count and not state.get("selectionActive"))
+                                os.write(master, f"\x1b[200~{expected}\x1b[201~".encode())
+                                wait_for(lambda state: state.get("pasteMatches") == count)
                         sentinel = "MISMATCH-PRIVATE-SENTINEL-560"
                         os.write(master, f"\x1b[200~{sentinel}\x1b[201~".encode())
                         state = wait_for(lambda state: state.get("pasteMismatches") == 1)
@@ -701,7 +708,12 @@ class PasteEvidenceTests(unittest.TestCase):
                         os.write(master, b"\x11")
                         wait_for(lambda state: state.get("stopped"))
                         wait_for(lambda _state: child.poll() is not None)
+                        while select.select([master], [], [], 0.02)[0]:
+                            output.extend(os.read(master, 65536))
                         self.assertEqual(child.returncode, 0)
+                        self.assertIn(b"\x1b[?1049l", output)
+                        restored = bytes(output).rsplit(b"\x1b[?1049l", 1)[1]
+                        self.assertNotRegex(restored, rb"ROW-|CARD-|NATIVE-IMAGE-TRANSCRIPT")
                         self.assertEqual(termios.tcgetattr(slave), before)
                     finally:
                         try:

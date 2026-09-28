@@ -6104,11 +6104,7 @@ export class InteractiveMode {
 		}
 		if (this.isInitialized) {
 			this.isInitialized = false;
-			const transcript = [...this.committedChatContainer.children, ...this.chatContainer.children];
-			for (const component of transcript) {
-				if (component instanceof ToolExecutionComponent) component.detachCommittedContext();
-			}
-			this.ui.stop({ transcript });
+			this.ui.stop();
 		}
 	}
 }

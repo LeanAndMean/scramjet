@@ -47,6 +47,195 @@ async function setup(blocks: ViewportBlock[], width = 21, height = 4, options: P
 const mouse = (button: number, x: number, y: number, action = "M") => `\x1b[<${button};${x};${y}${action}`;
 
 describe("viewport interactions", () => {
+	it.each([2, 3])("selects with %i stationary clicks, with or without intervening paints", async (count) => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		for (const paintBetween of [false, true]) {
+			const copy = vi.fn(async (_text: string) => {});
+			const { tui, terminal, frame } = await setup([{ component: new Rows(["alpha beta gamma"]) }], 21, 4, { copy });
+			const handleInput = vi.fn();
+			tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+			for (let click = 0; click < count; click++) {
+				terminal.sendInput(mouse(0, 8, 1));
+				terminal.sendInput(mouse(0, 8, 1, "m"));
+				if (paintBetween) await frame();
+				vi.setSystemTime(Date.now() + 100);
+			}
+			expect(copy).not.toHaveBeenCalled();
+			if (!paintBetween) {
+				terminal.sendInput("\x03");
+				expect(copy).not.toHaveBeenCalled();
+				expect(handleInput).not.toHaveBeenCalled();
+			}
+			await frame();
+			const [start, end] = count === 2 ? [6, 10] : [0, 16];
+			for (let col = 0; col < 21; col++)
+				expect(terminal.cell(0, col).inverse, `column ${col}`).toBe(col >= start && col < end);
+			terminal.sendInput("\x03");
+			expect(copy).toHaveBeenCalledExactlyOnceWith(count === 2 ? "beta" : "alpha beta gamma");
+			await frame();
+			expect(tui.getViewportState()?.followingTail).toBe(true);
+		}
+	});
+
+	it.each([
+		["L cafe\u0301 R", 6, "cafe\u0301"],
+		["L 界 R", 3, "界"],
+		["L 界 R", 4, "界"],
+		["L 👩\x1b[31m\u200d💻 R", 4, "👩‍💻"],
+		["some_word:=other", 4, "some_word"],
+		["some_word:=other", 10, ":="],
+		["left   right", 6, "   "],
+	] as const)("double-clicks displayed graphemes in %s at cell %i", async (line, x, expected) => {
+		const copy = vi.fn(async (_text: string) => {});
+		const { terminal, frame } = await setup([{ component: new Rows([line]) }], 31, 4, { copy });
+		for (let click = 0; click < 2; click++) {
+			terminal.sendInput(mouse(0, x, 1));
+			terminal.sendInput(mouse(0, x, 1, "m"));
+		}
+		await frame();
+		terminal.sendInput("\x03");
+		expect(copy).toHaveBeenCalledExactlyOnceWith(expected);
+	});
+
+	it.each(["alpha beta", "  alpha"])(
+		"triple-clicks only a displayed row, excluding layout padding: %s",
+		async (text) => {
+			const copy = vi.fn(async (_text: string) => {});
+			const { terminal, frame } = await setup(
+				[{ component: new Text(text, 2, 0) }],
+				text === "alpha beta" ? 10 : 16,
+				4,
+				{ copy },
+			);
+			for (let click = 0; click < 3; click++) {
+				terminal.sendInput(mouse(0, 4, 1));
+				terminal.sendInput(mouse(0, 4, 1, "m"));
+			}
+			await frame();
+			terminal.sendInput("\x03");
+			expect(copy).toHaveBeenCalledExactlyOnceWith(text === "alpha beta" ? "alpha" : text);
+		},
+	);
+
+	it("multi-clicks the painted row rather than queued navigation", async () => {
+		const copy = vi.fn(async (_text: string) => {});
+		const { tui, terminal, frame } = await setup(
+			[{ component: new Rows(Array.from({ length: 30 }, (_, i) => `word${i} suffix`)) }],
+			21,
+			4,
+			{ copy },
+		);
+		tui.scrollViewportTo(10);
+		await frame();
+		tui.scrollViewportTo(20);
+		for (let click = 0; click < 2; click++) {
+			terminal.sendInput(mouse(0, 3, 2));
+			terminal.sendInput(mouse(0, 3, 2, "m"));
+		}
+		await frame();
+		terminal.sendInput("\x03");
+		expect(copy).toHaveBeenCalledExactlyOnceWith("word11");
+	});
+
+	it.each([
+		"timeout",
+		"column",
+		"row",
+		"drag",
+		"wheel",
+		"navigation",
+		"key",
+		"focus",
+		"overlay",
+		"resize",
+		"reset",
+		"restart",
+		"content",
+	])("restarts click counting after %s", async (interruption) => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const copy = vi.fn(async (_text: string) => {});
+		const card = new Rows(["alpha beta gamma", "other beta line"]);
+		const { tui, terminal, frame } = await setup([{ component: card }], 21, 4, { copy });
+		const click = (x = 8, y = 1) => {
+			terminal.sendInput(mouse(0, x, y));
+			terminal.sendInput(mouse(0, x, y, "m"));
+		};
+		click(interruption === "column" ? 2 : 8, interruption === "row" ? 2 : 1);
+		if (interruption === "timeout") vi.setSystemTime(Date.now() + 501);
+		if (interruption === "drag") {
+			terminal.sendInput(mouse(0, 8, 1));
+			terminal.sendInput(mouse(32, 10, 1));
+			terminal.sendInput(mouse(0, 10, 1, "m"));
+		}
+		if (interruption === "wheel") terminal.sendInput(mouse(64, 8, 1));
+		if (interruption === "navigation") tui.scrollViewportTo(0);
+		if (interruption === "key") terminal.sendInput("a");
+		if (interruption === "focus") {
+			terminal.sendInput("\x1b[O");
+			terminal.sendInput("\x1b[I");
+		}
+		if (interruption === "overlay") {
+			const overlay = tui.showOverlay(new Rows(["overlay"]));
+			await frame();
+			overlay.hide();
+		}
+		if (interruption === "resize") terminal.resize(22, 5);
+		if (interruption === "reset") tui.resetViewport();
+		if (interruption === "restart") {
+			tui.stop();
+			tui.start();
+		}
+		if (interruption === "content") card.lines[0] = "alpha beta changed";
+		await frame();
+		click();
+		await frame();
+		expect(terminal.cell(0, 6).inverse).toBe(false);
+		click();
+		await frame();
+		terminal.sendInput("\x03");
+		expect(copy).toHaveBeenCalledExactlyOnceWith("beta");
+	});
+
+	it.each([2, 3])(
+		"preserves a completed %i-click selection across focus loss and copies its painted text",
+		async (count) => {
+			const copy = vi.fn(async (_text: string) => {});
+			const card = new Rows(["alpha beta gamma"]);
+			const { terminal, frame } = await setup([{ component: card }], 21, 4, { copy });
+			for (let click = 0; click < count; click++) {
+				terminal.sendInput(mouse(0, 8, 1));
+				terminal.sendInput(mouse(32, 8, 1));
+				terminal.sendInput(mouse(0, 8, 1, "m"));
+			}
+			await frame();
+			terminal.sendInput("\x1b[O");
+			terminal.sendInput("\x1b[I");
+			card.lines = ["CHANGED live output"];
+			terminal.sendInput(mouse(2, 8, 1));
+			expect(copy).toHaveBeenCalledExactlyOnceWith(count === 2 ? "beta" : "alpha beta gamma");
+		},
+	);
+
+	it("requires releases between clicks and restarts after the third click", async () => {
+		const copy = vi.fn(async (_text: string) => {});
+		const { terminal, frame } = await setup([{ component: new Rows(["alpha beta gamma"]) }], 21, 4, { copy });
+		for (let press = 0; press < 3; press++) terminal.sendInput(mouse(0, 8, 1));
+		await frame();
+		expect(terminal.cell(0, 6).inverse).toBe(false);
+		terminal.sendInput(mouse(0, 8, 1, "m"));
+		for (let click = 0; click < 3; click++) {
+			terminal.sendInput(mouse(0, 8, 1));
+			terminal.sendInput(mouse(0, 8, 1, "m"));
+		}
+		await frame();
+		expect(terminal.cell(0, 6).inverse).toBe(false);
+		terminal.sendInput(mouse(0, 8, 1));
+		terminal.sendInput(mouse(0, 8, 1, "m"));
+		await frame();
+		terminal.sendInput("\x03");
+		expect(copy).toHaveBeenCalledExactlyOnceWith("beta");
+	});
+
 	it("does not copy an unpainted new selection or pass copy through to the editor", async () => {
 		const copy = vi.fn(async (_text: string) => {});
 		const { tui, terminal, frame } = await setup([{ component: new Rows(["abcdef"]) }], 21, 4, { copy });
