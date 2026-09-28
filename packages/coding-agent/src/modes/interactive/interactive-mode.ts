@@ -3625,10 +3625,19 @@ export class InteractiveMode {
 							}
 						}
 					}
-					if (
-						this.chatContainer.children.length > 0 ||
-						(committedTailRow !== undefined && committedTailRow.trim() !== "")
-					) {
+					const tailNeedsGap =
+						committedTailRow !== undefined &&
+						(stripVTControlCharacters(committedTailRow).trim() !== "" ||
+							[...committedTailRow.matchAll(/\x1b\[([\d;:]*)m/g)].some(([, params]) => {
+								const codes = params.split(";");
+								for (let i = 0; i < codes.length; i++) {
+									const code = Number(codes[i].split(":")[0]);
+									if (code === 48 || (code >= 40 && code <= 47) || (code >= 100 && code <= 107)) return true;
+									if (code === 38) i += codes[i + 1] === "2" ? 4 : codes[i + 1] === "5" ? 2 : 0;
+								}
+								return false;
+							}));
+					if (this.chatContainer.children.length > 0 || tailNeedsGap) {
 						this.chatContainer.addChild(new Spacer(1));
 					}
 					// SCRAMJET-DIVERGENCE: scramjet-command block rendering (issue 82)
