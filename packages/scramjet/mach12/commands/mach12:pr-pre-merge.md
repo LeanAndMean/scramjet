@@ -225,7 +225,7 @@ If there are changes, assess and commit them:
    Never use `git add -A` or `git add .` — stage explicit reviewed paths individually based on the assessment above.
 2. **Stage** the files identified for inclusion (`git add <file>...`). When a version changed, stage the canonical version, required mirrors, affected tracked generated metadata, and required changelog update together. If staging fails, report the error, report the command incomplete, and stop before CI and final readiness.
 3. **Commit** with message: "Pre-merge checklist: [brief summary of what was updated]". If the commit fails (pre-commit hook, empty commit, permissions), report the error, report the command incomplete, and stop before CI and final readiness.
-4. **Push** to remote (`git push`). If the push fails, report the error, advise the user to retry manually with `git push`, report the command incomplete, and stop before CI and final readiness. Step 9 may begin only after a successful push, or when the checklist produced no changes.
+4. **Push** to remote (`git push`). If the push fails, report the error and the concrete blocker, report the command incomplete, and stop before CI and final readiness. Do not retry a failed push without evidence that retry is safe and authorized. Step 9 may begin only after a successful push, or when the checklist produced no changes.
 
 ## Step 9: CI verification
 
