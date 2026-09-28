@@ -3615,17 +3615,20 @@ export class InteractiveMode {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
 					// SCRAMJET-DIVERGENCE: separate user rows from visible committed results without doubling gaps (#579).
-					let committedTail: Component | undefined;
+					let committedTailRow: string | undefined;
 					if (this.chatContainer.children.length === 0) {
 						for (let i = this.committedChatContainer.children.length - 1; i >= 0; i--) {
-							const child = this.committedChatContainer.children[i];
-							if (child.render(this.ui.terminal.columns).length > 0) {
-								committedTail = child;
+							const lines = this.committedChatContainer.children[i].render(this.ui.terminal.columns);
+							if (lines.length > 0) {
+								committedTailRow = lines[lines.length - 1];
 								break;
 							}
 						}
 					}
-					if (this.chatContainer.children.length > 0 || (committedTail && !(committedTail instanceof Spacer))) {
+					if (
+						this.chatContainer.children.length > 0 ||
+						(committedTailRow !== undefined && committedTailRow.trim() !== "")
+					) {
 						this.chatContainer.addChild(new Spacer(1));
 					}
 					// SCRAMJET-DIVERGENCE: scramjet-command block rendering (issue 82)
