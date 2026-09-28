@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Browse and copy live terminal output
+## 0.103.0 — Browse and copy live terminal output
 
 Makes running output reachable through an application-managed retained transcript, with stable reading anchors and explicit selection copying. Fixes [#551](https://github.com/LeanAndMean/scramjet/issues/551).
 
