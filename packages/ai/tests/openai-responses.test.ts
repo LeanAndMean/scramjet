@@ -548,6 +548,25 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(result.diagnostics?.some((diagnostic) => diagnostic.type === "provider_failure")).not.toBe(true);
 	});
 
+	it("retains additional response.incomplete failure detail in the serialized assistant", async () => {
+		const detail = "Deployment policy blocks this output in region west";
+		const result = await failureFrom(
+			sse([
+				{
+					type: "response.incomplete",
+					response: {
+						status: "incomplete",
+						incomplete_details: { reason: "content_filter", explanation: detail },
+						output: [],
+					},
+				},
+			]),
+		);
+		expect(result.stopReason).toBe("error");
+		expect(validateResponsesProviderFailure(result.diagnostics).status).toBe("valid");
+		expect(JSON.stringify(JSON.parse(JSON.stringify(result)))).toContain(detail);
+	});
+
 	it("rejects unsupported incomplete reasons and unstreamed response-output calls", async () => {
 		for (const response of [
 			{ status: "incomplete", incomplete_details: { reason: "content_filter" }, output: [] },
