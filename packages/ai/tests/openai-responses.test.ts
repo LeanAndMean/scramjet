@@ -669,9 +669,44 @@ describe("OpenAI Responses failure normalization", () => {
 		] as const) {
 			const failure = normalizeResponsesFailure(error, "request");
 			expect(failure.diagnostic).toEqual(expect.objectContaining({ category, kind }));
-			expect(failure.message).not.toMatch(/private123456|Bearer secret/);
+			expect(failure.message).not.toContain("Bearer secret");
+			if (category === "permission") expect(failure.message).toContain("req_private123456");
 			expect(JSON.stringify(failure.diagnostic)).not.toMatch(/private123456|Bearer secret/);
 		}
+	});
+
+	it("retains a bounded SDK request ID in local history without copying headers or changing retry evidence", async () => {
+		const requestID = "req_probe_123";
+		const response = new Response(
+			JSON.stringify({ error: { code: "permission_denied", message: "permission denied" } }),
+			{
+				status: 403,
+				headers: {
+					"content-type": "application/json",
+					"x-request-id": requestID,
+					authorization: "Bearer PRIVATE_TOKEN",
+				},
+			},
+		);
+		const result = await failureFrom(response);
+		const restored = JSON.parse(JSON.stringify(result)) as AssistantMessage;
+		expect(restored.errorMessage).toContain("permission denied");
+		expect(restored.errorMessage).toContain(`Request ID: ${requestID}`);
+		expect(JSON.stringify(restored)).not.toMatch(/PRIVATE_TOKEN|authorization/);
+		expect(providerDetails(restored)).toEqual(
+			expect.objectContaining({ category: "permission", retryDisposition: "non_transient", httpStatus: 403 }),
+		);
+		expect(JSON.stringify(providerDetails(restored))).not.toContain(requestID);
+		expect(failureSnapshot(restored)).toBeUndefined();
+
+		const sdkError = APIError.generate(403, { error: { message: "permission denied" } }, undefined, new Headers());
+		Object.defineProperty(sdkError, "requestID", { value: "req_\u001b[31mtest" });
+		const sanitized = normalizeResponsesFailure(sdkError, "request");
+		expect(sanitized.message).toContain("Request ID: req_ [31mtest");
+		expect(sanitized.message).not.toContain("\u001b");
+		const longID = APIError.generate(403, { error: { message: "permission denied" } }, undefined, new Headers());
+		Object.defineProperty(longID, "requestID", { value: "x".repeat(300) });
+		expect(normalizeResponsesFailure(longID, "request").message).not.toContain("Request ID:");
 	});
 
 	it("retains a scalar SDK error reason in the persisted assistant without changing retry evidence", async () => {

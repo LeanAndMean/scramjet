@@ -686,6 +686,7 @@ function makeFailure(
 		(richKnownFields.length ? `Structured error fields: ${richKnownFields.join(", ")}` : undefined) ??
 		[top.code, nested.code].find((code) => code && code !== "error");
 	const param = readableFailureDetail(finiteString(topRecord?.param) ?? finiteString(nestedRecord?.param));
+	const requestID = value instanceof APIError ? readableFailureDetail(finiteString(value.requestID)) : undefined;
 	const detail =
 		kind === "malformed_event"
 			? undefined
@@ -716,7 +717,7 @@ function makeFailure(
 			? snapshotFailure(snapshotSource)
 			: undefined;
 	return {
-		message: `${composeFailureMessage(category, detail)}${withheld && !snapshot ? ` ${WITHHELD_DETAILS_NOTICE}` : ""}`,
+		message: `${composeFailureMessage(category, detail)}${requestID ? ` Request ID: ${requestID}.` : ""}${withheld && !snapshot ? ` ${WITHHELD_DETAILS_NOTICE}` : ""}`,
 		diagnostic,
 		...(snapshot ? { snapshot } : {}),
 	};
