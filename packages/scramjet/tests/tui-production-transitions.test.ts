@@ -292,9 +292,22 @@ it.each(["single", "chain"] as const)(
 	},
 );
 
-it("keeps an all-exited parallel update pending until the production row commits", async () => {
+it("updates parallel cost while running and keeps an all-exited update pending until the row commits", async () => {
 	const h = await runningBatch();
 	const component = h.internals.chatContainer.children[0];
+	for (const cost of [0.0123, 0.0456]) {
+		h.partialResult.details.results[0].usage.cost = cost;
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "batch",
+			toolName: "subagent",
+			args: { tasks: h.tasks },
+			partialResult: h.partialResult,
+		});
+		const live = stripVTControlCharacters(h.internals.chatContainer.render(47).join("\n"));
+		expect(live).toContain("4/8 done, 4 running");
+		expect(live).toContain(`$${cost.toFixed(4)}`);
+	}
 	for (const child of h.partialResult.details.results) child.exitCode = 0;
 	await h.emit({
 		type: "tool_execution_update",
@@ -325,6 +338,69 @@ it("keeps an all-exited parallel update pending until the production row commits
 		expect(committed).toMatch(/✓ parallel/);
 		for (let i = 1; i <= 8; i++) expect(committed.match(new RegExp(`CARD-${i}\\b`, "g"))).toHaveLength(1);
 	}
+});
+
+it("expands hidden intermediate subagent text with Ctrl+O through the production editor", async () => {
+	harness = await createProductionInteractiveHarness(90, 24, (pi) =>
+		registerSubagentTool(pi, noOpTerminalIndicators()),
+	);
+	const h = harness;
+	const args = { agent: "child", task: "task" };
+	const earlier = Array.from({ length: 8 }, (_, i) => `EARLIER-LINE-${i + 1}`).join("\n");
+	const result = {
+		content: [{ type: "text" as const, text: "FINAL-ANSWER" }],
+		details: {
+			mode: "single",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [
+				{
+					agent: "child",
+					agentSource: "user",
+					task: "task",
+					exitCode: -1,
+					messages: [
+						{ role: "assistant", content: [{ type: "text", text: earlier }] },
+						{ role: "assistant", content: [{ type: "text", text: "FINAL-ANSWER" }] },
+					],
+					stderr: "",
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.01, contextTokens: 15, turns: 2 },
+				},
+			],
+		},
+	};
+	await h.emit({ type: "agent_start" });
+	await h.emit({ type: "tool_execution_start", toolCallId: "expanded-child", toolName: "subagent", args });
+	await h.emit({
+		type: "tool_execution_update",
+		toolCallId: "expanded-child",
+		toolName: "subagent",
+		args,
+		partialResult: result,
+	});
+	const logical = () => stripVTControlCharacters(h.internals.chatContainer.render(89).join("\n"));
+	expect(logical()).not.toContain("EARLIER-LINE-8");
+	h.terminal.sendInput("\x0f");
+	await h.frame();
+	expect(logical()).toContain("EARLIER-LINE-8");
+	expect(logical().match(/FINAL-ANSWER/g)).toHaveLength(1);
+	h.terminal.sendInput("\x0f");
+	await h.frame();
+	expect(logical()).not.toContain("EARLIER-LINE-8");
+	result.details.results[0].exitCode = 0;
+	await h.emit({
+		type: "tool_execution_end",
+		toolCallId: "expanded-child",
+		toolName: "subagent",
+		result,
+		isError: false,
+	});
+	await h.emit({ type: "agent_end", messages: [] });
+	h.terminal.sendInput("\x0f");
+	await h.frame();
+	const committed = stripVTControlCharacters(h.internals.committedChatContainer.render(89).join("\n"));
+	expect(committed).toContain("EARLIER-LINE-8");
+	expect(committed.match(/FINAL-ANSWER/g)).toHaveLength(1);
 });
 
 async function browseAll(h: NonNullable<typeof harness>): Promise<string> {

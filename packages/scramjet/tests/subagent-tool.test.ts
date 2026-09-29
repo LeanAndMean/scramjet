@@ -1570,6 +1570,42 @@ describe("renderResult — child and row lifecycle regressions", () => {
 		expect(expanded).toContain("LIVE-LINE-8");
 	});
 
+	it("collapsed parallel shows accrued cost while any child is running", () => {
+		const accrued = child("active", -1, "LIVE", { usage: { ...usage, cost: 0.0123 } });
+		const waiting = child("waiting", -1);
+		for (const cost of [0.0123, 0.0456]) {
+			accrued.usage.cost = cost;
+			const result = snapshot("parallel", [accrued, waiting]);
+			const collapsed = renderToolResult(tool, result, false, {}, true);
+			const expanded = renderToolResult(tool, result, true, {}, true);
+			expect(collapsed).toContain("Total:");
+			expect(collapsed).toContain(`$${cost.toFixed(4)}`);
+			expect(expanded).toContain(`$${cost.toFixed(4)}`);
+		}
+	});
+
+	it.each(["single", "chain", "parallel"] as const)(
+		"%s expands earlier assistant text hidden by the collapsed preview without duplicating the final answer",
+		(mode) => {
+			const earlier = Array.from({ length: 8 }, (_, i) => `EARLIER-LINE-${i + 1}`).join("\n");
+			const result = snapshot(mode, [
+				child("done", 0, "", {
+					step: 1,
+					messages: [
+						{ role: "assistant", content: [{ type: "text", text: earlier }] },
+						{ role: "assistant", content: [{ type: "text", text: "FINAL-ANSWER" }] },
+					],
+				}),
+			]);
+			const collapsed = renderToolResult(tool, result, false);
+			const expanded = renderToolResult(tool, result, true);
+			expect(collapsed).toContain("EARLIER-LINE-1");
+			expect(collapsed).not.toContain("EARLIER-LINE-8");
+			expect(expanded).toContain("EARLIER-LINE-8");
+			expect(expanded.match(/FINAL-ANSWER/g)).toHaveLength(1);
+		},
+	);
+
 	it("expanded finalized answer retains every assistant text block", () => {
 		for (const mode of ["single", "chain", "parallel"] as const) {
 			const result = snapshot(mode, [

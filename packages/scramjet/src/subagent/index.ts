@@ -197,14 +197,24 @@ function isMessage(value: unknown): value is Message {
 	return isRecord(value) && typeof value.role === "string" && Array.isArray(value.content);
 }
 
-type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, unknown> };
+type DisplayItem =
+	| { type: "text"; text: string; final: boolean }
+	| { type: "toolCall"; name: string; args: Record<string, unknown> };
 
 function getDisplayItems(messages: Message[]): DisplayItem[] {
 	const items: DisplayItem[] = [];
-	for (const msg of messages) {
+	let finalMessage = -1;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role === "assistant" && msg.content.some((part) => part.type === "text")) {
+			finalMessage = i;
+			break;
+		}
+	}
+	for (const [index, msg] of messages.entries()) {
 		if (msg.role === "assistant") {
 			for (const part of msg.content) {
-				if (part.type === "text") items.push({ type: "text", text: part.text });
+				if (part.type === "text") items.push({ type: "text", text: part.text, final: index === finalMessage });
 				else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, args: part.arguments });
 			}
 		}
@@ -933,6 +943,21 @@ export function registerSubagentTool(
 				return text.trimEnd();
 			};
 
+			const addExpandedItems = (container: Container, items: DisplayItem[]) => {
+				for (const item of items) {
+					if (item.type === "text" && !item.final)
+						container.addChild(new Text(theme.fg("toolOutput", item.text), 0, 0));
+					else if (item.type === "toolCall")
+						container.addChild(
+							new Text(
+								theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
+								0,
+								0,
+							),
+						);
+				}
+			};
+
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
 				const isRunning = r.exitCode === EXIT_CODE_RUNNING;
@@ -970,16 +995,7 @@ export function registerSubagentTool(
 							),
 						);
 					} else {
-						for (const item of displayItems) {
-							if (item.type === "toolCall")
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
-						}
+						addExpandedItems(container, displayItems);
 						if (finalOutput) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
@@ -1058,17 +1074,7 @@ export function registerSubagentTool(
 						const diagnostics = formatInvocationDiagnostics(r);
 						if (diagnostics) container.addChild(new Text(theme.fg("warning", diagnostics), 0, 0));
 
-						for (const item of displayItems) {
-							if (item.type === "toolCall") {
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
-							}
-						}
+						addExpandedItems(container, displayItems);
 
 						if (r.exitCode !== EXIT_CODE_RUNNING && isResultError(r)) {
 							container.addChild(new Spacer(1));
@@ -1173,17 +1179,7 @@ export function registerSubagentTool(
 						const diagnostics = formatInvocationDiagnostics(r);
 						if (diagnostics) container.addChild(new Text(theme.fg("warning", diagnostics), 0, 0));
 
-						for (const item of displayItems) {
-							if (item.type === "toolCall") {
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
-							}
-						}
+						addExpandedItems(container, displayItems);
 
 						if (r.exitCode !== EXIT_CODE_RUNNING && isResultError(r)) {
 							container.addChild(new Spacer(1));
@@ -1226,10 +1222,8 @@ export function registerSubagentTool(
 						text += `\n${theme.fg("muted", output)}`;
 					} else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
-				if (!isRunning) {
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
-					if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
-				}
+				const usageStr = formatUsageStats(aggregateUsage(details.results));
+				if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
 				if (!expanded) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				return new Text(text, 0, 0);
 			}
