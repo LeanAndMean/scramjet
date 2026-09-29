@@ -47,6 +47,27 @@ export function parseForgeOrigin(input: string): ForgeRepository {
 	if (url.protocol === "ssh:" && url.username !== "git") throw new Error("SSH origin must use the git user");
 	return repositoryFromPath(url.hostname, url.pathname);
 }
+export function parseForgeRepository(input: string): ForgeRepository {
+	let url: URL;
+	try {
+		url = new URL(input);
+	} catch {
+		throw new Error("Repository target must be a canonical public HTTPS URL");
+	}
+	if (
+		url.protocol !== "https:" ||
+		(url.hostname !== "github.com" && url.hostname !== "gitlab.com") ||
+		input !== `https://${url.hostname}${url.pathname}` ||
+		input.includes("%") ||
+		input.includes("\\") ||
+		/\/(?:\.{1,2})(?:\/|$)/.test(input) ||
+		url.pathname.endsWith("/") ||
+		url.pathname.endsWith(".git")
+	)
+		throw new Error("Repository target must be a canonical public HTTPS URL without credentials or suffixes");
+	return repositoryFromPath(url.hostname, url.pathname);
+}
+
 function repositoryFromPath(host: string, rawPath: string): ForgeRepository {
 	let path = rawPath.replace(/^\//, "");
 	if (path.endsWith(".git")) path = path.slice(0, -4);
@@ -61,7 +82,18 @@ function repositoryFromPath(host: string, rawPath: string): ForgeRepository {
 	return { provider: "gitlab", namespace: segments.slice(0, -1).join("/"), repository: segments.at(-1)! };
 }
 export function sameRepository(left: ForgeRepository, right: ForgeRepository): boolean {
-	return JSON.stringify(left) === JSON.stringify(right);
+	if (left.provider !== right.provider) return false;
+	if (left.provider === "github" && right.provider === "github")
+		return (
+			left.owner.toLowerCase() === right.owner.toLowerCase() &&
+			left.repository.toLowerCase() === right.repository.toLowerCase()
+		);
+	return (
+		left.provider === "gitlab" &&
+		right.provider === "gitlab" &&
+		left.namespace === right.namespace &&
+		left.repository === right.repository
+	);
 }
 export async function resolveForgeOrigin(exec: ForgeExec, cwd: string, signal?: AbortSignal): Promise<ForgeRepository> {
 	const result = await exec("git", ["remote", "get-url", "origin"], {
@@ -83,7 +115,11 @@ export async function preflightPullRequestBranches(
 	request: Extract<PublicationRequest, { operation: "create_pr" }>,
 	cwd: string,
 	signal?: AbortSignal,
+	repository?: ForgeRepository,
 ): Promise<void> {
+	const remote = repository
+		? `https://${repository.provider === "github" ? `github.com/${repository.owner}` : `gitlab.com/${repository.namespace}`}/${repository.repository}.git`
+		: "origin";
 	for (const branch of [request.head, request.base]) {
 		if (
 			!branch ||
@@ -100,12 +136,12 @@ export async function preflightPullRequestBranches(
 		});
 		if (readFailed(checked)) throw new Error(`Invalid PR branch: ${branch}`);
 		const ref = `refs/heads/${branch}`;
-		const remote = await exec("git", ["ls-remote", "--exit-code", "--refs", "--heads", "origin", ref], {
+		const checkedRemote = await exec("git", ["ls-remote", "--exit-code", "--refs", "--heads", remote, ref], {
 			cwd,
 			signal,
 			timeout: FORGE_EXEC_TIMEOUT_MS,
 		});
-		if (readFailed(remote) || !remote.stdout.split("\n").some((line) => line.split("\t")[1] === ref))
+		if (readFailed(checkedRemote) || !checkedRemote.stdout.split("\n").some((line) => line.split("\t")[1] === ref))
 			throw new Error(`Remote branch does not exist: ${branch}`);
 	}
 }
@@ -116,7 +152,7 @@ export async function preflightForgePublication(
 	request: PublicationRequest,
 	cwd: string,
 	signal?: AbortSignal,
-): Promise<void> {
+): Promise<number | undefined> {
 	if (repository.provider === "github") {
 		const root = `repos/${repository.owner}/${repository.repository}`;
 		const metadata = record(await fetchJson(exec, "gh", root, cwd, signal));
@@ -148,14 +184,42 @@ export async function preflightForgePublication(
 		return;
 	}
 	const project = `${repository.namespace}/${repository.repository}`;
-	const metadata = record(await fetchJson(exec, "glab", `projects/${encodeURIComponent(project)}`, cwd, signal));
+	const root = `projects/${encodeURIComponent(project)}`;
+	const metadata = record(await fetchJson(exec, "glab", root, cwd, signal));
 	if (
 		!metadata ||
 		metadata.path_with_namespace !== project ||
+		!Number.isSafeInteger(metadata.id) ||
+		(metadata.id as number) <= 0 ||
 		typeof metadata.web_url !== "string" ||
 		!exactUrl(metadata.web_url, "gitlab.com", [...repository.namespace.split("/"), repository.repository], false)
 	)
 		throw new Error("Repository origin is not the forge canonical identity");
+	if (request.operation === "add_issue_comment" || request.operation === "add_pr_comment") {
+		const parent = record(
+			await fetchJson(
+				exec,
+				"glab",
+				`${root}/${request.operation === "add_pr_comment" ? "merge_requests" : "issues"}/${request.number}`,
+				cwd,
+				signal,
+			),
+		);
+		if (
+			!parent ||
+			parent.iid !== request.number ||
+			parent.project_id !== metadata.id ||
+			typeof parent.web_url !== "string" ||
+			!gitlabArtifactUrl(
+				parent.web_url,
+				repository,
+				request.operation === "add_pr_comment" ? "create_pr" : "create_issue",
+				request.number,
+			)
+		)
+			throw new Error("Publication target does not match the requested GitLab artifact");
+	}
+	return metadata.id as number;
 }
 
 export async function publishForge(
@@ -164,10 +228,11 @@ export async function publishForge(
 	request: PublicationRequest,
 	cwd: string,
 	signal?: AbortSignal,
+	preflightedProjectId?: number,
 ): Promise<PublicationOutcome> {
 	return repository.provider === "github"
 		? publishGithub(exec, repository, request, cwd, signal)
-		: publishGitlab(exec, repository, request, cwd, signal);
+		: publishGitlab(exec, repository, request, cwd, signal, preflightedProjectId);
 }
 
 async function invoke(
@@ -310,6 +375,7 @@ async function publishGitlab(
 	request: PublicationRequest,
 	cwd: string,
 	signal?: AbortSignal,
+	preflightedProjectId?: number,
 ): Promise<PublicationOutcome> {
 	const project = `${repo.namespace}/${repo.repository}`;
 	const root = `projects/${encodeURIComponent(project)}`;
@@ -353,6 +419,7 @@ async function publishGitlab(
 		if (!fetched) return ambiguous("verification-request-failed");
 		if (
 			fetched.iid !== item.iid ||
+			(preflightedProjectId !== undefined && fetched.project_id !== preflightedProjectId) ||
 			fetched.web_url !== item.web_url ||
 			fetched.title !== request.title ||
 			fetched.description !== request.body
@@ -373,6 +440,7 @@ async function publishGitlab(
 	if (
 		!Number.isInteger(item.id) ||
 		!Number.isInteger(item.project_id) ||
+		(preflightedProjectId !== undefined && item.project_id !== preflightedProjectId) ||
 		item.noteable_iid !== request.number ||
 		item.noteable_type !== (request.operation === "add_pr_comment" ? "MergeRequest" : "Issue")
 	)
@@ -382,6 +450,7 @@ async function publishGitlab(
 	if (
 		fetched.id !== item.id ||
 		fetched.project_id !== item.project_id ||
+		(preflightedProjectId !== undefined && fetched.project_id !== preflightedProjectId) ||
 		fetched.body !== request.body ||
 		fetched.noteable_iid !== request.number ||
 		fetched.noteable_type !== (request.operation === "add_pr_comment" ? "MergeRequest" : "Issue")
