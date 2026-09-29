@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.104.2 — Improve live subagent output and completion status
+
+Keeps running subagent cards accurate through finalization and makes intermediate output accessible. Fixes [#585](https://github.com/LeanAndMean/scramjet/issues/585).
+
+### Fixed
+
+- Keep single, chain, and parallel subagents pending until their tool results finish, with accurate child counts and failure diagnostics.
+- Show accrued parallel cost and expand interim output without duplicating final answers.
+
+### Tests
+
+- Cover live and committed TUI transitions, collapsed and expanded results, and Ctrl+O expansion.
+
 ## 0.104.1 — Fix npm README logo and package link
 
 Makes the package README logo load from a public URL and links the repository README to the npm package listing. Fixes [#583](https://github.com/LeanAndMean/scramjet/issues/583).

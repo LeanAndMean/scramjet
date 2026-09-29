@@ -77,13 +77,13 @@ function renderToolCall(
 	return tool.renderCall(args, theme, context).render(120).join("\n");
 }
 
-function renderToolResult(tool: any, result: any, expanded: boolean, args?: any): string {
+function renderToolResult(tool: any, result: any, expanded: boolean, args?: any, isPartial = false): string {
 	const theme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	};
 	return tool
-		.renderResult(result, { expanded }, theme, { args: args ?? {} })
+		.renderResult(result, { expanded, isPartial }, theme, { args: args ?? {} })
 		.render(120)
 		.join("\n");
 }
@@ -793,12 +793,31 @@ describe("subagent tool — failure reporting", () => {
 		expect(rendered).not.toContain("stale assistant output");
 	});
 
-	it("renders failed parallel diagnostics in expanded mode when assistant text exists", () => {
+	it.each(["parallel", "chain"])("renders failed %s diagnostics and pre-error child output when expanded", (mode) => {
 		const tool = registeredSubagentTool();
-		const rendered = renderToolResult(tool, failedParallelRenderResult(), true);
+		const result = failedParallelRenderResult();
+		result.details.mode = mode;
+		result.details.results[0].step = 1;
+		const rendered = renderToolResult(tool, result, true);
 
+		expect(rendered).toContain("✗");
 		expect(rendered).toContain("provider failed");
-		expect(rendered).not.toContain("stale assistant output");
+		expect(rendered).toContain("Pre-error child output");
+		expect(rendered).toContain("stale assistant output");
+		expect(rendered.indexOf("provider failed")).toBeLessThan(rendered.indexOf("stale assistant output"));
+		expect(rendered.match(/stale assistant output/g)).toHaveLength(1);
+	});
+
+	it.each(["parallel", "chain"])("does not duplicate failed %s output when it is the diagnostic", (mode) => {
+		const tool = registeredSubagentTool();
+		const result = failedParallelRenderResult();
+		result.details.mode = mode;
+		result.details.results[0].step = 1;
+		result.details.results[0].messages[0].content[0].text = "provider failed";
+		const rendered = renderToolResult(tool, result, true);
+
+		expect(rendered.match(/provider failed/g)).toHaveLength(1);
+		expect(rendered).not.toContain("Pre-error child output");
 	});
 
 	it("escalates aborted subprocesses that ignore SIGTERM", async () => {
@@ -1491,6 +1510,208 @@ describe("renderResult model and effort", () => {
 
 		const resultRendered = renderToolResult(tool, singleResult(), true, {});
 		expect(resultRendered).not.toContain("[Effort:");
+	});
+});
+
+describe("renderResult — child and row lifecycle regressions", () => {
+	const tool = registeredSubagentTool();
+	const usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 15, turns: 1 };
+	const child = (agent: string, exitCode: number, text = "", extra: Record<string, unknown> = {}) => ({
+		agent,
+		agentSource: "user",
+		task: `task for ${agent}`,
+		exitCode,
+		messages: text ? [{ role: "assistant", content: [{ type: "text", text }] }] : [],
+		stderr: "",
+		usage,
+		...extra,
+	});
+	const snapshot = (mode: "single" | "chain" | "parallel", results: ReturnType<typeof child>[]) => ({
+		content: [{ type: "text", text: "snapshot" }],
+		details: { mode, agentScope: "user", projectAgentsDir: null, results },
+	});
+
+	it.each([false, true])("single running child is pending and retains live output (expanded=%s)", (expanded) => {
+		for (const text of ["", "LIVE-SINGLE"]) {
+			const rendered = renderToolResult(tool, snapshot("single", [child("live", -1, text)]), expanded, {}, true);
+			expect(rendered).toContain("⏳ live");
+			expect(rendered).not.toContain("✓ live");
+			expect(rendered).not.toContain("(no output)");
+			if (text) expect(rendered).toContain(text);
+		}
+	});
+
+	it("empty running single must not show a final no-output verdict", () => {
+		for (const expanded of [false, true]) {
+			const rendered = renderToolResult(tool, snapshot("single", [child("live", -1)]), expanded, {}, true);
+			expect(rendered).not.toContain("(no output)");
+		}
+	});
+
+	it.each([false, true])("chain preserves settled step and pending live step (expanded=%s)", (expanded) => {
+		const result = snapshot("chain", [
+			child("done", 0, "SETTLED-ANSWER", { step: 1 }),
+			child("live", -1, "LIVE-CHAIN", { step: 2 }),
+		]);
+		const rendered = renderToolResult(tool, result, expanded, {}, true);
+		expect(rendered).toContain("⏳ chain 1/2 steps");
+		expect(rendered).toContain("done ✓");
+		expect(rendered).toContain("live ⏳");
+		expect(rendered).toContain("SETTLED-ANSWER");
+		expect(rendered).toContain("LIVE-CHAIN");
+	});
+
+	it.each([false, true])(
+		"parallel counts running error-stop child only once and keeps live text (expanded=%s)",
+		(expanded) => {
+			const result = snapshot("parallel", [
+				child("done", 0, "SETTLED-PARALLEL"),
+				child("failed", 2, "", { stderr: "FAILED-DIAGNOSTIC" }),
+				child("live", -1, "LIVE-PARALLEL", { stopReason: "error", errorMessage: "INTERIM-ERROR" }),
+			]);
+			const rendered = renderToolResult(tool, result, expanded, {}, true);
+			expect(rendered).toContain("2/3 done, 1 running");
+			expect(rendered).toContain("done ✓");
+			expect(rendered).toContain("failed ✗");
+			expect(rendered).toContain("live ⏳");
+			expect(rendered).toContain("SETTLED-PARALLEL");
+			expect(rendered).toContain("FAILED-DIAGNOSTIC");
+			expect(rendered).toContain("LIVE-PARALLEL");
+		},
+	);
+
+	it("expanded running parallel retains output past the collapsed three-line preview", () => {
+		const output = Array.from({ length: 8 }, (_, index) => `LIVE-LINE-${index + 1}`).join("\n");
+		const result = snapshot("parallel", [child("live", -1, output)]);
+		const collapsed = renderToolResult(tool, result, false, {}, true);
+		const expanded = renderToolResult(tool, result, true, {}, true);
+		expect(collapsed).not.toContain("LIVE-LINE-8");
+		expect(expanded).toContain("LIVE-LINE-8");
+	});
+
+	it.each(["chain", "parallel"] as const)("collapsed %s shows each child's usage and a separate total", (mode) => {
+		const first = child("first", 0, "FIRST-ANSWER", {
+			step: 1,
+			usage: { ...usage, input: 100, cost: 0.01 },
+		});
+		const second = child("second", -1, "SECOND-ANSWER", {
+			step: 2,
+			usage: { ...usage, input: 200, cost: 0.02 },
+		});
+		const rendered = renderToolResult(tool, snapshot(mode, [first, second]), false, {}, true);
+		const firstHeader = rendered.indexOf(mode === "chain" ? "Step 1: first" : "─── first");
+		const secondHeader = rendered.indexOf(mode === "chain" ? "Step 2: second" : "─── second");
+		const total = rendered.indexOf("Total:");
+		expect(firstHeader).toBeGreaterThanOrEqual(0);
+		expect(secondHeader).toBeGreaterThan(firstHeader);
+		expect(total).toBeGreaterThan(secondHeader);
+		expect(rendered.slice(firstHeader, secondHeader)).toContain("$0.0100");
+		expect(rendered.slice(secondHeader, total)).toContain("$0.0200");
+		expect(rendered.slice(total)).toContain("$0.0300");
+	});
+
+	it.each(["chain", "parallel"] as const)("collapsed %s omits model-only usage lines", (mode) => {
+		const empty = child("empty", -1, "", {
+			step: 1,
+			model: "example-model",
+			usage: { ...usage, input: 0, output: 0, contextTokens: 0, turns: 0 },
+		});
+		const active = child("active", -1, "LIVE", {
+			step: 2,
+			model: "example-model",
+			usage: { ...usage, cost: 0.02 },
+		});
+		const rendered = renderToolResult(tool, snapshot(mode, [empty, active]), false, {}, true);
+		expect(rendered.match(/example-model/g)).toHaveLength(2);
+		expect(rendered).toContain("$0.0200");
+	});
+
+	it("collapsed parallel shows accrued cost while any child is running", () => {
+		const accrued = child("active", -1, "LIVE", { usage: { ...usage, cost: 0.0123 } });
+		const waiting = child("waiting", -1);
+		for (const cost of [0.0123, 0.0456]) {
+			accrued.usage.cost = cost;
+			const result = snapshot("parallel", [accrued, waiting]);
+			const collapsed = renderToolResult(tool, result, false, {}, true);
+			const expanded = renderToolResult(tool, result, true, {}, true);
+			expect(collapsed).toContain("Total:");
+			expect(collapsed).toContain(`$${cost.toFixed(4)}`);
+			expect(expanded).toContain(`$${cost.toFixed(4)}`);
+		}
+	});
+
+	it.each(["single", "chain", "parallel"] as const)(
+		"%s expands earlier assistant text hidden by the collapsed preview without duplicating the final answer",
+		(mode) => {
+			const earlier = Array.from({ length: 8 }, (_, i) => `EARLIER-LINE-${i + 1}`).join("\n");
+			const result = snapshot(mode, [
+				child("done", 0, "", {
+					step: 1,
+					messages: [
+						{ role: "assistant", content: [{ type: "text", text: earlier }] },
+						{ role: "assistant", content: [{ type: "text", text: "FINAL-ANSWER" }] },
+					],
+				}),
+			]);
+			const collapsed = renderToolResult(tool, result, false);
+			const expanded = renderToolResult(tool, result, true);
+			expect(collapsed).toContain("EARLIER-LINE-1");
+			expect(collapsed).not.toContain("EARLIER-LINE-8");
+			expect(expanded).toContain("EARLIER-LINE-8");
+			expect(expanded.match(/FINAL-ANSWER/g)).toHaveLength(1);
+		},
+	);
+
+	it("expanded finalized answer retains every assistant text block", () => {
+		for (const mode of ["single", "chain", "parallel"] as const) {
+			const result = snapshot(mode, [
+				child("done", 0, "", {
+					step: 1,
+					messages: [
+						{
+							role: "assistant",
+							content: [
+								{ type: "text", text: "FIRST-ANSWER" },
+								{ type: "text", text: "LAST-ANSWER" },
+							],
+						},
+					],
+				}),
+			]);
+			const expanded = renderToolResult(tool, result, true);
+			expect(expanded).toContain("FIRST-ANSWER");
+			expect(expanded).toContain("LAST-ANSWER");
+		}
+	});
+
+	it("settled failure retains provider diagnostics across views", () => {
+		for (const mode of ["single", "chain", "parallel"] as const) {
+			const result = snapshot(mode, [
+				child("failed", 2, "LAST-ANSWER", {
+					step: 1,
+					stderr: "EXIT-DIAGNOSTIC",
+					errorMessage: "PROVIDER-ERROR",
+				}),
+			]);
+			for (const expanded of [false, true]) {
+				const rendered = renderToolResult(tool, result, expanded, {}, false);
+				expect(rendered).toContain("PROVIDER-ERROR");
+				expect(rendered).toContain("✗");
+			}
+		}
+	});
+
+	it.each(["single", "chain", "parallel"] as const)("%s waits for row finality after child exit", (mode) => {
+		const results = [child("done", 0, "FINAL-ANSWER", mode === "chain" ? { step: 1 } : {})];
+		for (const expanded of [false, true]) {
+			const result = snapshot(mode, results);
+			const pending = renderToolResult(tool, result, expanded, {}, true);
+			const final = renderToolResult(tool, result, expanded, {}, false);
+			expect(pending).toContain("⏳");
+			expect(pending).not.toMatch(/^✓/);
+			expect(final).toMatch(/^✓/);
+			expect(final).toContain("FINAL-ANSWER");
+		}
 	});
 });
 

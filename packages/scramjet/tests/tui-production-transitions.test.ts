@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import type { Model } from "@leanandmean/ai";
 import { type ExtensionAPI, SettingsManager } from "@leanandmean/coding-agent";
 import { Text } from "@leanandmean/tui";
@@ -207,6 +208,208 @@ describe("production running subagent presentation", () => {
 		}
 		expect([...seen].join("\n")).toContain("CARD-1");
 	});
+});
+
+it.each(["single", "chain"] as const)(
+	"keeps %s live status distinct from committed result through the production row",
+	async (mode) => {
+		harness = await createProductionInteractiveHarness(90, 24, (pi) =>
+			registerSubagentTool(pi, noOpTerminalIndicators()),
+		);
+		const h = harness;
+		const args = mode === "single" ? { agent: "child", task: "task" } : { chain: [{ agent: "child", task: "task" }] };
+		const result = (exitCode: number, output: string) => ({
+			content: [{ type: "text" as const, text: output }],
+			details: {
+				mode,
+				agentScope: "user",
+				projectAgentsDir: null,
+				results: [
+					{
+						agent: "child",
+						agentSource: "user",
+						task: "task",
+						step: 1,
+						exitCode,
+						messages: output ? [{ role: "assistant", content: [{ type: "text", text: output }] }] : [],
+						stderr: "",
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+					},
+				],
+			},
+		});
+		await h.emit({ type: "agent_start" });
+		await h.emit({ type: "tool_execution_start", toolCallId: "single-or-chain", toolName: "subagent", args });
+		const component = h.internals.chatContainer.children[0];
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "single-or-chain",
+			toolName: "subagent",
+			args,
+			partialResult: result(-1, "LIVE-ANSWER"),
+		});
+		const live = [];
+		for (const expanded of [false, true]) {
+			h.internals.setToolsExpanded(expanded);
+			live.push(stripVTControlCharacters(h.internals.chatContainer.render(89).join("\n")));
+		}
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "single-or-chain",
+			toolName: "subagent",
+			args,
+			partialResult: result(0, "FINAL-ANSWER"),
+		});
+		const exitedButPending = [false, true].map((expanded) => {
+			h.internals.setToolsExpanded(expanded);
+			return stripVTControlCharacters(h.internals.chatContainer.render(89).join("\n"));
+		});
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "single-or-chain",
+			toolName: "subagent",
+			result: result(0, "FINAL-ANSWER"),
+			isError: false,
+		});
+		await h.emit({ type: "agent_end", messages: [] });
+		expect(h.internals.committedChatContainer.children).toContain(component);
+		for (const frame of live) {
+			expect(frame).toContain("LIVE-ANSWER");
+			expect(frame).not.toMatch(/✓ (?:child|chain)/);
+		}
+		for (const frame of exitedButPending) {
+			expect(frame).toContain("FINAL-ANSWER");
+			expect(frame).not.toMatch(/✓ (?:child|chain)/);
+		}
+		for (const expanded of [false, true]) {
+			h.internals.setToolsExpanded(expanded);
+			const committed = stripVTControlCharacters(h.internals.committedChatContainer.render(89).join("\n"));
+			expect(committed).toContain("FINAL-ANSWER");
+			expect(committed).not.toContain("LIVE-ANSWER");
+			expect(committed).toMatch(/✓ (?:child|chain)/);
+			expect(committed.match(/FINAL-ANSWER/g)).toHaveLength(1);
+		}
+	},
+);
+
+it("updates parallel cost while running and keeps an all-exited update pending until the row commits", async () => {
+	const h = await runningBatch();
+	const component = h.internals.chatContainer.children[0];
+	h.partialResult.details.results[1].usage.cost = 0.02;
+	for (const cost of [0.0123, 0.0456]) {
+		h.partialResult.details.results[0].usage.cost = cost;
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "batch",
+			toolName: "subagent",
+			args: { tasks: h.tasks },
+			partialResult: h.partialResult,
+		});
+		const live = stripVTControlCharacters(h.internals.chatContainer.render(47).join("\n"));
+		expect(live).toContain("4/8 done, 4 running");
+		const first = live.indexOf("─── child-1");
+		const second = live.indexOf("─── child-2");
+		const third = live.indexOf("─── child-3");
+		expect(first).toBeGreaterThanOrEqual(0);
+		expect(second).toBeGreaterThan(first);
+		expect(third).toBeGreaterThan(second);
+		expect(live.slice(first, second)).toContain(`$${cost.toFixed(4)}`);
+		expect(live.slice(second, third)).toContain("$0.0200");
+		expect(live.slice(live.indexOf("Total:"))).toContain(`$${(cost + 0.02).toFixed(4)}`);
+	}
+	for (const child of h.partialResult.details.results) child.exitCode = 0;
+	await h.emit({
+		type: "tool_execution_update",
+		toolCallId: "batch",
+		toolName: "subagent",
+		args: { tasks: h.tasks },
+		partialResult: h.partialResult,
+	});
+	for (const expanded of [false, true]) {
+		h.internals.setToolsExpanded(expanded);
+		const pending = stripVTControlCharacters(h.internals.chatContainer.render(47).join("\n"));
+		expect(pending).toContain("⏳ parallel 8/8 tasks");
+		expect(pending).not.toMatch(/✓ parallel/);
+		expect(pending).toContain("CARD-8");
+	}
+	await h.emit({
+		type: "tool_execution_end",
+		toolCallId: "batch",
+		toolName: "subagent",
+		result: h.partialResult,
+		isError: false,
+	});
+	await h.emit({ type: "agent_end", messages: [] });
+	expect(h.internals.committedChatContainer.children).toContain(component);
+	for (const expanded of [false, true]) {
+		h.internals.setToolsExpanded(expanded);
+		const committed = stripVTControlCharacters(h.internals.committedChatContainer.render(47).join("\n"));
+		expect(committed).toMatch(/✓ parallel/);
+		for (let i = 1; i <= 8; i++) expect(committed.match(new RegExp(`CARD-${i}\\b`, "g"))).toHaveLength(1);
+	}
+});
+
+it("expands hidden intermediate subagent text with Ctrl+O through the production editor", async () => {
+	harness = await createProductionInteractiveHarness(90, 24, (pi) =>
+		registerSubagentTool(pi, noOpTerminalIndicators()),
+	);
+	const h = harness;
+	const args = { agent: "child", task: "task" };
+	const earlier = Array.from({ length: 8 }, (_, i) => `EARLIER-LINE-${i + 1}`).join("\n");
+	const result = {
+		content: [{ type: "text" as const, text: "FINAL-ANSWER" }],
+		details: {
+			mode: "single",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [
+				{
+					agent: "child",
+					agentSource: "user",
+					task: "task",
+					exitCode: -1,
+					messages: [
+						{ role: "assistant", content: [{ type: "text", text: earlier }] },
+						{ role: "assistant", content: [{ type: "text", text: "FINAL-ANSWER" }] },
+					],
+					stderr: "",
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.01, contextTokens: 15, turns: 2 },
+				},
+			],
+		},
+	};
+	await h.emit({ type: "agent_start" });
+	await h.emit({ type: "tool_execution_start", toolCallId: "expanded-child", toolName: "subagent", args });
+	await h.emit({
+		type: "tool_execution_update",
+		toolCallId: "expanded-child",
+		toolName: "subagent",
+		args,
+		partialResult: result,
+	});
+	const logical = () => stripVTControlCharacters(h.internals.chatContainer.render(89).join("\n"));
+	expect(logical()).not.toContain("EARLIER-LINE-8");
+	h.terminal.sendInput("\x0f");
+	await h.frame();
+	expect(logical()).toContain("EARLIER-LINE-8");
+	expect(logical().match(/FINAL-ANSWER/g)).toHaveLength(1);
+	h.terminal.sendInput("\x0f");
+	await h.frame();
+	expect(logical()).not.toContain("EARLIER-LINE-8");
+	result.details.results[0].exitCode = 0;
+	await h.emit({
+		type: "tool_execution_end",
+		toolCallId: "expanded-child",
+		toolName: "subagent",
+		result,
+		isError: false,
+	});
+	await h.emit({ type: "agent_end", messages: [] });
+	h.terminal.sendInput("\x0f");
+	await h.frame();
+	const committed = stripVTControlCharacters(h.internals.committedChatContainer.render(89).join("\n"));
+	expect(committed).toContain("EARLIER-LINE-8");
+	expect(committed.match(/FINAL-ANSWER/g)).toHaveLength(1);
 });
 
 async function browseAll(h: NonNullable<typeof harness>): Promise<string> {

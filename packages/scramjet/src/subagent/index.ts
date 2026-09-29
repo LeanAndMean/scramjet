@@ -182,9 +182,8 @@ function getFinalOutput(messages: Message[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role === "assistant") {
-			for (const part of msg.content) {
-				if (part.type === "text") return part.text;
-			}
+			const text = msg.content.filter((part) => part.type === "text");
+			if (text.length > 0) return text.map((part) => part.text).join("\n");
 		}
 	}
 	return "";
@@ -198,14 +197,24 @@ function isMessage(value: unknown): value is Message {
 	return isRecord(value) && typeof value.role === "string" && Array.isArray(value.content);
 }
 
-type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, unknown> };
+type DisplayItem =
+	| { type: "text"; text: string; final: boolean }
+	| { type: "toolCall"; name: string; args: Record<string, unknown> };
 
 function getDisplayItems(messages: Message[]): DisplayItem[] {
 	const items: DisplayItem[] = [];
-	for (const msg of messages) {
+	let finalMessage = -1;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role === "assistant" && msg.content.some((part) => part.type === "text")) {
+			finalMessage = i;
+			break;
+		}
+	}
+	for (const [index, msg] of messages.entries()) {
 		if (msg.role === "assistant") {
 			for (const part of msg.content) {
-				if (part.type === "text") items.push({ type: "text", text: part.text });
+				if (part.type === "text") items.push({ type: "text", text: part.text, final: index === finalMessage });
 				else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, args: part.arguments });
 			}
 		}
@@ -903,7 +912,7 @@ export function registerSubagentTool(
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded }, theme, context) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			const details = result.details;
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
@@ -934,10 +943,41 @@ export function registerSubagentTool(
 				return text.trimEnd();
 			};
 
+			const addExpandedItems = (container: Container, items: DisplayItem[]) => {
+				for (const item of items) {
+					if (item.type === "text" && !item.final)
+						container.addChild(new Text(theme.fg("toolOutput", item.text), 0, 0));
+					else if (item.type === "toolCall")
+						container.addChild(
+							new Text(
+								theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
+								0,
+								0,
+							),
+						);
+				}
+			};
+
+			const addExpandedFailure = (container: Container, r: SingleResult, finalOutput: string) => {
+				const diagnostic = getResultOutput(r).trim();
+				container.addChild(new Spacer(1));
+				container.addChild(new Text(theme.fg("error", diagnostic), 0, 0));
+				if (finalOutput.trim() && finalOutput.trim() !== diagnostic) {
+					container.addChild(new Text(theme.fg("muted", "Pre-error child output:"), 0, 0));
+					container.addChild(new Text(theme.fg("toolOutput", finalOutput.trim()), 0, 0));
+				}
+			};
+
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
-				const isError = isResultError(r);
-				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+				const isRunning = r.exitCode === EXIT_CODE_RUNNING;
+				const isError = !isRunning && isResultError(r);
+				const icon =
+					isRunning || isPartial
+						? theme.fg("warning", "⏳")
+						: isError
+							? theme.fg("error", "✗")
+							: theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
 				const finalOutput = getFinalOutput(r.messages);
 				const singleEffort = context.args?.effort;
@@ -957,18 +997,15 @@ export function registerSubagentTool(
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Output ───"), 0, 0));
 					if (displayItems.length === 0 && !finalOutput) {
-						container.addChild(new Text(theme.fg(isError ? "error" : "muted", getResultOutput(r).trim()), 0, 0));
+						container.addChild(
+							new Text(
+								theme.fg(isError ? "error" : "muted", isRunning ? "(running...)" : getResultOutput(r).trim()),
+								0,
+								0,
+							),
+						);
 					} else {
-						for (const item of displayItems) {
-							if (item.type === "toolCall")
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
-						}
+						addExpandedItems(container, displayItems);
 						if (finalOutput) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
@@ -988,7 +1025,8 @@ export function registerSubagentTool(
 				if (diagnostics) text += `\n${theme.fg("warning", diagnostics)}`;
 				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 				else if (isError && r.stderr) text += `\n${theme.fg("error", r.stderr.trim())}`;
-				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+				else if (displayItems.length === 0)
+					text += `\n${theme.fg("muted", isRunning ? "(running...)" : "(no output)")}`;
 				else {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
 					if (displayItems.length > COLLAPSED_ITEM_COUNT) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
@@ -999,8 +1037,15 @@ export function registerSubagentTool(
 			}
 
 			if (details.mode === "chain") {
-				const successCount = details.results.filter((r) => !isResultError(r)).length;
-				const icon = successCount === details.results.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
+				const successCount = details.results.filter(
+					(r) => r.exitCode !== EXIT_CODE_RUNNING && !isResultError(r),
+				).length;
+				const pending = isPartial || details.results.some((r) => r.exitCode === EXIT_CODE_RUNNING);
+				const icon = pending
+					? theme.fg("warning", "⏳")
+					: successCount === details.results.length
+						? theme.fg("success", "✓")
+						: theme.fg("error", "✗");
 
 				if (expanded) {
 					const container = new Container();
@@ -1017,7 +1062,12 @@ export function registerSubagentTool(
 
 					for (let i = 0; i < details.results.length; i++) {
 						const r = details.results[i];
-						const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
+						const rIcon =
+							r.exitCode === EXIT_CODE_RUNNING
+								? theme.fg("warning", "⏳")
+								: isResultError(r)
+									? theme.fg("error", "✗")
+									: theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 						const stepEffort = context.args?.chain?.[i]?.effort;
@@ -1034,21 +1084,10 @@ export function registerSubagentTool(
 						const diagnostics = formatInvocationDiagnostics(r);
 						if (diagnostics) container.addChild(new Text(theme.fg("warning", diagnostics), 0, 0));
 
-						for (const item of displayItems) {
-							if (item.type === "toolCall") {
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
-							}
-						}
+						addExpandedItems(container, displayItems);
 
-						if (isResultError(r)) {
-							container.addChild(new Spacer(1));
-							container.addChild(new Text(theme.fg("error", getResultOutput(r).trim()), 0, 0));
+						if (r.exitCode !== EXIT_CODE_RUNNING && isResultError(r)) {
+							addExpandedFailure(container, r, finalOutput);
 						} else if (finalOutput) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
@@ -1073,16 +1112,24 @@ export function registerSubagentTool(
 					theme.fg("accent", `${successCount}/${details.results.length} steps`);
 				for (let i = 0; i < details.results.length; i++) {
 					const r = details.results[i];
-					const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
+					const isRunning = r.exitCode === EXIT_CODE_RUNNING;
+					const rIcon = isRunning
+						? theme.fg("warning", "⏳")
+						: isResultError(r)
+							? theme.fg("error", "✗")
+							: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
-					const isError = isResultError(r);
+					const isError = !isRunning && isResultError(r);
 					const stepEffort = context.args?.chain?.[i]?.effort;
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}${modelTag(r.model)}${effortTag(stepEffort)}`;
 					const diagnostics = formatInvocationDiagnostics(r);
 					if (diagnostics) text += `\n${theme.fg("warning", diagnostics)}`;
 					if (isError) text += `\n${theme.fg("error", getResultOutput(r).trim())}`;
-					else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+					else if (displayItems.length === 0)
+						text += `\n${theme.fg("muted", isRunning ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					const stepUsage = formatUsageStats(r.usage);
+					if (stepUsage) text += `\n${theme.fg("dim", stepUsage)}`;
 				}
 				const usageStr = formatUsageStats(aggregateUsage(details.results));
 				if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
@@ -1095,18 +1142,21 @@ export function registerSubagentTool(
 				const successCount = details.results.filter(
 					(r) => r.exitCode !== EXIT_CODE_RUNNING && !isResultError(r),
 				).length;
-				const failCount = details.results.filter((r) => isResultError(r)).length;
+				const failCount = details.results.filter(
+					(r) => r.exitCode !== EXIT_CODE_RUNNING && isResultError(r),
+				).length;
 				const isRunning = running > 0;
-				const icon = isRunning
-					? theme.fg("warning", "⏳")
-					: failCount > 0
-						? theme.fg("warning", "◐")
-						: theme.fg("success", "✓");
+				const icon =
+					isRunning || isPartial
+						? theme.fg("warning", "⏳")
+						: failCount > 0
+							? theme.fg("warning", "◐")
+							: theme.fg("success", "✓");
 				const status = isRunning
 					? `${successCount + failCount}/${details.results.length} done, ${running} running`
 					: `${successCount}/${details.results.length} tasks`;
 
-				if (expanded && !isRunning) {
+				if (expanded) {
 					const container = new Container();
 					container.addChild(
 						new Text(
@@ -1118,7 +1168,12 @@ export function registerSubagentTool(
 
 					for (let i = 0; i < details.results.length; i++) {
 						const r = details.results[i];
-						const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
+						const rIcon =
+							r.exitCode === EXIT_CODE_RUNNING
+								? theme.fg("warning", "⏳")
+								: isResultError(r)
+									? theme.fg("error", "✗")
+									: theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 						const taskEffort = context.args?.tasks?.[i]?.effort;
@@ -1135,21 +1190,10 @@ export function registerSubagentTool(
 						const diagnostics = formatInvocationDiagnostics(r);
 						if (diagnostics) container.addChild(new Text(theme.fg("warning", diagnostics), 0, 0));
 
-						for (const item of displayItems) {
-							if (item.type === "toolCall") {
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
-							}
-						}
+						addExpandedItems(container, displayItems);
 
-						if (isResultError(r)) {
-							container.addChild(new Spacer(1));
-							container.addChild(new Text(theme.fg("error", getResultOutput(r).trim()), 0, 0));
+						if (r.exitCode !== EXIT_CODE_RUNNING && isResultError(r)) {
+							addExpandedFailure(container, r, finalOutput);
 						} else if (finalOutput) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
@@ -1177,7 +1221,7 @@ export function registerSubagentTool(
 								? theme.fg("error", "✗")
 								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
-					const isError = isResultError(r);
+					const isError = r.exitCode !== EXIT_CODE_RUNNING && isResultError(r);
 					const taskEffort = context.args?.tasks?.[i]?.effort;
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}${modelTag(r.model)}${effortTag(taskEffort)}`;
 					const diagnostics = formatInvocationDiagnostics(r);
@@ -1187,11 +1231,11 @@ export function registerSubagentTool(
 						const output = r.exitCode === EXIT_CODE_RUNNING ? "(running...)" : "(no output)";
 						text += `\n${theme.fg("muted", output)}`;
 					} else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					const taskUsage = formatUsageStats(r.usage);
+					if (taskUsage) text += `\n${theme.fg("dim", taskUsage)}`;
 				}
-				if (!isRunning) {
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
-					if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
-				}
+				const usageStr = formatUsageStats(aggregateUsage(details.results));
+				if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
 				if (!expanded) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				return new Text(text, 0, 0);
 			}
