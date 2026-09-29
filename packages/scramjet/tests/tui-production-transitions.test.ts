@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import type { Model } from "@leanandmean/ai";
 import { type ExtensionAPI, SettingsManager } from "@leanandmean/coding-agent";
 import { Text } from "@leanandmean/tui";
@@ -208,6 +209,78 @@ describe("production running subagent presentation", () => {
 		expect([...seen].join("\n")).toContain("CARD-1");
 	});
 });
+
+it.each(["single", "chain"] as const)(
+	"keeps %s live status distinct from committed result through the production row",
+	async (mode) => {
+		harness = await createProductionInteractiveHarness(90, 24, (pi) =>
+			registerSubagentTool(pi, noOpTerminalIndicators()),
+		);
+		const h = harness;
+		const args = mode === "single" ? { agent: "child", task: "task" } : { chain: [{ agent: "child", task: "task" }] };
+		const result = (exitCode: number, output: string) => ({
+			content: [{ type: "text" as const, text: output }],
+			details: {
+				mode,
+				agentScope: "user",
+				projectAgentsDir: null,
+				results: [
+					{
+						agent: "child",
+						agentSource: "user",
+						task: "task",
+						step: 1,
+						exitCode,
+						messages: output ? [{ role: "assistant", content: [{ type: "text", text: output }] }] : [],
+						stderr: "",
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+					},
+				],
+			},
+		});
+		await h.emit({ type: "agent_start" });
+		await h.emit({ type: "tool_execution_start", toolCallId: "single-or-chain", toolName: "subagent", args });
+		const component = h.internals.chatContainer.children[0];
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "single-or-chain",
+			toolName: "subagent",
+			args,
+			partialResult: result(-1, "LIVE-ANSWER"),
+		});
+		const live = [];
+		for (const expanded of [false, true]) {
+			h.internals.setToolsExpanded(expanded);
+			live.push(stripVTControlCharacters(h.internals.chatContainer.render(89).join("\n")));
+		}
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "single-or-chain",
+			toolName: "subagent",
+			args,
+			partialResult: result(0, "FINAL-ANSWER"),
+		});
+		const exitedButPending = stripVTControlCharacters(h.internals.chatContainer.render(89).join("\n"));
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "single-or-chain",
+			toolName: "subagent",
+			result: result(0, "FINAL-ANSWER"),
+			isError: false,
+		});
+		await h.emit({ type: "agent_end", messages: [] });
+		h.internals.setToolsExpanded(false);
+		const committed = stripVTControlCharacters(h.internals.committedChatContainer.render(89).join("\n"));
+		expect(h.internals.committedChatContainer.children).toContain(component);
+		for (const frame of live) {
+			expect(frame).toContain("LIVE-ANSWER");
+			expect(frame).not.toContain("✓ child");
+		}
+		expect(exitedButPending).not.toMatch(/✓ (?:child|chain)/);
+		expect(committed).toContain("FINAL-ANSWER");
+		expect(committed).toMatch(/✓ (?:child|chain)/);
+	},
+);
 
 async function browseAll(h: NonNullable<typeof harness>): Promise<string> {
 	const seen = new Set<string>();
