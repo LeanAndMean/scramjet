@@ -1,6 +1,6 @@
 ---
 description: Read a GitHub issue's title, body, and all comments; optionally locate an HTML-marker comment
-argument-hint: "<issue-number> [--marker <html-marker>]"
+argument-hint: "<issue-number> [--marker <html-marker>] [--repo <owner/repo>]"
 delegate-only: true
 allowed-tools:
   - bash
@@ -25,12 +25,13 @@ This subroutine is `gh`-specific. A future forge-agnostic command set would subs
 Extract:
 - The **issue number** (required, first token).
 - An optional **`--marker <html-marker>`** flag naming an HTML comment marker to locate (e.g., `--marker mach12-plan`, `--marker mach12-decisions`).
+- An optional **`--repo <owner/repo>`** flag identifying a canonical public GitHub repository to read instead of the checkout repository. Accept only a validated `owner/repo` identity; reject malformed, non-canonical or inaccessible targets rather than falling back to the checkout.
 
 If no issue number is present, return an error to the caller and stop.
 
 ## Step 2: Read the issue and complete comment stream
 
-Resolve the canonical `owner/name` with `gh repo view --json nameWithOwner`. Query the issue through `gh api graphql --paginate` with explicit variables for owner, name, issue number, and `$endCursor`. Request parent `title`, `body`, `createdAt`, `updatedAt`, and:
+When `--repo` is omitted, resolve the canonical `owner/name` with `gh repo view --json nameWithOwner`. When supplied, resolve `gh repo view <owner/repo> --json nameWithOwner,url`, require a canonical `https://github.com/<owner>/<repo>` URL and verify that the returned identity matches the requested owner/repo (GitHub identity comparison is case-insensitive). Use this resolved owner and name, never the checkout's defaults, for `repository(owner:$owner,name:$name)` in the `gh api graphql --paginate` query. Pass explicit variables for owner, name, issue number, and `$endCursor`. Request parent `title`, `body`, `createdAt`, `updatedAt`, and:
 
 ```graphql
 comments(first: 100, after: $endCursor) {
@@ -51,7 +52,7 @@ If the marker is not found, return that fact alongside the issue content -- the 
 ## Step 4: Return
 
 Return:
-- The issue title, body, `createdAt`, and `updatedAt`.
+- The resolved `owner/name` and the issue title, body, `createdAt`, and `updatedAt`.
 - The complete accumulated comments array (parsed JSON), including each comment's `createdAt`, its verified `totalCount`, and confirmation that pagination reached `hasNextPage: false`.
 - If `--marker` was requested: the matched comment body and its numeric comment ID (parsed from the comment URL -- the number after `issuecomment-`). If the marker was not found, indicate that.
 

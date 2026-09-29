@@ -264,6 +264,22 @@ describe("mach12 authoritative GitHub history helpers", () => {
 		);
 	});
 
+	it("binds issue reads and the creation workflow to an external GitHub target", () => {
+		const issueRead = readFileSync(join(COMMANDS_DIR, "mach12:gh-issue-read.md"), "utf-8");
+		const issueCreate = readFileSync(join(COMMANDS_DIR, "mach12:issue-create.md"), "utf-8");
+		expect(issueRead).toContain("[--repo <owner/repo>]");
+		expect(issueRead).toContain("canonical public GitHub");
+		expect(issueRead).toContain("repository(owner:$owner,name:$name)");
+		expect(issueCreate).toContain("before repository-dependent guidance, templates, or duplicate search");
+		expect(issueCreate).toContain("external target's contribution guidance and issue templates");
+		expect(issueCreate).toContain("do not substitute checkout guidance");
+		expect(issueCreate).toContain("gh issue list --repo");
+		expect(issueCreate).toContain("/mach12:gh-issue-read <candidate-number> --repo <owner/repo>");
+		expect(issueCreate).toContain("`repository` with the canonical HTTPS URL");
+		expect(issueCreate).toContain("gh issue edit --repo");
+		expect(issueCreate).toContain("Do not offer planning for an external issue");
+	});
+
 	it("reads plausible duplicate candidates before issue classification", () => {
 		const issueCreate = readFileSync(join(COMMANDS_DIR, "mach12:issue-create.md"), "utf-8");
 		const duplicateCheck = section(issueCreate, "## Step 9:", "## Step 10:");
