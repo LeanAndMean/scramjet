@@ -763,6 +763,53 @@ describe("retained interactive contracts", () => {
 		expect(copy).toHaveBeenCalledExactlyOnceWith(text);
 	});
 
+	it.each([true, false])("toggles styled committed and live tool output in retained=%s mode", async (retained) => {
+		const h = await createProductionInteractiveHarness(
+			80,
+			24,
+			async (pi) => {
+				pi.registerTool({
+					name: "styled-result",
+					label: "Styled result",
+					description: "Test renderer",
+					parameters: { type: "object", properties: {} },
+					execute: async () => ({ content: [] }),
+					renderCall: () => new Text("CALL", 0, 0),
+					renderResult: (result, { expanded }) =>
+						new Text(expanded ? `\x1b[32m${result.content[0]?.text}\x1b[0m` : "RESULT collapsed", 0, 0),
+				});
+			},
+			retained,
+		);
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "finished", toolName: "styled-result", args: {} });
+			await h.emit({
+				type: "tool_execution_end",
+				toolCallId: "finished",
+				isError: false,
+				result: { content: [{ type: "text", text: "FINISHED detail" }] },
+			});
+			await h.emit({ type: "tool_execution_start", toolCallId: "running", toolName: "styled-result", args: {} });
+			await h.emit({
+				type: "tool_execution_update",
+				toolCallId: "running",
+				toolName: "styled-result",
+				args: {},
+				partialResult: { content: [{ type: "text", text: "RUNNING detail" }] },
+			});
+			for (const expanded of [true, false, true]) {
+				h.internals.setToolsExpanded(expanded);
+				await h.frame();
+				const committed = h.internals.committedChatContainer.render(80).join("\n");
+				const live = h.internals.chatContainer.render(80).join("\n");
+				expect(committed.includes("FINISHED detail")).toBe(expanded);
+				expect(live.includes("RUNNING detail")).toBe(expanded);
+			}
+		} finally {
+			await h.dispose();
+		}
+	});
+
 	it("copies a collapsed bash excerpt without padding, wrap breaks or its hidden prefix", async () => {
 		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
 		const h = await setup(24, settings(), 34);

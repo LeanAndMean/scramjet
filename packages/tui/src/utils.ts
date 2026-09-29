@@ -237,6 +237,11 @@ export function visibleWidth(str: string): number {
 		clean = stripped;
 	}
 
+	// SCRAMJET-DIVERGENCE: styled printable rows need no grapheme segmentation after ANSI removal (#589).
+	if (isPrintableAscii(clean)) {
+		return clean.length;
+	}
+
 	// Calculate width
 	let width = 0;
 	for (const { segment } of segmenter.segment(clean)) {
