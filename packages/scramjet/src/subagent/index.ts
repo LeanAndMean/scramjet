@@ -182,9 +182,8 @@ function getFinalOutput(messages: Message[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role === "assistant") {
-			for (const part of msg.content) {
-				if (part.type === "text") return part.text;
-			}
+			const text = msg.content.filter((part) => part.type === "text");
+			if (text.length > 0) return text.map((part) => part.text).join("\n");
 		}
 	}
 	return "";
@@ -903,7 +902,7 @@ export function registerSubagentTool(
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded }, theme, context) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			const details = result.details;
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
@@ -936,8 +935,14 @@ export function registerSubagentTool(
 
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
-				const isError = isResultError(r);
-				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+				const isRunning = r.exitCode === EXIT_CODE_RUNNING;
+				const isError = !isRunning && isResultError(r);
+				const icon =
+					isRunning || isPartial
+						? theme.fg("warning", "⏳")
+						: isError
+							? theme.fg("error", "✗")
+							: theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
 				const finalOutput = getFinalOutput(r.messages);
 				const singleEffort = context.args?.effort;
@@ -957,7 +962,13 @@ export function registerSubagentTool(
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Output ───"), 0, 0));
 					if (displayItems.length === 0 && !finalOutput) {
-						container.addChild(new Text(theme.fg(isError ? "error" : "muted", getResultOutput(r).trim()), 0, 0));
+						container.addChild(
+							new Text(
+								theme.fg(isError ? "error" : "muted", isRunning ? "(running...)" : getResultOutput(r).trim()),
+								0,
+								0,
+							),
+						);
 					} else {
 						for (const item of displayItems) {
 							if (item.type === "toolCall")
@@ -988,7 +999,8 @@ export function registerSubagentTool(
 				if (diagnostics) text += `\n${theme.fg("warning", diagnostics)}`;
 				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 				else if (isError && r.stderr) text += `\n${theme.fg("error", r.stderr.trim())}`;
-				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+				else if (displayItems.length === 0)
+					text += `\n${theme.fg("muted", isRunning ? "(running...)" : "(no output)")}`;
 				else {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
 					if (displayItems.length > COLLAPSED_ITEM_COUNT) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
@@ -999,8 +1011,15 @@ export function registerSubagentTool(
 			}
 
 			if (details.mode === "chain") {
-				const successCount = details.results.filter((r) => !isResultError(r)).length;
-				const icon = successCount === details.results.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
+				const successCount = details.results.filter(
+					(r) => r.exitCode !== EXIT_CODE_RUNNING && !isResultError(r),
+				).length;
+				const pending = isPartial || details.results.some((r) => r.exitCode === EXIT_CODE_RUNNING);
+				const icon = pending
+					? theme.fg("warning", "⏳")
+					: successCount === details.results.length
+						? theme.fg("success", "✓")
+						: theme.fg("error", "✗");
 
 				if (expanded) {
 					const container = new Container();
@@ -1017,7 +1036,12 @@ export function registerSubagentTool(
 
 					for (let i = 0; i < details.results.length; i++) {
 						const r = details.results[i];
-						const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
+						const rIcon =
+							r.exitCode === EXIT_CODE_RUNNING
+								? theme.fg("warning", "⏳")
+								: isResultError(r)
+									? theme.fg("error", "✗")
+									: theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 						const stepEffort = context.args?.chain?.[i]?.effort;
@@ -1046,7 +1070,7 @@ export function registerSubagentTool(
 							}
 						}
 
-						if (isResultError(r)) {
+						if (r.exitCode !== EXIT_CODE_RUNNING && isResultError(r)) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Text(theme.fg("error", getResultOutput(r).trim()), 0, 0));
 						} else if (finalOutput) {
@@ -1073,15 +1097,21 @@ export function registerSubagentTool(
 					theme.fg("accent", `${successCount}/${details.results.length} steps`);
 				for (let i = 0; i < details.results.length; i++) {
 					const r = details.results[i];
-					const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
+					const isRunning = r.exitCode === EXIT_CODE_RUNNING;
+					const rIcon = isRunning
+						? theme.fg("warning", "⏳")
+						: isResultError(r)
+							? theme.fg("error", "✗")
+							: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
-					const isError = isResultError(r);
+					const isError = !isRunning && isResultError(r);
 					const stepEffort = context.args?.chain?.[i]?.effort;
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}${modelTag(r.model)}${effortTag(stepEffort)}`;
 					const diagnostics = formatInvocationDiagnostics(r);
 					if (diagnostics) text += `\n${theme.fg("warning", diagnostics)}`;
 					if (isError) text += `\n${theme.fg("error", getResultOutput(r).trim())}`;
-					else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+					else if (displayItems.length === 0)
+						text += `\n${theme.fg("muted", isRunning ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
 				const usageStr = formatUsageStats(aggregateUsage(details.results));
@@ -1095,18 +1125,21 @@ export function registerSubagentTool(
 				const successCount = details.results.filter(
 					(r) => r.exitCode !== EXIT_CODE_RUNNING && !isResultError(r),
 				).length;
-				const failCount = details.results.filter((r) => isResultError(r)).length;
+				const failCount = details.results.filter(
+					(r) => r.exitCode !== EXIT_CODE_RUNNING && isResultError(r),
+				).length;
 				const isRunning = running > 0;
-				const icon = isRunning
-					? theme.fg("warning", "⏳")
-					: failCount > 0
-						? theme.fg("warning", "◐")
-						: theme.fg("success", "✓");
+				const icon =
+					isRunning || isPartial
+						? theme.fg("warning", "⏳")
+						: failCount > 0
+							? theme.fg("warning", "◐")
+							: theme.fg("success", "✓");
 				const status = isRunning
 					? `${successCount + failCount}/${details.results.length} done, ${running} running`
 					: `${successCount}/${details.results.length} tasks`;
 
-				if (expanded && !isRunning) {
+				if (expanded) {
 					const container = new Container();
 					container.addChild(
 						new Text(
@@ -1118,7 +1151,12 @@ export function registerSubagentTool(
 
 					for (let i = 0; i < details.results.length; i++) {
 						const r = details.results[i];
-						const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
+						const rIcon =
+							r.exitCode === EXIT_CODE_RUNNING
+								? theme.fg("warning", "⏳")
+								: isResultError(r)
+									? theme.fg("error", "✗")
+									: theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 						const taskEffort = context.args?.tasks?.[i]?.effort;
@@ -1147,7 +1185,7 @@ export function registerSubagentTool(
 							}
 						}
 
-						if (isResultError(r)) {
+						if (r.exitCode !== EXIT_CODE_RUNNING && isResultError(r)) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Text(theme.fg("error", getResultOutput(r).trim()), 0, 0));
 						} else if (finalOutput) {
@@ -1177,7 +1215,7 @@ export function registerSubagentTool(
 								? theme.fg("error", "✗")
 								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
-					const isError = isResultError(r);
+					const isError = r.exitCode !== EXIT_CODE_RUNNING && isResultError(r);
 					const taskEffort = context.args?.tasks?.[i]?.effort;
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}${modelTag(r.model)}${effortTag(taskEffort)}`;
 					const diagnostics = formatInvocationDiagnostics(r);
