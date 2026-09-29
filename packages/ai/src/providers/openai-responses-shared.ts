@@ -101,12 +101,13 @@ export type ResponsesFailureCategory =
 	| "conflict"
 	| "content_rejection"
 	| "provider_error"
+	| "missing_terminal_event"
 	| "malformed_event"
 	| "unknown";
 
 export type ResponsesRetryDisposition = "transient" | "non_transient" | "unknown";
 
-type ResponsesFailureKind = "http" | "provider_event" | "transport" | "malformed_event";
+type ResponsesFailureKind = "http" | "provider_event" | "transport" | "malformed_event" | "stream_termination";
 type ResponsesFailureDetailSource = "provider_code" | "provider_type" | "http_status" | "message_category" | "none";
 
 type ResponsesProviderCode =
@@ -179,6 +180,7 @@ const CATEGORY_DISPOSITIONS: Record<ResponsesFailureCategory, ResponsesRetryDisp
 	conflict: "non_transient",
 	content_rejection: "non_transient",
 	provider_error: "unknown",
+	missing_terminal_event: "unknown",
 	malformed_event: "unknown",
 	unknown: "unknown",
 };
@@ -198,6 +200,8 @@ const CATEGORY_MESSAGES: Record<ResponsesFailureCategory, string> = {
 	conflict: "OpenAI Responses request conflicted with the current resource state.",
 	content_rejection: "OpenAI Responses rejected the content.",
 	provider_error: "OpenAI Responses returned a provider error.",
+	missing_terminal_event:
+		"OpenAI Responses stream ended without a terminal response event. Partial output may require review before a manual retry.",
 	malformed_event: "OpenAI Responses returned a malformed error event.",
 	unknown: "OpenAI Responses request failed without recognized details.",
 };
@@ -887,7 +891,7 @@ function isProviderFailureDetails(value: unknown): value is ResponsesProviderFai
 		details.layer !== "openai_responses" ||
 		(details.phase !== "request" && details.phase !== "stream") ||
 		typeof kind !== "string" ||
-		!["http", "provider_event", "transport", "malformed_event"].includes(kind) ||
+		!["http", "provider_event", "transport", "malformed_event", "stream_termination"].includes(kind) ||
 		typeof category !== "string" ||
 		!(category in CATEGORY_DISPOSITIONS) ||
 		details.retryDisposition !== CATEGORY_DISPOSITIONS[category as ResponsesFailureCategory] ||
@@ -899,6 +903,16 @@ function isProviderFailureDetails(value: unknown): value is ResponsesProviderFai
 	) {
 		return false;
 	}
+	if (kind === "stream_termination") {
+		return (
+			details.phase === "stream" &&
+			category === "missing_terminal_event" &&
+			source === "none" &&
+			status === undefined &&
+			providerCode === undefined
+		);
+	}
+	if (category === "missing_terminal_event") return false;
 	if (kind === "malformed_event") {
 		return category === "malformed_event" && source === "none" && status === undefined && providerCode === undefined;
 	}
@@ -1488,7 +1502,18 @@ export async function processResponsesStream<TApi extends Api>(
 		}
 	}
 	if (!completed)
-		throw providerEventFailure({ message: "Stream ended without a completed response." }, "provider_event");
+		throw new SafeResponsesFailureError({
+			message: CATEGORY_MESSAGES.missing_terminal_event,
+			diagnostic: {
+				schemaVersion: 1,
+				layer: "openai_responses",
+				phase: "stream",
+				kind: "stream_termination",
+				category: "missing_terminal_event",
+				retryDisposition: "unknown",
+				detailSource: "none",
+			},
+		});
 }
 
 function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {

@@ -440,6 +440,62 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(providerDetails(recoveredThenFailed)).toEqual(expect.objectContaining({ phase: "stream" }));
 	});
 
+	it.each([
+		["OpenAI", streamSimpleOpenAIResponses, openaiModel, {}],
+		["Azure", streamAzureOpenAIResponses, azureModel, { azureBaseUrl: "https://example.openai.azure.com/openai/v1" }],
+	] as const)("classifies %s natural EOF after accepted SDK retries", async (_name, streamFn, model, extra) => {
+		const requests = stubFetch([
+			jsonError(429),
+			jsonError(429),
+			sse([
+				{ type: "response.created", response: { id: "resp_1" } },
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "message", id: "msg_1", content: [] },
+				},
+				{
+					type: "response.content_part.added",
+					item_id: "msg_1",
+					output_index: 0,
+					content_index: 0,
+					part: { type: "output_text", text: "", annotations: [] },
+				},
+				{
+					type: "response.output_text.delta",
+					item_id: "msg_1",
+					output_index: 0,
+					content_index: 0,
+					delta: "partial",
+				},
+			]),
+		]);
+		const result = await streamFn(model, context, { apiKey, maxRetries: 2, ...extra }).result();
+		expect(requests).toHaveLength(3);
+		expect(result.stopReason).toBe("error");
+		expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "partial" }));
+		expect(providerDetails(result)).toEqual({
+			schemaVersion: 1,
+			layer: "openai_responses",
+			phase: "stream",
+			kind: "stream_termination",
+			category: "missing_terminal_event",
+			retryDisposition: "unknown",
+			detailSource: "none",
+		});
+		expect(result.errorMessage).toMatch(/ended without a terminal response event.*partial output.*review.*retry/i);
+		expect(JSON.stringify(result)).not.toContain("test-key");
+		expect(sdkRetryDetails(result)).toEqual({
+			schemaVersion: 1,
+			layer: "openai_sdk_request",
+			outcome: "recovered",
+			reason: "accepted_after_retry",
+			observedAttemptCount: 3,
+			attempts: [0, 1, 2].map((ordinal) => ({ ordinal, result: "response", status: ordinal === 2 ? 200 : 429 })),
+			truncated: false,
+		});
+	});
+
 	it("keeps observer records bounded and degrades invalid ordinals to call order", async () => {
 		const inputs: Array<string | URL | Request> = [];
 		const inits: Array<RequestInit | undefined> = [];
@@ -503,6 +559,41 @@ describe("OpenAI Responses failure normalization", () => {
 			maxRetries: 1,
 		}).result();
 		expect(sdkRetryDetails(azure)).toEqual(expect.objectContaining({ outcome: "recovered" }));
+	});
+
+	it.each([
+		["empty", [{ type: "response.created", response: { id: "resp_1" } }]],
+		[
+			"completed tool item",
+			[
+				{ type: "response.created", response: { id: "resp_1" } },
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "read", arguments: "" },
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: {
+						type: "function_call",
+						id: "fc_1",
+						call_id: "call_1",
+						name: "read",
+						arguments: '{"path":"README.md"}',
+						status: "completed",
+					},
+				},
+			],
+		],
+	] as const)("fails natural EOF with %s", async (_name, events) => {
+		const result = await failureFrom(sse([...events]));
+		expect(result.stopReason).toBe("error");
+		expect(validateResponsesProviderFailure(result.diagnostics)).toEqual({
+			status: "valid",
+			category: "missing_terminal_event",
+			retryDisposition: "unknown",
+		});
 	});
 
 	it("retries an accepted stream termination only when transport provenance is affirmative", async () => {
@@ -634,7 +725,7 @@ describe("OpenAI Responses failure normalization", () => {
 			} as never).result();
 			expect(result.stopReason).toBe("error");
 			expect(result.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: "read" }));
-			expect(result.errorMessage).toMatch(/incomplete|without a completed response/);
+			expect(result.errorMessage).toMatch(/incomplete|without a terminal response event/);
 			expect(validateResponsesProviderFailure(result.diagnostics)).toEqual(
 				expect.objectContaining({ status: "valid", retryDisposition: "unknown" }),
 			);
@@ -1908,6 +1999,36 @@ describe("OpenAI Responses failure normalization", () => {
 			expect(validateResponsesProviderFailure([{ type: "provider_failure", timestamp: 0, details }])).toEqual({
 				status: "malformed",
 			});
+		}
+	});
+
+	it("accepts only the canonical missing-terminal-event diagnostic", () => {
+		const details = {
+			schemaVersion: 1,
+			layer: "openai_responses",
+			phase: "stream",
+			kind: "stream_termination",
+			category: "missing_terminal_event",
+			retryDisposition: "unknown",
+			detailSource: "none",
+		};
+		const validate = (value: Record<string, unknown>) =>
+			validateResponsesProviderFailure([{ type: "provider_failure", timestamp: 0, details: value }]);
+		expect(validate(details)).toEqual({
+			status: "valid",
+			category: "missing_terminal_event",
+			retryDisposition: "unknown",
+		});
+		for (const contradiction of [
+			{ phase: "request" },
+			{ retryDisposition: "transient" },
+			{ httpStatus: 200 },
+			{ providerCode: "server_error" },
+			{ detailSource: "provider_code" },
+			{ kind: "provider_event" },
+			{ category: "provider_error" },
+		]) {
+			expect(validate({ ...details, ...contradiction })).toEqual({ status: "malformed" });
 		}
 	});
 
