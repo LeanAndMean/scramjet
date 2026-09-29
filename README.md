@@ -71,7 +71,7 @@ npm install -g @leanandmean/scramjet
 scramjet
 ```
 
-`scramjet` is a standalone CLI that uses Pi as its runtime. See the [package README](packages/scramjet/README.md) for current usage, configuration, platform support, command inventory, and detailed behavior.
+`scramjet` is a standalone CLI that uses Pi as its runtime. Find it on [npm](https://www.npmjs.com/package/@leanandmean/scramjet), and see the [package README](packages/scramjet/README.md) for current usage, configuration, platform support, command inventory, and detailed behavior.
 
 ## Repository packages
 
