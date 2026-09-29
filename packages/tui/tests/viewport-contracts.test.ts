@@ -71,6 +71,14 @@ function gestureFixture(count = 100) {
 	return { viewport, render, paint, input };
 }
 
+it("measures ANSI-styled printable ASCII without grapheme segmentation", () => {
+	const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+	const line = "\x1b[32mOUTPUT-589-1234 test content\x1b[0m";
+	expect(visibleWidth(line)).toBe("OUTPUT-589-1234 test content".length);
+	expect(segment).not.toHaveBeenCalled();
+	expect(visibleWidth("\x1b[32mA界\x1b[0m")).toBe(3);
+});
+
 describe("selection origins and release", () => {
 	it.each([
 		{ docked: false, empty: false },
