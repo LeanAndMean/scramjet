@@ -158,6 +158,8 @@ export async function preflightForgePublication(
 		const metadata = record(await fetchJson(exec, "gh", root, cwd, signal));
 		if (
 			!metadata ||
+			!Number.isSafeInteger(metadata.id) ||
+			(metadata.id as number) <= 0 ||
 			typeof metadata.full_name !== "string" ||
 			metadata.full_name.toLowerCase() !== `${repository.owner}/${repository.repository}`.toLowerCase() ||
 			typeof metadata.html_url !== "string" ||
@@ -181,7 +183,7 @@ export async function preflightForgePublication(
 			)
 				throw new Error("Publication target does not match the requested GitHub artifact type");
 		}
-		return;
+		return metadata.id as number;
 	}
 	const project = `${repository.namespace}/${repository.repository}`;
 	const root = `projects/${encodeURIComponent(project)}`;

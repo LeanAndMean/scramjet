@@ -39,6 +39,7 @@ async function guardedExec(command: string, args: string[]) {
 	if (command === "gh" && endpoint === "repos/LeanAndMean/scramjet")
 		return execResult(
 			JSON.stringify({
+				id: 42,
 				full_name: "LeanAndMean/scramjet",
 				html_url: "https://github.com/LeanAndMean/scramjet",
 			}),
@@ -89,7 +90,7 @@ describe("create_issue approval", () => {
 			pi.exec.mockImplementation(async (command: string, cmdArgs: string[]) => {
 				if (cmdArgs.includes("POST")) return execResult("", 1);
 				if (command === "gh" && cmdArgs.at(-1) === "repos/other/project")
-					return execResult(JSON.stringify({ full_name: "other/project", html_url: repository }));
+					return execResult(JSON.stringify({ id: 42, full_name: "other/project", html_url: repository }));
 				if (command === "gh" && /^repos\/other\/project\/issues\/(41|42)$/.test(cmdArgs.at(-1) ?? ""))
 					return execResult(
 						JSON.stringify({
@@ -216,7 +217,7 @@ describe("create_issue approval", () => {
 			}
 			if (args.at(-1) === "repos/other/project")
 				return execResult(
-					JSON.stringify({ full_name: "other/project", html_url: "https://github.com/other/project" }),
+					JSON.stringify({ id: 42, full_name: "other/project", html_url: "https://github.com/other/project" }),
 				);
 			return execResult("", 1);
 		});
@@ -447,8 +448,9 @@ describe("create_issue approval", () => {
 					return execResult(
 						JSON.stringify(
 							kind === "alias"
-								? { full_name: "other/repo", html_url: "https://github.com/other/repo" }
+								? { id: 42, full_name: "other/repo", html_url: "https://github.com/other/repo" }
 								: {
+										id: 42,
 										full_name: "LeanAndMean/scramjet",
 										html_url: "https://github.com/LeanAndMean/scramjet",
 									},
@@ -483,11 +485,14 @@ describe("create_issue approval", () => {
 			if (args.at(-1) === "repos/LeanAndMean/scramjet" && ++metadataReads === 1)
 				return execResult(
 					JSON.stringify({
+						id: 42,
 						full_name: "LeanAndMean/scramjet",
 						html_url: "https://github.com/LeanAndMean/scramjet",
 					}),
 				);
-			return execResult(JSON.stringify({ full_name: "other/repo", html_url: "https://github.com/other/repo" }));
+			return execResult(
+				JSON.stringify({ id: 42, full_name: "other/repo", html_url: "https://github.com/other/repo" }),
+			);
 		});
 		registerForgePublication(bag.pi, freshState(), noOpTerminalIndicators());
 		const tool = bag.tools.find((candidate) => candidate.name === "create_issue");
@@ -543,7 +548,7 @@ describe("create_issue approval", () => {
 		let remoteReads = 0;
 		pi.exec.mockImplementation(async (command: string, args: string[]) => {
 			if (command === "gh" && args.at(-1) === "repos/other/project")
-				return execResult(JSON.stringify({ full_name: "other/project", html_url: repository }));
+				return execResult(JSON.stringify({ id: 42, full_name: "other/project", html_url: repository }));
 			if (command === "git" && args[0] === "ls-remote" && ++remoteReads === 3) return execResult("", 2);
 			return guardedExec(command, args);
 		});
@@ -567,6 +572,67 @@ describe("create_issue approval", () => {
 				.filter((call: any[]) => call[0] === "git" && call[1]?.[0] === "ls-remote")
 				.map((call: any[]) => call[1][4]),
 		).toEqual(Array(3).fill(`${repository}.git`));
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("rejects a replaced GitHub repository after external approval", async () => {
+		const { tool, pi } = await registered();
+		const repository = "https://github.com/other/project";
+		let metadataReads = 0;
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "gh" && args.at(-1) === "repos/other/project")
+				return execResult(
+					JSON.stringify({
+						id: ++metadataReads === 1 ? 42 : 99,
+						full_name: "other/project",
+						html_url: repository,
+					}),
+				);
+			return guardedExec(command, args);
+		});
+		const outcome = await tool.execute(
+			"call",
+			{ title: "t", body: "b", repository },
+			undefined,
+			undefined,
+			context(async () => "approved"),
+		);
+		expect(metadataReads).toBe(2);
+		expect(outcome.details).toMatchObject({
+			outcome: "stale",
+			writeState: "not-dispatched",
+			reason: "Repository identity changed",
+		});
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("stops when the approved comment parent changes before dispatch", async () => {
+		const { tools, pi } = await registered();
+		let parentReads = 0;
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "gh" && args.at(-1) === "repos/LeanAndMean/scramjet/issues/41") {
+				parentReads++;
+				return execResult(
+					JSON.stringify({
+						number: 41,
+						html_url: `https://github.com/LeanAndMean/scramjet/${parentReads === 1 ? "issues" : "pull"}/41`,
+						...(parentReads === 2 ? { pull_request: {} } : {}),
+					}),
+				);
+			}
+			return guardedExec(command, args);
+		});
+		const outcome = await tools
+			.find((candidate) => candidate.name === "add_issue_comment")
+			.execute(
+				"call",
+				{ number: 41, body: "body" },
+				undefined,
+				undefined,
+				context(async () => "approved"),
+			);
+		expect(parentReads).toBe(2);
+		expect(outcome.details).toMatchObject({ outcome: "stale", writeState: "not-dispatched" });
 		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
 	});
 
@@ -596,9 +662,42 @@ describe("create_issue approval", () => {
 		expect(outcome.details).toMatchObject({
 			outcome: "stale",
 			writeState: "not-dispatched",
-			reason: "Repository project identity changed",
+			reason: "Repository identity changed",
 		});
 		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("checks explicit same-origin PR branches through SSH origin on both sides of approval", async () => {
+		const { tools, pi } = await registered();
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "git" && args[0] === "remote") return execResult("git@github.com:LeanAndMean/scramjet.git\n");
+			if (command === "git" && args[0] === "ls-remote" && args[4] !== "origin") return execResult("", 128);
+			if (args.includes("POST")) return execResult("", 1);
+			return guardedExec(command, args);
+		});
+		const outcome = await tools
+			.find((candidate) => candidate.name === "create_pr")
+			.execute(
+				"call",
+				{
+					title: "PR",
+					body: "body",
+					head: "feature",
+					base: "main",
+					draft: false,
+					repository: "https://github.com/LeanAndMean/scramjet",
+				},
+				undefined,
+				undefined,
+				context(async () => "approved"),
+			);
+		expect(outcome.details).toMatchObject({ outcome: "ambiguous", writeState: "possible" });
+		expect(
+			pi.exec.mock.calls
+				.filter((call: any[]) => call[0] === "git" && call[1]?.[0] === "ls-remote")
+				.map((call: any[]) => call[1][4]),
+		).toEqual(Array(4).fill("origin"));
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(1);
 	});
 
 	it("preflights both PR branches before approval and rejects unprefixed GitLab drafts", async () => {
@@ -620,7 +719,7 @@ describe("create_issue approval", () => {
 		githubBag.pi.exec = vi.fn(async (command: string, args: string[]) => {
 			if (command === "git" && args[0] === "remote") return execResult("https://github.com/a/b.git\n");
 			if (command === "gh")
-				return execResult(JSON.stringify({ full_name: "a/b", html_url: "https://github.com/a/b" }));
+				return execResult(JSON.stringify({ id: 42, full_name: "a/b", html_url: "https://github.com/a/b" }));
 			if (command === "git" && args[0] === "check-ref-format") return execResult();
 			if (command === "git" && args[0] === "ls-remote") return execResult(`abc\t${args.at(-1)}\n`);
 			return execResult("", 1);

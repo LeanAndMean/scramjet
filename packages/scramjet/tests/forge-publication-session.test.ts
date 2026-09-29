@@ -63,7 +63,7 @@ describe("forge publication session persistence", () => {
 			if (command === "git" && args[0] === "remote")
 				return execResult("https://github.com/LeanAndMean/scramjet.git\n");
 			if (command === "gh" && args.at(-1) === "repos/other/project")
-				return execResult(JSON.stringify({ full_name: "other/project", html_url: repository }));
+				return execResult(JSON.stringify({ id: 42, full_name: "other/project", html_url: repository }));
 			return execResult("", 1);
 		});
 		const title = "Persisted publication title";

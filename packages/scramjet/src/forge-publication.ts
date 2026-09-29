@@ -237,7 +237,7 @@ export function registerForgePublication(
 							request,
 							ctx.cwd,
 							signal,
-							request.targetSupplied ? repository : undefined,
+							external ? repository : undefined,
 						);
 				} catch (error) {
 					return toolResult(
@@ -369,14 +369,14 @@ export function registerForgePublication(
 						ctx.cwd,
 						signal,
 					);
-					if (currentProjectId !== projectId) throw new Error("Repository project identity changed");
+					if (currentProjectId !== projectId) throw new Error("Repository identity changed");
 					if (request.operation === "create_pr")
 						await preflightPullRequestBranches(
 							pi.exec.bind(pi),
 							request,
 							ctx.cwd,
 							signal,
-							request.targetSupplied ? repository : undefined,
+							external ? repository : undefined,
 						);
 				} catch (error) {
 					return toolResult(

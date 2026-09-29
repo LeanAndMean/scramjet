@@ -105,6 +105,7 @@ describe("publication preflight", () => {
 			.mockResolvedValueOnce(
 				result({
 					stdout: JSON.stringify({
+						id: 42,
 						full_name: "LeanAndMean/scramjet",
 						html_url: "https://github.com/LeanAndMean/scramjet",
 					}),
@@ -118,22 +119,43 @@ describe("publication preflight", () => {
 					}),
 				}),
 			);
-		await preflightForgePublication(
-			exec,
-			github,
-			{ operation: "add_issue_comment", number: 4, body: "body" },
-			"/repo",
-		);
+		expect(
+			await preflightForgePublication(
+				exec,
+				github,
+				{ operation: "add_issue_comment", number: 4, body: "body" },
+				"/repo",
+			),
+		).toBe(42);
 		expect(exec.mock.calls.map((call) => call[1])).toEqual([
 			["api", "--hostname", "github.com", "repos/LeanAndMean/scramjet"],
 			["api", "--hostname", "github.com", "repos/LeanAndMean/scramjet/issues/4"],
 		]);
 	});
 
+	it.each([undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "42"])(
+		"rejects invalid GitHub repository ID %s before publication",
+		async (id) => {
+			const exec = vi.fn<ForgeExec>().mockResolvedValue(
+				result({
+					stdout: JSON.stringify({
+						id,
+						full_name: "LeanAndMean/scramjet",
+						html_url: "https://github.com/LeanAndMean/scramjet",
+					}),
+				}),
+			);
+			await expect(
+				preflightForgePublication(exec, github, { operation: "create_issue", title: "t", body: "b" }, "/repo"),
+			).rejects.toThrow("canonical identity");
+		},
+	);
+
 	it("rejects canonical repository aliases and mismatched GitHub parent types", async () => {
 		const alias = vi.fn<ForgeExec>().mockResolvedValue(
 			result({
 				stdout: JSON.stringify({
+					id: 42,
 					full_name: "other/repo",
 					html_url: "https://github.com/other/repo",
 				}),
@@ -148,6 +170,7 @@ describe("publication preflight", () => {
 			.mockResolvedValueOnce(
 				result({
 					stdout: JSON.stringify({
+						id: 42,
 						full_name: "LeanAndMean/scramjet",
 						html_url: "https://github.com/LeanAndMean/scramjet",
 					}),
