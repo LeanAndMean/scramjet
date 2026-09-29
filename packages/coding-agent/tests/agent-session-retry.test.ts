@@ -1053,6 +1053,101 @@ describe("AgentSession persisted retry authority", () => {
 		}
 	});
 
+	it("persists accepted Responses EOF after SDK retries without replaying or executing a completed tool call", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		const execute = vi.fn(async () => ({
+			content: [{ type: "text" as const, text: "executed" }],
+			details: undefined,
+		}));
+		const tool = defineTool({
+			name: "read",
+			label: "Read",
+			description: "Side-effect sentinel",
+			parameters: Type.Object({ path: Type.String() }),
+			execute,
+		});
+		const fetch = vi.fn(async () => {
+			if (fetch.mock.calls.length <= 2) {
+				return new Response(null, {
+					status: 429,
+					headers: { "content-type": "application/json", "retry-after-ms": "0" },
+				});
+			}
+			return new Response(
+				[
+					'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+					'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":""}}\n\n',
+					'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":"{\\"path\\":\\"README.md\\"}"}}\n\n',
+				].join(""),
+				{ headers: { "content-type": "text/event-stream" } },
+			);
+		});
+		vi.stubGlobal("fetch", fetch);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				persist: true,
+				customTools: [tool],
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+						{ apiKey: "fake", maxRetries: 2, signal },
+					),
+			});
+			await session.prompt("hello");
+			const branch = SessionManager.open(session.sessionManager.getSessionFile()!).getBranch();
+			const assistants = branch.filter((entry) => entry.type === "message" && entry.message.role === "assistant");
+			expect(fetch).toHaveBeenCalledTimes(3);
+			expect(assistants).toHaveLength(1);
+			expect(assistants[0]).toMatchObject({
+				type: "message",
+				message: {
+					stopReason: "error",
+					content: [expect.objectContaining({ type: "toolCall", name: "read" })],
+					errorMessage: expect.stringMatching(
+						/ended without a terminal response event.*partial output.*review.*retry/i,
+					),
+					diagnostics: expect.arrayContaining([
+						expect.objectContaining({
+							type: "provider_failure",
+							details: {
+								schemaVersion: 1,
+								layer: "openai_responses",
+								phase: "stream",
+								kind: "stream_termination",
+								category: "missing_terminal_event",
+								retryDisposition: "unknown",
+								detailSource: "none",
+							},
+						}),
+						expect.objectContaining({
+							type: "sdk_request_retry",
+							details: expect.objectContaining({
+								outcome: "recovered",
+								reason: "accepted_after_retry",
+								attempts: [0, 1, 2].map((ordinal) => ({
+									ordinal,
+									result: "response",
+									status: ordinal === 2 ? 200 : 429,
+								})),
+							}),
+						}),
+					]),
+				},
+			});
+			expect(retryEvents(events)).toEqual([]);
+			expect(retryRecords(session)).toEqual([
+				{ schemaVersion: 1, outcome: "not_attempted", reason: "structured_unknown", evidence: "provider_failure" },
+			]);
+			expect(execute).not.toHaveBeenCalled();
+			expect(events).not.toContainEqual(expect.objectContaining({ type: "tool_execution_start" }));
+			session.dispose();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("never executes a completed tool call from an incomplete Responses stream", async () => {
 		const model = getModel("openai", "gpt-6-astra");
 		const execute = vi.fn(async () => ({
