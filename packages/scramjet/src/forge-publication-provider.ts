@@ -158,11 +158,15 @@ export async function preflightForgePublication(
 		const metadata = record(await fetchJson(exec, "gh", root, cwd, signal));
 		if (
 			!metadata ||
+			Array.isArray(metadata) ||
 			!Number.isSafeInteger(metadata.id) ||
 			(metadata.id as number) <= 0 ||
 			typeof metadata.full_name !== "string" ||
+			typeof metadata.html_url !== "string"
+		)
+			throw new Error("Unable to read the requested GitHub repository metadata");
+		if (
 			metadata.full_name.toLowerCase() !== `${repository.owner}/${repository.repository}`.toLowerCase() ||
-			typeof metadata.html_url !== "string" ||
 			!exactUrl(metadata.html_url, "github.com", [repository.owner, repository.repository], true)
 		)
 			throw new Error("Repository origin is not the forge canonical identity");
@@ -190,10 +194,15 @@ export async function preflightForgePublication(
 	const metadata = record(await fetchJson(exec, "glab", root, cwd, signal));
 	if (
 		!metadata ||
-		metadata.path_with_namespace !== project ||
+		Array.isArray(metadata) ||
+		typeof metadata.path_with_namespace !== "string" ||
 		!Number.isSafeInteger(metadata.id) ||
 		(metadata.id as number) <= 0 ||
-		typeof metadata.web_url !== "string" ||
+		typeof metadata.web_url !== "string"
+	)
+		throw new Error("Unable to read the requested GitLab repository metadata");
+	if (
+		metadata.path_with_namespace !== project ||
 		!exactUrl(metadata.web_url, "gitlab.com", [...repository.namespace.split("/"), repository.repository], false)
 	)
 		throw new Error("Repository origin is not the forge canonical identity");

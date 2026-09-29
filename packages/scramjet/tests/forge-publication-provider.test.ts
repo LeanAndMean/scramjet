@@ -147,7 +147,7 @@ describe("publication preflight", () => {
 			);
 			await expect(
 				preflightForgePublication(exec, github, { operation: "create_issue", title: "t", body: "b" }, "/repo"),
-			).rejects.toThrow("canonical identity");
+			).rejects.toThrow("Unable to read the requested GitHub repository metadata");
 		},
 	);
 
@@ -194,6 +194,73 @@ describe("publication preflight", () => {
 			),
 		).rejects.toThrow("artifact type");
 	});
+
+	it.each([
+		["GitHub", github, "gh", "repos/LeanAndMean/scramjet"],
+		[
+			"GitLab",
+			{ provider: "gitlab" as const, namespace: "group/sub", repository: "project" },
+			"glab",
+			"projects/group%2Fsub%2Fproject",
+		],
+	] as const)(
+		"distinguishes unreadable %s repository metadata from a canonical mismatch",
+		async (name, repository, cli, endpoint) => {
+			for (const failure of [
+				result({ code: 1, stderr: "private CLI error" }),
+				result({ killed: true }),
+				result({ stdout: "not JSON" }),
+				result({ stdout: "null" }),
+				result({ stdout: "[]" }),
+				result({ stdout: "{}" }),
+			]) {
+				const exec = vi.fn<ForgeExec>().mockResolvedValue(failure);
+				await expect(
+					preflightForgePublication(
+						exec,
+						repository,
+						{ operation: "create_issue", title: "t", body: "b" },
+						"/repo",
+					),
+				).rejects.toThrow(`Unable to read the requested ${name} repository metadata`);
+				expect(exec).toHaveBeenCalledTimes(1);
+				expect(exec.mock.calls[0]?.slice(0, 2)).toEqual([
+					cli,
+					["api", "--hostname", `${cli === "gh" ? "github" : "gitlab"}.com`, endpoint],
+				]);
+				expect(exec.mock.calls.filter((call) => call[1].includes("POST"))).toHaveLength(0);
+			}
+			const rejected = vi.fn<ForgeExec>().mockRejectedValue(new Error("private CLI error"));
+			await expect(
+				preflightForgePublication(
+					rejected,
+					repository,
+					{ operation: "create_issue", title: "t", body: "b" },
+					"/repo",
+				),
+			).rejects.toThrow(`Unable to read the requested ${name} repository metadata`);
+			const mismatch = vi.fn<ForgeExec>().mockResolvedValue(
+				result({
+					stdout: JSON.stringify({
+						id: 42,
+						full_name: "other/repo",
+						html_url: "https://github.com/other/repo",
+						path_with_namespace: "other/repo",
+						web_url: "https://gitlab.com/other/repo",
+					}),
+				}),
+			);
+			await expect(
+				preflightForgePublication(
+					mismatch,
+					repository,
+					{ operation: "create_issue", title: "t", body: "b" },
+					"/repo",
+				),
+			).rejects.toThrow("Repository origin is not the forge canonical identity");
+			expect(mismatch.mock.calls.filter((call) => call[1].includes("POST"))).toHaveLength(0);
+		},
+	);
 
 	it("checks external branches against the selected canonical remote, never origin", async () => {
 		const exec = vi
