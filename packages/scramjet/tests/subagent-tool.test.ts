@@ -793,12 +793,31 @@ describe("subagent tool — failure reporting", () => {
 		expect(rendered).not.toContain("stale assistant output");
 	});
 
-	it("renders failed parallel diagnostics in expanded mode when assistant text exists", () => {
+	it.each(["parallel", "chain"])("renders failed %s diagnostics and pre-error child output when expanded", (mode) => {
 		const tool = registeredSubagentTool();
-		const rendered = renderToolResult(tool, failedParallelRenderResult(), true);
+		const result = failedParallelRenderResult();
+		result.details.mode = mode;
+		result.details.results[0].step = 1;
+		const rendered = renderToolResult(tool, result, true);
 
+		expect(rendered).toContain("✗");
 		expect(rendered).toContain("provider failed");
-		expect(rendered).not.toContain("stale assistant output");
+		expect(rendered).toContain("Pre-error child output");
+		expect(rendered).toContain("stale assistant output");
+		expect(rendered.indexOf("provider failed")).toBeLessThan(rendered.indexOf("stale assistant output"));
+		expect(rendered.match(/stale assistant output/g)).toHaveLength(1);
+	});
+
+	it.each(["parallel", "chain"])("does not duplicate failed %s output when it is the diagnostic", (mode) => {
+		const tool = registeredSubagentTool();
+		const result = failedParallelRenderResult();
+		result.details.mode = mode;
+		result.details.results[0].step = 1;
+		result.details.results[0].messages[0].content[0].text = "provider failed";
+		const rendered = renderToolResult(tool, result, true);
+
+		expect(rendered.match(/provider failed/g)).toHaveLength(1);
+		expect(rendered).not.toContain("Pre-error child output");
 	});
 
 	it("escalates aborted subprocesses that ignore SIGTERM", async () => {

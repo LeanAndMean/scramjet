@@ -958,6 +958,16 @@ export function registerSubagentTool(
 				}
 			};
 
+			const addExpandedFailure = (container: Container, r: SingleResult, finalOutput: string) => {
+				const diagnostic = getResultOutput(r).trim();
+				container.addChild(new Spacer(1));
+				container.addChild(new Text(theme.fg("error", diagnostic), 0, 0));
+				if (finalOutput.trim() && finalOutput.trim() !== diagnostic) {
+					container.addChild(new Text(theme.fg("muted", "Pre-error child output:"), 0, 0));
+					container.addChild(new Text(theme.fg("toolOutput", finalOutput.trim()), 0, 0));
+				}
+			};
+
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
 				const isRunning = r.exitCode === EXIT_CODE_RUNNING;
@@ -1077,8 +1087,7 @@ export function registerSubagentTool(
 						addExpandedItems(container, displayItems);
 
 						if (r.exitCode !== EXIT_CODE_RUNNING && isResultError(r)) {
-							container.addChild(new Spacer(1));
-							container.addChild(new Text(theme.fg("error", getResultOutput(r).trim()), 0, 0));
+							addExpandedFailure(container, r, finalOutput);
 						} else if (finalOutput) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
@@ -1182,8 +1191,7 @@ export function registerSubagentTool(
 						addExpandedItems(container, displayItems);
 
 						if (r.exitCode !== EXIT_CODE_RUNNING && isResultError(r)) {
-							container.addChild(new Spacer(1));
-							container.addChild(new Text(theme.fg("error", getResultOutput(r).trim()), 0, 0));
+							addExpandedFailure(container, r, finalOutput);
 						} else if (finalOutput) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
