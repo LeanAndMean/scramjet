@@ -1128,6 +1128,8 @@ export function registerSubagentTool(
 					else if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", isRunning ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					const stepUsage = formatUsageStats(r.usage);
+					if (stepUsage) text += `\n${theme.fg("dim", stepUsage)}`;
 				}
 				const usageStr = formatUsageStats(aggregateUsage(details.results));
 				if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
@@ -1229,6 +1231,8 @@ export function registerSubagentTool(
 						const output = r.exitCode === EXIT_CODE_RUNNING ? "(running...)" : "(no output)";
 						text += `\n${theme.fg("muted", output)}`;
 					} else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					const taskUsage = formatUsageStats(r.usage);
+					if (taskUsage) text += `\n${theme.fg("dim", taskUsage)}`;
 				}
 				const usageStr = formatUsageStats(aggregateUsage(details.results));
 				if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;

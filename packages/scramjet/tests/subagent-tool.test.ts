@@ -1589,6 +1589,43 @@ describe("renderResult — child and row lifecycle regressions", () => {
 		expect(expanded).toContain("LIVE-LINE-8");
 	});
 
+	it.each(["chain", "parallel"] as const)("collapsed %s shows each child's usage and a separate total", (mode) => {
+		const first = child("first", 0, "FIRST-ANSWER", {
+			step: 1,
+			usage: { ...usage, input: 100, cost: 0.01 },
+		});
+		const second = child("second", -1, "SECOND-ANSWER", {
+			step: 2,
+			usage: { ...usage, input: 200, cost: 0.02 },
+		});
+		const rendered = renderToolResult(tool, snapshot(mode, [first, second]), false, {}, true);
+		const firstHeader = rendered.indexOf(mode === "chain" ? "Step 1: first" : "─── first");
+		const secondHeader = rendered.indexOf(mode === "chain" ? "Step 2: second" : "─── second");
+		const total = rendered.indexOf("Total:");
+		expect(firstHeader).toBeGreaterThanOrEqual(0);
+		expect(secondHeader).toBeGreaterThan(firstHeader);
+		expect(total).toBeGreaterThan(secondHeader);
+		expect(rendered.slice(firstHeader, secondHeader)).toContain("$0.0100");
+		expect(rendered.slice(secondHeader, total)).toContain("$0.0200");
+		expect(rendered.slice(total)).toContain("$0.0300");
+	});
+
+	it.each(["chain", "parallel"] as const)("collapsed %s omits model-only usage lines", (mode) => {
+		const empty = child("empty", -1, "", {
+			step: 1,
+			model: "example-model",
+			usage: { ...usage, input: 0, output: 0, contextTokens: 0, turns: 0 },
+		});
+		const active = child("active", -1, "LIVE", {
+			step: 2,
+			model: "example-model",
+			usage: { ...usage, cost: 0.02 },
+		});
+		const rendered = renderToolResult(tool, snapshot(mode, [empty, active]), false, {}, true);
+		expect(rendered.match(/example-model/g)).toHaveLength(2);
+		expect(rendered).toContain("$0.0200");
+	});
+
 	it("collapsed parallel shows accrued cost while any child is running", () => {
 		const accrued = child("active", -1, "LIVE", { usage: { ...usage, cost: 0.0123 } });
 		const waiting = child("waiting", -1);

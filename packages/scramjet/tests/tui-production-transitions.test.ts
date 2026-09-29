@@ -295,6 +295,7 @@ it.each(["single", "chain"] as const)(
 it("updates parallel cost while running and keeps an all-exited update pending until the row commits", async () => {
 	const h = await runningBatch();
 	const component = h.internals.chatContainer.children[0];
+	h.partialResult.details.results[1].usage.cost = 0.02;
 	for (const cost of [0.0123, 0.0456]) {
 		h.partialResult.details.results[0].usage.cost = cost;
 		await h.emit({
@@ -306,7 +307,15 @@ it("updates parallel cost while running and keeps an all-exited update pending u
 		});
 		const live = stripVTControlCharacters(h.internals.chatContainer.render(47).join("\n"));
 		expect(live).toContain("4/8 done, 4 running");
-		expect(live).toContain(`$${cost.toFixed(4)}`);
+		const first = live.indexOf("─── child-1");
+		const second = live.indexOf("─── child-2");
+		const third = live.indexOf("─── child-3");
+		expect(first).toBeGreaterThanOrEqual(0);
+		expect(second).toBeGreaterThan(first);
+		expect(third).toBeGreaterThan(second);
+		expect(live.slice(first, second)).toContain(`$${cost.toFixed(4)}`);
+		expect(live.slice(second, third)).toContain("$0.0200");
+		expect(live.slice(live.indexOf("Total:"))).toContain(`$${(cost + 0.02).toFixed(4)}`);
 	}
 	for (const child of h.partialResult.details.results) child.exitCode = 0;
 	await h.emit({
