@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.104.1 — Fix npm README logo and package link
+
+Makes the package README logo load from a public URL and links the repository README to the npm package listing. Fixes [#583](https://github.com/LeanAndMean/scramjet/issues/583).
+
+### Fixed
+
+- Use an absolute PNG URL for the package README logo so it renders on npm.
+- Link to the npm package listing from the repository README.
+
 ## 0.104.0 — Keep assigned work with the agent and improve CI recovery
 
 Directs agents to execute authorized work themselves and permits evidence-based recovery from test and CI failures. Fixes [#565](https://github.com/LeanAndMean/scramjet/issues/565).
