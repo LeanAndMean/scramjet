@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/scramjet-logo.png" alt="Scramjet logo" width="600">
+  <img src="https://raw.githubusercontent.com/LeanAndMean/scramjet/main/packages/scramjet/assets/scramjet-logo.png" alt="Scramjet logo" width="600">
 </p>
 
 # Scramjet
