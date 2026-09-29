@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.104.4 — Diagnose Responses streams that end without a terminal event
+
+Treat natural EOF after a Responses stream is accepted as an incomplete response, without replaying partial output or tools. Fixes [#586](https://github.com/LeanAndMean/scramjet/issues/586).
+
+### Fixed
+
+- Report a distinct, validated missing-terminal-event diagnostic for OpenAI and Azure Responses streams, with guidance to inspect partial output before retrying manually.
+- Keep SDK request-attempt evidence separate from the accepted stream's failure and fail closed when retry disposition is unknown.
+
+### Tests
+
+- Cover production adapters, SDK retries, partial output, persisted sessions, and prevention of automatic replay or partial tool execution.
+
 ## 0.104.3 — Speed up styled tool output expansion
 
 Avoid grapheme segmentation for ANSI-styled printable ASCII tool output while retaining Unicode and control-character width behavior. Fixes [#589](https://github.com/LeanAndMean/scramjet/issues/589).
