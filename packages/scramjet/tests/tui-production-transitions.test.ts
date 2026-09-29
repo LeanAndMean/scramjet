@@ -260,7 +260,10 @@ it.each(["single", "chain"] as const)(
 			args,
 			partialResult: result(0, "FINAL-ANSWER"),
 		});
-		const exitedButPending = stripVTControlCharacters(h.internals.chatContainer.render(89).join("\n"));
+		const exitedButPending = [false, true].map((expanded) => {
+			h.internals.setToolsExpanded(expanded);
+			return stripVTControlCharacters(h.internals.chatContainer.render(89).join("\n"));
+		});
 		await h.emit({
 			type: "tool_execution_end",
 			toolCallId: "single-or-chain",
@@ -269,18 +272,60 @@ it.each(["single", "chain"] as const)(
 			isError: false,
 		});
 		await h.emit({ type: "agent_end", messages: [] });
-		h.internals.setToolsExpanded(false);
-		const committed = stripVTControlCharacters(h.internals.committedChatContainer.render(89).join("\n"));
 		expect(h.internals.committedChatContainer.children).toContain(component);
 		for (const frame of live) {
 			expect(frame).toContain("LIVE-ANSWER");
-			expect(frame).not.toContain("✓ child");
+			expect(frame).not.toMatch(/✓ (?:child|chain)/);
 		}
-		expect(exitedButPending).not.toMatch(/✓ (?:child|chain)/);
-		expect(committed).toContain("FINAL-ANSWER");
-		expect(committed).toMatch(/✓ (?:child|chain)/);
+		for (const frame of exitedButPending) {
+			expect(frame).toContain("FINAL-ANSWER");
+			expect(frame).not.toMatch(/✓ (?:child|chain)/);
+		}
+		for (const expanded of [false, true]) {
+			h.internals.setToolsExpanded(expanded);
+			const committed = stripVTControlCharacters(h.internals.committedChatContainer.render(89).join("\n"));
+			expect(committed).toContain("FINAL-ANSWER");
+			expect(committed).not.toContain("LIVE-ANSWER");
+			expect(committed).toMatch(/✓ (?:child|chain)/);
+			expect(committed.match(/FINAL-ANSWER/g)).toHaveLength(1);
+		}
 	},
 );
+
+it("keeps an all-exited parallel update pending until the production row commits", async () => {
+	const h = await runningBatch();
+	const component = h.internals.chatContainer.children[0];
+	for (const child of h.partialResult.details.results) child.exitCode = 0;
+	await h.emit({
+		type: "tool_execution_update",
+		toolCallId: "batch",
+		toolName: "subagent",
+		args: { tasks: h.tasks },
+		partialResult: h.partialResult,
+	});
+	for (const expanded of [false, true]) {
+		h.internals.setToolsExpanded(expanded);
+		const pending = stripVTControlCharacters(h.internals.chatContainer.render(47).join("\n"));
+		expect(pending).toContain("⏳ parallel 8/8 tasks");
+		expect(pending).not.toMatch(/✓ parallel/);
+		expect(pending).toContain("CARD-8");
+	}
+	await h.emit({
+		type: "tool_execution_end",
+		toolCallId: "batch",
+		toolName: "subagent",
+		result: h.partialResult,
+		isError: false,
+	});
+	await h.emit({ type: "agent_end", messages: [] });
+	expect(h.internals.committedChatContainer.children).toContain(component);
+	for (const expanded of [false, true]) {
+		h.internals.setToolsExpanded(expanded);
+		const committed = stripVTControlCharacters(h.internals.committedChatContainer.render(47).join("\n"));
+		expect(committed).toMatch(/✓ parallel/);
+		for (let i = 1; i <= 8; i++) expect(committed.match(new RegExp(`CARD-${i}\\b`, "g"))).toHaveLength(1);
+	}
+});
 
 async function browseAll(h: NonNullable<typeof harness>): Promise<string> {
 	const seen = new Set<string>();
