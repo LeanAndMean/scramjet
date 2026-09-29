@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.104.3 — Speed up styled tool output expansion
+
+Avoid grapheme segmentation for ANSI-styled printable ASCII tool output while retaining Unicode and control-character width behavior. Fixes [#589](https://github.com/LeanAndMean/scramjet/issues/589).
+
+### Fixed
+
+- Improve expansion responsiveness for styled ASCII output in retained and committed transcripts.
+
+### Tests
+
+- Cover styled-width measurement and repeated expansion of live and completed tool output.
+
 ## 0.104.2 — Improve live subagent output and completion status
 
 Keeps running subagent cards accurate through finalization and makes intermediate output accessible. Fixes [#585](https://github.com/LeanAndMean/scramjet/issues/585).
