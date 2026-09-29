@@ -205,8 +205,8 @@ export async function preflightForgePublication(
 				signal,
 			),
 		);
+		if (!parent || Array.isArray(parent)) throw new Error("Unable to read the requested GitLab comment parent");
 		if (
-			!parent ||
 			parent.iid !== request.number ||
 			parent.project_id !== metadata.id ||
 			typeof parent.web_url !== "string" ||

@@ -537,6 +537,70 @@ describe("create_issue approval", () => {
 		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
 	});
 
+	it("rechecks selected-target PR branches after external approval", async () => {
+		const { tools, pi } = await registered();
+		const repository = "https://github.com/other/project";
+		let remoteReads = 0;
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "gh" && args.at(-1) === "repos/other/project")
+				return execResult(JSON.stringify({ full_name: "other/project", html_url: repository }));
+			if (command === "git" && args[0] === "ls-remote" && ++remoteReads === 3) return execResult("", 2);
+			return guardedExec(command, args);
+		});
+		const outcome = await tools
+			.find((tool) => tool.name === "create_pr")
+			.execute(
+				"call",
+				{ title: "PR", body: "body", head: "feature", base: "main", draft: false, repository },
+				undefined,
+				undefined,
+				context(async () => "approved"),
+			);
+		expect(outcome.details).toMatchObject({
+			outcome: "stale",
+			writeState: "not-dispatched",
+			repository: "other/project",
+		});
+		expect(remoteReads).toBe(3);
+		expect(
+			pi.exec.mock.calls
+				.filter((call: any[]) => call[0] === "git" && call[1]?.[0] === "ls-remote")
+				.map((call: any[]) => call[1][4]),
+		).toEqual(Array(3).fill(`${repository}.git`));
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("rejects a changed GitLab project ID after external approval", async () => {
+		const { tool, pi } = await registered();
+		const repository = "https://gitlab.com/group/sub/project";
+		let projectReads = 0;
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "glab" && args.at(-1) === "projects/group%2Fsub%2Fproject")
+				return execResult(
+					JSON.stringify({
+						id: ++projectReads === 1 ? 42 : 99,
+						path_with_namespace: "group/sub/project",
+						web_url: repository,
+					}),
+				);
+			return guardedExec(command, args);
+		});
+		const outcome = await tool.execute(
+			"call",
+			{ title: "t", body: "b", repository },
+			undefined,
+			undefined,
+			context(async () => "approved"),
+		);
+		expect(projectReads).toBe(2);
+		expect(outcome.details).toMatchObject({
+			outcome: "stale",
+			writeState: "not-dispatched",
+			reason: "Repository project identity changed",
+		});
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
 	it("preflights both PR branches before approval and rejects unprefixed GitLab drafts", async () => {
 		const bag = recordingPi();
 		bag.pi.exec = vi.fn().mockResolvedValueOnce(execResult("https://gitlab.com/group/project.git\n"));

@@ -257,6 +257,30 @@ describe("publication preflight", () => {
 		}
 	});
 
+	it.each([
+		["CLI failure", result({ code: 1, stderr: "private CLI error" })],
+		["malformed JSON", result({ stdout: "not JSON" })],
+		["malformed response", result({ stdout: "null" })],
+	])("reports an unreadable GitLab comment parent for %s without disclosing CLI output", async (_case, failure) => {
+		const repository = parseForgeRepository("https://gitlab.com/group/sub/project");
+		const exec = vi
+			.fn<ForgeExec>()
+			.mockResolvedValueOnce(
+				result({
+					stdout: JSON.stringify({
+						id: 42,
+						path_with_namespace: "group/sub/project",
+						web_url: "https://gitlab.com/group/sub/project",
+					}),
+				}),
+			)
+			.mockResolvedValueOnce(failure);
+		await expect(
+			preflightForgePublication(exec, repository, { operation: "add_issue_comment", number: 7, body: "b" }, "/repo"),
+		).rejects.toThrow("Unable to read the requested GitLab comment parent");
+		expect(exec.mock.calls.filter((call) => call[1].includes("POST"))).toHaveLength(0);
+	});
+
 	it("requires unqualified concrete live remote branches", async () => {
 		const exec = vi
 			.fn<ForgeExec>()
