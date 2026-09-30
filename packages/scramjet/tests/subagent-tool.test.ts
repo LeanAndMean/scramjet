@@ -852,7 +852,10 @@ describe("subagent tool — failure reporting", () => {
 
 		controller.abort();
 
-		await expect(promise).rejects.toThrow("Subagent was aborted");
+		const result = await promise;
+		expect(result.isError).toBe(true);
+		expect(result.details.results[0].stopReason).toBe("aborted");
+		expect(result.details.results[0].stderr).toContain("SIGKILL");
 	});
 });
 
@@ -1803,5 +1806,244 @@ describe("renderResult — parallel progress accuracy", () => {
 		expect(rendered).toContain("✓");
 		expect(rendered).toContain("2/2 tasks");
 		expect(rendered).not.toContain("running");
+	});
+});
+
+describe("subagent tool — inclusive accounting and interruption", () => {
+	let tmpDir: string;
+	let originalArgv: string;
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-cost-test-"));
+		originalArgv = process.argv[1];
+		writeProjectAgent(tmpDir, "cost-agent.md", ["name: cost-agent", "description: Cost agent"]);
+	});
+	afterEach(() => {
+		process.argv[1] = originalArgv;
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+	const task = { agent: "cost-agent", task: "run" };
+	const nestedDetails = {
+		results: [
+			{
+				usage: { cost: 0.1 },
+				messages: [{ role: "toolResult", toolName: "subagent", toolCallId: "deep", content: [], cost: 0.2 }],
+			},
+		],
+	};
+	function events(finalCost: unknown = 0.3) {
+		return [
+			JSON.parse(
+				assistantEvent("direct", { usage: { input: 100, output: 50, totalTokens: 150, cost: { total: 0.2 } } }),
+			),
+			{ type: "tool_execution_start", toolCallId: "child", toolName: "subagent" },
+			...[0.1, 0.3, 0.3].map((cost) => ({
+				type: "tool_execution_update",
+				toolCallId: "child",
+				partialResult: { cost },
+			})),
+			{ type: "tool_execution_end", toolCallId: "child", result: { cost: 0.3 } },
+			{
+				type: "message_end",
+				message: {
+					role: "toolResult",
+					toolName: "subagent",
+					toolCallId: "child",
+					content: [],
+					cost: finalCost,
+					details: nestedDetails,
+				},
+			},
+		];
+	}
+	function fakeEvents(data: unknown[], suffix = "") {
+		process.argv[1] = writeFakeInvocation(
+			tmpDir,
+			`process.stdout.write(${JSON.stringify(`${data.map((e) => JSON.stringify(e)).join("\n")}\n`)}); ${suffix}`,
+		);
+	}
+	async function execute(tool: any, params: any, update?: any, signal?: AbortSignal) {
+		return tool.execute("parent", { ...params, agentScope: "project", confirmProjectAgents: false }, signal, update, {
+			cwd: tmpDir,
+			hasUI: false,
+		});
+	}
+	it.each(["single", "parallel", "chain"])(
+		"reports inclusive %s costs without changing direct card metrics",
+		async (mode) => {
+			const data = events();
+			data.push({ type: "tool_result_end", message: data[data.length - 1].message });
+			data.push({ type: "turn_end", toolResults: [data[data.length - 1].message] });
+			data.push({ type: "agent_end", messages: [data[0].message, data[data.length - 1].toolResults[0]] });
+			fakeEvents(data);
+			const updates: any[] = [];
+			const params = mode === "single" ? task : mode === "chain" ? { chain: [task, task] } : { tasks: [task, task] };
+			const result = await execute(registeredSubagentTool(), params, (r: any) =>
+				updates.push({ cost: r.cost, details: r.details }),
+			);
+			expect(result.cost).toBeCloseTo(mode === "single" ? 0.5 : 1);
+			expect(updates.some((r) => Math.abs(r.cost - 0.5) < 1e-9)).toBe(true);
+			expect(updates[0].cost).toBe(0.2);
+			if (mode === "chain") expect(updates.some((r) => Math.abs(r.cost - 0.7) < 1e-9)).toBe(true);
+			expect(updates.at(-1).cost).toBeCloseTo(result.cost);
+			for (const child of result.details.results) {
+				expect(child.usage).toMatchObject({ cost: 0.2, turns: 1, input: 100, contextTokens: 150 });
+				expect(child.messages.filter((m: any) => m.role === "toolResult")).toHaveLength(1);
+			}
+		},
+	);
+	it("replaces pending cost with authoritative final zero and ignores malformed reports", async () => {
+		const data = events(0);
+		data.splice(4, 0, { type: "tool_execution_update", toolCallId: "child", partialResult: { cost: -1 } });
+		fakeEvents(data);
+		const result = await execute(registeredSubagentTool(), task);
+		expect(result.cost).toBeCloseTo(0.2);
+	});
+	it("starts fresh ownership when a settled call ID is reused", async () => {
+		const data = events();
+		data.push(...events().slice(1));
+		fakeEvents(data);
+		const result = await execute(registeredSubagentTool(), task);
+		expect(result.cost).toBeCloseTo(0.8);
+	});
+	it("includes legacy nested finalized costs and keeps failed usage", async () => {
+		const data = events();
+		delete data[data.length - 1].message.cost;
+		data[data.length - 1].message.details = {
+			results: [{ usage: { cost: 0.2 }, messages: nestedDetails.results[0].messages }],
+		};
+		fakeEvents(data, "process.exitCode = 2;");
+		const tool = registeredSubagentTool();
+		const result = await execute(tool, task);
+		expect(result.isError).toBe(true);
+		expect(result.cost).toBeCloseTo(0.6);
+		expect(tool.getHistoricalCost(result.details)).toBeCloseTo(0.6);
+	});
+	it("interprets legacy details without doubling transcript usage and honors generic zero", () => {
+		const tool = registeredSubagentTool();
+		const details = {
+			results: [
+				{
+					usage: { cost: 0.2 },
+					messages: [
+						{ role: "assistant", usage: { cost: { total: 0.2 } } },
+						{ role: "toolResult", toolName: "subagent", cost: 0.3, details: nestedDetails },
+						{ role: "toolResult", toolName: "subagent", cost: 0, details: nestedDetails },
+						{ role: "toolResult", toolName: "subagent", details: nestedDetails },
+						{ role: "toolResult", toolName: "other", cost: -1 },
+					],
+				},
+			],
+		};
+		expect(tool.getHistoricalCost(details)).toBeCloseTo(0.8);
+		expect(tool.getHistoricalCost({})).toBeUndefined();
+		expect(tool.getHistoricalCost({ results: [{ usage: { cost: -1 }, messages: [] }] })).toBeUndefined();
+	});
+	it.each([
+		{},
+		{ results: null },
+		{ results: [null] },
+		{ mode: "single", results: [{}] },
+		...[[null], [{ type: "text", text: null }], [{ type: "toolCall", name: "read", arguments: null }]].map(
+			(content) => ({
+				mode: "single",
+				results: [
+					{
+						agent: "bad",
+						task: "bad",
+						stderr: "",
+						exitCode: 1,
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.2, contextTokens: 0, turns: 1 },
+						messages: [{ role: "assistant", content }],
+					},
+				],
+			}),
+		),
+	])("renders malformed error details safely: %j", (details) => {
+		const tool = registeredSubagentTool();
+		for (const expanded of [false, true])
+			expect(renderToolResult(tool, { content: [{ type: "text", text: "failed" }], details }, expanded)).toContain(
+				"failed",
+			);
+	});
+	it.each(["single", "chain", "parallel"])(
+		"drains final stdout on %s cancellation and stops queued launches",
+		async (mode) => {
+			const launches = path.join(tmpDir, "launches");
+			const initial = assistantEvent("before abort", { usage: { input: 100, cost: { total: 0.2 } } });
+			const last = assistantEvent("drained fragment", { usage: { output: 50, cost: { total: 0.05 } } });
+			const descendant = events()
+				.slice(1, 5)
+				.map((e) => JSON.stringify(e))
+				.join("\n");
+			process.argv[1] = writeFakeInvocation(
+				tmpDir,
+				`
+   const fs = require("node:fs");
+   fs.appendFileSync(${JSON.stringify(launches)}, ${JSON.stringify("started\n")});
+   process.on("SIGTERM", () => { process.stdout.write(${JSON.stringify(last)}, () => process.exit(0)); });
+   process.stdout.write(${JSON.stringify(`${initial}\n${descendant}\n`)});
+   setInterval(() => {}, 1000);
+  `,
+			);
+			const tool = registeredSubagentTool();
+			const controller = new AbortController();
+			const params =
+				mode === "single"
+					? task
+					: mode === "chain"
+						? { chain: [task, task] }
+						: { tasks: Array.from({ length: 6 }, () => task) };
+			const promise = execute(
+				tool,
+				params,
+				() => {
+					const count = fs.readFileSync(launches, "utf8").trim().split("\n").length;
+					if (mode !== "parallel" || count === 4) controller.abort();
+				},
+				controller.signal,
+			);
+			const result = await promise;
+			expect(result.isError).toBe(true);
+			const expected = mode === "parallel" ? 4 : 1;
+			expect(fs.readFileSync(launches, "utf8").trim().split("\n")).toHaveLength(expected);
+			expect(result.cost).toBeCloseTo(expected * 0.55);
+			expect(tool.getHistoricalCost(result.details)).toBeCloseTo(result.cost);
+			const started = result.details.results.filter((r: any) => r.usage.turns > 0);
+			expect(started).toHaveLength(expected);
+			for (const child of started) {
+				expect(child.stopReason).toBe("aborted");
+				expect(child.usage).toMatchObject({ cost: 0.25, input: 100, output: 50, turns: 2 });
+				expect(child.messages.at(-1).content[0].text).toBe("drained fragment");
+			}
+			for (const expanded of [false, true]) {
+				const rendered = renderToolResult(tool, result, expanded, params);
+				expect(rendered).toContain("$0.2500");
+				expect(rendered).toContain("aborted");
+			}
+		},
+		10000,
+	);
+	it.each(["single", "chain", "parallel"])("does not launch %s children after prior cancellation", async (mode) => {
+		const launches = path.join(tmpDir, "launches");
+		process.argv[1] = writeFakeInvocation(
+			tmpDir,
+			`require("node:fs").writeFileSync(${JSON.stringify(launches)}, "started");`,
+		);
+		const controller = new AbortController();
+		controller.abort();
+		const params = mode === "single" ? task : mode === "chain" ? { chain: [task] } : { tasks: [task] };
+		const result = await execute(registeredSubagentTool(), params, undefined, controller.signal);
+		expect(fs.existsSync(launches)).toBe(false);
+		expect(result.isError).toBe(true);
+		expect(result.cost).toBe(0);
+		expect(textContent(result)).toContain("aborted");
+	});
+	it("returns structured process setup failures", async () => {
+		fakeEvents([]);
+		const tool = registeredSubagentTool();
+		const result = await execute(tool, { ...task, cwd: path.join(tmpDir, "missing") });
+		expect(result.isError).toBe(true);
+		expect(result.cost).toBe(0);
+		expect(result.details.results[0].stderr).toContain("Spawn failed");
 	});
 });

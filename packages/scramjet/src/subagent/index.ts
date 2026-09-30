@@ -150,6 +150,7 @@ interface SingleResult {
 	messages: Message[];
 	stderr: string;
 	usage: UsageStats;
+	inclusiveCost?: number;
 	model?: string;
 	stopReason?: string;
 	errorMessage?: string;
@@ -162,6 +163,80 @@ interface SubagentDetails {
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
+}
+
+function validCost(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function getHistoricalSubagentCost(details: unknown): number | undefined {
+	if (!isRecord(details) || !Array.isArray(details.results)) return undefined;
+	let total = 0;
+	let reported = false;
+	for (const result of details.results) {
+		if (!isRecord(result)) continue;
+		if (validCost(result.inclusiveCost)) {
+			total += result.inclusiveCost;
+			reported = true;
+			continue;
+		}
+		if (isRecord(result.usage) && validCost(result.usage.cost)) {
+			total += result.usage.cost;
+			reported = true;
+		}
+		if (!Array.isArray(result.messages)) continue;
+		for (const message of result.messages) {
+			if (!isRecord(message) || message.role !== "toolResult") continue;
+			const cost = validCost(message.cost)
+				? message.cost
+				: message.toolName === "subagent"
+					? getHistoricalSubagentCost(message.details)
+					: undefined;
+			if (cost !== undefined) {
+				total += cost;
+				reported = true;
+			}
+		}
+	}
+	return reported && validCost(total) ? total : undefined;
+}
+
+function invocationCost(results: SingleResult[]): number {
+	return results.reduce((total, result) => total + (result.inclusiveCost ?? result.usage.cost), 0);
+}
+
+function hasRenderableDetails(details: unknown): details is SubagentDetails {
+	if (
+		!isRecord(details) ||
+		!["single", "parallel", "chain"].includes(String(details.mode)) ||
+		!Array.isArray(details.results)
+	)
+		return false;
+	return details.results.every((result) => {
+		if (!isRecord(result) || !isRecord(result.usage)) return false;
+		const usage = result.usage;
+		return (
+			typeof result.agent === "string" &&
+			typeof result.task === "string" &&
+			typeof result.stderr === "string" &&
+			typeof result.exitCode === "number" &&
+			Array.isArray(result.messages) &&
+			result.messages.every(
+				(message) =>
+					isMessage(message) &&
+					Array.isArray(message.content) &&
+					message.content.every(
+						(part) =>
+							isRecord(part) &&
+							(part.type !== "text" || typeof part.text === "string") &&
+							(part.type !== "toolCall" || (typeof part.name === "string" && isRecord(part.arguments))),
+					),
+			) &&
+			["input", "output", "cacheRead", "cacheWrite", "cost", "contextTokens", "turns"].every((key) =>
+				validCost(usage[key]),
+			)
+		);
+	});
 }
 
 function formatInvocationDiagnostics(results: SingleResult | SingleResult[]): string {
@@ -266,20 +341,21 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
 	items: TIn[],
 	concurrency: number,
 	fn: (item: TIn, index: number) => Promise<TOut>,
+	signal?: AbortSignal,
 ): Promise<TOut[]> {
 	if (items.length === 0) return [];
 	const limit = Math.max(1, Math.min(concurrency, items.length));
 	const results: TOut[] = new Array(items.length);
 	let nextIndex = 0;
 	const workers = new Array(limit).fill(null).map(async () => {
-		while (true) {
+		while (!signal?.aborted) {
 			const current = nextIndex++;
 			if (current >= items.length) return;
 			results[current] = await fn(items[current], current);
 		}
 	});
 	await Promise.all(workers);
-	return results;
+	return results.filter(() => true);
 }
 
 async function writePromptToTempFile(agentName: string, prompt: string): Promise<{ dir: string; filePath: string }> {
@@ -358,12 +434,19 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 		messages: [],
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+		inclusiveCost: 0,
 		model: agent.model,
 		step,
 		diagnostics: agent.diagnostics,
 	};
 
+	const executions = new Map<string, { cost?: number; finalized: boolean }>();
+	let finalizedCost = 0;
 	const emitUpdate = () => {
+		currentResult.inclusiveCost = currentResult.usage.cost + finalizedCost;
+		for (const execution of executions.values()) {
+			if (!execution.finalized) currentResult.inclusiveCost += execution.cost ?? 0;
+		}
 		if (onUpdate) {
 			onUpdate({
 				content: [
@@ -375,11 +458,18 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 						),
 					},
 				],
+				cost: currentResult.inclusiveCost,
 				details: makeDetails([currentResult]),
 			});
 		}
 	};
 
+	if (signal?.aborted) {
+		currentResult.exitCode = 1;
+		currentResult.stopReason = "aborted";
+		currentResult.errorMessage = "Subagent was aborted before launch";
+		return currentResult;
+	}
 	if (currentResult.diagnostics?.length) emitUpdate();
 	try {
 		if (agent.systemPrompt.trim()) {
@@ -401,6 +491,7 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 			let exited = false;
 			let stdinFailed = false;
 			let killTimer: ReturnType<typeof setTimeout> | undefined;
+			let killProc: (() => void) | undefined;
 
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
@@ -412,8 +503,36 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 				}
 				if (!isRecord(event)) return;
 
-				if (event.type === "message_end" && isMessage(event.message)) {
+				if (event.type === "tool_execution_start" && typeof event.toolCallId === "string") {
+					executions.set(event.toolCallId, { finalized: false });
+				}
+				if (
+					(event.type === "tool_execution_update" || event.type === "tool_execution_end") &&
+					typeof event.toolCallId === "string"
+				) {
+					const execution = executions.get(event.toolCallId) ?? { finalized: false };
+					const report = event.type === "tool_execution_update" ? event.partialResult : event.result;
+					if (!execution.finalized && isRecord(report) && validCost(report.cost)) execution.cost = report.cost;
+					executions.set(event.toolCallId, execution);
+					emitUpdate();
+				}
+
+				if (
+					isMessage(event.message) &&
+					(event.type === "message_end" ||
+						(event.type === "tool_result_end" && event.message.role === "toolResult"))
+				) {
 					const msg = event.message;
+					if (msg.role === "toolResult") {
+						const execution = executions.get(msg.toolCallId) ?? { finalized: false };
+						if (execution.finalized) return;
+						const cost = validCost(msg.cost)
+							? msg.cost
+							: ((msg.toolName === "subagent" ? getHistoricalSubagentCost(msg.details) : undefined) ??
+								execution.cost);
+						finalizedCost += cost ?? 0;
+						executions.set(msg.toolCallId, { cost, finalized: true });
+					}
 					currentResult.messages.push(msg);
 
 					if (msg.role === "assistant") {
@@ -424,18 +543,13 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 							currentResult.usage.output += usage.output || 0;
 							currentResult.usage.cacheRead += usage.cacheRead || 0;
 							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-							currentResult.usage.cost += usage.cost?.total || 0;
+							if (validCost(usage.cost?.total)) currentResult.usage.cost += usage.cost.total;
 							currentResult.usage.contextTokens = usage.totalTokens || 0;
 						}
 						if (!currentResult.model && msg.model) currentResult.model = msg.model;
 						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
 						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
 					}
-					emitUpdate();
-				}
-
-				if (event.type === "tool_result_end" && isMessage(event.message)) {
-					currentResult.messages.push(event.message);
 					emitUpdate();
 				}
 			};
@@ -457,22 +571,23 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 				currentResult.stderr += data.toString();
 			});
 
-			proc.on("close", (code, signal) => {
+			proc.on("close", (code, exitSignal) => {
 				exited = true;
 				if (killTimer) clearTimeout(killTimer);
+				if (killProc) signal?.removeEventListener("abort", killProc);
 				if (buffer.trim()) processLine(buffer);
-				const signalName = signal ?? signalNameFromExitCode(code);
+				const signalName = exitSignal ?? signalNameFromExitCode(code);
 				if (signalName) currentResult.stderr += `Process killed by ${signalName}\n`;
-				resolve(stdinFailed ? 1 : (code ?? (signal ? 1 : 0)));
+				resolve(stdinFailed ? 1 : (code ?? (exitSignal ? 1 : 0)));
 			});
 
 			proc.on("error", (err) => {
 				currentResult.stderr += `Spawn failed: ${err.message}\n`;
-				resolve(1);
+				stdinFailed = true;
 			});
 
 			if (signal) {
-				const killProc = () => {
+				killProc = () => {
 					wasAborted = true;
 					proc.kill("SIGTERM");
 					killTimer = setTimeout(() => {
@@ -485,7 +600,14 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 		});
 
 		currentResult.exitCode = exitCode;
-		if (wasAborted) throw new Error("Subagent was aborted");
+		if (wasAborted) {
+			currentResult.stopReason = "aborted";
+			currentResult.errorMessage = "Subagent was aborted";
+		}
+		return currentResult;
+	} catch (error) {
+		currentResult.exitCode = 1;
+		currentResult.errorMessage = error instanceof Error ? error.message : String(error);
 		return currentResult;
 	} finally {
 		if (tmpPromptPath)
@@ -577,6 +699,7 @@ export function registerSubagentTool(
 			"Registered command-set agents remain available under every scope; project-provenance confirmation still applies.",
 		].join(" "),
 		parameters: SubagentParams,
+		getHistoricalCost: getHistoricalSubagentCost,
 		promptSnippet:
 			"effort: optional thinking level (off/minimal/low/medium/high/xhigh). Guidance: low for exploration and information gathering; medium for structured review and analysis; high for architecture, design, assessment, and code tracing tasks requiring judgment; xhigh for complex multi-constraint planning or deep root-cause analysis. Capped at your current session level.",
 
@@ -672,6 +795,13 @@ export function registerSubagentTool(
 				let previousOutput = "";
 
 				for (let i = 0; i < params.chain.length; i++) {
+					if (signal?.aborted)
+						return {
+							content: [{ type: "text", text: "Chain was aborted before the next step" }],
+							cost: invocationCost(results),
+							details: makeDetails("chain")(results),
+							isError: true,
+						};
 					const step = params.chain[i];
 					const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
 
@@ -682,6 +812,7 @@ export function registerSubagentTool(
 									const allResults = [...results, currentResult];
 									onUpdate({
 										content: partial.content,
+										cost: invocationCost(results) + (partial.cost ?? 0),
 										details: makeDetails("chain")(allResults),
 									});
 								}
@@ -712,6 +843,7 @@ export function registerSubagentTool(
 									text: `Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutputWithDiagnostics(result)}`,
 								},
 							],
+							cost: invocationCost(results),
 							details: makeDetails("chain")(results),
 							isError: true,
 						};
@@ -728,6 +860,7 @@ export function registerSubagentTool(
 							),
 						},
 					],
+					cost: invocationCost(results),
 					details: makeDetails("chain")(results),
 				};
 			}
@@ -766,35 +899,41 @@ export function registerSubagentTool(
 							content: [
 								{ type: "text", text: `Parallel: ${done}/${allResults.length} done, ${running} running...` },
 							],
+							cost: invocationCost(allResults),
 							details: makeDetails("parallel")([...allResults]),
 						});
 					}
 				};
 
-				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
-					const result = await runSingleAgent({
-						defaultCwd: ctx.cwd,
-						agents,
-						agentName: t.agent,
-						task: t.task,
-						cwd: t.cwd,
-						step: undefined,
-						signal,
-						onUpdate: (partial) => {
-							if (partial.details?.results[0]) {
-								allResults[index] = partial.details.results[0];
-								emitParallelUpdate();
-							}
-						},
-						makeDetails: makeDetails("parallel"),
-						discoveryDiagnostics: discovery.diagnostics,
-						thinkingLevel: resolveEffort(t.effort),
-						parentModel,
-					});
-					allResults[index] = result;
-					emitParallelUpdate();
-					return result;
-				});
+				const results = await mapWithConcurrencyLimit(
+					params.tasks,
+					MAX_CONCURRENCY,
+					async (t, index) => {
+						const result = await runSingleAgent({
+							defaultCwd: ctx.cwd,
+							agents,
+							agentName: t.agent,
+							task: t.task,
+							cwd: t.cwd,
+							step: undefined,
+							signal,
+							onUpdate: (partial) => {
+								if (partial.details?.results[0]) {
+									allResults[index] = partial.details.results[0];
+									emitParallelUpdate();
+								}
+							},
+							makeDetails: makeDetails("parallel"),
+							discoveryDiagnostics: discovery.diagnostics,
+							thinkingLevel: resolveEffort(t.effort),
+							parentModel,
+						});
+						allResults[index] = result;
+						emitParallelUpdate();
+						return result;
+					},
+					signal,
+				);
 
 				const successCount = results.filter((r) => !isResultError(r)).length;
 				const summaries = results.map((r) => {
@@ -808,12 +947,15 @@ export function registerSubagentTool(
 					content: [
 						{
 							type: "text" as const,
-							text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+							text: `${signal?.aborted ? "Parallel aborted" : "Parallel"}: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
 						},
 					],
+					cost: invocationCost(results),
 					details: makeDetails("parallel")(results),
 				};
-				return successCount === results.length ? parallelResult : { ...parallelResult, isError: true };
+				return !signal?.aborted && successCount === results.length
+					? parallelResult
+					: { ...parallelResult, isError: true };
 			}
 
 			if (params.agent && params.task) {
@@ -839,6 +981,7 @@ export function registerSubagentTool(
 								text: `Agent ${result.stopReason || "failed"}: ${getResultOutputWithDiagnostics(result)}`,
 							},
 						],
+						cost: invocationCost([result]),
 						details: makeDetails("single")([result]),
 						isError: true,
 					};
@@ -850,6 +993,7 @@ export function registerSubagentTool(
 							text: withInvocationDiagnostics(getFinalOutput(result.messages) || "(no output)", result),
 						},
 					],
+					cost: invocationCost([result]),
 					details: makeDetails("single")([result]),
 				};
 			}
@@ -914,7 +1058,7 @@ export function registerSubagentTool(
 
 		renderResult(result, { expanded, isPartial }, theme, context) {
 			const details = result.details;
-			if (!details || details.results.length === 0) {
+			if (!hasRenderableDetails(details) || details.results.length === 0) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 			}
