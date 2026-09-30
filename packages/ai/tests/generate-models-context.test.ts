@@ -993,6 +993,68 @@ describe("real generator context corrections", () => {
 		expect(models["azure-openai-responses"]["gpt-realtime-2.1"]).toBeUndefined();
 	});
 
+	it.each([true, false])("pins GPT-6.1 Sol direct metadata with feed-present=%s", async (feedPresent) => {
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				data.openai.models["gpt-6.1-sol-neighbor"] = feedModel("gpt-6.1-sol-neighbor", 240000);
+				if (feedPresent) {
+					data.openai.models["gpt-6.1-sol"] = feedModel("gpt-6.1-sol", 240000, {
+						name: "Conflicting feed name",
+						reasoning: false,
+						modalities: { input: ["text"] },
+						limit: { context: 240000, input: 200000, output: 4000 },
+					});
+				}
+			},
+		}))!;
+		const direct = models.openai["gpt-6.1-sol"];
+		expect(direct).toMatchObject({
+			id: "gpt-6.1-sol",
+			name: "GPT-6.1 Sol",
+			provider: "openai",
+			api: "openai-responses",
+			baseUrl: "https://api.openai.com/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 1050000,
+			maxTokens: 128000,
+			cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+			thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+		});
+		expect(direct).not.toHaveProperty("maxInputTokens");
+		expect(Object.keys(models.openai).filter((id) => id === "gpt-6.1-sol")).toHaveLength(1);
+		expect(models.openai["gpt-6.1-sol-neighbor"].contextWindow).toBe(240000);
+		expect(models.openai["gpt-6.1-sol-neighbor"].thinkingLevelMap).not.toEqual(direct.thinkingLevelMap);
+		expect(models["azure-openai-responses"]["gpt-6.1-sol"]).toBeUndefined();
+		expect(models["github-copilot"]["gpt-6.1-sol"]).toBeUndefined();
+	});
+
+	it("emits one GPT-6.1 Sol Codex row without changing existing efforts", async () => {
+		const models = (await generate(true))!;
+		const codex = models["openai-codex"]["gpt-6.1-sol"];
+		expect(codex).toMatchObject({
+			id: "gpt-6.1-sol",
+			name: "GPT-6.1 Sol",
+			provider: "openai-codex",
+			api: "openai-codex-responses",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 872000,
+			maxTokens: 128000,
+			cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+			thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+		});
+		expect(codex).not.toHaveProperty("maxInputTokens");
+		expect(Object.keys(models["openai-codex"]).filter((id) => id === "gpt-6.1-sol")).toHaveLength(1);
+		expect(models["openai-codex"]["gpt-6-sol"].thinkingLevelMap).toEqual({
+			off: null,
+			minimal: "low",
+			xhigh: "xhigh",
+			max: "max",
+		});
+	});
+
 	it("does not offer a Realtime-only OpenAI model through Responses", async () => {
 		const models = (await generate(true, {
 			modelsDevChange: (data) => {
@@ -1186,6 +1248,7 @@ describe("real generator context corrections", () => {
 			"gpt-6-astra": 872000,
 			"gpt-6-sol": 872000,
 			"gpt-6-luna": 872000,
+			"gpt-6.1-sol": 872000,
 		};
 		for (const model of Object.values(models["openai-codex"])) {
 			expect(model.contextWindow, model.id).toBe(codexContexts[model.id]);
