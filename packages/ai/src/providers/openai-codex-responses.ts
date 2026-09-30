@@ -1382,7 +1382,7 @@ async function parseErrorResponse(
 			error?: { code?: string; type?: string; message?: string; plan_type?: string; resets_at?: number };
 		};
 		const err = parsed?.error;
-		failure = failureFromProviderError({ status: response.status, error: err });
+		failure = failureFromProviderError({ status: response.status, error: parsed });
 		if (err) {
 			const code = err.code || err.type || "";
 			if (
