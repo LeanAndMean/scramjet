@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.106.0 — Add GPT-6.1 Sol to OpenAI, Codex, and Copilot catalogs
+
+Add `gpt-6.1-sol` to three route-specific model catalogs. Fixes [#595](https://github.com/LeanAndMean/scramjet/issues/595).
+
+### Added
+
+- Advertise direct OpenAI, Codex sign-in, and GitHub Copilot model capabilities with route-specific context limits, supported efforts, and qualified usage estimates.
+- Retain direct OpenAI and Codex records when a live feed omits them; require an eligible Copilot feed record for its Responses routing and limits.
+
+### Tests
+
+- Cover generator retention, catalog metadata, and Copilot Responses request shape.
+
 ## 0.105.0 — Allow explicitly targeted external forge publication
 
 Permit guarded publication to canonical public GitHub and GitLab repository URLs while requiring interactive approval for external destinations. Fixes [#550](https://github.com/LeanAndMean/scramjet/issues/550).
