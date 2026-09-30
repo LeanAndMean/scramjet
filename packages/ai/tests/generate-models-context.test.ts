@@ -62,6 +62,14 @@ function feedModel(id: string, context: number, overrides: Record<string, unknow
 }
 
 const copilotAdditions = {
+	"gpt-6.1-sol": {
+		api: "openai-responses",
+		contextWindow: 1050000,
+		maxInputTokens: 922000,
+		maxTokens: 128000,
+		cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	},
 	"claude-fable-5.1": {
 		api: "openai-completions",
 		contextWindow: 1000000,
@@ -1026,7 +1034,7 @@ describe("real generator context corrections", () => {
 		expect(models.openai["gpt-6.1-sol-neighbor"].contextWindow).toBe(240000);
 		expect(models.openai["gpt-6.1-sol-neighbor"].thinkingLevelMap).not.toEqual(direct.thinkingLevelMap);
 		expect(models["azure-openai-responses"]["gpt-6.1-sol"]).toBeUndefined();
-		expect(models["github-copilot"]["gpt-6.1-sol"]).toBeUndefined();
+		expect(models["github-copilot"]["gpt-6.1-sol"].maxInputTokens).toBe(922000);
 	});
 
 	it("emits one GPT-6.1 Sol Codex row without changing existing efforts", async () => {
@@ -1150,6 +1158,48 @@ describe("real generator context corrections", () => {
 		expect(models["deprecated-copilot-candidate"]).toBeUndefined();
 		expect(models["no-tools-copilot-candidate"]).toBeUndefined();
 	});
+
+	it("pins only the eligible GPT-6.1 Sol Copilot candidate despite conflicting feed metadata", async () => {
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				data["github-copilot"].models["gpt-6.1-sol"] = feedModel("gpt-6.1-sol", 240000, {
+					name: "Conflicting feed name",
+					reasoning: false,
+					modalities: { input: ["text", "image", "pdf"] },
+					limit: { context: 240000, input: 200000, output: 4000 },
+				});
+				data["github-copilot"].models["gpt-6.1-sol-neighbor"] = feedModel("gpt-6.1-sol-neighbor", 240000);
+			},
+		}))!;
+		expect(models["github-copilot"]["gpt-6.1-sol"]).toMatchObject({
+			id: "gpt-6.1-sol",
+			name: "gpt-6.1-sol",
+			...copilotAdditions["gpt-6.1-sol"],
+			input: ["text", "image"],
+		});
+		expect(Object.keys(models["github-copilot"]).filter((id) => id === "gpt-6.1-sol")).toHaveLength(1);
+		expect(models["github-copilot"]["gpt-6.1-sol-neighbor"].contextWindow).toBe(240000);
+		expect(models["github-copilot"]["gpt-6.1-sol-neighbor"].api).toBe("openai-completions");
+		expect(models["azure-openai-responses"]["gpt-6.1-sol"]).toBeUndefined();
+	});
+
+	it.each(["missing", "deprecated", "no-tools"])(
+		"rejects a %s GPT-6.1 Sol Copilot candidate before writing",
+		async (state) => {
+			await generate(true, {
+				...(state === "missing"
+					? { omittedCopilotCorrection: "gpt-6.1-sol" }
+					: {
+							modelsDevChange: (data) => {
+								data["github-copilot"].models["gpt-6.1-sol"][state === "deprecated" ? "status" : "tool_call"] =
+									state === "deprecated" ? "deprecated" : false;
+							},
+						}),
+				expectFailure: true,
+				expectedError: "Missing corrected GitHub Copilot candidates: gpt-6.1-sol",
+			});
+		},
+	);
 
 	it("rejects a missing corrected GitHub Copilot candidate before writing", async () => {
 		await generate(true, {
