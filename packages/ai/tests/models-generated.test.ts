@@ -787,6 +787,54 @@ describe("generated catalog - GPT-6 Astra", () => {
 	);
 });
 
+describe("generated catalog - GPT-6.1 Sol route contracts", () => {
+	const cost = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 };
+	const levels = ["low", "medium", "high", "xhigh", "max"];
+
+	it.each([
+		["openai", "openai-responses", "https://api.openai.com/v1", 1050000, undefined],
+		["openai-codex", "openai-codex-responses", "https://chatgpt.com/backend-api", 872000, undefined],
+		["github-copilot", "openai-responses", "https://api.individual.githubcopilot.com", 1050000, 922000],
+	] as const)("pins %s metadata and effort choices", (provider, api, baseUrl, contextWindow, maxInputTokens) => {
+		const matches = getModels(provider).filter((model) => model.id === "gpt-6.1-sol");
+		expect(matches).toHaveLength(1);
+		const model = matches[0];
+		expect(model).toMatchObject({
+			id: "gpt-6.1-sol",
+			name: provider === "github-copilot" ? "gpt-6.1-sol" : "GPT-6.1 Sol",
+			provider,
+			api,
+			baseUrl,
+			reasoning: true,
+			input: ["text", "image"],
+			cost,
+			contextWindow,
+			maxTokens: 128000,
+		});
+		expect(model.maxInputTokens).toBe(maxInputTokens);
+		expect(model.thinkingLevelMap).toEqual({ off: null, minimal: null, xhigh: "xhigh", max: "max" });
+		expect(getSupportedThinkingLevels(model)).toEqual(levels);
+		for (const level of ["off", "minimal"] as const) expect(clampThinkingLevel(model, level)).toBe("low");
+		for (const level of levels)
+			expect(clampThinkingLevel(model, level as "low" | "medium" | "high" | "xhigh" | "max")).toBe(level);
+		if (provider === "github-copilot") {
+			expect(model.headers).toEqual({
+				"User-Agent": "GitHubCopilotChat/0.35.0",
+				"Editor-Version": "vscode/1.107.0",
+				"Editor-Plugin-Version": "copilot-chat/0.35.0",
+				"Copilot-Integration-Id": "vscode-chat",
+				"X-GitHub-Api-Version": "2026-06-01",
+			});
+		} else {
+			expect(model.headers).toBeUndefined();
+		}
+	});
+
+	it("does not add an unevidenced Azure route", () => {
+		expect(getModels("azure-openai-responses").some((model) => model.id === "gpt-6.1-sol")).toBe(false);
+	});
+});
+
 describe("generated catalog - direct GPT-6 reasoning", () => {
 	it.each(["gpt-6-sol", "gpt-6-luna"])("supports the documented reasoning choices for openai/%s", (id) => {
 		const model = getModel("openai", id);
