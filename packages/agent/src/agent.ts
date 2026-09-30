@@ -381,6 +381,11 @@ export class Agent {
 		return this.activeRun?.promise ?? Promise.resolve();
 	}
 
+	// SCRAMJET-DIVERGENCE: execution truth survives revocation of public harness promises (#598).
+	get hasActiveTransientHarnessTools(): boolean {
+		return this.transientRuns.size > 0;
+	}
+
 	/** Clear transcript state, runtime state, and queued messages. */
 	reset(): void {
 		this._state.messages = [];

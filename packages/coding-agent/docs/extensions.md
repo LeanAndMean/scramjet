@@ -1022,7 +1022,7 @@ if (usage && usage.tokens !== null && usage.tokens > usage.contextWindow * 0.8) 
 
 ### ctx.compact()
 
-Trigger compaction without awaiting completion. Use `onComplete` and `onError` for follow-up actions.
+Trigger compaction without awaiting completion. Use `onComplete` and `onError` for follow-up actions. Competing manual/automatic compaction, branch summarization, or executing idle-origin harness work causes immediate refusal through `onError`; retry deliberately after conflicting work and its persistence settle. The admitted owner drains final `message_end` hooks and persistence while suppressing queued/new run/turn lifecycle continuation. New session harness invocations reject during manual ownership. See [manual admission and terminal drain](compaction.md#manual-admission-and-terminal-drain).
 
 ```typescript
 ctx.compact({
@@ -1627,6 +1627,8 @@ await pi.invokeHarnessTool("my_notice_tool", { text: "model changed to X" });
 ```
 
 The returned promise **resolves only after the resulting tool-result message has been persisted** to the session — a stronger guarantee than "the tool ran". A consumer that must not replace or tear down the session (e.g. before starting a fresh session) until the record row exists can safely `await` it. The promise **rejects** if no tool with `name` is registered, if a matching event fails to process/persist, if the session is disposed before it settles or is called after disposal, or if an explicit `options.toolCallId` is malformed or already pending. Rejection means the pipeline did not complete — it does **not** prove the artifact is absent (state and persistence may have partially completed), so do not blindly retry. A tool's own `execute()` error is not a rejection: it resolves normally as an `isError` result.
+
+New invocations also reject during manual compaction ownership, before allocating an id or persistence acknowledgement or executing a tool. Already-admitted active-run/queued invocations drain normally; manual compaction refuses existing idle-origin execution rather than pretending `Agent.waitForIdle()` covers it. This session-local admission policy does not guard direct underlying Agent calls.
 
 `options.toolCallId` (optional) sets an explicit tool-call id (must be provider-safe: 1-64 characters of `[a-zA-Z0-9_-]`); a provider-safe id is generated when omitted.
 

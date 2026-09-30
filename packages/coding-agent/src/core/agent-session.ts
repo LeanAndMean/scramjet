@@ -432,6 +432,7 @@ export class AgentSession {
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
+	private _manualCompactionDrain: { firstError?: Error } | undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
 
@@ -796,9 +797,10 @@ export class AgentSession {
 			await this._processAgentEvent(event, run, harnessAck !== undefined, toolCost);
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
+			if (this._manualCompactionDrain) this._manualCompactionDrain.firstError ??= error;
 			if (harnessAck) {
 				harnessAck.firstPersistenceError ??= error;
-			} else if (run) {
+			} else if (run && !this._manualCompactionDrain) {
 				if (event.type === "message_end" && event.message.role === "assistant") {
 					run.assistantPersistenceError = error;
 				}
@@ -843,6 +845,13 @@ export class AgentSession {
 		toolCost?: LiveToolCost,
 	): Promise<void> {
 		if (this._disposed) return;
+		// SCRAMJET-DIVERGENCE: queued lifecycle events must respect manual compaction ownership (#598).
+		if (this._manualCompactionDrain && event.type !== "message_end" && event.type !== "agent_end") return;
+		if (this._manualCompactionDrain && event.type === "agent_end") {
+			if (this._retry) this._finishCancelledRetry("cancelled_during_continuation");
+			if (run) this._completeAgentRun(run, this._manualCompactionDrain.firstError);
+			return;
+		}
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -871,6 +880,14 @@ export class AgentSession {
 			event.message.cost = toolCost.cost;
 		}
 
+		// An awaited hook may have acquired manual ownership while this event was in flight.
+		if (this._manualCompactionDrain && event.type !== "message_end") {
+			if (event.type === "agent_end" && run) {
+				if (this._retry) this._finishCancelledRetry("cancelled_during_continuation");
+				this._completeAgentRun(run, this._manualCompactionDrain.firstError);
+			}
+			return;
+		}
 		// Notify all listeners
 		this._emit(event);
 		if (this._disposed) return;
@@ -932,7 +949,8 @@ export class AgentSession {
 				event.message.role === "assistant" &&
 				event.message.stopReason !== "error" &&
 				event.message.stopReason !== "aborted" &&
-				!fromHarnessInvocation
+				!fromHarnessInvocation &&
+				!this._manualCompactionDrain
 			) {
 				this._overflowRecoveryAttempted = false;
 				if (this._retry) this._retry = { ...this._retry, attempt: 0 };
@@ -941,6 +959,11 @@ export class AgentSession {
 
 		if (event.type === "agent_end") {
 			if (this._disposed || !run) return;
+			if (this._manualCompactionDrain) {
+				if (this._retry) this._finishCancelledRetry("cancelled_during_continuation");
+				this._completeAgentRun(run, this._manualCompactionDrain.firstError);
+				return;
+			}
 			if (run.assistantPersistenceError) {
 				const error = run.assistantPersistenceError;
 				run.assistantPersistenceError = undefined;
@@ -1171,7 +1194,7 @@ export class AgentSession {
 	 * Preserves all existing listeners.
 	 */
 	private _reconnectToAgent(): void {
-		if (this._unsubscribeAgent) return; // Already connected
+		if (this._disposed || this._unsubscribeAgent) return; // Already connected or disposed
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 	}
 
@@ -1415,6 +1438,12 @@ export class AgentSession {
 	async invokeHarnessTool(name: string, args: unknown, options?: InvokeHarnessToolOptions): Promise<void> {
 		if (this._disposed) {
 			throw new Error(`Cannot invoke harness tool "${name}": the session has been disposed.`);
+		}
+		// SCRAMJET-DIVERGENCE: reject new session work before allocating invocation ownership (#598).
+		if (this._compactionAbortController) {
+			throw new Error(
+				`Cannot invoke harness tool "${name}": manual compaction is in progress. Retry after it settles.`,
+			);
 		}
 		const tool = this._toolRegistry.get(name);
 		if (!tool) {
@@ -2338,13 +2367,30 @@ export class AgentSession {
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
-		this._resetOutputThroughput();
-		this._disconnectFromAgent();
-		await this.abort();
-		this._compactionAbortController = new AbortController();
-		this._emit({ type: "compaction_start", reason: "manual" });
-
+		// SCRAMJET-DIVERGENCE: acquire one owner before awaits and drain terminal persistence (#598).
+		if (this._disposed) throw new Error("Cannot compact a disposed session.");
+		if (this.isCompacting)
+			throw new Error("Compaction or branch summarization is already in progress. Retry after it settles.");
+		if (this.agent.hasActiveTransientHarnessTools) {
+			throw new Error(
+				"A harness tool is still executing outside an Agent run. Retry compaction after its persisted settlement.",
+			);
+		}
+		const controller = new AbortController();
+		this._compactionAbortController = controller;
+		const drain: { firstError?: Error } = {};
+		this._manualCompactionDrain = drain;
+		const runs = [...this._unsettledAgentRuns];
 		try {
+			this._resetOutputThroughput();
+			this._disconnectFromAgent();
+			this._unsubscribeAgent = this.agent.subscribe((event) => this._handleAgentEvent(event));
+			this._emit({ type: "compaction_start", reason: "manual" });
+			await this.abort();
+			await this._agentEventQueue;
+			if (drain.firstError) throw drain.firstError;
+			if (this._disposed) throw new Error("Session disposed during compaction.");
+			if (controller.signal.aborted) throw new Error("Compaction cancelled");
 			if (!this.model) {
 				throw new Error(formatNoModelSelectedMessage());
 			}
@@ -2373,7 +2419,7 @@ export class AgentSession {
 					preparation,
 					branchEntries: pathEntries,
 					customInstructions,
-					signal: this._compactionAbortController.signal,
+					signal: controller.signal,
 				})) as SessionBeforeCompactResult | undefined;
 
 				if (result?.cancel) {
@@ -2405,7 +2451,7 @@ export class AgentSession {
 					apiKey,
 					headers,
 					customInstructions,
-					this._compactionAbortController.signal,
+					controller.signal,
 					this.thinkingLevel,
 				);
 				summary = result.summary;
@@ -2414,7 +2460,8 @@ export class AgentSession {
 				details = result.details;
 			}
 
-			if (this._compactionAbortController.signal.aborted) {
+			if (this._disposed) throw new Error("Session disposed during compaction.");
+			if (controller.signal.aborted) {
 				throw new Error("Compaction cancelled");
 			}
 
@@ -2451,8 +2498,12 @@ export class AgentSession {
 			});
 			return compactionResult;
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			const aborted = message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError");
+			const failure = drain.firstError ?? error;
+			const settlementError = failure instanceof Error ? failure : new Error(String(failure));
+			this._releaseRetryForFailedRun(settlementError);
+			for (const run of runs) this._completeAgentRun(run, settlementError);
+			const message = settlementError.message;
+			const aborted = message === "Compaction cancelled" || settlementError.name === "AbortError";
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
@@ -2461,8 +2512,10 @@ export class AgentSession {
 				willRetry: false,
 				errorMessage: aborted ? undefined : `Compaction failed: ${message}`,
 			});
-			throw error;
+			throw failure;
 		} finally {
+			this._disconnectFromAgent();
+			this._manualCompactionDrain = undefined;
 			this._compactionAbortController = undefined;
 			this._reconnectToAgent();
 		}
@@ -2495,6 +2548,7 @@ export class AgentSession {
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
 	 */
 	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<void> {
+		if (this._manualCompactionDrain) return;
 		const settings = this.settingsManager.getCompactionSettings();
 		if (!settings.enabled) return;
 
@@ -2587,10 +2641,11 @@ export class AgentSession {
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<void> {
 		const settings = this.settingsManager.getCompactionSettings();
 
-		this._emit({ type: "compaction_start", reason });
+		// SCRAMJET-DIVERGENCE: reentrant subscribers must observe compaction ownership (#598).
 		this._autoCompactionAbortController = new AbortController();
 
 		try {
+			this._emit({ type: "compaction_start", reason });
 			if (!this.model) {
 				this._emit({
 					type: "compaction_end",
@@ -3218,7 +3273,7 @@ export class AgentSession {
 		try {
 			this._appendAutoRetryRecord(record);
 		} catch (error) {
-			if (retry) {
+			if (retry && !this._manualCompactionDrain) {
 				this._emit({
 					type: "auto_retry_end",
 					success: false,
@@ -3228,7 +3283,7 @@ export class AgentSession {
 			}
 			throw this._reportRetryFailure(error);
 		}
-		if (retry && end) this._emit(end);
+		if (retry && end && !this._manualCompactionDrain) this._emit(end);
 	}
 
 	private _finishRetryWithoutSuccess(record: AutoRetryRecord, message: AssistantMessage): void {
@@ -3390,6 +3445,8 @@ export class AgentSession {
 		if (controller.signal.aborted || this._disposed) {
 			return this._finishCancelledRetry("cancelled_during_backoff", backoff);
 		}
+
+		if (this._manualCompactionDrain) return this._finishCancelledRetry("cancelled_during_backoff", backoff);
 
 		// Hand the chain to the continuation before `continue()`; the run that eventually emits
 		// `agent_start` adopts it (see `_captureAgentRunSettlement`), however long Agent defers that start.

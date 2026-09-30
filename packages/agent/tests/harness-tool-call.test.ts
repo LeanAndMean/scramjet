@@ -854,14 +854,19 @@ describe("Agent.runHarnessTool", () => {
 		try {
 			// Idle transient run (not queued). Observe its rejection immediately, then reset while it is
 			// gated — outside any queue.
+			expect(agent.hasActiveTransientHarnessTools).toBe(false);
 			const transient = agent.runHarnessTool(slowTool, {});
+			expect(agent.hasActiveTransientHarnessTools).toBe(true);
 			const rejection = expect(transient).rejects.toThrow(/discarded unsettled harness tool call/);
 			agent.reset();
 			await rejection;
+			expect(agent.hasActiveTransientHarnessTools).toBe(true);
 
 			// The public guarantee was revoked, but the underlying work still runs to completion.
 			release();
 			await underlyingComplete;
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(agent.hasActiveTransientHarnessTools).toBe(false);
 			expect(executed).toBe(true);
 		} finally {
 			console.warn = originalWarn;

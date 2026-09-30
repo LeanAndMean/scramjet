@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
@@ -68,6 +68,8 @@ async function fixture(
 		manager?: SessionManager;
 		allowedToolNames?: string[];
 		normal?: boolean;
+		responses?: (call: number) => AssistantMessage;
+		onQueuedTurnEnd?: () => void;
 	} = {},
 ) {
 	const dir = mkdtempSync(join(tmpdir(), "session-cost-"));
@@ -88,6 +90,12 @@ async function fixture(
 		initialState: { model },
 		getApiKey: async () => "fake",
 		streamFn: () => {
+			if (options.responses) {
+				const message = options.responses(calls++);
+				const stream = createAssistantMessageEventStream();
+				stream.push({ type: "done", reason: message.stopReason as "stop", message });
+				return stream;
+			}
 			const message = parent(0);
 			if (options.normal && calls++ === 0) {
 				message.content = [{ type: "toolCall", id: "normal-cost", name: "charged", arguments: {} }];
@@ -98,6 +106,16 @@ async function fixture(
 			return stream;
 		},
 	});
+	if (options.onQueuedTurnEnd) {
+		const subscribe = agent.subscribe.bind(agent);
+		vi.spyOn(agent, "subscribe").mockImplementation((listener) =>
+			subscribe((event, signal) => {
+				const pending = listener(event, signal);
+				if (event.type === "turn_end") options.onQueuedTurnEnd?.();
+				return pending;
+			}),
+		);
+	}
 	const session = new AgentSession({
 		agent,
 		sessionManager: manager,
@@ -112,6 +130,7 @@ async function fixture(
 	return {
 		session,
 		manager,
+		dir,
 		drain: () => (session as unknown as { _drainAgentEventQueue(): Promise<void> })._drainAgentEventQueue(),
 	};
 }
@@ -136,6 +155,378 @@ function footer(session: AgentSession) {
 		.render(160)
 		.map(stripAnsi);
 }
+
+function offlineCompaction(pi: Parameters<ExtensionFactory>[0]) {
+	pi.on("session_before_compact", (event) => ({
+		compaction: {
+			summary: "offline summary",
+			firstKeptEntryId: event.preparation.firstKeptEntryId,
+			tokensBefore: event.preparation.tokensBefore,
+		},
+	}));
+}
+
+describe("manual compaction accounting boundary", () => {
+	it("refuses reentrant manual compaction from automatic compaction start", async () => {
+		const ownerStarted = gate();
+		const ownerFinished = gate();
+		let contender!: Promise<unknown>;
+		const { session, manager } = await fixture({
+			builtin: offlineCompaction,
+			responses: () => ({
+				...parent(0),
+				usage: { ...parent(0).usage, input: 980, output: 19, cacheRead: 0, cacheWrite: 0, totalTokens: 999 },
+			}),
+		});
+		session.settingsManager.applyOverrides({ compaction: { enabled: true, reserveTokens: 10, keepRecentTokens: 0 } });
+		manager.appendMessage(parent(1));
+		const starts: string[] = [];
+		session.subscribe((event) => {
+			if (event.type === "compaction_start") {
+				starts.push(event.reason);
+				if (event.reason === "threshold") {
+					contender = session.compact().catch((error) => error);
+					ownerStarted.release();
+				}
+			}
+			if (event.type === "compaction_end" && event.reason === "threshold") ownerFinished.release();
+		});
+		const running = session.prompt("go");
+		try {
+			await ownerStarted.promise;
+			expect(((await contender) as Error).message).toMatch(/already.*progress/i);
+			await ownerFinished.promise;
+			await running;
+			expect(starts).toEqual(["threshold"]);
+			expect(manager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+		} finally {
+			session.dispose();
+		}
+	});
+	it("refuses idle-origin execution without aborting it, then compacts after persisted settlement", async () => {
+		const started = gate();
+		const finish = gate();
+		let signal!: AbortSignal;
+		const { session, manager } = await fixture({
+			builtin: offlineCompaction,
+			tools: [
+				charged(async (_id, _args, currentSignal, update) => {
+					signal = currentSignal!;
+					update?.({ content: [], details: {}, cost: 0.5 });
+					started.release();
+					await finish.promise;
+					return { content: [], details: {}, cost: 0.5 };
+				}),
+			],
+		});
+		manager.appendMessage(parent(1));
+		const running = session.invokeHarnessTool("charged", {});
+		try {
+			await started.promise;
+			const messages = session.messages;
+			await expect(session.compact()).rejects.toThrow(/harness.*execut/i);
+			expect(session.messages).toBe(messages);
+			expect(signal.aborted).toBe(false);
+			expect(session.isCompacting).toBe(false);
+			expect(session.getRecordedSessionCost()).toBe(1.5);
+			finish.release();
+			await running;
+			await session.compact();
+			expect(session.getRecordedSessionCost()).toBe(1.5);
+		} finally {
+			finish.release();
+			await running;
+			session.dispose();
+		}
+	});
+
+	it.each([false, true])(
+		"drains charged final persistence and settles prompt with append failure=%s",
+		async (failAppend) => {
+			const started = gate();
+			const finalHook = gate();
+			const release = gate();
+			const contender = gate();
+			const ends = vi.fn();
+			const newExecution = vi.fn(async () => ({ content: [], details: {} }));
+			let refusal: Error | undefined;
+			let harnessRefusal: Promise<void> | undefined;
+			const { session, manager } = await fixture({
+				normal: true,
+				tools: [
+					charged(async (_id, _args, signal, update) => {
+						update?.({ content: [], details: { retained: true }, cost: 0.5 });
+						started.release();
+						await new Promise<void>((resolve) =>
+							signal!.addEventListener("abort", () => resolve(), { once: true }),
+						);
+						throw new Error("interrupted");
+					}),
+					charged(newExecution, "new_work"),
+				],
+				builtin: (pi) => {
+					offlineCompaction(pi);
+					pi.on("agent_end", ends);
+					pi.on("turn_end", ends);
+					pi.on("message_end", async (event, ctx) => {
+						if (event.message.role !== "toolResult") return;
+						ctx.compact({
+							onError: (error) => {
+								refusal = error;
+								contender.release();
+							},
+						});
+						harnessRefusal = expect(pi.invokeHarnessTool("new_work", {})).rejects.toThrow(/compaction/i);
+						finalHook.release();
+						await release.promise;
+						return { message: { ...event.message, content: [{ type: "text", text: "transformed" }] } };
+					});
+				},
+			});
+			manager.appendMessage(parent(1));
+			const append = manager.appendMessage.bind(manager);
+			const appendSpy = vi.spyOn(manager, "appendMessage").mockImplementation((message) => {
+				if (message.role === "toolResult" && failAppend) throw new Error("disk unavailable");
+				return append(message);
+			});
+			const running = session.prompt("go");
+			const promptOutcome = running.catch((error) => error);
+			await started.promise;
+			const compacting = session.compact();
+			const compactOutcome = compacting.catch((error) => error);
+			try {
+				await finalHook.promise;
+				await contender.promise;
+				expect(refusal?.message).toMatch(/already.*progress/i);
+				await expect(session.compact()).rejects.toThrow(/already.*progress/i);
+				await harnessRefusal;
+				expect(newExecution).not.toHaveBeenCalled();
+				expect(session.getRecordedSessionCost()).toBe(1.5);
+				expect(manager.getEntries().filter((e) => e.type === "compaction")).toHaveLength(0);
+				release.release();
+				const outcome = await compactOutcome;
+				const promptResult = await promptOutcome;
+				expect(ends).not.toHaveBeenCalled();
+				expect(session.isCompacting).toBe(false);
+				expect(session.getRecordedSessionCost()).toBe(1.5);
+				expect(manager.getEntries().filter((e) => e.type === "compaction")).toHaveLength(failAppend ? 0 : 1);
+				if (failAppend) {
+					expect(outcome.message).toContain("disk unavailable");
+					expect(promptResult).toBeInstanceOf(Error);
+				} else {
+					expect(outcome.summary).toBe("offline summary");
+					expect(promptResult).toBeUndefined();
+					expect(
+						manager.getEntries().find((e) => e.type === "message" && e.message.role === "toolResult"),
+					).toMatchObject({
+						message: {
+							cost: 0.5,
+							isError: true,
+							details: { retained: true },
+							content: [{ text: "transformed" }],
+						},
+					});
+				}
+				appendSpy.mockRestore();
+				const before = manager.getEntries().filter((e) => e.type === "message").length;
+				await session.prompt("after");
+				expect(manager.getEntries().filter((e) => e.type === "message")).toHaveLength(before + 2);
+				expect(ends).toHaveBeenCalledTimes(2);
+				if (failAppend) await session.compact();
+			} finally {
+				release.release();
+				await compactOutcome;
+				await promptOutcome;
+				session.dispose();
+			}
+		},
+	);
+
+	it("suppresses lifecycle work queued before ownership and still settles the original prompt", async () => {
+		const hook = gate();
+		const release = gate();
+		const queued = gate();
+		const ends = vi.fn();
+		const { session, manager } = await fixture({
+			normal: true,
+			onQueuedTurnEnd: queued.release,
+			tools: [charged(async () => ({ content: [], details: {}, cost: 0.5 }))],
+			builtin: (pi) => {
+				offlineCompaction(pi);
+				pi.on("message_end", async (event) => {
+					if (event.message.role === "toolResult") {
+						hook.release();
+						await release.promise;
+					}
+				});
+				pi.on("turn_end", ends);
+				pi.on("agent_end", ends);
+			},
+		});
+		manager.appendMessage(parent(1));
+		const running = session.prompt("go");
+		await hook.promise;
+		await queued.promise;
+		const compacting = session.compact();
+		release.release();
+		try {
+			await compacting;
+			await running;
+			expect(ends).not.toHaveBeenCalled();
+			expect(manager.getEntries().filter((e) => e.type === "compaction")).toHaveLength(1);
+		} finally {
+			release.release();
+			session.dispose();
+		}
+	});
+
+	it("releases ownership after abort failure without reconstructing an incomplete journal", async () => {
+		const { session, manager } = await fixture({ builtin: offlineCompaction });
+		manager.appendMessage(parent(1));
+		const messages = session.messages;
+		const abort = vi.spyOn(session, "abort").mockRejectedValueOnce(new Error("abort failed"));
+		try {
+			await expect(session.compact()).rejects.toThrow("abort failed");
+			expect(session.messages).toBe(messages);
+			expect(manager.getEntries().filter((e) => e.type === "compaction")).toHaveLength(0);
+			expect(session.isCompacting).toBe(false);
+			abort.mockRestore();
+			await session.prompt("after");
+			await session.compact();
+		} finally {
+			session.dispose();
+		}
+	});
+});
+
+describe("compaction composed execution", () => {
+	it.each([false, true])("settles already-admitted harness work during an active retry=%s", async (retry) => {
+		const started = gate();
+		const harnessStarted = gate();
+		const ends = vi.fn();
+		const { session, manager } = await fixture({
+			responses: (call) => {
+				const message = parent(0);
+				if (retry && call === 0) {
+					message.stopReason = "error";
+					message.errorMessage = "rate limit exceeded";
+				} else if (call === (retry ? 1 : 0)) {
+					message.content = [{ type: "toolCall", id: "charged-call", name: "charged", arguments: {} }];
+					message.stopReason = "toolUse";
+				}
+				return message;
+			},
+			tools: [
+				charged(async (_id, _args, signal, update) => {
+					update?.({ content: [], details: {}, cost: 0.5 });
+					started.release();
+					await new Promise<void>((resolve) => signal!.addEventListener("abort", () => resolve(), { once: true }));
+					return { content: [], details: {}, isError: true };
+				}),
+				charged(async () => {
+					harnessStarted.release();
+					return { content: [], details: {}, cost: 0.2 };
+				}, "notice"),
+			],
+			builtin: (pi) => {
+				offlineCompaction(pi);
+				pi.on("agent_end", ends);
+			},
+		});
+		session.settingsManager.setRetryEnabled(retry);
+		manager.appendMessage(parent(1));
+		const running = session.prompt("go");
+		await started.promise;
+		const callsBefore = ends.mock.calls.length;
+		const harness = session.invokeHarnessTool("notice", {});
+		try {
+			await session.compact();
+			await Promise.all([running, harness, harnessStarted.promise]);
+			expect(session.isRetrying).toBe(false);
+			expect(ends).toHaveBeenCalledTimes(callsBefore);
+			expect(session.getRecordedSessionCost()).toBe(1.7);
+			expect(
+				manager.getEntries().filter((e) => e.type === "message" && e.message.role === "toolResult"),
+			).toHaveLength(2);
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("composes interrupted nested fake-child usage through real session, footer, and reload", async () => {
+		const temp = mkdtempSync(join(tmpdir(), "composed-child-"));
+		const script = join(temp, "child.js");
+		const events = [
+			{ type: "message_end", message: parent(0.2) },
+			{ type: "message_end", message: { ...result({}, 0.3), toolCallId: "nested" } },
+		];
+		writeFileSync(
+			script,
+			`process.on('SIGTERM', () => process.exit(0));\n${events.map((e) => `console.log(${JSON.stringify(JSON.stringify(e))});`).join("\n")}\nsetInterval(() => {}, 1000);`,
+		);
+		const original = process.argv[1];
+		process.argv[1] = script;
+		const live = gate();
+		const { session, manager, dir } = await fixture({
+			builtin: (pi) => {
+				registerSubagentTool(pi);
+				offlineCompaction(pi);
+			},
+			responses: (call) =>
+				call
+					? parent(0)
+					: {
+							...parent(0),
+							stopReason: "toolUse",
+							content: [
+								{
+									type: "toolCall",
+									id: "sub",
+									name: "subagent",
+									arguments: {
+										agent: "offline",
+										task: "test",
+										agentScope: "project",
+										confirmProjectAgents: false,
+									},
+								},
+							],
+						},
+		});
+		mkdirSync(join(dir, ".scramjet", "agents"), { recursive: true });
+		writeFileSync(
+			join(dir, ".scramjet", "agents", "offline.md"),
+			"---\nname: offline\ndescription: Offline fixture\n---\nTest.",
+		);
+		manager.appendMessage(parent(1));
+		session.agent.subscribe((event) => {
+			if (event.type === "tool_execution_update" && event.partialResult.cost === 0.5) live.release();
+		});
+		const running = session.prompt("go");
+		try {
+			await live.promise;
+			expect(footer(session)[1]).toContain("$1.500");
+			await session.compact();
+			await running;
+			expect(session.getRecordedSessionCost()).toBe(1.5);
+			const saved = manager.getEntries().find((e) => e.type === "message" && e.message.role === "toolResult");
+			expect(saved).toMatchObject({
+				message: { cost: 0.5, isError: true, details: { results: [{ usage: { cost: 0.2 } }] } },
+			});
+			const reloaded = await fixture({ manager: SessionManager.open(manager.getSessionFile()!) });
+			try {
+				expect(reloaded.session.getRecordedSessionCost()).toBe(1.5);
+				expect(footer(reloaded.session)[1]).toContain("$1.500");
+			} finally {
+				reloaded.session.dispose();
+			}
+		} finally {
+			process.argv[1] = original;
+			await session.abort();
+			session.dispose();
+		}
+	});
+});
 
 describe("session tool costs", () => {
 	it.each(["normal", "harness"])(
