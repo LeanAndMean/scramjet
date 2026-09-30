@@ -14,6 +14,51 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 describe("Codex retry boundaries", () => {
+	it("rejects a malformed URL before fetch with local detail", async () => {
+		const fetch = vi.fn();
+		vi.stubGlobal("fetch", fetch);
+		const result = await streamOpenAICodexResponses({ ...model, baseUrl: "not-a-url" }, context, {
+			apiKey,
+			transport: "sse",
+			maxRetries: 2,
+		}).result();
+		expect(fetch).not.toHaveBeenCalled();
+		expect(result.errorMessage).toMatch(/failed to parse url.*not-a-url/i);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			status: "valid",
+			source: "local",
+			transient: false,
+		});
+	});
+	it("does not retry an unsupported fetch rejection or discard its detail", async () => {
+		const fetch = vi.fn(async () => {
+			throw new TypeError("unsupported local sentinel");
+		});
+		vi.stubGlobal("fetch", fetch);
+		const result = await run({ maxRetries: 2 });
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(result.errorMessage).toBe("unsupported local sentinel");
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ category: "unknown", transient: false });
+	});
+	it.each(["ECONNRESET", "UND_ERR_CONNECT_TIMEOUT"])(
+		"retries observed fetch %s with exact bounded attempts",
+		async (code) => {
+			vi.useFakeTimers();
+			const fetch = vi.fn(async () => {
+				throw new TypeError("fetch failed", { cause: { code } });
+			});
+			vi.stubGlobal("fetch", fetch);
+			const pending = run({ maxRetries: 1 });
+			await vi.runAllTimersAsync();
+			const result = await pending;
+			expect(fetch).toHaveBeenCalledTimes(2);
+			expect(result.errorMessage).toBe("fetch failed");
+			expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+				category: code === "ECONNRESET" ? "transport" : "timeout",
+				transient: true,
+			});
+		},
+	);
 	it.each([401, 503])("retains status and delay policy when HTTP %s body reading fails", async (status) => {
 		const fetch = vi.fn(
 			async () =>

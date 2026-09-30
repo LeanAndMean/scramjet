@@ -386,6 +386,40 @@ describe("Provider failure recovery policy", () => {
 			session.dispose();
 		}
 	});
+	it("excludes high-usage unknown failure at public settlement but maintains on the next prompt", async () => {
+		let calls = 0;
+		const successful = { ...assistantToolCall("dummy", "successful"), timestamp: 2_000_000_000_000 };
+		successful.usage.input = testModel.contextWindow;
+		const failed = failure({ schemaVersion: 1, kind: "provider", category: "unknown" });
+		const { session, events } = await createFixture(
+			() => {
+				calls++;
+				return calls === 1 ? successful : calls === 2 ? failed : assistantText("done");
+			},
+			{ customTools: [makeDummyTool()], persist: true },
+		);
+		const internal = session as unknown as { _runAutoCompaction: (reason: string, retry: boolean) => Promise<void> };
+		const compact = vi.spyOn(internal, "_runAutoCompaction").mockResolvedValue();
+		try {
+			await session.prompt("run");
+			expect(calls).toBe(2);
+			expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
+			expect(compact).not.toHaveBeenCalled();
+			expect(retryEvents(events)).toEqual([]);
+			expect(events.some((event) => event.type === "compaction_start")).toBe(false);
+			expect(retryRecords(session)).toContainEqual(
+				expect.objectContaining({ outcome: "not_attempted", reason: "structured_unknown" }),
+			);
+			await session.prompt("next");
+			expect(calls).toBe(3);
+			expect(compact).toHaveBeenCalledTimes(1);
+			expect(compact).toHaveBeenCalledWith("threshold", false);
+			expect(retryEvents(events)).toEqual([]);
+		} finally {
+			compact.mockRestore();
+			session.dispose();
+		}
+	});
 	it.each(["unknown", "provider_error", "malformed_event"])(
 		"does not compact explicit %s at failure settlement but maintains on a new prompt",
 		async (category) => {

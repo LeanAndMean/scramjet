@@ -216,6 +216,12 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 				websocketRequestId,
 			);
 			const bodyJson = JSON.stringify(body);
+			const request = new Request(resolveCodexUrl(model.baseUrl), {
+				method: "POST",
+				headers: sseHeaders,
+				body: bodyJson,
+				signal: options?.signal,
+			});
 			prepared = true;
 			const transport = options?.transport || "auto";
 			const websocketDisabledForSession = transport !== "sse" && isWebSocketSseFallbackActive(options?.sessionId);
@@ -305,20 +311,16 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			for (let attempt = 0; ; attempt++) {
 				if (options?.signal?.aborted) throw new Error("Request was aborted");
 				try {
-					response = await fetch(resolveCodexUrl(model.baseUrl), {
-						method: "POST",
-						headers: sseHeaders,
-						body: bodyJson,
-						signal: options?.signal,
-					});
+					response = await fetch(request.clone());
 				} catch (error) {
 					if (options?.signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
-					if (attempt >= maxRetries)
-						throw new RequestFailureError("Codex connection failed.", {
-							schemaVersion: 1,
-							kind: "stream",
-							reason: "transport",
-						});
+					const failure = failureFromProviderError(error);
+					if (
+						failure?.kind !== "provider" ||
+						!["transport", "timeout"].includes(failure.category) ||
+						attempt >= maxRetries
+					)
+						throw error;
 					await sleep(Math.min(2_147_483_647, BASE_DELAY_MS * 2 ** Math.min(31, attempt)), options?.signal);
 					continue;
 				}

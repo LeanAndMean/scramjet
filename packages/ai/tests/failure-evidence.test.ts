@@ -131,6 +131,25 @@ describe("persisted failure evidence", () => {
 		},
 	);
 	it("preserves absent-evidence legacy overflow", () => expect(isContextOverflow(message())).toBe(true));
+	it.each([
+		{ status: 429, error: { code: "rate_limit_exceeded", type: "insufficient_quota" } },
+		{ status: 429, error: { code: "insufficient_quota", type: "rate_limit_exceeded" } },
+		{ status: 429, code: "insufficient_quota", error: { type: "rate_limit_exceeded" } },
+		{ status: 429, cause: { code: "insufficient_quota" }, error: { code: "rate_limit_exceeded" } },
+	])("closes conflicting recovery-relevant semantic fields", (error) => {
+		expect(failureFromProviderError(error)).toEqual({ schemaVersion: 1, kind: "provider", category: "unknown" });
+	});
+	it.each([
+		[{ status: 429, error: { code: "rate_limit_exceeded", type: "rate_limit_error" } }, "rate_limit"],
+		[{ status: 429, code: "wrapper", error: { type: "rate_limit_error" } }, "rate_limit"],
+		[{ status: 429, error: { code: "novel", type: "wrapper" } }, "rate_limit"],
+		[{ status: 503, error: { code: "novel" } }, "server"],
+		[{ error: { code: "insufficient_quota", type: "billing_hard_limit_reached" } }, "quota_exhausted"],
+	] as const)("retains compatible semantics and observed status", (error, category) => {
+		const result = message();
+		appendObservedFailure(result, error);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ status: "valid", category });
+	});
 	it("keeps quota separate from HTTP rate limiting", () => {
 		expect(failureFromProviderError({ status: 429, error: { code: "insufficient_quota" } })).toMatchObject({
 			category: "quota_exhausted",

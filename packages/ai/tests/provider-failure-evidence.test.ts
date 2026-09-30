@@ -283,7 +283,7 @@ describe("adapter failure evidence", () => {
 			});
 		},
 	);
-	it.each(["new_code", "insufficient_quota", "rate_limit_exceeded"])(
+	it.each(["new_code", "insufficient_quota", "rate_limit_exceeded", "rate_limit_error", "timeout_error"])(
 		"preserves Anthropic streamed rejection %s",
 		async (code) => {
 			vi.stubGlobal(
@@ -303,10 +303,74 @@ describe("adapter failure evidence", () => {
 			expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
 				status: "valid",
 				category:
-					code === "new_code" ? "unknown" : code === "insufficient_quota" ? "quota_exhausted" : "rate_limit",
+					code === "new_code"
+						? "unknown"
+						: code === "insufficient_quota"
+							? "quota_exhausted"
+							: code === "timeout_error"
+								? "timeout"
+								: "rate_limit",
+				transient: !["new_code", "insufficient_quota"].includes(code),
 			});
 		},
 	);
+	it.each([
+		["kimi-coding", "Your request exceeded model token limit: 262144 (requested: 300000)"],
+		["minimax", "invalid params, context window exceeds limit"],
+		["minimax-cn", "invalid params, context window exceeds limit"],
+	] as const)("preserves %s overflow without losing rejection vetoes", async (provider, message) => {
+		for (const [status, type, overflow] of [
+			[400, "invalid_request_error", true],
+			[400, "insufficient_quota", false],
+			[401, "invalid_request_error", false],
+			[403, "invalid_request_error", false],
+			[429, "invalid_request_error", false],
+		] as const) {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(
+					async () =>
+						new Response(JSON.stringify({ error: { type, message } }), {
+							status,
+							headers: { "content-type": "application/json" },
+						}),
+				),
+			);
+			const result = await streamAnthropic(model("anthropic-messages", provider), context, {
+				apiKey: "fake",
+				maxRetries: 0,
+			}).result();
+			expect(inspectFailureEvidence(result.diagnostics).status).toBe("valid");
+			expect(isContextOverflow(result)).toBe(overflow);
+		}
+	});
+	it("does not authorize an Anthropic rate-limit/quota conflict", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							error: {
+								code: "rate_limit_exceeded",
+								type: "insufficient_quota",
+								message: "server error",
+							},
+						}),
+						{ status: 429, headers: { "content-type": "application/json" } },
+					),
+			),
+		);
+		const result = await streamAnthropic(model("anthropic-messages", "anthropic"), context, {
+			apiKey: "fake",
+			maxRetries: 0,
+		}).result();
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			status: "valid",
+			category: "unknown",
+			transient: false,
+		});
+	});
 	it("finalizes Bedrock proxy preparation failure", async () => {
 		vi.stubEnv("HTTPS_PROXY", "socks5://localhost:1080");
 		vi.stubEnv("NO_PROXY", "");

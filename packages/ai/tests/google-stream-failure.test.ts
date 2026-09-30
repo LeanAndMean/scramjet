@@ -1,7 +1,6 @@
 import { ApiError, FinishReason } from "@google/genai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamGoogle } from "../src/providers/google.js";
-import { mapStopReason } from "../src/providers/google-shared.js";
 import { streamGoogleVertex } from "../src/providers/google-vertex.js";
 import { inspectFailureEvidence } from "../src/utils/failure-evidence.js";
 import { isContextOverflow } from "../src/utils/overflow.js";
@@ -41,26 +40,37 @@ const routes = [
 ] as const;
 afterEach(() => vi.clearAllMocks());
 describe.each(routes)("%s failure handling", (_name, run) => {
-	it.each(Object.values(FinishReason).filter((reason) => mapStopReason(reason) === "error"))(
-		"latches %s after partial tools despite a later successful finish",
-		async (finishReason) => {
-			fake.stream.mockResolvedValue(
-				(async function* () {
-					yield {
-						candidates: [
-							{ content: { parts: [{ functionCall: { name: "write", args: { path: "sentinel" } } }] } },
-						],
-					};
-					yield { candidates: [{ finishReason }] };
-					yield { candidates: [{ finishReason: FinishReason.STOP }] };
-				})(),
-			);
-			const result = await run();
-			expect(result.stopReason).toBe("error");
-			expect(result.errorMessage).toContain(finishReason);
-			expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ transient: false });
-		},
-	);
+	it.each([
+		FinishReason.BLOCKLIST,
+		FinishReason.PROHIBITED_CONTENT,
+		FinishReason.SPII,
+		FinishReason.SAFETY,
+		FinishReason.IMAGE_SAFETY,
+		FinishReason.IMAGE_PROHIBITED_CONTENT,
+		FinishReason.IMAGE_RECITATION,
+		FinishReason.IMAGE_OTHER,
+		FinishReason.RECITATION,
+		FinishReason.FINISH_REASON_UNSPECIFIED,
+		FinishReason.OTHER,
+		FinishReason.LANGUAGE,
+		FinishReason.MALFORMED_FUNCTION_CALL,
+		FinishReason.UNEXPECTED_TOOL_CALL,
+		FinishReason.NO_IMAGE,
+	])("latches %s after partial tools despite a later successful finish", async (finishReason) => {
+		fake.stream.mockResolvedValue(
+			(async function* () {
+				yield {
+					candidates: [{ content: { parts: [{ functionCall: { name: "write", args: { path: "sentinel" } } }] } }],
+				};
+				yield { candidates: [{ finishReason }] };
+				yield { candidates: [{ finishReason: FinishReason.STOP }] };
+			})(),
+		);
+		const result = await run();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain(finishReason);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ transient: false });
+	});
 	it.each([408, 429, 503, 529])("retains SDK status %s absent from error prose", async (status) => {
 		fake.stream.mockRejectedValue(new ApiError({ status, message: '{"error":{"message":"neutral"}}' }));
 		expect(inspectFailureEvidence((await run()).diagnostics)).toMatchObject({ transient: true });

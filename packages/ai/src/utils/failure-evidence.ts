@@ -365,6 +365,7 @@ const codeCategory: Record<string, (typeof categories)[number]> = {
 	insufficient_quota: "quota_exhausted",
 	billing_hard_limit_reached: "quota_exhausted",
 	rate_limit_exceeded: "rate_limit",
+	rate_limit_error: "rate_limit",
 	ThrottlingException: "rate_limit",
 	overloaded_error: "overloaded",
 	server_error: "server",
@@ -383,6 +384,7 @@ const codeCategory: Record<string, (typeof categories)[number]> = {
 	APIConnectionError: "transport",
 	APIConnectionTimeoutError: "timeout",
 	timeout: "timeout",
+	timeout_error: "timeout",
 	ModelTimeoutException: "timeout",
 	context_length_exceeded: "context_overflow",
 	not_found: "not_found",
@@ -432,12 +434,21 @@ export function failureFromProviderError(error: unknown, provider?: string): Req
 			if (nested) break;
 		}
 	}
-	const code = nested?.code ?? nested?.type ?? e.code ?? object(e.cause)?.code;
-	const candidate = typeof code === "string" ? code : e.name;
-	let category =
-		typeof candidate === "string" && Object.hasOwn(codeCategory, candidate) ? codeCategory[candidate] : undefined;
+	nested = object(nested?.error) ?? nested;
+	const candidates = [nested?.code, nested?.type, e.code, e.type, object(e.cause)?.code, e.name];
+	const code = candidates.slice(0, 5).find((value) => typeof value === "string" && value.length > 0);
+	const recognized = new Set(
+		candidates.flatMap((value) =>
+			typeof value === "string" && Object.hasOwn(codeCategory, value) ? [codeCategory[value]] : [],
+		),
+	);
+	if (hasStatus && [401, 403, 404].includes(status as number))
+		return { schemaVersion: 1, kind: "http", status: status as number, reason: "status" };
+	if (recognized.size > 1) return { schemaVersion: 1, kind: "provider", category: "unknown" };
+	let category = recognized.values().next().value;
 	const message = nested?.message ?? e.message;
-	if (provider === "anthropic" && candidate === "request_too_large" && status === 413) category = "context_overflow";
+	if (provider === "anthropic" && candidates.includes("request_too_large") && status === 413)
+		category = "context_overflow";
 	if (
 		(!category || category === "invalid_request") &&
 		(status === 400 || status === 413 || status === 422 || category === "invalid_request") &&
@@ -445,8 +456,6 @@ export function failureFromProviderError(error: unknown, provider?: string): Req
 		isProviderOverflowMessage(message, provider)
 	)
 		category = "context_overflow";
-	if (hasStatus && [401, 403, 404].includes(status as number))
-		return { schemaVersion: 1, kind: "http", status: status as number, reason: "status" };
 	if (hasStatus && status !== 408 && status !== 429 && (status as number) < 500 && category && transient.has(category))
 		return { schemaVersion: 1, kind: "http", status: status as number, reason: "status" };
 	if (category && isFailureCategoryCompatibleWithStatus(hasStatus ? (status as number) : undefined, category))
@@ -464,6 +473,12 @@ export function isProviderOverflowMessage(message: string, provider?: string): b
 	)
 		return true;
 	if (provider === "anthropic" && /request_too_large/i.test(message)) return true;
+	if (provider === "kimi-coding" && /your request exceeded model token limit/i.test(message)) return true;
+	if (
+		(provider === "minimax" || provider === "minimax-cn") &&
+		/invalid params, context window exceeds limit/i.test(message)
+	)
+		return true;
 	if (provider === "xai" && /maximum prompt length is \d+/i.test(message)) return true;
 	if (provider === "groq" && /reduce the length of the messages/i.test(message)) return true;
 	if (
