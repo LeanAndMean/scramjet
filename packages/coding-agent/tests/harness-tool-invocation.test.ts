@@ -213,6 +213,45 @@ function hasHarnessToolResult(messages: Context["messages"]): boolean {
 }
 
 describe("AgentSession harness-tool invocation", () => {
+	it.each(["normal", "harness"] as const)(
+		"persists cost-bearing returned failures through the %s path",
+		async (mode) => {
+			const tool = defineTool({
+				name: "charged_failure",
+				label: "Charged Failure",
+				description: "Reports recorded usage on failure",
+				parameters: Type.Object({}),
+				execute: async () => ({
+					content: [{ type: "text" as const, text: "failed after usage" }],
+					details: { usage: 1 },
+					cost: 0.25,
+					isError: true,
+				}),
+			});
+			const { session, sessionManager, drain } = await createFixture([tool], (index) =>
+				mode === "normal" && index === 0 ? assistantToolCall("charged_failure", "charged-1", {}) : undefined,
+			);
+			try {
+				if (mode === "normal") await session.prompt("go");
+				else await session.invokeHarnessTool("charged_failure", {});
+				await drain();
+				const result = sessionManager
+					.getBranch()
+					.find(
+						(entry) =>
+							entry.type === "message" &&
+							entry.message.role === "toolResult" &&
+							entry.message.toolName === "charged_failure",
+					) as SessionMessageEntry;
+				expect(result.message).toMatchObject({ isError: true, details: { usage: 1 }, cost: 0.25 });
+				expect(JSON.parse(JSON.stringify(result)).message).toMatchObject({ cost: 0.25, isError: true });
+				expect(session.getRecordedSessionCost()).toBe(0.25);
+			} finally {
+				session.dispose();
+			}
+		},
+	);
+
 	it("keeps a harness-only tool out of the active set and the provider tool list, but resolvable", async () => {
 		const { tool: notice } = makeNoticeTool();
 		const { session, streamContexts } = await createFixture([notice, makeNormalTool()]);

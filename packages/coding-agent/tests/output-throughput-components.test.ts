@@ -32,6 +32,7 @@ function footerSession(liveOutputRate: number | undefined, medianOutputRate?: nu
 		state: { model, thinkingLevel: "off" },
 		liveOutputRate,
 		medianOutputRate,
+		getRecordedSessionCost: () => 0,
 		sessionManager: {
 			getEntries: () => [
 				{

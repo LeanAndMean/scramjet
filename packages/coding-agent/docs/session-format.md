@@ -97,6 +97,7 @@ interface ToolResultMessage {
   toolName: string;
   content: (TextContent | ImageContent)[];
   details?: any;      // Tool-specific metadata
+  cost?: number;     // Cumulative reported invocation USD, including descendants
   isError: boolean;
   timestamp: number;
 }
@@ -116,6 +117,8 @@ interface Usage {
   };
 }
 ```
+
+Tool-result `cost` is optional additive metadata: it excludes the requesting assistant's usage and is independent of `details` and error status. Valid amounts are finite and nonnegative; explicit zero is authoritative, while absence means no generic cost was recorded, not that execution was free. This addition does not change the session format version or rewrite older records. Closed-schema readers must allow the optional field.
 
 ### Extended Message Types (from `@leanandmean/coding-agent`)
 

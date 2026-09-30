@@ -96,6 +96,9 @@ interface AgentSession {
   // Harness-originated tool execution (resolves after the tool-result is persisted)
   invokeHarnessTool(name: string, args: unknown, options?: { toolCallId?: string }): Promise<void>;
 
+  // Whole-journal assistant/tool costs plus live reports awaiting final append
+  getRecordedSessionCost(): number;
+
   // State access
   agent: Agent;
   model: Model | undefined;

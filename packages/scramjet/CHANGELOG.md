@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.106.1 — Include subagent costs and retain interrupted metrics
+
+Include recorded subagent costs in the existing session dollar total and retain metrics through failures and interruption. Fixes [#598](https://github.com/LeanAndMean/scramjet/issues/598).
+
+### Fixed
+
+- Combine parent and nested subagent costs live without double-counting or changing parent token/context metrics or footer layout.
+- Retain recorded usage and diagnostics in failed/interrupted results, and recover interpretable historical costs without rewriting saved records.
+- Drain terminal persistence and internal settlement before manual compaction, refusing conflicting execution and suppressing lifecycle continuation during the drain.
+
+### Tests
+
+- Cover cumulative cost transport, nested and interrupted subagents, historical recovery, live-to-persisted reconciliation, footer projection, and compaction ownership/settlement.
+
 ## 0.106.0 — Add GPT-6.1 Sol to OpenAI, Codex, and Copilot catalogs
 
 Add `gpt-6.1-sol` to three route-specific model catalogs. Fixes [#595](https://github.com/LeanAndMean/scramjet/issues/595).

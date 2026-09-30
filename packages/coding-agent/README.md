@@ -124,6 +124,8 @@ The interface from top to bottom:
 - **Editor** - Where you type; border color indicates thinking level
 - **Footer** - Working directory, session name, total token/cache usage, cost, context usage, current model, and recent median output speed
 
+The default footer's existing dollar amount combines parent assistant costs across the whole journal with tool-reported costs, including nested subagents and failed/interrupted work. Cumulative tool updates replace earlier reports live; saved final costs survive resume. Recoverable legacy details are interpreted by the registered tool without rewriting history or enabling execution. Token/cache/context metrics remain parent-only; `/session`, RPC statistics, and custom footer examples retain their existing accounting.
+
 The editor can be temporarily replaced by other UI, like built-in `/settings` or custom UI from extensions (e.g., a Q&A tool that lets the user answer model questions in a structured format). [Extensions](#extensions) can also replace the editor, add widgets above/below it, a status line, custom footer, or overlays.
 
 ### Browsing and copying output
