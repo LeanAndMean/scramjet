@@ -58,24 +58,18 @@ describe("forge publication session persistence", () => {
 		const authStorage = AuthStorage.inMemory();
 		authStorage.setRuntimeApiKey("openai", "fake");
 		const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+		const repository = "https://github.com/other/project";
 		const exec = vi.fn(async (command: string, args: string[]) => {
 			if (command === "git" && args[0] === "remote")
 				return execResult("https://github.com/LeanAndMean/scramjet.git\n");
-			if (command === "gh" && args.at(-1) === "repos/LeanAndMean/scramjet")
-				return execResult(
-					JSON.stringify({
-						full_name: "LeanAndMean/scramjet",
-						html_url: "https://github.com/LeanAndMean/scramjet",
-					}),
-				);
+			if (command === "gh" && args.at(-1) === "repos/other/project")
+				return execResult(JSON.stringify({ id: 42, full_name: "other/project", html_url: repository }));
 			return execResult("", 1);
 		});
 		const title = "Persisted publication title";
 		const body = "PERSISTED-AMBIGUOUS-BODY-café";
 		let responseIndex = 0;
-		const custom = vi.fn(async () => {
-			throw new Error("auto-approved publication must not open UI");
-		});
+		const custom = vi.fn(async () => "approved");
 
 		const buildSession = async (sessionManager: SessionManager) => {
 			const factory = (pi: ExtensionAPI) => {
@@ -111,7 +105,14 @@ describe("forge publication session persistence", () => {
 					const message =
 						responseIndex++ === 0
 							? assistant(
-									[{ type: "toolCall", id: "publish-1", name: "create_issue", arguments: { title, body } }],
+									[
+										{
+											type: "toolCall",
+											id: "publish-1",
+											name: "create_issue",
+											arguments: { title, body, repository },
+										},
+									],
 									"toolUse",
 								)
 							: assistant([{ type: "text", text: "done" }], "stop");
@@ -151,7 +152,7 @@ describe("forge publication session persistence", () => {
 				: [],
 		);
 		expect(toolCalls).toHaveLength(1);
-		expect(toolCalls[0]).toMatchObject({ arguments: { title, body } });
+		expect(toolCalls[0]).toMatchObject({ arguments: { title, body, repository } });
 		expect(JSON.stringify(messages).split(body)).toHaveLength(2);
 		const toolResult = messages.find(
 			(message) => message.role === "toolResult" && message.toolName === "create_issue",
@@ -162,10 +163,11 @@ describe("forge publication session persistence", () => {
 				outcome: "ambiguous",
 				writeState: "possible",
 				retryProhibited: true,
-				authorization: { mode: "command-default", command: "mach12:issue-create" },
+				repository: "other/project",
+				authorization: { mode: "interactive", command: "mach12:issue-create" },
 			},
 		});
-		expect(custom).not.toHaveBeenCalled();
+		expect(custom).toHaveBeenCalledOnce();
 		expect(exec.mock.calls.filter((call) => call[1]?.includes("POST"))).toHaveLength(1);
 
 		const callCount = exec.mock.calls.length;

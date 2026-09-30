@@ -1164,7 +1164,7 @@ describe("mach12 issue creation — duplicate search and inline publication", ()
 	it("applies metadata only after verified creation", () => {
 		const metadata = issueCreate.slice(issueCreate.indexOf("## Step 11:"), issueCreate.indexOf("## Step 12:"));
 		expect(metadata).toContain("Only after `create_issue` returns verified identity");
-		expect(metadata).toContain("separate guarded `gh issue edit` operations");
+		expect(metadata).toContain('separate guarded `gh issue edit --repo "$selected_repo"` operations');
 		expect(metadata).toContain("metadata failure is partial success");
 		expect(metadata).toContain("do not recreate the issue");
 	});
