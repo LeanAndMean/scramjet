@@ -271,11 +271,20 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						throw error;
 					}
 					if (websocketStarted) {
-						if (error instanceof WebSocketTransportError)
+						if (
+							error instanceof WebSocketTransportError ||
+							(error instanceof WebSocketCloseError && error.code === 1006)
+						)
 							throw new RequestFailureError(error.message, {
 								schemaVersion: 1,
 								kind: "stream",
 								reason: "transport",
+							});
+						if (error instanceof WebSocketCloseError)
+							throw new RequestFailureError(error.message, {
+								schemaVersion: 1,
+								kind: "provider",
+								category: "unknown",
 							});
 						throw error;
 					}
@@ -364,7 +373,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			try {
 				await processStream(response, output, stream, model, options);
 			} catch (error) {
-				if (!(error instanceof CodexApiError) && !(error instanceof RequestFailureError))
+				if (!isCodexNonTransportError(error) && !(error instanceof RequestFailureError))
 					appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, "stream"));
 				throw error;
 			}
@@ -391,7 +400,22 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 								kind: "local",
 								reason: "request_preparation",
 							})
-						: error,
+						: error instanceof CodexProtocolError
+							? new RequestFailureError(error.message, {
+									schemaVersion: 1,
+									kind: "stream",
+									reason: "malformed_event",
+								})
+							: error instanceof CodexApiError
+								? new RequestFailureError(
+										error.message,
+										failureFromProviderError(error) ?? {
+											schemaVersion: 1,
+											kind: "provider",
+											category: "unknown",
+										},
+									)
+								: error,
 				);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();

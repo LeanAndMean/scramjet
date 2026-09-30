@@ -88,6 +88,33 @@ describe("persisted failure evidence", () => {
 		expect(validateRequestFailure(result.diagnostics)).toEqual({ status: "malformed" });
 		expect(isContextOverflow(result)).toBe(false);
 	});
+	it.each([401, 403, 404])("rejects contradictory semantic reasons for terminal HTTP %s", (status) => {
+		for (const reason of [
+			"quota_exhausted",
+			"context_overflow",
+			"authentication",
+			"permission",
+			"invalid_request",
+			"content_rejection",
+			"unknown",
+		]) {
+			const result = { ...message(), diagnostics: [diagnostic({ schemaVersion: 1, kind: "http", status, reason })] };
+			const consistent =
+				(status === 401 && reason === "authentication") || (status === 403 && reason === "permission");
+			expect(validateRequestFailure(result.diagnostics).status).toBe(consistent ? "valid" : "malformed");
+			expect(isContextOverflow(result)).toBe(false);
+		}
+	});
+	it.each([
+		[400, "context_overflow"],
+		[413, "context_overflow"],
+		[429, "quota_exhausted"],
+		[503, "quota_exhausted"],
+	])("retains legitimate HTTP %s / %s evidence", (status, reason) => {
+		const result = { ...message(), diagnostics: [diagnostic({ schemaVersion: 1, kind: "http", status, reason })] };
+		expect(validateRequestFailure(result.diagnostics)).toMatchObject({ status: "valid", category: reason });
+		expect(isContextOverflow(result)).toBe(reason === "context_overflow");
+	});
 	it("rejects duplicated and conflicting authorities", () => {
 		const d = diagnostic({ schemaVersion: 1, kind: "http", status: 503, reason: "status" });
 		expect(inspectFailureEvidence([d, d])).toEqual({ status: "duplicate" });

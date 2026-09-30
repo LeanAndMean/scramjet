@@ -4,6 +4,7 @@ import { streamGoogle } from "../src/providers/google.js";
 import { mapStopReason } from "../src/providers/google-shared.js";
 import { streamGoogleVertex } from "../src/providers/google-vertex.js";
 import { inspectFailureEvidence } from "../src/utils/failure-evidence.js";
+import { isContextOverflow } from "../src/utils/overflow.js";
 
 const fake = vi.hoisted(() => ({ stream: vi.fn() }));
 vi.mock("@google/genai", async (original) => {
@@ -63,6 +64,31 @@ describe.each(routes)("%s failure handling", (_name, run) => {
 	it.each([408, 429, 503, 529])("retains SDK status %s absent from error prose", async (status) => {
 		fake.stream.mockRejectedValue(new ApiError({ status, message: '{"error":{"message":"neutral"}}' }));
 		expect(inspectFailureEvidence((await run()).diagnostics)).toMatchObject({ transient: true });
+	});
+	it.each([400, 401, 403, 429])("classifies token-count wording under HTTP %s", async (status) => {
+		fake.stream.mockRejectedValue(
+			new ApiError({
+				status,
+				message: JSON.stringify({
+					error: {
+						message: "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)",
+					},
+				}),
+			}),
+		);
+		const result = await run();
+		expect(isContextOverflow(result)).toBe(status === 400);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			status: "valid",
+			category:
+				status === 400
+					? "context_overflow"
+					: status === 401
+						? "authentication"
+						: status === 403
+							? "permission"
+							: "rate_limit",
+		});
 	});
 	it("recognizes candidate-free prompt blocking without requiring a finish marker", async () => {
 		fake.stream.mockResolvedValue(

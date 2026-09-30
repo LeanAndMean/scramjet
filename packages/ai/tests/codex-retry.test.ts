@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.js";
 import { streamOpenAICodexResponses } from "../src/providers/openai-codex-responses.js";
 import { inspectFailureEvidence } from "../src/utils/failure-evidence.js";
+import { isContextOverflow } from "../src/utils/overflow.js";
 
 const model = getModel("openai-codex", "gpt-6-astra");
 const apiKey = `x.${btoa(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test" } }))}.x`;
@@ -165,6 +166,95 @@ describe("Codex retry boundaries", () => {
 			family: "request_failure",
 			transient: true,
 		});
+	});
+	it.each([
+		["api", "unknown", false],
+		["protocol", "malformed_event", false],
+		["abnormal_close", "transport", true],
+		["policy_close", "unknown", false],
+		["normal_close", "unknown", false],
+		["semantic", "rate_limit", true],
+	] as const)("classifies started WebSocket %s independently of prose", async (kind, category, transient) => {
+		class FailingWebSocket extends EventTarget {
+			readyState = 1;
+			constructor() {
+				super();
+				queueMicrotask(() => this.dispatchEvent(new Event("open")));
+			}
+			send() {
+				setTimeout(() => {
+					this.dispatchEvent(
+						new MessageEvent("message", {
+							data: JSON.stringify({ type: "response.created", response: { id: "resp_1" } }),
+						}),
+					);
+					setTimeout(() => {
+						const prose = "server error context_length_exceeded";
+						if (kind.endsWith("close")) {
+							this.dispatchEvent(
+								Object.assign(new Event("close"), {
+									code: kind === "abnormal_close" ? 1006 : kind === "policy_close" ? 1008 : 1000,
+									reason: prose,
+									wasClean: kind !== "abnormal_close",
+								}),
+							);
+						} else {
+							this.dispatchEvent(
+								new MessageEvent("message", {
+									data:
+										kind === "protocol"
+											? prose
+											: JSON.stringify({
+													type: "response.failed",
+													response: {
+														error: {
+															message: prose,
+															...(kind === "semantic" ? { code: "rate_limit_exceeded" } : {}),
+														},
+													},
+												}),
+								}),
+							);
+						}
+					}, 0);
+				}, 0);
+			}
+			close() {
+				this.readyState = 3;
+			}
+		}
+		vi.stubGlobal("WebSocket", FailingWebSocket);
+		const fetch = vi.fn();
+		vi.stubGlobal("fetch", fetch);
+		const result = await streamOpenAICodexResponses(model, context, { apiKey, transport: "websocket" }).result();
+		expect(fetch).not.toHaveBeenCalled();
+		expect(result.stopReason).toBe("error");
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			status: "valid",
+			family: "request_failure",
+			category,
+			transient,
+		});
+		expect(isContextOverflow(result)).toBe(false);
+	});
+	it("classifies code-less SSE API failures as unknown", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						'data: {"type":"response.failed","response":{"error":{"message":"server error context_length_exceeded"}}}\n\n',
+						{ headers: { "content-type": "text/event-stream" } },
+					),
+			),
+		);
+		const result = await run();
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			status: "valid",
+			category: "unknown",
+			transient: false,
+		});
+		expect(isContextOverflow(result)).toBe(false);
 	});
 	it.each([0, 3])("persists excessive server delay suppression even with %s inner retries", async (maxRetries) => {
 		const fetch = vi.fn(async () => new Response(null, { status: 503, headers: { "retry-after": "120" } }));

@@ -280,6 +280,9 @@ describe("Provider failure recovery policy", () => {
 		{ schemaVersion: 1, kind: "local", reason: "configuration" },
 		{ schemaVersion: 1, kind: "provider", category: "quota_exhausted" },
 		{ schemaVersion: 2, kind: "http", status: 503, reason: "status" },
+		...[401, 403, 404].map((status) => ({ schemaVersion: 1, kind: "http", status, reason: "context_overflow" })),
+		{ schemaVersion: 1, kind: "provider", category: "unknown" },
+		{ schemaVersion: 1, kind: "stream", reason: "malformed_event" },
 	])("does not recover from excluded or invalid evidence", async (details) => {
 		let calls = 0;
 		const { session, events } = await createFixture(() => {
@@ -335,6 +338,53 @@ describe("Provider failure recovery policy", () => {
 		expect(retryEvents(events)).toEqual([]);
 		expect(events.some((event) => event.type === "compaction_start")).toBe(false);
 		session.dispose();
+	});
+	it.each(["eligible", "other-model", "pre-compaction"])(
+		"checks %s usage through the public new-prompt path",
+		async (kind) => {
+			const { session, events } = await createFixture(() => assistantText("done"));
+			const successful = { ...assistantText("prior success"), timestamp: 2_000_000_000_000 };
+			successful.usage.input = testModel.contextWindow;
+			if (kind === "other-model") successful.model = "other-model";
+			if (kind === "pre-compaction") {
+				const id = session.sessionManager.appendMessage({ role: "user", content: "old", timestamp: 0 });
+				session.sessionManager.appendCompaction("summary", id, testModel.contextWindow);
+				successful.timestamp = 0;
+			}
+			const failed = failure({ schemaVersion: 1, kind: "callback", callback: "onResponse" });
+			session.agent.state.messages = [successful, failed];
+			const internal = session as unknown as {
+				_runAutoCompaction: (reason: string, retry: boolean) => Promise<void>;
+			};
+			const compact = vi.spyOn(internal, "_runAutoCompaction").mockResolvedValue();
+			try {
+				await session.prompt("next");
+				if (kind === "eligible") {
+					expect(compact).toHaveBeenCalledTimes(1);
+					expect(compact).toHaveBeenCalledWith("threshold", false);
+				} else expect(compact).not.toHaveBeenCalled();
+				expect(retryEvents(events)).toEqual([]);
+			} finally {
+				compact.mockRestore();
+				session.dispose();
+			}
+		},
+	);
+	it("saturates two outer retry backoffs at the valid timer maximum", async () => {
+		const sleep = vi.mocked(sleepModule.sleep).mockImplementation((_ms, signal) => actualSleep.current!(0, signal));
+		const { session, events } = await createFixture(
+			(index) => (index < 2 ? assistantError("server error") : assistantText("done")),
+			{ baseDelayMs: 2_147_483_647, maxRetries: 2 },
+		);
+		sleep.mockClear();
+		try {
+			await session.prompt("run");
+			expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([2_147_483_647, 0, 2_147_483_647, 0]);
+			expect(events.filter((event) => event.type === "auto_retry_start")).toHaveLength(2);
+		} finally {
+			sleep.mockImplementation(actualSleep.current!);
+			session.dispose();
+		}
 	});
 	it("maintains context on a new prompt without reviving a callback error", async () => {
 		const { session } = await createFixture(() => assistantText("unused"));

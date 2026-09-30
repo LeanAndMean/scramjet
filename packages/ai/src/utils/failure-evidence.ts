@@ -109,6 +109,12 @@ export function validateRequestFailure(diagnostics: unknown): FailureEvidence {
 			"unknown",
 		])
 	) {
+		if (
+			[401, 403, 404].includes(d.status as number) &&
+			d.reason !== "status" &&
+			d.reason !== httpFailureCategory(d.status as number)
+		)
+			return { status: "malformed" };
 		category = d.reason === "status" ? httpFailureCategory(d.status as number) : (d.reason as string);
 	} else if (
 		d.kind === "provider" &&
@@ -274,7 +280,7 @@ export function failureFromProviderError(error: unknown): RequestFailureV1 | und
 	if (
 		(status === 400 || status === 413 || category === "invalid_request") &&
 		typeof message === "string" &&
-		/prompt is too long|context_length_exceeded|maximum context length|exceeds? (?:the )?context (?:window|length)|input (?:is )?too long/i.test(
+		/prompt is too long|context_length_exceeded|maximum context length|exceeds? (?:the )?context (?:window|length)|input (?:is )?too long|input token count.*exceeds the maximum/i.test(
 			message,
 		)
 	)
