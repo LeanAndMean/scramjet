@@ -77,6 +77,14 @@ const COPILOT_STATIC_HEADERS = {
 
 // SCRAMJET-DIVERGENCE: Exact Copilot routing, limits, and effort metadata plus scalar price estimates (issues 477, 567).
 const COPILOT_MODEL_CORRECTIONS = {
+	"gpt-6.1-sol": {
+		api: "openai-responses",
+		contextWindow: 1050000,
+		maxInputTokens: 922000,
+		maxTokens: 128000,
+		cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	},
 	"claude-fable-5.1": {
 		api: "openai-completions",
 		contextWindow: 1000000,
@@ -345,6 +353,14 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 		((model.provider === "openai" && model.api === "openai-responses") ||
 			(model.provider === "openai-codex" && model.api === "openai-codex-responses") ||
 			(model.provider === "github-copilot" && model.api === "openai-responses"))
+	) {
+		mergeThinkingLevelMap(model, { off: null, minimal: null, xhigh: "xhigh", max: "max" });
+	}
+	// SCRAMJET-DIVERGENCE: GPT-6.1 Sol has five supported effort levels on both OpenAI routes.
+	if (
+		model.id === "gpt-6.1-sol" &&
+		((model.provider === "openai" && model.api === "openai-responses") ||
+			(model.provider === "openai-codex" && model.api === "openai-codex-responses"))
 	) {
 		mergeThinkingLevelMap(model, { off: null, minimal: null, xhigh: "xhigh", max: "max" });
 	}
@@ -1491,6 +1507,17 @@ async function generateModels() {
 			candidate.contextWindow = 1050000;
 			candidate.maxTokens = 128000;
 		}
+		// SCRAMJET-DIVERGENCE: Pin the direct GPT-6.1 Sol route independently of feed metadata.
+		if (candidate.provider === "openai" && candidate.id === "gpt-6.1-sol") {
+			candidate.name = "GPT-6.1 Sol";
+			candidate.api = "openai-responses";
+			candidate.baseUrl = "https://api.openai.com/v1";
+			candidate.reasoning = true;
+			candidate.input = ["text", "image"];
+			candidate.cost = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 };
+			candidate.contextWindow = 1050000;
+			candidate.maxTokens = 128000;
+		}
 		if (candidate.provider === "openai" && candidate.id === "gpt-6-astra") {
 			candidate.name = "GPT-6 Astra";
 			candidate.api = "openai-responses";
@@ -1758,6 +1785,22 @@ async function generateModels() {
 			},
 			contextWindow: 128000,
 			maxTokens: 16384,
+		});
+	}
+
+	// SCRAMJET-DIVERGENCE: Retain the direct GPT-6.1 Sol route when the feed omits it.
+	if (!allModels.some((m) => m.provider === "openai" && m.id === "gpt-6.1-sol")) {
+		allModels.push({
+			id: "gpt-6.1-sol",
+			name: "GPT-6.1 Sol",
+			api: "openai-responses",
+			baseUrl: "https://api.openai.com/v1",
+			provider: "openai",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+			contextWindow: 1050000,
+			maxTokens: 128000,
 		});
 	}
 
@@ -2086,7 +2129,19 @@ async function generateModels() {
 			contextWindow: CODEX_EXTENDED_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
-		// SCRAMJET-DIVERGENCE: GPT-6 Codex output uses the direct-API allowance provisionally, not a Codex-route maximum.
+		// SCRAMJET-DIVERGENCE: Codex output uses the direct-API allowance provisionally, not a Codex-route maximum.
+		{
+			id: "gpt-6.1-sol",
+			name: "GPT-6.1 Sol",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+			contextWindow: CODEX_EXTENDED_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
 		{
 			id: "gpt-6-sol",
 			name: "GPT-6 Sol",
