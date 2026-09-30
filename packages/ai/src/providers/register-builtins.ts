@@ -127,6 +127,7 @@ export function setBedrockProviderModule(module: BedrockProviderModule): void {
 	};
 }
 
+// SCRAMJET-DIVERGENCE: Await lazy stream settlement and retain partial content plus closed failure evidence.
 async function forwardStream(
 	target: AssistantMessageEventStream,
 	source: AsyncIterable<AssistantMessageEvent>,

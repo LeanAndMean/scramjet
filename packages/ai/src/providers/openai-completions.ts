@@ -136,6 +136,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			timestamp: Date.now(),
 		};
 
+		// SCRAMJET-DIVERGENCE: Preserve callback, preparation, SDK failure, and stream-completion evidence.
 		let requestStarted = false;
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -446,7 +447,17 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-			appendBuiltinFailure(output, error, !requestStarted);
+			appendBuiltinFailure(
+				output,
+				requestStarted && !options?.signal?.aborted && error instanceof OpenAI.APIConnectionError
+					? new RequestFailureError(output.errorMessage, {
+							schemaVersion: 1,
+							kind: "provider",
+							category: error instanceof OpenAI.APIConnectionTimeoutError ? "timeout" : "transport",
+						})
+					: error,
+				!requestStarted,
+			);
 			// Some providers via OpenRouter give additional information in this field.
 			const rawMetadata = (error as any)?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;

@@ -88,6 +88,7 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
 			timestamp: Date.now(),
 		};
 
+		// SCRAMJET-DIVERGENCE: Preserve callback/preparation evidence and latch failed finishes.
 		let requestStarted = false;
 		try {
 			const apiKey = resolveApiKey(options);

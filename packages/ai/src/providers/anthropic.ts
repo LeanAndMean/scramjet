@@ -750,7 +750,17 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-			appendBuiltinFailure(output, error, !requestStarted);
+			appendBuiltinFailure(
+				output,
+				requestStarted && !options?.signal?.aborted && error instanceof Anthropic.APIConnectionError
+					? new RequestFailureError(output.errorMessage, {
+							schemaVersion: 1,
+							kind: "provider",
+							category: error instanceof Anthropic.APIConnectionTimeoutError ? "timeout" : "transport",
+						})
+					: error,
+				!requestStarted,
+			);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

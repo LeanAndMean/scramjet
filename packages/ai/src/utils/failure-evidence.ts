@@ -434,9 +434,19 @@ export function failureFromProviderError(error: unknown, provider?: string): Req
 			if (nested) break;
 		}
 	}
-	nested = object(nested?.error) ?? nested;
-	const candidates = [nested?.code, nested?.type, e.code, e.type, object(e.cause)?.code, e.name];
-	const code = candidates.slice(0, 5).find((value) => typeof value === "string" && value.length > 0);
+	const envelope = nested;
+	nested = object(envelope?.error) ?? envelope;
+	const candidates = [
+		nested?.code,
+		nested?.type,
+		envelope?.code,
+		envelope?.type,
+		e.code,
+		e.type,
+		object(e.cause)?.code,
+		e.name,
+	];
+	const code = candidates.slice(0, -1).find((value) => typeof value === "string" && value.length > 0);
 	const recognized = new Set(
 		candidates.flatMap((value) =>
 			typeof value === "string" && Object.hasOwn(codeCategory, value) ? [codeCategory[value]] : [],
@@ -468,6 +478,12 @@ export function isProviderOverflowMessage(message: string, provider?: string): b
 	if (/rate limit|too many requests|throttling|quota|billing/i.test(message)) return false;
 	if (
 		/prompt is too long|context_length_exceeded|maximum context length|exceeds? (?:the )?context (?:window|length)|input (?:is )?too long|input token count.*exceeds the maximum/i.test(
+			message,
+		)
+	)
+		return true;
+	if (
+		/prompt token count of \d+ exceeds the limit of \d+|the request exceeds the available context size|tokens to keep from the initial prompt is greater than the context length|prompt too long; exceeded (?:max )?context length/i.test(
 			message,
 		)
 	)

@@ -107,6 +107,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatMistralError(error);
+			// SCRAMJET-DIVERGENCE: Normalize actual SDK validation, body absence, and transport observations.
 			appendBuiltinFailure(
 				output,
 				error instanceof ResponseValidationError && error.rawResponse.ok && !error.rawResponse.body

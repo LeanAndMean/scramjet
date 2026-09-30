@@ -73,6 +73,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 			timestamp: Date.now(),
 		};
 
+		// SCRAMJET-DIVERGENCE: Preserve callback/preparation evidence and latch failed finishes.
 		let requestStarted = false;
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";

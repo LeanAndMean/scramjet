@@ -65,6 +65,251 @@ describe("adapter failure evidence", () => {
 			transient: true,
 		});
 	});
+	it.each([
+		["github-copilot", "prompt token count of 200000 exceeds the limit of 128000"],
+		["llama.cpp", "the request exceeds the available context size, try increasing it"],
+		["lmstudio", "tokens to keep from the initial prompt is greater than the context length"],
+		["ollama", "prompt too long; exceeded max context length by 200 tokens"],
+	] as const)("retains established %s overflow and rejection vetoes", async (provider, message) => {
+		for (const [status, code, overflow] of [
+			[400, "invalid_request_error", true],
+			[400, "insufficient_quota", false],
+			[401, "invalid_request_error", false],
+			[403, "invalid_request_error", false],
+			[404, "invalid_request_error", false],
+			[429, "invalid_request_error", false],
+		] as const) {
+			const fetch = vi.fn(
+				async () =>
+					new Response(JSON.stringify({ error: { code, message } }), {
+						status,
+						headers: { "content-type": "application/json" },
+					}),
+			);
+			vi.stubGlobal("fetch", fetch);
+			const result = await streamOpenAICompletions(model("openai-completions", provider), context, {
+				apiKey: "fake",
+				maxRetries: 0,
+			}).result();
+			expect(fetch).toHaveBeenCalledTimes(1);
+			expect(result.stopReason).toBe("error");
+			expect(inspectFailureEvidence(result.diagnostics).status).toBe("valid");
+			expect(isContextOverflow(result)).toBe(overflow);
+		}
+	});
+	it.each(["Chat", "Anthropic"] as const)(
+		"normalizes actual %s SDK transport and timeout identities",
+		async (route) => {
+			for (const category of ["timeout", "transport"] as const) {
+				const fetch = vi.fn(async () => {
+					if (category === "timeout") throw new DOMException("fixture timeout", "AbortError");
+					throw new TypeError("fetch failed", {
+						cause: Object.assign(new Error("socket failed"), { code: "ECONNRESET" }),
+					});
+				});
+				vi.stubGlobal("fetch", fetch);
+				const result = await (route === "Chat"
+					? streamOpenAICompletions(model("openai-completions", "openai"), context, {
+							apiKey: "fake",
+							maxRetries: 0,
+						})
+					: streamAnthropic(model("anthropic-messages", "anthropic"), context, { apiKey: "fake", maxRetries: 0 })
+				).result();
+				expect(fetch).toHaveBeenCalledTimes(1);
+				expect(result.stopReason).toBe("error");
+				expect(result.errorMessage).toBe(category === "timeout" ? "Request timed out." : "Connection error.");
+				expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+					status: "valid",
+					category,
+					transient: true,
+				});
+			}
+		},
+	);
+	it.each(["Chat", "Anthropic"] as const)(
+		"does not turn %s caller cancellation into transient evidence",
+		async (route) => {
+			const controller = new AbortController();
+			const fetch = vi.fn(async () => {
+				controller.abort();
+				throw new DOMException("caller cancellation", "AbortError");
+			});
+			vi.stubGlobal("fetch", fetch);
+			const options = { apiKey: "fake", maxRetries: 0, signal: controller.signal };
+			const result = await (route === "Chat"
+				? streamOpenAICompletions(model("openai-completions", "openai"), context, options)
+				: streamAnthropic(model("anthropic-messages", "anthropic"), context, options)
+			).result();
+			expect(fetch).toHaveBeenCalledTimes(1);
+			expect(result.stopReason).toBe("aborted");
+			expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ status: "valid", transient: false });
+		},
+	);
+	it.each(["Chat", "Anthropic"] as const)(
+		"keeps unsupported %s rejection closed despite timeout prose",
+		async (route) => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(
+					async () =>
+						new Response(
+							JSON.stringify({
+								error: {
+									code: "novel",
+									type: "novel",
+									message: "Connection error. Request timed out.",
+								},
+							}),
+							{ status: 400, headers: { "content-type": "application/json" } },
+						),
+				),
+			);
+			const result = await (route === "Chat"
+				? streamOpenAICompletions(model("openai-completions", "openai"), context, { apiKey: "fake", maxRetries: 0 })
+				: streamAnthropic(model("anthropic-messages", "anthropic"), context, { apiKey: "fake", maxRetries: 0 })
+			).result();
+			expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+				status: "valid",
+				category: "invalid_request",
+				transient: false,
+			});
+		},
+	);
+	it.each([false, true])("retains the Anthropic SDK envelope quota veto (compatible=%s)", async (compatible) => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							code: compatible ? "rate_limit_exceeded" : "insufficient_quota",
+							error: { type: "rate_limit_error", message: "try later" },
+						}),
+						{ status: 429, headers: { "content-type": "application/json" } },
+					),
+			),
+		);
+		const result = await streamAnthropic(model("anthropic-messages", "anthropic"), context, {
+			apiKey: "fake",
+			maxRetries: 0,
+		}).result();
+		expect(result.stopReason).toBe("error");
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			status: "valid",
+			category: compatible ? "rate_limit" : "unknown",
+			transient: compatible,
+		});
+	});
+	it.each(["Chat", "Anthropic"] as const)("protects %s partial-tool EOF and terminal success", async (route) => {
+		for (const terminal of [false, true]) {
+			const anthropicEvents = [
+				{ type: "message_start", message: { id: "msg", usage: { input_tokens: 1, output_tokens: 0 } } },
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "tool_use", id: "call", name: "read", input: {} },
+				},
+				{
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "input_json_delta", partial_json: '{"path":"partial"}' },
+				},
+				...(terminal
+					? [
+							{ type: "content_block_stop", index: 0 },
+							{ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+							{ type: "message_stop" },
+						]
+					: []),
+			];
+			const chatChunks = [
+				{
+					id: "msg",
+					choices: [
+						{
+							index: 0,
+							delta: {
+								role: "assistant",
+								tool_calls: [
+									{
+										index: 0,
+										id: "call",
+										type: "function",
+										function: { name: "read", arguments: '{"path":"partial"}' },
+									},
+								],
+							},
+							finish_reason: null,
+						},
+					],
+				},
+				...(terminal ? [{ id: "msg", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }] : []),
+			];
+			const body =
+				route === "Anthropic"
+					? anthropicEvents.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("")
+					: `${chatChunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`;
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => new Response(body, { headers: { "content-type": "text/event-stream" } })),
+			);
+			const result = await (route === "Chat"
+				? streamOpenAICompletions(model("openai-completions", "openai"), context, { apiKey: "fake", maxRetries: 0 })
+				: streamAnthropic(model("anthropic-messages", "anthropic"), context, { apiKey: "fake", maxRetries: 0 })
+			).result();
+			expect(result.content).toEqual([
+				{ type: "toolCall", id: "call", name: "read", arguments: { path: "partial" } },
+			]);
+			expect(result.stopReason).toBe(terminal ? "toolUse" : "error");
+			if (terminal) expect(inspectFailureEvidence(result.diagnostics)).toEqual({ status: "absent" });
+			else
+				expect(result.diagnostics?.filter((d) => d.type === "request_failure").map((d) => d.details)).toEqual([
+					{ schemaVersion: 1, kind: "stream", reason: "missing_terminal_event" },
+				]);
+		}
+	});
+	it("preserves startless Anthropic SSE success", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response('event: ping\ndata: {"type":"ping"}\n\n', {
+						headers: { "content-type": "text/event-stream" },
+					}),
+			),
+		);
+		const result = await streamAnthropic(model("anthropic-messages", "anthropic"), context, {
+			apiKey: "fake",
+			maxRetries: 0,
+		}).result();
+		expect(result.stopReason).toBe("stop");
+		expect(inspectFailureEvidence(result.diagnostics)).toEqual({ status: "absent" });
+	});
+	it.each([
+		[undefined, "missing_body", false],
+		[{ internalServerException: { message: "fixture" } }, "server", true],
+		[{ serviceUnavailableException: { message: "fixture" } }, "server", true],
+		[{ validationException: { message: "server error context_length_exceeded" } }, "invalid_request", false],
+		[{ modelStreamErrorException: { message: "server error context_length_exceeded" } }, "unknown", false],
+	] as const)("preserves Bedrock event evidence for %s", async (event, category, transient) => {
+		const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+			$metadata: { httpStatusCode: 200 },
+			...(event
+				? {
+						stream: (async function* () {
+							yield event;
+						})(),
+					}
+				: {}),
+		} as never);
+		const result = await streamBedrock(model("bedrock-converse-stream", "amazon-bedrock"), context, {
+			region: "us-east-1",
+		}).result();
+		expect(send).toHaveBeenCalledTimes(1);
+		expect(result.stopReason).toBe("error");
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ status: "valid", category, transient });
+		expect(isContextOverflow(result)).toBe(false);
+	});
 	it("classifies accepted Anthropic body absence", async () => {
 		vi.stubGlobal(
 			"fetch",

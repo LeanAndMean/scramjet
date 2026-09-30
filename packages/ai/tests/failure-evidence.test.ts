@@ -150,6 +150,23 @@ describe("persisted failure evidence", () => {
 		appendObservedFailure(result, error);
 		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ status: "valid", category });
 	});
+	it.each([
+		["insufficient_quota", "unknown"],
+		["rate_limit_exceeded", "rate_limit"],
+		["unfamiliar_wrapper", "rate_limit"],
+	] as const)("reconciles supported SDK envelopes without dropping %s", (code, category) => {
+		const body = { code, error: { type: "rate_limit_error" } };
+		const direct = failureFromProviderError({ status: 429, ...body });
+		const wrapped = failureFromProviderError({ status: 429, type: "rate_limit_error", error: body });
+		expect(direct).toEqual({ schemaVersion: 1, kind: "provider", category });
+		expect(wrapped).toEqual(direct);
+		expect(failureFromProviderError({ status: 401, error: body })).toEqual({
+			schemaVersion: 1,
+			kind: "http",
+			status: 401,
+			reason: "status",
+		});
+	});
 	it("keeps quota separate from HTTP rate limiting", () => {
 		expect(failureFromProviderError({ status: 429, error: { code: "insufficient_quota" } })).toMatchObject({
 			category: "quota_exhausted",
