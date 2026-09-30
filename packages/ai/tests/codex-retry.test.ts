@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.js";
 import { streamOpenAICodexResponses } from "../src/providers/openai-codex-responses.js";
-import { inspectFailureEvidence } from "../src/utils/failure-evidence.js";
+import { failureFromProviderError, inspectFailureEvidence } from "../src/utils/failure-evidence.js";
 import { isContextOverflow } from "../src/utils/overflow.js";
 
 const model = getModel("openai-codex", "gpt-6-astra");
@@ -113,6 +113,33 @@ describe("Codex retry boundaries", () => {
 		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
 			category: status === 429 ? "rate_limit" : "server",
 			transient: true,
+		});
+	});
+	it("preserves the outer HTTP quota veto before Codex retries", async () => {
+		const body = {
+			code: "insufficient_quota",
+			error: { type: "rate_limit_error", message: "try later" },
+		};
+		expect(failureFromProviderError({ status: 429, ...body })).toEqual({
+			schemaVersion: 1,
+			kind: "provider",
+			category: "unknown",
+		});
+		const fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify(body), {
+					status: 429,
+					headers: { "content-type": "application/json", "retry-after-ms": "0" },
+				}),
+		);
+		vi.stubGlobal("fetch", fetch);
+		const result = await run({ maxRetries: 1 });
+		expect(result.stopReason).toBe("error");
+		expect.soft(fetch).toHaveBeenCalledTimes(1);
+		expect.soft(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			status: "valid",
+			category: "unknown",
+			transient: false,
 		});
 	});
 	it("honors ordinary 429 and explicit maxRetries", async () => {
