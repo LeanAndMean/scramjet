@@ -380,6 +380,11 @@ export interface AgentToolResult<T> {
 	content: (TextContent | ImageContent)[];
 	/** Arbitrary structured details for logs or UI rendering. */
 	details: T;
+	// SCRAMJET-DIVERGENCE: cumulative tool accounting and returned failure status (#598).
+	/** Cumulative reported USD for this invocation, including descendants but excluding the requesting assistant. */
+	cost?: number;
+	/** Marks a returned result as failed; omission preserves normal success. */
+	isError?: boolean;
 	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
@@ -399,7 +404,7 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * Must return an object that matches `TParameters`.
 	 */
 	prepareArguments?: (args: unknown) => Static<TParameters>;
-	/** Execute the tool call. Throw on failure instead of encoding errors in `content`. */
+	/** Execute the tool call. Throw or return `isError: true` on failure. */
 	execute: (
 		toolCallId: string,
 		params: Static<TParameters>,

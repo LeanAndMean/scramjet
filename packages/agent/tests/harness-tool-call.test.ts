@@ -132,6 +132,169 @@ function makeReadTool(execute: AgentTool["execute"]): AgentTool {
 	};
 }
 
+describe.each(["normal", "harness"] as const)("tool accounting transport (%s)", (mode) => {
+	async function run(execute: AgentTool["execute"], afterToolCall?: Agent["afterToolCall"]) {
+		const tool = makeReadTool(execute);
+		const { fn } = createRecordingStreamFn([
+			makeAssistantMessage([{ type: "toolCall", id: "cost-1", name: "read", arguments: { path: "a" } }], "toolUse"),
+			makeTextAssistantMessage("done"),
+		]);
+		const agent = new Agent({
+			initialState: { model: testModel, tools: [tool] },
+			streamFn: fn,
+			getApiKey: async () => "key",
+			afterToolCall,
+		});
+		const events: AgentEvent[] = [];
+		agent.subscribe((event) => {
+			events.push(event);
+		});
+		if (mode === "harness") await agent.runHarnessTool(tool, { path: "a" });
+		else await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+		const result = agent.state.messages.find((message) => message.role === "toolResult");
+		expect(result).toBeDefined();
+		return { result, events };
+	}
+
+	it("transports returned errors, details and cumulative cost", async () => {
+		const { result, events } = await run(async () => ({
+			content: [{ type: "text", text: "failed" }],
+			details: { usage: 1 },
+			cost: 0.25,
+			isError: true,
+		}));
+		expect(result).toMatchObject({ isError: true, details: { usage: 1 }, cost: 0.25 });
+		expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
+			isError: true,
+			result: { cost: 0.25, details: { usage: 1 } },
+		});
+	});
+
+	it("preserves ordinary success when accounting fields are omitted", async () => {
+		const { result } = await run(async () => ({ content: [], details: { ok: true } }));
+		expect(result).toMatchObject({ isError: false, details: { ok: true } });
+		expect(result).not.toHaveProperty("cost");
+	});
+
+	it("retains the cost-bearing partial through a content-only update and throw without terminating", async () => {
+		const { result, events } = await run(async (_id, _args, _signal, update) => {
+			const partial = { content: [], details: { usage: 1 }, cost: 0.25, terminate: true };
+			update?.(partial);
+			partial.cost = 9;
+			update?.({ content: [{ type: "text", text: "still running" }], details: undefined });
+			throw new Error("interrupted");
+		});
+		expect(result).toMatchObject({
+			isError: true,
+			cost: 0.25,
+			details: { usage: 1 },
+			content: [{ text: "interrupted" }],
+		});
+		expect(events.find((event) => event.type === "tool_execution_update")).toMatchObject({
+			partialResult: { cost: 0.25 },
+		});
+		expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({ result: { cost: 0.25 } });
+		expect(events.find((event) => event.type === "tool_execution_end")?.result).not.toHaveProperty("terminate");
+	});
+
+	it("keeps latest partial cost when the final result and hook omit it", async () => {
+		const { result } = await run(
+			async (_id, _args, _signal, update) => {
+				update?.({ content: [], details: {}, cost: 0.1 });
+				update?.({ content: [], details: {}, cost: 0.25 });
+				return { content: [], details: { final: true } };
+			},
+			async () => ({ content: [{ type: "text", text: "patched" }], details: { patched: true } }),
+		);
+		expect(result).toMatchObject({ cost: 0.25, details: { patched: true }, content: [{ text: "patched" }] });
+	});
+
+	it("retains executed accounting details on hook failure without inheriting termination", async () => {
+		const { result, events } = await run(
+			async () => ({
+				content: [],
+				details: { usage: 1 },
+				cost: 0.25,
+				terminate: true,
+			}),
+			async (context) => {
+				(context.result as { cost?: number }).cost = 9;
+				throw new Error("hook failed");
+			},
+		);
+		expect(result).toMatchObject({
+			isError: true,
+			cost: 0.25,
+			details: { usage: 1 },
+			content: [{ text: "hook failed" }],
+		});
+		expect(events.find((event) => event.type === "tool_execution_end")?.result).not.toHaveProperty("terminate");
+	});
+
+	it.each([NaN, Infinity, -1, "0.25", null])(
+		"ignores malformed cost %s without losing the last valid report",
+		async (cost) => {
+			const { result, events } = await run(async (_id, _args, _signal, update) => {
+				update?.({ content: [], details: { usage: 1 }, cost: 0.25 });
+				update?.({ content: [], details: {}, cost } as never);
+				return { content: [], details: {}, cost } as never;
+			});
+			expect(result).toMatchObject({ isError: false, cost: 0.25 });
+			expect(events.filter((event) => event.type === "tool_execution_update")[1]).toMatchObject({
+				partialResult: { details: {} },
+			});
+			const malformedUpdate = events.filter((event) => event.type === "tool_execution_update")[1];
+			expect(malformedUpdate?.partialResult).not.toHaveProperty("cost");
+		},
+	);
+
+	it("treats zero as an authoritative replacement", async () => {
+		const { result } = await run(async (_id, _args, _signal, update) => {
+			update?.({ content: [], details: {}, cost: 0.25 });
+			return { content: [], details: {}, cost: 0 };
+		});
+		expect(result).toMatchObject({ cost: 0, isError: false });
+	});
+
+	it("retains a zero-cost partial's details on failure", async () => {
+		const { result } = await run(async (_id, _args, _signal, update) => {
+			update?.({ content: [], details: { usage: 1 }, cost: 0.25 });
+			update?.({ content: [], details: { usage: 2 }, cost: 0 });
+			throw new Error("failed");
+		});
+		expect(result).toMatchObject({ cost: 0, details: { usage: 2 }, isError: true });
+	});
+
+	it("keeps scalar cost when a hook mutates its input and returns no patch", async () => {
+		const { result } = await run(
+			async () => ({ content: [], details: {}, cost: 0.25 }),
+			async ({ result }) => {
+				result.cost = 9;
+				return undefined;
+			},
+		);
+		expect(result).toMatchObject({ cost: 0.25 });
+	});
+
+	it("omits invalid reports when no valid cost was published", async () => {
+		const { result, events } = await run(async (_id, _args, _signal, update) => {
+			update?.({ content: [], details: { partial: true }, cost: Infinity });
+			return { content: [], details: {}, cost: -1 };
+		});
+		expect(result).not.toHaveProperty("cost");
+		expect(events.find((event) => event.type === "tool_execution_update")?.partialResult).not.toHaveProperty("cost");
+	});
+
+	it("keeps non-accounting throw details empty", async () => {
+		const { result } = await run(async (_id, _args, _signal, update) => {
+			update?.({ content: [], details: { partial: true }, terminate: true });
+			throw new Error("failed");
+		});
+		expect(result).toMatchObject({ details: {}, isError: true });
+		expect(result).not.toHaveProperty("cost");
+	});
+});
+
 describe("Agent.runHarnessTool", () => {
 	it("executes an idle harness tool immediately with no run/turn framing", async () => {
 		const record: string[] = [];

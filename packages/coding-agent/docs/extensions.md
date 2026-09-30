@@ -1884,7 +1884,11 @@ pi.registerTool({
 });
 ```
 
-**Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
+**Signaling errors:** Throw an error from `execute`, or return `isError: true` alongside `content` and `details`. Returned failures retain their structured details and are reported to the LLM as errors. Omitted `isError` preserves normal success; `tool_result` hooks may still override the final error flag.
+
+**Reported cost:** Results and `onUpdate` partials may include `cost: number`, the invocation's cumulative reported USD including descendants but excluding the requesting assistant. Each finite, nonnegative report replaces the previous amount; zero is authoritative, omission is not a new report, and malformed values are ignored. The latest reported cost survives a final result that omits it and `tool_result` content/details patches; hooks cannot override cost through their patch interface. On an execution throw, the latest cost-bearing partial's details and cost accompany the error text, even after a content-only update. On an after-tool hook failure, executed accounting-bearing details and cost accompany the error text. Neither failure inherits a termination hint. Non-accounting throws retain their existing empty-details behavior.
+
+**Historical cost interpretation:** A tool definition may supply synchronous, read-only `getHistoricalCost(details: unknown): number | undefined` to recover costs from older saved details. It must tolerate untrusted historical data, return only a finite nonnegative amount or `undefined`, and never execute work or call a renderer. It stays on the definition, not the executable Agent tool; consumers own aggregation and prefer valid generic message cost, including zero, over this fallback.
 
 **Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
 
@@ -2659,7 +2663,7 @@ const highlighted = highlightCode(code, lang, theme);
 
 - Extension errors are logged, agent continues
 - `tool_call` errors block the tool (fail-safe)
-- Tool `execute` errors must be signaled by throwing; the thrown error is caught, reported to the LLM with `isError: true`, and execution continues
+- Tool `execute` errors may be signaled by throwing or returning `isError: true`; failures are reported to the LLM and execution continues unless the finalized batch explicitly terminates
 
 ## Mode Behavior
 

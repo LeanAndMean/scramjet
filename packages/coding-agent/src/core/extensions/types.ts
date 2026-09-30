@@ -512,6 +512,10 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	 */
 	executionMode?: ToolExecutionMode;
 
+	// SCRAMJET-DIVERGENCE: product-owned read-only interpretation of legacy result costs (#598).
+	/** Recover reported USD from historical details without executing the tool or invoking its renderer. */
+	getHistoricalCost?: (details: unknown) => number | undefined;
+
 	/** Execute the tool. */
 	execute(
 		toolCallId: string,

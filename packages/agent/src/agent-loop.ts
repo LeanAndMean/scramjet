@@ -646,6 +646,8 @@ async function executePreparedToolCall(
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallOutcome> {
 	const updateEvents: Promise<void>[] = [];
+	// SCRAMJET-DIVERGENCE: retain scalar accounting reports across partial updates and failures (#598).
+	let accounting: Pick<AgentToolResult<any>, "cost" | "details"> | undefined;
 
 	try {
 		const result = await prepared.tool.execute(
@@ -653,6 +655,12 @@ async function executePreparedToolCall(
 			prepared.args as never,
 			signal,
 			(partialResult) => {
+				const { cost, ...partial } = partialResult;
+				const snapshot: AgentToolResult<any> = partial;
+				if (isReportedToolCost(cost)) {
+					accounting = { cost, details: partial.details };
+					snapshot.cost = cost;
+				}
 				updateEvents.push(
 					Promise.resolve(
 						emit({
@@ -660,18 +668,22 @@ async function executePreparedToolCall(
 							toolCallId: prepared.toolCall.id,
 							toolName: prepared.toolCall.name,
 							args: prepared.toolCall.arguments,
-							partialResult,
+							partialResult: snapshot,
 						}),
 					),
 				);
 			},
 		);
+		const { cost, ...finalFields } = result;
+		const finalResult: AgentToolResult<any> = finalFields;
+		const reportedCost = isReportedToolCost(cost) ? cost : accounting?.cost;
+		if (reportedCost !== undefined) finalResult.cost = reportedCost;
 		await Promise.all(updateEvents);
-		return { result, isError: false };
+		return { result: finalResult, isError: result.isError === true };
 	} catch (error) {
 		await Promise.all(updateEvents);
 		return {
-			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+			result: createErrorToolResult(error instanceof Error ? error.message : String(error), accounting),
 			isError: true,
 		};
 	}
@@ -687,6 +699,8 @@ async function finalizeExecutedToolCall(
 ): Promise<FinalizedToolCallOutcome> {
 	let result = executed.result;
 	let isError = executed.isError;
+	const cost = result.cost;
+	const accounting = cost === undefined ? undefined : { cost, details: result.details };
 
 	if (config.afterToolCall) {
 		try {
@@ -706,15 +720,21 @@ async function finalizeExecutedToolCall(
 					content: afterResult.content ?? result.content,
 					details: afterResult.details ?? result.details,
 					terminate: afterResult.terminate ?? result.terminate,
+					...(cost === undefined ? {} : { cost }),
 				};
 				isError = afterResult.isError ?? isError;
 			}
 		} catch (error) {
-			result = createErrorToolResult(error instanceof Error ? error.message : String(error));
+			result = createErrorToolResult(error instanceof Error ? error.message : String(error), accounting);
 			isError = true;
 		}
 	}
 
+	if (cost !== undefined) result = { ...result, cost };
+	else {
+		result = { ...result };
+		delete result.cost;
+	}
 	return {
 		toolCall: prepared.toolCall,
 		result,
@@ -722,10 +742,18 @@ async function finalizeExecutedToolCall(
 	};
 }
 
-function createErrorToolResult(message: string): AgentToolResult<any> {
+function isReportedToolCost(cost: unknown): cost is number {
+	return typeof cost === "number" && Number.isFinite(cost) && cost >= 0;
+}
+
+function createErrorToolResult(
+	message: string,
+	accounting?: Pick<AgentToolResult<any>, "cost" | "details">,
+): AgentToolResult<any> {
 	return {
 		content: [{ type: "text", text: message }],
 		details: {},
+		...accounting,
 	};
 }
 
@@ -746,6 +774,7 @@ function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResul
 		toolName: finalized.toolCall.name,
 		content: finalized.result.content,
 		details: finalized.result.details,
+		...(finalized.result.cost === undefined ? {} : { cost: finalized.result.cost }),
 		isError: finalized.isError,
 		timestamp: Date.now(),
 	};
