@@ -17,7 +17,7 @@ import {
 	createAgentSessionRuntime,
 } from "../src/core/agent-session-runtime.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
-import { defineTool, type SessionStartEvent } from "../src/core/extensions/index.js";
+import { defineTool, type SessionStartEvent, type ToolDefinition } from "../src/core/extensions/index.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader, RequiredBuiltinInitError } from "../src/core/resource-loader.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../src/core/session-manager.js";
@@ -76,7 +76,7 @@ function writeSessionFile(path: string, cwd: string): void {
 	writeFileSync(path, `${JSON.stringify(header)}\n`);
 }
 
-async function buildFixture(opts?: { initialInMemory?: boolean }) {
+async function buildFixture(opts?: { initialInMemory?: boolean; customTools?: ToolDefinition[] }) {
 	const dir = mkdtempSync(join(tmpdir(), "runtime-replacement-"));
 	const cwd = dir;
 	const agentDir = join(dir, "agent");
@@ -145,7 +145,7 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 			settingsManager,
 			sessionManager,
 			resourceLoader,
-			customTools: [runtimeTool],
+			customTools: [runtimeTool, ...(opts?.customTools ?? [])],
 			initialActiveToolNames: [RUNTIME_TOOL_NAME],
 			sessionStartEvent,
 		});
@@ -233,6 +233,56 @@ const replacementCases: Array<{ name: string; invoke: (fx: Fixture) => Promise<{
 		},
 	},
 ];
+
+describe("AgentSessionRuntime — tool cost isolation", () => {
+	it("clears live ownership on replacement and ignores late old-session execution", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let started!: () => void;
+		const ready = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const tool = defineTool({
+			name: "charged_runtime",
+			label: "Charged Runtime",
+			description: "Offline gated usage",
+			parameters: Type.Object({}),
+			execute: async (_id, _args, _signal, update) => {
+				update?.({ content: [], details: {}, cost: 0.5 });
+				started();
+				await gate;
+				return { content: [], details: {}, cost: 0.8 };
+			},
+		});
+		const fx = await buildFixture({ customTools: [tool] });
+		const old = fx.runtime.session;
+		const running = old.invokeHarnessTool("charged_runtime", {});
+		const rejected = expect(running).rejects.toThrow("disposed");
+		try {
+			await ready;
+			expect(old.getRecordedSessionCost()).toBe(0.5);
+			await fx.runtime.newSession();
+			await rejected;
+			expect(old.getRecordedSessionCost()).toBe(0);
+			expect(fx.runtime.session.getRecordedSessionCost()).toBe(0);
+			const ended = new Promise<void>((resolve) =>
+				old.agent.subscribe((event) => {
+					if (event.type === "tool_execution_end") resolve();
+				}),
+			);
+			release();
+			await ended;
+			await fx.runtime.session.prompt("new session");
+			expect(fx.runtime.session.getRecordedSessionCost()).toBe(0);
+			expect(old.getRecordedSessionCost()).toBe(0);
+		} finally {
+			release();
+			fx.runtime.session.dispose();
+		}
+	});
+});
 
 describe("AgentSessionRuntime — prompt composition isolation", () => {
 	for (const { name, invoke } of replacementCases) {

@@ -387,6 +387,14 @@ type RetryClassification =
 	| { kind: "context_overflow" }
 	| ({ kind: "do_not_retry" } & NotAttemptedCause);
 
+function validRecordedCost(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+interface LiveToolCost {
+	cost?: number;
+}
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -399,6 +407,10 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _agentEventQueue: Promise<void> = Promise.resolve();
+	// SCRAMJET-DIVERGENCE: execution ownership survives final-event queue latency until append succeeds (#598).
+	private readonly _toolCostExecutions = new Map<string, LiveToolCost>();
+	private readonly _pendingToolCosts = new Set<LiveToolCost>();
+	private _historicalCostDefinitions = new Map<string, ToolDefinition>();
 	private readonly _outputThroughputTracker = new OutputThroughputTracker();
 	private readonly _outputThroughputHistory: OutputThroughputHistoryStore;
 	private _outputThroughputGeneration: number | undefined;
@@ -638,13 +650,15 @@ export class AgentSession {
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = (event: AgentEvent): Promise<void> | void => {
+		if (this._disposed) return;
 		this._captureOutputThroughput(event);
+		const toolCost = this._captureToolCost(event);
 
 		const runSettlement = this._captureAgentRunSettlement(event);
 		const harnessAck = this._harnessPersistenceAckForEvent(event);
 		const processing = this._agentEventQueue.then(
-			() => this._processAgentEventTracked(event, runSettlement, harnessAck),
-			() => this._processAgentEventTracked(event, runSettlement, harnessAck),
+			() => this._processAgentEventTracked(event, runSettlement, harnessAck, toolCost),
+			() => this._processAgentEventTracked(event, runSettlement, harnessAck, toolCost),
 		);
 		this._agentEventQueue = processing;
 		if (harnessAck) harnessAck.persistenceTail = processing;
@@ -656,6 +670,40 @@ export class AgentSession {
 		// live state for the next provider request (#524).
 		if (event.type === "turn_end") return this._agentEventQueue;
 	};
+
+	// SCRAMJET-DIVERGENCE: scalar reports are captured before mutable events enter async hooks (#598).
+	private _captureToolCost(event: AgentEvent): LiveToolCost | undefined {
+		if (event.type === "tool_execution_start") {
+			const execution: LiveToolCost = {};
+			this._toolCostExecutions.set(event.toolCallId, execution);
+			this._pendingToolCosts.add(execution);
+			return;
+		}
+		let toolCallId: string;
+		let reported: unknown;
+		const final = event.type === "message_end" && event.message.role === "toolResult";
+		if (event.type === "tool_execution_update" || event.type === "tool_execution_end") {
+			toolCallId = event.toolCallId;
+			reported = event.type === "tool_execution_update" ? event.partialResult?.cost : event.result?.cost;
+		} else if (event.type === "message_end" && event.message.role === "toolResult") {
+			toolCallId = event.message.toolCallId;
+			reported = event.message.cost;
+		} else {
+			return;
+		}
+		let execution = this._toolCostExecutions.get(toolCallId);
+		if (!execution && validRecordedCost(reported)) {
+			execution = {};
+			this._toolCostExecutions.set(toolCallId, execution);
+			this._pendingToolCosts.add(execution);
+		}
+		if (execution && validRecordedCost(reported)) execution.cost = reported;
+		if (final) {
+			this._toolCostExecutions.delete(toolCallId);
+			return execution;
+		}
+		return;
+	}
 
 	// SCRAMJET-DIVERGENCE: Capture provider events synchronously and reset stale throughput lifecycles (#476).
 	private _captureOutputThroughput(event: AgentEvent): void {
@@ -742,9 +790,10 @@ export class AgentSession {
 		event: AgentEvent,
 		run: AgentRunSettlement | undefined,
 		harnessAck?: HarnessPersistenceAck,
+		toolCost?: LiveToolCost,
 	): Promise<void> {
 		try {
-			await this._processAgentEvent(event, run, harnessAck !== undefined);
+			await this._processAgentEvent(event, run, harnessAck !== undefined, toolCost);
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
 			if (harnessAck) {
@@ -791,7 +840,9 @@ export class AgentSession {
 		event: AgentEvent,
 		run: AgentRunSettlement | undefined,
 		fromHarnessInvocation = false,
+		toolCost?: LiveToolCost,
 	): Promise<void> {
+		if (this._disposed) return;
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -816,6 +867,9 @@ export class AgentSession {
 
 		// Emit to extensions first
 		await this._emitExtensionEvent(event);
+		if (event.type === "message_end" && event.message.role === "toolResult" && toolCost?.cost !== undefined) {
+			event.message.cost = toolCost.cost;
+		}
 
 		// Notify all listeners
 		this._emit(event);
@@ -844,6 +898,7 @@ export class AgentSession {
 						? (JSON.parse(JSON.stringify(event.message)) as AssistantMessage)
 						: event.message;
 				const messageEntryId = this.sessionManager.appendMessage(persistedMessage);
+				if (toolCost) this._pendingToolCosts.delete(toolCost);
 				if (persistedMessage.role === "assistant" && !fromHarnessInvocation && run) {
 					run.persistedAssistantSnapshot = persistedMessage;
 				}
@@ -1129,6 +1184,8 @@ export class AgentSession {
 		// A second call must not re-reject already-settled acknowledgements or re-run teardown.
 		if (this._disposed) return;
 		this._disposed = true;
+		this._toolCostExecutions.clear();
+		this._pendingToolCosts.clear();
 		this._resetOutputThroughput();
 		const retryDisposeError = new Error("AgentSession disposed before retry settlement completed.");
 		const unsettledRuns = [...this._unsettledAgentRuns];
@@ -2932,7 +2989,13 @@ export class AgentSession {
 				definition,
 				sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
 			})),
-		].filter((tool) => isAllowedTool(tool.definition.name));
+		];
+		// SCRAMJET-DIVERGENCE: historical interpretation follows definition collision winners, not execution allowlists (#598).
+		this._historicalCostDefinitions = new Map(this._baseToolDefinitions);
+		for (const tool of allCustomTools) {
+			this._historicalCostDefinitions.set(tool.definition.name, tool.definition);
+		}
+		const allowedCustomTools = allCustomTools.filter((tool) => isAllowedTool(tool.definition.name));
 		const definitionRegistry = new Map<string, ToolDefinitionEntry>(
 			Array.from(this._baseToolDefinitions.entries())
 				.filter(([name]) => isAllowedTool(name))
@@ -2944,7 +3007,7 @@ export class AgentSession {
 					},
 				]),
 		);
-		for (const tool of allCustomTools) {
+		for (const tool of allowedCustomTools) {
 			definitionRegistry.set(tool.definition.name, {
 				definition: tool.definition,
 				sourceInfo: tool.sourceInfo,
@@ -2968,7 +3031,7 @@ export class AgentSession {
 				.filter((entry): entry is readonly [string, string[]] => entry !== undefined),
 		);
 		const runner = this._extensionRunner;
-		const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner);
+		const wrappedExtensionTools = wrapRegisteredTools(allowedCustomTools, runner);
 		const wrappedBuiltInTools = wrapRegisteredTools(
 			Array.from(this._baseToolDefinitions.values())
 				.filter((definition) => isAllowedTool(definition.name))
@@ -3803,6 +3866,37 @@ export class AgentSession {
 		}
 
 		return result;
+	}
+
+	// SCRAMJET-DIVERGENCE: whole-journal parent/tool costs plus reports awaiting successful append (#598).
+	getRecordedSessionCost(): number {
+		let total = 0;
+		for (const entry of this.sessionManager.getEntries()) {
+			if (entry.type !== "message") continue;
+			const message = entry.message;
+			if (message.role === "assistant") {
+				if (validRecordedCost(message.usage?.cost?.total)) total += message.usage.cost.total;
+			} else if (message.role === "toolResult") {
+				if (validRecordedCost(message.cost)) {
+					total += message.cost;
+					continue;
+				}
+				const definition = this._historicalCostDefinitions.get(message.toolName);
+				if (!definition?.getHistoricalCost) continue;
+				try {
+					const cost = definition.getHistoricalCost(message.details);
+					if (validRecordedCost(cost)) total += cost;
+				} catch (error) {
+					this._extensionRunner.emitError({
+						extensionPath: `tool:${message.toolName}`,
+						event: "historical_cost",
+						error: `Failed to interpret historical tool cost: ${error instanceof Error ? error.message : String(error)}`,
+					});
+				}
+			}
+		}
+		for (const execution of this._pendingToolCosts) total += execution.cost ?? 0;
+		return total;
 	}
 
 	/**

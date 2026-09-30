@@ -245,6 +245,7 @@ describe("AgentSession harness-tool invocation", () => {
 					) as SessionMessageEntry;
 				expect(result.message).toMatchObject({ isError: true, details: { usage: 1 }, cost: 0.25 });
 				expect(JSON.parse(JSON.stringify(result)).message).toMatchObject({ cost: 0.25, isError: true });
+				expect(session.getRecordedSessionCost()).toBe(0.25);
 			} finally {
 				session.dispose();
 			}
