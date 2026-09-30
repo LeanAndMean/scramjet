@@ -30,6 +30,7 @@ import type {
 	ToolResultMessage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendObservedFailure, invokeProviderCallback, RequestFailureError } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -401,12 +402,17 @@ async function* iterateSseMessages(
 	}
 }
 
+// SCRAMJET-DIVERGENCE: Preserve provider and callback failure facts independently.
 async function* iterateAnthropicEvents(
 	response: Response,
 	signal?: AbortSignal,
 ): AsyncGenerator<RawMessageStreamEvent> {
 	if (!response.body) {
-		throw new Error("Attempted to iterate over an Anthropic response with no body");
+		throw new RequestFailureError("Anthropic response has no body.", {
+			schemaVersion: 1,
+			kind: "stream",
+			reason: "missing_body",
+		});
 	}
 
 	let sawMessageStart = false;
@@ -438,7 +444,11 @@ async function* iterateAnthropicEvents(
 	}
 
 	if (sawMessageStart && !sawMessageEnd) {
-		throw new Error("Anthropic stream ended before message_stop");
+		throw new RequestFailureError("Anthropic stream ended before message_stop", {
+			schemaVersion: 1,
+			kind: "stream",
+			reason: "missing_terminal_event",
+		});
 	}
 }
 
@@ -468,6 +478,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			timestamp: Date.now(),
 		};
 
+		let requestStarted = false;
 		try {
 			let client: Anthropic;
 			let isOAuth: boolean;
@@ -503,7 +514,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				isOAuth = created.isOAuthToken;
 			}
 			let params = buildParams(model, context, isOAuth, options);
-			const nextParams = await options?.onPayload?.(params, model);
+			const nextParams = await invokeProviderCallback("onPayload", () => options?.onPayload?.(params, model));
 			if (nextParams !== undefined) {
 				params = nextParams as MessageCreateParamsStreaming;
 			}
@@ -512,8 +523,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
+			requestStarted = true;
 			const response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			await invokeProviderCallback("onResponse", () =>
+				options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model),
+			);
 			stream.push({ type: "start", partial: output });
 
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
@@ -695,6 +709,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			appendObservedFailure(output, error, !requestStarted);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

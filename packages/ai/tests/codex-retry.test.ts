@@ -1,0 +1,133 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getModel } from "../src/models.js";
+import { streamOpenAICodexResponses } from "../src/providers/openai-codex-responses.js";
+import { inspectFailureEvidence } from "../src/utils/failure-evidence.js";
+
+const model = getModel("openai-codex", "gpt-6-astra");
+const apiKey = `x.${btoa(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test" } }))}.x`;
+const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 0 }] };
+const run = (options: Parameters<typeof streamOpenAICodexResponses>[2] = {}) =>
+	streamOpenAICodexResponses(model, context, { apiKey, transport: "sse", ...options }).result();
+afterEach(() => {
+	vi.unstubAllGlobals();
+	vi.useRealTimers();
+});
+describe("Codex retry boundaries", () => {
+	it.each([401, 503])("retains status and delay policy when HTTP %s body reading fails", async (status) => {
+		const fetch = vi.fn(
+			async () =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.error(new Error("terminated"));
+						},
+					}),
+					{ status, headers: { "retry-after": "120" } },
+				),
+		);
+		vi.stubGlobal("fetch", fetch);
+		const result = await run();
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject(
+			status === 401
+				? { category: "authentication", transient: false }
+				: { category: "server", suppression: "server_delay_exceeds_limit" },
+		);
+	});
+	it.each([400, 401, 403, 409])("does not retry HTTP %s with misleading body", async (status) => {
+		const fetch = vi.fn(async () => new Response("rate limit server error", { status }));
+		vi.stubGlobal("fetch", fetch);
+		const result = await run();
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ status: "valid", transient: false });
+	});
+	it.each(["usage_limit_reached", "usage_not_included"])("never retries explicit quota %s", async (code) => {
+		const fetch = vi.fn(
+			async () => new Response(JSON.stringify({ error: { code, message: "server error" } }), { status: 429 }),
+		);
+		vi.stubGlobal("fetch", fetch);
+		const result = await run();
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			category: "quota_exhausted",
+			transient: false,
+		});
+	});
+	it("honors ordinary 429 and explicit maxRetries", async () => {
+		const fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ error: { code: "rate_limit_exceeded" } }), {
+					status: 429,
+					headers: { "retry-after-ms": "0" },
+				}),
+		);
+		vi.stubGlobal("fetch", fetch);
+		const result = await run({ maxRetries: 2 });
+		expect(fetch).toHaveBeenCalledTimes(3);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ category: "rate_limit", transient: true });
+	});
+	it.each([NaN, Infinity, -1, 0.5])("rejects invalid direct count %s before transport", async (maxRetries) => {
+		const fetch = vi.fn();
+		vi.stubGlobal("fetch", fetch);
+		const result = await run({ maxRetries });
+		expect(fetch).not.toHaveBeenCalled();
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ source: "local" });
+	});
+	it("keeps response callbacks out of the retry loop and private", async () => {
+		const fetch = vi.fn(async () => new Response("", { status: 503 }));
+		vi.stubGlobal("fetch", fetch);
+		const result = await run({
+			onResponse: () => {
+				throw new Error("secret 429 sentinel");
+			},
+		});
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ source: "callback" });
+		expect(JSON.stringify(result)).not.toContain("sentinel");
+	});
+	it("distinguishes successful missing body from HTTP rejection without a body", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(null, { status: 200 })),
+		);
+		expect(inspectFailureEvidence((await run()).diagnostics)).toMatchObject({ category: "missing_body" });
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(null, { status: 503 })),
+		);
+		expect(inspectFailureEvidence((await run({ maxRetries: 0 })).diagnostics)).toMatchObject({ category: "server" });
+	});
+	it.each([0, 3])("persists excessive server delay suppression even with %s inner retries", async (maxRetries) => {
+		const fetch = vi.fn(async () => new Response(null, { status: 503, headers: { "retry-after": "120" } }));
+		vi.stubGlobal("fetch", fetch);
+		const result = await run({ maxRetries });
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			category: "server",
+			suppression: "server_delay_exceeds_limit",
+		});
+	});
+	it("suppresses unrepresentable server delays without persisting the value", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(null, { status: 429, headers: { "retry-after": "1e309" } })),
+		);
+		const result = await run({ maxRetryDelayMs: 0 });
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ suppression: "invalid_server_delay" });
+		expect(JSON.stringify(result.diagnostics)).not.toContain("1e309");
+	});
+	it("chunks uncapped server waits and cancels without a retry", async () => {
+		vi.useFakeTimers();
+		const fetch = vi.fn(async () => new Response(null, { status: 429, headers: { "retry-after-ms": "2147483648" } }));
+		vi.stubGlobal("fetch", fetch);
+		const controller = new AbortController();
+		const result = run({ maxRetryDelayMs: 0, signal: controller.signal });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fetch).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(2_147_483_647);
+		expect(fetch).toHaveBeenCalledTimes(1);
+		controller.abort();
+		expect((await result).stopReason).toBe("aborted");
+		expect(vi.getTimerCount()).toBe(0);
+	});
+});

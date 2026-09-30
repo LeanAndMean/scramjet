@@ -39,9 +39,22 @@ import {
 	formatThrownValue,
 } from "../utils/diagnostics.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import {
+	appendObservedFailure,
+	failureFromProviderError,
+	invokeProviderCallback,
+	RequestFailureError,
+	type RequestFailureV1,
+} from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import { flattenSystemPrompt } from "../utils/system-prompt.js";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
+import {
+	appendResponsesFailureDiagnostics,
+	convertResponsesMessages,
+	convertResponsesTools,
+	normalizeResponsesFailure,
+	processResponsesStream,
+} from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 // ============================================================================
@@ -100,25 +113,41 @@ interface RequestBody {
 // Retry Helpers
 // ============================================================================
 
-function isRetryableError(status: number, errorText: string): boolean {
-	if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) {
-		return true;
-	}
-	return /rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i.test(errorText);
+function isRetryableError(status: number): boolean {
+	return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-	return new Promise((resolve, reject) => {
-		if (signal?.aborted) {
-			reject(new Error("Request was aborted"));
-			return;
-		}
-		const timeout = setTimeout(resolve, ms);
-		signal?.addEventListener("abort", () => {
-			clearTimeout(timeout);
-			reject(new Error("Request was aborted"));
+function serverRetryDelay(headers: Headers): number | undefined {
+	const milliseconds = headers.get("retry-after-ms");
+	if (milliseconds?.trim() && !Number.isNaN(Number(milliseconds))) return Number(milliseconds);
+	const value = headers.get("retry-after");
+	if (!value?.trim()) return undefined;
+	if (!Number.isNaN(Number(value))) return Number(value) * 1000;
+	const date = Date.parse(value);
+	return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+}
+
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	do {
+		const chunk = Math.min(ms, 2_147_483_647);
+		await new Promise<void>((resolve, reject) => {
+			if (signal?.aborted) {
+				reject(new Error("Request was aborted"));
+				return;
+			}
+			const abort = () => {
+				clearTimeout(timer);
+				signal?.removeEventListener("abort", abort);
+				reject(new Error("Request was aborted"));
+			};
+			const timer = setTimeout(() => {
+				signal?.removeEventListener("abort", abort);
+				resolve();
+			}, chunk);
+			signal?.addEventListener("abort", abort, { once: true });
 		});
-	});
+		ms -= chunk;
+	} while (ms > 0);
 }
 
 // ============================================================================
@@ -151,7 +180,21 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			timestamp: Date.now(),
 		};
 
+		let prepared = false;
 		try {
+			for (const [name, maximum] of [
+				["maxRetries", Number.MAX_SAFE_INTEGER],
+				["maxRetryDelayMs", 2_147_483_647],
+				["timeoutMs", 2_147_483_647],
+			] as const) {
+				const value = options?.[name];
+				if (value !== undefined && (!Number.isSafeInteger(value) || value < 0 || value > maximum))
+					throw new RequestFailureError(`Invalid Codex ${name}: expected an integer from 0 to ${maximum}.`, {
+						schemaVersion: 1,
+						kind: "local",
+						reason: "request_validation",
+					});
+			}
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			if (!apiKey) {
 				throw new Error(`No API key for provider: ${model.provider}`);
@@ -159,7 +202,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 
 			const accountId = extractAccountId(apiKey);
 			let body = buildRequestBody(model, context, options);
-			const nextBody = await options?.onPayload?.(body, model);
+			const nextBody = await invokeProviderCallback("onPayload", () => options?.onPayload?.(body, model));
 			if (nextBody !== undefined) {
 				body = nextBody as RequestBody;
 			}
@@ -173,6 +216,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 				websocketRequestId,
 			);
 			const bodyJson = JSON.stringify(body);
+			prepared = true;
 			const transport = options?.transport || "auto";
 			const websocketDisabledForSession = transport !== "sse" && isWebSocketSseFallbackActive(options?.sessionId);
 			if (websocketDisabledForSession) {
@@ -207,7 +251,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 					return;
 				} catch (error) {
 					const aborted = options?.signal?.aborted;
-					if (aborted || isCodexNonTransportError(error)) {
+					if (aborted || isCodexNonTransportError(error) || error instanceof RequestFailureError) {
 						throw error;
 					}
 					appendAssistantMessageDiagnostic(
@@ -221,6 +265,11 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						}),
 					);
 					recordWebSocketFailure(options?.sessionId, error);
+					const failure = normalizeResponsesFailure(error, "stream");
+					if (failure.diagnostic.category === "missing_terminal_event") {
+						appendResponsesFailureDiagnostics(output, failure);
+						throw error;
+					}
 					if (websocketStarted) {
 						throw error;
 					}
@@ -228,15 +277,13 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 				}
 			}
 
-			// Fetch with retry logic for rate limits and transient errors
+			// SCRAMJET-DIVERGENCE: Provider rejection and callback failures are not fetch failures.
 			let response: Response | undefined;
-			let lastError: Error | undefined;
+			const maxRetries = options?.maxRetries ?? MAX_RETRIES;
+			const maxDelay = options?.maxRetryDelayMs ?? 60_000;
 
-			for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-				if (options?.signal?.aborted) {
-					throw new Error("Request was aborted");
-				}
-
+			for (let attempt = 0; ; attempt++) {
+				if (options?.signal?.aborted) throw new Error("Request was aborted");
 				try {
 					response = await fetch(resolveCodexUrl(model.baseUrl), {
 						method: "POST",
@@ -244,78 +291,77 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						body: bodyJson,
 						signal: options?.signal,
 					});
-					await options?.onResponse?.(
-						{ status: response.status, headers: headersToRecord(response.headers) },
-						model,
-					);
-
-					if (response.ok) {
-						break;
-					}
-
-					const errorText = await response.text();
-					if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
-						let delayMs = BASE_DELAY_MS * 2 ** attempt;
-
-						const retryAfterMs = response.headers.get("retry-after-ms");
-						if (retryAfterMs !== null) {
-							const millis = Number(retryAfterMs);
-							if (Number.isFinite(millis)) {
-								delayMs = Math.max(0, millis);
-							}
-						} else {
-							const retryAfter = response.headers.get("retry-after");
-							if (retryAfter) {
-								const seconds = Number(retryAfter);
-								if (Number.isFinite(seconds)) {
-									delayMs = Math.max(0, seconds * 1000);
-								} else {
-									const date = Date.parse(retryAfter);
-									if (!Number.isNaN(date)) {
-										delayMs = Math.max(0, date - Date.now());
-									}
-								}
-							}
-						}
-
-						await sleep(delayMs, options?.signal);
-						continue;
-					}
-
-					// Parse error for friendly message on final attempt or non-retryable error
-					const fakeResponse = new Response(errorText, {
-						status: response.status,
-						statusText: response.statusText,
-					});
-					const info = await parseErrorResponse(fakeResponse);
-					throw new Error(info.friendlyMessage || info.message);
 				} catch (error) {
-					if (error instanceof Error) {
-						if (error.name === "AbortError" || error.message === "Request was aborted") {
-							throw new Error("Request was aborted");
-						}
-					}
-					lastError = error instanceof Error ? error : new Error(String(error));
-					// Network errors are retryable
-					if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit")) {
-						const delayMs = BASE_DELAY_MS * 2 ** attempt;
-						await sleep(delayMs, options?.signal);
-						continue;
-					}
-					throw lastError;
+					if (options?.signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
+					if (attempt >= maxRetries)
+						throw new RequestFailureError("Codex connection failed.", {
+							schemaVersion: 1,
+							kind: "stream",
+							reason: "transport",
+						});
+					await sleep(Math.min(2_147_483_647, BASE_DELAY_MS * 2 ** Math.min(31, attempt)), options?.signal);
+					continue;
 				}
-			}
-
-			if (!response?.ok) {
-				throw lastError ?? new Error("Failed after retries");
+				const accepted = response;
+				await invokeProviderCallback("onResponse", () =>
+					options?.onResponse?.({ status: accepted.status, headers: headersToRecord(accepted.headers) }, model),
+				);
+				if (response.ok) break;
+				const info = await parseErrorResponse(response);
+				const failure: RequestFailureV1 = info.failure ?? {
+					schemaVersion: 1,
+					kind: "http",
+					status: response.status,
+					reason: "status",
+				};
+				const retryable =
+					failure.kind === "provider"
+						? ["rate_limit", "overloaded", "server", "timeout", "transport"].includes(failure.category)
+						: isRetryableError(response.status);
+				let delayMs = Math.min(2_147_483_647, BASE_DELAY_MS * 2 ** Math.min(31, attempt));
+				if (retryable) {
+					const requested = serverRetryDelay(response.headers);
+					if (requested !== undefined) {
+						if (!Number.isFinite(requested) || requested > Number.MAX_SAFE_INTEGER || requested < 0)
+							throw new RequestFailureError("Codex server requested an unrepresentable retry delay.", failure, {
+								schemaVersion: 1,
+								reason: "invalid_server_delay",
+							});
+						if (maxDelay > 0 && requested > maxDelay)
+							throw new RequestFailureError(
+								`Codex server retry delay (${requested} ms) exceeds configured limit (${maxDelay} ms).`,
+								failure,
+								{
+									schemaVersion: 1,
+									reason: "server_delay_exceeds_limit",
+									requestedDelayMs: requested,
+									maxDelayMs: maxDelay,
+								},
+							);
+						delayMs = requested;
+					}
+				}
+				if (!retryable || attempt >= maxRetries)
+					throw new RequestFailureError(info.friendlyMessage || info.message, failure);
+				await sleep(delayMs, options?.signal);
 			}
 
 			if (!response.body) {
-				throw new Error("No response body");
+				throw new RequestFailureError("Codex response has no body.", {
+					schemaVersion: 1,
+					kind: "stream",
+					reason: "missing_body",
+				});
 			}
 
 			stream.push({ type: "start", partial: output });
-			await processStream(response, output, stream, model, options);
+			try {
+				await processStream(response, output, stream, model, options);
+			} catch (error) {
+				if (!(error instanceof CodexApiError) && !(error instanceof RequestFailureError))
+					appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, "stream"));
+				throw error;
+			}
 
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
@@ -330,6 +376,17 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : String(error);
+			if (!output.diagnostics?.some((d) => d.type === "provider_failure"))
+				appendObservedFailure(
+					output,
+					!prepared && !(error instanceof RequestFailureError)
+						? new RequestFailureError("Codex request preparation failed.", {
+								schemaVersion: 1,
+								kind: "local",
+								reason: "request_preparation",
+							})
+						: error,
+				);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -1268,19 +1325,32 @@ async function processWebSocketStream(
 // Error Handling
 // ============================================================================
 
-async function parseErrorResponse(response: Response): Promise<{ message: string; friendlyMessage?: string }> {
-	const raw = await response.text();
+async function parseErrorResponse(
+	response: Response,
+): Promise<{ message: string; friendlyMessage?: string; failure?: RequestFailureV1 }> {
+	let raw: string;
+	try {
+		raw = await response.text();
+	} catch {
+		return { message: `HTTP ${response.status}: error response body could not be read.` };
+	}
 	let message = raw || response.statusText || "Request failed";
 	let friendlyMessage: string | undefined;
+	let failure: RequestFailureV1 | undefined;
 
 	try {
 		const parsed = JSON.parse(raw) as {
 			error?: { code?: string; type?: string; message?: string; plan_type?: string; resets_at?: number };
 		};
 		const err = parsed?.error;
+		failure = failureFromProviderError({ status: response.status, error: err });
 		if (err) {
 			const code = err.code || err.type || "";
-			if (/usage_limit_reached|usage_not_included|rate_limit_exceeded/i.test(code) || response.status === 429) {
+			if (
+				["usage_limit_reached", "usage_not_included", "insufficient_quota", "billing_hard_limit_reached"].includes(
+					code,
+				)
+			) {
 				const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
 				const mins = err.resets_at
 					? Math.max(0, Math.round((err.resets_at * 1000 - Date.now()) / 60000))
@@ -1292,7 +1362,7 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
 		}
 	} catch {}
 
-	return { message, friendlyMessage };
+	return { message, friendlyMessage, failure };
 }
 
 // ============================================================================

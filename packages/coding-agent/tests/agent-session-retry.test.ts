@@ -241,6 +241,120 @@ function retryRecords(session: AgentSession) {
 		.map((entry) => entry.data);
 }
 
+describe("Provider failure recovery policy", () => {
+	const failure = (details: Record<string, unknown>): AssistantMessage => ({
+		...assistantError("timeout maximum context length exceeded"),
+		diagnostics: [{ type: "request_failure", timestamp: 0, details }],
+	});
+	it.each(["missing_body", "missing_terminal_event"])(
+		"recovers %s without executing tools from the failed response",
+		async (reason) => {
+			const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "ok" }], details: undefined }));
+			const tool = defineTool({
+				name: "dummy",
+				label: "Dummy",
+				description: "sentinel",
+				parameters: Type.Object({}),
+				execute,
+			});
+			const failed = failure({ schemaVersion: 1, kind: "stream", reason });
+			failed.content = assistantToolCall("dummy", "failed").content;
+			const { session, events } = await createFixture(
+				(index) =>
+					index === 0 ? failed : index === 1 ? assistantToolCall("dummy", "recovered") : assistantText("done"),
+				{ customTools: [tool], persist: true },
+			);
+			await session.prompt("run");
+			expect(execute).toHaveBeenCalledTimes(1);
+			expect(
+				events.filter((event) => event.type === "tool_execution_start").map((event) => event.toolCallId),
+			).toEqual(["recovered"]);
+			expect(retryRecords(session)).toContainEqual(
+				expect.objectContaining({ outcome: "scheduled", evidence: "request_failure" }),
+			);
+			session.dispose();
+		},
+	);
+	it.each([
+		{ schemaVersion: 1, kind: "callback", callback: "onPayload" },
+		{ schemaVersion: 1, kind: "local", reason: "configuration" },
+		{ schemaVersion: 1, kind: "provider", category: "quota_exhausted" },
+		{ schemaVersion: 2, kind: "http", status: 503, reason: "status" },
+	])("does not recover from excluded or invalid evidence", async (details) => {
+		let calls = 0;
+		const { session, events } = await createFixture(() => {
+			calls++;
+			return failure(details);
+		});
+		await session.prompt("run");
+		expect(calls).toBe(1);
+		expect(retryEvents(events)).toEqual([]);
+		expect(events.some((event) => event.type === "compaction_start")).toBe(false);
+		session.dispose();
+	});
+	it("retains delay suppression across persistence and never starts an outer retry", async () => {
+		const failed = failure({ schemaVersion: 1, kind: "http", status: 503, reason: "status" });
+		failed.diagnostics!.push({
+			type: "retry_suppression",
+			timestamp: 0,
+			details: {
+				schemaVersion: 1,
+				reason: "server_delay_exceeds_limit",
+				requestedDelayMs: 120000,
+				maxDelayMs: 60000,
+			},
+		});
+		let calls = 0;
+		const { session, events } = await createFixture(
+			() => {
+				calls++;
+				return failed;
+			},
+			{ persist: true },
+		);
+		await session.prompt("run");
+		expect(calls).toBe(1);
+		expect(retryEvents(events)).toEqual([]);
+		expect(retryRecords(session)).toContainEqual(
+			expect.objectContaining({ outcome: "not_attempted", reason: "server_delay_exceeds_limit" }),
+		);
+		const reopened = SessionManager.open(session.sessionManager.getSessionFile()!).getBranch();
+		expect(JSON.stringify(reopened)).toContain("retry_suppression");
+		session.dispose();
+	});
+	it("does not retry or compact a harness-generated failure", async () => {
+		let calls = 0;
+		const { session, events } = await createFixture(() => assistantText("unused"), {
+			streamFn: () => {
+				calls++;
+				throw new Error("timeout maximum context length exceeded");
+			},
+		});
+		await session.prompt("run");
+		expect(calls).toBe(1);
+		expect(retryEvents(events)).toEqual([]);
+		expect(events.some((event) => event.type === "compaction_start")).toBe(false);
+		session.dispose();
+	});
+	it("maintains context on a new prompt without reviving a callback error", async () => {
+		const { session } = await createFixture(() => assistantText("unused"));
+		const successful = assistantText("done");
+		successful.usage.input = testModel.contextWindow;
+		const failed = failure({ schemaVersion: 1, kind: "callback", callback: "onResponse" });
+		session.agent.state.messages = [successful, failed];
+		const internal = session as unknown as {
+			_checkCompaction: (message: AssistantMessage, trigger: string) => Promise<void>;
+			_runAutoCompaction: (reason: string, retry: boolean) => Promise<void>;
+		};
+		const compact = vi.spyOn(internal, "_runAutoCompaction").mockResolvedValue();
+		await internal._checkCompaction(failed, "settlement");
+		expect(compact).not.toHaveBeenCalled();
+		await internal._checkCompaction(failed, "new_prompt");
+		expect(compact).toHaveBeenCalledWith("threshold", false);
+		session.dispose();
+	});
+});
+
 describe("AgentSession context window", () => {
 	it("uses total context even when an obsolete field reaches a direct Model caller", async () => {
 		const model = { ...testModel, contextWindowBudget: 272_000 };
@@ -1053,7 +1167,7 @@ describe("AgentSession persisted retry authority", () => {
 		}
 	});
 
-	it("persists accepted Responses EOF after SDK retries without replaying or executing a completed tool call", async () => {
+	it("bounds accepted Responses EOF retries without executing a failed turn's completed tool call", async () => {
 		const model = getModel("openai", "gpt-6-astra");
 		const execute = vi.fn(async () => ({
 			content: [{ type: "text" as const, text: "executed" }],
@@ -1098,15 +1212,15 @@ describe("AgentSession persisted retry authority", () => {
 			await session.prompt("hello");
 			const branch = SessionManager.open(session.sessionManager.getSessionFile()!).getBranch();
 			const assistants = branch.filter((entry) => entry.type === "message" && entry.message.role === "assistant");
-			expect(fetch).toHaveBeenCalledTimes(3);
-			expect(assistants).toHaveLength(1);
+			expect(fetch).toHaveBeenCalledTimes(6);
+			expect(assistants).toHaveLength(4);
 			expect(assistants[0]).toMatchObject({
 				type: "message",
 				message: {
 					stopReason: "error",
 					content: [expect.objectContaining({ type: "toolCall", name: "read" })],
 					errorMessage: expect.stringMatching(
-						/ended without a terminal response event.*partial output.*review.*retry/i,
+						/ended without a terminal response event.*partial output.*automatic recovery.*retry/i,
 					),
 					diagnostics: expect.arrayContaining([
 						expect.objectContaining({
@@ -1136,10 +1250,12 @@ describe("AgentSession persisted retry authority", () => {
 					]),
 				},
 			});
-			expect(retryEvents(events)).toEqual([]);
-			expect(retryRecords(session)).toEqual([
-				{ schemaVersion: 1, outcome: "not_attempted", reason: "structured_unknown", evidence: "provider_failure" },
-			]);
+			expect(retryEvents(events).filter((event) => event.type === "auto_retry_start")).toHaveLength(3);
+			expect(retryRecords(session).at(-1)).toMatchObject({
+				outcome: "exhausted",
+				reason: "attempt_limit",
+				attemptsCompleted: 3,
+			});
 			expect(execute).not.toHaveBeenCalled();
 			expect(events).not.toContainEqual(expect.objectContaining({ type: "tool_execution_start" }));
 			session.dispose();

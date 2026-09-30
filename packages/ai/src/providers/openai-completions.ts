@@ -31,6 +31,7 @@ import type {
 	ToolResultMessage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendObservedFailure, invokeProviderCallback } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -135,6 +136,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			timestamp: Date.now(),
 		};
 
+		let requestStarted = false;
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const compat = getCompat(model);
@@ -142,7 +144,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
 			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
 			let params = buildParams(model, context, options, compat, cacheRetention);
-			const nextParams = await options?.onPayload?.(params, model);
+			const nextParams = await invokeProviderCallback("onPayload", () => options?.onPayload?.(params, model));
 			if (nextParams !== undefined) {
 				params = nextParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming;
 			}
@@ -151,10 +153,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
+			requestStarted = true;
 			const { data: openaiStream, response } = await client.chat.completions
 				.create(params, requestOptions)
 				.withResponse();
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			await invokeProviderCallback("onResponse", () =>
+				options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model),
+			);
 			stream.push({ type: "start", partial: output });
 
 			interface StreamingToolCallBlock extends ToolCall {
@@ -408,6 +413,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			appendObservedFailure(output, error, !requestStarted);
 			// Some providers via OpenRouter give additional information in this field.
 			const rawMetadata = (error as any)?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;

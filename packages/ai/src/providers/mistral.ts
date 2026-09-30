@@ -23,6 +23,7 @@ import type {
 	ToolCall,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendObservedFailure, invokeProviderCallback } from "../utils/failure-evidence.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -57,6 +58,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 	(async () => {
 		const output = createOutput(model);
 
+		let requestStarted = false;
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider);
 			if (!apiKey) {
@@ -73,10 +75,11 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 			const transformedMessages = transformMessages(context.messages, model, (id) => normalizeMistralToolCallId(id));
 
 			let payload = buildChatPayload(model, context, transformedMessages, options);
-			const nextPayload = await options?.onPayload?.(payload, model);
+			const nextPayload = await invokeProviderCallback("onPayload", () => options?.onPayload?.(payload, model));
 			if (nextPayload !== undefined) {
 				payload = nextPayload as ChatCompletionStreamRequest;
 			}
+			requestStarted = true;
 			const mistralStream = await mistral.chat.stream(payload, buildRequestOptions(model, options));
 			stream.push({ type: "start", partial: output });
 			await consumeChatStream(model, output, stream, mistralStream);
@@ -98,6 +101,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatMistralError(error);
+			appendObservedFailure(output, error, !requestStarted);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

@@ -201,7 +201,7 @@ const CATEGORY_MESSAGES: Record<ResponsesFailureCategory, string> = {
 	content_rejection: "OpenAI Responses rejected the content.",
 	provider_error: "OpenAI Responses returned a provider error.",
 	missing_terminal_event:
-		"OpenAI Responses stream ended without a terminal response event. Partial output may require review before a manual retry.",
+		"OpenAI Responses stream ended without a terminal response event. Partial output is incomplete; automatic recovery may retry within configured limits.",
 	malformed_event: "OpenAI Responses returned a malformed error event.",
 	unknown: "OpenAI Responses request failed without recognized details.",
 };

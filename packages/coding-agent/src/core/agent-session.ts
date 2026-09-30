@@ -21,15 +21,16 @@ import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLe
 import { generateHarnessToolCallId } from "@leanandmean/agent";
 import type { AssistantMessage, ImageContent, Message, Model, SystemPromptSection, TextContent } from "@leanandmean/ai";
 import {
+	blocksFailureRecovery,
 	clampThinkingLevel,
 	cleanupSessionResources,
 	flattenSystemPrompt,
 	getSupportedThinkingLevels,
+	inspectFailureEvidence,
 	isContextOverflow,
 	modelsAreEqual,
 	resetApiProviders,
 } from "@leanandmean/ai";
-import { validateResponsesProviderFailure } from "@leanandmean/ai/openai-responses";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
@@ -41,6 +42,7 @@ import {
 	collectEntriesForBranchSummary,
 	compact,
 	estimateContextTokens,
+	estimateTokens,
 	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
@@ -326,9 +328,18 @@ type RetryPhase =
 	| { phase: "backoff"; attempt: number; controller: AbortController; run: AgentRunSettlement }
 	| { phase: "continuing"; attempt: number; chain: RetryChainSettlement };
 
-type AutoRetryEvidence = "provider_failure" | "legacy_text" | "context_overflow" | "none";
+type RetryFailureEvidence = "provider_failure" | "request_failure";
+type AutoRetryEvidence = RetryFailureEvidence | "legacy_text" | "context_overflow" | "none";
 type NotAttemptedCause =
-	| { reason: "structured_non_transient" | "structured_unknown"; evidence: "provider_failure" }
+	| {
+			reason:
+				| "structured_non_transient"
+				| "structured_unknown"
+				| "server_delay_exceeds_limit"
+				| "invalid_server_delay";
+			evidence: RetryFailureEvidence;
+	  }
+	| { reason: "non_provider_failure" | "invalid_failure_evidence"; evidence: "none" }
 	| {
 			reason: "malformed_provider_diagnostic" | "duplicate_provider_diagnostic" | "missing_error_evidence";
 			evidence: "none";
@@ -352,7 +363,7 @@ type AutoRetryRecord =
 	| {
 			schemaVersion: 1;
 			outcome: "scheduled";
-			evidence: "provider_failure" | "legacy_text";
+			evidence: RetryFailureEvidence | "legacy_text";
 			attempt: number;
 			maxAttempts: number;
 			cumulativeErrors: number;
@@ -383,7 +394,7 @@ type AutoRetryRecord =
 	  };
 
 type RetryClassification =
-	| { kind: "retry"; evidence: "provider_failure" | "legacy_text" }
+	| { kind: "retry"; evidence: RetryFailureEvidence | "legacy_text" }
 	| { kind: "context_overflow" }
 	| ({ kind: "do_not_retry" } & NotAttemptedCause);
 
@@ -1670,7 +1681,7 @@ export class AgentSession {
 			// Check if we need to compact before sending (catches aborted responses)
 			const lastAssistant = this._findLastAssistantMessage();
 			if (lastAssistant) {
-				await this._checkCompaction(lastAssistant, false);
+				await this._checkCompaction(lastAssistant, "new_prompt");
 			}
 
 			// Build messages array (custom message if any, then user message)
@@ -2435,14 +2446,50 @@ export class AgentSession {
 	 * 2. Threshold: Context over threshold, compact, NO auto-retry (user continues manually)
 	 *
 	 * @param assistantMessage The assistant message to check
-	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
 	 */
-	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<void> {
+	private async _checkCompaction(
+		assistantMessage: AssistantMessage,
+		trigger: "settlement" | "new_prompt" = "settlement",
+	): Promise<void> {
 		const settings = this.settingsManager.getCompactionSettings();
 		if (!settings.enabled) return;
 
-		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
-		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
+		// SCRAMJET-DIVERGENCE: New prompts maintain context independently of failed-turn recovery.
+		if (trigger === "settlement" && blocksFailureRecovery(assistantMessage)) return;
+		if (trigger === "new_prompt") {
+			const boundary = getLatestCompactionEntry(this.sessionManager.getBranch());
+			const messages = this.agent.state.messages;
+			const reverseIndex = [...messages]
+				.reverse()
+				.findIndex(
+					(message) =>
+						message.role === "assistant" &&
+						message.origin !== "harness" &&
+						message.stopReason !== "error" &&
+						message.stopReason !== "aborted" &&
+						message.provider === this.model?.provider &&
+						message.model === this.model?.id &&
+						Number.isFinite(calculateContextTokens(message.usage)) &&
+						calculateContextTokens(message.usage) >= 0 &&
+						(!boundary || message.timestamp > new Date(boundary.timestamp).getTime()) &&
+						[message.usage.input, message.usage.output, message.usage.cacheRead, message.usage.cacheWrite].every(
+							(n) => Number.isFinite(n) && n >= 0,
+						),
+				);
+			if (reverseIndex < 0) return;
+			const sourceIndex = messages.length - reverseIndex - 1;
+			const source = messages[sourceIndex] as AssistantMessage;
+			const tokens =
+				calculateContextTokens(source.usage) +
+				messages.slice(sourceIndex + 1).reduce((total, message) => total + estimateTokens(message), 0);
+			const window = this.model?.contextWindow ?? 0;
+			if (
+				shouldCompact(tokens, window, settings) ||
+				(window > settings.reserveTokens && tokens > (this.model?.maxInputTokens ?? Infinity))
+			)
+				await this._runAutoCompaction("threshold", false);
+			return;
+		}
 
 		// SCRAMJET-DIVERGENCE: Total context and independent input limits are separate constraints.
 		const contextWindow = this.model?.contextWindow ?? 0;
@@ -3104,20 +3151,31 @@ export class AgentSession {
 
 	// SCRAMJET-DIVERGENCE: persisted post-extension snapshots authoritatively classify and settle retries (#553).
 	private _classifyRetry(message: AssistantMessage): RetryClassification {
+		if ((message.origin === "harness" || message.stopReason === "aborted") && blocksFailureRecovery(message))
+			return { kind: "do_not_retry", reason: "non_provider_failure", evidence: "none" };
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (isContextOverflow(message, Math.min(contextWindow, this.model?.maxInputTokens ?? Infinity))) {
 			return { kind: "context_overflow" };
 		}
 
-		const structured = validateResponsesProviderFailure(message.diagnostics);
+		const structured = inspectFailureEvidence(message.diagnostics);
 		if (structured.status === "valid") {
-			if (structured.retryDisposition === "transient") return { kind: "retry", evidence: "provider_failure" };
+			if (structured.source !== "provider")
+				return { kind: "do_not_retry", reason: "non_provider_failure", evidence: "none" };
+			if (structured.suppression)
+				return { kind: "do_not_retry", reason: structured.suppression, evidence: structured.family };
+			if (structured.transient || ["missing_terminal_event", "missing_body"].includes(structured.category))
+				return { kind: "retry", evidence: structured.family };
 			return {
 				kind: "do_not_retry",
-				reason: structured.retryDisposition === "non_transient" ? "structured_non_transient" : "structured_unknown",
-				evidence: "provider_failure",
+				reason: ["unknown", "provider_error", "malformed_event"].includes(structured.category)
+					? "structured_unknown"
+					: "structured_non_transient",
+				evidence: structured.family,
 			};
 		}
+		if (structured.status === "conflicting")
+			return { kind: "do_not_retry", reason: "invalid_failure_evidence", evidence: "none" };
 		if (structured.status === "malformed") {
 			return { kind: "do_not_retry", reason: "malformed_provider_diagnostic", evidence: "none" };
 		}
@@ -3227,15 +3285,13 @@ export class AgentSession {
 
 	private async _handleRetryableError(
 		message: AssistantMessage,
-		evidence: "provider_failure" | "legacy_text",
+		evidence: RetryFailureEvidence | "legacy_text",
 		run: AgentRunSettlement,
 	): Promise<boolean> {
 		const settings = this.settingsManager.getRetrySettings();
 		const attempt = (this._retry?.attempt ?? 0) + 1;
-		this._runRetryCount++;
-
-		const cumulativeCap = settings.maxRetries * 2;
-		if (attempt > settings.maxRetries) {
+		const cumulativeCap = Math.min(Number.MAX_SAFE_INTEGER, settings.maxRetries * 2);
+		if ((this._retry?.attempt ?? 0) >= settings.maxRetries) {
 			const attemptsCompleted = attempt - 1;
 			this._finishRetry(
 				{
@@ -3251,8 +3307,8 @@ export class AgentSession {
 			return false;
 		}
 
-		if (this._runRetryCount > cumulativeCap) {
-			const attemptsCompleted = this._runRetryCount - 1;
+		if (this._runRetryCount >= cumulativeCap) {
+			const attemptsCompleted = this._runRetryCount;
 			this._finishRetry(
 				{
 					schemaVersion: 1,
@@ -3260,7 +3316,7 @@ export class AgentSession {
 					reason: "cumulative_limit",
 					attemptsCompleted: this._bounded(attemptsCompleted),
 					maxAttempts: this._bounded(settings.maxRetries),
-					cumulativeErrors: this._bounded(this._runRetryCount),
+					cumulativeErrors: this._bounded(this._runRetryCount + 1),
 				},
 				{
 					type: "auto_retry_end",
@@ -3273,7 +3329,11 @@ export class AgentSession {
 			return false;
 		}
 
-		const delayMs = settings.baseDelayMs * 2 ** (attempt - 1);
+		this._runRetryCount++;
+		const delayMs =
+			settings.baseDelayMs === 0
+				? 0
+				: Math.min(2_147_483_647, settings.baseDelayMs * 2 ** Math.min(31, attempt - 1));
 		const previous = this._retry;
 		this._retry = undefined;
 		try {

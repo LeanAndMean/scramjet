@@ -483,7 +483,9 @@ describe("OpenAI Responses failure normalization", () => {
 			retryDisposition: "unknown",
 			detailSource: "none",
 		});
-		expect(result.errorMessage).toMatch(/ended without a terminal response event.*partial output.*review.*retry/i);
+		expect(result.errorMessage).toMatch(
+			/ended without a terminal response event.*partial output.*automatic recovery.*retry/i,
+		);
 		expect(JSON.stringify(result)).not.toContain("test-key");
 		expect(sdkRetryDetails(result)).toEqual({
 			schemaVersion: 1,
@@ -1312,7 +1314,12 @@ describe("OpenAI Responses failure normalization", () => {
 			},
 		}).result();
 		expect(result.stopReason).toBe("aborted");
-		expect(result.diagnostics).toBeUndefined();
+		expect(result.diagnostics).toEqual([
+			expect.objectContaining({
+				type: "request_failure",
+				details: { schemaVersion: 1, kind: "callback", callback: "onResponse" },
+			}),
+		]);
 	});
 
 	it("rejects SDK-wrapped SSE rejection prose as transport proof", async () => {
@@ -1746,7 +1753,12 @@ describe("OpenAI Responses failure normalization", () => {
 
 			expect(result.stopReason).toBe("error");
 			expect(result.errorMessage).toBe("OpenAI Responses payload callback failed.");
-			expect(result.diagnostics).toBeUndefined();
+			expect(result.diagnostics).toEqual([
+				expect.objectContaining({
+					type: "request_failure",
+					details: { schemaVersion: 1, kind: "callback", callback: "onPayload" },
+				}),
+			]);
 			expect(JSON.stringify(result)).not.toContain("private callback rate limit sentinel");
 		},
 	);
@@ -1770,7 +1782,12 @@ describe("OpenAI Responses failure normalization", () => {
 
 			expect(result.stopReason).toBe("aborted");
 			expect(result.errorMessage).toBe("OpenAI Responses payload callback failed.");
-			expect(result.diagnostics).toBeUndefined();
+			expect(result.diagnostics).toEqual([
+				expect.objectContaining({
+					type: "request_failure",
+					details: { schemaVersion: 1, kind: "callback", callback: "onPayload" },
+				}),
+			]);
 			expect(JSON.stringify(result)).not.toContain("private aborted callback sentinel");
 		},
 	);
@@ -1818,7 +1835,12 @@ describe("OpenAI Responses failure normalization", () => {
 
 			expect(result.stopReason).toBe("error");
 			expect(result.errorMessage).toBe("OpenAI Responses response callback failed.");
-			expect(result.diagnostics).toBeUndefined();
+			expect(result.diagnostics).toEqual([
+				expect.objectContaining({
+					type: "request_failure",
+					details: { schemaVersion: 1, kind: "callback", callback: "onResponse" },
+				}),
+			]);
 			expect(response.bodyUsed).toBe(false);
 			expect(JSON.stringify(result)).not.toContain("private callback rate limit sentinel");
 		},
@@ -1845,7 +1867,12 @@ describe("OpenAI Responses failure normalization", () => {
 
 			expect(result.stopReason).toBe("aborted");
 			expect(result.errorMessage).toBe("OpenAI Responses response callback failed.");
-			expect(result.diagnostics).toBeUndefined();
+			expect(result.diagnostics).toEqual([
+				expect.objectContaining({
+					type: "request_failure",
+					details: { schemaVersion: 1, kind: "callback", callback: "onResponse" },
+				}),
+			]);
 			expect(response.bodyUsed).toBe(false);
 			expect(JSON.stringify(result)).not.toContain("private aborted response callback sentinel");
 		},

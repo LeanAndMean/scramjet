@@ -43,6 +43,7 @@ import type {
 	ToolResultMessage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendObservedFailure, invokeProviderCallback, RequestFailureError } from "../utils/failure-evidence.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { createHttpProxyAgentsForTarget } from "../utils/node-http-proxy.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -188,6 +189,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 			config.authSchemePreference = ["httpBearerAuth"];
 		}
 
+		let requestStarted = false;
 		try {
 			const client = new BedrockRuntimeClient(config);
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
@@ -205,19 +207,25 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 				additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
 				...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
 			};
-			const nextCommandInput = await options?.onPayload?.(commandInput, model);
+			const nextCommandInput = await invokeProviderCallback("onPayload", () =>
+				options?.onPayload?.(commandInput, model),
+			);
 			if (nextCommandInput !== undefined) {
 				commandInput = nextCommandInput as typeof commandInput;
 			}
 			const command = new ConverseStreamCommand(commandInput);
 
+			requestStarted = true;
 			const response = await client.send(command, { abortSignal: options.signal });
 			if (response.$metadata.httpStatusCode !== undefined) {
 				const responseHeaders: Record<string, string> = {};
 				if (response.$metadata.requestId) {
 					responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
 				}
-				await options?.onResponse?.({ status: response.$metadata.httpStatusCode, headers: responseHeaders }, model);
+				const status = response.$metadata.httpStatusCode;
+				await invokeProviderCallback("onResponse", () =>
+					options?.onResponse?.({ status, headers: responseHeaders }, model),
+				);
 			}
 
 			for await (const item of response.stream!) {
@@ -243,7 +251,11 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 				} else if (item.validationException) {
 					throw item.validationException;
 				} else if (item.throttlingException) {
-					throw item.throttlingException;
+					throw new RequestFailureError("Bedrock request throttled.", {
+						schemaVersion: 1,
+						kind: "provider",
+						category: "rate_limit",
+					});
 				} else if (item.serviceUnavailableException) {
 					throw item.serviceUnavailableException;
 				}
@@ -267,6 +279,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatBedrockError(error);
+			appendObservedFailure(output, error, !requestStarted);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

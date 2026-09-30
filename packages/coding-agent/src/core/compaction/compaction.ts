@@ -7,7 +7,7 @@
 
 import type { AgentMessage, ThinkingLevel } from "@leanandmean/agent";
 import type { AssistantMessage, Context, Model, Usage } from "@leanandmean/ai";
-import { completeSimple, flattenSystemPrompt, getEndpointOutputLimit } from "@leanandmean/ai";
+import { completeSimple, flattenSystemPrompt, getEndpointOutputLimit, RequestFailureError } from "@leanandmean/ai";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,
@@ -236,14 +236,16 @@ export function getRequestMaxTokens(
 			? Math.max(heuristic, estimate.tokens)
 			: heuristic;
 	if (model.maxInputTokens !== undefined && inputTokens > model.maxInputTokens) {
-		throw new Error(
+		throw new RequestFailureError(
 			`context_length_exceeded: ${model.provider}/${model.id} estimated input ${inputTokens} exceeds provider input limit ${model.maxInputTokens}; compact or reduce the request.`,
+			{ schemaVersion: 1, kind: "local", reason: "context_overflow" },
 		);
 	}
 	const remaining = Math.floor(model.contextWindow - inputTokens);
 	if (remaining < 1) {
-		throw new Error(
+		throw new RequestFailureError(
 			`context_length_exceeded: ${model.provider}/${model.id} estimated input ${inputTokens} leaves no output space in total context ${model.contextWindow}; compact or reduce the request.`,
+			{ schemaVersion: 1, kind: "local", reason: "context_overflow" },
 		);
 	}
 	const endpointOutput = getEndpointOutputLimit(model, inputTokens, !!context.tools?.length);

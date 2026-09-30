@@ -15,6 +15,7 @@ import type {
 	Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendObservedFailure, appendRequestFailure, RequestFailureError } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -110,6 +111,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 		let failurePhase: "request" | "stream" = "request";
 		let payloadCallbackFailed = false;
 		let responseCallbackFailed = false;
+		let requestStarted = false;
 		const sdkRequestObserver = createResponsesSdkRequestObserver(fetch);
 		try {
 			// Create OpenAI client
@@ -139,6 +141,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
+			requestStarted = true;
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
 			sdkRequestObserver.markAccepted();
 			try {
@@ -147,6 +150,12 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				responseCallbackFailed = true;
 				throw error;
 			}
+			if (!response.body)
+				throw new RequestFailureError("OpenAI Responses response has no body.", {
+					schemaVersion: 1,
+					kind: "stream",
+					reason: "missing_body",
+				});
 			stream.push({ type: "start", partial: output });
 
 			failurePhase = "stream";
@@ -175,10 +184,18 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			output.stopReason = options?.signal?.aborted || error instanceof APIUserAbortError ? "aborted" : "error";
 			if (payloadCallbackFailed) {
 				output.errorMessage = "OpenAI Responses payload callback failed.";
+				appendRequestFailure(output, { schemaVersion: 1, kind: "callback", callback: "onPayload" });
 			} else if (responseCallbackFailed) {
 				output.errorMessage = "OpenAI Responses response callback failed.";
+				appendRequestFailure(output, { schemaVersion: 1, kind: "callback", callback: "onResponse" });
 			} else if (output.stopReason === "aborted") {
 				output.errorMessage = abortedResponsesFailureMessage(error);
+			} else if (error instanceof RequestFailureError) {
+				output.errorMessage = error.message;
+				appendObservedFailure(output, error);
+			} else if (!requestStarted) {
+				output.errorMessage = "OpenAI Responses request preparation failed.";
+				appendRequestFailure(output, { schemaVersion: 1, kind: "local", reason: "request_preparation" });
 			} else {
 				appendResponsesFailureDiagnostics(
 					output,
