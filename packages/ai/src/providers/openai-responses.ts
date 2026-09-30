@@ -189,7 +189,8 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				output.errorMessage = error.message;
 				appendBuiltinFailure(output, error);
 			} else if (!requestStarted) {
-				output.errorMessage = "OpenAI Responses request preparation failed.";
+				output.errorMessage =
+					"OpenAI Responses request preparation failed. Check that the payload is JSON-serializable and the base URL and headers are valid.";
 				appendRequestFailure(output, { schemaVersion: 1, kind: "local", reason: "request_preparation" });
 			} else {
 				appendResponsesFailureDiagnostics(
@@ -239,8 +240,9 @@ function createClient(
 ) {
 	if (!apiKey) {
 		if (!process.env.OPENAI_API_KEY) {
-			throw new Error(
+			throw new RequestFailureError(
 				"OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it as an argument.",
+				{ schemaVersion: 1, kind: "local", reason: "request_preparation" },
 			);
 		}
 		apiKey = process.env.OPENAI_API_KEY;

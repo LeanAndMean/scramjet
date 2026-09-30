@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getApiProvider } from "../src/api-registry.js";
 import { streamBedrock, streamSimpleBedrock } from "../src/providers/amazon-bedrock.js";
 import { streamAnthropic } from "../src/providers/anthropic.js";
+import { streamAzureOpenAIResponses } from "../src/providers/azure-openai-responses.js";
 import { streamGoogle } from "../src/providers/google.js";
 import { streamGoogleVertex } from "../src/providers/google-vertex.js";
 import { streamMistral } from "../src/providers/mistral.js";
@@ -481,22 +482,93 @@ describe("adapter failure evidence", () => {
 		setBedrockProviderModule({ streamBedrock: stream, streamSimpleBedrock: stream });
 		expect(await getApiProvider(selected.api)!.streamSimple(selected, context).result()).toEqual(result);
 	});
-	it("classifies Responses SDK serialization as local preparation with zero fetch calls", async () => {
-		const fetch = vi.fn();
-		vi.stubGlobal("fetch", fetch);
-		const result = await streamOpenAIResponses(model("openai-responses", "openai"), context, {
-			apiKey: "fake",
-			maxRetries: 0,
-			onPayload: (payload) => ({ ...(payload as object), metadata: { value: 1n } }),
-		}).result();
-		expect(fetch).not.toHaveBeenCalled();
-		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
-			status: "valid",
-			source: "local",
-			category: "local",
-			transient: false,
-		});
-	});
+	it.each(["OpenAI", "Azure"] as const)(
+		"keeps %s SDK preparation guidance actionable and private with zero fetch calls",
+		async (route) => {
+			const fetch = vi.fn();
+			vi.stubGlobal("fetch", fetch);
+			for (const value of [
+				1n,
+				{
+					toJSON() {
+						throw new Error("private serialization sentinel");
+					},
+				},
+			]) {
+				const options = {
+					apiKey: "fake",
+					maxRetries: 0,
+					onPayload: (payload: unknown) => ({ ...(payload as object), metadata: { value } }),
+				};
+				const result = await (route === "OpenAI"
+					? streamOpenAIResponses(model("openai-responses", "openai"), context, options)
+					: streamAzureOpenAIResponses(model("azure-openai-responses", "azure-openai-responses"), context, options)
+				).result();
+				expect(result.stopReason).toBe("error");
+				expect(result.errorMessage).toMatch(/JSON-serializable/);
+				expect(result.errorMessage).toMatch(/base URL and headers/);
+				expect(JSON.stringify(result)).not.toContain("private serialization sentinel");
+				expect(fetch).not.toHaveBeenCalled();
+				expect(result.diagnostics).toContainEqual(
+					expect.objectContaining({
+						type: "request_failure",
+						details: { schemaVersion: 1, kind: "local", reason: "request_preparation" },
+					}),
+				);
+				expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+					status: "valid",
+					source: "local",
+					category: "local",
+					transient: false,
+				});
+			}
+		},
+	);
+	it.each(["OpenAI key", "Azure key", "Azure endpoint", "Azure URL"] as const)(
+		"retains controlled configuration guidance for %s without fetching",
+		async (configuration) => {
+			for (const name of [
+				"OPENAI_API_KEY",
+				"AZURE_OPENAI_API_KEY",
+				"AZURE_OPENAI_BASE_URL",
+				"AZURE_OPENAI_RESOURCE_NAME",
+			]) {
+				vi.stubEnv(name, "");
+			}
+			const fetch = vi.fn();
+			vi.stubGlobal("fetch", fetch);
+			const result = await (configuration === "OpenAI key"
+				? streamOpenAIResponses(model("openai-responses", "openai"), context)
+				: streamAzureOpenAIResponses(
+						{ ...model("azure-openai-responses", "azure-openai-responses"), baseUrl: "" },
+						context,
+						{
+							apiKey: configuration === "Azure key" ? undefined : "fake",
+							azureBaseUrl: configuration === "Azure URL" ? "private-invalid-url-sentinel" : undefined,
+						},
+					)
+			).result();
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toContain(
+				configuration === "OpenAI key"
+					? "Set OPENAI_API_KEY"
+					: configuration === "Azure key"
+						? "Set AZURE_OPENAI_API_KEY"
+						: configuration === "Azure endpoint"
+							? "Set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME"
+							: "Invalid Azure OpenAI base URL",
+			);
+			if (configuration === "Azure URL") expect(result.errorMessage).toContain("azureBaseUrl");
+			expect(JSON.stringify(result)).not.toContain("private-invalid-url-sentinel");
+			expect(fetch).not.toHaveBeenCalled();
+			expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+				status: "valid",
+				source: "local",
+				category: "local",
+				transient: false,
+			});
+		},
+	);
 	it("classifies Mistral SDK request validation as local", async () => {
 		const fetch = vi.fn();
 		vi.stubGlobal("fetch", fetch);

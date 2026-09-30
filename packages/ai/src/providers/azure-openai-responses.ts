@@ -169,7 +169,8 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				output.errorMessage = error.message;
 				appendBuiltinFailure(output, error);
 			} else if (!requestStarted) {
-				output.errorMessage = "Azure Responses request preparation failed.";
+				output.errorMessage =
+					"Azure Responses request preparation failed. Check that the payload is JSON-serializable and the base URL and headers are valid.";
 				appendRequestFailure(output, { schemaVersion: 1, kind: "local", reason: "request_preparation" });
 			} else {
 				appendResponsesFailureDiagnostics(
@@ -212,7 +213,10 @@ function normalizeAzureBaseUrl(baseUrl: string): string {
 	try {
 		url = new URL(trimmed);
 	} catch {
-		throw new Error(`Invalid Azure OpenAI base URL: ${baseUrl}`);
+		throw new RequestFailureError(
+			"Invalid Azure OpenAI base URL. Set AZURE_OPENAI_BASE_URL or pass a valid azureBaseUrl or model.baseUrl.",
+			{ schemaVersion: 1, kind: "local", reason: "request_preparation" },
+		);
 	}
 
 	const isAzureHost =
@@ -253,8 +257,9 @@ function resolveAzureConfig(
 	}
 
 	if (!resolvedBaseUrl) {
-		throw new Error(
+		throw new RequestFailureError(
 			"Azure OpenAI base URL is required. Set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME, or pass azureBaseUrl, azureResourceName, or model.baseUrl.",
+			{ schemaVersion: 1, kind: "local", reason: "request_preparation" },
 		);
 	}
 
@@ -272,8 +277,9 @@ function createClient(
 ) {
 	if (!apiKey) {
 		if (!process.env.AZURE_OPENAI_API_KEY) {
-			throw new Error(
+			throw new RequestFailureError(
 				"Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
+				{ schemaVersion: 1, kind: "local", reason: "request_preparation" },
 			);
 		}
 		apiKey = process.env.AZURE_OPENAI_API_KEY;
