@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.105.0 — Allow explicitly targeted external forge publication
+
+Permit guarded publication to canonical public GitHub and GitLab repository URLs while requiring interactive approval for external destinations. Fixes [#550](https://github.com/LeanAndMean/scramjet/issues/550).
+
+### Changed
+
+- Verify selected-target PR branches and bind GitLab postimage checks to the preflighted project.
+- Keep external GitHub issue guidance, duplicate checks, publication, and metadata on the selected repository.
+- Preserve same-origin publication policy and require explicit approval before writing to an external repository.
+
+### Tests
+
+- Cover external destination validation, approval, freshness, and publication consistency.
+
 ## 0.104.3 — Speed up styled tool output expansion
 
 Avoid grapheme segmentation for ANSI-styled printable ASCII tool output while retaining Unicode and control-character width behavior. Fixes [#589](https://github.com/LeanAndMean/scramjet/issues/589).
