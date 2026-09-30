@@ -284,8 +284,8 @@ export function failureFromProviderError(error: unknown): RequestFailureV1 | und
 	if (hasStatus && status !== 408 && status !== 429 && (status as number) < 500 && category && transient.has(category))
 		return { schemaVersion: 1, kind: "http", status: status as number, reason: "status" };
 	if (category) return { schemaVersion: 1, kind: "provider", category };
-	if (typeof code === "string" && code.length > 0) return { schemaVersion: 1, kind: "provider", category: "unknown" };
 	if (hasStatus) return { schemaVersion: 1, kind: "http", status: status as number, reason: "status" };
+	if (typeof code === "string" && code.length > 0) return { schemaVersion: 1, kind: "provider", category: "unknown" };
 	return undefined;
 }
 export function appendObservedFailure(message: AssistantMessage, error: unknown, preparationFailed = false): void {

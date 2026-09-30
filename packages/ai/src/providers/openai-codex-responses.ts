@@ -271,6 +271,12 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						throw error;
 					}
 					if (websocketStarted) {
+						if (error instanceof WebSocketTransportError)
+							throw new RequestFailureError(error.message, {
+								schemaVersion: 1,
+								kind: "stream",
+								reason: "transport",
+							});
 						throw error;
 					}
 					recordWebSocketSseFallback(options?.sessionId);
@@ -827,6 +833,8 @@ async function getWebSocketConstructor(): Promise<WebSocketConstructor | null> {
 	return ctor as unknown as WebSocketConstructor;
 }
 
+class WebSocketTransportError extends Error {}
+
 class WebSocketCloseError extends Error {
 	readonly code?: number;
 	readonly reason?: string;
@@ -1116,7 +1124,7 @@ async function* parseWebSocket(socket: WebSocketLike, signal?: AbortSignal): Asy
 	};
 
 	const onError: WebSocketListener = (event) => {
-		failed = extractWebSocketError(event);
+		failed = new WebSocketTransportError(extractWebSocketError(event).message);
 		done = true;
 		wake();
 	};

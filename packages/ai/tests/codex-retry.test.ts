@@ -53,6 +53,22 @@ describe("Codex retry boundaries", () => {
 			transient: false,
 		});
 	});
+	it.each([429, 503])("retries HTTP %s with an unfamiliar provider code", async (status) => {
+		const fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ error: { code: "new_provider_code" } }), {
+					status,
+					headers: { "retry-after-ms": "0" },
+				}),
+		);
+		vi.stubGlobal("fetch", fetch);
+		const result = await run({ maxRetries: 1 });
+		expect(fetch).toHaveBeenCalledTimes(2);
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			category: status === 429 ? "rate_limit" : "server",
+			transient: true,
+		});
+	});
 	it("honors ordinary 429 and explicit maxRetries", async () => {
 		const fetch = vi.fn(
 			async () =>
@@ -96,6 +112,59 @@ describe("Codex retry boundaries", () => {
 			vi.fn(async () => new Response(null, { status: 503 })),
 		);
 		expect(inspectFailureEvidence((await run({ maxRetries: 0 })).diagnostics)).toMatchObject({ category: "server" });
+	});
+	it("classifies a started WebSocket error event without SSE fallback and retains failed tool content", async () => {
+		class FailingWebSocket extends EventTarget {
+			readyState = 1;
+			constructor() {
+				super();
+				queueMicrotask(() => this.dispatchEvent(new Event("open")));
+			}
+			send() {
+				setTimeout(() => {
+					this.dispatchEvent(
+						new MessageEvent("message", {
+							data: JSON.stringify({ type: "response.created", response: { id: "resp_1" } }),
+						}),
+					);
+					this.dispatchEvent(
+						new MessageEvent("message", {
+							data: JSON.stringify({
+								type: "response.output_item.added",
+								output_index: 0,
+								item: {
+									type: "function_call",
+									id: "fc_1",
+									call_id: "call_1",
+									name: "read",
+									arguments: "",
+								},
+							}),
+						}),
+					);
+					setTimeout(
+						() => this.dispatchEvent(Object.assign(new Event("error"), { message: "upstream disconnected" })),
+						0,
+					);
+				}, 0);
+			}
+			close() {
+				this.readyState = 3;
+			}
+		}
+		vi.stubGlobal("WebSocket", FailingWebSocket);
+		const fetch = vi.fn();
+		vi.stubGlobal("fetch", fetch);
+		const result = await streamOpenAICodexResponses(model, context, { apiKey, transport: "websocket" }).result();
+		expect(fetch).not.toHaveBeenCalled();
+		expect(result.stopReason).toBe("error");
+		expect(result.content).toContainEqual(expect.objectContaining({ type: "toolCall" }));
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			status: "valid",
+			category: "transport",
+			family: "request_failure",
+			transient: true,
+		});
 	});
 	it.each([0, 3])("persists excessive server delay suppression even with %s inner retries", async (maxRetries) => {
 		const fetch = vi.fn(async () => new Response(null, { status: 503, headers: { "retry-after": "120" } }));
