@@ -40,7 +40,7 @@ import {
 } from "../utils/diagnostics.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
-	appendObservedFailure,
+	appendBuiltinFailure,
 	failureFromProviderError,
 	invokeProviderCallback,
 	RequestFailureError,
@@ -266,7 +266,12 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 					);
 					recordWebSocketFailure(options?.sessionId, error);
 					const failure = normalizeResponsesFailure(error, "stream");
-					if (failure.diagnostic.category === "missing_terminal_event") {
+					if (
+						failure.diagnostic.category === "missing_terminal_event" ||
+						(websocketStarted &&
+							!(error instanceof WebSocketTransportError) &&
+							!(error instanceof WebSocketCloseError))
+					) {
 						appendResponsesFailureDiagnostics(output, failure);
 						throw error;
 					}
@@ -392,7 +397,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : String(error);
 			if (!output.diagnostics?.some((d) => d.type === "provider_failure"))
-				appendObservedFailure(
+				appendBuiltinFailure(
 					output,
 					!prepared && !(error instanceof RequestFailureError)
 						? new RequestFailureError("Codex request preparation failed.", {

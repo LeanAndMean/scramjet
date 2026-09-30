@@ -386,6 +386,37 @@ describe("Provider failure recovery policy", () => {
 			session.dispose();
 		}
 	});
+	it.each(["unknown", "provider_error", "malformed_event"])(
+		"does not compact explicit %s at failure settlement but maintains on a new prompt",
+		async (category) => {
+			const { session } = await createFixture(() => assistantText("done"));
+			const successful = { ...assistantText("prior"), timestamp: 2_000_000_000_000 };
+			successful.usage.input = testModel.contextWindow;
+			const failed =
+				category === "provider_error"
+					? providerFailure("unknown", "provider_error")
+					: failure(
+							category === "unknown"
+								? { schemaVersion: 1, kind: "provider", category }
+								: { schemaVersion: 1, kind: "stream", reason: category },
+						);
+			session.agent.state.messages = [successful, failed];
+			const internal = session as unknown as {
+				_checkCompaction: (message: AssistantMessage) => Promise<void>;
+				_runAutoCompaction: (reason: string, retry: boolean) => Promise<void>;
+			};
+			const compact = vi.spyOn(internal, "_runAutoCompaction").mockResolvedValue();
+			try {
+				await internal._checkCompaction(failed);
+				expect(compact).not.toHaveBeenCalled();
+				await session.prompt("next");
+				expect(compact).toHaveBeenCalledWith("threshold", false);
+			} finally {
+				compact.mockRestore();
+				session.dispose();
+			}
+		},
+	);
 	it("maintains context on a new prompt without reviving a callback error", async () => {
 		const { session } = await createFixture(() => assistantText("unused"));
 		const successful = assistantText("done");

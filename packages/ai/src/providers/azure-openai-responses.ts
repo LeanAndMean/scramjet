@@ -12,7 +12,7 @@ import type {
 	StreamOptions,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { appendObservedFailure, appendRequestFailure, RequestFailureError } from "../utils/failure-evidence.js";
+import { appendBuiltinFailure, appendRequestFailure, RequestFailureError } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import {
 	abortedResponsesFailureMessage,
@@ -101,7 +101,10 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 		try {
 			// Create Azure OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const client = createClient(model, apiKey, options, sdkRequestObserver.fetch);
+			const client = createClient(model, apiKey, options, (input, init) => {
+				requestStarted = true;
+				return sdkRequestObserver.fetch(input, init);
+			});
 			let params = buildParams(model, context, options, deploymentName);
 			try {
 				const nextParams = await options?.onPayload?.(params, model);
@@ -117,7 +120,6 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
-			requestStarted = true;
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
 			sdkRequestObserver.markAccepted();
 			try {
@@ -165,7 +167,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				output.errorMessage = abortedResponsesFailureMessage(error);
 			} else if (error instanceof RequestFailureError) {
 				output.errorMessage = error.message;
-				appendObservedFailure(output, error);
+				appendBuiltinFailure(output, error);
 			} else if (!requestStarted) {
 				output.errorMessage = "Azure Responses request preparation failed.";
 				appendRequestFailure(output, { schemaVersion: 1, kind: "local", reason: "request_preparation" });

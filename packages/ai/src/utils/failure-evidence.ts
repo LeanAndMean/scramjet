@@ -1,4 +1,3 @@
-import { validateResponsesProviderFailure } from "../providers/openai-responses-shared.js";
 import type { AssistantMessage } from "../types.js";
 
 // SCRAMJET-DIVERGENCE: Failure facts survive persistence independently of recovery policy.
@@ -23,6 +22,24 @@ export type FailureCategory =
 	| "missing_body"
 	| "missing_terminal_event"
 	| "malformed_event";
+export type ResponsesFailureCategory = Exclude<FailureCategory, "missing_body"> | "provider_error";
+export type ResponsesRetryDisposition = "transient" | "non_transient" | "unknown";
+export interface ResponsesProviderFailureV1 {
+	schemaVersion: 1;
+	layer: "openai_responses";
+	phase: "request" | "stream";
+	kind: "http" | "provider_event" | "transport" | "malformed_event" | "stream_termination";
+	category: ResponsesFailureCategory;
+	retryDisposition: ResponsesRetryDisposition;
+	detailSource: "provider_code" | "provider_type" | "http_status" | "message_category" | "none";
+	httpStatus?: number;
+	providerCode?: (typeof responsesProviderCodes)[number];
+}
+export type ResponsesProviderFailureValidation =
+	| { status: "absent" }
+	| { status: "malformed" }
+	| { status: "duplicate" }
+	| { status: "valid"; category: ResponsesFailureCategory; retryDisposition: ResponsesRetryDisposition };
 export type RequestFailureV1 =
 	| {
 			schemaVersion: 1;
@@ -72,7 +89,7 @@ const object = (value: unknown): Record<string, unknown> | undefined =>
 const keys = (value: Record<string, unknown>, names: string[]) =>
 	Object.keys(value).length === names.length && names.every((key) => Object.hasOwn(value, key));
 const member = (value: unknown, choices: readonly string[]) => typeof value === "string" && choices.includes(value);
-export function httpFailureCategory(status: number): FailureCategory {
+export function httpFailureCategory(status: number): (typeof categories)[number] {
 	if (status === 408 || status === 504) return "timeout";
 	if (status === 429) return "rate_limit";
 	if (status >= 500) return "server";
@@ -109,11 +126,7 @@ export function validateRequestFailure(diagnostics: unknown): FailureEvidence {
 			"unknown",
 		])
 	) {
-		if (
-			[401, 403, 404].includes(d.status as number) &&
-			d.reason !== "status" &&
-			d.reason !== httpFailureCategory(d.status as number)
-		)
+		if (d.reason !== "status" && !isFailureCategoryCompatibleWithStatus(d.status as number, d.reason as string))
 			return { status: "malformed" };
 		category = d.reason === "status" ? httpFailureCategory(d.status as number) : (d.reason as string);
 	} else if (
@@ -183,6 +196,129 @@ export function inspectFailureEvidence(diagnostics: unknown): FailureEvidence {
 		return { ...result, suppression: d.reason };
 	return { status: "malformed" };
 }
+export function responsesHttpFailureCategory(status: number | undefined): ResponsesFailureCategory | undefined {
+	return status !== undefined && ([400, 401, 403, 404, 408, 409, 413, 422, 429].includes(status) || status >= 500)
+		? httpFailureCategory(status)
+		: undefined;
+}
+export function isFailureCategoryCompatibleWithStatus(status: number | undefined, category: string): boolean {
+	if (status === undefined) return true;
+	if ([401, 403, 404].includes(status)) return category === httpFailureCategory(status);
+	if (category === "context_overflow") return [400, 413, 422].includes(status);
+	return !transient.has(category) || status === 408 || status === 429 || status >= 500;
+}
+export const responsesCategoryDispositions = Object.fromEntries(
+	[...categories, "provider_error", "missing_terminal_event", "malformed_event"].map((category) => [
+		category,
+		transient.has(category)
+			? "transient"
+			: ["unknown", "provider_error", "missing_terminal_event", "malformed_event"].includes(category)
+				? "unknown"
+				: "non_transient",
+	]),
+) as Record<ResponsesFailureCategory, ResponsesRetryDisposition>;
+function isResponsesFailureDetails(value: unknown): value is ResponsesProviderFailureV1 {
+	const d = object(value);
+	if (
+		!d ||
+		Object.keys(d).some(
+			(key) =>
+				![
+					"schemaVersion",
+					"layer",
+					"phase",
+					"kind",
+					"category",
+					"retryDisposition",
+					"detailSource",
+					"httpStatus",
+					"providerCode",
+				].includes(key),
+		)
+	)
+		return false;
+	const category = d.category;
+	const kind = d.kind;
+	const source = d.detailSource;
+	const status = d.httpStatus;
+	const code = d.providerCode;
+	if (
+		d.schemaVersion !== 1 ||
+		d.layer !== "openai_responses" ||
+		!member(d.phase, ["request", "stream"]) ||
+		!member(kind, ["http", "provider_event", "transport", "malformed_event", "stream_termination"]) ||
+		typeof category !== "string" ||
+		!Object.hasOwn(responsesCategoryDispositions, category) ||
+		d.retryDisposition !== responsesCategoryDispositions[category as ResponsesFailureCategory] ||
+		!member(source, ["provider_code", "provider_type", "http_status", "message_category", "none"]) ||
+		(status !== undefined &&
+			(typeof status !== "number" || !Number.isInteger(status) || status < 100 || status > 599)) ||
+		(code !== undefined && !member(code, responsesProviderCodes))
+	)
+		return false;
+	if (!isFailureCategoryCompatibleWithStatus(status as number | undefined, category)) return false;
+	if (kind === "stream_termination")
+		return (
+			d.phase === "stream" &&
+			category === "missing_terminal_event" &&
+			source === "none" &&
+			status === undefined &&
+			code === undefined
+		);
+	if (category === "missing_terminal_event") return false;
+	if (kind === "malformed_event")
+		return category === "malformed_event" && source === "none" && status === undefined && code === undefined;
+	if (kind === "transport")
+		return (
+			status === undefined &&
+			code === undefined &&
+			(source === "none"
+				? category === "transport" || category === "timeout"
+				: d.phase === "request" && source === "message_category" && category === "transport")
+		);
+	if (kind === "http" && status === undefined) return false;
+	if (kind === "provider_event" && d.phase === "request" && (status !== undefined || category === "transport"))
+		return false;
+	if (source === "provider_code" || source === "provider_type")
+		return (
+			typeof code === "string" &&
+			responsesProviderCodeCategories[code as (typeof responsesProviderCodes)[number]] === category
+		);
+	if (source === "http_status")
+		return code === undefined && responsesHttpFailureCategory(status as number | undefined) === category;
+	if (source === "message_category") {
+		if (["provider_error", "malformed_event", "unknown"].includes(category)) return false;
+		if (code !== undefined && (category !== "context_overflow" || code === "context_length_exceeded")) return false;
+		return (
+			responsesHttpFailureCategory(status as number | undefined) === undefined || category === "context_overflow"
+		);
+	}
+	if (code !== undefined) return false;
+	if (kind === "http") {
+		const statusCategory = responsesHttpFailureCategory(status as number);
+		return (
+			(category === "unknown" && statusCategory === undefined) ||
+			(category === "provider_error" && (statusCategory === undefined || transient.has(statusCategory)))
+		);
+	}
+	if (status !== undefined)
+		return (
+			kind === "provider_event" &&
+			(category === "provider_error" || category === "unknown") &&
+			responsesHttpFailureCategory(status as number) === undefined
+		);
+	return kind === "provider_event" && ["provider_error", "unknown", "malformed_event"].includes(category);
+}
+export function validateResponsesProviderFailure(diagnostics: unknown): ResponsesProviderFailureValidation {
+	if (diagnostics === undefined) return { status: "absent" };
+	if (!Array.isArray(diagnostics)) return { status: "malformed" };
+	const matches = diagnostics.filter((entry) => object(entry)?.type === "provider_failure");
+	if (matches.length === 0) return { status: "absent" };
+	if (matches.length > 1) return { status: "duplicate" };
+	const details = object(matches[0])?.details;
+	if (!isResponsesFailureDetails(details)) return { status: "malformed" };
+	return { status: "valid", category: details.category, retryDisposition: details.retryDisposition };
+}
 export function blocksFailureRecovery(message: AssistantMessage): boolean {
 	if (message.stopReason === "aborted") return true;
 	const evidence = inspectFailureEvidence(message.diagnostics);
@@ -191,7 +327,10 @@ export function blocksFailureRecovery(message: AssistantMessage): boolean {
 	if (message.origin === "harness") return true;
 	return (
 		evidence.status !== "absent" &&
-		(evidence.status !== "valid" || evidence.source !== "provider" || evidence.suppression !== undefined)
+		(evidence.status !== "valid" ||
+			evidence.source !== "provider" ||
+			evidence.suppression !== undefined ||
+			["unknown", "provider_error", "malformed_event"].includes(evidence.category))
 	);
 }
 export function appendRequestFailure(message: AssistantMessage, details: RequestFailureV1): void {
@@ -246,6 +385,8 @@ const codeCategory: Record<string, (typeof categories)[number]> = {
 	timeout: "timeout",
 	ModelTimeoutException: "timeout",
 	context_length_exceeded: "context_overflow",
+	not_found: "not_found",
+	conflict: "conflict",
 	authentication_error: "authentication",
 	permission_denied: "permission",
 	invalid_request_error: "invalid_request",
@@ -253,7 +394,26 @@ const codeCategory: Record<string, (typeof categories)[number]> = {
 	content_filter: "content_rejection",
 	content_policy_violation: "content_rejection",
 };
-export function failureFromProviderError(error: unknown): RequestFailureV1 | undefined {
+export const responsesProviderCodes = [
+	"rate_limit_exceeded",
+	"insufficient_quota",
+	"billing_hard_limit_reached",
+	"overloaded_error",
+	"server_error",
+	"timeout",
+	"context_length_exceeded",
+	"authentication_error",
+	"permission_denied",
+	"invalid_request_error",
+	"not_found",
+	"conflict",
+	"content_filter",
+	"content_policy_violation",
+] as const;
+export const responsesProviderCodeCategories = Object.fromEntries(
+	responsesProviderCodes.map((code) => [code, codeCategory[code]]),
+) as Record<(typeof responsesProviderCodes)[number], ResponsesFailureCategory>;
+export function failureFromProviderError(error: unknown, provider?: string): RequestFailureV1 | undefined {
 	if (error instanceof RequestFailureError) return error.failure;
 	const e = object(error);
 	if (!e) return undefined;
@@ -277,28 +437,53 @@ export function failureFromProviderError(error: unknown): RequestFailureV1 | und
 	let category =
 		typeof candidate === "string" && Object.hasOwn(codeCategory, candidate) ? codeCategory[candidate] : undefined;
 	const message = nested?.message ?? e.message;
+	if (provider === "anthropic" && candidate === "request_too_large" && status === 413) category = "context_overflow";
 	if (
-		(status === 400 || status === 413 || category === "invalid_request") &&
+		(!category || category === "invalid_request") &&
+		(status === 400 || status === 413 || status === 422 || category === "invalid_request") &&
 		typeof message === "string" &&
-		/prompt is too long|context_length_exceeded|maximum context length|exceeds? (?:the )?context (?:window|length)|input (?:is )?too long|input token count.*exceeds the maximum/i.test(
-			message,
-		)
+		isProviderOverflowMessage(message, provider)
 	)
 		category = "context_overflow";
 	if (hasStatus && [401, 403, 404].includes(status as number))
 		return { schemaVersion: 1, kind: "http", status: status as number, reason: "status" };
 	if (hasStatus && status !== 408 && status !== 429 && (status as number) < 500 && category && transient.has(category))
 		return { schemaVersion: 1, kind: "http", status: status as number, reason: "status" };
-	if (category) return { schemaVersion: 1, kind: "provider", category };
+	if (category && isFailureCategoryCompatibleWithStatus(hasStatus ? (status as number) : undefined, category))
+		return { schemaVersion: 1, kind: "provider", category };
 	if (hasStatus) return { schemaVersion: 1, kind: "http", status: status as number, reason: "status" };
 	if (typeof code === "string" && code.length > 0) return { schemaVersion: 1, kind: "provider", category: "unknown" };
 	return undefined;
+}
+export function isProviderOverflowMessage(message: string, provider?: string): boolean {
+	if (/rate limit|too many requests|throttling|quota|billing/i.test(message)) return false;
+	if (
+		/prompt is too long|context_length_exceeded|maximum context length|exceeds? (?:the )?context (?:window|length)|input (?:is )?too long|input token count.*exceeds the maximum/i.test(
+			message,
+		)
+	)
+		return true;
+	if (provider === "anthropic" && /request_too_large/i.test(message)) return true;
+	if (provider === "xai" && /maximum prompt length is \d+/i.test(message)) return true;
+	if (provider === "groq" && /reduce the length of the messages/i.test(message)) return true;
+	if (
+		provider === "together" &&
+		/input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i.test(message)
+	)
+		return true;
+	return provider === "cerebras" && /^4(?:00|13)\s*(?:status code)?\s*\(no body\)/i.test(message);
+}
+export function appendBuiltinFailure(message: AssistantMessage, error: unknown, preparationFailed = false): void {
+	if (inspectFailureEvidence(message.diagnostics).status !== "absent") return;
+	appendObservedFailure(message, error, preparationFailed);
+	if (inspectFailureEvidence(message.diagnostics).status === "absent")
+		appendRequestFailure(message, { schemaVersion: 1, kind: "provider", category: "unknown" });
 }
 export function appendObservedFailure(message: AssistantMessage, error: unknown, preparationFailed = false): void {
 	const failure: RequestFailureV1 | undefined =
 		preparationFailed && !(error instanceof RequestFailureError)
 			? { schemaVersion: 1, kind: "local", reason: "request_preparation" }
-			: failureFromProviderError(error);
+			: failureFromProviderError(error, message.provider);
 	if (failure) appendRequestFailure(message, failure);
 	if (error instanceof RequestFailureError && error.suppression)
 		message.diagnostics = [

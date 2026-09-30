@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+	normalizeResponsesFailure,
+	validateResponsesProviderFailure,
+} from "../src/providers/openai-responses-shared.js";
 import type { AssistantMessage } from "../src/types.js";
 import {
 	appendObservedFailure,
@@ -68,6 +72,64 @@ describe("persisted failure evidence", () => {
 		});
 		expect(isContextOverflow(result)).toBe(true);
 	});
+	it.each([401, 403, 404])("Responses HTTP %s vetoes conflicting overflow", (status) => {
+		const produced = normalizeResponsesFailure(
+			{ status, error: { code: "context_length_exceeded" } },
+			"request",
+		).diagnostic;
+		expect(validateResponsesProviderFailure([diagnostic(produced, "provider_failure")])).toMatchObject({
+			status: "valid",
+			category: status === 401 ? "authentication" : status === 403 ? "permission" : "not_found",
+		});
+		const contradictory = {
+			...produced,
+			category: "context_overflow",
+			retryDisposition: "non_transient",
+			detailSource: "provider_code",
+			providerCode: "context_length_exceeded",
+		};
+		expect(validateResponsesProviderFailure([diagnostic(contradictory, "provider_failure")])).toEqual({
+			status: "malformed",
+		});
+	});
+	it("does not infer transport from a generic request-phase TypeError", () => {
+		expect(
+			normalizeResponsesFailure(new TypeError("Do not know how to serialize a BigInt"), "request").diagnostic
+				.category,
+		).not.toBe("transport");
+	});
+	it.each(["unknown", "provider_error", "malformed_event"])(
+		"blocks failure-triggered recovery for explicit %s",
+		(category) => {
+			const details =
+				category === "malformed_event"
+					? { schemaVersion: 1, kind: "stream", reason: category }
+					: category === "provider_error"
+						? {
+								schemaVersion: 1,
+								layer: "openai_responses",
+								phase: "stream",
+								kind: "provider_event",
+								category,
+								retryDisposition: "unknown",
+								detailSource: "none",
+							}
+						: { schemaVersion: 1, kind: "provider", category };
+			expect(
+				inspectFailureEvidence([
+					diagnostic(details, category === "provider_error" ? "provider_failure" : "request_failure"),
+				]),
+			).toMatchObject({ status: "valid", category });
+			expect(
+				blocksFailureRecovery({
+					...message(),
+					diagnostics: [
+						diagnostic(details, category === "provider_error" ? "provider_failure" : "request_failure"),
+					],
+				}),
+			).toBe(true);
+		},
+	);
 	it("preserves absent-evidence legacy overflow", () => expect(isContextOverflow(message())).toBe(true));
 	it("keeps quota separate from HTTP rate limiting", () => {
 		expect(failureFromProviderError({ status: 429, error: { code: "insufficient_quota" } })).toMatchObject({

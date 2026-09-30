@@ -114,6 +114,34 @@ describe("Codex retry boundaries", () => {
 		);
 		expect(inspectFailureEvidence((await run({ maxRetries: 0 })).diagnostics)).toMatchObject({ category: "server" });
 	});
+	it("falls back to SSE after a pre-open WebSocket error", async () => {
+		class FailingWebSocket extends EventTarget {
+			readyState = 0;
+			constructor() {
+				super();
+				queueMicrotask(() =>
+					this.dispatchEvent(Object.assign(new Event("error"), { message: "upstream disconnected" })),
+				);
+			}
+			send() {}
+			close() {
+				this.readyState = 3;
+			}
+		}
+		vi.stubGlobal("WebSocket", FailingWebSocket);
+		const fetch = vi.fn(
+			async () =>
+				new Response(
+					'data: {"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}\n\n',
+					{ headers: { "content-type": "text/event-stream" } },
+				),
+		);
+		vi.stubGlobal("fetch", fetch);
+		const result = await run({ transport: "websocket" });
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(result.stopReason).toBe("stop");
+		expect(inspectFailureEvidence(result.diagnostics)).toEqual({ status: "absent" });
+	});
 	it("classifies a started WebSocket error event without SSE fallback and retains failed tool content", async () => {
 		class FailingWebSocket extends EventTarget {
 			readyState = 1;

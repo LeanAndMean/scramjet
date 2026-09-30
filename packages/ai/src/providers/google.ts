@@ -21,7 +21,7 @@ import type {
 	ToolCall,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { appendObservedFailure, invokeProviderCallback, RequestFailureError } from "../utils/failure-evidence.js";
+import { appendBuiltinFailure, invokeProviderCallback, RequestFailureError } from "../utils/failure-evidence.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { flattenSystemPrompt } from "../utils/system-prompt.js";
 import type { GoogleThinkingLevel } from "./google-shared.js";
@@ -284,7 +284,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-			appendObservedFailure(output, error, !requestStarted);
+			appendBuiltinFailure(output, error, !requestStarted);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

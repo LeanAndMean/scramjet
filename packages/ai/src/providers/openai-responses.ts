@@ -15,7 +15,7 @@ import type {
 	Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { appendObservedFailure, appendRequestFailure, RequestFailureError } from "../utils/failure-evidence.js";
+import { appendBuiltinFailure, appendRequestFailure, RequestFailureError } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -118,14 +118,10 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(
-				model,
-				context,
-				apiKey,
-				options?.headers,
-				cacheSessionId,
-				sdkRequestObserver.fetch,
-			);
+			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, (input, init) => {
+				requestStarted = true;
+				return sdkRequestObserver.fetch(input, init);
+			});
 			let params = buildParams(model, context, options);
 			try {
 				const nextParams = await options?.onPayload?.(params, model);
@@ -141,7 +137,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
-			requestStarted = true;
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
 			sdkRequestObserver.markAccepted();
 			try {
@@ -192,7 +187,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				output.errorMessage = abortedResponsesFailureMessage(error);
 			} else if (error instanceof RequestFailureError) {
 				output.errorMessage = error.message;
-				appendObservedFailure(output, error);
+				appendBuiltinFailure(output, error);
 			} else if (!requestStarted) {
 				output.errorMessage = "OpenAI Responses request preparation failed.";
 				appendRequestFailure(output, { schemaVersion: 1, kind: "local", reason: "request_preparation" });
