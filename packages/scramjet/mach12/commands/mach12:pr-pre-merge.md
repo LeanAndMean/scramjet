@@ -10,6 +10,7 @@ allowed-tools:
   - glob
   - edit
   - write
+  - subagent
   - get_scramjet_user_input
   - delegate
 next:
@@ -109,7 +110,7 @@ Pass the unqualified default branch name established above and the current PR nu
 
 Consume the complete delegated handoff, including its outcome, repository and branch identities, commits, both delta intents, conflict resolutions and semantic corrections, project-native checks, push destination, convergence evidence, preserved unrelated state, and unresolved follow-up. Continue to Step 5 only when the outcome is `integrated` or `already integrated`, every required check succeeded, and local, upstream, forge, and matching-PR convergence is established. For `aborted`, `blocked`, or `indeterminate` outcomes, or an incomplete success handoff, surface the result and stop without attempting to integrate, finalize, or push it again.
 
-The delegated command exclusively owns integration, conflict resolution, semantic corrections, merge finalization, integration push, and convergence verification. Pre-Merge retains the later checklist-change commit and push in Step 8 and the existing `mach12:push` delegation for CI-fix batches in Step 9.
+The delegated command exclusively owns integration, conflict resolution, semantic corrections, merge finalization, integration push, and convergence verification. Pre-Merge retains the later checklist-change commit and push in Step 8; `mach12:pr-ci-fix` owns CI remediation delegated in Step 9.
 
 ## Step 5: Read contribution guidelines
 
@@ -231,53 +232,19 @@ Check whether CI is passing on the current HEAD of the PR branch. This step catc
 
 If the user provided a skip directive for CI (e.g., "skip CI", "no CI check"), skip this step, record "CI: skipped per user request", and proceed to Step 10.
 
-### 9a. Check CI status
+Read CI for the current PR head:
 
 ```
 gh pr checks <pr-number> --json name,state,bucket,link
 ```
 
-If checks are pending, poll periodically while provider status or logs show progress. If progress stalls, inspect the provider state; if it remains unclear or continued waiting is impractical in this session, report which checks remain pending and stop without claiming readiness. If no checks appear after a short wait, note that in the report. Proceed when checks pass; diagnose failures before attempting a fix.
-
-### 9b. Diagnose failures
-
-Use the same progress-aware polling and stop rule for running checks, then inspect the available logs or provider links for each failure.
-
-Identify the root cause of each failure:
-
-- **Lint/format errors**: identify the linter and the failing files.
-- **Type errors**: identify the type-checker and the failing files.
-- **Build errors**: identify the build step and error message.
-- **Test failures**: if Step 7d already ran tests and they passed locally, these may stem from code pushed before the checklist ran, or from platform-specific differences.
-- **Other failures** (packaging, smoke tests, import guards): read the log output and diagnose accordingly.
-
-If evidence points to a transient CI or infrastructure failure, rerun the affected check when supported and verify its result for the current PR HEAD. If all required checks pass, proceed to Step 10; otherwise diagnose the new result.
-
-### 9c. Fix and push
-
-Fix diagnosed PR-caused failures locally. For common categories:
-
-- **Lint/format**: run the project's lint-fix command (e.g., `npx biome check --write .`, `npm run lint -- --write`). Identify the correct command from `package.json` scripts or project configuration.
-- **Type errors**: fix the type issues in the identified files.
-- **Build errors**: fix the source based on the build error.
-- **Test failures**: diagnose and fix as described in Step 7d.
-
-After applying fixes, verify locally by running the relevant check command before pushing.
-
-Delegate to push the fixes:
+When CI is not verified successful, delegate its resolution to:
 
 ```
-/mach12:push CI fix: <brief description of what was fixed> for PR #<pr-number>
+/mach12:pr-ci-fix <pr-number>
 ```
 
-Proceed only when the delegation confirms that the commit was pushed successfully. Otherwise report the result and stop before CI verification.
-
-### 9d. Verify
-
-Check CI on each pushed fix using the same progress-aware polling and stop rule. Proceed to Step 10 only when CI passes. If checks still fail, inspect the new evidence and return to diagnosis while a concrete, safe next action exists. Otherwise escalate with:
-- Which checks are still unsuccessful and their log output.
-- What was attempted and why it did not resolve the issue.
-- A recommendation for next steps.
+Pass the current-head evidence and relevant checklist context. Consume the outcome, verified head, CI results and evidence, fix summary, plan and push/progress references, and unresolved work. Continue to Step 10 only when the handoff establishes successful CI for the current PR head and verified required durable records. Surface incomplete, pending, failed, blocked, or uncorrelated results and stop without declaring readiness or repeating delegated mutations. CI-fix owns remediation and its push handoff; Step 10 retains final readiness.
 
 ## Step 10: Final readiness and pre-merge report
 

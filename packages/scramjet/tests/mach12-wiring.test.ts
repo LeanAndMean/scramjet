@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@leanandmean/coding-agent";
 import { describe, expect, it } from "vitest";
-import { parseAutonomyRecommendations } from "../src/autonomy-settings.js";
+import { parseAutonomyRecommendations, resolvePublicationPolicy } from "../src/autonomy-settings.js";
 import { parseCommandFile } from "../src/commands/loader.js";
 import type { NextStepPolicy } from "../src/types.js";
 
@@ -96,6 +96,7 @@ const WIRING: WiringRow[] = [
 			candidates: [{ name: "mach12:pr-review" }, { name: "mach12:pr-validation" }, { name: "mach12:pr-pre-merge" }],
 		},
 	},
+	{ basename: "pr-ci-fix", expected: null },
 	{
 		basename: "pr-pre-merge",
 		expected: {
@@ -408,7 +409,7 @@ describe("mach12 inline forge publication inventory", () => {
 		expect(existsSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-comment.md`))).toBe(false);
 	});
 
-	it.each(["issue-implement", "pr-review-fix", "pr-pre-merge"])(
+	it.each(["issue-implement", "pr-review-fix", "pr-pre-merge", "pr-ci-fix"])(
 		"%s permits delegated progress publication",
 		(basename) => {
 			const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
@@ -1590,6 +1591,77 @@ describe("mach12 branch integration contract", () => {
 	});
 });
 
+describe("mach12 CI-fix invocation and publication contracts", () => {
+	const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-ci-fix.md`);
+	const content = readFileSync(filePath, "utf-8");
+
+	it("declares the direct interface and delegated investigation, review, and push capabilities", () => {
+		const parsed = parseCommandFile(filePath, content, SET_NAME);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.def.argumentHint).toBe("<pr-number> [context]");
+		expect(parsed.def.allowedTools).toEqual([
+			"add_issue_comment",
+			"add_pr_comment",
+			"bash",
+			"read",
+			"grep",
+			"edit",
+			"write",
+			"subagent",
+			"delegate",
+			"get_scramjet_user_input",
+			"report_scramjet_command_status",
+		]);
+		expect(content.match(/\$ARGUMENTS/g)).toHaveLength(1);
+		expect(content).toContain("<user-context>\n$ARGUMENTS\n</user-context>");
+		expect(content).toContain("/mach12:gh-pr-read <pr-number>");
+		const preMergePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`);
+		const preMerge = parseCommandFile(preMergePath, readFileSync(preMergePath, "utf-8"), SET_NAME);
+		expect(preMerge.ok).toBe(true);
+		if (!preMerge.ok) return;
+		for (const tool of parsed.def.allowedTools ?? []) {
+			if (tool !== "report_scramjet_command_status") expect(preMerge.def.allowedTools).toContain(tool);
+		}
+	});
+
+	it("reserves status reporting for direct invocation and returns the caller's CI handoff", () => {
+		const result = content.slice(content.indexOf("## Establish the result"));
+		expect(result).toMatch(/delegated invocation[^\n]*without calling `report_scramjet_command_status`/);
+		expect(result).toMatch(/direct invocation[^\n]*After delivering your answer/);
+		expect(result).toContain("Omit `next_steps`");
+		for (const field of [
+			"outcome",
+			"verified head",
+			"CI results and evidence",
+			"fix summary",
+			"plan and push/progress references",
+			"unresolved work",
+		]) {
+			expect(result).toContain(field);
+		}
+		expect(content).toContain("Require verified publication before implementing the plan");
+	});
+
+	it("preserves direct approval fallback and the caller's publication policy", () => {
+		const defaults = parseAutonomyRecommendations(
+			readFileSync(resolve(MACH12_COMMANDS_DIR, "..", "autonomy-defaults.yaml"), "utf-8"),
+		);
+		for (const tool of ["add_pr_comment", "add_issue_comment"] as const) {
+			expect(resolvePublicationPolicy(null, defaults, "mach12:pr-ci-fix", tool).policy).toBe("require-approval");
+			expect(resolvePublicationPolicy(null, defaults, "mach12:pr-pre-merge", tool).policy).toBe("auto-approve");
+		}
+	});
+
+	it("preserves push's progress marker and its review-fix consumer", () => {
+		for (const basename of ["push", "pr-review-fix"]) {
+			expect(readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8")).toContain(
+				"<!-- mach12-progress -->",
+			);
+		}
+	});
+});
+
 describe("mach12 pre-merge version propagation contract", () => {
 	const guidelines = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:find-contribution-guidelines.md`), "utf-8");
 	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
@@ -1741,15 +1813,16 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(finalSection).toContain("final authoritative readiness reread");
 	});
 
-	it("pre-merge gates post-fix verification on a confirmed push", () => {
+	it("pre-merge consumes verified CI-fix results before final readiness", () => {
 		const ciSection = preMerge.slice(preMerge.indexOf("## Step 9:"), preMerge.indexOf("## Step 10:"));
-		const pushGate = ciSection.indexOf("delegation confirms that the commit was pushed successfully");
-		const verify = ciSection.indexOf("### 9d. Verify");
-		expect(pushGate).toBeGreaterThan(-1);
-		expect(pushGate).toBeLessThan(verify);
-		expect(ciSection).toContain("Otherwise report the result and stop before CI verification");
-		expect(ciSection.slice(verify)).toContain(
-			"Check CI on each pushed fix using the same progress-aware polling and stop rule",
+		expect(ciSection).toContain("/mach12:pr-ci-fix <pr-number>");
+		expect(ciSection).toContain("successful CI for the current PR head");
+		expect(ciSection).toContain("verified required durable records");
+		expect(ciSection).toContain("stop without declaring readiness or repeating delegated mutations");
+		expect(ciSection).not.toContain("/mach12:push");
+		expect(ciSection).toContain('record "CI: skipped per user request"');
+		expect(preMerge.slice(preMerge.indexOf("### 7d."), preMerge.indexOf("## Step 8:"))).toContain(
+			"Attempt to diagnose and fix",
 		);
 	});
 
@@ -1763,14 +1836,16 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(readinessSection(merge)).not.toContain("statusCheckRollup");
 	});
 
-	it("pre-merge stops polling when CI progress cannot be established", () => {
-		const ciSection = preMerge.slice(preMerge.indexOf("## Step 9:"), preMerge.indexOf("## Step 10:"));
-		expect(ciSection).toContain("poll periodically while provider status or logs show progress");
-		expect(ciSection).toContain(
-			"If progress stalls, inspect the provider state; if it remains unclear or continued waiting is impractical in this session, report which checks remain pending and stop without claiming readiness",
+	it("CI-fix owns push correlation and unresolved CI evidence", () => {
+		const ciFix = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-ci-fix.md`), "utf-8");
+		expect(ciFix).toContain("/mach12:push CI fix: <summary> for PR #<pr-number>");
+		expect(ciFix).toContain(
+			"Consume its verified head and progress-artifact result before correlating later CI evidence",
 		);
-		expect(ciSection).toContain("available logs or provider links");
-		expect(ciSection).not.toMatch(/gh pr checks[^\n]*--watch/);
+		expect(ciFix).toContain("correlating checks and provider results with that exact commit");
+		expect(ciFix).toContain("progress-aware troubleshooting");
+		expect(ciFix).toContain("cannot establish success");
+		expect(ciFix).toContain("Preserve a successful push when progress publication is incomplete");
 	});
 
 	it("documents release publication as outside the four-tool migration", () => {
