@@ -43,6 +43,7 @@ import type {
 	ToolResultMessage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendBuiltinFailure, invokeProviderCallback, RequestFailureError } from "../utils/failure-evidence.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { createHttpProxyAgentsForTarget } from "../utils/node-http-proxy.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -120,75 +121,76 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 			timestamp: Date.now(),
 		};
 
-		const blocks = output.content as Block[];
-
-		const config: BedrockRuntimeClientConfig = {
-			profile: options.profile,
-		};
-		const configuredRegion = getConfiguredBedrockRegion(options);
-		const hasConfiguredProfile = hasConfiguredBedrockProfile();
-		const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
-		const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
-			model.baseUrl,
-			configuredRegion,
-			hasConfiguredProfile,
-		);
-
-		// Only pin standard AWS Bedrock runtime endpoints when no region/profile is configured.
-		// This preserves custom endpoints (VPC/proxy) from #3402 without forcing built-in
-		// catalog defaults such as us-east-1 to override AWS_REGION/AWS_PROFILE.
-		if (useExplicitEndpoint) {
-			config.endpoint = model.baseUrl;
-		}
-
-		// Resolve bearer token for Bedrock API key auth.
-		const bearerToken = options.bearerToken || process.env.AWS_BEARER_TOKEN_BEDROCK || undefined;
-		const useBearerToken = bearerToken !== undefined && process.env.AWS_BEDROCK_SKIP_AUTH !== "1";
-
-		// in Node.js/Bun environment only
-		if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-			// Region resolution: explicit option > env vars > SDK default chain.
-			// When AWS_PROFILE is set, we leave region undefined so the SDK can
-			// resovle it from aws profile configs. Otherwise fall back to us-east-1.
-			if (configuredRegion) {
-				config.region = configuredRegion;
-			} else if (endpointRegion && useExplicitEndpoint) {
-				config.region = endpointRegion;
-			} else if (!hasConfiguredProfile) {
-				config.region = "us-east-1";
-			}
-
-			// Support proxies that don't need authentication
-			if (process.env.AWS_BEDROCK_SKIP_AUTH === "1") {
-				config.credentials = {
-					accessKeyId: "dummy-access-key",
-					secretAccessKey: "dummy-secret-key",
-				};
-			}
-
-			const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
-			if (proxyAgents) {
-				// Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
-				// on `http2` module and has no support for http agent.
-				// Use NodeHttpHandler to support HTTP(S) proxy agents.
-				config.requestHandler = new NodeHttpHandler(proxyAgents);
-			} else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
-				// Some custom endpoints require HTTP/1.1 instead of HTTP/2
-				config.requestHandler = new NodeHttpHandler();
-			}
-		} else {
-			// Non-Node environment (browser): fall back to us-east-1 since
-			// there's no config file resolution available.
-			config.region =
-				configuredRegion || (endpointRegion && useExplicitEndpoint ? endpointRegion : undefined) || "us-east-1";
-		}
-
-		if (useBearerToken) {
-			config.token = { token: bearerToken };
-			config.authSchemePreference = ["httpBearerAuth"];
-		}
-
+		let requestStarted = false;
 		try {
+			const blocks = output.content as Block[];
+
+			const config: BedrockRuntimeClientConfig = {
+				profile: options.profile,
+			};
+			const configuredRegion = getConfiguredBedrockRegion(options);
+			const hasConfiguredProfile = hasConfiguredBedrockProfile();
+			const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
+			const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
+				model.baseUrl,
+				configuredRegion,
+				hasConfiguredProfile,
+			);
+
+			// Only pin standard AWS Bedrock runtime endpoints when no region/profile is configured.
+			// This preserves custom endpoints (VPC/proxy) from #3402 without forcing built-in
+			// catalog defaults such as us-east-1 to override AWS_REGION/AWS_PROFILE.
+			if (useExplicitEndpoint) {
+				config.endpoint = model.baseUrl;
+			}
+
+			// Resolve bearer token for Bedrock API key auth.
+			const bearerToken = options.bearerToken || process.env.AWS_BEARER_TOKEN_BEDROCK || undefined;
+			const useBearerToken = bearerToken !== undefined && process.env.AWS_BEDROCK_SKIP_AUTH !== "1";
+
+			// in Node.js/Bun environment only
+			if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
+				// Region resolution: explicit option > env vars > SDK default chain.
+				// When AWS_PROFILE is set, we leave region undefined so the SDK can
+				// resovle it from aws profile configs. Otherwise fall back to us-east-1.
+				if (configuredRegion) {
+					config.region = configuredRegion;
+				} else if (endpointRegion && useExplicitEndpoint) {
+					config.region = endpointRegion;
+				} else if (!hasConfiguredProfile) {
+					config.region = "us-east-1";
+				}
+
+				// Support proxies that don't need authentication
+				if (process.env.AWS_BEDROCK_SKIP_AUTH === "1") {
+					config.credentials = {
+						accessKeyId: "dummy-access-key",
+						secretAccessKey: "dummy-secret-key",
+					};
+				}
+
+				const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
+				if (proxyAgents) {
+					// Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
+					// on `http2` module and has no support for http agent.
+					// Use NodeHttpHandler to support HTTP(S) proxy agents.
+					config.requestHandler = new NodeHttpHandler(proxyAgents);
+				} else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
+					// Some custom endpoints require HTTP/1.1 instead of HTTP/2
+					config.requestHandler = new NodeHttpHandler();
+				}
+			} else {
+				// Non-Node environment (browser): fall back to us-east-1 since
+				// there's no config file resolution available.
+				config.region =
+					configuredRegion || (endpointRegion && useExplicitEndpoint ? endpointRegion : undefined) || "us-east-1";
+			}
+
+			if (useBearerToken) {
+				config.token = { token: bearerToken };
+				config.authSchemePreference = ["httpBearerAuth"];
+			}
+
 			const client = new BedrockRuntimeClient(config);
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
 			// SCRAMJET-DIVERGENCE: gate temperature on modelSupportsTemperature (opus-4-7+ rejects non-default temperature)
@@ -205,25 +207,41 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 				additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
 				...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
 			};
-			const nextCommandInput = await options?.onPayload?.(commandInput, model);
+			const nextCommandInput = await invokeProviderCallback("onPayload", () =>
+				options?.onPayload?.(commandInput, model),
+			);
 			if (nextCommandInput !== undefined) {
 				commandInput = nextCommandInput as typeof commandInput;
 			}
 			const command = new ConverseStreamCommand(commandInput);
 
+			requestStarted = true;
 			const response = await client.send(command, { abortSignal: options.signal });
 			if (response.$metadata.httpStatusCode !== undefined) {
 				const responseHeaders: Record<string, string> = {};
 				if (response.$metadata.requestId) {
 					responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
 				}
-				await options?.onResponse?.({ status: response.$metadata.httpStatusCode, headers: responseHeaders }, model);
+				const status = response.$metadata.httpStatusCode;
+				await invokeProviderCallback("onResponse", () =>
+					options?.onResponse?.({ status, headers: responseHeaders }, model),
+				);
 			}
 
-			for await (const item of response.stream!) {
+			if (!response.stream)
+				throw new RequestFailureError("Bedrock response has no stream.", {
+					schemaVersion: 1,
+					kind: "stream",
+					reason: "missing_body",
+				});
+			for await (const item of response.stream) {
 				if (item.messageStart) {
 					if (item.messageStart.role !== ConversationRole.ASSISTANT) {
-						throw new Error("Unexpected assistant message start but got user message start instead");
+						throw new RequestFailureError("Unexpected user message start in Bedrock response.", {
+							schemaVersion: 1,
+							kind: "stream",
+							reason: "malformed_event",
+						});
 					}
 					stream.push({ type: "start", partial: output });
 				} else if (item.contentBlockStart) {
@@ -233,19 +251,39 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 				} else if (item.contentBlockStop) {
 					handleContentBlockStop(item.contentBlockStop, blocks, output, stream);
 				} else if (item.messageStop) {
-					output.stopReason = mapStopReason(item.messageStop.stopReason);
+					if (output.stopReason !== "error") output.stopReason = mapStopReason(item.messageStop.stopReason);
 				} else if (item.metadata) {
 					handleMetadata(item.metadata, model, output);
 				} else if (item.internalServerException) {
-					throw item.internalServerException;
+					throw new RequestFailureError("Bedrock internal server error.", {
+						schemaVersion: 1,
+						kind: "provider",
+						category: "server",
+					});
 				} else if (item.modelStreamErrorException) {
-					throw item.modelStreamErrorException;
+					throw new RequestFailureError(formatBedrockError(item.modelStreamErrorException), {
+						schemaVersion: 1,
+						kind: "provider",
+						category: "unknown",
+					});
 				} else if (item.validationException) {
-					throw item.validationException;
+					throw new RequestFailureError(formatBedrockError(item.validationException), {
+						schemaVersion: 1,
+						kind: "provider",
+						category: "invalid_request",
+					});
 				} else if (item.throttlingException) {
-					throw item.throttlingException;
+					throw new RequestFailureError("Bedrock request throttled.", {
+						schemaVersion: 1,
+						kind: "provider",
+						category: "rate_limit",
+					});
 				} else if (item.serviceUnavailableException) {
-					throw item.serviceUnavailableException;
+					throw new RequestFailureError("Bedrock service unavailable.", {
+						schemaVersion: 1,
+						kind: "provider",
+						category: "server",
+					});
 				}
 			}
 
@@ -267,6 +305,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatBedrockError(error);
+			appendBuiltinFailure(output, error, !requestStarted);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

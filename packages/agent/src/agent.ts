@@ -1,8 +1,10 @@
 import {
 	type AssistantMessage,
+	appendObservedFailure,
 	type ImageContent,
 	type Message,
 	type Model,
+	RequestFailureError,
 	type SimpleStreamOptions,
 	streamSimple,
 	type TextContent,
@@ -628,6 +630,8 @@ export class Agent {
 			errorMessage: error instanceof Error ? error.message : String(error),
 			timestamp: Date.now(),
 		} satisfies AgentMessage;
+		// SCRAMJET-DIVERGENCE: Typed local allocation failures retain their bounded compaction evidence.
+		if (error instanceof RequestFailureError) appendObservedFailure(failureMessage, error);
 		await this.processEvents({ type: "message_start", message: failureMessage });
 		await this.processEvents({ type: "message_end", message: failureMessage });
 		await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });

@@ -15,6 +15,7 @@ import type {
 	Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendBuiltinFailure, appendRequestFailure, RequestFailureError } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -110,20 +111,17 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 		let failurePhase: "request" | "stream" = "request";
 		let payloadCallbackFailed = false;
 		let responseCallbackFailed = false;
+		let requestStarted = false;
 		const sdkRequestObserver = createResponsesSdkRequestObserver(fetch);
 		try {
 			// Create OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(
-				model,
-				context,
-				apiKey,
-				options?.headers,
-				cacheSessionId,
-				sdkRequestObserver.fetch,
-			);
+			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, (input, init) => {
+				requestStarted = true;
+				return sdkRequestObserver.fetch(input, init);
+			});
 			let params = buildParams(model, context, options);
 			try {
 				const nextParams = await options?.onPayload?.(params, model);
@@ -147,6 +145,12 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				responseCallbackFailed = true;
 				throw error;
 			}
+			if (!response.body)
+				throw new RequestFailureError("OpenAI Responses response has no body.", {
+					schemaVersion: 1,
+					kind: "stream",
+					reason: "missing_body",
+				});
 			stream.push({ type: "start", partial: output });
 
 			failurePhase = "stream";
@@ -175,10 +179,19 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			output.stopReason = options?.signal?.aborted || error instanceof APIUserAbortError ? "aborted" : "error";
 			if (payloadCallbackFailed) {
 				output.errorMessage = "OpenAI Responses payload callback failed.";
+				appendRequestFailure(output, { schemaVersion: 1, kind: "callback", callback: "onPayload" });
 			} else if (responseCallbackFailed) {
 				output.errorMessage = "OpenAI Responses response callback failed.";
+				appendRequestFailure(output, { schemaVersion: 1, kind: "callback", callback: "onResponse" });
 			} else if (output.stopReason === "aborted") {
 				output.errorMessage = abortedResponsesFailureMessage(error);
+			} else if (error instanceof RequestFailureError) {
+				output.errorMessage = error.message;
+				appendBuiltinFailure(output, error);
+			} else if (!requestStarted) {
+				output.errorMessage =
+					"OpenAI Responses request preparation failed. Check that the payload is JSON-serializable and the base URL and headers are valid.";
+				appendRequestFailure(output, { schemaVersion: 1, kind: "local", reason: "request_preparation" });
 			} else {
 				appendResponsesFailureDiagnostics(
 					output,
@@ -227,8 +240,9 @@ function createClient(
 ) {
 	if (!apiKey) {
 		if (!process.env.OPENAI_API_KEY) {
-			throw new Error(
+			throw new RequestFailureError(
 				"OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it as an argument.",
+				{ schemaVersion: 1, kind: "local", reason: "request_preparation" },
 			);
 		}
 		apiKey = process.env.OPENAI_API_KEY;

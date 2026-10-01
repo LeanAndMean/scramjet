@@ -241,6 +241,235 @@ function retryRecords(session: AgentSession) {
 		.map((entry) => entry.data);
 }
 
+describe("Provider failure recovery policy", () => {
+	const failure = (details: Record<string, unknown>): AssistantMessage => ({
+		...assistantError("timeout maximum context length exceeded"),
+		diagnostics: [{ type: "request_failure", timestamp: 0, details }],
+	});
+	it.each(["missing_body", "missing_terminal_event"])(
+		"recovers %s without executing tools from the failed response",
+		async (reason) => {
+			const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "ok" }], details: undefined }));
+			const tool = defineTool({
+				name: "dummy",
+				label: "Dummy",
+				description: "sentinel",
+				parameters: Type.Object({}),
+				execute,
+			});
+			const failed = failure({ schemaVersion: 1, kind: "stream", reason });
+			failed.content = assistantToolCall("dummy", "failed").content;
+			const { session, events } = await createFixture(
+				(index) =>
+					index === 0 ? failed : index === 1 ? assistantToolCall("dummy", "recovered") : assistantText("done"),
+				{ customTools: [tool], persist: true },
+			);
+			await session.prompt("run");
+			expect(execute).toHaveBeenCalledTimes(1);
+			expect(
+				events.filter((event) => event.type === "tool_execution_start").map((event) => event.toolCallId),
+			).toEqual(["recovered"]);
+			expect(retryRecords(session)).toContainEqual(
+				expect.objectContaining({ outcome: "scheduled", evidence: "request_failure" }),
+			);
+			session.dispose();
+		},
+	);
+	it.each([
+		{ schemaVersion: 1, kind: "callback", callback: "onPayload" },
+		{ schemaVersion: 1, kind: "local", reason: "configuration" },
+		{ schemaVersion: 1, kind: "provider", category: "quota_exhausted" },
+		{ schemaVersion: 2, kind: "http", status: 503, reason: "status" },
+		...[401, 403, 404].map((status) => ({ schemaVersion: 1, kind: "http", status, reason: "context_overflow" })),
+		{ schemaVersion: 1, kind: "provider", category: "unknown" },
+		{ schemaVersion: 1, kind: "stream", reason: "malformed_event" },
+	])("does not recover from excluded or invalid evidence", async (details) => {
+		let calls = 0;
+		const { session, events } = await createFixture(() => {
+			calls++;
+			return failure(details);
+		});
+		await session.prompt("run");
+		expect(calls).toBe(1);
+		expect(retryEvents(events)).toEqual([]);
+		expect(events.some((event) => event.type === "compaction_start")).toBe(false);
+		session.dispose();
+	});
+	it("retains delay suppression across persistence and never starts an outer retry", async () => {
+		const failed = failure({ schemaVersion: 1, kind: "http", status: 503, reason: "status" });
+		failed.diagnostics!.push({
+			type: "retry_suppression",
+			timestamp: 0,
+			details: {
+				schemaVersion: 1,
+				reason: "server_delay_exceeds_limit",
+				requestedDelayMs: 120000,
+				maxDelayMs: 60000,
+			},
+		});
+		let calls = 0;
+		const { session, events } = await createFixture(
+			() => {
+				calls++;
+				return failed;
+			},
+			{ persist: true },
+		);
+		await session.prompt("run");
+		expect(calls).toBe(1);
+		expect(retryEvents(events)).toEqual([]);
+		expect(retryRecords(session)).toContainEqual(
+			expect.objectContaining({ outcome: "not_attempted", reason: "server_delay_exceeds_limit" }),
+		);
+		const reopened = SessionManager.open(session.sessionManager.getSessionFile()!).getBranch();
+		expect(JSON.stringify(reopened)).toContain("retry_suppression");
+		session.dispose();
+	});
+	it("does not retry or compact a harness-generated failure", async () => {
+		let calls = 0;
+		const { session, events } = await createFixture(() => assistantText("unused"), {
+			streamFn: () => {
+				calls++;
+				throw new Error("timeout maximum context length exceeded");
+			},
+		});
+		await session.prompt("run");
+		expect(calls).toBe(1);
+		expect(retryEvents(events)).toEqual([]);
+		expect(events.some((event) => event.type === "compaction_start")).toBe(false);
+		session.dispose();
+	});
+	it.each(["eligible", "other-model", "pre-compaction"])(
+		"checks %s usage through the public new-prompt path",
+		async (kind) => {
+			const { session, events } = await createFixture(() => assistantText("done"));
+			const successful = { ...assistantText("prior success"), timestamp: 2_000_000_000_000 };
+			successful.usage.input = testModel.contextWindow;
+			if (kind === "other-model") successful.model = "other-model";
+			if (kind === "pre-compaction") {
+				const id = session.sessionManager.appendMessage({ role: "user", content: "old", timestamp: 0 });
+				session.sessionManager.appendCompaction("summary", id, testModel.contextWindow);
+				successful.timestamp = 0;
+			}
+			const failed = failure({ schemaVersion: 1, kind: "callback", callback: "onResponse" });
+			session.agent.state.messages = [successful, failed];
+			const internal = session as unknown as {
+				_runAutoCompaction: (reason: string, retry: boolean) => Promise<void>;
+			};
+			const compact = vi.spyOn(internal, "_runAutoCompaction").mockResolvedValue();
+			try {
+				await session.prompt("next");
+				if (kind === "eligible") {
+					expect(compact).toHaveBeenCalledTimes(1);
+					expect(compact).toHaveBeenCalledWith("threshold", false);
+				} else expect(compact).not.toHaveBeenCalled();
+				expect(retryEvents(events)).toEqual([]);
+			} finally {
+				compact.mockRestore();
+				session.dispose();
+			}
+		},
+	);
+	it("saturates two outer retry backoffs at the valid timer maximum", async () => {
+		const sleep = vi.mocked(sleepModule.sleep).mockImplementation((_ms, signal) => actualSleep.current!(0, signal));
+		const { session, events } = await createFixture(
+			(index) => (index < 2 ? assistantError("server error") : assistantText("done")),
+			{ baseDelayMs: 2_147_483_647, maxRetries: 2 },
+		);
+		sleep.mockClear();
+		try {
+			await session.prompt("run");
+			expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([2_147_483_647, 0, 2_147_483_647, 0]);
+			expect(events.filter((event) => event.type === "auto_retry_start")).toHaveLength(2);
+		} finally {
+			sleep.mockImplementation(actualSleep.current!);
+			session.dispose();
+		}
+	});
+	it("excludes high-usage unknown failure at public settlement but maintains on the next prompt", async () => {
+		let calls = 0;
+		const successful = { ...assistantToolCall("dummy", "successful"), timestamp: 2_000_000_000_000 };
+		successful.usage.input = testModel.contextWindow;
+		const failed = failure({ schemaVersion: 1, kind: "provider", category: "unknown" });
+		const { session, events } = await createFixture(
+			() => {
+				calls++;
+				return calls === 1 ? successful : calls === 2 ? failed : assistantText("done");
+			},
+			{ customTools: [makeDummyTool()], persist: true },
+		);
+		const internal = session as unknown as { _runAutoCompaction: (reason: string, retry: boolean) => Promise<void> };
+		const compact = vi.spyOn(internal, "_runAutoCompaction").mockResolvedValue();
+		try {
+			await session.prompt("run");
+			expect(calls).toBe(2);
+			expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
+			expect(compact).not.toHaveBeenCalled();
+			expect(retryEvents(events)).toEqual([]);
+			expect(events.some((event) => event.type === "compaction_start")).toBe(false);
+			expect(retryRecords(session)).toContainEqual(
+				expect.objectContaining({ outcome: "not_attempted", reason: "structured_unknown" }),
+			);
+			await session.prompt("next");
+			expect(calls).toBe(3);
+			expect(compact).toHaveBeenCalledTimes(1);
+			expect(compact).toHaveBeenCalledWith("threshold", false);
+			expect(retryEvents(events)).toEqual([]);
+		} finally {
+			compact.mockRestore();
+			session.dispose();
+		}
+	});
+	it.each(["unknown", "provider_error", "malformed_event"])(
+		"does not compact explicit %s at failure settlement but maintains on a new prompt",
+		async (category) => {
+			const { session } = await createFixture(() => assistantText("done"));
+			const successful = { ...assistantText("prior"), timestamp: 2_000_000_000_000 };
+			successful.usage.input = testModel.contextWindow;
+			const failed =
+				category === "provider_error"
+					? providerFailure("unknown", "provider_error")
+					: failure(
+							category === "unknown"
+								? { schemaVersion: 1, kind: "provider", category }
+								: { schemaVersion: 1, kind: "stream", reason: category },
+						);
+			session.agent.state.messages = [successful, failed];
+			const internal = session as unknown as {
+				_checkCompaction: (message: AssistantMessage) => Promise<void>;
+				_runAutoCompaction: (reason: string, retry: boolean) => Promise<void>;
+			};
+			const compact = vi.spyOn(internal, "_runAutoCompaction").mockResolvedValue();
+			try {
+				await internal._checkCompaction(failed);
+				expect(compact).not.toHaveBeenCalled();
+				await session.prompt("next");
+				expect(compact).toHaveBeenCalledWith("threshold", false);
+			} finally {
+				compact.mockRestore();
+				session.dispose();
+			}
+		},
+	);
+	it("maintains context on a new prompt without reviving a callback error", async () => {
+		const { session } = await createFixture(() => assistantText("unused"));
+		const successful = assistantText("done");
+		successful.usage.input = testModel.contextWindow;
+		const failed = failure({ schemaVersion: 1, kind: "callback", callback: "onResponse" });
+		session.agent.state.messages = [successful, failed];
+		const internal = session as unknown as {
+			_checkCompaction: (message: AssistantMessage, trigger: string) => Promise<void>;
+			_runAutoCompaction: (reason: string, retry: boolean) => Promise<void>;
+		};
+		const compact = vi.spyOn(internal, "_runAutoCompaction").mockResolvedValue();
+		await internal._checkCompaction(failed, "settlement");
+		expect(compact).not.toHaveBeenCalled();
+		await internal._checkCompaction(failed, "new_prompt");
+		expect(compact).toHaveBeenCalledWith("threshold", false);
+		session.dispose();
+	});
+});
+
 describe("AgentSession context window", () => {
 	it("uses total context even when an obsolete field reaches a direct Model caller", async () => {
 		const model = { ...testModel, contextWindowBudget: 272_000 };
@@ -1045,6 +1274,103 @@ describe("AgentSession persisted retry authority", () => {
 			expect(session.sessionManager.buildSessionContext().messages).toContainEqual(
 				expect.objectContaining({ role: "assistant", stopReason: "error" }),
 			);
+			expect(execute).not.toHaveBeenCalled();
+			expect(events).not.toContainEqual(expect.objectContaining({ type: "tool_execution_start" }));
+			session.dispose();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("bounds accepted Responses EOF retries without executing a failed turn's completed tool call", async () => {
+		const model = getModel("openai", "gpt-6-astra");
+		const execute = vi.fn(async () => ({
+			content: [{ type: "text" as const, text: "executed" }],
+			details: undefined,
+		}));
+		const tool = defineTool({
+			name: "read",
+			label: "Read",
+			description: "Side-effect sentinel",
+			parameters: Type.Object({ path: Type.String() }),
+			execute,
+		});
+		const fetch = vi.fn(async () => {
+			if (fetch.mock.calls.length <= 2) {
+				return new Response(null, {
+					status: 429,
+					headers: { "content-type": "application/json", "retry-after-ms": "0" },
+				});
+			}
+			return new Response(
+				[
+					'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+					'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":""}}\n\n',
+					'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":"{\\"path\\":\\"README.md\\"}"}}\n\n',
+				].join(""),
+				{ headers: { "content-type": "text/event-stream" } },
+			);
+		});
+		vi.stubGlobal("fetch", fetch);
+		try {
+			const { session, events } = await createFixture(() => assistantText("unused"), {
+				model,
+				persist: true,
+				customTools: [tool],
+				streamFn: (_index, signal) =>
+					streamSimpleOpenAIResponses(
+						model,
+						{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+						{ apiKey: "fake", maxRetries: 2, signal },
+					),
+			});
+			await session.prompt("hello");
+			const branch = SessionManager.open(session.sessionManager.getSessionFile()!).getBranch();
+			const assistants = branch.filter((entry) => entry.type === "message" && entry.message.role === "assistant");
+			expect(fetch).toHaveBeenCalledTimes(6);
+			expect(assistants).toHaveLength(4);
+			expect(assistants[0]).toMatchObject({
+				type: "message",
+				message: {
+					stopReason: "error",
+					content: [expect.objectContaining({ type: "toolCall", name: "read" })],
+					errorMessage: expect.stringMatching(
+						/ended without a terminal response event.*partial output.*automatic recovery.*retry/i,
+					),
+					diagnostics: expect.arrayContaining([
+						expect.objectContaining({
+							type: "provider_failure",
+							details: {
+								schemaVersion: 1,
+								layer: "openai_responses",
+								phase: "stream",
+								kind: "stream_termination",
+								category: "missing_terminal_event",
+								retryDisposition: "unknown",
+								detailSource: "none",
+							},
+						}),
+						expect.objectContaining({
+							type: "sdk_request_retry",
+							details: expect.objectContaining({
+								outcome: "recovered",
+								reason: "accepted_after_retry",
+								attempts: [0, 1, 2].map((ordinal) => ({
+									ordinal,
+									result: "response",
+									status: ordinal === 2 ? 200 : 429,
+								})),
+							}),
+						}),
+					]),
+				},
+			});
+			expect(retryEvents(events).filter((event) => event.type === "auto_retry_start")).toHaveLength(3);
+			expect(retryRecords(session).at(-1)).toMatchObject({
+				outcome: "exhausted",
+				reason: "attempt_limit",
+				attemptsCompleted: 3,
+			});
 			expect(execute).not.toHaveBeenCalled();
 			expect(events).not.toContainEqual(expect.objectContaining({ type: "tool_execution_start" }));
 			session.dispose();

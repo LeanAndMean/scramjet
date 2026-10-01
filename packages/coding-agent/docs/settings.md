@@ -108,14 +108,18 @@ The upstream runtime can check `https://pi.dev/api/latest-version` for updates, 
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `retry.enabled` | boolean | `true` | Enable automatic agent-level retry on transient errors |
+| `retry.enabled` | boolean | `true` | Enable bounded agent retries for transient and specifically recognized incomplete responses |
 | `retry.maxRetries` | number | `3` | Maximum agent-level retry attempts |
 | `retry.baseDelayMs` | number | `2000` | Base delay for agent-level exponential backoff (2s, 4s, 8s) |
 | `retry.provider.timeoutMs` | number | SDK default | Provider/SDK request timeout in milliseconds |
 | `retry.provider.maxRetries` | number | SDK default | Provider/SDK retry attempts |
 | `retry.provider.maxRetryDelayMs` | number | `60000` | Max server-requested delay before failing (60s) |
 
-When a provider requests a retry delay longer than `retry.provider.maxRetryDelayMs` (e.g., Google's "quota will reset after 5h"), the request fails immediately with an informative error instead of waiting silently. Set to `0` to disable the cap.
+Agent retries include validated missing-terminal Responses streams and accepted responses with missing bodies. Failed-turn tool calls never execute. Known quota/authentication/permission/content rejection, callback failures, and invalid evidence do not authorize retries. Provider/SDK request attempts are separate from the agent's consecutive and cumulative limits; these settings do not establish a universal HTTP-attempt or elapsed-time budget.
+
+Codex SSE honors `retry.provider.maxRetries` (default three) and rejects server-requested waits above `retry.provider.maxRetryDelayMs`, including after the final inner attempt. That rejection suppresses outer agent retries too. Set the delay cap to `0` to disable the policy cap; long representable waits remain cancellable, and unrepresentable waits fail without retry. Other SDKs do not necessarily implement this delay cap or these request controls; forwarding an option is not proof of enforcement.
+
+Counts must be nonnegative safe integers; millisecond settings must be integers from 0 through 2,147,483,647. Invalid values generate scoped settings diagnostics and inherit a valid lower-priority value or the default without rewriting the file. Nested `retry.provider` leaves merge individually. Zero retries disables that layer's retries; zero base delay removes intentional backoff; timeout zero retains provider/SDK semantics and does not universally disable timeouts. Codex direct API callers receive a local validation failure for invalid retry options.
 
 ```json
 {

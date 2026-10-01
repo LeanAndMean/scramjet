@@ -10,6 +10,7 @@ import type {
 	StreamOptions,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendBuiltinFailure, RequestFailureError } from "../utils/failure-evidence.js";
 import type { BedrockOptions } from "./amazon-bedrock.js";
 import type { AnthropicOptions } from "./anthropic.js";
 import type { AzureOpenAIResponsesOptions } from "./azure-openai-responses.js";
@@ -126,17 +127,41 @@ export function setBedrockProviderModule(module: BedrockProviderModule): void {
 	};
 }
 
-function forwardStream(target: AssistantMessageEventStream, source: AsyncIterable<AssistantMessageEvent>): void {
-	(async () => {
+// SCRAMJET-DIVERGENCE: Await lazy stream settlement and retain partial content plus closed failure evidence.
+async function forwardStream(
+	target: AssistantMessageEventStream,
+	source: AsyncIterable<AssistantMessageEvent>,
+	model: Model<Api>,
+): Promise<void> {
+	let partial: AssistantMessage | undefined;
+	let terminal = false;
+	try {
 		for await (const event of source) {
+			if (event.type !== "done" && event.type !== "error") partial = event.partial;
+			else terminal = true;
 			target.push(event);
 		}
-		target.end();
-	})();
+		if (!terminal) {
+			if (source instanceof AssistantMessageEventStream) target.end(await source.result());
+			else
+				throw new RequestFailureError("Provider iterator ended without a terminal message.", {
+					schemaVersion: 1,
+					kind: "stream",
+					reason: "malformed_event",
+				});
+		} else target.end();
+	} catch (error) {
+		const message: AssistantMessage = partial
+			? { ...partial, stopReason: "error", errorMessage: error instanceof Error ? error.message : String(error) }
+			: { ...createLazyLoadErrorMessage(model, error), diagnostics: undefined };
+		appendBuiltinFailure(message, error);
+		target.push({ type: "error", reason: "error", error: message });
+		target.end(message);
+	}
 }
 
 function createLazyLoadErrorMessage<TApi extends Api>(model: Model<TApi>, error: unknown): AssistantMessage {
-	return {
+	const message: AssistantMessage = {
 		role: "assistant",
 		content: [],
 		api: model.api,
@@ -154,6 +179,8 @@ function createLazyLoadErrorMessage<TApi extends Api>(model: Model<TApi>, error:
 		errorMessage: error instanceof Error ? error.message : String(error),
 		timestamp: Date.now(),
 	};
+	appendBuiltinFailure(message, error, true);
+	return message;
 }
 
 function createLazyStream<TApi extends Api, TOptions extends StreamOptions, TSimpleOptions extends SimpleStreamOptions>(
@@ -163,9 +190,9 @@ function createLazyStream<TApi extends Api, TOptions extends StreamOptions, TSim
 		const outer = new AssistantMessageEventStream();
 
 		loadModule()
-			.then((module) => {
+			.then(async (module) => {
 				const inner = module.stream(model, context, options);
-				forwardStream(outer, inner);
+				await forwardStream(outer, inner, model);
 			})
 			.catch((error) => {
 				const message = createLazyLoadErrorMessage(model, error);
@@ -186,9 +213,9 @@ function createLazySimpleStream<
 		const outer = new AssistantMessageEventStream();
 
 		loadModule()
-			.then((module) => {
+			.then(async (module) => {
 				const inner = module.streamSimple(model, context, options);
-				forwardStream(outer, inner);
+				await forwardStream(outer, inner, model);
 			})
 			.catch((error) => {
 				const message = createLazyLoadErrorMessage(model, error);

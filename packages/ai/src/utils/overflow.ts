@@ -1,5 +1,5 @@
-import { validateResponsesProviderFailure } from "../providers/openai-responses-shared.js";
 import type { AssistantMessage } from "../types.js";
+import { blocksFailureRecovery, inspectFailureEvidence } from "./failure-evidence.js";
 
 /**
  * Regex patterns to detect context overflow errors from different providers.
@@ -122,8 +122,9 @@ const NON_OVERFLOW_PATTERNS = [
  */
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
 	// A validated category cannot be overridden by an unrelated SDK cause or provider prose.
+	if (blocksFailureRecovery(message)) return false;
 	if (message.stopReason === "error") {
-		const structured = validateResponsesProviderFailure(message.diagnostics);
+		const structured = inspectFailureEvidence(message.diagnostics);
 		if (structured.status !== "absent")
 			return structured.status === "valid" && structured.category === "context_overflow";
 	}

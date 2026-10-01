@@ -446,6 +446,12 @@ The `createAgentSession()` stream path checks the current request's estimated in
 
 OpenRouter's implicit aggregate output maximum is omitted because it can exclude the long-context endpoint; explicit summary output limits are retained. Vercel's Anthropic route still requires an output limit. Codex still omits `max_output_tokens`. Aggregate route compatibility is not guaranteed by scalar metadata. Anthropic/Bedrock simple adapters treat explicit `maxTokens` as a combined output ceiling including thinking, rather than increasing it for reasoning.
 
+### Provider failure recovery
+
+AgentSession classifies the finalized persisted assistant snapshot. Built-in adapters distinguish provider failures from payload/response callback failures without changing message origin; callback exceptions persist only a fixed stage-specific error and closed diagnostic, not private exception text. Typed local allocation overflows retain compaction recovery, while arbitrary runtime errors cannot request recovery through suggestive prose.
+
+Recognized incomplete responses can use the existing bounded agent retry loop; tools from a failed response do not execute. Provider/SDK retries remain a separate layer. See [settings.md](settings.md#retry) for numeric validation, zero semantics and Codex-only server-delay suppression, and [custom-provider.md](custom-provider.md#failure-evidence) for evidence precedence. Neither these attempt limits nor forwarding provider options guarantees a universal request-count or elapsed-time bound.
+
 ### API Keys and OAuth
 
 API key resolution priority (handled by AuthStorage):
