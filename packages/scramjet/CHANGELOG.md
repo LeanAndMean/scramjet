@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Diagnose Responses streams that end without a terminal event
+## 0.107.0 — Recover from incomplete provider responses
 
 Diagnose incomplete provider responses and recover within configured retry limits without executing tools from failed responses. Fixes [#586](https://github.com/LeanAndMean/scramjet/issues/586).
 
