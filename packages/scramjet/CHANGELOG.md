@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.108.0 — Centralize PR CI remediation
+
+Add a reusable CI-fix command for direct invocation and pre-merge delegation. Fixes [#600](https://github.com/LeanAndMean/scramjet/issues/600).
+
+### Added
+
+- Introduce `mach12:pr-ci-fix` with evidence-backed diagnosis, informed plan alignment, reviewed corrections, durable PR records, and current-head CI verification.
+
+### Changed
+
+- Delegate pre-merge CI remediation to the shared command while preserving local-test repair, CI skips, publication ownership, and final readiness gates.
+
+### Tests
+
+- Cover command invocation, delegation, publication policy, handoffs, and the updated bundled-command inventory.
+
 ## 0.107.0 — Recover from incomplete provider responses
 
 Diagnose incomplete provider responses and recover within configured retry limits without executing tools from failed responses. Fixes [#586](https://github.com/LeanAndMean/scramjet/issues/586).
