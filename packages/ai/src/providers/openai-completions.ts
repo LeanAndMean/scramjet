@@ -31,6 +31,7 @@ import type {
 	ToolResultMessage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendBuiltinFailure, invokeProviderCallback, RequestFailureError } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -135,14 +136,27 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			timestamp: Date.now(),
 		};
 
+		// SCRAMJET-DIVERGENCE: Preserve callback, preparation, SDK failure, and stream-completion evidence.
+		let requestStarted = false;
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const compat = getCompat(model);
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
+			const client = createClient(
+				model,
+				context,
+				apiKey,
+				options?.headers,
+				cacheSessionId,
+				compat,
+				(input, init) => {
+					requestStarted = true;
+					return fetch(input, init);
+				},
+			);
 			let params = buildParams(model, context, options, compat, cacheRetention);
-			const nextParams = await options?.onPayload?.(params, model);
+			const nextParams = await invokeProviderCallback("onPayload", () => options?.onPayload?.(params, model));
 			if (nextParams !== undefined) {
 				params = nextParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming;
 			}
@@ -154,7 +168,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			const { data: openaiStream, response } = await client.chat.completions
 				.create(params, requestOptions)
 				.withResponse();
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			await invokeProviderCallback("onResponse", () =>
+				options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model),
+			);
+			if (!response.body)
+				throw new RequestFailureError("Chat response has no body.", {
+					schemaVersion: 1,
+					kind: "stream",
+					reason: "missing_body",
+				});
 			stream.push({ type: "start", partial: output });
 
 			interface StreamingToolCallBlock extends ToolCall {
@@ -167,6 +189,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			let textBlock: TextContent | null = null;
 			let thinkingBlock: ThinkingContent | null = null;
 			let hasFinishReason = false;
+			let failedFinishReason: string | undefined;
 			const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
 			const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
 			const blocks = output.content as StreamingBlock[];
@@ -284,9 +307,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					output.usage = parseChunkUsage((choice as any).usage, model);
 				}
 
-				if (choice.finish_reason) {
+				if (choice.finish_reason && output.stopReason !== "error") {
 					const finishReasonResult = mapStopReason(choice.finish_reason);
 					output.stopReason = finishReasonResult.stopReason;
+					if (output.stopReason === "error") failedFinishReason = choice.finish_reason;
 					if (finishReasonResult.errorMessage) {
 						output.errorMessage = finishReasonResult.errorMessage;
 					}
@@ -391,10 +415,25 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				throw new Error("Request was aborted");
 			}
 			if (output.stopReason === "error") {
-				throw new Error(output.errorMessage || "Provider returned an error stop reason");
+				throw new RequestFailureError(output.errorMessage || "Provider returned an error stop reason", {
+					schemaVersion: 1,
+					kind: "provider",
+					category:
+						failedFinishReason === "content_filter"
+							? "content_rejection"
+							: failedFinishReason === "network_error"
+								? "transport"
+								: model.provider === "zai" && failedFinishReason === "model_context_window_exceeded"
+									? "context_overflow"
+									: "unknown",
+				});
 			}
 			if (!hasFinishReason) {
-				throw new Error("Stream ended without finish_reason");
+				throw new RequestFailureError("Stream ended without finish_reason", {
+					schemaVersion: 1,
+					kind: "stream",
+					reason: "missing_terminal_event",
+				});
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -408,6 +447,17 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			appendBuiltinFailure(
+				output,
+				requestStarted && !options?.signal?.aborted && error instanceof OpenAI.APIConnectionError
+					? new RequestFailureError(output.errorMessage, {
+							schemaVersion: 1,
+							kind: "provider",
+							category: error instanceof OpenAI.APIConnectionTimeoutError ? "timeout" : "transport",
+						})
+					: error,
+				!requestStarted,
+			);
 			// Some providers via OpenRouter give additional information in this field.
 			const rawMetadata = (error as any)?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
@@ -448,6 +498,7 @@ function createClient(
 	optionsHeaders?: Record<string, string>,
 	sessionId?: string,
 	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
+	fetchImplementation?: typeof fetch,
 ) {
 	if (!apiKey) {
 		if (!process.env.OPENAI_API_KEY) {
@@ -493,6 +544,7 @@ function createClient(
 		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
+		fetch: fetchImplementation,
 	});
 }
 

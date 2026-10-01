@@ -12,6 +12,7 @@ import type {
 	StreamOptions,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendBuiltinFailure, appendRequestFailure, RequestFailureError } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import {
 	abortedResponsesFailureMessage,
@@ -95,11 +96,15 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 		let failurePhase: "request" | "stream" = "request";
 		let payloadCallbackFailed = false;
 		let responseCallbackFailed = false;
+		let requestStarted = false;
 		const sdkRequestObserver = createResponsesSdkRequestObserver(fetch);
 		try {
 			// Create Azure OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const client = createClient(model, apiKey, options, sdkRequestObserver.fetch);
+			const client = createClient(model, apiKey, options, (input, init) => {
+				requestStarted = true;
+				return sdkRequestObserver.fetch(input, init);
+			});
 			let params = buildParams(model, context, options, deploymentName);
 			try {
 				const nextParams = await options?.onPayload?.(params, model);
@@ -123,6 +128,12 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				responseCallbackFailed = true;
 				throw error;
 			}
+			if (!response.body)
+				throw new RequestFailureError("Azure Responses response has no body.", {
+					schemaVersion: 1,
+					kind: "stream",
+					reason: "missing_body",
+				});
 			stream.push({ type: "start", partial: output });
 
 			failurePhase = "stream";
@@ -148,10 +159,19 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			if (payloadCallbackFailed) {
 				output.errorMessage = "OpenAI Responses payload callback failed.";
+				appendRequestFailure(output, { schemaVersion: 1, kind: "callback", callback: "onPayload" });
 			} else if (responseCallbackFailed) {
 				output.errorMessage = "OpenAI Responses response callback failed.";
+				appendRequestFailure(output, { schemaVersion: 1, kind: "callback", callback: "onResponse" });
 			} else if (output.stopReason === "aborted") {
 				output.errorMessage = abortedResponsesFailureMessage(error);
+			} else if (error instanceof RequestFailureError) {
+				output.errorMessage = error.message;
+				appendBuiltinFailure(output, error);
+			} else if (!requestStarted) {
+				output.errorMessage =
+					"Azure Responses request preparation failed. Check that the payload is JSON-serializable and the base URL and headers are valid.";
+				appendRequestFailure(output, { schemaVersion: 1, kind: "local", reason: "request_preparation" });
 			} else {
 				appendResponsesFailureDiagnostics(
 					output,
@@ -193,7 +213,10 @@ function normalizeAzureBaseUrl(baseUrl: string): string {
 	try {
 		url = new URL(trimmed);
 	} catch {
-		throw new Error(`Invalid Azure OpenAI base URL: ${baseUrl}`);
+		throw new RequestFailureError(
+			"Invalid Azure OpenAI base URL. Set AZURE_OPENAI_BASE_URL or pass a valid azureBaseUrl or model.baseUrl.",
+			{ schemaVersion: 1, kind: "local", reason: "request_preparation" },
+		);
 	}
 
 	const isAzureHost =
@@ -234,8 +257,9 @@ function resolveAzureConfig(
 	}
 
 	if (!resolvedBaseUrl) {
-		throw new Error(
+		throw new RequestFailureError(
 			"Azure OpenAI base URL is required. Set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME, or pass azureBaseUrl, azureResourceName, or model.baseUrl.",
+			{ schemaVersion: 1, kind: "local", reason: "request_preparation" },
 		);
 	}
 
@@ -253,8 +277,9 @@ function createClient(
 ) {
 	if (!apiKey) {
 		if (!process.env.AZURE_OPENAI_API_KEY) {
-			throw new Error(
+			throw new RequestFailureError(
 				"Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
+				{ schemaVersion: 1, kind: "local", reason: "request_preparation" },
 			);
 		}
 		apiKey = process.env.AZURE_OPENAI_API_KEY;

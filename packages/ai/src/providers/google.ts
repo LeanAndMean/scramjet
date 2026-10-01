@@ -21,6 +21,7 @@ import type {
 	ToolCall,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendBuiltinFailure, invokeProviderCallback, RequestFailureError } from "../utils/failure-evidence.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { flattenSystemPrompt } from "../utils/system-prompt.js";
 import type { GoogleThinkingLevel } from "./google-shared.js";
@@ -72,14 +73,17 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 			timestamp: Date.now(),
 		};
 
+		// SCRAMJET-DIVERGENCE: Preserve callback/preparation evidence and latch failed finishes.
+		let requestStarted = false;
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const client = createClient(model, apiKey, options?.headers);
 			let params = buildParams(model, context, options);
-			const nextParams = await options?.onPayload?.(params, model);
+			const nextParams = await invokeProviderCallback("onPayload", () => options?.onPayload?.(params, model));
 			if (nextParams !== undefined) {
 				params = nextParams as GenerateContentParameters;
 			}
+			requestStarted = true;
 			const googleStream = await client.models.generateContentStream(params);
 
 			stream.push({ type: "start", partial: output });
@@ -90,6 +94,13 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 				// @google/genai documents GenerateContentResponse.responseId as an output-only field
 				// used to identify each response. Keep the first non-empty one from the stream.
 				output.responseId ||= chunk.responseId;
+				if (chunk.promptFeedback?.blockReason) {
+					throw new RequestFailureError("Provider rejected the prompt.", {
+						schemaVersion: 1,
+						kind: "provider",
+						category: "content_rejection",
+					});
+				}
 				const candidate = chunk.candidates?.[0];
 				if (candidate?.content?.parts) {
 					for (const part of candidate.content.parts) {
@@ -203,9 +214,11 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 					}
 				}
 
-				if (candidate?.finishReason) {
+				if (candidate?.finishReason && output.stopReason !== "error") {
 					output.stopReason = mapStopReason(candidate.finishReason);
-					if (output.content.some((b) => b.type === "toolCall")) {
+					if (output.stopReason === "error")
+						output.errorMessage = `Provider finish reason: ${candidate.finishReason}`;
+					if (output.stopReason === "stop" && output.content.some((b) => b.type === "toolCall")) {
 						output.stopReason = "toolUse";
 					}
 				}
@@ -254,7 +267,11 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				throw new RequestFailureError(output.errorMessage ?? "Provider response failed.", {
+					schemaVersion: 1,
+					kind: "provider",
+					category: "unknown",
+				});
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -268,6 +285,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			appendBuiltinFailure(output, error, !requestStarted);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

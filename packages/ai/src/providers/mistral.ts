@@ -6,6 +6,12 @@ import type {
 	ContentChunk,
 	FunctionTool,
 } from "@mistralai/mistralai/models/components";
+import {
+	ConnectionError,
+	RequestTimeoutError,
+	ResponseValidationError,
+	SDKValidationError,
+} from "@mistralai/mistralai/models/errors";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../models.js";
 import type {
@@ -23,6 +29,7 @@ import type {
 	ToolCall,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { appendBuiltinFailure, invokeProviderCallback, RequestFailureError } from "../utils/failure-evidence.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -57,6 +64,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 	(async () => {
 		const output = createOutput(model);
 
+		let requestStarted = false;
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider);
 			if (!apiKey) {
@@ -73,10 +81,11 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 			const transformedMessages = transformMessages(context.messages, model, (id) => normalizeMistralToolCallId(id));
 
 			let payload = buildChatPayload(model, context, transformedMessages, options);
-			const nextPayload = await options?.onPayload?.(payload, model);
+			const nextPayload = await invokeProviderCallback("onPayload", () => options?.onPayload?.(payload, model));
 			if (nextPayload !== undefined) {
 				payload = nextPayload as ChatCompletionStreamRequest;
 			}
+			requestStarted = true;
 			const mistralStream = await mistral.chat.stream(payload, buildRequestOptions(model, options));
 			stream.push({ type: "start", partial: output });
 			await consumeChatStream(model, output, stream, mistralStream);
@@ -98,6 +107,30 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatMistralError(error);
+			// SCRAMJET-DIVERGENCE: Normalize actual SDK validation, body absence, and transport observations.
+			appendBuiltinFailure(
+				output,
+				error instanceof ResponseValidationError && error.rawResponse.ok && !error.rawResponse.body
+					? new RequestFailureError(output.errorMessage, {
+							schemaVersion: 1,
+							kind: "stream",
+							reason: "missing_body",
+						})
+					: error instanceof SDKValidationError
+						? new RequestFailureError(output.errorMessage, {
+								schemaVersion: 1,
+								kind: "local",
+								reason: "request_validation",
+							})
+						: error instanceof RequestTimeoutError || error instanceof ConnectionError
+							? new RequestFailureError(output.errorMessage, {
+									schemaVersion: 1,
+									kind: "stream",
+									reason: error instanceof RequestTimeoutError ? "timeout" : "transport",
+								})
+							: error,
+				!requestStarted,
+			);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -319,7 +352,7 @@ async function consumeChatStream(
 		const choice = chunk.choices[0];
 		if (!choice) continue;
 
-		if (choice.finishReason) {
+		if (choice.finishReason && output.stopReason !== "error") {
 			output.stopReason = mapChatStopReason(choice.finishReason);
 		}
 

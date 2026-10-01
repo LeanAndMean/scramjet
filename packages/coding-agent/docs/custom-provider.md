@@ -515,6 +515,26 @@ output.usage.totalTokens = output.usage.input + output.usage.output +
 calculateCost(model, output.usage);
 ```
 
+### Failure Evidence
+
+`@leanandmean/ai` exports `RequestFailureV1`, `RetrySuppressionV1`, `appendRequestFailure`, `validateRequestFailure`, and `inspectFailureEvidence`. Optional diagnostics persist in the existing assistant message envelope. A `request_failure` diagnostic has `details.schemaVersion: 1` and exactly one closed branch:
+
+- `kind: "http"`, numeric integer `status` from 400 through 599, and `reason: "status"` or a recognized semantic rejection.
+- `kind: "provider"` and a closed semantic `category` (for example `rate_limit`, `quota_exhausted`, or `context_overflow`).
+- `kind: "stream"` and `reason: "missing_body"`, `"missing_terminal_event"`, `"transport"`, `"timeout"`, or `"malformed_event"`.
+- `kind: "callback"` and `callback: "onPayload"` or `"onResponse"`.
+- `kind: "local"` and `reason: "request_preparation"`, `"request_validation"`, `"configuration"`, or `"context_overflow"`. The last is reserved for witnessed local context allocation failure, not arbitrary error prose.
+
+Use the exported TypeScript union as the complete vocabulary. AI's neutral evidence utility validates both primary families; the Responses validator remains available from its existing public subpath. Unknown keys, invalid values, duplicate recognized diagnostics, and simultaneous `request_failure` and Responses `provider_failure` evidence fail closed. HTTP 401/403/404 cannot authorize overflow or override their terminal status category; explicit HTTP overflow evidence is compatible only with 400/413/422. Previously accepted contradictory version-1 records remain readable in sessions but no longer validate for recovery; no journal migration is required. Do not emit two primary failure families for one failure. Valid evidence takes precedence over retry and overflow prose; absent evidence preserves legacy custom-provider behavior. Stream completeness failures may be retried within configured limits without asserting their cause was transient. The existing Responses EOF diagnostic remains `unknown`; session policy explicitly admits its canonical category.
+
+Separate `retry_suppression` evidence vetoes retries without changing the provider cause. Version 1 accepts `server_delay_exceeds_limit` with finite safe `requestedDelayMs > maxDelayMs > 0`, or `invalid_server_delay` with no raw value. It must accompany one valid transient primary failure. Orphaned, malformed, duplicate or inconsistent suppression blocks automatic recovery. These records are evidence, not durable retry queues; reopening a session does not restart retries.
+
+Built-in failure catches preserve an existing primary diagnosis, classify witnessed failures at their source, and emit explicit unknown evidence when available facts do not establish a category. Unknown, provider-error, and malformed-event evidence blocks both retry and failure-triggered compaction, even when preceding usage is high. This is not a universal enforcement guarantee for future adapters or trusted extension replacements. Independent new-prompt maintenance and evidence-absent legacy custom providers retain their existing behavior.
+
+Callback failures must never be inferred from provider prose or persist original callback exception details. Message origin describes who produced the message, not which operation failed. Retain partial provider output and mark the callback failure separately.
+
+Completeness coverage is route-qualified: shared Responses, Chat's existing finish-reason check, and started Anthropic streams detect missing terminals. Additional mandatory markers for Google/Vertex, Mistral, Bedrock and startless Anthropic SSE were not established from installed SDK contracts and are not enforced. In particular, Google prompt-feedback blocking can occur without a candidate finish reason; parser acceptance alone does not establish valid backend completion. The installed Google SDK exposes bodyless generation failures as plain errors without a supported raw-response hook; Google/Vertex therefore retain an explicit unknown diagnosis rather than inferring body absence from the error message. Chat and Mistral classify body absence from their available response objects. Responses and default Chat/Anthropic clients distinguish local SDK preparation from dispatch at the invocation-local fetch boundary, not from observational SDK-attempt diagnostics or a generic `TypeError`.
+
 ### Context Overflow Errors
 
 When a request exceeds the model's context window, scramjet can recover automatically by compacting the conversation and retrying. This recovery only kicks in if scramjet recognizes the failure as an overflow.
@@ -522,9 +542,9 @@ When a request exceeds the model's context window, scramjet can recover automati
 Detection runs on the finalized assistant message:
 
 - `stopReason === "error"`
-- Without a Responses provider-failure diagnostic, `errorMessage` matches one of scramjet's known overflow patterns (see [`packages/ai/src/utils/overflow.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/utils/overflow.ts)). With a Responses diagnostic, its validated category determines overflow instead of message text.
+- Without authoritative failure evidence, `errorMessage` matches one of scramjet's known overflow patterns (see [`packages/ai/src/utils/overflow.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/utils/overflow.ts)). With recognized failure evidence, its validated category determines overflow instead of message text.
 
-If your provider returns overflow errors without Responses diagnostics and with a message scramjet does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase scramjet recognizes. The generic fallback `context_length_exceeded` is the safest choice. For a provider that produces Responses diagnostics, classify overflow at the provider-error source; rewriting `errorMessage` alone cannot override a present diagnostic. Shared Responses adapters can also record a bounded local snapshot of unfamiliar error fields separately from the readable `errorMessage`; this snapshot is display-only and never grants retry or compaction.
+If your provider returns overflow errors without any authoritative failure evidence and with a message scramjet does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase scramjet recognizes. The generic fallback `context_length_exceeded` is the safest choice. For a provider that emits `request_failure` or Responses `provider_failure` diagnostics, classify overflow at the provider-error source; rewriting `errorMessage` alone cannot override present evidence. Shared Responses adapters can also record a bounded local snapshot of unfamiliar error fields separately from the readable `errorMessage`; this snapshot is display-only and never grants retry or compaction.
 
 ```typescript
 const MY_PROVIDER_OVERFLOW_PATTERN = /your provider's overflow phrase/i;
@@ -556,7 +576,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-`message_end` runs before scramjet tracks the assistant message for auto-compaction. When there is no Responses diagnostic, the rewritten `errorMessage` is what scramjet checks. With this in place, scramjet will:
+`message_end` runs before scramjet tracks the assistant message for auto-compaction. When there is no authoritative failure diagnostic, the rewritten `errorMessage` is what scramjet checks. With this in place, scramjet will:
 
 1. Detect the overflow from `errorMessage`.
 2. Drop the failed assistant message from live context.

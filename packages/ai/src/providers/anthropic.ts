@@ -30,6 +30,12 @@ import type {
 	ToolResultMessage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import {
+	appendBuiltinFailure,
+	failureFromProviderError,
+	invokeProviderCallback,
+	RequestFailureError,
+} from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -401,12 +407,17 @@ async function* iterateSseMessages(
 	}
 }
 
+// SCRAMJET-DIVERGENCE: Preserve provider and callback failure facts independently.
 async function* iterateAnthropicEvents(
 	response: Response,
 	signal?: AbortSignal,
 ): AsyncGenerator<RawMessageStreamEvent> {
 	if (!response.body) {
-		throw new Error("Attempted to iterate over an Anthropic response with no body");
+		throw new RequestFailureError("Anthropic response has no body.", {
+			schemaVersion: 1,
+			kind: "stream",
+			reason: "missing_body",
+		});
 	}
 
 	let sawMessageStart = false;
@@ -414,7 +425,34 @@ async function* iterateAnthropicEvents(
 
 	for await (const sse of iterateSseMessages(response.body, signal)) {
 		if (sse.event === "error") {
-			throw new Error(sse.data);
+			let value: unknown;
+			try {
+				value = JSON.parse(sse.data);
+			} catch {
+				throw new RequestFailureError("Malformed Anthropic error event.", {
+					schemaVersion: 1,
+					kind: "stream",
+					reason: "malformed_event",
+				});
+			}
+			if (
+				!value ||
+				typeof value !== "object" ||
+				Array.isArray(value) ||
+				!("error" in value) ||
+				!value.error ||
+				typeof value.error !== "object" ||
+				Array.isArray(value.error)
+			)
+				throw new RequestFailureError("Malformed Anthropic error event.", {
+					schemaVersion: 1,
+					kind: "stream",
+					reason: "malformed_event",
+				});
+			throw new RequestFailureError(
+				sse.data,
+				failureFromProviderError(value) ?? { schemaVersion: 1, kind: "provider", category: "unknown" },
+			);
 		}
 
 		if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
@@ -431,14 +469,19 @@ async function* iterateAnthropicEvents(
 			yield event;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			throw new Error(
+			throw new RequestFailureError(
 				`Could not parse Anthropic SSE event ${sse.event}: ${message}; data=${sse.data}; raw=${sse.raw.join("\\n")}`,
+				{ schemaVersion: 1, kind: "stream", reason: "malformed_event" },
 			);
 		}
 	}
 
 	if (sawMessageStart && !sawMessageEnd) {
-		throw new Error("Anthropic stream ended before message_stop");
+		throw new RequestFailureError("Anthropic stream ended before message_stop", {
+			schemaVersion: 1,
+			kind: "stream",
+			reason: "missing_terminal_event",
+		});
 	}
 }
 
@@ -468,6 +511,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			timestamp: Date.now(),
 		};
 
+		let requestStarted = false;
 		try {
 			let client: Anthropic;
 			let isOAuth: boolean;
@@ -498,12 +542,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					options?.headers,
 					copilotDynamicHeaders,
 					cacheSessionId,
+					(input, init) => {
+						requestStarted = true;
+						return fetch(input, init);
+					},
 				);
 				client = created.client;
 				isOAuth = created.isOAuthToken;
 			}
 			let params = buildParams(model, context, isOAuth, options);
-			const nextParams = await options?.onPayload?.(params, model);
+			const nextParams = await invokeProviderCallback("onPayload", () => options?.onPayload?.(params, model));
 			if (nextParams !== undefined) {
 				params = nextParams as MessageCreateParamsStreaming;
 			}
@@ -512,8 +560,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
+			if (options?.client) requestStarted = true;
 			const response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			await invokeProviderCallback("onResponse", () =>
+				options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model),
+			);
 			stream.push({ type: "start", partial: output });
 
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
@@ -654,7 +705,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					}
 				} else if (event.type === "message_delta") {
 					if (event.delta.stop_reason) {
-						output.stopReason = mapStopReason(event.delta.stop_reason);
+						if (output.stopReason !== "error") output.stopReason = mapStopReason(event.delta.stop_reason);
 					}
 					// Only update usage fields if present (not null).
 					// Preserves input_tokens from message_start when proxies omit it in message_delta.
@@ -681,9 +732,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				throw new Error("Request was aborted");
 			}
 
-			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
-			}
+			if (output.stopReason === "error")
+				throw new RequestFailureError("Anthropic rejected the output.", {
+					schemaVersion: 1,
+					kind: "provider",
+					category: "content_rejection",
+				});
+			if (output.stopReason === "aborted") throw new Error("Request was aborted");
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
@@ -695,6 +750,17 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			appendBuiltinFailure(
+				output,
+				requestStarted && !options?.signal?.aborted && error instanceof Anthropic.APIConnectionError
+					? new RequestFailureError(output.errorMessage, {
+							schemaVersion: 1,
+							kind: "provider",
+							category: error instanceof Anthropic.APIConnectionTimeoutError ? "timeout" : "transport",
+						})
+					: error,
+				!requestStarted,
+			);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -798,6 +864,7 @@ function createClient(
 	optionsHeaders?: Record<string, string>,
 	dynamicHeaders?: Record<string, string>,
 	sessionId?: string,
+	fetchImplementation?: typeof fetch,
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Adaptive-thinking models have interleaved thinking built in, so skip the beta header.
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model.id);
@@ -814,6 +881,7 @@ function createClient(
 			apiKey: null,
 			authToken: null,
 			baseURL: resolveCloudflareBaseUrl(model),
+			fetch: fetchImplementation,
 			dangerouslyAllowBrowser: true,
 			defaultHeaders: mergeHeaders(
 				{
@@ -835,6 +903,7 @@ function createClient(
 	// Copilot: Bearer auth, selective betas.
 	if (model.provider === "github-copilot") {
 		const client = new Anthropic({
+			fetch: fetchImplementation,
 			apiKey: null,
 			authToken: apiKey,
 			baseURL: model.baseUrl,
@@ -857,6 +926,7 @@ function createClient(
 	// OAuth: Bearer auth, Claude Code identity headers
 	if (isOAuthToken(apiKey)) {
 		const client = new Anthropic({
+			fetch: fetchImplementation,
 			apiKey: null,
 			authToken: apiKey,
 			baseURL: model.baseUrl,
@@ -883,6 +953,7 @@ function createClient(
 	const client = new Anthropic({
 		apiKey,
 		baseURL: model.baseUrl,
+		fetch: fetchImplementation,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders: mergeHeaders(
 			{

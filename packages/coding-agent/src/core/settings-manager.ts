@@ -146,6 +146,9 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 		}
 	}
 
+	if (base.retry?.provider && overrides.retry?.provider) {
+		result.retry = { ...result.retry, provider: { ...base.retry.provider, ...overrides.retry.provider } };
+	}
 	return result;
 }
 
@@ -272,6 +275,8 @@ export class SettingsManager {
 		this.globalSettingsLoadError = globalLoadError;
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
+		this.normalizeRetrySettings(this.globalSettings, "global");
+		this.normalizeRetrySettings(this.projectSettings, "project");
 		this.normalizeViewportSettings(this.globalSettings, "global");
 		this.normalizeViewportSettings(this.projectSettings, "project");
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
@@ -441,6 +446,8 @@ export class SettingsManager {
 			this.recordError("project", projectLoad.error);
 		}
 
+		this.normalizeRetrySettings(this.globalSettings, "global");
+		this.normalizeRetrySettings(this.projectSettings, "project");
 		this.normalizeViewportSettings(this.globalSettings, "global");
 		this.normalizeViewportSettings(this.projectSettings, "project");
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
@@ -448,7 +455,9 @@ export class SettingsManager {
 
 	/** Apply additional overrides on top of current settings */
 	applyOverrides(overrides: Partial<Settings>): void {
-		this.settings = deepMergeSettings(this.settings, overrides);
+		const normalized = structuredClone(overrides);
+		this.normalizeRetrySettings(normalized, "global");
+		this.settings = deepMergeSettings(this.settings, normalized);
 		this.normalizeViewportSettings(this.settings, "global");
 	}
 
@@ -1024,6 +1033,47 @@ export class SettingsManager {
 		this.globalSettings.treeFilterMode = mode;
 		this.markModified("treeFilterMode");
 		this.save();
+	}
+
+	// SCRAMJET-DIVERGENCE: Invalid retry leaves must not erase valid lower-priority settings.
+	private normalizeRetrySettings(settings: Partial<Settings>, scope: SettingsScope): void {
+		const retry = settings.retry;
+		if (retry === undefined) return;
+		if (!retry || typeof retry !== "object" || Array.isArray(retry)) {
+			delete settings.retry;
+			this.recordError(scope, new Error("retry must be an object; ignoring this scope's value."));
+			return;
+		}
+		if (retry.enabled !== undefined && typeof retry.enabled !== "boolean") {
+			delete retry.enabled;
+			this.recordError(scope, new Error("retry.enabled must be boolean; ignoring this scope's value."));
+		}
+		const validate = (target: object, name: string, path: string, maximum: number) => {
+			const record = target as Record<string, unknown>;
+			const value = record[name];
+			if (
+				value !== undefined &&
+				(typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > maximum)
+			) {
+				delete record[name];
+				this.recordError(
+					scope,
+					new Error(`${path} must be an integer between 0 and ${maximum}; ignoring this scope's value.`),
+				);
+			}
+		};
+		validate(retry, "maxRetries", "retry.maxRetries", Number.MAX_SAFE_INTEGER);
+		validate(retry, "baseDelayMs", "retry.baseDelayMs", 2_147_483_647);
+		if (retry.provider !== undefined) {
+			if (!retry.provider || typeof retry.provider !== "object" || Array.isArray(retry.provider)) {
+				delete retry.provider;
+				this.recordError(scope, new Error("retry.provider must be an object; ignoring this scope's value."));
+			} else {
+				validate(retry.provider, "maxRetries", "retry.provider.maxRetries", Number.MAX_SAFE_INTEGER);
+				validate(retry.provider, "timeoutMs", "retry.provider.timeoutMs", 2_147_483_647);
+				validate(retry.provider, "maxRetryDelayMs", "retry.provider.maxRetryDelayMs", 2_147_483_647);
+			}
+		}
 	}
 
 	private normalizeViewportSettings(settings: Settings, scope: SettingsScope): void {

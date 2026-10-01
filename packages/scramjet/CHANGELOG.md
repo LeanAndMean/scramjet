@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.107.0 — Recover from incomplete provider responses
+
+Diagnose incomplete provider responses and recover within configured retry limits without executing tools from failed responses. Fixes [#586](https://github.com/LeanAndMean/scramjet/issues/586).
+
+### Fixed
+
+- Report a distinct, validated missing-terminal-event diagnostic for OpenAI and Azure Responses streams, keeping SDK request-attempt evidence separate from accepted-stream failures.
+- Retry recognized incomplete responses within bounded agent limits while preserving failed-turn tool safety, cancellation, and terminal provider rejections.
+- Preserve provider, callback, and local failure identities; suppress outer retries after rejected Codex server delays and retain typed context-allocation overflow recovery.
+
+### Tests
+
+- Cover production adapters, SDK and agent retries, partial output, persisted sessions, failure-evidence validation, and prevention of failed-response tool execution.
+
 ## 0.106.1 — Include subagent costs and retain interrupted metrics
 
 Include recorded subagent costs in the existing session dollar total and retain metrics through failures and interruption. Fixes [#598](https://github.com/LeanAndMean/scramjet/issues/598).
