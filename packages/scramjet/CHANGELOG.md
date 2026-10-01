@@ -1,17 +1,59 @@
 # Changelog
 
-## 0.104.4 — Diagnose Responses streams that end without a terminal event
+## Unreleased — Diagnose Responses streams that end without a terminal event
 
-Treat natural EOF after a Responses stream is accepted as an incomplete response, without replaying partial output or tools. Fixes [#586](https://github.com/LeanAndMean/scramjet/issues/586).
+Diagnose incomplete provider responses and recover within configured retry limits without executing tools from failed responses. Fixes [#586](https://github.com/LeanAndMean/scramjet/issues/586).
 
 ### Fixed
 
-- Report a distinct, validated missing-terminal-event diagnostic for OpenAI and Azure Responses streams, with guidance to inspect partial output before retrying manually.
-- Keep SDK request-attempt evidence separate from the accepted stream's failure and fail closed when retry disposition is unknown.
+- Report a distinct, validated missing-terminal-event diagnostic for OpenAI and Azure Responses streams, keeping SDK request-attempt evidence separate from accepted-stream failures.
+- Retry recognized incomplete responses within bounded agent limits while preserving failed-turn tool safety, cancellation, and terminal provider rejections.
+- Preserve provider, callback, and local failure identities; suppress outer retries after rejected Codex server delays and retain typed context-allocation overflow recovery.
 
 ### Tests
 
-- Cover production adapters, SDK retries, partial output, persisted sessions, and prevention of automatic replay or partial tool execution.
+- Cover production adapters, SDK and agent retries, partial output, persisted sessions, failure-evidence validation, and prevention of failed-response tool execution.
+
+## 0.106.1 — Include subagent costs and retain interrupted metrics
+
+Include recorded subagent costs in the existing session dollar total and retain metrics through failures and interruption. Fixes [#598](https://github.com/LeanAndMean/scramjet/issues/598).
+
+### Fixed
+
+- Combine parent and nested subagent costs live without double-counting or changing parent token/context metrics or footer layout.
+- Retain recorded usage and diagnostics in failed/interrupted results, and recover interpretable historical costs without rewriting saved records.
+- Drain terminal persistence and internal settlement before manual compaction, refusing conflicting execution and suppressing lifecycle continuation during the drain.
+
+### Tests
+
+- Cover cumulative cost transport, nested and interrupted subagents, historical recovery, live-to-persisted reconciliation, footer projection, and compaction ownership/settlement.
+
+## 0.106.0 — Add GPT-6.1 Sol to OpenAI, Codex, and Copilot catalogs
+
+Add `gpt-6.1-sol` to three route-specific model catalogs. Fixes [#595](https://github.com/LeanAndMean/scramjet/issues/595).
+
+### Added
+
+- Advertise direct OpenAI, Codex sign-in, and GitHub Copilot model capabilities with route-specific context limits, supported efforts, and qualified usage estimates.
+- Retain direct OpenAI and Codex records when a live feed omits them; require an eligible Copilot feed record for its Responses routing and limits.
+
+### Tests
+
+- Cover generator retention, catalog metadata, and Copilot Responses request shape.
+
+## 0.105.0 — Allow explicitly targeted external forge publication
+
+Permit guarded publication to canonical public GitHub and GitLab repository URLs while requiring interactive approval for external destinations. Fixes [#550](https://github.com/LeanAndMean/scramjet/issues/550).
+
+### Changed
+
+- Verify selected-target PR branches and bind GitLab postimage checks to the preflighted project.
+- Keep external GitHub issue guidance, duplicate checks, publication, and metadata on the selected repository.
+- Preserve same-origin publication policy and require explicit approval before writing to an external repository.
+
+### Tests
+
+- Cover external destination validation, approval, freshness, and publication consistency.
 
 ## 0.104.3 — Speed up styled tool output expansion
 

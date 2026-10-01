@@ -44,6 +44,16 @@ A new user prompt independently checks threshold maintenance using trustworthy s
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
+### Manual admission and terminal drain
+
+Manual compaction has one owner. It rejects while manual/automatic compaction or branch summarization is in progress, or while an idle-origin harness tool is still executing. Refusal leaves execution, abort signals, accounting, subscriptions, and context untouched. Await the conflicting operation's persisted settlement before deliberately retrying; requests are not queued.
+
+An admitted request cancels the active Agent run and drains prior and terminal message processing before preparing the summary. Final `message_end` hooks, message replacement, subscriber notification, persistence, and cost handoff still run. Internal prompt/retry and already-admitted harness obligations settle, but queued/new run/turn lifecycle hooks and subscribers, retries, continuations, and automatic compaction are suppressed during the drain. Tool-result execution hooks are not replayed. New session `invokeHarnessTool()` admissions reject throughout manual ownership; this is not a lock on direct underlying Agent calls.
+
+Abort/drain/persistence failure rejects compaction without appending its entry or reconstructing context from an incomplete journal. Recorded in-memory costs remain included; no automatic persistence retry or durability guarantee is added. Normal event subscription is restored on success/failure unless the session was disposed.
+
+These rules apply to SDK `session.compact()`, interactive `/compact`, RPC `compact` (failure response), and extension `ctx.compact()` (`onError`). A refused contender does not emit the owner's completion or cancel it. Message hooks should use the fire-and-forget `ctx.compact()` callbacks, not await compaction from work the drain needs to finish.
+
 ### How It Works
 
 1. **Find cut point**: Walk backwards from newest message, accumulating token estimates until `keepRecentTokens` (default 20k, configurable in `~/.scramjet/agent/settings.json` or `<project-dir>/.scramjet/settings.json`) is reached

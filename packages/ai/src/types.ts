@@ -299,6 +299,9 @@ export interface ToolResultMessage<TDetails = any> {
 	toolName: string;
 	content: (TextContent | ImageContent)[]; // Supports text and images
 	details?: TDetails;
+	// SCRAMJET-DIVERGENCE: serialized cumulative invocation cost (#598).
+	/** Reported USD including descendants, excluding the requesting assistant. */
+	cost?: number;
 	isError: boolean;
 	timestamp: number; // Unix timestamp in milliseconds
 }

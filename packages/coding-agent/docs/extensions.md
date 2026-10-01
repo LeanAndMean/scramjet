@@ -1022,7 +1022,7 @@ if (usage && usage.tokens !== null && usage.tokens > usage.contextWindow * 0.8) 
 
 ### ctx.compact()
 
-Trigger compaction without awaiting completion. Use `onComplete` and `onError` for follow-up actions.
+Trigger compaction without awaiting completion. Use `onComplete` and `onError` for follow-up actions. Competing manual/automatic compaction, branch summarization, or executing idle-origin harness work causes immediate refusal through `onError`; retry deliberately after conflicting work and its persistence settle. The admitted owner drains final `message_end` hooks and persistence while suppressing queued/new run/turn lifecycle continuation. New session harness invocations reject during manual ownership. See [manual admission and terminal drain](compaction.md#manual-admission-and-terminal-drain).
 
 ```typescript
 ctx.compact({
@@ -1628,6 +1628,8 @@ await pi.invokeHarnessTool("my_notice_tool", { text: "model changed to X" });
 
 The returned promise **resolves only after the resulting tool-result message has been persisted** to the session — a stronger guarantee than "the tool ran". A consumer that must not replace or tear down the session (e.g. before starting a fresh session) until the record row exists can safely `await` it. The promise **rejects** if no tool with `name` is registered, if a matching event fails to process/persist, if the session is disposed before it settles or is called after disposal, or if an explicit `options.toolCallId` is malformed or already pending. Rejection means the pipeline did not complete — it does **not** prove the artifact is absent (state and persistence may have partially completed), so do not blindly retry. A tool's own `execute()` error is not a rejection: it resolves normally as an `isError` result.
 
+New invocations also reject during manual compaction ownership, before allocating an id or persistence acknowledgement or executing a tool. Already-admitted active-run/queued invocations drain normally; manual compaction refuses existing idle-origin execution rather than pretending `Agent.waitForIdle()` covers it. This session-local admission policy does not guard direct underlying Agent calls.
+
 `options.toolCallId` (optional) sets an explicit tool-call id (must be provider-safe: 1-64 characters of `[a-zA-Z0-9_-]`); a provider-safe id is generated when omitted.
 
 Do not `await` this from work whose return is required for the agent to reach the mid-run drain point or for the event queue to persist the result (a model-callable `execute`, `beforeToolBatch`/`beforeToolCall`/`afterToolCall`/`prepareNextTurn`, or an awaited event handler) — that would deadlock. Start the promise, return from the gating callback, and await it from an independent continuation.
@@ -1884,7 +1886,13 @@ pi.registerTool({
 });
 ```
 
-**Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
+**Signaling errors:** Throw an error from `execute`, or return `isError: true` alongside `content` and `details`. Returned failures retain their structured details and are reported to the LLM as errors. Omitted `isError` preserves normal success; `tool_result` hooks may still override the final error flag.
+
+**Reported cost:** Results and `onUpdate` partials may include `cost: number`, the invocation's cumulative reported USD including descendants but excluding the requesting assistant. Each finite, nonnegative report replaces the previous amount; zero is authoritative, omission is not a new report, and malformed values are ignored. The latest reported cost survives a final result that omits it and `tool_result` content/details patches; hooks cannot override cost through their patch interface. On an execution throw, the latest cost-bearing partial's details and cost accompany the error text, even after a content-only update. On an after-tool hook failure, executed accounting-bearing details and cost accompany the error text. Neither failure inherits a termination hint. Non-accounting throws retain their existing empty-details behavior.
+
+**Historical cost interpretation:** A tool definition may supply synchronous, read-only `getHistoricalCost(details: unknown): number | undefined` to recover costs from older saved details. It must tolerate untrusted historical data, return only a finite nonnegative amount or `undefined`, and never execute work or call a renderer. It stays on the definition, not the executable Agent tool; consumers own aggregation and prefer valid generic message cost, including zero, over this fallback. `AgentSession.getRecordedSessionCost()` and the default footer include all journal assistant/tool costs plus live reports awaiting final append. The interpreter remains available on discovered definitions even when a tool is inactive or excluded by the execution allowlist, following the same definition collision winners without enabling execution. Missing definitions cannot recover legacy schemas. Interpreter exceptions use the extension error channel and do not break presentation.
+
+Session accounting captures scalar reports before asynchronous event hooks. A final `message_end` replacement can change tool content/details but cannot override the captured cost. Live cost transfers to recorded cost only after a successful append; append failure retains the observation in memory and uses existing persistence/settlement error reporting, without automatic retry or a durability claim. Disposal clears live ownership; ordinary abort does not discard it. Compaction/tree navigation retain whole-journal recorded totals, and forks count only copied records. This does not redefine `/session`, RPC statistics, or custom footers.
 
 **Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
 
@@ -2659,7 +2667,7 @@ const highlighted = highlightCode(code, lang, theme);
 
 - Extension errors are logged, agent continues
 - `tool_call` errors block the tool (fail-safe)
-- Tool `execute` errors must be signaled by throwing; the thrown error is caught, reported to the LLM with `isError: true`, and execution continues
+- Tool `execute` errors may be signaled by throwing or returning `isError: true`; failures are reported to the LLM and execution continues unless the finalized batch explicitly terminates
 
 ## Mode Behavior
 

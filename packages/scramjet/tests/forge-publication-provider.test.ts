@@ -3,10 +3,12 @@ import {
 	FORGE_EXEC_TIMEOUT_MS,
 	type ForgeExec,
 	parseForgeOrigin,
+	parseForgeRepository,
 	preflightForgePublication,
 	preflightPullRequestBranches,
 	publishForge,
 	resolveForgeOrigin,
+	sameRepository,
 } from "../src/forge-publication-provider.js";
 
 const github = { provider: "github" as const, owner: "LeanAndMean", repository: "scramjet" };
@@ -42,6 +44,48 @@ describe("parseForgeOrigin", () => {
 	});
 });
 
+describe("explicit repository identity", () => {
+	it.each([
+		["https://github.com/LeanAndMean/scramjet", github],
+		["https://gitlab.com/group/sub/project", { provider: "gitlab", namespace: "group/sub", repository: "project" }],
+	])("accepts strict HTTPS targets", (input, expected) => {
+		expect(parseForgeRepository(input)).toEqual(expected);
+	});
+
+	it.each([
+		"",
+		"https://github.com/a/b.git",
+		"https://github.com/a/b/",
+		"https://github.com/a/%62",
+		"https://github.com/a/../b",
+		"https://github.com/a/b?x=1",
+		"https://github.com/a/b#fragment",
+		"https://github.com:443/a/b",
+		"https://user@github.com/a/b",
+		"https://github.com./a/b",
+		"http://github.com/a/b",
+		"ssh://git@github.com/a/b",
+		"git@github.com:a/b",
+		"https://evil.example/a/b",
+		" https://github.com/a/b",
+		"https://gitlab.com/a//b",
+		"https://github.com/a/b\\c",
+		"https://github.com/a/b\u202e",
+	])("rejects noncanonical explicit target %s", (input) => {
+		expect(() => parseForgeRepository(input)).toThrow();
+	});
+
+	it("compares GitHub without case and GitLab exactly", () => {
+		expect(sameRepository(github, parseForgeRepository("https://github.com/leanandmean/SCRAMJET"))).toBe(true);
+		expect(
+			sameRepository(
+				parseForgeRepository("https://gitlab.com/Group/sub/project"),
+				parseForgeRepository("https://gitlab.com/group/sub/project"),
+			),
+		).toBe(false);
+	});
+});
+
 describe("publication preflight", () => {
 	it("removes only Git's record newline before validating an origin", async () => {
 		const exec = vi.fn<ForgeExec>().mockResolvedValue(result({ stdout: "git@github.com:owner/repo\t\n" }));
@@ -61,6 +105,7 @@ describe("publication preflight", () => {
 			.mockResolvedValueOnce(
 				result({
 					stdout: JSON.stringify({
+						id: 42,
 						full_name: "LeanAndMean/scramjet",
 						html_url: "https://github.com/LeanAndMean/scramjet",
 					}),
@@ -74,22 +119,43 @@ describe("publication preflight", () => {
 					}),
 				}),
 			);
-		await preflightForgePublication(
-			exec,
-			github,
-			{ operation: "add_issue_comment", number: 4, body: "body" },
-			"/repo",
-		);
+		expect(
+			await preflightForgePublication(
+				exec,
+				github,
+				{ operation: "add_issue_comment", number: 4, body: "body" },
+				"/repo",
+			),
+		).toBe(42);
 		expect(exec.mock.calls.map((call) => call[1])).toEqual([
 			["api", "--hostname", "github.com", "repos/LeanAndMean/scramjet"],
 			["api", "--hostname", "github.com", "repos/LeanAndMean/scramjet/issues/4"],
 		]);
 	});
 
+	it.each([undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "42"])(
+		"rejects invalid GitHub repository ID %s before publication",
+		async (id) => {
+			const exec = vi.fn<ForgeExec>().mockResolvedValue(
+				result({
+					stdout: JSON.stringify({
+						id,
+						full_name: "LeanAndMean/scramjet",
+						html_url: "https://github.com/LeanAndMean/scramjet",
+					}),
+				}),
+			);
+			await expect(
+				preflightForgePublication(exec, github, { operation: "create_issue", title: "t", body: "b" }, "/repo"),
+			).rejects.toThrow("Unable to read the requested GitHub repository metadata");
+		},
+	);
+
 	it("rejects canonical repository aliases and mismatched GitHub parent types", async () => {
 		const alias = vi.fn<ForgeExec>().mockResolvedValue(
 			result({
 				stdout: JSON.stringify({
+					id: 42,
 					full_name: "other/repo",
 					html_url: "https://github.com/other/repo",
 				}),
@@ -104,6 +170,7 @@ describe("publication preflight", () => {
 			.mockResolvedValueOnce(
 				result({
 					stdout: JSON.stringify({
+						id: 42,
 						full_name: "LeanAndMean/scramjet",
 						html_url: "https://github.com/LeanAndMean/scramjet",
 					}),
@@ -126,6 +193,182 @@ describe("publication preflight", () => {
 				"/repo",
 			),
 		).rejects.toThrow("artifact type");
+	});
+
+	it.each([
+		["GitHub", github, "gh", "repos/LeanAndMean/scramjet"],
+		[
+			"GitLab",
+			{ provider: "gitlab" as const, namespace: "group/sub", repository: "project" },
+			"glab",
+			"projects/group%2Fsub%2Fproject",
+		],
+	] as const)(
+		"distinguishes unreadable %s repository metadata from a canonical mismatch",
+		async (name, repository, cli, endpoint) => {
+			for (const failure of [
+				result({ code: 1, stderr: "private CLI error" }),
+				result({ killed: true }),
+				result({ stdout: "not JSON" }),
+				result({ stdout: "null" }),
+				result({ stdout: "[]" }),
+				result({ stdout: "{}" }),
+			]) {
+				const exec = vi.fn<ForgeExec>().mockResolvedValue(failure);
+				await expect(
+					preflightForgePublication(
+						exec,
+						repository,
+						{ operation: "create_issue", title: "t", body: "b" },
+						"/repo",
+					),
+				).rejects.toThrow(`Unable to read the requested ${name} repository metadata`);
+				expect(exec).toHaveBeenCalledTimes(1);
+				expect(exec.mock.calls[0]?.slice(0, 2)).toEqual([
+					cli,
+					["api", "--hostname", `${cli === "gh" ? "github" : "gitlab"}.com`, endpoint],
+				]);
+				expect(exec.mock.calls.filter((call) => call[1].includes("POST"))).toHaveLength(0);
+			}
+			const rejected = vi.fn<ForgeExec>().mockRejectedValue(new Error("private CLI error"));
+			await expect(
+				preflightForgePublication(
+					rejected,
+					repository,
+					{ operation: "create_issue", title: "t", body: "b" },
+					"/repo",
+				),
+			).rejects.toThrow(`Unable to read the requested ${name} repository metadata`);
+			const mismatch = vi.fn<ForgeExec>().mockResolvedValue(
+				result({
+					stdout: JSON.stringify({
+						id: 42,
+						full_name: "other/repo",
+						html_url: "https://github.com/other/repo",
+						path_with_namespace: "other/repo",
+						web_url: "https://gitlab.com/other/repo",
+					}),
+				}),
+			);
+			await expect(
+				preflightForgePublication(
+					mismatch,
+					repository,
+					{ operation: "create_issue", title: "t", body: "b" },
+					"/repo",
+				),
+			).rejects.toThrow("Repository origin is not the forge canonical identity");
+			expect(mismatch.mock.calls.filter((call) => call[1].includes("POST"))).toHaveLength(0);
+		},
+	);
+
+	it("checks external branches against the selected canonical remote, never origin", async () => {
+		const exec = vi
+			.fn<ForgeExec>()
+			.mockResolvedValueOnce(result())
+			.mockResolvedValueOnce(result({ stdout: "abc\trefs/heads/feature\n" }))
+			.mockResolvedValueOnce(result())
+			.mockResolvedValueOnce(result({ stdout: "def\trefs/heads/main\n" }));
+		await preflightPullRequestBranches(
+			exec,
+			{
+				operation: "create_pr",
+				title: "PR",
+				body: "body",
+				head: "feature",
+				base: "main",
+				draft: false,
+			},
+			"/repo",
+			undefined,
+			parseForgeRepository("https://gitlab.com/group/sub/project"),
+		);
+		expect(exec.mock.calls.filter((call) => call[1][0] === "ls-remote").map((call) => call[1][4])).toEqual([
+			"https://gitlab.com/group/sub/project.git",
+			"https://gitlab.com/group/sub/project.git",
+		]);
+	});
+
+	it("checks GitLab comment parent against the selected project before write", async () => {
+		const repository = parseForgeRepository("https://gitlab.com/group/sub/project");
+		const metadata = {
+			id: 42,
+			path_with_namespace: "group/sub/project",
+			web_url: "https://gitlab.com/group/sub/project",
+		};
+		const exec = vi
+			.fn<ForgeExec>()
+			.mockResolvedValueOnce(result({ stdout: JSON.stringify(metadata) }))
+			.mockResolvedValueOnce(
+				result({
+					stdout: JSON.stringify({
+						iid: 7,
+						project_id: 42,
+						web_url: "https://gitlab.com/group/sub/project/-/issues/7",
+					}),
+				}),
+			);
+		expect(
+			await preflightForgePublication(
+				exec,
+				repository,
+				{
+					operation: "add_issue_comment",
+					number: 7,
+					body: "comment",
+				},
+				"/repo",
+			),
+		).toBe(42);
+		expect(exec.mock.calls.map((call) => call[1].at(-1))).toEqual([
+			"projects/group%2Fsub%2Fproject",
+			"projects/group%2Fsub%2Fproject/issues/7",
+		]);
+		for (const parent of [
+			{ iid: 7, project_id: 99, web_url: "https://gitlab.com/group/sub/project/-/issues/7" },
+			{ iid: 7, project_id: 42, web_url: "https://gitlab.com/other/project/-/issues/7" },
+		]) {
+			const wrong = vi
+				.fn<ForgeExec>()
+				.mockResolvedValueOnce(result({ stdout: JSON.stringify(metadata) }))
+				.mockResolvedValueOnce(result({ stdout: JSON.stringify(parent) }));
+			await expect(
+				preflightForgePublication(
+					wrong,
+					repository,
+					{
+						operation: "add_issue_comment",
+						number: 7,
+						body: "comment",
+					},
+					"/repo",
+				),
+			).rejects.toThrow("artifact");
+		}
+	});
+
+	it.each([
+		["CLI failure", result({ code: 1, stderr: "private CLI error" })],
+		["malformed JSON", result({ stdout: "not JSON" })],
+		["malformed response", result({ stdout: "null" })],
+	])("reports an unreadable GitLab comment parent for %s without disclosing CLI output", async (_case, failure) => {
+		const repository = parseForgeRepository("https://gitlab.com/group/sub/project");
+		const exec = vi
+			.fn<ForgeExec>()
+			.mockResolvedValueOnce(
+				result({
+					stdout: JSON.stringify({
+						id: 42,
+						path_with_namespace: "group/sub/project",
+						web_url: "https://gitlab.com/group/sub/project",
+					}),
+				}),
+			)
+			.mockResolvedValueOnce(failure);
+		await expect(
+			preflightForgePublication(exec, repository, { operation: "add_issue_comment", number: 7, body: "b" }, "/repo"),
+		).rejects.toThrow("Unable to read the requested GitLab comment parent");
+		expect(exec.mock.calls.filter((call) => call[1].includes("POST"))).toHaveLength(0);
 	});
 
 	it("requires unqualified concrete live remote branches", async () => {
@@ -595,6 +838,40 @@ describe("four-operation provider matrix", () => {
 		});
 		expect(exec).toHaveBeenCalledTimes(2);
 		expect(exec.mock.calls.filter((call) => call[1].includes("POST"))).toHaveLength(1);
+	});
+
+	it("binds GitLab note and MR project IDs to preflighted project metadata", async () => {
+		const repo = { provider: "gitlab" as const, namespace: "group/sub", repository: "project" };
+		const preflight = vi.fn<ForgeExec>().mockResolvedValue(
+			result({
+				stdout: JSON.stringify({
+					id: 42,
+					path_with_namespace: "group/sub/project",
+					web_url: "https://gitlab.com/group/sub/project",
+				}),
+			}),
+		);
+		const projectId = await preflightForgePublication(
+			preflight,
+			repo,
+			{ operation: "create_issue", title: "t", body: "b" },
+			"/repo",
+		);
+		expect(projectId).toBe(42);
+		for (const index of [4, 5]) {
+			const testCase = cases[index]!;
+			const direct = { ...testCase.direct, project_id: 99 };
+			const fetched = { ...testCase.fetched, project_id: 99, source_project_id: 99, target_project_id: 99 };
+			const exec = vi
+				.fn<ForgeExec>()
+				.mockResolvedValueOnce(result({ stdout: JSON.stringify(direct) }))
+				.mockResolvedValueOnce(result({ stdout: JSON.stringify(fetched) }));
+			expect(await publishForge(exec, repo, testCase.request, "/repo", undefined, projectId)).toMatchObject({
+				status: "ambiguous",
+				retryProhibited: true,
+			});
+			expect(exec.mock.calls.filter((call) => call[1].includes("POST"))).toHaveLength(1);
+		}
 	});
 
 	it("rejects cross-repository PR identity and GitLab note project mismatches without retry", async () => {

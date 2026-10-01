@@ -39,6 +39,7 @@ async function guardedExec(command: string, args: string[]) {
 	if (command === "gh" && endpoint === "repos/LeanAndMean/scramjet")
 		return execResult(
 			JSON.stringify({
+				id: 42,
 				full_name: "LeanAndMean/scramjet",
 				html_url: "https://github.com/LeanAndMean/scramjet",
 			}),
@@ -66,6 +67,175 @@ async function registered(terminalIndicators = noOpTerminalIndicators()) {
 }
 
 describe("create_issue approval", () => {
+	it.each(["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"] as const)(
+		"forces external approval for %s despite command auto-approval and freezes the destination",
+		async (name) => {
+			const { tools, pi, state } = await registered();
+			state.lifecycle.activeCommand = "mach12:publish";
+			allowPublication(state, "mach12:publish", [name]);
+			state.autonomyRecommendations = new Map([
+				["mach12", { edges: {}, publications: { "mach12:publish": { [name]: "auto-approve" } } }],
+			]);
+			const tool = tools.find((candidate) => candidate.name === name);
+			const args =
+				name === "create_issue"
+					? { title: "title", body: "body" }
+					: name === "create_pr"
+						? { title: "title", body: "body", head: "feature", base: "main", draft: false }
+						: { number: name === "add_pr_comment" ? 42 : 41, body: "body" };
+			const repository = "https://github.com/other/project";
+			const headless = await tool.execute("call", { ...args, repository }, undefined, undefined, context());
+			expect(headless.details).toMatchObject({ outcome: "headless", writeState: "not-dispatched" });
+			let preview = "";
+			pi.exec.mockImplementation(async (command: string, cmdArgs: string[]) => {
+				if (cmdArgs.includes("POST")) return execResult("", 1);
+				if (command === "gh" && cmdArgs.at(-1) === "repos/other/project")
+					return execResult(JSON.stringify({ id: 42, full_name: "other/project", html_url: repository }));
+				if (command === "gh" && /^repos\/other\/project\/issues\/(41|42)$/.test(cmdArgs.at(-1) ?? ""))
+					return execResult(
+						JSON.stringify({
+							number: args.number,
+							html_url: `${repository}/${name === "add_pr_comment" ? "pull" : "issues"}/${args.number}`,
+							...(name === "add_pr_comment" ? { pull_request: {} } : {}),
+						}),
+					);
+				return guardedExec(command, cmdArgs);
+			});
+			const params = { ...args, repository };
+			const outcome = await tool.execute(
+				"call",
+				params,
+				undefined,
+				undefined,
+				context(async (_factory: any, options: any) => {
+					preview = options.toolAttachedContext.render({}, theme()).render(90).join("\n");
+					params.repository = "https://github.com/attacker/repo";
+					return "approved";
+				}),
+			);
+			expect(preview).toContain(repository);
+			expect(outcome.details).toMatchObject({
+				outcome: "ambiguous",
+				repository: "other/project",
+				authorization: { mode: "interactive" },
+			});
+			const posts = pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"));
+			expect(posts).toHaveLength(1);
+			expect(posts[0][1].at(-1)).toContain("repos/other/project");
+			expect(posts[0][2].stdin).not.toContain("repository");
+		},
+	);
+	it("rejects malformed explicit targets rather than treating them as omitted", async () => {
+		const { tool, pi, state } = await registered();
+		state.lifecycle.activeCommand = "mach12:publish";
+		allowPublication(state, "mach12:publish", ["create_issue"]);
+		state.autonomyRecommendations = new Map([
+			["mach12", { edges: {}, publications: { "mach12:publish": { create_issue: "auto-approve" } } }],
+		]);
+		for (const repository of ["", "other/project", "https://github.com/other/project.git", undefined]) {
+			const result = await tool.execute(
+				"call",
+				{ title: "t", body: "b", repository },
+				undefined,
+				undefined,
+				context(),
+			);
+			expect(result.details).toMatchObject({ outcome: "pre-dispatch-failure", writeState: "not-dispatched" });
+		}
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("keeps explicit same-origin command autonomy and requires approval under an exact user override", async () => {
+		const { tool, pi, state } = await registered();
+		state.lifecycle.activeCommand = "mach12:publish";
+		allowPublication(state, "mach12:publish", ["create_issue"]);
+		state.autonomyRecommendations = new Map([
+			["mach12", { edges: {}, publications: { "mach12:publish": { create_issue: "auto-approve" } } }],
+		]);
+		const same = await tool.execute(
+			"call",
+			{ title: "t", body: "b", repository: "https://github.com/LeanAndMean/scramjet" },
+			undefined,
+			undefined,
+			context(),
+		);
+		expect(same.details).toMatchObject({ outcome: "ambiguous", authorization: { mode: "command-default" } });
+		state.autonomyConfigPath = join(tmpdir(), `scramjet-external-override-${Date.now()}.yaml`);
+		writeFileSync(state.autonomyConfigPath, "publications:\n  mach12:publish:\n    create_issue: auto-approve\n");
+		resetCache();
+		const external = await tool.execute(
+			"call",
+			{ title: "t", body: "b", repository: "https://github.com/other/project" },
+			undefined,
+			undefined,
+			context(),
+		);
+		expect(external.details).toMatchObject({ outcome: "headless", writeState: "not-dispatched" });
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(1);
+	});
+
+	it("routes a nested GitLab target through the selected project without leaking the selector into POST", async () => {
+		const { tool, pi } = await registered();
+		const repository = "https://gitlab.com/group/sub/project";
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "git") return guardedExec(command, args);
+			if (command === "glab" && args.at(-1) === "projects/group%2Fsub%2Fproject")
+				return execResult(
+					JSON.stringify({ id: 23, path_with_namespace: "group/sub/project", web_url: repository }),
+				);
+			if (args.includes("POST")) return execResult("", 1);
+			return execResult("", 1);
+		});
+		const outcome = await tool.execute(
+			"call",
+			{ title: "title", body: "body", repository },
+			undefined,
+			undefined,
+			context(async () => "approved"),
+		);
+		expect(outcome.details).toMatchObject({
+			outcome: "ambiguous",
+			repository: "group/sub/project",
+			authorization: { mode: "interactive" },
+		});
+		const posts = pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"));
+		expect(posts).toHaveLength(1);
+		expect(posts[0][1].at(-1)).toBe("projects/group%2Fsub%2Fproject/issues");
+		expect(JSON.parse(posts[0][2].stdin)).toEqual({ title: "title", description: "body" });
+	});
+
+	it("invalidates external approval when the origin changes before dispatch", async () => {
+		const { tool, pi } = await registered();
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "git" && args[0] === "remote") {
+				const reads = pi.exec.mock.calls.filter(
+					(call: any[]) => call[0] === "git" && call[1]?.[0] === "remote",
+				).length;
+				return execResult(
+					reads === 1 ? "https://github.com/LeanAndMean/scramjet.git\n" : "https://github.com/changed/repo.git\n",
+				);
+			}
+			if (args.at(-1) === "repos/other/project")
+				return execResult(
+					JSON.stringify({ id: 42, full_name: "other/project", html_url: "https://github.com/other/project" }),
+				);
+			return execResult("", 1);
+		});
+		const outcome = await tool.execute(
+			"call",
+			{ title: "t", body: "b", repository: "https://github.com/other/project" },
+			undefined,
+			undefined,
+			context(async () => "approved"),
+		);
+		expect(outcome.details).toMatchObject({
+			outcome: "stale",
+			repository: "other/project",
+			reason: "origin-changed",
+		});
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
 	it("shows waiting only while publication approval is unresolved", async () => {
 		let resolveApproval!: (result: "cancelled") => void;
 		const approval = new Promise<"cancelled">((resolve) => {
@@ -278,8 +448,9 @@ describe("create_issue approval", () => {
 					return execResult(
 						JSON.stringify(
 							kind === "alias"
-								? { full_name: "other/repo", html_url: "https://github.com/other/repo" }
+								? { id: 42, full_name: "other/repo", html_url: "https://github.com/other/repo" }
 								: {
+										id: 42,
 										full_name: "LeanAndMean/scramjet",
 										html_url: "https://github.com/LeanAndMean/scramjet",
 									},
@@ -314,11 +485,14 @@ describe("create_issue approval", () => {
 			if (args.at(-1) === "repos/LeanAndMean/scramjet" && ++metadataReads === 1)
 				return execResult(
 					JSON.stringify({
+						id: 42,
 						full_name: "LeanAndMean/scramjet",
 						html_url: "https://github.com/LeanAndMean/scramjet",
 					}),
 				);
-			return execResult(JSON.stringify({ full_name: "other/repo", html_url: "https://github.com/other/repo" }));
+			return execResult(
+				JSON.stringify({ id: 42, full_name: "other/repo", html_url: "https://github.com/other/repo" }),
+			);
 		});
 		registerForgePublication(bag.pi, freshState(), noOpTerminalIndicators());
 		const tool = bag.tools.find((candidate) => candidate.name === "create_issue");
@@ -368,6 +542,164 @@ describe("create_issue approval", () => {
 		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
 	});
 
+	it("rechecks selected-target PR branches after external approval", async () => {
+		const { tools, pi } = await registered();
+		const repository = "https://github.com/other/project";
+		let remoteReads = 0;
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "gh" && args.at(-1) === "repos/other/project")
+				return execResult(JSON.stringify({ id: 42, full_name: "other/project", html_url: repository }));
+			if (command === "git" && args[0] === "ls-remote" && ++remoteReads === 3) return execResult("", 2);
+			return guardedExec(command, args);
+		});
+		const outcome = await tools
+			.find((tool) => tool.name === "create_pr")
+			.execute(
+				"call",
+				{ title: "PR", body: "body", head: "feature", base: "main", draft: false, repository },
+				undefined,
+				undefined,
+				context(async () => "approved"),
+			);
+		expect(outcome.details).toMatchObject({
+			outcome: "stale",
+			writeState: "not-dispatched",
+			repository: "other/project",
+		});
+		expect(remoteReads).toBe(3);
+		expect(
+			pi.exec.mock.calls
+				.filter((call: any[]) => call[0] === "git" && call[1]?.[0] === "ls-remote")
+				.map((call: any[]) => call[1][4]),
+		).toEqual(Array(3).fill(`${repository}.git`));
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("rejects a replaced GitHub repository after external approval", async () => {
+		const { tool, pi } = await registered();
+		const repository = "https://github.com/other/project";
+		let metadataReads = 0;
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "gh" && args.at(-1) === "repos/other/project")
+				return execResult(
+					JSON.stringify({
+						id: ++metadataReads === 1 ? 42 : 99,
+						full_name: "other/project",
+						html_url: repository,
+					}),
+				);
+			return guardedExec(command, args);
+		});
+		const outcome = await tool.execute(
+			"call",
+			{ title: "t", body: "b", repository },
+			undefined,
+			undefined,
+			context(async () => "approved"),
+		);
+		expect(metadataReads).toBe(2);
+		expect(outcome.details).toMatchObject({
+			outcome: "stale",
+			writeState: "not-dispatched",
+			reason: "Repository identity changed",
+		});
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("stops when the approved comment parent changes before dispatch", async () => {
+		const { tools, pi } = await registered();
+		let parentReads = 0;
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "gh" && args.at(-1) === "repos/LeanAndMean/scramjet/issues/41") {
+				parentReads++;
+				return execResult(
+					JSON.stringify({
+						number: 41,
+						html_url: `https://github.com/LeanAndMean/scramjet/${parentReads === 1 ? "issues" : "pull"}/41`,
+						...(parentReads === 2 ? { pull_request: {} } : {}),
+					}),
+				);
+			}
+			return guardedExec(command, args);
+		});
+		const outcome = await tools
+			.find((candidate) => candidate.name === "add_issue_comment")
+			.execute(
+				"call",
+				{ number: 41, body: "body" },
+				undefined,
+				undefined,
+				context(async () => "approved"),
+			);
+		expect(parentReads).toBe(2);
+		expect(outcome.details).toMatchObject({ outcome: "stale", writeState: "not-dispatched" });
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("rejects a changed GitLab project ID after external approval", async () => {
+		const { tool, pi } = await registered();
+		const repository = "https://gitlab.com/group/sub/project";
+		let projectReads = 0;
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "glab" && args.at(-1) === "projects/group%2Fsub%2Fproject")
+				return execResult(
+					JSON.stringify({
+						id: ++projectReads === 1 ? 42 : 99,
+						path_with_namespace: "group/sub/project",
+						web_url: repository,
+					}),
+				);
+			return guardedExec(command, args);
+		});
+		const outcome = await tool.execute(
+			"call",
+			{ title: "t", body: "b", repository },
+			undefined,
+			undefined,
+			context(async () => "approved"),
+		);
+		expect(projectReads).toBe(2);
+		expect(outcome.details).toMatchObject({
+			outcome: "stale",
+			writeState: "not-dispatched",
+			reason: "Repository identity changed",
+		});
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("checks explicit same-origin PR branches through SSH origin on both sides of approval", async () => {
+		const { tools, pi } = await registered();
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "git" && args[0] === "remote") return execResult("git@github.com:LeanAndMean/scramjet.git\n");
+			if (command === "git" && args[0] === "ls-remote" && args[4] !== "origin") return execResult("", 128);
+			if (args.includes("POST")) return execResult("", 1);
+			return guardedExec(command, args);
+		});
+		const outcome = await tools
+			.find((candidate) => candidate.name === "create_pr")
+			.execute(
+				"call",
+				{
+					title: "PR",
+					body: "body",
+					head: "feature",
+					base: "main",
+					draft: false,
+					repository: "https://github.com/LeanAndMean/scramjet",
+				},
+				undefined,
+				undefined,
+				context(async () => "approved"),
+			);
+		expect(outcome.details).toMatchObject({ outcome: "ambiguous", writeState: "possible" });
+		expect(
+			pi.exec.mock.calls
+				.filter((call: any[]) => call[0] === "git" && call[1]?.[0] === "ls-remote")
+				.map((call: any[]) => call[1][4]),
+		).toEqual(Array(4).fill("origin"));
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(1);
+	});
+
 	it("preflights both PR branches before approval and rejects unprefixed GitLab drafts", async () => {
 		const bag = recordingPi();
 		bag.pi.exec = vi.fn().mockResolvedValueOnce(execResult("https://gitlab.com/group/project.git\n"));
@@ -387,7 +719,7 @@ describe("create_issue approval", () => {
 		githubBag.pi.exec = vi.fn(async (command: string, args: string[]) => {
 			if (command === "git" && args[0] === "remote") return execResult("https://github.com/a/b.git\n");
 			if (command === "gh")
-				return execResult(JSON.stringify({ full_name: "a/b", html_url: "https://github.com/a/b" }));
+				return execResult(JSON.stringify({ id: 42, full_name: "a/b", html_url: "https://github.com/a/b" }));
 			if (command === "git" && args[0] === "check-ref-format") return execResult();
 			if (command === "git" && args[0] === "ls-remote") return execResult(`abc\t${args.at(-1)}\n`);
 			return execResult("", 1);

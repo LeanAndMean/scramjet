@@ -55,6 +55,8 @@ Extended messages from [`packages/coding-agent/src/core/messages.ts`](https://gi
 - `BranchSummaryMessage` (line 55)
 - `CompactionSummaryMessage` (line 62)
 
+Tool execution updates (`partialResult.cost`), execution-end results (`result.cost`), and final `toolResult` messages (`message.cost`) may carry optional finite, nonnegative cumulative invocation USD, including descendants but excluding the requesting assistant. Reports replace prior amounts rather than representing additional expenditures; zero is authoritative and omission is not a new report. Final costs remain present for reported failures (`isError: true`). These are additive fields in JSON and RPC events; closed-schema clients must allow them. Existing tools may omit them.
+
 ## Output Format
 
 Each line is a JSON object. The first line is the session header:

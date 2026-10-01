@@ -69,6 +69,12 @@ const gpt6SolModel = copilotResponsesModel("gpt-6-sol", {
 	xhigh: "xhigh",
 	max: "max",
 });
+const gpt61SolModel = copilotResponsesModel("gpt-6.1-sol", {
+	off: null,
+	minimal: null,
+	xhigh: "xhigh",
+	max: "max",
+});
 const apiKey = "test-key";
 
 const context: Context = {
@@ -2123,6 +2129,19 @@ describe("Explicit none Responses request contract", () => {
 });
 
 describe("GitHub Copilot exact Responses model contracts", () => {
+	it("sends GPT-6.1 Sol tools and reasoning to the Copilot Responses route", async () => {
+		const requests = stubFetch([completedResponse()]);
+		await streamSimpleOpenAIResponses(gpt61SolModel, toolContext, { apiKey, reasoning: "max" }).result();
+		const request = requests[0];
+		const body = await requestBody(request);
+		expect(request.url).toBe("https://api.individual.githubcopilot.com/responses");
+		expect(request.headers.get("copilot-integration-id")).toBe("vscode-chat");
+		expect(request.headers.get("openai-intent")).toBe("conversation-edits");
+		expect(body.model).toBe("gpt-6.1-sol");
+		expect(body.reasoning).toEqual(expect.objectContaining({ effort: "max" }));
+		expect(body.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: "read" })]));
+	});
+
 	it.each([
 		[grok46Model, "xhigh", "xhigh"],
 		[grok46Model, "minimal", "low"],

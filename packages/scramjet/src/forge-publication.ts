@@ -15,6 +15,7 @@ import { loadAutonomyConfig, mergeAllRecommendations, resolvePublicationPolicy }
 import {
 	type ForgeRepository,
 	type PublicationRequest,
+	parseForgeRepository,
 	preflightForgePublication,
 	preflightPullRequestBranches,
 	publishForge,
@@ -28,6 +29,7 @@ import { PUBLICATION_TOOLS } from "./types.js";
 const DETAILS_KIND = "scramjet:forge-publication";
 const OPERATIONS = PUBLICATION_TOOLS;
 type Operation = PublicationTool;
+type FrozenRequest = PublicationRequest & { readonly repository?: string; readonly targetSupplied: boolean };
 type PublicationOutcomeDetails =
 	| { outcome: "cancelled"; writeState: "not-dispatched" }
 	| { outcome: "verified"; writeState: "verified"; url: string }
@@ -70,35 +72,49 @@ export function registerForgePublication(
 		{
 			name: "create_issue",
 			label: "Create Issue",
-			description: "Create an issue in the current public GitHub or GitLab repository under publication policy.",
-			parameters: Type.Object({ title: Type.String({ minLength: 1 }), body: Type.String() }),
+			description:
+				"Create an issue in the current or explicitly selected public GitHub/GitLab repository; external targets always require interactive approval.",
+			parameters: Type.Object({
+				title: Type.String({ minLength: 1 }),
+				body: Type.String(),
+				repository: Type.Optional(Type.String()),
+			}),
 		},
 		{
 			name: "create_pr",
 			label: "Create Pull Request",
 			description:
-				"Create a pull request or merge request from current-repository branches under publication policy.",
+				"Create a pull/merge request from branches in the current or explicitly selected public GitHub/GitLab repository; external targets always require interactive approval.",
 			parameters: Type.Object({
 				title: Type.String({ minLength: 1 }),
 				body: Type.String(),
 				head: Type.String({ minLength: 1 }),
 				base: Type.String({ minLength: 1 }),
 				draft: Type.Boolean(),
+				repository: Type.Optional(Type.String()),
 			}),
 		},
 		{
 			name: "add_issue_comment",
 			label: "Add Issue Comment",
 			description:
-				"Add a comment to an issue in the current public GitHub or GitLab repository under publication policy.",
-			parameters: Type.Object({ number: Type.Integer({ minimum: 1 }), body: Type.String() }),
+				"Add a comment to an issue in the current or explicitly selected public GitHub/GitLab repository; external targets always require interactive approval.",
+			parameters: Type.Object({
+				number: Type.Integer({ minimum: 1 }),
+				body: Type.String(),
+				repository: Type.Optional(Type.String()),
+			}),
 		},
 		{
 			name: "add_pr_comment",
 			label: "Add PR Comment",
 			description:
-				"Add a comment to a pull request or merge request in the current public GitHub or GitLab repository under publication policy.",
-			parameters: Type.Object({ number: Type.Integer({ minimum: 1 }), body: Type.String() }),
+				"Add a comment to a pull request or merge request in the current or explicitly selected public GitHub/GitLab repository; external targets always require interactive approval.",
+			parameters: Type.Object({
+				number: Type.Integer({ minimum: 1 }),
+				body: Type.String(),
+				repository: Type.Optional(Type.String()),
+			}),
 		},
 	] as const;
 	for (const definition of definitions as readonly any[]) {
@@ -151,7 +167,6 @@ export function registerForgePublication(
 					}
 				};
 				const decision = resolveDecision();
-				const policy = decision.policy;
 				if (!requestStrings(request).every(isValidUnicode))
 					return toolResult(request.operation, {
 						outcome: "pre-dispatch-failure",
@@ -167,15 +182,19 @@ export function registerForgePublication(
 						writeState: "not-dispatched",
 						reason: "publication titles must contain exactly one line",
 					});
-				if (policy === "require-approval" && (!ctx.hasUI || !ctx.ui))
+				if (!request.targetSupplied && decision.policy === "require-approval" && (!ctx.hasUI || !ctx.ui))
 					return toolResult(request.operation, {
 						outcome: "headless",
 						writeState: "not-dispatched",
 						reason: "interactive-approval-unavailable",
 					});
+				let origin: ForgeRepository;
 				let repository: ForgeRepository;
 				try {
-					repository = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd, signal);
+					origin = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd, signal);
+					if (request.targetSupplied && typeof request.repository !== "string")
+						throw new Error("Repository target must be a canonical public HTTPS URL");
+					repository = request.targetSupplied ? parseForgeRepository(request.repository!) : origin;
 				} catch (error) {
 					return toolResult(request.operation, {
 						outcome: "pre-dispatch-failure",
@@ -183,6 +202,18 @@ export function registerForgePublication(
 						reason: safeError(error),
 					});
 				}
+				const external = !sameRepository(origin, repository);
+				const policy = external ? "require-approval" : decision.policy;
+				if (policy === "require-approval" && (!ctx.hasUI || !ctx.ui))
+					return toolResult(
+						request.operation,
+						{
+							outcome: "headless",
+							writeState: "not-dispatched",
+							reason: "interactive-approval-unavailable",
+						},
+						repository,
+					);
 				if (
 					request.operation === "create_pr" &&
 					repository.provider === "gitlab" &&
@@ -197,10 +228,17 @@ export function registerForgePublication(
 						},
 						repository,
 					);
+				let projectId: number | undefined;
 				try {
-					await preflightForgePublication(pi.exec.bind(pi), repository, request, ctx.cwd, signal);
+					projectId = await preflightForgePublication(pi.exec.bind(pi), repository, request, ctx.cwd, signal);
 					if (request.operation === "create_pr")
-						await preflightPullRequestBranches(pi.exec.bind(pi), request, ctx.cwd, signal);
+						await preflightPullRequestBranches(
+							pi.exec.bind(pi),
+							request,
+							ctx.cwd,
+							signal,
+							external ? repository : undefined,
+						);
 				} catch (error) {
 					return toolResult(
 						request.operation,
@@ -209,7 +247,7 @@ export function registerForgePublication(
 					);
 				}
 				const authorization: PublicationAuthorization = {
-					mode: decision.authorization,
+					mode: external ? "interactive" : decision.authorization,
 					command: expectedCommand,
 				};
 				let approval: ApprovalResult = "approved";
@@ -312,21 +350,34 @@ export function registerForgePublication(
 						authorization,
 					);
 				}
-				if (!fresh() || !sameRepository(repository, current))
+				if (!fresh() || !sameRepository(origin, current))
 					return toolResult(
 						request.operation,
 						{
 							outcome: "stale",
 							writeState: "not-dispatched",
-							reason: sameRepository(repository, current) ? undefined : "origin-changed",
+							reason: sameRepository(origin, current) ? undefined : "origin-changed",
 						},
 						repository,
 						authorization,
 					);
 				try {
-					await preflightForgePublication(pi.exec.bind(pi), repository, request, ctx.cwd, signal);
+					const currentProjectId = await preflightForgePublication(
+						pi.exec.bind(pi),
+						repository,
+						request,
+						ctx.cwd,
+						signal,
+					);
+					if (currentProjectId !== projectId) throw new Error("Repository identity changed");
 					if (request.operation === "create_pr")
-						await preflightPullRequestBranches(pi.exec.bind(pi), request, ctx.cwd, signal);
+						await preflightPullRequestBranches(
+							pi.exec.bind(pi),
+							request,
+							ctx.cwd,
+							signal,
+							external ? repository : undefined,
+						);
 				} catch (error) {
 					return toolResult(
 						request.operation,
@@ -342,7 +393,7 @@ export function registerForgePublication(
 						repository,
 						authorization,
 					);
-				const outcome = await publishForge(pi.exec.bind(pi), repository, request, ctx.cwd, signal);
+				const outcome = await publishForge(pi.exec.bind(pi), repository, request, ctx.cwd, signal, projectId);
 				if (outcome.status === "verified")
 					return toolResult(
 						request.operation,
@@ -374,7 +425,7 @@ class ApprovalComponent {
 		private readonly tui: { requestRender(): void },
 		private readonly theme: any,
 		private readonly repository: ForgeRepository,
-		private readonly request: PublicationRequest,
+		private readonly request: FrozenRequest,
 		done: (result: ApprovalResult) => void,
 	) {
 		this.choices = new SelectList(
@@ -413,7 +464,7 @@ class ApprovalComponent {
 	dispose(): void {}
 }
 
-function publicationPayloadComponent(request: PublicationRequest, _theme: any): Container {
+function publicationPayloadComponent(request: FrozenRequest, _theme: any): Container {
 	const component = new Container();
 	component.addChild(
 		new Markdown(
@@ -433,7 +484,7 @@ function publicationPayloadComponent(request: PublicationRequest, _theme: any): 
 class ApprovalPreviewComponent implements Component {
 	constructor(
 		private readonly repository: ForgeRepository,
-		private readonly request: PublicationRequest,
+		private readonly request: FrozenRequest,
 		private readonly theme: any,
 	) {}
 	render(width: number): string[] {
@@ -459,7 +510,7 @@ class ApprovalPreviewComponent implements Component {
 	invalidate(): void {}
 }
 
-function approvalPreviewComponent(repository: ForgeRepository, request: PublicationRequest, theme: any): Component {
+function approvalPreviewComponent(repository: ForgeRepository, request: FrozenRequest, theme: any): Component {
 	return new ApprovalPreviewComponent(repository, request, theme);
 }
 
@@ -473,9 +524,11 @@ function isValidUnicode(value: string): boolean {
 	}
 	return Buffer.from(value, "utf8").toString("utf8") === value;
 }
-function freezeRequest(operation: Operation, params: any): PublicationRequest {
+function freezeRequest(operation: Operation, params: any): FrozenRequest {
+	const targetSupplied = Object.hasOwn(params, "repository");
+	const repository = targetSupplied ? params.repository : undefined;
 	if (operation === "create_issue")
-		return Object.freeze({ operation, title: `${params.title}`, body: `${params.body}` });
+		return Object.freeze({ operation, title: `${params.title}`, body: `${params.body}`, repository, targetSupplied });
 	if (operation === "create_pr")
 		return Object.freeze({
 			operation,
@@ -484,36 +537,35 @@ function freezeRequest(operation: Operation, params: any): PublicationRequest {
 			head: `${params.head}`,
 			base: `${params.base}`,
 			draft: params.draft === true,
+			repository,
+			targetSupplied,
 		});
-	return Object.freeze({ operation, number: params.number, body: `${params.body}` });
+	return Object.freeze({ operation, number: params.number, body: `${params.body}`, repository, targetSupplied });
 }
-function requestStrings(request: PublicationRequest): string[] {
-	return request.operation === "create_pr"
-		? [request.title, request.body, request.head, request.base]
-		: request.operation === "create_issue"
-			? [request.title, request.body]
-			: [request.body];
+function requestStrings(request: FrozenRequest): string[] {
+	const values =
+		request.operation === "create_pr"
+			? [request.title, request.body, request.head, request.base]
+			: request.operation === "create_issue"
+				? [request.title, request.body]
+				: [request.body];
+	return request.targetSupplied && typeof request.repository === "string" ? [request.repository, ...values] : values;
 }
-function displayFields(request: PublicationRequest): [string, string][] {
-	if (request.operation === "create_issue")
-		return [
-			["Title", request.title],
-			["Body", request.body],
-		];
+function displayFields(request: FrozenRequest): [string, string][] {
+	const target: [string, string][] = request.targetSupplied ? [["Repository", String(request.repository)]] : [];
+	if (request.operation === "create_issue") return [...target, ["Title", request.title], ["Body", request.body]];
 	if (request.operation === "create_pr")
 		return [
+			...target,
 			["Title", request.title],
 			["Head", request.head],
 			["Base", request.base],
 			["Draft", String(request.draft)],
 			["Body", request.body],
 		];
-	return [
-		["Target", `#${request.number}`],
-		["Comment", request.body],
-	];
+	return [...target, ["Target", `#${request.number}`], ["Comment", request.body]];
 }
-function callSummary(request: PublicationRequest): string {
+function callSummary(request: FrozenRequest): string {
 	if (request.operation === "create_issue") return request.title;
 	if (request.operation === "create_pr")
 		return `${request.title} (${request.head} → ${request.base}${request.draft ? ", draft" : ""})`;

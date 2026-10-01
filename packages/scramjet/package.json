@@ -1,6 +1,6 @@
 {
   "name": "@leanandmean/scramjet",
-  "version": "0.104.4",
+  "version": "0.106.1",
   "description": "A high-velocity harness for agentic development",
   "license": "Apache-2.0",
   "repository": {
@@ -48,10 +48,10 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@leanandmean/agent": "0.74.1-scramjet.45",
-    "@leanandmean/ai": "0.74.1-scramjet.41",
-    "@leanandmean/coding-agent": "0.74.1-scramjet.66",
-    "@leanandmean/tui": "0.74.1-scramjet.38",
+    "@leanandmean/agent": "0.74.1-scramjet.47",
+    "@leanandmean/ai": "0.74.1-scramjet.43",
+    "@leanandmean/coding-agent": "0.74.1-scramjet.68",
+    "@leanandmean/tui": "0.74.1-scramjet.40",
     "typebox": "^1.1.24",
     "yaml": "^2.9.0"
   }

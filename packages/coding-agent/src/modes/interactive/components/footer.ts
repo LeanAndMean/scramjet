@@ -87,7 +87,8 @@ export class FooterComponent implements Component {
 		let totalOutput = 0;
 		let totalCacheRead = 0;
 		let totalCacheWrite = 0;
-		let totalCost = 0;
+		// SCRAMJET-DIVERGENCE: inclusive dollars are session-owned; token/context metrics remain parent-only (#598).
+		const totalCost = this.session.getRecordedSessionCost();
 
 		for (const entry of this.session.sessionManager.getEntries()) {
 			if (entry.type === "message" && entry.message.role === "assistant") {
@@ -95,7 +96,6 @@ export class FooterComponent implements Component {
 				totalOutput += entry.message.usage.output;
 				totalCacheRead += entry.message.usage.cacheRead;
 				totalCacheWrite += entry.message.usage.cacheWrite;
-				totalCost += entry.message.usage.cost.total;
 			}
 		}
 
