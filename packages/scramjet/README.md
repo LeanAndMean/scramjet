@@ -240,6 +240,7 @@ Mach 12 is one team's codification of their development process. It's a starting
 | `mach12:pr-validation` | Challenge a PR through independently validated executable tests |
 | `mach12:pr-validation-assessment` | Reassess executable findings and route validated outcomes |
 | `mach12:pr-review-fix` | Fix issues flagged in review |
+| `mach12:pr-ci-fix` | Resolve PR CI with a lightweight plan and reviewed fixes; invoke directly or delegate from pre-merge |
 | `mach12:pr-pre-merge` | Pre-merge checks |
 | `mach12:pr-merge` | Merge the PR |
 
