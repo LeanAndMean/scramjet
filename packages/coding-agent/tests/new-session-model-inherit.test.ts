@@ -54,6 +54,38 @@ describe("buildSessionOptions — inherited model/thinkingLevel precedence", () 
 	const dir = mkdtempSync(join(tmpdir(), "bso-"));
 	const modelRegistry = ModelRegistry.create(authStorage, join(dir, "models.json"));
 
+	it("invocation model bypasses saved/scoped startup choices while preserving unrelated controls", () => {
+		const { options } = buildSessionOptions(
+			minimalParsed({ thinking: "low", cacheRetention: "short", noTools: true }),
+			[{ model: modelB, thinkingLevel: "high" }],
+			false,
+			modelRegistry,
+			settingsManager,
+			undefined,
+			modelA,
+		);
+		expect(options.model).toBe(modelA);
+		expect(options.thinkingLevel).toBe("low");
+		expect(options.persistModelPreferences).toBe(false);
+		expect(options.cacheRetention).toBe("short");
+		expect(options.noTools).toBe("all");
+	});
+
+	it("inherited live selection wins over the invocation model without re-enabling persistence", () => {
+		const { options } = buildSessionOptions(
+			minimalParsed(),
+			[],
+			true,
+			modelRegistry,
+			settingsManager,
+			{ model: modelB, thinkingLevel: "high" },
+			modelA,
+		);
+		expect(options.model).toBe(modelB);
+		expect(options.thinkingLevel).toBe("high");
+		expect(options.persistModelPreferences).toBe(false);
+	});
+
 	it("inherited model takes priority over CLI --model", () => {
 		const { options } = buildSessionOptions(
 			minimalParsed({ model: "model-b", provider: "provider-b" }),

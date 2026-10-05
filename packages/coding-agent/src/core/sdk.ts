@@ -54,6 +54,8 @@ export interface CreateAgentSessionOptions {
 
 	/** Model to use. Default: from settings, else first available */
 	model?: Model<any>;
+	/** Save model/thinking changes as global defaults. Default: true. */
+	persistModelPreferences?: boolean;
 	/** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
 	thinkingLevel?: ThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
@@ -489,7 +491,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Restore messages if session has existing data
 	if (hasExistingSession) {
 		agent.state.messages = existingSession.messages;
-		if (!hasThinkingEntry) {
+		// SCRAMJET-DIVERGENCE: Explicit ephemeral selection must remain accurate in branch-local history.
+		if (
+			options.persistModelPreferences === false &&
+			model &&
+			(existingSession.model?.provider !== model.provider || existingSession.model?.modelId !== model.id)
+		) {
+			sessionManager.appendModelChange(model.provider, model.id);
+		}
+		if (
+			!hasThinkingEntry ||
+			(options.persistModelPreferences === false && existingSession.thinkingLevel !== thinkingLevel)
+		) {
 			sessionManager.appendThinkingLevelChange(thinkingLevel);
 		}
 	} else {
@@ -507,6 +520,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		cwd,
 		outputThroughputHistoryPath,
 		scopedModels: options.scopedModels,
+		persistModelPreferences: options.persistModelPreferences,
 		resourceLoader,
 		customTools: options.customTools,
 		modelRegistry,

@@ -5,6 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { ThinkingLevel } from "@leanandmean/agent";
@@ -138,6 +139,24 @@ export function resolveInvocationModelDefinition(
 	}
 	const apiKey = parsed.listModels === undefined ? readEnvironment(definition.apiKeyEnv, "apiKeyEnv") : undefined;
 	return { definition, apiKey };
+}
+
+// SCRAMJET-DIVERGENCE: Install captured invocation routes after extension registrations, without storing secrets in models.
+export function registerInvocationModel(
+	invocation: NonNullable<ReturnType<typeof resolveInvocationModelDefinition>>,
+	provider: string,
+	modelRegistry: ModelRegistry,
+	authStorage: AuthStorage,
+): Model<any> {
+	if (modelRegistry.getAll().some((model) => model.provider === provider)) {
+		throw new Error("--model-definition: generated provider identity collided; retry the invocation.");
+	}
+	const { api, baseUrl, apiKeyEnv, ...model } = invocation.definition;
+	modelRegistry.registerProvider(provider, { api, baseUrl, apiKey: apiKeyEnv, models: [model] });
+	if (invocation.apiKey !== undefined) authStorage.setRuntimeApiKey(provider, invocation.apiKey);
+	const registered = modelRegistry.find(provider, model.id);
+	if (!registered) throw new Error("--model-definition: registration failed; correct the definition before retrying.");
+	return registered;
 }
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
@@ -337,6 +356,7 @@ export function buildSessionOptions(
 	modelRegistry: ModelRegistry,
 	settingsManager: SettingsManager,
 	inherited?: { model: Model<any>; thinkingLevel: ThinkingLevel },
+	invocationModel?: Model<any>,
 ): {
 	options: CreateAgentSessionOptions;
 	cliThinkingFromModel: boolean;
@@ -351,6 +371,12 @@ export function buildSessionOptions(
 	if (inherited) {
 		options.model = inherited.model;
 		options.thinkingLevel = inherited.thinkingLevel;
+	}
+
+	// SCRAMJET-DIVERGENCE: Invocation selection bypasses ordinary resolution and saved startup scopes.
+	if (invocationModel) {
+		options.model ??= invocationModel;
+		options.persistModelPreferences = false;
 	}
 
 	// Model from CLI
@@ -525,8 +551,9 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
+	let invocation: ReturnType<typeof resolveInvocationModelDefinition>;
 	try {
-		resolveInvocationModelDefinition(parsed, process.stdin.isTTY);
+		invocation = resolveInvocationModelDefinition(parsed, process.stdin.isTTY);
 	} catch (error) {
 		console.error(chalk.red(`Error: ${(error as Error).message}`));
 		process.exit(1);
@@ -593,6 +620,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
 	const authStorage = AuthStorage.create();
+	const invocationProvider = invocation ? `invocation-${randomUUID()}` : undefined;
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
 		agentDir,
@@ -631,7 +659,10 @@ export async function main(args: string[], options?: MainOptions) {
 			})),
 		];
 
-		const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
+		const invocationModel = invocation
+			? registerInvocationModel(invocation, invocationProvider!, modelRegistry, authStorage)
+			: undefined;
+		const modelPatterns = invocation ? undefined : (parsed.models ?? settingsManager.getEnabledModels());
 		const scopedModels =
 			modelPatterns && modelPatterns.length > 0 ? await resolveModelScope(modelPatterns, modelRegistry) : [];
 		const {
@@ -645,6 +676,7 @@ export async function main(args: string[], options?: MainOptions) {
 			modelRegistry,
 			settingsManager,
 			inherited, // SCRAMJET-DIVERGENCE: pass inherited model/thinkingLevel (issue 186)
+			invocationModel,
 		);
 		diagnostics.push(...sessionOptionDiagnostics);
 
@@ -664,6 +696,7 @@ export async function main(args: string[], options?: MainOptions) {
 			sessionManager,
 			sessionStartEvent,
 			model: sessionOptions.model,
+			persistModelPreferences: sessionOptions.persistModelPreferences,
 			thinkingLevel: sessionOptions.thinkingLevel,
 			scopedModels: sessionOptions.scopedModels,
 			cacheRetention: sessionOptions.cacheRetention,
