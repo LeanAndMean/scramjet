@@ -28,7 +28,7 @@ import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import type { ExtensionAPI, ExtensionFactory } from "./core/extensions/types.js";
 import { KeybindingsManager } from "./core/keybindings.js";
-import type { ModelRegistry } from "./core/model-registry.js";
+import { type ModelRegistry, validateInvocationModelDefinition } from "./core/model-registry.js";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import { isRequiredBuiltinInitError, renderRequiredBuiltinInitCause } from "./core/resource-loader.js";
@@ -96,6 +96,49 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 }
 
 type AppMode = "interactive" | "print" | "json" | "rpc";
+
+// SCRAMJET-DIVERGENCE: Resolve strict invocation inputs before runtime construction, without secret-bearing errors.
+export function resolveInvocationModelDefinition(
+	parsed: Args,
+	stdinIsTTY: boolean,
+	env: NodeJS.ProcessEnv = process.env,
+) {
+	if (parsed.help || parsed.version) return undefined;
+	if (parsed.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+		throw new Error("--model-definition/--model-definition-env: correct the selector diagnostics before continuing.");
+	}
+	if (parsed.modelDefinition === undefined && parsed.modelDefinitionEnv === undefined) return undefined;
+	if (parsed.listModels === undefined && resolveAppMode(parsed, stdinIsTTY) === "interactive") {
+		throw new Error(
+			"--model-definition/--model-definition-env requires headless execution; use --print, --mode json, --mode rpc or redirected stdin.",
+		);
+	}
+	function readEnvironment(name: string, field: string): string {
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+			throw new Error(`${field}: supply a valid environment variable identifier.`);
+		}
+		const value = env[name];
+		if (!value?.trim()) throw new Error(`${field}: set the named environment variable to a nonblank value.`);
+		return value;
+	}
+	const json = parsed.modelDefinition ?? readEnvironment(parsed.modelDefinitionEnv!, "--model-definition-env");
+	let value: unknown;
+	try {
+		value = JSON.parse(json);
+	} catch {
+		throw new Error(
+			"--model-definition/--model-definition-env: supply strict JSON without comments or trailing commas.",
+		);
+	}
+	let definition: ReturnType<typeof validateInvocationModelDefinition>;
+	try {
+		definition = validateInvocationModelDefinition(value);
+	} catch (error) {
+		throw new Error(`--model-definition/--model-definition-env: ${(error as Error).message}`);
+	}
+	const apiKey = parsed.listModels === undefined ? readEnvironment(definition.apiKeyEnv, "apiKeyEnv") : undefined;
+	return { definition, apiKey };
+}
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
 	if (parsed.mode === "rpc") {
@@ -480,6 +523,13 @@ export async function main(args: string[], options?: MainOptions) {
 	if (parsed.version) {
 		console.log(VERSION);
 		process.exit(0);
+	}
+
+	try {
+		resolveInvocationModelDefinition(parsed, process.stdin.isTTY);
+	} catch (error) {
+		console.error(chalk.red(`Error: ${(error as Error).message}`));
+		process.exit(1);
 	}
 
 	if (parsed.export) {

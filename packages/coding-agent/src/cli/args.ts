@@ -13,6 +13,8 @@ export interface Args {
 	provider?: string;
 	model?: string;
 	apiKey?: string;
+	modelDefinition?: string;
+	modelDefinitionEnv?: string;
 	systemPrompt?: string;
 	appendSystemPrompt?: string[];
 	thinking?: ThinkingLevel;
@@ -74,6 +76,22 @@ export function parseArgs(args: string[]): Args {
 		diagnostics: [],
 	};
 
+	// SCRAMJET-DIVERGENCE: Atomic invocation selectors cannot mix with ordinary route/auth selection.
+	const selectors = args.filter((arg) => /^--model-definition(?:-env)?(?:=|$)/.test(arg));
+	if (selectors.length > 1) {
+		result.diagnostics.push({
+			type: "error",
+			message: "Use exactly one --model-definition or --model-definition-env selector, once.",
+		});
+	}
+	if (selectors.length > 0 && args.some((arg) => /^--(?:provider|model|models|api-key)(?:=|$)/.test(arg))) {
+		result.diagnostics.push({
+			type: "error",
+			message:
+				"--model-definition/--model-definition-env cannot be combined with --provider, --model, --models or --api-key; put route metadata in the definition.",
+		});
+	}
+
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 
@@ -90,6 +108,22 @@ export function parseArgs(args: string[]): Args {
 			result.continue = true;
 		} else if (arg === "--resume" || arg === "-r") {
 			result.resume = true;
+		} else if (/^--model-definition(?:-env)?(?:=|$)/.test(arg)) {
+			const eq = arg.indexOf("=");
+			const selector = eq < 0 ? arg : arg.slice(0, eq);
+			const next = args[i + 1];
+			const value =
+				eq >= 0 ? arg.slice(eq + 1) : next !== undefined && !next.startsWith("-") ? args[++i] : undefined;
+			if (!value?.trim()) {
+				result.diagnostics.push({
+					type: "error",
+					message: `${selector}: supply ${selector.endsWith("-env") ? "an environment variable name" : "a JSON object"}.`,
+				});
+			} else if (selector === "--model-definition") {
+				result.modelDefinition = value;
+			} else {
+				result.modelDefinitionEnv = value;
+			}
 		} else if (arg === "--provider" && i + 1 < args.length) {
 			result.provider = args[++i];
 		} else if (arg === "--model" && i + 1 < args.length) {
