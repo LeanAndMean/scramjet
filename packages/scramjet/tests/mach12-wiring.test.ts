@@ -464,7 +464,7 @@ describe("mach12 command-surface issue routing", () => {
 		expect(evaluation).toContain("mach12:test-designer");
 	});
 
-	it("integrates one current-state packet before architecture within the shared call ceiling", () => {
+	it("integrates current-state evidence before architecture and preserves contract-impact treatment", () => {
 		const content = command("issue-plan");
 		const exploration = section(content, "## Step 4:", "## Step 5:");
 		const architecture = section(content, "## Step 6:", "## Step 7:");
@@ -476,9 +476,6 @@ describe("mach12 command-surface issue routing", () => {
 		expect(exploration).toMatch(/skip[^.]*structural packet[^.]*mechanical/i);
 		expect(exploration).toMatch(/owner and location[^.]*unambiguous/i);
 		expect(exploration).toMatch(/no shared, exported, public, serialized, cross-owner, or dependency contract/i);
-		expect(exploration).toMatch(/initial[^.]*maximum of seven subagent calls/i);
-		expect(exploration).toMatch(/eighth call[^.]*narrow mapper refresh/i);
-		expect(exploration).toMatch(/no rerun or decision branch[^.]*exceed the total ceiling/i);
 		expect(exploration).toMatch(/mapper replaces[^.]*structural[^.]*exploration/i);
 		expect(architecture).toMatch(/packet[^.]*citations[^.]*evidence limit/i);
 		expect(content).toMatch(/responsibilities, dependencies, contracts, consumers, public exposure/i);
@@ -486,12 +483,13 @@ describe("mach12 command-surface issue routing", () => {
 		expect(architecture).toMatch(/compatible[^.]*needs migration[^.]*breaking/i);
 	});
 
-	it("routes packet evidence gaps through one reserved mapper refresh without automatic architect redispatch", () => {
+	it("requires evidence refresh and complete contract-impact treatment before plan drafting", () => {
 		const architecture = section(command("issue-plan"), "## Step 6:", "## Step 7:");
 		expect(architecture).toMatch(/exact evidence gap/i);
-		expect(architecture).toMatch(/reserved eighth call[^.]*same `mach12:structural-mapper`/i);
-		expect(architecture).toMatch(/do not automatically re-dispatch[^.]*architect/i);
-		expect(architecture).toMatch(/report incomplete evidence[^.]*exceed/i);
+		expect(architecture).toMatch(/refresh changed or uncovered evidence[^.]*before relying on dependent design/i);
+		expect(architecture).toMatch(
+			/gate durable plan drafting[^.]*complete structural fit and contract-impact treatment/i,
+		);
 	});
 
 	it("reuses structural evidence only after separate freshness and task-coverage checks", () => {
@@ -598,13 +596,13 @@ describe("mach12 command-surface issue routing", () => {
 		const architecture = section(command("issue-plan"), "## Step 6:", "## Step 7:");
 		const commonModel = architecture.indexOf("establish one common responsibility model");
 		const placement = architecture.indexOf("before selecting components, interfaces, or files", commonModel);
-		const alternatives = architecture.indexOf("For code architecture, the three alternatives are:");
+		const codeArchitect = architecture.indexOf("`mach12:code-architect`");
 		const comparison = architecture.indexOf("compare every code option against it");
 
 		expect(commonModel).toBeGreaterThan(-1);
 		expect(placement).toBeGreaterThan(commonModel);
-		expect(alternatives).toBeGreaterThan(placement);
-		expect(comparison).toBeGreaterThan(alternatives);
+		expect(codeArchitect).toBeGreaterThan(placement);
+		expect(comparison).toBeGreaterThan(codeArchitect);
 		expect(architecture).toMatch(/Carry this model in every code-architect brief/i);
 		expect(architecture).toMatch(/when material code architecture established a common responsibility model/i);
 		expect(architecture).toMatch(
