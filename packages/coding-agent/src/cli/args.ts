@@ -76,24 +76,14 @@ export function parseArgs(args: string[]): Args {
 		diagnostics: [],
 	};
 
-	// SCRAMJET-DIVERGENCE: Atomic invocation selectors cannot mix with ordinary route/auth selection.
-	const selectors = args.filter((arg) => /^--model-definition(?:-env)?(?:=|$)/.test(arg));
-	if (selectors.length > 1) {
-		result.diagnostics.push({
-			type: "error",
-			message: "Use exactly one --model-definition or --model-definition-env selector, once.",
-		});
-	}
-	if (selectors.length > 0 && args.some((arg) => /^--(?:provider|model|models|api-key)(?:=|$)/.test(arg))) {
-		result.diagnostics.push({
-			type: "error",
-			message:
-				"--model-definition/--model-definition-env cannot be combined with --provider, --model, --models or --api-key; put route metadata in the definition.",
-		});
-	}
+	// SCRAMJET-DIVERGENCE: Count visited selectors, not consumed values, for atomic route/auth exclusivity.
+	let selectorCount = 0;
+	let ordinaryRouteSeen = false;
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
+		if (/^--model-definition(?:-env)?(?:=|$)/.test(arg)) selectorCount++;
+		if (/^--(?:provider|model|models|api-key)(?:=|$)/.test(arg)) ordinaryRouteSeen = true;
 
 		if (arg === "--help" || arg === "-h") {
 			result.help = true;
@@ -237,6 +227,20 @@ export function parseArgs(args: string[]): Args {
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
 		}
+	}
+
+	if (selectorCount > 1) {
+		result.diagnostics.push({
+			type: "error",
+			message: "Use exactly one --model-definition or --model-definition-env selector, once.",
+		});
+	}
+	if (selectorCount > 0 && ordinaryRouteSeen) {
+		result.diagnostics.push({
+			type: "error",
+			message:
+				"--model-definition/--model-definition-env cannot be combined with --provider, --model, --models or --api-key; put route metadata in the definition.",
+		});
 	}
 
 	return result;

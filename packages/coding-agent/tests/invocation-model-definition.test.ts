@@ -1,7 +1,9 @@
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@leanandmean/ai";
 import { describe, expect, it } from "vitest";
 import { parseArgs } from "../src/cli/args.js";
-import { validateInvocationModelDefinition } from "../src/core/model-registry.js";
-import { resolveInvocationModelDefinition } from "../src/main.js";
+import { AuthStorage } from "../src/core/auth-storage.js";
+import { ModelRegistry, validateInvocationModelDefinition } from "../src/core/model-registry.js";
+import { registerInvocationModel, resolveInvocationModelDefinition } from "../src/main.js";
 
 const minimal = {
 	api: "openai-completions",
@@ -37,13 +39,44 @@ describe("invocation definition selectors", () => {
 			...["--provider", "--model", "--models", "--api-key"].flatMap((flag) => [
 				["--model-definition", "{}", flag, "synthetic-secret"],
 				["--model-definition-env=DEF", `${flag}=synthetic-secret`],
-				[flag, "--model-definition", "{}"],
+				[flag, "synthetic-secret", "--model-definition", "{}"],
+				[`${flag}=synthetic-secret`, "--model-definition-env=DEF"],
 			]),
 		].map((args) => ({ args })),
 	)("rejects incomplete/repeated/conflicting selectors $args", ({ args }) => {
 		const diagnostics = parseArgs(args).diagnostics;
 		expect(diagnostics.some((d) => d.type === "error")).toBe(true);
 		expect(JSON.stringify(diagnostics)).not.toContain("synthetic-secret");
+	});
+	it.each(["--system-prompt", "--append-system-prompt", "--model", "--provider", "--models", "--api-key"])(
+		"does not count consumed %s values as selectors",
+		(flag) => {
+			const parsed = parseArgs([flag, "--model-definition", "{}"]);
+			expect(parsed.modelDefinition).toBeUndefined();
+			expect(parsed.diagnostics).toEqual([]);
+		},
+	);
+	it.each(["--system-prompt", "--append-system-prompt"])("resolves flag-like %s values unchanged", (flag) => {
+		for (const value of [
+			"--model",
+			"--provider=x",
+			"--models",
+			"--api-key",
+			"--model-definition",
+			"--model-definition-env=DEF",
+		]) {
+			for (const args of [
+				[...inline(minimal), flag, value],
+				[flag, value, ...inline(minimal)],
+			]) {
+				const parsed = parseArgs(args);
+				expect(parsed.diagnostics).toEqual([]);
+				expect(flag === "--system-prompt" ? parsed.systemPrompt : parsed.appendSystemPrompt).toEqual(
+					flag === "--system-prompt" ? value : [value],
+				);
+				expect(resolve(args)?.definition.id).toBe(minimal.id);
+			}
+		}
 	});
 	it("preserves unrelated options and extension flags", () => {
 		const parsed = parseArgs([...inline(minimal), "--thinking", "high", "--custom=value"]);
@@ -62,6 +95,17 @@ describe("registry-owned invocation validation", () => {
 			expect(definition.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 		},
 	);
+	it.each(["max", null])("preserves max mapping %s through validation and registration", (max) => {
+		const invocation = resolve(
+			inline({ ...minimal, api: "openai-responses", reasoning: true, thinkingLevelMap: { max } }),
+		)!;
+		expect(invocation.definition.thinkingLevelMap).toEqual({ max });
+		const auth = AuthStorage.inMemory();
+		const model = registerInvocationModel(invocation, "invocation-max-test", ModelRegistry.inMemory(auth), auth);
+		expect(model.thinkingLevelMap).toEqual({ max });
+		expect(getSupportedThinkingLevels(model).includes("max")).toBe(max !== null);
+		expect(clampThinkingLevel(model, "max")).toBe(max === null ? "high" : "max");
+	});
 	it("preserves declared metadata", () => {
 		const definition = {
 			...minimal,
@@ -113,7 +157,7 @@ describe("registry-owned invocation validation", () => {
 		{ ...minimal, requestLimits: [{ maxTotalTokens: Infinity, supportsTools: true }] },
 		{ ...minimal, requestLimits: [{ maxTotalTokens: 10, supportsTools: true, synthetic: true }] },
 		{ ...minimal, input: ["audio"] },
-		{ ...minimal, thinkingLevelMap: { max: "unsupported" } },
+		{ ...minimal, thinkingLevelMap: { unknown: "unsupported" } },
 		{ ...minimal, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, synthetic: 1 } },
 		{ ...minimal, cost: { input: Infinity, output: 0, cacheRead: 0, cacheWrite: 0 } },
 		{ ...minimal, compat: { supportsDeveloperRole: "false" } },
@@ -152,11 +196,33 @@ describe("registry-owned invocation validation", () => {
 		"http://\\@localhost",
 		"http://localhost\\path",
 	])("rejects unsafe URL %# without echoing it", (baseUrl) => {
-		expect(() => validateInvocationModelDefinition({ ...minimal, baseUrl })).toThrow(/baseUrl/);
+		let diagnostic: unknown;
+		try {
+			validateInvocationModelDefinition({ ...minimal, baseUrl });
+		} catch (error) {
+			diagnostic = error;
+		}
+		expect(diagnostic).toBeInstanceOf(Error);
+		expect(String(diagnostic)).toMatch(/baseUrl/);
+		expect(String(diagnostic)).not.toContain(baseUrl);
+		expect(String(diagnostic)).not.toContain("synthetic-secret");
 	});
 });
 
 describe("CLI source resolution", () => {
+	it("omits rejected credential-bearing URLs from user-visible diagnostics", () => {
+		const baseUrl = "http://synthetic-secret@localhost";
+		let diagnostic: unknown;
+		try {
+			resolve(inline({ ...minimal, baseUrl }));
+		} catch (error) {
+			diagnostic = error;
+		}
+		expect(diagnostic).toBeInstanceOf(Error);
+		expect(String(diagnostic)).toMatch(/--model-definition.*baseUrl/);
+		expect(String(diagnostic)).not.toContain(baseUrl);
+		expect(String(diagnostic)).not.toContain("synthetic-secret");
+	});
 	it("only reads explicitly selected environment JSON", () => {
 		const environment = { ...env, DEF: JSON.stringify(minimal) };
 		expect(resolve(["-p"], environment)).toBeUndefined();

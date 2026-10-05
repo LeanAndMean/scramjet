@@ -304,13 +304,13 @@ Current behavior:
 
 ### Thinking Level Map
 
-Use `thinkingLevelMap` on a model to describe model-specific thinking controls. Keys are scramjet thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+Use `thinkingLevelMap` on a model to describe model-specific thinking controls. Keys are scramjet thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
 
 Values are tristate:
 
 | Value | Meaning |
 |-------|---------|
-| omitted | Level is supported and uses the provider's default mapping |
+| omitted | Ordinary levels use the provider's default mapping; `xhigh` and `max` require explicit string mappings to be supported |
 | string | Level is supported and this value is sent to the provider |
 | `null` | Level is unsupported and hidden/skipped/clamped away |
 

@@ -90,6 +90,7 @@ const ThinkingLevelMapSchema = Type.Object({
 	medium: Type.Optional(ThinkingLevelMapValueSchema),
 	high: Type.Optional(ThinkingLevelMapValueSchema),
 	xhigh: Type.Optional(ThinkingLevelMapValueSchema),
+	max: Type.Optional(ThinkingLevelMapValueSchema), // SCRAMJET-DIVERGENCE: Match the public thinking-map vocabulary.
 });
 
 // SCRAMJET-DIVERGENCE: strict additionalProperties: false on all compat schemas, compat-key derivation,
