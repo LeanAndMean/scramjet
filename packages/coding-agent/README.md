@@ -113,6 +113,18 @@ See [docs/providers.md](docs/providers.md) for detailed setup instructions.
 
 ---
 
+### One-invocation headless models
+
+Supply deployment metadata and an environment-sourced credential without saving a model definition:
+
+```sh
+# ROUTE_DEFINITION contains validated JSON; its apiKeyEnv names your credential variable.
+scramjet --print --model-definition-env ROUTE_DEFINITION "Summarize this project"
+scramjet --mode rpc --model-definition "$ROUTE_DEFINITION"
+```
+
+The exact supplied route is process-local and bypasses saved startup defaults/scopes; model/thinking changes do not save defaults, but ordinary journals still persist. Resupply the definition in each process; ordinary resume without it may fall back. See [the complete definition contract and deployment-derived example](docs/models.md#invocation-scoped-headless-models) for required limits, compatibility overrides, conflicts, modes and failure semantics.
+
 ## Interactive Mode
 
 <p align="center"><img src="docs/images/interactive-mode.png" alt="Interactive Mode" width="600"></p>
@@ -512,6 +524,8 @@ cat README.md | scramjet -p "Summarize this text"
 | `--provider <name>` | Provider (anthropic, openai, google, etc.) |
 | `--model <pattern>` | Model pattern or ID (supports `provider/id` and optional `:<thinking>`) |
 | `--api-key <key>` | API key (overrides env vars) |
+| `--model-definition <JSON>` | One validated process-local headless model; conflicts with provider/model/models/api-key flags |
+| `--model-definition-env <NAME>` | Explicitly read the same definition from a named environment variable; mutually exclusive with inline definition |
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
 | `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
 | `--list-models [search]` | List available models |

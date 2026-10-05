@@ -438,6 +438,19 @@ For each built-in provider request, `createAgentSession()` binds the current ext
 
 > See [examples/sdk/02-custom-model.ts](../examples/sdk/02-custom-model.ts)
 
+### Model preference persistence
+
+`createAgentSession()` and `createAgentSessionFromServices()` accept optional `persistModelPreferences` (default `true`); it is also available on `AgentSessionConfig`. Pass `false` to preserve saved default provider/model/thinking while allowing direct selection, both model-cycling paths and thinking changes to update live state, events and journal entries. Authentication and thinking clamping are unchanged. With this opt-out, explicit startup selection also records changed branch-local model/thinking identity when opening an existing journal.
+
+```typescript
+const { session } = await createAgentSession({
+  model: myModel,
+  persistModelPreferences: false,
+});
+```
+
+This is not blanket settings suppression: unrelated settings writes remain possible. Runtime factories must forward the policy to every replacement session. The CLI's [invocation-definition selectors](models.md#invocation-scoped-headless-models) do this automatically, register the captured route through existing `ModelRegistry.registerProvider()`, and supply its credential through `AuthStorage.setRuntimeApiKey()`. Ingress helpers are not new package-root SDK exports; programmatic callers can continue using those existing registry/auth APIs. Journal identity alone cannot reconstruct an endpoint or credential in a fresh process.
+
 ### Context and output allocation
 
 Models and usage expose one authoritative total `contextWindow`; `contextWindowBudget` and `getContextWindowBudget()` are removed. See [the migration guide](models.md#breaking-migration-from-context-budgets) before updating external model definitions or consumers.

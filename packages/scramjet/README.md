@@ -39,6 +39,20 @@ Try it:
 > /mach12:issue-plan 55          # replace 55 with a GitHub issue number from your repo
 ```
 
+## One-invocation headless models
+
+Use an otherwise unconfigured compatible deployment without editing `models.json` or installing an endpoint extension:
+
+```sh
+# ROUTE_DEFINITION is deployment-derived JSON; apiKeyEnv names your credential variable.
+scramjet --print --model-definition-env ROUTE_DEFINITION "Summarize this project"
+scramjet --mode rpc --model-definition "$ROUTE_DEFINITION"
+```
+
+Supply the API, base URL, literal model ID, credential environment name and evidenced context/output limits. The generated provider identity and captured key are process-local; simultaneous invocations remain independent. Saved model/thinking defaults are preserved, including RPC changes, but ordinary journals/observational files may still be written. Resupply the definition in each process; resume without it uses ordinary restoration/fallback, not endpoint revival. No automatic subagent-route forwarding is provided.
+
+See [the complete selector/field/conflict/mode contract](../coding-agent/docs/models.md#invocation-scoped-headless-models), [JSON failure events](../coding-agent/docs/json.md) and [RPC acceptance versus generation success](../coding-agent/docs/rpc.md). These interfaces reuse existing adapters; valid metadata is not proof of deployment entitlement, limits or compatibility.
+
 ## Browsing live output
 
 The interactive transcript uses Scramjet's retained viewport and **rightmost scrollbar**, not the terminal's native history. Wheel/trackpad scrolling and scrollbar dragging can reach running tool/subagent cards before a turn finishes; unrelated updates preserve your reading position. Running subagent cards show pending status and accrued parallel cost; Ctrl+O expands interim output, while success or failure appears only after the tool result finishes. The editor, adjacent widgets and footer are docked by default, allowing typing without leaving the passage you are reading. `/settings` can undock that area, cap visible input text at 10–50% of terminal height (30% by default), or set 1–20 rows per wheel event (3 by default). Docking temporarily suspends with an explanation when the complete band cannot fit; it never switches renderers silently.
