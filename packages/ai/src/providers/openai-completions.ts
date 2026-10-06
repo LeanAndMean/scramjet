@@ -34,6 +34,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { appendBuiltinFailure, invokeProviderCallback, RequestFailureError } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { createProviderAbortScope } from "../utils/provider-abort-scope.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { flattenSystemPrompt } from "../utils/system-prompt.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
@@ -138,6 +139,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 
 		// SCRAMJET-DIVERGENCE: Preserve callback, preparation, SDK failure, and stream-completion evidence.
 		let requestStarted = false;
+		const abortScope = createProviderAbortScope(options?.signal);
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const compat = getCompat(model);
@@ -161,7 +163,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				params = nextParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming;
 			}
 			const requestOptions = {
-				...(options?.signal ? { signal: options.signal } : {}),
+				signal: abortScope.signal,
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
@@ -463,6 +465,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
+		} finally {
+			// SCRAMJET-DIVERGENCE: finish cleanup synchronously before terminal consumers resume (#587).
+			abortScope.dispose();
 		}
 	})();
 

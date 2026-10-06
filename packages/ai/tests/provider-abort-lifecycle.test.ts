@@ -1,17 +1,74 @@
 import { spawnSync } from "node:child_process";
 import { getEventListeners, setMaxListeners } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
+import Anthropic from "@anthropic-ai/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.js";
+import { streamAnthropic } from "../src/providers/anthropic.js";
 import { streamAzureOpenAIResponses } from "../src/providers/azure-openai-responses.js";
+import { streamOpenAICompletions } from "../src/providers/openai-completions.js";
 import { streamOpenAIResponses } from "../src/providers/openai-responses.js";
 import type { AssistantMessage, Context, StreamOptions } from "../src/types.js";
 import type { AssistantMessageEventStream } from "../src/utils/event-stream.js";
+import { inspectFailureEvidence } from "../src/utils/failure-evidence.js";
 import { createProviderAbortScope } from "../src/utils/provider-abort-scope.js";
 
 const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 0 }] };
 const nativeFetch = globalThis.fetch;
+const chatPartial = [
+	{ id: "msg_1", choices: [{ index: 0, delta: { role: "assistant", content: "done" }, finish_reason: null }] },
+];
+const chatCompleted = [
+	...chatPartial,
+	{
+		id: "msg_1",
+		choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+		usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+	},
+];
+const anthropicPartial = [
+	{ type: "message_start", message: { id: "msg_1", usage: { input_tokens: 2, output_tokens: 0 } } },
+	{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+	{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "done" } },
+];
+const anthropicCompleted = [
+	...anthropicPartial,
+	{ type: "content_block_stop", index: 0 },
+	{ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+	{ type: "message_stop" },
+];
 const routes = [
+	{
+		name: "Chat",
+		partial: chatPartial,
+		completed: chatCompleted,
+		malformed: [...chatPartial, { error: { message: "malformed stream" } }],
+		stream: (options: StreamOptions, baseUrl = "http://localhost:1/v1") =>
+			streamOpenAICompletions({ ...getModel("openai", "gpt-4o"), baseUrl }, context, {
+				apiKey: "test-key",
+				...options,
+			}),
+	},
+	...[false, true].map((injected) => ({
+		name: injected ? "Anthropic injected client" : "Anthropic",
+		partial: anthropicPartial,
+		completed: anthropicCompleted,
+		malformed: [...anthropicPartial, { type: "error" }],
+		stream: (options: StreamOptions, baseUrl = "http://localhost:1/v1") =>
+			streamAnthropic({ ...getModel("anthropic", "claude-sonnet-4-5"), baseUrl }, context, {
+				apiKey: "test-key",
+				...(injected
+					? {
+							client: new Anthropic({
+								apiKey: "test-key",
+								baseURL: baseUrl,
+								fetch: (input, init) => fetch(input, init),
+							}),
+						}
+					: {}),
+				...options,
+			}),
+	})),
 	{
 		name: "OpenAI Responses",
 		stream: (options: StreamOptions, baseUrl = "http://localhost:1/v1") =>
@@ -40,7 +97,12 @@ function deferred<T>() {
 }
 
 function sse(events: Record<string, unknown>[]) {
-	return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+	return events
+		.map(
+			(event) =>
+				`${typeof event.type === "string" && !event.type.startsWith("response.") ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
+		)
+		.join("");
 }
 
 const partialEvents = [
@@ -74,10 +136,6 @@ const completedEvents = [
 		},
 	},
 ];
-
-function response(events = completedEvents): Response {
-	return new Response(sse(events), { headers: { "content-type": "text/event-stream" } });
-}
 
 function httpError(status: number): Response {
 	return new Response(JSON.stringify({ error: { message: "failure", code: "server_error" } }), {
@@ -160,7 +218,13 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-describe.each(routes)("$name operation lifetime", ({ stream }) => {
+describe.each(routes)("$name operation lifetime", (route) => {
+	const { stream } = route;
+	const partial = "partial" in route ? route.partial : partialEvents;
+	const completed = "completed" in route ? route.completed : completedEvents;
+	const malformed = "malformed" in route ? route.malformed : [...partialEvents, { type: "error" }];
+	const response = (events = completed) =>
+		new Response(sse(events), { headers: { "content-type": "text/event-stream" } });
 	it("restores caller listeners after each of twelve successful operations, before either terminal consumer", async () => {
 		const caller = new AbortController();
 		setMaxListeners(10, caller.signal);
@@ -199,7 +263,7 @@ describe.each(routes)("$name operation lifetime", ({ stream }) => {
 	it.each([true, false])(
 		"aborts an unread native body on response callback failure (caller: %s)",
 		async (withCaller) => {
-			const server = await loopback((response) => response.write(sse([partialEvents[0]])));
+			const server = await loopback((response) => response.write(sse([partial[0]])));
 			const caller = withCaller ? new AbortController() : undefined;
 			const { signals } = observeFetch(nativeFetch);
 			try {
@@ -249,12 +313,25 @@ describe.each(routes)("$name operation lifetime", ({ stream }) => {
 			assertFinalCleanup(caller.signal, signals);
 			expect(result.stopReason).toBe(stopReason);
 			expect(mock).toHaveBeenCalledTimes(statuses.length);
-			expect(result.diagnostics).toContainEqual(
-				expect.objectContaining({
-					type: "sdk_request_retry",
-					details: expect.objectContaining({ outcome, observedAttemptCount: statuses.length }),
-				}),
-			);
+			if (!route.name.includes("Responses")) {
+				if (stopReason === "stop") {
+					expect(inspectFailureEvidence(result.diagnostics)).toEqual({ status: "absent" });
+					expect(result.usage).toMatchObject({ input: 2, output: 1, totalTokens: 3 });
+				} else {
+					expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+						status: "valid",
+						category: statuses[0] === 400 ? "invalid_request" : "server",
+						transient: statuses[0] !== 400,
+					});
+				}
+			}
+			if (route.name.includes("Responses"))
+				expect(result.diagnostics).toContainEqual(
+					expect.objectContaining({
+						type: "sdk_request_retry",
+						details: expect.objectContaining({ outcome, observedAttemptCount: statuses.length }),
+					}),
+				);
 		});
 	});
 
@@ -283,8 +360,8 @@ describe.each(routes)("$name operation lifetime", ({ stream }) => {
 	});
 
 	it.each([
-		{ name: "incomplete", events: partialEvents, category: "missing_terminal_event" },
-		{ name: "malformed", events: [...partialEvents, { type: "error" }], category: "malformed_event" },
+		{ name: "incomplete", events: partial, category: "missing_terminal_event" },
+		{ name: "malformed", events: malformed, category: "malformed_event" },
 	])("cleans up $name streams while preserving partial output", async ({ events, category }) => {
 		const caller = new AbortController();
 		const { signals } = observeFetch(async () => response(events));
@@ -292,12 +369,17 @@ describe.each(routes)("$name operation lifetime", ({ stream }) => {
 			assertFinalCleanup(caller.signal, signals);
 			expect(result.stopReason).toBe("error");
 			expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "done" }));
-			expect(result.diagnostics).toContainEqual(
-				expect.objectContaining({
-					type: "provider_failure",
-					details: expect.objectContaining({ phase: "stream", category }),
-				}),
-			);
+			expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+				status: "valid",
+				category: route.name === "Chat" && category === "malformed_event" ? "unknown" : category,
+			});
+			if (route.name.includes("Responses"))
+				expect(result.diagnostics).toContainEqual(
+					expect.objectContaining({
+						type: "provider_failure",
+						details: expect.objectContaining({ phase: "stream", category }),
+					}),
+				);
 		});
 	});
 
@@ -333,7 +415,7 @@ describe.each(routes)("$name operation lifetime", ({ stream }) => {
 		const caller = new AbortController();
 		const ready = deferred<void>();
 		const release = deferred<void>();
-		const server = await loopback((response) => response.write(sse([partialEvents[0]])));
+		const server = await loopback((response) => response.write(sse([partial[0]])));
 		const { signals } = observeFetch(nativeFetch);
 		try {
 			const result = stream(
@@ -364,7 +446,7 @@ describe.each(routes)("$name operation lifetime", ({ stream }) => {
 
 	it("interrupts native body reads after partial output", async () => {
 		const caller = new AbortController();
-		const server = await loopback((response) => response.write(sse(partialEvents)));
+		const server = await loopback((response) => response.write(sse(partial)));
 		const { signals } = observeFetch(nativeFetch);
 		try {
 			const events = stream({ signal: caller.signal }, server.url);

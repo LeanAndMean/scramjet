@@ -38,6 +38,7 @@ import {
 } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
+import { createProviderAbortScope } from "../utils/provider-abort-scope.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
 	ADAPTIVE_THINKING_PATTERNS,
@@ -512,6 +513,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 		};
 
 		let requestStarted = false;
+		const abortScope = createProviderAbortScope(options?.signal);
 		try {
 			let client: Anthropic;
 			let isOAuth: boolean;
@@ -556,7 +558,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				params = nextParams as MessageCreateParamsStreaming;
 			}
 			const requestOptions = {
-				...(options?.signal ? { signal: options.signal } : {}),
+				signal: abortScope.signal,
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
@@ -570,7 +572,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
 			const blocks = output.content as Block[];
 
-			for await (const event of iterateAnthropicEvents(response, options?.signal)) {
+			for await (const event of iterateAnthropicEvents(response, abortScope.signal)) {
 				if (event.type === "message_start") {
 					output.responseId = event.message.id;
 					// Capture initial token usage from message_start event
@@ -763,6 +765,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
+		} finally {
+			// SCRAMJET-DIVERGENCE: finish cleanup synchronously before terminal consumers resume (#587).
+			abortScope.dispose();
 		}
 	})();
 
