@@ -22,7 +22,7 @@ import {
 import { registerOAuthProvider, resetOAuthProviders } from "@leanandmean/ai/oauth";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { type Static, Type } from "typebox";
+import { type Static, type TSchema, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { getAgentDir } from "../config.js";
@@ -90,6 +90,7 @@ const ThinkingLevelMapSchema = Type.Object({
 	medium: Type.Optional(ThinkingLevelMapValueSchema),
 	high: Type.Optional(ThinkingLevelMapValueSchema),
 	xhigh: Type.Optional(ThinkingLevelMapValueSchema),
+	max: Type.Optional(ThinkingLevelMapValueSchema), // SCRAMJET-DIVERGENCE: Match the public thinking-map vocabulary.
 });
 
 // SCRAMJET-DIVERGENCE: strict additionalProperties: false on all compat schemas, compat-key derivation,
@@ -199,6 +200,105 @@ const ModelDefinitionSchema = Type.Object({
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
 });
+
+// SCRAMJET-DIVERGENCE: Invocation ingress closes reused schemas without tightening persistent configuration.
+function closedInvocationSchema<T extends TSchema>(schema: T): T {
+	const result = structuredClone(schema);
+	function close(value: unknown): void {
+		if (!value || typeof value !== "object") return;
+		for (const child of Object.values(value)) close(child);
+		const node = value as Record<string, unknown>;
+		if (node.type === "object") node.additionalProperties = false;
+		if (node.type === "number") {
+			node.minimum ??= -Number.MAX_VALUE;
+			node.maximum ??= Number.MAX_VALUE;
+		}
+	}
+	close(result);
+	return result;
+}
+
+const InvocationModelDefinitionSchema = closedInvocationSchema(
+	Type.Object({
+		...Type.Pick(ModelDefinitionSchema, [
+			"id",
+			"name",
+			"reasoning",
+			"input",
+			"thinkingLevelMap",
+			"compat",
+			"cost",
+			"maxInputTokens",
+			"requestLimits",
+		]).properties,
+		api: Type.Union([
+			Type.Literal("openai-completions"),
+			Type.Literal("openai-responses"),
+			Type.Literal("anthropic-messages"),
+			Type.Literal("google-generative-ai"),
+		]),
+		baseUrl: Type.String({ minLength: 1 }),
+		apiKeyEnv: Type.String({ pattern: "^[A-Za-z_][A-Za-z0-9_]*$" }),
+		contextWindow: Type.Number({ exclusiveMinimum: 0 }),
+		maxTokens: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+	}),
+);
+const validateInvocationDefinition = Compile(InvocationModelDefinitionSchema);
+
+export function validateInvocationModelDefinition(value: unknown) {
+	if (!validateInvocationDefinition.Check(value)) {
+		const error = validateInvocationDefinition.Errors(value)[0];
+		const field = error ? formatValidationPath(error).split(".")[0] : undefined;
+		const safeField = field && Object.hasOwn(InvocationModelDefinitionSchema.properties, field) ? field : "object";
+		throw new Error(
+			`model definition ${safeField}: supply the required fields and supported metadata with valid values.`,
+		);
+	}
+	if (!value.id.trim()) throw new Error("model definition id: supply a nonblank literal backend ID.");
+	const urlError =
+		"model definition baseUrl: supply an absolute HTTP(S) URL with a host and no credentials, query, fragment, controls or surrounding whitespace.";
+	if (value.baseUrl.trim() !== value.baseUrl || /[\s\u0000-\u0020\u007f-\u009f\\?#]/.test(value.baseUrl)) {
+		throw new Error(urlError);
+	}
+	let url: URL;
+	try {
+		url = new URL(value.baseUrl);
+	} catch {
+		throw new Error(urlError);
+	}
+	if (
+		!/^https?:\/\//i.test(value.baseUrl) ||
+		!["http:", "https:"].includes(url.protocol) ||
+		!url.hostname ||
+		url.username ||
+		url.password ||
+		value.baseUrl.split("/")[2].includes("@")
+	) {
+		throw new Error(urlError);
+	}
+	try {
+		validateCompatForApi(value.compat, value.api, "compat");
+	} catch {
+		throw new Error("model definition compat: use only compatibility fields supported by the selected API.");
+	}
+	try {
+		validateModelContextLimits({ ...value, provider: "invocation", id: "definition" });
+	} catch {
+		throw new Error(
+			"model definition contextWindow/maxInputTokens/requestLimits: supply positive finite applicable limits.",
+		);
+	}
+	// Omitted capabilities and zero price estimates are client metadata, not backend or billing evidence.
+	return {
+		...value,
+		name: value.name ?? value.id,
+		reasoning: value.reasoning ?? false,
+		input: value.input ?? ["text" as const],
+		cost: value.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	};
+}
+
+export type InvocationModelDefinition = ReturnType<typeof validateInvocationModelDefinition>;
 
 // Schema for per-model overrides (all fields optional, merged with built-in model)
 const ModelOverrideSchema = Type.Object({

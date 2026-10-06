@@ -16,6 +16,14 @@ Common options:
 - `--no-session`: Disable session persistence
 - `--session-dir <path>`: Custom session storage directory
 
+### Invocation-scoped model startup
+
+Start with `scramjet --mode rpc --model-definition-env ROUTE_DEFINITION` or `--model-definition '<JSON>'`. See [the complete field/conflict contract](models.md#invocation-scoped-headless-models); credentials come only from the definition's `apiKeyEnv`. These selectors cannot be combined with `--provider`, `--model`, `--models` or `--api-key`.
+
+`get_state` and `get_available_models` expose the normal full model, including nonsecret endpoint/limits and a generated `invocation-<UUID>` provider, but not the captured credential. Use that returned provider and literal ID for later `set_model`. Model/thinking setters and cycling remain supported without saving default model/thinking preferences, even after switching models. `new_session` inherits the live selection; `switch_session` uses the supplied invocation model. All replacement registries retain the same definition/key and opt-out policy.
+
+Ordinary journal persistence remains enabled unless `--no-session` is supplied. Resupply the definition in a fresh process; reopening without it uses ordinary unavailable-model restoration warnings/fallback and never revives the endpoint/key. Invalid definitions/missing environment values fail startup with nonzero status before protocol service construction. A successful `prompt` response means acceptance, not successful generation: authentication, transport and stream failures arrive in subsequent assistant error/events, without silent route substitution. This feature does not change JSONL framing or RPC command/result shapes.
+
 ## Protocol Overview
 
 - **Commands**: JSON objects sent to stdin, one per line

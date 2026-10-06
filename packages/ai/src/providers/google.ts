@@ -347,6 +347,8 @@ function createClient(
 	}
 
 	return new GoogleGenAI({
+		// SCRAMJET-DIVERGENCE: Model.api owns routing, not ambient SDK cloud flags.
+		vertexai: false,
 		apiKey,
 		httpOptions: Object.keys(httpOptions).length > 0 ? httpOptions : undefined,
 	});

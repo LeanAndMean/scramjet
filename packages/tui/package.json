@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/tui",
-	"version": "0.74.1-scramjet.42",
+	"version": "0.74.1-scramjet.43",
 	"publishConfig": {
 		"access": "public"
 	},

@@ -6,6 +6,12 @@ scramjet --mode json "Your prompt"
 
 Outputs all session events as JSON lines to stdout. Useful for integrating Scramjet into other tools or custom UIs.
 
+## Invocation-scoped models and failures
+
+`--mode json` accepts `--model-definition '<JSON>'` or `--model-definition-env NAME` for a process-local compatible route. See [the complete contract](models.md#invocation-scoped-headless-models) for required deployment-evidenced limits, strict environment credentials, conflicts and persistence. The definition is not automatically activated by ambient environment variables.
+
+Invalid definition/environment input fails startup with nonzero status. Generation failures may still exit zero in JSON mode: inspect finalized assistant `message_end` entries for `stopReason: "error"`/`"aborted"`, their `errorMessage`/diagnostics, and retry outcomes rather than treating process exit or `agent_end` as success. Explicit request failures do not silently switch routes; existing same-route recovery remains. Text print errors retain nonzero status; [RPC](rpc.md) separately distinguishes prompt acceptance from generation success. No new event shape or exit policy is introduced.
+
 ## Event Types
 
 Events are defined in [`AgentSessionEvent`](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/agent-session.ts#L102):

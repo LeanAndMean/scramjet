@@ -71,7 +71,6 @@ describe("GitHub Copilot selector visibility", () => {
 		const selector = new ModelSelectorComponent(
 			{ requestRender: vi.fn() } as any,
 			current,
-			{ setDefaultModelAndProvider: vi.fn() } as any,
 			registry,
 			[],
 			vi.fn(),

@@ -9,35 +9,66 @@ import {
 	type SimpleStreamOptions,
 } from "@leanandmean/ai";
 import { describe, expect, it, vi } from "vitest";
+import { parseArgs } from "../src/cli/args.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader } from "../src/core/resource-loader.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+import { registerInvocationModel, resolveInvocationModelDefinition } from "../src/main.js";
 
-async function fixture(maxInputTokens?: number, requestLimits?: ModelRequestLimit[], autoCompact = false) {
+async function fixture(
+	maxInputTokens?: number,
+	requestLimits?: ModelRequestLimit[],
+	autoCompact = false,
+	invocation = false,
+) {
 	const root = mkdtempSync(join(tmpdir(), "context-allocation-"));
 	const authStorage = AuthStorage.inMemory();
 	const registry = ModelRegistry.inMemory(authStorage);
 	const calls: Array<{ context: Context; options?: SimpleStreamOptions }> = [];
-	registry.registerProvider("allocation-test", {
-		api: "allocation-test",
-		baseUrl: "https://unused.invalid",
-		apiKey: "test",
-		models: [
-			{
+	if (invocation) {
+		const parsed = parseArgs([
+			"--print",
+			"--model-definition",
+			JSON.stringify({
+				api: "openai-completions",
+				baseUrl: "https://unused.invalid",
 				id: "model",
-				name: "model",
-				input: ["text"],
-				reasoning: false,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				apiKeyEnv: "ALLOCATION_KEY",
 				contextWindow: 1000,
 				maxTokens: 500,
 				maxInputTokens,
 				requestLimits,
-			},
-		],
+			}),
+		]);
+		registerInvocationModel(
+			resolveInvocationModelDefinition(parsed, true, { ALLOCATION_KEY: "test" })!,
+			"allocation-test",
+			registry,
+			authStorage,
+		);
+	}
+	registry.registerProvider("allocation-test", {
+		api: invocation ? "openai-completions" : "allocation-test",
+		baseUrl: "https://unused.invalid",
+		apiKey: "test",
+		models: invocation
+			? undefined
+			: [
+					{
+						id: "model",
+						name: "model",
+						input: ["text"],
+						reasoning: false,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 1000,
+						maxTokens: 500,
+						maxInputTokens,
+						requestLimits,
+					},
+				],
 		streamSimple: (model, context, options) => {
 			calls.push({ context, options });
 			const stream = createAssistantMessageEventStream();
@@ -169,6 +200,47 @@ const malformedDirectModel = {
 };
 
 describe("SDK request context allocation", () => {
+	it.each([
+		{
+			maxInputTokens: undefined,
+			limits: [{ maxTotalTokens: 1000, maxOutputTokens: 100, supportsTools: true }],
+			expected: 100,
+			error: undefined,
+		},
+		{ maxInputTokens: 700, limits: undefined, expected: undefined, error: "provider input limit 700" },
+		{
+			maxInputTokens: undefined,
+			limits: [{ maxTotalTokens: 1000, supportsTools: false }],
+			expected: undefined,
+			error: "tool",
+		},
+	])(
+		"allocates supplied invocation limits before transport: $error",
+		async ({ maxInputTokens, limits, expected, error }) => {
+			const f = await fixture(maxInputTokens, limits, false, true);
+			try {
+				f.session.agent.beforeProviderCall = (context) => ({
+					...context,
+					systemPrompt: "x".repeat(3000),
+					tools: [{ name: "read", description: "read", parameters: { type: "object", properties: {} } }],
+				});
+				await f.session.prompt("xxxx");
+				if (error) {
+					expect(f.calls).toHaveLength(0);
+					expect(f.session.agent.state.errorMessage).toContain(error);
+				} else {
+					expect(f.calls).toHaveLength(1);
+					expect(f.calls[0].options?.maxTokens).toBe(expected);
+				}
+				expect(f.session.model?.contextWindow).toBe(1000);
+				expect(f.session.model?.maxTokens).toBe(500);
+				expect(f.session.getContextUsage()?.contextWindow).toBe(1000);
+			} finally {
+				f.dispose();
+			}
+		},
+	);
+
 	it.each([
 		{ source: "model", options: { model: malformedDirectModel } },
 		{ source: "scopedModels", options: { model: directModel, scopedModels: [{ model: malformedDirectModel }] } },

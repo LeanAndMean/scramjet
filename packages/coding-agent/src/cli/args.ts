@@ -13,6 +13,8 @@ export interface Args {
 	provider?: string;
 	model?: string;
 	apiKey?: string;
+	modelDefinition?: string;
+	modelDefinitionEnv?: string;
 	systemPrompt?: string;
 	appendSystemPrompt?: string[];
 	thinking?: ThinkingLevel;
@@ -74,8 +76,14 @@ export function parseArgs(args: string[]): Args {
 		diagnostics: [],
 	};
 
+	// SCRAMJET-DIVERGENCE: Count visited selectors, not consumed values, for atomic route/auth exclusivity.
+	let selectorCount = 0;
+	let ordinaryRouteSeen = false;
+
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
+		if (/^--model-definition(?:-env)?(?:=|$)/.test(arg)) selectorCount++;
+		if (/^--(?:provider|model|models|api-key)(?:=|$)/.test(arg)) ordinaryRouteSeen = true;
 
 		if (arg === "--help" || arg === "-h") {
 			result.help = true;
@@ -90,6 +98,22 @@ export function parseArgs(args: string[]): Args {
 			result.continue = true;
 		} else if (arg === "--resume" || arg === "-r") {
 			result.resume = true;
+		} else if (/^--model-definition(?:-env)?(?:=|$)/.test(arg)) {
+			const eq = arg.indexOf("=");
+			const selector = eq < 0 ? arg : arg.slice(0, eq);
+			const next = args[i + 1];
+			const value =
+				eq >= 0 ? arg.slice(eq + 1) : next !== undefined && !next.startsWith("-") ? args[++i] : undefined;
+			if (!value?.trim()) {
+				result.diagnostics.push({
+					type: "error",
+					message: `${selector}: supply ${selector.endsWith("-env") ? "an environment variable name" : "a JSON object"}.`,
+				});
+			} else if (selector === "--model-definition") {
+				result.modelDefinition = value;
+			} else {
+				result.modelDefinitionEnv = value;
+			}
 		} else if (arg === "--provider" && i + 1 < args.length) {
 			result.provider = args[++i];
 		} else if (arg === "--model" && i + 1 < args.length) {
@@ -205,6 +229,20 @@ export function parseArgs(args: string[]): Args {
 		}
 	}
 
+	if (selectorCount > 1) {
+		result.diagnostics.push({
+			type: "error",
+			message: "Use exactly one --model-definition or --model-definition-env selector, once.",
+		});
+	}
+	if (selectorCount > 0 && ordinaryRouteSeen) {
+		result.diagnostics.push({
+			type: "error",
+			message:
+				"--model-definition/--model-definition-env cannot be combined with --provider, --model, --models or --api-key; put route metadata in the definition.",
+		});
+	}
+
 	return result;
 }
 
@@ -237,6 +275,13 @@ ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: google)
   --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
   --api-key <key>                API key (defaults to env vars)
+  --model-definition <JSON>     Use a strict JSON model definition for this invocation
+  --model-definition-env <NAME> Read definition JSON from the named environment variable
+                                 Generation requires --print, --mode json, --mode rpc,
+                                 or redirected stdin
+                                 Use one selector once; cannot combine with
+                                 --provider, --model, --models or --api-key
+                                 Credentials: apiKeyEnv in the definition names the key variable
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, or rpc

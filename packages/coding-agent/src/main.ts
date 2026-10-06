@@ -5,6 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { ThinkingLevel } from "@leanandmean/agent";
@@ -28,7 +29,7 @@ import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import type { ExtensionAPI, ExtensionFactory } from "./core/extensions/types.js";
 import { KeybindingsManager } from "./core/keybindings.js";
-import type { ModelRegistry } from "./core/model-registry.js";
+import { type ModelRegistry, validateInvocationModelDefinition } from "./core/model-registry.js";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import { isRequiredBuiltinInitError, renderRequiredBuiltinInitCause } from "./core/resource-loader.js";
@@ -96,6 +97,67 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 }
 
 type AppMode = "interactive" | "print" | "json" | "rpc";
+
+// SCRAMJET-DIVERGENCE: Resolve strict invocation inputs before runtime construction, without secret-bearing errors.
+export function resolveInvocationModelDefinition(
+	parsed: Args,
+	stdinIsTTY: boolean,
+	env: NodeJS.ProcessEnv = process.env,
+) {
+	if (parsed.help || parsed.version) return undefined;
+	if (parsed.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+		throw new Error("--model-definition/--model-definition-env: correct the selector diagnostics before continuing.");
+	}
+	if (parsed.modelDefinition === undefined && parsed.modelDefinitionEnv === undefined) return undefined;
+	if (parsed.listModels === undefined && resolveAppMode(parsed, stdinIsTTY) === "interactive") {
+		throw new Error(
+			"--model-definition/--model-definition-env requires headless execution; use --print, --mode json, --mode rpc or redirected stdin.",
+		);
+	}
+	function readEnvironment(name: string, field: string): string {
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+			throw new Error(`${field}: supply a valid environment variable identifier.`);
+		}
+		const value = env[name];
+		if (!value?.trim()) throw new Error(`${field}: set the named environment variable to a nonblank value.`);
+		return value;
+	}
+	const json = parsed.modelDefinition ?? readEnvironment(parsed.modelDefinitionEnv!, "--model-definition-env");
+	let value: unknown;
+	try {
+		value = JSON.parse(json);
+	} catch {
+		throw new Error(
+			"--model-definition/--model-definition-env: supply strict JSON without comments or trailing commas.",
+		);
+	}
+	let definition: ReturnType<typeof validateInvocationModelDefinition>;
+	try {
+		definition = validateInvocationModelDefinition(value);
+	} catch (error) {
+		throw new Error(`--model-definition/--model-definition-env: ${(error as Error).message}`);
+	}
+	const apiKey = parsed.listModels === undefined ? readEnvironment(definition.apiKeyEnv, "apiKeyEnv") : undefined;
+	return { definition, apiKey };
+}
+
+// SCRAMJET-DIVERGENCE: Install captured invocation routes after extension registrations, without storing secrets in models.
+export function registerInvocationModel(
+	invocation: NonNullable<ReturnType<typeof resolveInvocationModelDefinition>>,
+	provider: string,
+	modelRegistry: ModelRegistry,
+	authStorage: AuthStorage,
+): Model<any> {
+	if (modelRegistry.getAll().some((model) => model.provider === provider)) {
+		throw new Error("--model-definition: generated provider identity collided; retry the invocation.");
+	}
+	const { api, baseUrl, apiKeyEnv, ...model } = invocation.definition;
+	modelRegistry.registerProvider(provider, { api, baseUrl, apiKey: apiKeyEnv, models: [model] });
+	if (invocation.apiKey !== undefined) authStorage.setRuntimeApiKey(provider, invocation.apiKey);
+	const registered = modelRegistry.find(provider, model.id);
+	if (!registered) throw new Error("--model-definition: registration failed; correct the definition before retrying.");
+	return registered;
+}
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
 	if (parsed.mode === "rpc") {
@@ -294,6 +356,7 @@ export function buildSessionOptions(
 	modelRegistry: ModelRegistry,
 	settingsManager: SettingsManager,
 	inherited?: { model: Model<any>; thinkingLevel: ThinkingLevel },
+	invocationModel?: Model<any>,
 ): {
 	options: CreateAgentSessionOptions;
 	cliThinkingFromModel: boolean;
@@ -308,6 +371,12 @@ export function buildSessionOptions(
 	if (inherited) {
 		options.model = inherited.model;
 		options.thinkingLevel = inherited.thinkingLevel;
+	}
+
+	// SCRAMJET-DIVERGENCE: Invocation selection bypasses ordinary resolution and saved startup scopes.
+	if (invocationModel) {
+		options.model ??= invocationModel;
+		options.persistModelPreferences = false;
 	}
 
 	// Model from CLI
@@ -482,6 +551,14 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
+	let invocation: ReturnType<typeof resolveInvocationModelDefinition>;
+	try {
+		invocation = resolveInvocationModelDefinition(parsed, process.stdin.isTTY);
+	} catch (error) {
+		console.error(chalk.red(`Error: ${(error as Error).message}`));
+		process.exit(1);
+	}
+
 	if (parsed.export) {
 		let result: string;
 		try {
@@ -543,6 +620,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
 	const authStorage = AuthStorage.create();
+	const invocationProvider = invocation ? `invocation-${randomUUID()}` : undefined;
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
 		agentDir,
@@ -581,7 +659,10 @@ export async function main(args: string[], options?: MainOptions) {
 			})),
 		];
 
-		const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
+		const invocationModel = invocation
+			? registerInvocationModel(invocation, invocationProvider!, modelRegistry, authStorage)
+			: undefined;
+		const modelPatterns = invocation ? undefined : (parsed.models ?? settingsManager.getEnabledModels());
 		const scopedModels =
 			modelPatterns && modelPatterns.length > 0 ? await resolveModelScope(modelPatterns, modelRegistry) : [];
 		const {
@@ -595,6 +676,7 @@ export async function main(args: string[], options?: MainOptions) {
 			modelRegistry,
 			settingsManager,
 			inherited, // SCRAMJET-DIVERGENCE: pass inherited model/thinkingLevel (issue 186)
+			invocationModel,
 		);
 		diagnostics.push(...sessionOptionDiagnostics);
 
@@ -614,6 +696,7 @@ export async function main(args: string[], options?: MainOptions) {
 			sessionManager,
 			sessionStartEvent,
 			model: sessionOptions.model,
+			persistModelPreferences: sessionOptions.persistModelPreferences,
 			thinkingLevel: sessionOptions.thinkingLevel,
 			scopedModels: sessionOptions.scopedModels,
 			cacheRetention: sessionOptions.cacheRetention,

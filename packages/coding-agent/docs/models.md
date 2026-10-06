@@ -4,6 +4,7 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.scram
 
 ## Table of Contents
 
+- [Invocation-scoped Headless Models](#invocation-scoped-headless-models)
 - [Minimal Example](#minimal-example)
 - [Full Example](#full-example)
 - [Supported APIs](#supported-apis)
@@ -13,6 +14,72 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.scram
 - [Per-model Overrides](#per-model-overrides)
 - [Anthropic Messages Compatibility](#anthropic-messages-compatibility)
 - [OpenAI Compatibility](#openai-compatibility)
+
+## Invocation-scoped Headless Models
+
+Use one model definition for a single headless invocation without editing `models.json` or installing an extension:
+
+- `--model-definition '<JSON>'` supplies strict JSON directly.
+- `--model-definition-env NAME` reads strict JSON from the named environment variable only when explicitly selected.
+
+Both selectors accept `=value` forms. Missing values, repeated selectors, using both selectors, or combining either with `--provider`, `--model`, `--models` or `--api-key` are errors. Ambient definition variables alone never activate a route. Use `--thinking` separately: the model `id` is a nonblank literal backend ID, preserving case, slashes and colons without fuzzy matching, provider-prefix parsing or thinking-suffix interpretation.
+
+Supported execution modes are `--print`, `--mode json`, `--mode rpc`, and print mode selected by redirected stdin. Actual interactive execution is rejected. Help/version need no credentials; `--list-models` can inspect a supplied definition without resolving its credential.
+
+### Definition fields
+
+| Field | Requirement and meaning |
+|-------|-------------------------|
+| `api` | Required: `openai-completions`, `openai-responses`, `anthropic-messages`, or `google-generative-ai` |
+| `baseUrl` | Required absolute HTTP(S) URL with a host; no userinfo, query, fragment, controls or whitespace. Supply the adapter-appropriate base path; there is no endpoint/version discovery. |
+| `id` | Required nonblank literal backend model ID |
+| `apiKeyEnv` | Required environment variable identifier containing a nonblank credential at startup |
+| `contextWindow` | Required positive finite maximum supported total context; positive fractional values remain accepted |
+| `maxTokens` | Required positive safe-integer maximum output allowance |
+| `name` | Optional nonempty label; defaults to `id` |
+| `reasoning` | Optional boolean; defaults to `false` |
+| `input` | Optional array of `text`/`image` modalities; defaults to `["text"]` |
+| `thinkingLevelMap` | Optional existing [thinking-level mapping](#thinking-level-map) |
+| `compat` | Optional existing API-valid [OpenAI](#openai-compatibility) or [Anthropic](#anthropic-messages-compatibility) compatibility overrides; API-incompatible fields are rejected |
+| `cost` | Optional complete finite-number `input`, `output`, `cacheRead`, `cacheWrite` estimates per million tokens; defaults to zero estimates |
+| `maxInputTokens` | Optional positive finite independent input constraint, evidenced for the supplied route |
+| `requestLimits` | Optional nonempty array of existing [joint endpoint constraints](#joint-endpoint-constraints) |
+
+Unknown fields, including nested unsupported keys/values, are rejected. Credential literals, headers, provider identity, OAuth, custom stream functions, provider collections/overrides, file references and discovery configuration are not supported. JSON comments and trailing commas are rejected; input is never loaded from a file or evaluated as a shell command.
+
+Obtain limits and capabilities from the actual deployment's applicable documentation/account metadata. `contextWindow` stays the total-context denominator; input constraints and output allocation remain separate. Output need not be less than total context: existing request-local allocation bounds feasible output without changing either scalar maximum. These estimates/checks do not establish backend acceptance, entitlement or exact serialized token counts. Omitted capabilities are client defaults, not capability evidence; zero cost estimates do not mean free billing. Existing adapter compatibility defaults still apply.
+
+### Example using caller deployment metadata
+
+For a deployment confirmed to implement Chat Completions, set `DEPLOYMENT_BASE_URL`, `DEPLOYMENT_MODEL_ID`, `DEPLOYMENT_CONTEXT_WINDOW` and `DEPLOYMENT_MAX_OUTPUT` from its metadata, and export `ROUTE_API_KEY` from your credential source. Then, using `jq` to construct JSON:
+
+```sh
+export ROUTE_DEFINITION="$(jq -n \
+  --arg baseUrl "$DEPLOYMENT_BASE_URL" \
+  --arg id "$DEPLOYMENT_MODEL_ID" \
+  --argjson contextWindow "$DEPLOYMENT_CONTEXT_WINDOW" \
+  --argjson maxTokens "$DEPLOYMENT_MAX_OUTPUT" \
+  '{api:"openai-completions",baseUrl:$baseUrl,id:$id,apiKeyEnv:"ROUTE_API_KEY",contextWindow:$contextWindow,maxTokens:$maxTokens}')"
+scramjet --print --model-definition-env ROUTE_DEFINITION "Summarize this project"
+# Equivalent inline selector, without putting the credential in JSON:
+scramjet --mode json --model-definition "$ROUTE_DEFINITION" "Summarize this project"
+```
+
+Both environment names must be valid identifiers with nonblank values. The credential is captured once, preserving its bytes; it is never interpreted as a shell command, second variable name or literal fallback. Missing credentials fail startup instead of borrowing saved/provider credentials. For an unauthenticated server, the caller may supply a nonblank placeholder in the named credential variable; Scramjet does not invent one. Definition metadata, including the URL, is nonsecret and normally visible through RPC/model output. Controlled input errors omit raw JSON, rejected URL contents and credential values; arbitrary remote echoes and trusted extensions are not covered by a universal redaction guarantee.
+
+### Lifetime, selection and persistence
+
+Each invocation registers a fresh non-vendor `invocation-<UUID>` provider identity in memory and selects its exact model, bypassing saved startup defaults and scopes. Discover this generated identity through RPC `get_state`/`get_available_models`; concurrent invocations using the same backend ID remain independent. Credentials stay in runtime auth overrides, not model metadata or configuration.
+
+Refresh/reload retain the registration. Replacement registries re-register the same captured definition/key. `new_session` inherits the live model/thinking after a deliberate switch; non-inherited session switch/fork/import selection uses the supplied definition. Explicit later model switching remains allowed: this is not a route lock or protection against arbitrary trusted extensions. No automatic forwarding of the complete route to subagents is provided.
+
+All sessions created by a definition invocation opt out of saving model/thinking defaults, including later setters/cycling, replacements and switches to other models. Live state, events and ordinary journal model/thinking entries still change. Auth/model configuration remains unchanged; unrelated settings, journals and observational files may still be written. Use `--no-session` to disable journal saving, not as a general filesystem sandbox.
+
+Endpoints/keys/limits are not revived from journal model identity. Resupply the definition in each fresh process. Reopening without selectors uses ordinary unavailable-model restoration warnings and default/available-model fallback; it is **not** fail-closed ordinary resume. An explicit invocation startup records its effective branch-local model/thinking identity using existing journal shapes.
+
+Invalid definition/environment input fails before migrations/runtime construction with nonzero status. Explicit registration or request failures do not silently select a substitute route; existing retries/compaction may retry the same selected route. Text generation failures report errors and nonzero status. JSON generation errors can accompany exit zero: inspect finalized assistant error events. RPC prompt acceptance is not generation success: inspect subsequent events. See [JSON](json.md), [RPC](rpc.md) and [SDK preference persistence](sdk.md#model-preference-persistence).
+
+`google-generative-ai` explicitly pins the generic API even when `GOOGLE_GENAI_USE_VERTEXAI` or `GOOGLE_GENAI_USE_ENTERPRISE` is set. This also applies to configured/dynamic models and direct generic AI streams. Vertex routing requires the existing explicit `google-vertex` API/configuration, which is outside invocation-definition support. Compatibility with every enterprise endpoint is not established; ambient cloud flags are not a supported migration mechanism.
 
 ## Minimal Example
 
@@ -237,13 +304,13 @@ Current behavior:
 
 ### Thinking Level Map
 
-Use `thinkingLevelMap` on a model to describe model-specific thinking controls. Keys are scramjet thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+Use `thinkingLevelMap` on a model to describe model-specific thinking controls. Keys are scramjet thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
 
 Values are tristate:
 
 | Value | Meaning |
 |-------|---------|
-| omitted | Level is supported and uses the provider's default mapping |
+| omitted | Ordinary levels use the provider's default mapping; `xhigh` and `max` require explicit string mappings to be supported |
 | string | Level is supported and this value is sent to the provider |
 | `null` | Level is unsupported and hidden/skipped/clamped away |
 
