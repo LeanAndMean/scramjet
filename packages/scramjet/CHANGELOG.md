@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.107.1 — Independently evaluate architect advice
+
+Strengthen parent-owned evaluation of architect proposals in planning, plan revision, and review fixes. Fixes [#603](https://github.com/LeanAndMean/scramjet/issues/603).
+
+### Changed
+
+- Explain concrete reasons for retaining, rejecting, or investigating architect advice, and reject inadequate designs instead of advancing them.
+- Surface promising alternatives with trade-offs and uncertainty while preserving revision gates, locked fix scope, and proof restrictions.
+- Adapt planning exploration and design effort to uncertainty instead of fixed call budgets and predefined code-design perspectives.
+
+### Tests
+
+- Update structural wiring checks for evidence refresh and contract-impact treatment; these checks do not establish real-session effectiveness.
+
 ## 0.107.0 — Recover from incomplete provider responses
 
 Diagnose incomplete provider responses and recover within configured retry limits without executing tools from failed responses. Fixes [#586](https://github.com/LeanAndMean/scramjet/issues/586).
