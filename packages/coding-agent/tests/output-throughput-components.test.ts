@@ -89,19 +89,17 @@ describe("output throughput components", () => {
 		expect(withHistory).toContain("test-model [test-provider] 42tok/s ✗");
 	});
 
-	it("adds requested-model history to the model selector without changing the old constructor", async () => {
+	it("adds requested-model history to the model selector only when supplied", async () => {
 		const registry = {
 			refresh: () => {},
 			getError: () => undefined,
 			getAvailable: async () => [model],
 			find: () => model,
 		};
-		const settings = { setDefaultModelAndProvider: () => {} };
 		const tui = { requestRender: () => {} };
-		const oldForm = new ModelSelectorComponent(
+		const withoutHistory = new ModelSelectorComponent(
 			tui as any,
 			model,
-			settings as any,
 			registry as any,
 			[],
 			() => {},
@@ -110,7 +108,6 @@ describe("output throughput components", () => {
 		const sampled = new ModelSelectorComponent(
 			tui as any,
 			model,
-			settings as any,
 			registry as any,
 			[],
 			() => {},
@@ -120,7 +117,7 @@ describe("output throughput components", () => {
 		);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(stripAnsi(oldForm.render(80).join("\n"))).not.toContain("tok/s");
+		expect(stripAnsi(withoutHistory.render(80).join("\n"))).not.toContain("tok/s");
 		expect(stripAnsi(sampled.render(80).join("\n"))).toContain("test-model [test-provider] 42tok/s ✓");
 	});
 });

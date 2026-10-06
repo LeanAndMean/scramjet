@@ -1066,6 +1066,10 @@ const mode = new InteractiveMode(runtime, {
 await mode.run();
 ```
 
+`/model` selection delegates preference persistence to the session, including `persistModelPreferences: false`.
+
+**Component migration:** the exported `ModelSelectorComponent` constructor no longer takes `settingsManager` as its third argument. Use `(tui, currentModel, modelRegistry, scopedModels, onSelect, onCancel, initialSearchInput?, outputThroughputHistory?)`; the selection callback must perform model selection through `session.setModel(model)` to retain authentication, journaling and preference policy. The component itself does not save defaults.
+
 ### runPrintMode
 
 Single-shot mode: send prompts, output result, exit:

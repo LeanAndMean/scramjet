@@ -10,6 +10,10 @@ import { DefaultResourceLoader } from "../src/core/resource-loader.js";
 import { createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+import { ModelSelectorComponent } from "../src/modes/interactive/components/model-selector.js";
+import { initTheme } from "../src/modes/interactive/theme/theme.js";
+
+initTheme("pi-dark");
 
 const roots: string[] = [];
 afterEach(() => {
@@ -103,10 +107,49 @@ async function fixture(persistModelPreferences: boolean | undefined, throughServ
 	await session.bindExtensions({});
 	const events: string[] = [];
 	session.subscribe((event) => events.push(event.type));
-	return { session, settingsManager, settingsPath, sessionManager, models, selections, events };
+	return { session, settingsManager, settingsPath, sessionManager, modelRegistry, models, selections, events };
 }
 
 describe("model preference persistence policy", () => {
+	it.each([false, true, undefined])("picker selection respects policy=%s", async (policy) => {
+		const f = await fixture(policy, false, false);
+		try {
+			let selection: Promise<void> | undefined;
+			const requestRender = vi.fn();
+			const selector = new ModelSelectorComponent(
+				{ requestRender } as any,
+				f.session.model,
+				f.modelRegistry,
+				[],
+				(model) => {
+					selection = f.session.setModel(model);
+				},
+				vi.fn(),
+				"b",
+			);
+			await vi.waitFor(() => expect(requestRender).toHaveBeenCalled());
+			selector.handleInput("\r");
+			expect(selection).toBeDefined();
+			await selection;
+			expect(f.session.model).toBe(f.models[1]);
+			expect(f.selections).toEqual(["b"]);
+			expect(f.sessionManager.buildSessionContext().model).toEqual({ provider: f.models[1].provider, modelId: "b" });
+			await f.settingsManager.flush();
+			expect(f.settingsManager.drainErrors()).toEqual([]);
+			expect(JSON.parse(readFileSync(f.settingsPath, "utf8"))).toEqual(
+				policy === false ? defaults : { ...defaults, defaultProvider: f.models[1].provider, defaultModel: "b" },
+			);
+
+			vi.spyOn(f.modelRegistry, "hasConfiguredAuth").mockReturnValue(false);
+			selector.handleInput("\r");
+			await expect(selection).rejects.toThrow(`No API key for ${f.models[1].provider}/b`);
+			expect(f.selections).toEqual(["b"]);
+			await f.settingsManager.flush();
+			expect(f.settingsManager.drainErrors()).toEqual([]);
+		} finally {
+			f.session.dispose();
+		}
+	});
 	it.each([
 		[false, false, false],
 		[false, true, true],

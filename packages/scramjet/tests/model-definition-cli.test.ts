@@ -12,7 +12,7 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-function profile() {
+function profile(enabledModels = ["saved-unavailable/*"]) {
 	const root = mkdtempSync(join(tmpdir(), "model-definition-cli-"));
 	cleanups.push(() => rmSync(root, { recursive: true, force: true }));
 	const agent = join(root, "agent");
@@ -21,7 +21,7 @@ function profile() {
 		defaultProvider: "saved-unavailable",
 		defaultModel: "saved-model",
 		defaultThinkingLevel: "low",
-		enabledModels: ["saved-unavailable/*"],
+		enabledModels,
 		enableInstallTelemetry: false,
 		compaction: { enabled: false },
 		retry: { enabled: false, provider: { maxRetries: 0, timeoutMs: 2000 } },
@@ -420,7 +420,7 @@ describe("compiled product invocation model acceptance", () => {
 	}, 30000);
 
 	it("RPC exposes secret-free models, mutates live state and replaces sessions without saving defaults", async () => {
-		const p = profile();
+		const p = profile(["alternate/*"]);
 		const server = await endpoint((_call, response) => chat(response, "rpc-marker"));
 		const alternate = await endpoint((_call, response) => chat(response, "alternate-marker"));
 		const d = definition(server.baseUrl);
