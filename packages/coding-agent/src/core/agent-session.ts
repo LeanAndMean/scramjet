@@ -485,8 +485,9 @@ export class AgentSession {
 
 	// Model registry for API key resolution
 	private _modelRegistry: ModelRegistry;
-	// SCRAMJET-DIVERGENCE: Ephemeral routes retain live/journal changes without changing shared defaults.
+	// SCRAMJET-DIVERGENCE: Ephemeral routes retain live preferences and journal changes without changing shared defaults.
 	private readonly _persistModelPreferences: boolean;
+	private _sessionThinkingLevelPreference: ThinkingLevel | undefined;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -2297,8 +2298,12 @@ export class AgentSession {
 
 		if (isChanging) {
 			this.sessionManager.appendThinkingLevelChange(effectiveLevel);
-			if (this._persistModelPreferences && (this.supportsThinking() || effectiveLevel !== "off")) {
-				this.settingsManager.setDefaultThinkingLevel(effectiveLevel);
+			if (this.supportsThinking() || effectiveLevel !== "off") {
+				if (this._persistModelPreferences) {
+					this.settingsManager.setDefaultThinkingLevel(effectiveLevel);
+				} else {
+					this._sessionThinkingLevelPreference = effectiveLevel;
+				}
 			}
 			this._emit({ type: "thinking_level_changed", level: effectiveLevel });
 			void this._extensionRunner.emit({
@@ -2346,6 +2351,9 @@ export class AgentSession {
 			return explicitLevel;
 		}
 		if (!this.supportsThinking()) {
+			if (!this._persistModelPreferences && this._sessionThinkingLevelPreference !== undefined) {
+				return this._sessionThinkingLevelPreference;
+			}
 			return this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
 		}
 		return this.thinkingLevel;

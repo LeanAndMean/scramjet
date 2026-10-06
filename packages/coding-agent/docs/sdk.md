@@ -440,7 +440,7 @@ For each built-in provider request, `createAgentSession()` binds the current ext
 
 ### Model preference persistence
 
-`createAgentSession()` and `createAgentSessionFromServices()` accept optional `persistModelPreferences` (default `true`); it is also available on `AgentSessionConfig`. Pass `false` to preserve saved default provider/model/thinking while allowing direct selection, both model-cycling paths and thinking changes to update live state, events and journal entries. Authentication and thinking clamping are unchanged. With this opt-out, explicit startup selection also records changed branch-local model/thinking identity when opening an existing journal.
+`createAgentSession()` and `createAgentSessionFromServices()` accept optional `persistModelPreferences` (default `true`); it is also available on `AgentSessionConfig`. Pass `false` to preserve saved default provider/model/thinking while allowing direct selection, both model-cycling paths and thinking changes to update live state, events and journal entries. Authentication and thinking clamping are unchanged. In an opt-out session, actual thinking-level changes on reasoning-capable models are remembered locally across non-reasoning detours, including an explicit `off` choice; the saved default remains unchanged. This local preference is not a new journal field or replacement-session inheritance value. With this opt-out, explicit startup selection also records changed branch-local model/thinking identity when opening an existing journal.
 
 ```typescript
 const { session } = await createAgentSession({

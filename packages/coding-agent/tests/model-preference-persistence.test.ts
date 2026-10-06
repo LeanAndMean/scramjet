@@ -21,7 +21,12 @@ afterEach(() => {
 });
 const defaults = { defaultProvider: "saved", defaultModel: "saved-id", defaultThinkingLevel: "low" };
 
-async function fixture(persistModelPreferences: boolean | undefined, throughServices: boolean, scoped: boolean) {
+async function fixture(
+	persistModelPreferences: boolean | undefined,
+	throughServices: boolean,
+	scoped: boolean,
+	nonReasoningDetour = false,
+) {
 	const root = mkdtempSync(join(tmpdir(), "model-preferences-"));
 	roots.push(root);
 	const agentDir = join(root, "agent");
@@ -40,7 +45,7 @@ async function fixture(persistModelPreferences: boolean | undefined, throughServ
 				{
 					id,
 					name: id,
-					reasoning: true,
+					reasoning: !nonReasoningDetour || id !== "b",
 					input: ["text"],
 					contextWindow: 10000,
 					maxTokens: 1000,
@@ -111,6 +116,105 @@ async function fixture(persistModelPreferences: boolean | undefined, throughServ
 }
 
 describe("model preference persistence policy", () => {
+	it.each(
+		[false, true, undefined].flatMap((policy) =>
+			["direct", "scoped", "available"].flatMap((path) =>
+				(["high", "off"] as const).map((level) => ({ policy, path, level })),
+			),
+		),
+	)("policy=$policy path=$path retains $level through a non-reasoning detour", async ({ policy, path, level }) => {
+		const f = await fixture(policy, path === "scoped", path === "scoped", true);
+		const changes: string[] = [];
+		const unsubscribe = f.session.subscribe((event) => {
+			if (event.type === "thinking_level_changed") changes.push(event.level);
+		});
+		try {
+			f.session.setThinkingLevel(level);
+			if (path === "direct") await f.session.setModel(f.models[1]);
+			else await f.session.cycleModel();
+			expect(f.session.model).toBe(f.models[1]);
+			expect(f.session.thinkingLevel).toBe("off");
+			if (path === "direct") await f.session.setModel(f.models[0]);
+			else await f.session.cycleModel();
+			expect(f.session.model).toBe(f.models[0]);
+			expect(f.session.thinkingLevel).toBe(level);
+			expect(changes).toEqual(level === "high" ? ["high", "off", "high"] : ["off"]);
+			expect(
+				f.sessionManager
+					.getEntries()
+					.filter((entry) => entry.type === "thinking_level_change")
+					.map((entry) => entry.thinkingLevel),
+			).toEqual(level === "high" ? ["low", "high", "off", "high"] : ["low", "off"]);
+			expect(f.selections).toEqual(["b", "a"]);
+			await f.settingsManager.flush();
+			expect(f.settingsManager.drainErrors()).toEqual([]);
+			expect(JSON.parse(readFileSync(f.settingsPath, "utf8"))).toEqual(
+				policy === false
+					? defaults
+					: { defaultProvider: f.models[0].provider, defaultModel: "a", defaultThinkingLevel: level },
+			);
+		} finally {
+			unsubscribe();
+			f.session.dispose();
+		}
+	});
+
+	it("retains the local preference across reload without adopting unsupported requests", async () => {
+		const f = await fixture(false, false, false, true);
+		try {
+			f.session.setThinkingLevel("high");
+			await f.session.setModel(f.models[1]);
+			const count = f.sessionManager.getEntries().length;
+			f.session.setThinkingLevel("low");
+			expect(f.sessionManager.getEntries()).toHaveLength(count);
+			await f.session.reload();
+			expect(f.session.thinkingLevel).toBe("off");
+			await f.session.setModel(f.models[0]);
+			expect(f.session.thinkingLevel).toBe("high");
+			await f.settingsManager.flush();
+			expect(JSON.parse(readFileSync(f.settingsPath, "utf8"))).toEqual(defaults);
+		} finally {
+			f.session.dispose();
+		}
+	});
+
+	it("explicit scoped effort overrides and updates the local preference", async () => {
+		const f = await fixture(false, true, true, true);
+		try {
+			f.session.setThinkingLevel("high");
+			await f.session.cycleModel();
+			f.session.setScopedModels([{ model: f.models[0], thinkingLevel: "medium" }, { model: f.models[1] }]);
+			await f.session.cycleModel();
+			expect(f.session.thinkingLevel).toBe("medium");
+			f.session.setScopedModels(f.models.map((model) => ({ model })));
+			await f.session.cycleModel();
+			await f.session.cycleModel();
+			expect(f.session.thinkingLevel).toBe("medium");
+			await f.settingsManager.flush();
+			expect(JSON.parse(readFileSync(f.settingsPath, "utf8"))).toEqual(defaults);
+		} finally {
+			f.session.dispose();
+		}
+	});
+
+	it("remembers the effective level after capability clamping, not the unsupported request", async () => {
+		const f = await fixture(false, false, false, true);
+		try {
+			f.session.setThinkingLevel("high");
+			await f.session.setModel(f.models[1]);
+			const limitedModel = { ...f.models[0], thinkingLevelMap: { high: null, xhigh: null, max: null } };
+			await f.session.setModel(limitedModel);
+			expect(f.session.thinkingLevel).toBe("medium");
+			await f.session.setModel(f.models[1]);
+			await f.session.setModel(f.models[0]);
+			expect(f.session.thinkingLevel).toBe("medium");
+			await f.settingsManager.flush();
+			expect(JSON.parse(readFileSync(f.settingsPath, "utf8"))).toEqual(defaults);
+		} finally {
+			f.session.dispose();
+		}
+	});
+
 	it.each([false, true, undefined])("picker selection respects policy=%s", async (policy) => {
 		const f = await fixture(policy, false, false);
 		try {
