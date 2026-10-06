@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.108.0 — Use invocation-scoped headless models
+
+Run compatible deployments with process-local model definitions and environment-sourced credentials, without changing saved model or thinking defaults. Fixes [#605](https://github.com/LeanAndMean/scramjet/issues/605).
+
+### Added
+
+- Accept strict JSON through `--model-definition` or `--model-definition-env` in print, JSON and RPC modes, using literal model IDs, explicit deployment limits and existing generic adapters.
+- Retain captured routes across same-process reload and session replacement, with independent concurrent invocations and no silent substitute route on invalid input or request failure. Fresh processes must resupply definitions; ordinary resume without one retains existing fallback behavior.
+- Add default-true SDK `persistModelPreferences`; opt-out sessions retain live selection, thinking preferences, events and journals without saving model/thinking defaults.
+
+### Breaking
+
+- Remove the `settingsManager` argument from the exported `ModelSelectorComponent` constructor. External callers must omit the former third argument and select through `session.setModel(model)` in their callback; see the [SDK migration guidance](../coding-agent/docs/sdk.md#interactivemode).
+
+### Fixed
+
+- Make interactive model selection honor session authentication and preference policy, including rejection-side non-mutation.
+- Pin the generic Google adapter to its declared API despite ambient cloud flags; explicit Vertex routing remains separate.
+
+### Tests
+
+- Cover strict input diagnostics, registry/auth isolation, preference persistence, thinking switches, restoration, picker rejection, and compiled loopback CLI acceptance across four adapters, tool continuation, concurrent processes, RPC and failures. Offline checks do not establish live deployment compatibility, entitlement or backend maxima.
+
 ## 0.107.1 — Independently evaluate architect advice
 
 Strengthen parent-owned evaluation of architect proposals in planning, plan revision, and review fixes. Fixes [#603](https://github.com/LeanAndMean/scramjet/issues/603).
