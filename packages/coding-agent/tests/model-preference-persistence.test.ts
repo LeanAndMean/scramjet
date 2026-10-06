@@ -244,12 +244,36 @@ describe("model preference persistence policy", () => {
 				policy === false ? defaults : { ...defaults, defaultProvider: f.models[1].provider, defaultModel: "b" },
 			);
 
+			const modelBefore = f.session.model;
+			const thinkingBefore = f.session.thinkingLevel;
+			const entriesBefore = structuredClone(f.sessionManager.getEntries());
+			const diskBefore = readFileSync(f.settingsPath, "utf8");
+			selection = undefined;
+			requestRender.mockClear();
+
+			const rejectedSelector = new ModelSelectorComponent(
+				{ requestRender } as any,
+				f.session.model,
+				f.modelRegistry,
+				[],
+				(model) => {
+					selection = f.session.setModel(model);
+				},
+				vi.fn(),
+				"a",
+			);
+			await vi.waitFor(() => expect(requestRender).toHaveBeenCalled());
 			vi.spyOn(f.modelRegistry, "hasConfiguredAuth").mockReturnValue(false);
-			selector.handleInput("\r");
-			await expect(selection).rejects.toThrow(`No API key for ${f.models[1].provider}/b`);
-			expect(f.selections).toEqual(["b"]);
+			rejectedSelector.handleInput("\r");
+			expect(selection).toBeDefined();
+			await expect(selection).rejects.toThrow(`No API key for ${f.models[0].provider}/a`);
 			await f.settingsManager.flush();
 			expect(f.settingsManager.drainErrors()).toEqual([]);
+			expect(f.session.model).toBe(modelBefore);
+			expect(f.session.thinkingLevel).toBe(thinkingBefore);
+			expect(f.sessionManager.getEntries()).toEqual(entriesBefore);
+			expect(readFileSync(f.settingsPath, "utf8")).toBe(diskBefore);
+			expect(f.selections).toEqual(["b"]);
 		} finally {
 			f.session.dispose();
 		}
