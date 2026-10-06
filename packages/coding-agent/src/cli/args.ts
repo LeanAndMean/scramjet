@@ -275,6 +275,13 @@ ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: google)
   --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
   --api-key <key>                API key (defaults to env vars)
+  --model-definition <JSON>     Use a strict JSON model definition for this invocation
+  --model-definition-env <NAME> Read definition JSON from the named environment variable
+                                 Generation requires --print, --mode json, --mode rpc,
+                                 or redirected stdin
+                                 Use one selector once; cannot combine with
+                                 --provider, --model, --models or --api-key
+                                 Credentials: apiKeyEnv in the definition names the key variable
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, or rpc
