@@ -5,11 +5,11 @@ with tempfile.TemporaryDirectory() as temp:
     script = pathlib.Path(temp) / 'probe.mjs'
     script.write_text('''
 import { ProcessTerminal } from "''' + (root / 'packages/tui/dist/terminal.js').as_uri() + '''";
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 const state = process.argv[2];
-const record = (phase, extra = {}) => writeFileSync(state, JSON.stringify({ phase, ...extra }));
+const record = (phase, extra = {}) => { writeFileSync(state + '.tmp', JSON.stringify({ phase, ...extra })); renameSync(state + '.tmp', state); };
 const t = new ProcessTerminal();
 const control = t.configureNativeCopy({ onCopyIntent() { throw Error('unexpected copy'); }, onAvailability() {}, onError(e) { throw e; } });
 let text = '';
