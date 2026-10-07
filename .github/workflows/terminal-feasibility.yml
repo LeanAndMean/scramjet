@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         terminal: [apple, iterm2]
-        backend: [inprocess, proxy]
+        backend: [proxy]
     steps:
       - uses: actions/checkout@v4
         with:

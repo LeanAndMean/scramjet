@@ -254,16 +254,20 @@ async function runProduction() {
 	const startTerminal = terminal.start.bind(terminal);
 	const stopTerminal = terminal.stop.bind(terminal);
 	let inputProxy;
+	let nativeCopyDraining = false;
 	terminal.start = (...args) => {
+		nativeCopyDraining = false;
 		terminalStates.push({ start: ttyState() }); startTerminal(...args);
 		if (process.env.SCRAMJET_MACOS_INPUT_PROXY === "1") {
 			process.stdin.removeListener("data", terminal.stdinDataHandler);
 			process.stdin.pause();
 			inputProxy = fork(new URL("../../../../.github/scripts/macos-copy-input-proxy.mjs", import.meta.url), [process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC], { stdio: ["inherit", "ignore", "inherit", "ipc"] });
+			const owner = inputProxy;
 			inputProxy.on("message", (message) => {
+				if (inputProxy !== owner) return;
 				if (message.kind === "data") terminal.stdinBuffer?.emit("data", message.data);
 				if (message.kind === "paste") terminal.stdinBuffer?.emit("paste", message.data);
-				if (message.kind === "copy" && terminalFocused && nativeCopyEnabled && message.event.lease === nativeCopyLease && mode.ui.viewport?.selection && !mode.ui.hasOverlay()) {
+				if (message.kind === "copy" && !nativeCopyDraining && terminalFocused && nativeCopyEnabled && message.event.lease === nativeCopyLease && mode.ui.viewport?.selection && !mode.ui.hasOverlay()) {
 					copyKind = "keyCopy"; void mode.ui.viewport.copySelection();
 					safetyState.nativeCopyDelivered = (safetyState.nativeCopyDelivered ?? 0) + 1;
 				}
@@ -272,6 +276,20 @@ async function runProduction() {
 	};
 	const holdOsc = terminal.holdOscInput.bind(terminal);
 	terminal.holdOscInput = (hold) => { holdOsc(hold); if (inputProxy?.connected) inputProxy.send({ kind: "osc", hold }); };
+	const drainTerminal = terminal.drainInput.bind(terminal);
+	terminal.drainInput = async (...args) => {
+		nativeCopyDraining = true;
+		if (inputProxy) writeFileSync(process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC + ".control", "disarm");
+		await drainTerminal(...args);
+		if (inputProxy?.connected) {
+			const owner = inputProxy;
+			await new Promise((resolve, reject) => {
+				const timeout = setTimeout(() => { owner.kill("SIGKILL"); reject(new Error("Native input reader did not relinquish terminal")); }, 2000);
+				owner.once("close", () => { clearTimeout(timeout); resolve(); });
+				owner.send({ kind: "stop" });
+			});
+		}
+	};
 	terminal.stop = () => { stopTerminal(); terminalStates.push({ stop: ttyState() }); record(); };
 	const mode = new InteractiveMode(runtime, { terminal });
 	let stopped = false;
@@ -369,7 +387,7 @@ async function runProduction() {
 		const mouseEvidence = process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC;
 		if (nativeCopyEnabled && mouseEvidence && existsSync(mouseEvidence)) {
 			const view = mode.ui.viewport;
-			const selection = terminalFocused && !mode.ui.hasOverlay() && !view?.copying && view?.paintedSelection && view?.selection;
+			const selection = !nativeCopyDraining && terminalFocused && !mode.ui.hasOverlay() && !view?.copying && view?.paintedSelection && view?.selection;
 			if (selection !== lastCopySelection) { lastCopySelection = selection; nativeCopyLease = selection ? `arm:${++nativeCopyEpoch}` : "disarm"; writeFileSync(mouseEvidence + ".control", nativeCopyLease); }
 			const evidence = JSON.parse(readFileSync(mouseEvidence, "utf8"));
 			const hotkeys = evidence.events.filter((event) => event.kind === "hotkey");

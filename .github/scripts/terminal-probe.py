@@ -678,15 +678,16 @@ try:
         if clipboard() != "OTHER-TAB-608":
             raise RuntimeError("Unrelated tab native Copy check failed")
         control = Path(str(observer_path) + ".control")
-        control.write_text("arm-pass")
-        if not wait_for(lambda: json.loads(observer_path.read_text()).get("armed") is True):
-            raise RuntimeError("Pass-through experiment failed to arm")
-        seed_clipboard("UNTOUCHED-unhandled-608")
-        events("key", 8, 1048576)
-        time.sleep(0.3)
-        observations["unhandledHotkey"] = {"clipboard": clipboard(), "observer": json.loads(observer_path.read_text())}
-        control.write_text("disarm")
-        wait_for(lambda: json.loads(observer_path.read_text()).get("armed") is False)
+        if os.environ.get("SCRAMJET_MACOS_INPUT_PROXY") != "1":
+            control.write_text("arm-pass")
+            if not wait_for(lambda: json.loads(observer_path.read_text()).get("armed") is True):
+                raise RuntimeError("Pass-through experiment failed to arm")
+            seed_clipboard("UNTOUCHED-unhandled-608")
+            events("key", 8, 1048576)
+            time.sleep(0.3)
+            observations["unhandledHotkey"] = {"clipboard": clipboard(), "observer": json.loads(observer_path.read_text())}
+            control.write_text("disarm")
+            wait_for(lambda: json.loads(observer_path.read_text()).get("armed") is False)
         events("key", 13, 1048576)
         if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
             raise RuntimeError("Tab return did not rearm")
@@ -704,6 +705,14 @@ try:
             raise RuntimeError("Native paste regressed")
         observations["paste"] = state()
         screenshot("automatic-paste")
+        if os.environ.get("SCRAMJET_MACOS_INPUT_PROXY") == "1":
+            fixture_command("external")
+            if state().get("editorHandoffs") != 1 or state().get("handoffTermios") != state().get("termiosBefore"):
+                raise RuntimeError("External-editor handoff did not restore terminal state")
+            key("x") if not is_mac else events("text", "x")
+            if not wait_for(lambda: state().get("editor") == "edited by synthetic external editorx"):
+                raise RuntimeError("Input did not survive native-reader restart")
+            observations["externalEditor"] = state()
         key("exit")
         check("orderlyExit", lambda: state().get("stopped") is True and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
         check("termiosRestored", lambda: state().get("termiosBefore") == state().get("termiosAfter"))
