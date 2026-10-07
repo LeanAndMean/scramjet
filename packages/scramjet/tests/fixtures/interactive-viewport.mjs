@@ -354,7 +354,7 @@ async function runProduction() {
 			else if (diagnostic && command.action === "diagnostic-super-binding") mode.keybindings.setUserBindings({ ...mode.keybindings.getUserBindings(), "tui.input.copy": ["ctrl+c", "super+c"] });
 			else if (diagnostic && command.action === "diagnostic-top") { mode.ui.followViewport(); mode.ui.scrollViewportTo(0); }
 			else if (diagnostic && command.action === "diagnostic-auto-handoff") { nativeHandoff = true; safetyState.handoffExpected = `HANDOFF-${command.id} synthetic café 界 e\u0301 text`; extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth(safetyState.handoffExpected, width)] })); mode.ui.followViewport(); mode.ui.scrollViewportTo(0); }
-			else if (diagnostic && command.action === "diagnostic-native-selection") { extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth("ROW-001 synthetic café 界 e\u0301 text", width)] })); mode.ui.followViewport(); mode.ui.scrollViewportTo(0); terminal.write("\x1b[?1002l\x1b[?1006l"); }
+			else if (diagnostic && command.action === "diagnostic-native-selection") { extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth("ROW-001 synthetic café 界 e\u0301 text", width)] })); mode.ui.followViewport(); mode.ui.scrollViewportTo(0); terminal.write("\x1b[?1002l\x1b[?1006l\x1b[?1007l"); }
 			else if (diagnostic && command.action === "diagnostic-restore-mouse") terminal.write("\x1b[?1002h\x1b[?1006h");
 			else if (command.action === "copy-editor") extensionUI.setEditorText(`COPY-EDITOR ${"alpha beta gamma ".repeat(12).trimEnd()}\n\n    café 界`);
 			else if (command.action === "copy-seam" || command.action === "copy-seam-scrolled") {

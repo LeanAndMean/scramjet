@@ -638,6 +638,10 @@ try:
         time.sleep(0.7)
         observations["nativeSelectionWithApplicationMouseDisabled"] = {"qualification": "Temporary protocol experiment, not a supported retained-mode fix", "afterCopy": clipboard(), "exactExpected": clipboard() == expected, "before": before_native, "after": state()}
         screenshot("diagnostic-native-selection")
+        before_wheel = state()
+        events("wheel", -3)
+        time.sleep(0.7)
+        observations["nativeWheelWithReportingDisabled"] = {"before": before_wheel, "after": state(), "qualification": "1007 disabled; inspect independent AppKit observer for wheel delivery"}
         fixture_command("diagnostic-restore-mouse")
         key("exit")
         check("orderlyExit", lambda: state().get("stopped") is True and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")

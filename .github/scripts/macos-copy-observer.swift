@@ -6,6 +6,8 @@ let target = URL(fileURLWithPath: CommandLine.arguments[1])
 let started = Date()
 var samples: [[String: Any]] = []
 var taps: [[String: Any]] = []
+var mouseEvents: [[String: Any]] = []
+var mouseMonitorInstalled = false
 var previous: [UInt64] = []
 let capabilities: [String: Any] = [
     "pid": ProcessInfo.processInfo.processIdentifier,
@@ -19,9 +21,22 @@ let capabilities: [String: Any] = [
 var tapCreated = false
 
 func record() {
-    let data = try! JSONSerialization.data(withJSONObject: ["capabilities": capabilities, "eventTapCreated": tapCreated, "samples": samples, "tapEvents": taps], options: [.sortedKeys])
+    let data = try! JSONSerialization.data(withJSONObject: ["capabilities": capabilities, "eventTapCreated": tapCreated, "samples": samples, "tapEvents": taps, "mouseMonitorInstalled": mouseMonitorInstalled, "appKitMouseEvents": mouseEvents], options: [.sortedKeys])
     try! data.write(to: target, options: .atomic)
 }
+
+let app = NSApplication.shared
+app.setActivationPolicy(.prohibited)
+app.finishLaunching()
+let mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .scrollWheel]) { event in
+    let foreground = NSWorkspace.shared.frontmostApplication
+    guard ["com.apple.Terminal", "com.googlecode.iterm2"].contains(foreground?.bundleIdentifier ?? "") else { return }
+    let global = NSEvent.mouseLocation
+    mouseEvents.append(["seconds": Date().timeIntervalSince(started), "type": event.type.rawValue, "windowNumber": event.windowNumber, "x": event.locationInWindow.x, "y": event.locationInWindow.y, "globalX": global.x, "globalY": global.y, "deltaY": event.type == .scrollWheel ? event.scrollingDeltaY : 0, "precise": event.type == .scrollWheel && event.hasPreciseScrollingDeltas, "foregroundPid": foreground?.processIdentifier ?? -1])
+    if mouseEvents.count > 200 { mouseEvents.removeFirst() }
+    record()
+}
+mouseMonitorInstalled = mouseMonitor != nil
 
 let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.scrollWheel.rawValue)
 let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: CGEventMask(mask), callback: { _, type, event, _ in
@@ -55,6 +70,11 @@ let timer = Timer(timeInterval: 0.002, repeats: true) { _ in
     }
 }
 RunLoop.current.add(timer, forMode: .common)
+let stopTimer = Timer(timeInterval: 90, repeats: false) { _ in
+    app.stop(nil)
+    app.postEvent(NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0)!, atStart: false)
+}
+RunLoop.current.add(stopTimer, forMode: .common)
 record()
-RunLoop.current.run(until: started.addingTimeInterval(90))
+app.run()
 record()
