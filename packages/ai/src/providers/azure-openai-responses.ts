@@ -14,6 +14,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { appendBuiltinFailure, appendRequestFailure, RequestFailureError } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
+import { createProviderAbortScope } from "../utils/provider-abort-scope.js";
 import {
 	abortedResponsesFailureMessage,
 	appendResponsesFailureDiagnostics,
@@ -98,6 +99,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 		let responseCallbackFailed = false;
 		let requestStarted = false;
 		const sdkRequestObserver = createResponsesSdkRequestObserver(fetch);
+		const abortScope = createProviderAbortScope(options?.signal);
 		try {
 			// Create Azure OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -116,7 +118,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				throw error;
 			}
 			const requestOptions = {
-				...(options?.signal ? { signal: options.signal } : {}),
+				signal: abortScope.signal,
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
@@ -181,6 +183,9 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			}
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
+		} finally {
+			// SCRAMJET-DIVERGENCE: finish cleanup synchronously before terminal consumers resume (#587).
+			abortScope.dispose();
 		}
 	})();
 

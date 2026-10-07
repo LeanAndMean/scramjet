@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getApiProvider } from "../src/api-registry.js";
@@ -203,6 +204,7 @@ describe("adapter failure evidence", () => {
 	});
 	it.each(["Chat", "Anthropic"] as const)("protects %s partial-tool EOF and terminal success", async (route) => {
 		for (const terminal of [false, true]) {
+			const caller = new AbortController();
 			const anthropicEvents = [
 				{ type: "message_start", message: { id: "msg", usage: { input_tokens: 1, output_tokens: 0 } } },
 				{
@@ -255,9 +257,19 @@ describe("adapter failure evidence", () => {
 				vi.fn(async () => new Response(body, { headers: { "content-type": "text/event-stream" } })),
 			);
 			const result = await (route === "Chat"
-				? streamOpenAICompletions(model("openai-completions", "openai"), context, { apiKey: "fake", maxRetries: 0 })
-				: streamAnthropic(model("anthropic-messages", "anthropic"), context, { apiKey: "fake", maxRetries: 0 })
+				? streamOpenAICompletions(model("openai-completions", "openai"), context, {
+						apiKey: "fake",
+						maxRetries: 0,
+						signal: caller.signal,
+					})
+				: streamAnthropic(model("anthropic-messages", "anthropic"), context, {
+						apiKey: "fake",
+						maxRetries: 0,
+						signal: caller.signal,
+					})
 			).result();
+			expect(getEventListeners(caller.signal, "abort")).toHaveLength(0);
+			expect(caller.signal.aborted).toBe(false);
 			expect(result.content).toEqual([
 				{ type: "toolCall", id: "call", name: "read", arguments: { path: "partial" } },
 			]);

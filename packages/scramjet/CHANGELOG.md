@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.108.1 — Bound abort-listener lifetimes
+
+Clean up settled provider and tool operations without changing caller cancellation state or retry policy. Fixes [#587](https://github.com/LeanAndMean/scramjet/issues/587).
+
+### Fixed
+
+- Give OpenAI Responses, Azure Responses, Chat Completions, and Anthropic operations owned cancellation signals; detach caller forwarding and close owned transports on completion or failure.
+- Detach `ls` abort listeners on missing-path, non-directory, and directory-read failures as well as successful listings.
+
+### Tests
+
+- Cover offline SDK retries, callback failures, body disposal, cancellation, listener baselines, and repeated Agent/SDK child workloads. These regressions do not identify the historical warning producer or establish a memory leak.
+
 ## 0.108.0 — Use invocation-scoped headless models
 
 Run compatible deployments with process-local model definitions and environment-sourced credentials, without changing saved model or thinking defaults. Fixes [#605](https://github.com/LeanAndMean/scramjet/issues/605).

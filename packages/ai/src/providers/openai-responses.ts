@@ -17,6 +17,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { appendBuiltinFailure, appendRequestFailure, RequestFailureError } from "../utils/failure-evidence.js";
 import { headersToRecord } from "../utils/headers.js";
+import { createProviderAbortScope } from "../utils/provider-abort-scope.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import {
@@ -113,6 +114,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 		let responseCallbackFailed = false;
 		let requestStarted = false;
 		const sdkRequestObserver = createResponsesSdkRequestObserver(fetch);
+		const abortScope = createProviderAbortScope(options?.signal);
 		try {
 			// Create OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -133,7 +135,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				throw error;
 			}
 			const requestOptions = {
-				...(options?.signal ? { signal: options.signal } : {}),
+				signal: abortScope.signal,
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
@@ -201,6 +203,9 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			}
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
+		} finally {
+			// SCRAMJET-DIVERGENCE: finish cleanup synchronously before terminal consumers resume (#587).
+			abortScope.dispose();
 		}
 	})();
 

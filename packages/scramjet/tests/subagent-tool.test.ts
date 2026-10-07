@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initScramjet } from "../src/index.js";
 import { discoverAgents, parseExecutableAgent } from "../src/subagent/agents.js";
@@ -857,6 +858,169 @@ describe("subagent tool — failure reporting", () => {
 		expect(result.details.results[0].stopReason).toBe("aborted");
 		expect(result.details.results[0].stderr).toContain("SIGKILL");
 	});
+});
+
+describe("subagent tool — real SDK abort lifecycle", () => {
+	let tmpDir: string;
+	let originalArgv: string;
+
+	beforeEach(() => {
+		tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-sdk-child-")));
+		originalArgv = process.argv[1];
+		writeProjectAgent(tmpDir, "test-agent.md", ["name: test-agent", "description: SDK lifecycle agent"]);
+	});
+
+	afterEach(() => {
+		process.argv[1] = originalArgv;
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	function writeSdkInvocation(stalled = false) {
+		const moduleUrl = (file: string) => pathToFileURL(path.resolve(__dirname, "../..", file)).href;
+		const script = `
+(async () => {
+ const { getEventListeners, setMaxListeners } = await import("node:events");
+ const { createServer } = await import("node:http");
+ const fs = await import("node:fs");
+ const { Agent } = await import(${JSON.stringify(moduleUrl("agent/dist/agent.js"))});
+ const { getModel } = await import(${JSON.stringify(moduleUrl("ai/dist/models.js"))});
+ const { streamOpenAICompletions } = await import(${JSON.stringify(moduleUrl("ai/dist/providers/openai-completions.js"))});
+ const { createLsTool } = await import(${JSON.stringify(moduleUrl("coding-agent/dist/core/tools/ls.js"))});
+ const stalled = ${stalled};
+ const counts = [];
+ const transports = [];
+ let runSignal;
+ let requests = 0;
+ let toolCalls = 0;
+ let toolErrors = 0;
+ let bodyClosed = false;
+ let resolveBodyClosed;
+ const bodyClosure = new Promise(resolve => { resolveBodyClosed = resolve; });
+ let server;
+ let baseUrl = "http://localhost:1/v1";
+ const chunk = (delta, finish_reason = null) => ({ id: "msg", choices: [{ index: 0, delta, finish_reason }] });
+ const sse = (events) => events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join("");
+ if (stalled) {
+  server = createServer((request, response) => {
+   request.resume();
+   response.on("close", () => { bodyClosed = true; resolveBodyClosed(); });
+   response.writeHead(200, { "content-type": "text/event-stream" });
+   response.write(sse([chunk({ role: "assistant", content: "before cancellation" })]));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  baseUrl = "http://127.0.0.1:" + server.address().port + "/v1";
+ } else {
+  globalThis.fetch = async (_input, init) => {
+   transports.push(init.signal);
+   requests++;
+   const delta = requests < 12
+    ? { role: "assistant", tool_calls: Array.from({ length: 3 }, (_, index) => ({ index, id: "ls_" + requests + "_" + index, type: "function", function: { name: "ls", arguments: JSON.stringify({ path: "missing" }) } })) }
+    : { role: "assistant", content: "SDK child completed" };
+   return new Response(sse([chunk(delta), chunk({}, requests < 12 ? "tool_calls" : "stop")]), { headers: { "content-type": "text/event-stream" } });
+  };
+ }
+ const model = { ...getModel("openai", "gpt-4o"), baseUrl };
+ const agent = new Agent({
+  initialState: { model, tools: [createLsTool(process.cwd())] },
+  streamFn: (model, context, options) => {
+   if (!runSignal) { runSignal = options.signal; setMaxListeners(10, runSignal); }
+   if (runSignal !== options.signal) throw new Error("Run signal changed");
+   counts.push(getEventListeners(runSignal, "abort").length);
+   if (transports.some(signal => !signal.aborted)) throw new Error("Settled transport remains live");
+   return streamOpenAICompletions(model, context, { ...options, apiKey: "offline-test-key" });
+  },
+ });
+ agent.subscribe(event => {
+  if (event.type === "tool_execution_end") { toolCalls++; if (event.isError) toolErrors++; }
+  process.stdout.write(JSON.stringify(event) + "\\n");
+  if (stalled && event.type === "message_update" && event.assistantMessageEvent.type === "text_delta")
+   fs.writeFileSync(${JSON.stringify(path.join(tmpDir, "ready"))}, String(process.pid));
+ });
+ process.on("SIGTERM", () => agent.abort());
+ await agent.prompt("Run the offline SDK workload");
+ counts.push(getEventListeners(runSignal, "abort").length);
+ if (server) {
+  let timer;
+  try {
+   await Promise.race([bodyClosure, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Body closure timed out")), 2000); })]);
+  } finally {
+   clearTimeout(timer);
+   server.closeAllConnections();
+   await new Promise(resolve => server.close(resolve));
+  }
+ }
+ fs.writeFileSync(${JSON.stringify(path.join(tmpDir, "metrics.json"))}, JSON.stringify({ counts, requests, toolCalls, toolErrors, transportsAborted: transports.every(signal => signal.aborted), callerAborted: runSignal.aborted, bodyClosed }));
+ if (stalled) process.stderr.write("SDK child cancellation settled\\n");
+ process.stdout.end(() => process.exit(0));
+})().catch(error => { console.error(error); process.exitCode = 1; });
+`;
+		process.argv[1] = writeFakeInvocation(tmpDir, script);
+	}
+
+	it.each([1, 2])(
+		"completes twelve real provider turns with stable listeners (run %s)",
+		async () => {
+			writeSdkInvocation();
+			const result = await registeredSubagentTool().execute(
+				"sdk-child",
+				{ agent: "test-agent", task: "run", agentScope: "project", confirmProjectAgents: false },
+				undefined,
+				undefined,
+				{ cwd: tmpDir, hasUI: false },
+			);
+			const child = result.details.results[0];
+			expect(result.isError).toBeUndefined();
+			expect(textContent(result)).toBe("SDK child completed");
+			expect(child).toMatchObject({ exitCode: 0, stopReason: "stop", stderr: "", usage: { turns: 12 } });
+			const metrics = JSON.parse(fs.readFileSync(path.join(tmpDir, "metrics.json"), "utf8"));
+			expect(metrics).toEqual({
+				counts: Array(13).fill(0),
+				requests: 12,
+				toolCalls: 33,
+				toolErrors: 33,
+				transportsAborted: true,
+				callerAborted: false,
+				bodyClosed: false,
+			});
+			const errors = child.messages.filter((message: any) => message.role === "toolResult");
+			expect(errors).toHaveLength(33);
+			for (const error of errors) {
+				expect(error.isError).toBe(true);
+				expect(error.content[0].text).toBe(`Path not found: ${path.join(tmpDir, "missing")}`);
+			}
+		},
+		15000,
+	);
+
+	it("interrupts a real stalled SDK body after readiness and drains child events", async () => {
+		writeSdkInvocation(true);
+		const controller = new AbortController();
+		const execution = registeredSubagentTool().execute(
+			"sdk-child",
+			{ agent: "test-agent", task: "stall", agentScope: "project", confirmProjectAgents: false },
+			controller.signal,
+			undefined,
+			{ cwd: tmpDir, hasUI: false },
+		);
+		try {
+			await vi.waitFor(() => expect(fs.existsSync(path.join(tmpDir, "ready"))).toBe(true), { timeout: 10000 });
+		} finally {
+			controller.abort();
+		}
+		const result = await execution;
+		expect(result.isError).toBe(true);
+		const child = result.details.results[0];
+		expect(child).toMatchObject({ exitCode: 0, stopReason: "aborted" });
+		expect(child.stderr).toBe("SDK child cancellation settled\n");
+		expect(child.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+		expect(child.messages.at(-1).content).toContainEqual({ type: "text", text: "before cancellation" });
+		expect(JSON.parse(fs.readFileSync(path.join(tmpDir, "metrics.json"), "utf8"))).toMatchObject({
+			counts: [0, 0],
+			callerAborted: true,
+			bodyClosed: true,
+		});
+		expect(() => process.kill(Number(fs.readFileSync(path.join(tmpDir, "ready"), "utf8")), 0)).toThrow();
+	}, 15000);
 });
 
 describe("subagent tool — chain mode", () => {

@@ -174,8 +174,6 @@ export function createLsToolDefinition(
 							results.push(entry + suffix);
 						}
 
-						signal?.removeEventListener("abort", onAbort);
-
 						if (results.length === 0) {
 							resolve({ content: [{ type: "text", text: "(empty directory)" }], details: undefined });
 							return;
@@ -205,8 +203,10 @@ export function createLsToolDefinition(
 							details: Object.keys(details).length > 0 ? details : undefined,
 						});
 					} catch (e: any) {
-						signal?.removeEventListener("abort", onAbort);
 						reject(e);
+					} finally {
+						// SCRAMJET-DIVERGENCE: Explicit rejection paths must also detach the operation listener.
+						signal?.removeEventListener("abort", onAbort);
 					}
 				})();
 			});
