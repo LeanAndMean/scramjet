@@ -71,7 +71,7 @@ jobs:
   native-terminal:
     name: native-terminal (${{ matrix.os }}, ${{ matrix.terminal }}, tmux=${{ matrix.tmux }}, stock=${{ matrix.stock || false }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -150,6 +150,12 @@ jobs:
           args=()
           if [[ "$STOCK_COPY" == true ]]; then args+=(--stock-copy); fi
           python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal=${{ matrix.terminal }} "${args[@]}"
+      - name: Probe stock checkout runtime
+        if: matrix.stock == true
+        run: |
+          SCRAMJET_TUI_RECEIVER_ROOT="$SCRAMJET_TUI_INSTALLED_ROOT" env -u SCRAMJET_TUI_INSTALLED_ROOT \
+            python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence/checkout" \
+              --terminal=${{ matrix.terminal }} --stock-copy
       - name: Reject native false-positive controls
         if: matrix.stock == true
         run: |

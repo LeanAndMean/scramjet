@@ -199,6 +199,25 @@ class InteractionVerdictTests(unittest.TestCase):
             del self.context["report"]["checks"][name]
         self.assertTrue(self.passed())
 
+    def test_stock_profile_requires_native_outcomes_and_isolation(self):
+        self.context.update(is_mac=True, terminal_kind="apple", stock_copy=True)
+        checks = self.context["report"]["checks"]
+        for name in ("desktopCellTargetVerified", "narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
+                     "narrowWrappedInputVisible", "narrowMultilineEditing", "narrowAutocompleteVisible", "narrowAutocompleteAccepted",
+                     "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration",
+                     "rightClickRequestsCopy", "rightClickClipboardExactUnicode", "rightWithoutSelectionPastesWithoutSubmit", "editorRightClickPastesWithoutSubmit"):
+            del checks[name]
+        native = {"nativeCommandCCopy", "sentinelSurvivesSelectionAndUpdate", "externalEditorInput", "extensionExternalEditorInput",
+                  "stalledOtherTabCopy", "noDelayedCopyAfterStall", "otherAppIsolation", "twoInstanceCopy",
+                  "deniedPermissionNativeAdapter", "nativeRegistrationConflict", "nativeRegistrationRecovered", "staleAndFailedNativeCleanup"}
+        checks.update({name: {"passed": True} for name in native})
+        self.assertTrue(self.passed())
+        for name in native:
+            with self.subTest(missing=name):
+                del checks[name]
+                self.assertFalse(self.passed())
+                checks[name] = {"passed": True}
+
     def test_focus_profile_requires_focus_checks(self):
         self.context["terminal_kind"] = "kitty"
         for name in ("narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
@@ -651,6 +670,13 @@ class TerminalReadinessTests(unittest.TestCase):
 
 
 class PasteEvidenceTests(unittest.TestCase):
+    def test_installed_fixture_never_falls_back_to_checkout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(["node", str(ROOT / "packages/scramjet/tests/fixtures/interactive-viewport.mjs"), "--help"],
+                                    env={**os.environ, "SCRAMJET_TUI_INSTALLED_ROOT": directory}, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("Retained TUI interaction fixture", result.stdout)
+
     def test_committed_startup_finalization_and_exit_restore_the_terminal(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "fixture.json"

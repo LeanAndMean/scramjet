@@ -1,5 +1,6 @@
 import json
 import os
+import plistlib
 from pathlib import Path
 import re
 import shlex
@@ -64,7 +65,7 @@ def required_checks():
                      "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration"}
     if stock_copy:
         expected -= {"rightClickRequestsCopy", "rightClickClipboardExactUnicode", "rightWithoutSelectionPastesWithoutSubmit", "editorRightClickPastesWithoutSubmit"}
-        expected |= {"nativeCommandCCopy", "sentinelSurvivesSelectionAndUpdate", "externalEditorInput", "extensionExternalEditorInput", "stalledOtherTabCopy", "noDelayedCopyAfterStall", "otherAppIsolation", "twoInstanceCopy"}
+        expected |= {"nativeCommandCCopy", "sentinelSurvivesSelectionAndUpdate", "externalEditorInput", "extensionExternalEditorInput", "stalledOtherTabCopy", "noDelayedCopyAfterStall", "otherAppIsolation", "twoInstanceCopy", "deniedPermissionNativeAdapter", "nativeRegistrationConflict", "nativeRegistrationRecovered", "staleAndFailedNativeCleanup"}
     return expected
 
 
@@ -136,7 +137,7 @@ def shell_exited(pid):
 def owned_exit():
     if terminal_process.poll() is None and json.loads(events("frontmost")).get("pid") == terminal_process.pid:
         key("exit")
-        if negative_control:
+        if negative_control and state():
             if not wait_for(lambda: (output / "exit-code").exists(), timeout=10):
                 raise RuntimeError("Negative-control fixture did not exit")
             report["negativeControlExit"] = {"status": (output / "exit-code").read_text().strip(), "fixture": state()}
@@ -455,6 +456,53 @@ def visible_marker(marker):
     return cells[0]
 
 
+def native_receiver_challenge(cell):
+    installed = os.environ.get("SCRAMJET_TUI_INSTALLED_ROOT") or os.environ.get("SCRAMJET_TUI_RECEIVER_ROOT")
+    if not installed:
+        raise RuntimeError("Independent adapter challenge requires an installed candidate")
+    receiver = output / "receiver.json"
+    app = output / "NativeCopyReceiver.app"
+    executable = app / "Contents/MacOS/receiver"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/bash\nexec " + shlex.join([shutil.which("node"), str(root / ".github/scripts/macos-native-copy-receiver.mjs"), str(receiver), installed]) + " >" + shlex.quote(str(output / "receiver.log")) + " 2>&1\n")
+    executable.chmod(0o700)
+    (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "org.scramjet.nativecopy." + str(time.monotonic_ns()), "CFBundleName": "NativeCopyReceiver", "CFBundleExecutable": "receiver", "CFBundlePackageType": "APPL", "LSUIElement": True}))
+    run("open", "-n", str(app))
+    def receipt():
+        return json.loads(receiver.read_text()) if receiver.exists() else {}
+    if not wait_for(lambda: receipt().get("registration") == 0 or receipt().get("error"), timeout=15) or receipt().get("error"):
+        raise RuntimeError("Independent native adapter did not register: " + json.dumps(receipt()))
+    try:
+        seed_clipboard("CONFLICT-SENTINEL")
+        drag(cell(1, 1), cell(60, 1))
+        if not wait_for(lambda: any("registration failed" in item.get("reason", "") for item in state().get("nativeAvailability", []))):
+            raise RuntimeError("Native registration conflict was not surfaced")
+        key("nativeCopy")
+        if not wait_for(lambda: receipt().get("stopped") is True):
+            raise RuntimeError("Independent receiver did not release native resources")
+        report["independentReceiver"] = receipt()
+        check("deniedPermissionNativeAdapter", lambda: receipt().get("capabilities") == {"accessibility": False, "listenEvents": False, "postEvents": False, "screenCapture": False}
+              and receipt().get("permissionRequestsMade") is False and receipt().get("notices") == [608]
+              and receipt().get("unregister") == 0 and receipt().get("dispose") == 0 and not receipt().get("error"))
+        check("nativeRegistrationConflict", lambda: clipboard() == "CONFLICT-SENTINEL" and state().get("selectionActive") is True)
+        check("staleAndFailedNativeCleanup", lambda: receipt().get("staleCapturedIdentityRejected") is True
+              and receipt().get("failedReleaseWithheldRegistration") is True
+              and "ownership is unknown" in receipt().get("injectedReleaseFailure", "")
+              and "cleanup cannot be retried" in receipt().get("repeatedReleaseFailure", "")
+              and receipt().get("challengeUnregister") == 0)
+    finally:
+        if not wait_for(lambda: receipt().get("stopped") is True, timeout=35):
+            raise RuntimeError("Receiver cleanup was not acknowledged")
+        if receipt().get("pid") and not wait_for(lambda: shell_exited(receipt()["pid"]), timeout=5):
+            raise RuntimeError("Independent receiver process remains alive")
+    mouse("down", *cell(10, 1))
+    mouse("up", *cell(10, 1))
+    drag(cell(1, 1), cell(60, 1))
+    seed_clipboard("RECOVERY-SENTINEL")
+    key("nativeCopy")
+    check("nativeRegistrationRecovered", lambda: clipboard() == "ROW-001 synthetic café 界 e\u0301 text" and state().get("selectionActive") is False)
+
+
 def native_isolation(first, cell, launcher):
     global state_path, command_id
     expected = "ROW-001 synthetic café 界 e\u0301 text"
@@ -629,6 +677,8 @@ try:
             for pid in subprocess.run(["pgrep", "-x", "CoreServicesUIAgent"], text=True, capture_output=True, timeout=5).stdout.split():
                 report["launchConsent"] = json.loads(events("press-pid", pid, "Open"))
             try:
+                if terminal_kind == "iterm2":
+                    report["startupUpdatePrompt"] = json.loads(events("press-pid", str(terminal_process.pid), "Don't Check"))
                 roles = {item["role"] for item in json.loads(events("geometry", bundle))}
                 if {"AXWindow", "AXTextArea"} <= roles:
                     break
@@ -683,7 +733,8 @@ try:
         raise RuntimeError("Terminal did not start the fixture in a TTY")
     time.sleep(1)
     columns, rows = state()["columns"], state()["rows"]
-    check("checkoutProvenanceMatches", lambda: state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False)
+    check("checkoutProvenanceMatches", lambda: state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False
+          and state().get("runtimeOrigin") == ({"kind": "installed", "root": str(Path(os.environ["SCRAMJET_TUI_INSTALLED_ROOT"]).resolve())} if os.environ.get("SCRAMJET_TUI_INSTALLED_ROOT") else {"kind": "checkout"}))
     check("productionCompositionConfigured", lambda: state().get("production") is True and state().get("journey") is True and state().get("totalRows", 0) > 240)
     check("defaultDockKeepsInputVisible", lambda: state().get("dockEditor") is True and state()["height"] < state()["rows"] and any("Synthetic editor" in row for row in state()["painted"]))
     if is_mac:
@@ -790,6 +841,7 @@ try:
     screenshot("native-caret-paste")
     fixture_command("restore-editor")
     if stock_copy and not negative_control:
+        native_receiver_challenge(cell)
         native_isolation(first, cell, launcher)
     paste_before = state()
     if not stock_copy:
