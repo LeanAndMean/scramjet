@@ -63,6 +63,7 @@ export {
 	parseKey,
 	setKittyProtocolActive,
 } from "./keys.js";
+export type { NativeCopyControl, NativeCopyNotice, NativeCopyOptions } from "./macos-input.js";
 // Utilities
 export { getRenderedCopy, type RenderedCopyRow, setRenderedCopy } from "./render-copy.js";
 export type { SpellcheckProvider, SpellcheckRange } from "./spellcheck.js";
