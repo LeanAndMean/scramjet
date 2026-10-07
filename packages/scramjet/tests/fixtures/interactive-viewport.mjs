@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { release, platform, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -264,6 +264,8 @@ async function runProduction() {
 	let updates = 0;
 	const safety = process.argv.includes("--safety");
 	const journey = process.argv.includes("--journey");
+	const diagnostic = process.argv.includes("--copy-diagnostic");
+	const observer = diagnostic && process.env.SCRAMJET_MACOS_OBSERVER ? spawn(process.env.SCRAMJET_MACOS_OBSERVER, [`${process.env.SCRAMJET_TUI_PROBE_EVIDENCE}.observer.json`], { stdio: "ignore" }) : undefined;
 	const interactions = { wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0, copyErrors: 0, pasteMatches: 0, pasteMismatches: 0, focusIn: 0, focusOut: 0, enterPresses: 0 };
 	const committed = process.argv.includes("--committed");
 	const committedHandoffs = process.argv.includes("--committed-handoffs");
@@ -286,7 +288,7 @@ async function runProduction() {
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), editor: extensionUI?.getEditorText() }));
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), diagnosticCursor: diagnostic ? mode.defaultEditor.getCursor() : undefined, editor: extensionUI?.getEditorText() }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {
@@ -347,6 +349,11 @@ async function runProduction() {
 			else if (command.action === "close-overlay") { overlay?.hide(); overlay = undefined; }
 			else if (command.action === "expand") mode.setToolsExpanded(true);
 			else if (command.action === "editor") extensionUI.setEditorText("");
+			else if (diagnostic && command.action === "diagnostic-draft") extensionUI.setEditorText("PREFIXSUFFIX");
+			else if (diagnostic && command.action === "diagnostic-super-binding") mode.keybindings.setUserBindings({ ...mode.keybindings.getUserBindings(), "tui.input.copy": ["ctrl+c", "super+c"] });
+			else if (diagnostic && command.action === "diagnostic-top") { mode.ui.followViewport(); mode.ui.scrollViewportTo(0); }
+			else if (diagnostic && command.action === "diagnostic-native-selection") { mode.ui.followViewport(); mode.ui.scrollViewportTo(0); terminal.write("\x1b[?1002l\x1b[?1006l"); }
+			else if (diagnostic && command.action === "diagnostic-restore-mouse") terminal.write("\x1b[?1002h\x1b[?1006h");
 			else if (command.action === "copy-editor") extensionUI.setEditorText(`COPY-EDITOR ${"alpha beta gamma ".repeat(12).trimEnd()}\n\n    café 界`);
 			else if (command.action === "copy-seam" || command.action === "copy-seam-scrolled") {
 				const hiddenRows = command.action === "copy-seam-scrolled" ? 40 : 0;
@@ -381,6 +388,7 @@ async function runProduction() {
 	process.once("SIGHUP", stop);
 	mode.ui.addInputListener((data) => {
 		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+			if (diagnostic && data.slice(6, -6) === "DIAGNOSTIC café 界 e\u0301\nsecond line") return;
 			interactions[copied !== undefined && data.slice(6, -6) === copied ? "pasteMatches" : "pasteMismatches"]++;
 			return { consume: true };
 		}
@@ -396,7 +404,7 @@ async function runProduction() {
 			safetyState.inputs ??= [];
 			safetyState.inputs.push(data);
 			if (safetyState.inputs.length > 20) safetyState.inputs.shift();
-			if (matchesKey(data, "ctrl+c")) copyKind = "keyCopy";
+			if (matchesKey(data, "ctrl+c") || (diagnostic && matchesKey(data, "super+c"))) copyKind = "keyCopy";
 			const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
 			if (mouse) {
 				const [button, x, y] = mouse.slice(1, 4).map(Number);
@@ -578,6 +586,7 @@ async function runProduction() {
 	} finally {
 		stop();
 		clearInterval(timer);
+		observer?.kill("SIGTERM");
 		approvalDone?.("cancelled");
 		selectorDone?.(null);
 		safetyImage?.free();

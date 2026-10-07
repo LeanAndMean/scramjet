@@ -13,6 +13,7 @@ if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONM
     raise SystemExit("This probe is restricted to disposable GitHub-hosted macOS/Linux jobs")
 
 is_mac = sys.platform == "darwin"
+copy_diagnostic = "--copy-diagnostic" in sys.argv[2:]
 with_tmux = "--tmux" in sys.argv[2:]
 terminal_kind = next((arg.split("=", 1)[1] for arg in sys.argv[2:] if arg.startswith("--terminal=")), "apple" if is_mac else "vte")
 bundle = "com.googlecode.iterm2" if terminal_kind == "iterm2" else "com.apple.Terminal"
@@ -49,6 +50,8 @@ REQUIRED_CHECKS = {
 
 
 def required_checks():
+    if globals().get("copy_diagnostic", False):
+        return {"checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible", "diagnosticControlCopy", "diagnosticPasteInsertion", "orderlyExit", "termiosRestored"}
     expected = REQUIRED_CHECKS | ({"desktopCellTargetVerified"} if not is_mac else set())
     if terminal_kind in ("kitty", "iterm2"):
         expected |= {"nativeFocusDragActive", "nativeFocusOutReceived", "focusLossStopsSelectionScroll", "nativeFocusReturned"}
@@ -419,6 +422,10 @@ def drag(start, end):
     mouse("up", *end)
 
 
+class CopyDiagnosticComplete(Exception):
+    pass
+
+
 try:
     report["os"] = run("sw_vers") if is_mac else Path("/etc/os-release").read_text()
     report["image"] = {key: os.environ.get(key) for key in ("ImageOS", "ImageVersion", "RUNNER_ARCH", "GITHUB_SHA")}
@@ -446,7 +453,7 @@ try:
         f"stty -g > {shlex.quote(str(output / 'stty-before.txt'))}",
         f'printf "%s\\n" "$PPID" > {shlex.quote(str(output / "shell-pid"))}',
         "printf 'SCRAMJET NORMAL BUFFER SENTINEL\\n'",
-        f"SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(root / 'packages/scramjet/tests/fixtures/interactive-viewport.mjs'))} --production --journey{key_profile}",
+        f"SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(root / 'packages/scramjet/tests/fixtures/interactive-viewport.mjs'))} --production --journey{key_profile}{' --copy-diagnostic' if globals().get('copy_diagnostic', False) else ''}",
         "fixture_status=$?",
         f'printf "%s\\n" "$fixture_status" > {shlex.quote(str(output / "exit-code"))}',
         f"stty -g > {shlex.quote(str(output / 'stty-after.txt'))}",
@@ -464,7 +471,11 @@ try:
     if is_mac:
         if json.loads(events("running", bundle)):
             raise RuntimeError("Refusing to adopt an existing terminal application")
-        if terminal_kind == "iterm2":
+        if globals().get("copy_diagnostic", False):
+            report["scope"] = "Diagnostic observations only, not product acceptance"
+            preference = subprocess.run(["defaults", "read", bundle, "ReportRightClick"], text=True, capture_output=True, timeout=10)
+            report["terminalConfiguration"] = {"shortcutRemapsApplied": False, "ReportRightClickRead": {"exit": preference.returncode, "stdout": preference.stdout, "stderr": preference.stderr}}
+        elif terminal_kind == "iterm2":
             run("defaults", "write", bundle, "ReportRightClick", "-bool", "true")
             report["terminalConfiguration"] = {"ReportRightClick": True, "qualification": "Explicitly approved configuration; default-profile right-click opens the native menu"}
         executable = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleExecutable", plist)
@@ -567,6 +578,54 @@ try:
         if not check("desktopCellTargetVerified", lambda: state()["lastMouse"]["x"] == 10 and state()["lastMouse"]["y"] == 3):
             raise RuntimeError("Desktop cell targeting remains uncalibrated")
     screenshot("startup")
+    if copy_diagnostic:
+        expected = "ROW-001 synthetic café 界 e\u0301 text"
+        observations = report["copyDiagnostic"] = {}
+        for variant in ("stockCommand", "appSuperBinding", "control"):
+            if variant == "appSuperBinding":
+                fixture_command("diagnostic-super-binding")
+            fixture_command("diagnostic-top")
+            sentinel = f"UNTOUCHED-{variant}-608"
+            seed_clipboard(sentinel)
+            before_copy = state()
+            drag(cell(1, 1), cell(60, 1))
+            if not wait_for(lambda: state().get("selectionPainted") is True and state().get("frameFlushed") is True):
+                raise RuntimeError("Application drag did not establish a painted selection")
+            after_drag = clipboard()
+            if variant == "control":
+                key("copy")
+                check("diagnosticControlCopy", lambda: state().get("keyCopy", 0) == before_copy.get("keyCopy", 0) + 1 and clipboard() == expected)
+            else:
+                events("key", 8, 1048576)
+                time.sleep(0.7)
+            observations[variant] = {"clipboardSentinel": sentinel, "afterDrag": after_drag, "afterCopy": clipboard(), "exactExpected": clipboard() == expected, "fixture": state()}
+            screenshot(f"diagnostic-{variant}")
+            key("escape")
+        fixture_command("diagnostic-draft")
+        for _ in range(6):
+            key("left")
+        if state().get("diagnosticCursor") != {"line": 0, "col": 6}:
+            raise RuntimeError("Interior caret was not established")
+        before_paste = state()
+        payload = "DIAGNOSTIC café 界 e\u0301\nsecond line"
+        seed_clipboard(payload)
+        key("paste")
+        check("diagnosticPasteInsertion", lambda: state().get("editor") == "PREFIX" + payload + "SUFFIX" and state().get("diagnosticCursor") == {"line": 1, "col": 11} and state().get("submissions", 0) == before_paste.get("submissions", 0) and state().get("frameFlushed") is True)
+        observations["nativePaste"] = {"before": before_paste, "after": state()}
+        screenshot("diagnostic-paste")
+        fixture_command("diagnostic-native-selection")
+        seed_clipboard("UNTOUCHED-nativeSelection-608")
+        before_native = state()
+        drag(cell(1, 1), cell(60, 1))
+        events("key", 8, 1048576)
+        time.sleep(0.7)
+        observations["nativeSelectionWithApplicationMouseDisabled"] = {"qualification": "Temporary protocol experiment, not a supported retained-mode fix", "afterCopy": clipboard(), "exactExpected": clipboard() == expected, "before": before_native, "after": state()}
+        screenshot("diagnostic-native-selection")
+        fixture_command("diagnostic-restore-mouse")
+        key("exit")
+        check("orderlyExit", lambda: state().get("stopped") is True and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
+        check("termiosRestored", lambda: state().get("termiosBefore") == state().get("termiosAfter"))
+        raise CopyDiagnosticComplete()
     exercise_product_selectors()
     mouse("move", *cell(10, 3))
     events("wheel", -3)
@@ -893,6 +952,8 @@ try:
               and report.get("committedHandoffs", {}).get("contextMarkers") == 60
               and report.get("committedHandoffs", {}).get("suspended") is True and report.get("committedHandoffs", {}).get("resumed") is True)
         screenshot("committed-restored")
+except CopyDiagnosticComplete:
+    pass
 except Exception as error:
     report["error"] = str(error)
     if isinstance(error, subprocess.CalledProcessError):
