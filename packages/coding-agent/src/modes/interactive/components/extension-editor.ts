@@ -118,12 +118,14 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 
 		const currentText = this.editor.getText();
 		const tmpFile = path.join(os.tmpdir(), `pi-extension-editor-${Date.now()}.md`);
+		let released = false;
 
 		try {
 			fs.writeFileSync(tmpFile, currentText, "utf-8");
 			// SCRAMJET-DIVERGENCE: drain the opening key's release before the external editor takes input.
 			await this.tui.terminal.drainInput();
 			this.tui.stop();
+			released = true;
 
 			const [editor, ...editorArgs] = editorCmd.split(" ");
 			const result = spawnSync(editor, [...editorArgs, tmpFile], {
@@ -141,9 +143,11 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 			} catch {
 				// Ignore cleanup errors
 			}
-			this.tui.start();
-			// SCRAMJET-DIVERGENCE: external-editor return deliberately rebuilds retained history (#389).
-			this.tui.rebuild();
+			// SCRAMJET-DIVERGENCE: rebuild only after proven release and external-editor return.
+			if (released) {
+				this.tui.start();
+				this.tui.rebuild();
+			}
 		}
 	}
 }

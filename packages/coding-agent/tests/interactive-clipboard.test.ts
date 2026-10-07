@@ -1,6 +1,8 @@
 import { type EditorComponent, getCellDimensions, Text } from "@leanandmean/tui";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { KeybindingsManager } from "../src/core/keybindings.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+import { ExtensionEditorComponent } from "../src/modes/interactive/components/extension-editor.js";
 import * as clipboard from "../src/utils/clipboard.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
 
@@ -204,6 +206,64 @@ it("accepts terminal-native text paste independently of clipboard reads", async 
 	await h.frame();
 	h.terminal.sendInput("\x1b[200~PASTED\x1b[201~");
 	expect(h.extensionUI.getEditorText()).toBe("DRAFTPASTED");
+	expect(read).not.toHaveBeenCalled();
+	expect(submit).not.toHaveBeenCalled();
+});
+
+it.each(["main", "extension"])("does not restart the %s editor after unproven input release", async (owner) => {
+	vi.stubEnv("VISUAL", "unused-editor-608");
+	const start = vi.spyOn(h.internals.ui, "start");
+	const error = new Error("native release unproven");
+	const stop = vi.spyOn(h.internals.ui, "stop").mockImplementationOnce(() => {
+		throw error;
+	});
+	const target =
+		owner === "main"
+			? h.mode
+			: new ExtensionEditorComponent(
+					h.internals.ui,
+					new KeybindingsManager(),
+					"Edit",
+					"draft",
+					() => {},
+					() => {},
+				);
+	try {
+		await expect((target as unknown as { openExternalEditor(): Promise<void> }).openExternalEditor()).rejects.toBe(
+			error,
+		);
+		expect(start).not.toHaveBeenCalled();
+	} finally {
+		stop.mockRestore();
+		vi.unstubAllEnvs();
+	}
+});
+
+it("removes the resume handler when suspension release fails", async () => {
+	const listeners = process.listeners("SIGCONT");
+	const start = vi.spyOn(h.internals.ui, "start");
+	const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+	vi.spyOn(h.terminal, "drainInput").mockRejectedValueOnce(new Error("release failed"));
+	await expect(h.internals.handleCtrlZ()).rejects.toThrow("release failed");
+	const added = process.listeners("SIGCONT").filter((listener) => !listeners.includes(listener));
+	try {
+		expect(added).toEqual([]);
+		expect(kill).not.toHaveBeenCalled();
+		expect(start).not.toHaveBeenCalled();
+	} finally {
+		for (const listener of added) process.removeListener("SIGCONT", listener);
+	}
+});
+
+it("inserts native multiline Unicode paste at an interior caret without submit", async () => {
+	const read = vi.spyOn(clipboard, "readClipboardText");
+	const editor = h.internals.editorContainer.children[0] as EditorComponent;
+	const submit = vi.spyOn(editor, "onSubmit");
+	h.extensionUI.setEditorText("PREFIXSUFFIX");
+	await h.frame();
+	for (let i = 0; i < 6; i++) h.terminal.sendInput("\x1b[D");
+	h.terminal.sendInput("\x1b[200~café 界 é\nsecond line\x1b[201~");
+	expect(h.extensionUI.getEditorText()).toBe("PREFIXcafé 界 é\nsecond lineSUFFIX");
 	expect(read).not.toHaveBeenCalled();
 	expect(submit).not.toHaveBeenCalled();
 });

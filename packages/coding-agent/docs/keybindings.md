@@ -22,7 +22,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 
 ## Transcript browsing precedence
 
-Interactive mode's retained viewport owns mouse wheel/trackpad scrolling, the rightmost draggable scrollbar and ordinary drag selection. Right-click a nonempty selection or use `tui.input.copy` (Ctrl+C by default) to copy displayed text. Without a transcript selection, the same key keeps its focused-component/application behavior. Escape clears selection and returns to the live tail.
+Interactive mode's retained viewport owns mouse wheel/trackpad scrolling, the rightmost draggable scrollbar and ordinary drag selection. Right-click a nonempty selection or use `tui.input.copy` (Ctrl+C by default) to copy displayed text. Local supported macOS terminals additionally use native Command+C for an eligible painted selection, independently of `tui.input.copy` remaps; this intent never falls through to submit, clear or approval. Command+V remains terminal-native paste. Availability and proof limits are described in [terminal setup](terminal-setup.md#transcript-browsing-and-copying). Without a transcript selection, the configured application key keeps its focused-component/application behavior. Escape clears selection and returns to the live tail.
 
 While detached from the tail with the editor owning input, the viewport consumes this fixed set before editor bindings; focused selectors retain their own navigation and cancellation bindings:
 

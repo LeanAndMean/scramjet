@@ -32,6 +32,7 @@ export interface ViewportOptions {
 	getBlocks(): readonly ViewportBlock[];
 	keybindings?: KeybindingsManager;
 	copy?(text: string): Promise<void>;
+	onNativeCopyAvailability?(available: boolean, reason?: string): void;
 	requestPaste?(): void;
 	getScrollWheelStep?(): number;
 	handlePresentationInput?(data: string): boolean;
@@ -244,6 +245,7 @@ export class RetainedViewport {
 	constructor(
 		private readonly options: ViewportOptions,
 		private readonly requestRender: () => void = () => {},
+		private readonly copyEligibilityChanged: () => void = () => {},
 	) {}
 
 	isTooSmall(columns = this.terminalColumns, rows = this.screenHeight): boolean {
@@ -264,6 +266,7 @@ export class RetainedViewport {
 		this.selection = undefined;
 		this.paintedSelection = undefined;
 		this.copyError = undefined;
+		this.copyEligibilityChanged();
 	}
 
 	private releaseSelection(): void {
@@ -386,11 +389,16 @@ export class RetainedViewport {
 		this.edgeDirection = y <= 0 ? -1 : !this.selectionInDock && y >= height - 1 && offset < this.maxOffset ? 1 : 0;
 	}
 
-	private async copySelection(): Promise<void> {
+	getCopySelection(): object | undefined {
+		return !this.copying && this.options.copy && this.selectedText() ? this.selection : undefined;
+	}
+
+	async copySelection(): Promise<void> {
 		const text = this.selectedText();
 		if (!text || this.copying) return;
 		const selection = this.selection;
 		this.copying = true;
+		this.copyEligibilityChanged();
 		this.endGesture();
 		try {
 			if (!this.options.copy) throw new Error("No clipboard callback configured");
@@ -402,6 +410,7 @@ export class RetainedViewport {
 			this.copyError = plainText(error instanceof Error ? error.message : String(error));
 		} finally {
 			this.copying = false;
+			this.copyEligibilityChanged();
 		}
 		this.requestRender();
 	}

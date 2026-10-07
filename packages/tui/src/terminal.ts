@@ -478,7 +478,7 @@ export class ProcessTerminal implements Terminal {
 		let disposed = false;
 		return {
 			setLease: (lease) => {
-				if (!disposed) this.macosInput?.setLease(lease);
+				if (!disposed && (!this.draining || lease === null)) this.macosInput?.setLease(lease);
 			},
 			isCurrent: (notice) => !disposed && (this.macosInput?.isCurrent(notice) ?? false),
 			dispose: () => {
