@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { setKittyProtocolActive } from "./keys.js";
+import { MacosInput, type NativeCopyControl, type NativeCopyOptions } from "./macos-input.js";
 import { StdinBuffer } from "./stdin-buffer.js";
 
 const cjsRequire = createRequire(import.meta.url);
@@ -62,6 +63,8 @@ export interface Terminal {
 	holdOscInput(hold: boolean): void;
 	// SCRAMJET-DIVERGENCE: opt-in viewport protocol ownership.
 	setViewportMode?(enabled: boolean): void;
+	// SCRAMJET-DIVERGENCE: optional native intent transport; the caller retains selection and clipboard policy.
+	configureNativeCopy?(options: NativeCopyOptions): NativeCopyControl;
 }
 
 /**
@@ -69,6 +72,9 @@ export interface Terminal {
  */
 export class ProcessTerminal implements Terminal {
 	private wasRaw = false;
+	private nativeOptions?: NativeCopyOptions;
+	private macosInput?: MacosInput;
+	private draining = false;
 	private started = false;
 	private viewportMode = false;
 	private keyboardFallback?: ReturnType<typeof setTimeout>;
@@ -100,17 +106,40 @@ export class ProcessTerminal implements Terminal {
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
 		if (this.started) return;
-		this.started = true;
+		if (this.macosInput) throw new Error("Previous macOS input ownership is unproven; do not restart this terminal.");
 		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
+
+		// SCRAMJET-DIVERGENCE: select one reader before resuming stdin; never migrate an active parser.
+		if (this.nativeOptions && process.platform === "darwin" && process.stdin.isTTY && process.stdout.isTTY) {
+			if (process.stdin.listenerCount("data") || process.stdin.readableLength || process.stdin.readableFlowing) {
+				throw new Error("Cannot acquire macOS input while another stdin reader or buffered input exists.");
+			}
+			const options = this.nativeOptions;
+			this.macosInput = new MacosInput(
+				(kind, data) => (kind === "paste" ? this.dispatchPaste(data) : this.dispatchSequence(data)),
+				(notice) => this.nativeOptions?.onCopyIntent(notice),
+				(available, reason) => this.nativeOptions?.onAvailability(available, reason),
+				undefined,
+				(error) => options.onError(error),
+			);
+			if (!this.macosInput.prepare()) this.macosInput = undefined;
+		}
+		this.draining = false;
 
 		// Save previous state and enable raw mode
 		this.wasRaw = process.stdin.isRaw || false;
 		if (process.stdin.setRawMode) {
 			process.stdin.setRawMode(true);
 		}
-		process.stdin.setEncoding("utf8");
-		process.stdin.resume();
+		if (this.macosInput) this.macosInput.commit();
+		else {
+			process.stdin.setEncoding("utf8");
+			this.setupStdinBuffer();
+			process.stdin.on("data", this.stdinDataHandler!);
+			process.stdin.resume();
+		}
+		this.started = true;
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		process.stdout.write("\x1b[?2004h");
@@ -148,41 +177,8 @@ export class ProcessTerminal implements Terminal {
 		this.stdinBuffer = new StdinBuffer({ timeout: 10 });
 		this.stdinBuffer.setMouseReporting(this.viewportMode);
 
-		// Kitty protocol response pattern: \x1b[?<flags>u
-		const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
-
-		// Forward individual sequences to the input handler
-		this.stdinBuffer.on("data", (sequence) => {
-			// Check for Kitty protocol response (only if not already enabled)
-			if (!this._kittyProtocolActive) {
-				const match = sequence.match(kittyResponsePattern);
-				if (match) {
-					if (!this.inputHandler) return;
-					this._kittyProtocolActive = true;
-					setKittyProtocolActive(true);
-
-					// Enable Kitty keyboard protocol (push flags)
-					// Flag 1 = disambiguate escape codes
-					// Flag 2 = report event types (press/repeat/release)
-					// Flag 4 = report alternate keys (shifted key, base layout key)
-					// Base layout key enables shortcuts to work with non-Latin keyboard layouts
-					// SCRAMJET-DIVERGENCE: explicit Enter events prevent legacy release bytes from authorizing twice.
-					process.stdout.write(this.viewportMode ? "\x1b[>15u" : "\x1b[>7u");
-					return; // Don't forward protocol response to TUI
-				}
-			}
-
-			if (this.inputHandler) {
-				this.inputHandler(sequence);
-			}
-		});
-
-		// Re-wrap paste content with bracketed paste markers for existing editor handling
-		this.stdinBuffer.on("paste", (content) => {
-			if (this.inputHandler) {
-				this.inputHandler(`\x1b[200~${content}\x1b[201~`);
-			}
-		});
+		this.stdinBuffer.on("data", (sequence) => this.dispatchSequence(sequence));
+		this.stdinBuffer.on("paste", (content) => this.dispatchPaste(content));
 
 		// Handler that pipes stdin data through the buffer
 		this.stdinDataHandler = (data: string) => {
@@ -205,8 +201,6 @@ export class ProcessTerminal implements Terminal {
 	 * handles the case where the response arrives split across multiple stdin events.
 	 */
 	private queryAndEnableKittyProtocol(): void {
-		this.setupStdinBuffer();
-		process.stdin.on("data", this.stdinDataHandler!);
 		process.stdout.write("\x1b[?u");
 		this.keyboardFallback = setTimeout(() => {
 			this.keyboardFallback = undefined;
@@ -247,6 +241,8 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
+		this.draining = true;
+		this.macosInput?.setLease(null);
 		clearTimeout(this.keyboardFallback);
 		this.keyboardFallback = undefined;
 		if (this._kittyProtocolActive) {
@@ -259,6 +255,11 @@ export class ProcessTerminal implements Terminal {
 		if (this._modifyOtherKeysActive) {
 			process.stdout.write("\x1b[>4;0m");
 			this._modifyOtherKeysActive = false;
+		}
+
+		if (this.macosInput) {
+			await this.macosInput.drain(maxMs, idleMs);
+			return;
 		}
 
 		const previousHandler = this.inputHandler;
@@ -289,6 +290,7 @@ export class ProcessTerminal implements Terminal {
 	// SCRAMJET-DIVERGENCE: modes belong to the configured viewport, not ordinary terminal callers.
 	setViewportMode(enabled: boolean): void {
 		if (enabled === this.viewportMode) return;
+		this.macosInput?.setMouseReporting(enabled);
 		// Kitty keeps separate keyboard stacks for the normal and alternate buffers.
 		if (this._kittyProtocolActive) this.write("\x1b[<u");
 		this.viewportMode = enabled;
@@ -302,6 +304,9 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		// SCRAMJET-DIVERGENCE: no terminal handoff or restart follows unproven Worker release.
+		this.macosInput?.stop();
+		this.macosInput = undefined;
 		if (!this.started) return;
 		this.started = false;
 		clearTimeout(this.keyboardFallback);
@@ -434,7 +439,48 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	holdOscInput(hold: boolean): void {
+		this.macosInput?.holdOscInput(hold);
 		this.stdinBuffer?.holdOscInput(hold);
+	}
+
+	configureNativeCopy(options: NativeCopyOptions): NativeCopyControl {
+		if (this.nativeOptions) throw new Error("Native Copy is already configured");
+		this.nativeOptions = options;
+		if (this.started)
+			options.onAvailability(
+				false,
+				"Native Copy activates after a clean terminal restart; the current input parser is unchanged.",
+			);
+		let disposed = false;
+		return {
+			setLease: (lease) => {
+				if (!disposed) this.macosInput?.setLease(lease);
+			},
+			isCurrent: (notice) => !disposed && (this.macosInput?.isCurrent(notice) ?? false),
+			dispose: () => {
+				if (disposed) return;
+				this.macosInput?.setLease(null);
+				disposed = true;
+				this.nativeOptions = undefined;
+			},
+		};
+	}
+
+	private dispatchSequence(sequence: string): void {
+		if (this.draining) return;
+		if (!this._kittyProtocolActive && /^\x1b\[\?(\d+)u$/.test(sequence)) {
+			if (!this.inputHandler) return;
+			this._kittyProtocolActive = true;
+			setKittyProtocolActive(true);
+			// SCRAMJET-DIVERGENCE: explicit Enter events prevent legacy release bytes from authorizing twice.
+			process.stdout.write(this.viewportMode ? "\x1b[>15u" : "\x1b[>7u");
+			return;
+		}
+		this.inputHandler?.(sequence);
+	}
+
+	private dispatchPaste(content: string): void {
+		if (!this.draining) this.inputHandler?.(`\x1b[200~${content}\x1b[201~`);
 	}
 
 	private clearProgressInterval(): boolean {

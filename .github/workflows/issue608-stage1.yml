@@ -1,0 +1,22 @@
+name: Issue 608 Stage 1 transport probe
+on:
+  push:
+    branches: [diagnostics/issue-608-stage1-transport]
+permissions:
+  contents: read
+jobs:
+  transport:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npx --no-install vitest run packages/tui/tests/macos-input.test.ts packages/tui/tests/viewport-terminal.test.ts packages/tui/tests/terminal-colors.test.ts
+      - run: python3 .github/scripts/issue608-stage1.py
