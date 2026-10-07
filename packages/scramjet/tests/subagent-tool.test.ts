@@ -865,7 +865,7 @@ describe("subagent tool — real SDK abort lifecycle", () => {
 	let originalArgv: string;
 
 	beforeEach(() => {
-		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-sdk-child-"));
+		tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-sdk-child-")));
 		originalArgv = process.argv[1];
 		writeProjectAgent(tmpDir, "test-agent.md", ["name: test-agent", "description: SDK lifecycle agent"]);
 	});
