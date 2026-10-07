@@ -730,6 +730,64 @@ try:
             raise RuntimeError("Native paste regressed")
         observations["paste"] = state()
         screenshot("automatic-paste")
+        if os.environ.get("SCRAMJET_MACOS_INPUT_THREAD") == "1":
+            fixture_command("diagnostic-top")
+            first = next(item["firstCell"] for item in json.loads(events("geometry", bundle)) if "firstCell" in item)
+            drag(cell(1, 1), cell(60, 1))
+            if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
+                raise RuntimeError("First-instance selection did not arm")
+            primary_path, primary_command = state_path, command_id
+            second_dir = output / "second-instance"
+            second_dir.mkdir()
+            second_launcher = output / "second-launch.sh"
+            body = launcher.read_text().replace(str(output), str(second_dir))
+            body = body.replace("SCRAMJET_TUI_PROBE_EVIDENCE=", f"SCRAMJET_MACOS_MOUSE_DIAGNOSTIC={shlex.quote(str(second_dir / 'independent-observer.json'))} SCRAMJET_TUI_PROBE_EVIDENCE=")
+            second_launcher.write_text(body)
+            events("key", 17, 1048576)
+            seed_clipboard(f"/bin/bash {shlex.quote(str(second_launcher))}")
+            key("paste")
+            key("enter")
+            second_path = second_dir / "fixture.json"
+            state_path, command_id = second_path, 0
+            try:
+                if not wait_for(lambda: state().get("totalRows", 0) > 240, timeout=15):
+                    raise RuntimeError("Second production instance did not initialize")
+                fixture_command("diagnostic-native-copy-on")
+                fixture_command("diagnostic-second-label")
+                second_cell = next(item["firstCell"] for item in json.loads(events("geometry", bundle, "--marker=SECOND-608")) if "firstCell" in item)
+                second_start = (second_cell["x"] + second_cell["width"] / 2, second_cell["y"] + second_cell["height"] / 2)
+                second_end = (second_start[0] + 59 * second_cell["width"], second_start[1])
+                drag(second_start, second_end)
+                if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
+                    raise RuntimeError("Second instance could not register Copy")
+                seed_clipboard("UNTOUCHED-second-instance")
+                events("key", 8, 1048576)
+                second_expected = "SECOND-608 synthetic café 界 e\u0301 text"
+                if not wait_for(lambda: clipboard() == second_expected and state().get("nativeCopyDelivered") == 1):
+                    raise RuntimeError("Second instance copied the wrong selection")
+                drag(second_start, second_end)
+                if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
+                    raise RuntimeError("Second instance did not retain a Copy target")
+                events("key", 33, 1179648)
+                state_path, command_id = primary_path, primary_command
+                seed_clipboard("UNTOUCHED-first-return")
+                events("key", 8, 1048576)
+                if not wait_for(lambda: clipboard() == expected):
+                    raise RuntimeError("Immediate Copy after returning to first instance failed")
+                events("key", 30, 1179648)
+                state_path = second_path
+                seed_clipboard("UNTOUCHED-second-return")
+                events("key", 8, 1048576)
+                if not wait_for(lambda: clipboard() == second_expected and state().get("nativeCopyDelivered") == 2):
+                    raise RuntimeError("Immediate Copy after returning to second instance failed")
+                observations["multipleInstances"] = {"first": json.loads(primary_path.read_text()), "second": state(), "clipboard": clipboard()}
+                screenshot("multiple-instances")
+                key("exit")
+                if not wait_for(lambda: state().get("stopped") and (second_dir / "exit-code").exists() and (second_dir / "exit-code").read_text().strip() == "0"):
+                    raise RuntimeError("Second instance did not exit cleanly")
+                events("key", 13, 1048576)
+            finally:
+                state_path, command_id = primary_path, primary_command
         if direct_reader:
             import threading
             input_errors = []

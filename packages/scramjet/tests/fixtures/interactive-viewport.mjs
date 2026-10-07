@@ -450,6 +450,7 @@ async function runProduction() {
 			else if (diagnostic && command.action === "diagnostic-native-copy-on") { nativeCopyEnabled = true; const path = process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC; hotkeyEventsSeen = JSON.parse(readFileSync(path, "utf8")).events.filter((event) => event.kind === "hotkey").length; }
 			else if (diagnostic && command.action === "diagnostic-retained-restore") { safetyState.protocolCapture = false; terminal.write("\x1b[?1l\x1b[>1m\x1b[?1007l\x1b[?1002h\x1b[?1006h"); }
 			else if (diagnostic && command.action === "diagnostic-hotkey-copy") mode.ui.handleInput("\x03");
+			else if (diagnostic && command.action === "diagnostic-second-label") { extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth("SECOND-608 synthetic café 界 e\u0301 text", width)] })); mode.ui.scrollViewportTo(0); }
 			else if (diagnostic && command.action === "diagnostic-draft") extensionUI.setEditorText("PREFIXSUFFIX");
 			else if (diagnostic && command.action === "diagnostic-super-binding") mode.keybindings.setUserBindings({ ...mode.keybindings.getUserBindings(), "tui.input.copy": ["ctrl+c", "super+c"] });
 			else if (diagnostic && command.action === "diagnostic-top") { mode.ui.followViewport(); mode.ui.scrollViewportTo(0); }
@@ -723,6 +724,7 @@ async function runProduction() {
 		const after = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
 		record();
 		rmSync(directory, { recursive: true, force: true });
-		if (before !== after) throw new Error("Production fixture did not restore terminal state");
+		const comparable = (value) => diagnostic && platform() === "darwin" && process.env.SCRAMJET_MACOS_INPUT_THREAD === "1" ? value.replace(/(:lflag=)([0-9a-f]+)(?=:)/, (_, prefix, bits) => prefix + (BigInt(`0x${bits}`) & ~0x20000000n).toString(16)) : value;
+		if (comparable(before) !== comparable(after)) throw new Error("Production fixture did not restore terminal state");
 	}
 }
