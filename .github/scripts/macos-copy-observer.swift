@@ -30,7 +30,7 @@ var handler: EventHandlerRef?
 let installed = InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
     var key = EventHotKeyID()
     let result = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &key)
-    events.append(["seconds": Date().timeIntervalSince(started), "kind": "hotkey", "result": result, "id": key.id, "foregroundPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0, "foregroundBundle": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""])
+    events.append(["seconds": Date().timeIntervalSince(started), "kind": "hotkey", "lease": requested, "result": result, "id": key.id, "foregroundPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0, "foregroundBundle": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""])
     record()
     return noErr
 }, 1, &eventType, nil, &handler)
@@ -40,7 +40,7 @@ let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
     if command == requested { return }
     requested = command
     if let ref = hotKey { UnregisterEventHotKey(ref); hotKey = nil }
-    if command == "arm" {
+    if command.hasPrefix("arm") {
         registration = RegisterEventHotKey(UInt32(kVK_ANSI_C), UInt32(cmdKey), EventHotKeyID(signature: 0x5343524D, id: 608), GetApplicationEventTarget(), 0, &hotKey)
     }
     record()

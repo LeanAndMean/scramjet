@@ -266,6 +266,12 @@ async function runProduction() {
 	const journey = process.argv.includes("--journey");
 	const diagnostic = process.argv.includes("--copy-diagnostic");
 	let nativeHandoff = false;
+	let nativeCopyEnabled = false;
+	let terminalFocused = false;
+	let hotkeyEventsSeen = 0;
+	let nativeCopyLease = "";
+	let nativeCopyEpoch = 0;
+	let lastCopySelection;
 	let mouseDiagnosticEnabled = false;
 	let lastMouseDiagnosticSeconds = 0;
 	const observer = diagnostic && process.env.SCRAMJET_MACOS_OBSERVER ? spawn(process.env.SCRAMJET_MACOS_OBSERVER, [`${process.env.SCRAMJET_TUI_PROBE_EVIDENCE}.observer.json`], { stdio: "ignore" }) : undefined;
@@ -338,6 +344,18 @@ async function runProduction() {
 	}
 	const timer = setInterval(() => {
 		const mouseEvidence = process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC;
+		if (nativeCopyEnabled && mouseEvidence && existsSync(mouseEvidence)) {
+			const view = mode.ui.viewport;
+			const selection = terminalFocused && !mode.ui.hasOverlay() && !view?.copying && view?.paintedSelection && view?.selection;
+			if (selection !== lastCopySelection) { lastCopySelection = selection; nativeCopyLease = selection ? `arm:${++nativeCopyEpoch}` : "disarm"; writeFileSync(mouseEvidence + ".control", nativeCopyLease); }
+			const evidence = JSON.parse(readFileSync(mouseEvidence, "utf8"));
+			const hotkeys = evidence.events.filter((event) => event.kind === "hotkey");
+			for (const event of hotkeys.slice(hotkeyEventsSeen)) {
+				if (selection && event.lease === nativeCopyLease) { mode.ui.handleInput("\x03"); safetyState.nativeCopyDelivered = (safetyState.nativeCopyDelivered ?? 0) + 1; }
+			}
+			hotkeyEventsSeen = hotkeys.length;
+			safetyState.nativeCopy = { terminalFocused, lease: nativeCopyLease, armed: evidence.armed, registration: evidence.registration, capabilities: evidence.capabilities };
+		}
 		if (mouseDiagnosticEnabled && mouseEvidence && existsSync(mouseEvidence)) {
 			for (const event of JSON.parse(readFileSync(mouseEvidence, "utf8")).appKitMouseEvents ?? []) {
 				if (event.seconds <= lastMouseDiagnosticSeconds) continue;
@@ -373,6 +391,7 @@ async function runProduction() {
 				terminal.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" + modes[variant]);
 			}
 			else if (diagnostic && command.action === "diagnostic-capture-reset") safetyState.protocolInputs = [];
+			else if (diagnostic && command.action === "diagnostic-native-copy-on") { nativeCopyEnabled = true; const path = process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC; hotkeyEventsSeen = JSON.parse(readFileSync(path, "utf8")).events.filter((event) => event.kind === "hotkey").length; }
 			else if (diagnostic && command.action === "diagnostic-retained-restore") { safetyState.protocolCapture = false; terminal.write("\x1b[?1l\x1b[>1m\x1b[?1007l\x1b[?1002h\x1b[?1006h"); }
 			else if (diagnostic && command.action === "diagnostic-hotkey-copy") mode.ui.handleInput("\x03");
 			else if (diagnostic && command.action === "diagnostic-draft") extensionUI.setEditorText("PREFIXSUFFIX");
@@ -415,6 +434,10 @@ async function runProduction() {
 	process.once("SIGTERM", stop);
 	process.once("SIGHUP", stop);
 	mode.ui.addInputListener((data) => {
+		if (diagnostic) {
+			if (data === "\x1b[O") terminalFocused = false;
+			if (data === "\x1b[I" || /^\x1b\[<0;\d+;\d+M$/.test(data)) terminalFocused = true;
+		}
 		if (diagnostic && safetyState.protocolCapture) {
 			safetyState.protocolInputs.push(data);
 			if (safetyState.protocolInputs.length > 1000) safetyState.protocolInputs.shift();

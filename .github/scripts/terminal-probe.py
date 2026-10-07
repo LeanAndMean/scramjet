@@ -580,6 +580,81 @@ try:
         if not check("desktopCellTargetVerified", lambda: state()["lastMouse"]["x"] == 10 and state()["lastMouse"]["y"] == 3):
             raise RuntimeError("Desktop cell targeting remains uncalibrated")
     screenshot("startup")
+    if os.environ.get("SCRAMJET_NATIVE_COPY") == "1":
+        observer_path = Path(os.environ["SCRAMJET_MACOS_MOUSE_DIAGNOSTIC"])
+        if not wait_for(observer_path.exists):
+            raise RuntimeError("Native helper did not initialize")
+        observations = report["automaticNativeCopy"] = {}
+        fixture_command("diagnostic-native-copy-on")
+        mouse("move", *cell(10, 3))
+        events("wheel", -10)
+        if not wait_for(lambda: state().get("offset", 0) > 0 and state().get("completed") == 0):
+            raise RuntimeError("Unfinished retained browsing failed")
+        observations["browsing"] = state()
+        fixture_command("diagnostic-top")
+        expected = "ROW-001 synthetic café 界 e\u0301 text"
+        drag(cell(1, 1), cell(60, 1))
+        if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
+            raise RuntimeError("Selection did not automatically arm hotkey: " + observer_path.read_text())
+        seed_clipboard("UNTOUCHED-automatic-608")
+        fixture_command("update")
+        if clipboard() != "UNTOUCHED-automatic-608":
+            raise RuntimeError("Clipboard changed without Copy")
+        events("key", 8, 1048576)
+        if not wait_for(lambda: clipboard() == expected and state().get("nativeCopyDelivered") == 1):
+            raise RuntimeError("Native Copy did not automatically dispatch")
+        if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is False):
+            raise RuntimeError("Successful Copy did not unregister")
+        observations["copy"] = {"clipboard": clipboard(), "fixture": state(), "observer": json.loads(observer_path.read_text())}
+        screenshot("automatic-copy")
+        drag(cell(1, 1), cell(60, 1))
+        if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
+            raise RuntimeError("Second selection did not arm")
+        events("activate", "com.apple.finder")
+        if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is False and not state().get("nativeCopy", {}).get("terminalFocused")):
+            raise RuntimeError("Other app did not disarm")
+        observations["otherApp"] = state()["nativeCopy"]
+        events("key", 8, 1048576)
+        events("activate-pid", str(terminal_process.pid))
+        if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
+            raise RuntimeError("Focus return did not rearm")
+        events("key", 17, 1048576)
+        if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is False):
+            raise RuntimeError("Other tab did not disarm")
+        observations["otherTab"] = state()["nativeCopy"]
+        seed_clipboard("printf '\\033[2J\\033[HOTHER-TAB-608\\n'")
+        key("paste")
+        key("enter")
+        time.sleep(0.4)
+        drag(cell(1, 1), cell(14, 1))
+        seed_clipboard("UNTOUCHED-other-tab-608")
+        events("key", 8, 1048576)
+        time.sleep(0.3)
+        observations["otherTabCopy"] = clipboard()
+        screenshot("automatic-other-tab-copy")
+        if clipboard() != "OTHER-TAB-608":
+            raise RuntimeError("Unrelated tab native Copy was interfered with")
+        events("key", 13, 1048576)
+        if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
+            raise RuntimeError("Tab return did not rearm")
+        seed_clipboard("UNTOUCHED-return-608")
+        events("key", 8, 1048576)
+        if not wait_for(lambda: clipboard() == expected and state().get("nativeCopyDelivered") == 2):
+            raise RuntimeError("Copy after focus return failed")
+        observations["returnCopy"] = {"clipboard": clipboard(), "fixture": state(), "observer": json.loads(observer_path.read_text())}
+        fixture_command("diagnostic-draft")
+        for _ in range(6): key("left")
+        payload = "DIAGNOSTIC café 界 e\u0301\nsecond line"
+        seed_clipboard(payload)
+        key("paste")
+        if not wait_for(lambda: state().get("editor") == "PREFIX" + payload + "SUFFIX" and state().get("submissions", 0) == 0):
+            raise RuntimeError("Native paste regressed")
+        observations["paste"] = state()
+        screenshot("automatic-paste")
+        key("exit")
+        check("orderlyExit", lambda: state().get("stopped") is True and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
+        check("termiosRestored", lambda: state().get("termiosBefore") == state().get("termiosAfter"))
+        raise CopyDiagnosticComplete()
     if os.environ.get("SCRAMJET_SCROLL_PROTOCOL") == "1":
         observations = report["scrollProtocol"] = {}
         for variant in ("modifycursor", "sgronly"):

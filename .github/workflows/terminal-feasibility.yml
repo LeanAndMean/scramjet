@@ -8,13 +8,14 @@ permissions:
 
 jobs:
   macos-copy-diagnostic:
-    name: macOS copy diagnostic (${{ matrix.terminal }})
+    name: macOS copy diagnostic (${{ matrix.terminal }}, ${{ matrix.backend }})
     runs-on: macos-15
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         terminal: [apple, iterm2]
+        backend: [swift, koffi]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,16 +30,23 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run build
       - name: Compile bounded, non-requesting observer
+        if: matrix.backend == 'swift'
         run: swiftc .github/scripts/macos-copy-observer.swift -o "$RUNNER_TEMP/macos-copy-observer"
       - name: Launch independently attributed observer without requesting access
         run: |
           mkdir -p "$RUNNER_TEMP/copy-diagnostic" "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS"
-          cp "$RUNNER_TEMP/macos-copy-observer" "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS/observer"
+          if [ '${{ matrix.backend }}' = swift ]; then
+            cp "$RUNNER_TEMP/macos-copy-observer" "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS/observer"
+          else
+            printf '#!/bin/bash\nexec %q %q "$@" >%q 2>&1\n' "$(command -v node)" "$GITHUB_WORKSPACE/.github/scripts/macos-copy-koffi.mjs" "$RUNNER_TEMP/copy-diagnostic/koffi.log" > "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS/observer"
+            chmod +x "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS/observer"
+          fi
           printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.scramjet.issue608.observer</string><key>CFBundleName</key><string>Issue608Observer</string><key>CFBundleExecutable</key><string>observer</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/></dict></plist>' > "$RUNNER_TEMP/Issue608Observer.app/Contents/Info.plist"
           open -n "$RUNNER_TEMP/Issue608Observer.app" --args "$RUNNER_TEMP/copy-diagnostic/independent-observer.json"
       - name: Observe stock shortcuts through production composition
         env:
           SCRAMJET_SCROLL_PROTOCOL: "1"
+          SCRAMJET_NATIVE_COPY: "1"
           SCRAMJET_MACOS_MOUSE_DIAGNOSTIC: ${{ runner.temp }}/copy-diagnostic/independent-observer.json
         run: python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/copy-diagnostic" --terminal=${{ matrix.terminal }} --copy-diagnostic
       - name: Stop bounded independent observer
@@ -52,7 +60,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-608-copy-diagnostic-${{ matrix.terminal }}
+          name: issue-608-copy-diagnostic-${{ matrix.terminal }}-${{ matrix.backend }}
           path: ${{ runner.temp }}/copy-diagnostic
           if-no-files-found: error
           retention-days: 7
