@@ -582,7 +582,7 @@ try:
     screenshot("startup")
     if os.environ.get("SCRAMJET_SCROLL_PROTOCOL") == "1":
         observations = report["scrollProtocol"] = {}
-        for variant in ("off", "on", "appcursor"):
+        for variant in ("modifycursor", "sgronly"):
             fixture_command("diagnostic-protocol-" + variant)
             fixture_command("diagnostic-protocol-query")
             time.sleep(0.4)
@@ -606,14 +606,39 @@ try:
             screenshot(f"protocol-{variant}-copy")
         observer_path = Path(os.environ["SCRAMJET_MACOS_MOUSE_DIAGNOSTIC"])
         control = Path(str(observer_path) + ".control")
-        control.write_text("suppress")
-        time.sleep(0.3)
-        fixture_command("diagnostic-protocol-off")
-        events("wheel", 3)
+        fixture_command("diagnostic-protocol-focus")
+        events("activate", "com.apple.finder")
         time.sleep(0.5)
-        observations["wheelTapSuppression"] = {"observer": json.loads(observer_path.read_text()), "inputs": state().get("protocolInputs")}
-        screenshot("protocol-tap-suppression")
-        control.write_text("observe")
+        events("activate-pid", str(terminal_process.pid))
+        time.sleep(0.5)
+        observations["appFocus"] = state().get("protocolInputs")
+        fixture_command("diagnostic-capture-reset")
+        events("key", 17, 1048576)
+        time.sleep(0.8)
+        screenshot("protocol-new-tab")
+        events("key", 13, 1048576)
+        time.sleep(0.8)
+        observations["tabFocus"] = state().get("protocolInputs")
+        fixture_command("diagnostic-retained-restore")
+        fixture_command("diagnostic-top")
+        drag(cell(1, 1), cell(60, 1))
+        if not wait_for(lambda: state().get("selectionPainted") is True):
+            raise RuntimeError("Application selection absent before hotkey experiment")
+        seed_clipboard("UNTOUCHED-hotkey-608")
+        control.write_text("arm")
+        if not wait_for(lambda: json.loads(observer_path.read_text()).get("registration") == 0):
+            raise RuntimeError("Carbon hotkey registration failed: " + observer_path.read_text())
+        events("key", 8, 1048576)
+        delivered = wait_for(lambda: any(e.get("kind") == "hotkey" for e in json.loads(observer_path.read_text()).get("events", [])))
+        observations["carbonHotkey"] = {"delivered": delivered, "observer": json.loads(observer_path.read_text()), "clipboardBeforeDispatch": clipboard()}
+        if delivered:
+            fixture_command("diagnostic-hotkey-copy")
+            wait_for(lambda: clipboard() == expected)
+        observations["carbonHotkey"]["clipboardAfterDispatch"] = clipboard()
+        observations["carbonHotkey"]["fixture"] = state()
+        control.write_text("disarm")
+        wait_for(lambda: json.loads(observer_path.read_text()).get("armed") is False)
+        screenshot("protocol-hotkey-copy")
         fixture_command("diagnostic-protocol-reset")
         key("exit")
         check("orderlyExit", lambda: state().get("stopped") is True and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")

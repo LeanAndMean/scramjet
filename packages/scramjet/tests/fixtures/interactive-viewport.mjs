@@ -365,7 +365,7 @@ async function runProduction() {
 			else if (command.action === "editor") extensionUI.setEditorText("");
 			else if (diagnostic && command.action.startsWith("diagnostic-protocol-")) {
 				const variant = command.action.slice("diagnostic-protocol-".length);
-				const modes = { off: "\x1b[?1007l", on: "\x1b[?1007h", appcursor: "\x1b[?1007h\x1b[?1h", query: "\x1b[?1007$p", reset: "\x1b[?1007l\x1b[?1l" };
+				const modes = { off: "\x1b[?1007l", on: "\x1b[?1007h", appcursor: "\x1b[?1007h\x1b[?1h", modifycursor: "\x1b[?1h\x1b[>1;2m", sgronly: "\x1b[?1l\x1b[?1007l\x1b[?1006h", query: "\x1b[?1007$p", focus: "\x1b[?1004h", reset: "\x1b[?1007l\x1b[?1l\x1b[>1m" };
 				if (!(variant in modes)) throw new Error("Unknown protocol variant");
 				safetyState.protocolCapture = true;
 				safetyState.protocolInputs = [];
@@ -373,6 +373,8 @@ async function runProduction() {
 				terminal.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" + modes[variant]);
 			}
 			else if (diagnostic && command.action === "diagnostic-capture-reset") safetyState.protocolInputs = [];
+			else if (diagnostic && command.action === "diagnostic-retained-restore") { safetyState.protocolCapture = false; terminal.write("\x1b[?1l\x1b[>1m\x1b[?1007l\x1b[?1002h\x1b[?1006h"); }
+			else if (diagnostic && command.action === "diagnostic-hotkey-copy") mode.ui.handleInput("\x03");
 			else if (diagnostic && command.action === "diagnostic-draft") extensionUI.setEditorText("PREFIXSUFFIX");
 			else if (diagnostic && command.action === "diagnostic-super-binding") mode.keybindings.setUserBindings({ ...mode.keybindings.getUserBindings(), "tui.input.copy": ["ctrl+c", "super+c"] });
 			else if (diagnostic && command.action === "diagnostic-top") { mode.ui.followViewport(); mode.ui.scrollViewportTo(0); }
