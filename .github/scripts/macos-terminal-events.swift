@@ -139,7 +139,7 @@ let args = CommandLine.arguments
 switch args[1] {
 case "capabilities":
     emit(["accessibility": AXIsProcessTrusted(), "postEvents": CGPreflightPostEventAccess(),
-          "screenCapture": CGPreflightScreenCaptureAccess()])
+          "screenCapture": CGPreflightScreenCaptureAccess(), "pendinMask": UInt64(PENDIN)])
 case "geometry", "resize":
     guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier?.lowercased() == (args.count > 2 ? args[2].lowercased() : "com.apple.terminal") }) else {
         fatalError("Terminal is not running")

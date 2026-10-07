@@ -593,10 +593,14 @@ async function runProduction() {
 		} else if (key === "6") {
 			const editor = join(directory, "editor.sh");
 			const receipt = join(directory, "handoff.txt");
-			writeFileSync(editor, `#!/bin/sh\nstty -g > '${receipt}'\nprintf 'SYNTHETIC EXTERNAL EDITOR\\n'\nprintf 'edited by synthetic external editor' > "$1"\n`, { mode: 0o700 });
+			const readInput = diagnostic && process.env.SCRAMJET_MACOS_INPUT_THREAD === "1";
+			const inputCheck = readInput ? `touch '${receipt}.ready'\nIFS= read -r value\nprintf '%s' "$value" > '${receipt}.input'\nstty -g > '${receipt}.after-read'\n` : "";
+			writeFileSync(editor, `#!/bin/sh\nstty -g > '${receipt}'\nprintf 'SYNTHETIC EXTERNAL EDITOR\\n'\n${inputCheck}printf 'edited by synthetic external editor' > "$1"\n`, { mode: 0o700 });
+			if (readInput) { safetyState.externalEditorReady = `${receipt}.ready`; record(); }
 			process.env.VISUAL = editor;
 			await mode.openExternalEditor();
 			safetyState.handoffTermios = readFileSync(receipt, "utf8").trim();
+			if (readInput) { safetyState.externalEditorInput = readFileSync(`${receipt}.input`, "utf8"); safetyState.handoffAfterRead = readFileSync(`${receipt}.after-read`, "utf8").trim(); }
 			safetyState.editorHandoffs++;
 			safetyState.phase = "editor-return";
 		} else if (key === "8") {

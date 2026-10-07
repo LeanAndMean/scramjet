@@ -159,6 +159,18 @@ def clipboard():
     return subprocess.run(command, text=True, capture_output=True, check=True, timeout=10).stdout
 
 
+def diagnostic_termios_restored(before, after):
+    if before == after:
+        return True
+    if not is_mac or report.get("capabilities", {}).get("pendinMask") != 0x20000000:
+        return False
+    a, b = before.split(":"), after.split(":")
+    if len(a) != len(b):
+        return False
+    differences = [(x, y) for x, y in zip(a, b) if x != y]
+    return len(differences) == 1 and all(x.startswith("lflag=") for x in differences[0]) and (int(differences[0][0][6:], 16) ^ int(differences[0][1][6:], 16)) == 0x20000000
+
+
 def seed_clipboard(text):
     command = ["pbcopy"] if is_mac else ["xclip", "-selection", "clipboard"]
     subprocess.run(command, input=text, text=True, check=True, timeout=10)
@@ -719,16 +731,35 @@ try:
         observations["paste"] = state()
         screenshot("automatic-paste")
         if direct_reader:
-            fixture_command("external")
-            if state().get("editorHandoffs") != 1 or state().get("handoffTermios") != state().get("termiosBefore"):
-                raise RuntimeError("External-editor handoff did not restore terminal state")
+            import threading
+            input_errors = []
+            def external_input():
+                try:
+                    if not wait_for(lambda: bool(state().get("externalEditorReady")) and Path(state()["externalEditorReady"]).exists(), timeout=8):
+                        raise RuntimeError("External editor did not reach its input read")
+                    type_text("handoff")
+                    key("enter")
+                except Exception as error:
+                    input_errors.append(str(error))
+            sender = threading.Thread(target=external_input)
+            sender.start()
+            try:
+                fixture_command("external")
+            finally:
+                sender.join(timeout=10)
+            if sender.is_alive() or input_errors:
+                raise RuntimeError("External-editor input failed: " + repr(input_errors))
+            if state().get("editorHandoffs") != 1 or not diagnostic_termios_restored(state()["termiosBefore"], state()["handoffTermios"]):
+                raise RuntimeError("External-editor handoff did not restore terminal configuration")
+            if state().get("externalEditorInput") != "handoff" or state().get("handoffAfterRead") != state().get("termiosBefore"):
+                raise RuntimeError("External-editor read lost input or failed to settle PENDIN")
             key("x") if not is_mac else events("text", "x")
             if not wait_for(lambda: state().get("editor") == "edited by synthetic external editorx"):
                 raise RuntimeError("Input did not survive native-reader restart")
             observations["externalEditor"] = state()
         key("exit")
         check("orderlyExit", lambda: state().get("stopped") is True and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
-        check("termiosRestored", lambda: state().get("termiosBefore") == state().get("termiosAfter"))
+        check("termiosRestored", lambda: diagnostic_termios_restored(state()["termiosBefore"], state()["termiosAfter"]))
         raise CopyDiagnosticComplete()
     if os.environ.get("SCRAMJET_SCROLL_PROTOCOL") == "1":
         observations = report["scrollProtocol"] = {}
