@@ -388,7 +388,12 @@ async function runProduction() {
 	process.once("SIGHUP", stop);
 	mode.ui.addInputListener((data) => {
 		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
-			if (diagnostic && data.slice(6, -6) === "DIAGNOSTIC café 界 e\u0301\nsecond line") return;
+			if (diagnostic) {
+				const payload = data.slice(6, -6);
+				const expected = "DIAGNOSTIC café 界 e\u0301\nsecond line";
+				safetyState.diagnosticPasteShape = { length: payload.length, carriageReturns: payload.split("\r").length - 1, lineFeeds: payload.split("\n").length - 1, exact: payload === expected, normalizedLineEndings: payload.replace(/\r\n?/g, "\n") === expected, normalizedUnicode: payload.replace(/\r\n?/g, "\n").normalize("NFC") === expected.normalize("NFC") };
+				if (safetyState.diagnosticPasteShape.normalizedLineEndings) return;
+			}
 			interactions[copied !== undefined && data.slice(6, -6) === copied ? "pasteMatches" : "pasteMismatches"]++;
 			return { consume: true };
 		}

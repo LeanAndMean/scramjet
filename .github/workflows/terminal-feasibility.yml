@@ -30,10 +30,23 @@ jobs:
       - run: npm run build
       - name: Compile bounded, non-requesting observer
         run: swiftc .github/scripts/macos-copy-observer.swift -o "$RUNNER_TEMP/macos-copy-observer"
+      - name: Launch independently attributed observer without requesting access
+        run: |
+          mkdir -p "$RUNNER_TEMP/copy-diagnostic" "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS"
+          cp "$RUNNER_TEMP/macos-copy-observer" "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS/observer"
+          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.scramjet.issue608.observer</string><key>CFBundleName</key><string>Issue608Observer</string><key>CFBundleExecutable</key><string>observer</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/></dict></plist>' > "$RUNNER_TEMP/Issue608Observer.app/Contents/Info.plist"
+          open -n "$RUNNER_TEMP/Issue608Observer.app" --args "$RUNNER_TEMP/copy-diagnostic/independent-observer.json"
       - name: Observe stock shortcuts through production composition
         env:
           SCRAMJET_MACOS_OBSERVER: ${{ runner.temp }}/macos-copy-observer
         run: python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/copy-diagnostic" --terminal=${{ matrix.terminal }} --copy-diagnostic
+      - name: Stop bounded independent observer
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/copy-diagnostic/independent-observer.json"; then
+            pid=$(jq -r '.capabilities.pid' "$RUNNER_TEMP/copy-diagnostic/independent-observer.json")
+            kill -TERM "$pid" 2>/dev/null || true
+          fi
       - name: Preserve diagnostic observations
         if: always()
         uses: actions/upload-artifact@v4
