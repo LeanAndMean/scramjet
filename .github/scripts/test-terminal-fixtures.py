@@ -297,6 +297,30 @@ class NativeClipboardOracleTests(unittest.TestCase):
             self.assertFalse(check(baseline, invalid, True))
 
 
+class NativeNegativeControlVerdictTests(unittest.TestCase):
+    def test_only_expected_outcome_failure_with_provenance_and_cleanup_is_accepted(self):
+        source = interaction_source()
+        finalizer = next(node for node in source.body if isinstance(node, ast.Try))
+        classifier = next(node for node in finalizer.finalbody if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "negative_control")
+        functions = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "termios_configuration_equal"]
+        code = compile(ast.Module(body=functions + [classifier], type_ignores=[]), "terminal-probe.py", "exec")
+        for control, failure in (("noop-copy", "nativeCommandCCopy"), ("copy-on-selection", "sentinelSurvivesSelectionAndUpdate"), ("consumed-paste", "desktopPasteRoundTrip")):
+            report = {"error": failure, "checks": {failure: {"passed": False}, **{name: {"passed": True} for name in ("checkoutProvenanceMatches", "productionCompositionConfigured", "ordinaryDesktopDragSelects")}},
+                      "negativeControlExit": {"status": "0", "fixture": {"stopped": True, "negativeControl": control, "termiosBefore": "saved", "termiosAfter": "saved"}},
+                      "ownedTerminalClosed": {"pid": 42}}
+            def accepted(candidate):
+                context = {"re": re, "negative_control": control, "report": candidate}
+                exec(code, context)
+                return candidate["negativeControlRejected"]
+            with self.subTest(control=control):
+                self.assertTrue(accepted(report))
+                for field in ("negativeControlExit", "ownedTerminalClosed"):
+                    self.assertFalse(accepted({key: value for key, value in report.items() if key != field}))
+                self.assertFalse(accepted({**report, "cleanupError": "surviving process"}))
+                self.assertFalse(accepted({**report, "error": "startup failed"}))
+                self.assertFalse(accepted({**report, "checks": {failure: {"passed": False}}}))
+
+
 class SafetyTermiosOracleTests(unittest.TestCase):
     def setUp(self):
         self.context = {"re": re}

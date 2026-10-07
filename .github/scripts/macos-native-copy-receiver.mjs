@@ -20,23 +20,32 @@ if (isMainThread) {
 	const { createNative, MacosInputReader } = await import(pathToFileURL(adapterPath).href);
 	const services = koffi.load("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices");
 	const capabilities = Object.fromEntries(Object.entries({ accessibility: "AXIsProcessTrusted", listenEvents: "CGPreflightListenEventAccess", postEvents: "CGPreflightPostEventAccess", screenCapture: "CGPreflightScreenCaptureAccess" }).map(([key, name]) => [key, services.func(`bool ${name}()`)()]));
-	const receipt = { pid: process.pid, adapterPath, capabilities, permissionRequestsMade: false, notices: [] };
+	const receipt = { pid: process.pid, architecture: process.arch, adapterPath, capabilities, permissionRequestsMade: false, notices: [] };
 	const record = () => { writeFileSync(`${target}.tmp`, JSON.stringify(receipt)); renameSync(`${target}.tmp`, target); };
 	if (Object.values(capabilities).some(Boolean)) {
 		receipt.error = "Receiver inherited permission; denied-permission evidence unavailable";
 		record();
 		throw new Error(receipt.error);
 	}
-	const native = createNative(koffi, 0);
+	let exclusive = false;
+	const native = createNative({ ...koffi, load(path) {
+		const library = koffi.load(path);
+		return { func(...args) {
+			const call = library.func(...args);
+			return args[0] === "RegisterEventHotKey" ? (code, modifiers, id, target, options, result) => call(code, modifiers, id, target, exclusive ? 1 : options, result) : call;
+		} };
+	} }, 0);
 	let registered = false;
+	let releaseUnknown = false;
 	let timer;
 	let deadline;
 	function stop(error) {
 		clearInterval(timer);
 		clearTimeout(deadline);
 		if (error) receipt.error = String(error);
-		if (registered) { receipt.unregister = native.unregister(); registered = receipt.unregister !== 0; }
+		if (registered && !releaseUnknown) { receipt.unregister = native.unregister(); registered = receipt.unregister !== 0; releaseUnknown = registered; }
 		if (!registered && !error) {
+			exclusive = false;
 			try {
 				const shared = new Int32Array(new SharedArrayBuffer(24));
 				const messages = [];
@@ -72,7 +81,18 @@ if (isMainThread) {
 		timer = setInterval(() => {
 			try {
 				native.pump((id) => receipt.notices.push(id));
-				if (receipt.notices.length) stop(receipt.notices.length === 1 && receipt.notices[0] === 608 ? undefined : "Unexpected native identity");
+				if (receipt.notices.length === 1 && !exclusive) {
+					if (receipt.notices[0] !== 608) throw new Error("Unexpected default-adapter identity");
+					receipt.defaultUnregister = native.unregister();
+					if (receipt.defaultUnregister !== 0) { releaseUnknown = true; throw new Error("Default adapter cleanup failed"); }
+					registered = false;
+					exclusive = true;
+					receipt.exclusiveCompetitorOptions = 1;
+					receipt.exclusiveRegistration = native.register(609);
+					registered = receipt.exclusiveRegistration === 0;
+					if (!registered) throw new Error("Exclusive competitor registration failed");
+					record();
+				} else if (receipt.notices.length > 1) stop(receipt.notices.length === 2 && receipt.notices[1] === 609 ? undefined : "Unexpected exclusive identity");
 			} catch (error) { stop(error); }
 		}, 4);
 		deadline = setTimeout(() => stop("Native gesture timed out"), 30000);

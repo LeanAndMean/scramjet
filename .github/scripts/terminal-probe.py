@@ -473,6 +473,9 @@ def native_receiver_challenge(cell):
     if not wait_for(lambda: receipt().get("registration") == 0 or receipt().get("error"), timeout=15) or receipt().get("error"):
         raise RuntimeError("Independent native adapter did not register: " + json.dumps(receipt()))
     try:
+        key("nativeCopy")
+        if not wait_for(lambda: receipt().get("exclusiveRegistration") == 0 or receipt().get("error")) or receipt().get("error"):
+            raise RuntimeError("Default adapter delivery or exclusive competitor failed: " + json.dumps(receipt()))
         seed_clipboard("CONFLICT-SENTINEL")
         drag(cell(1, 1), cell(60, 1))
         if not wait_for(lambda: any("registration failed" in item.get("reason", "") for item in state().get("nativeAvailability", []))):
@@ -482,7 +485,8 @@ def native_receiver_challenge(cell):
             raise RuntimeError("Independent receiver did not release native resources")
         report["independentReceiver"] = receipt()
         check("deniedPermissionNativeAdapter", lambda: receipt().get("capabilities") == {"accessibility": False, "listenEvents": False, "postEvents": False, "screenCapture": False}
-              and receipt().get("permissionRequestsMade") is False and receipt().get("notices") == [608]
+              and receipt().get("permissionRequestsMade") is False and receipt().get("notices") == [608, 609]
+              and receipt().get("defaultUnregister") == 0 and receipt().get("exclusiveCompetitorOptions") == 1
               and receipt().get("unregister") == 0 and receipt().get("dispose") == 0 and not receipt().get("error"))
         check("nativeRegistrationConflict", lambda: clipboard() == "CONFLICT-SENTINEL" and state().get("selectionActive") is True)
         check("staleAndFailedNativeCleanup", lambda: receipt().get("staleCapturedIdentityRejected") is True
@@ -624,7 +628,10 @@ try:
     if is_mac:
         plist = "/Applications/iTerm.app/Contents/Info.plist" if terminal_kind == "iterm2" else "/System/Applications/Utilities/Terminal.app/Contents/Info.plist"
         report["terminalVersion"] = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", plist)
-        run("swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(driver))
+        subprocess.run(["swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(driver)], text=True, capture_output=True, check=True, timeout=120)
+        report["termiosStateMask"] = json.loads(events("termios-mask"))
+        if report["termiosStateMask"] != {"PENDIN": 0x20000000}:
+            raise RuntimeError("Native SDK PENDIN mask does not match the restoration oracle")
         report["capabilities"] = json.loads(events("capabilities"))
     else:
         executable = {"vte": "xfce4-terminal", "kitty": "kitty", "xterm": "xterm"}[terminal_kind]
@@ -1159,6 +1166,8 @@ finally:
         final = receipt.get("fixture", {})
         report["negativeControlRejected"] = (report.get("error") == expected_failure
             and report["checks"].get(expected_failure, {}).get("passed") is False
+            and all(report["checks"].get(name, {}).get("passed") is True for name in ("checkoutProvenanceMatches", "productionCompositionConfigured", "ordinaryDesktopDragSelects"))
+            and all(item.get("passed") is True for name, item in report["checks"].items() if name != expected_failure)
             and "cleanupError" not in report and receipt.get("status") == "0"
             and final.get("stopped") is True and final.get("negativeControl") == negative_control
             and termios_configuration_equal(final.get("termiosBefore"), final.get("termiosAfter"), True)

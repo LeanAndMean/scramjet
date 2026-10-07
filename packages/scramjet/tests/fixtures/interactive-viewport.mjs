@@ -39,7 +39,8 @@ Uses actual TUI/RetainedViewport/ProcessTerminal input, selection and rendering.
 3. Drag-select Unicode without modifiers, including across the screen edge.
 4. Right-click selection; independently compare exact desktop clipboard text.
 5. Select again and Ctrl+C; successful copying clears the selection.
-6. Paste back here: only equality is recorded, never pasted content.
+6. Unexpected paste is consumed without recording its content. Journey action
+   native-paste arms one known synthetic payload for real editor insertion.
 7. Ctrl+Home/Ctrl+End browse the transcript; use --production to test Home/End editing.
 8. Type and use arrows/backspace; at-tail PageUp belongs to the focused component.
 9. Production right-click without selection pastes into the focused editor from
@@ -54,7 +55,11 @@ subagent cards, queues, widgets, editor and footer. Ctrl+N advances one child,
 Ctrl+O expands/collapses, Ctrl+Q exits. No child processes or models are invoked.
 Use --production --journey for the native activation matrix: synthetic history,
 real grouped cards, clipboard observation, and controlled updates/approval/handoffs.
-Only that mode polls <SCRAMJET_TUI_PROBE_EVIDENCE>.command for fixture actions.
+Only journey/committed-handoff modes poll <SCRAMJET_TUI_PROBE_EVIDENCE>.command.
+Set SCRAMJET_TUI_INSTALLED_ROOT to an isolated installed Scramjet package root
+(Node 22.14+); runtime imports must stay in that closure, without checkout fallback.
+--native-handoffs requires real external-editor stdin; --negative-control selects
+noop-copy, copy-on-selection or consumed-paste solely to challenge native oracles.
 selector-confirm/select/next/model open actual Scramjet controls; their opening
 receipt precedes the eventual answer, recorded separately in selector.result.
 The default mode retains the Stage 3 desktop driver's fixed-row protocol.
@@ -311,7 +316,7 @@ async function runProduction() {
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), editor: extensionUI?.getEditorText(), editorCursor: mode.defaultEditor.getCursor(), runtimeOrigin: installedRoot ? { kind: "installed", root: realpathSync(installedRoot) } : { kind: "checkout" }, negativeControl: control ?? null, nativeAvailability }));
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, architecture: process.arch, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), editor: extensionUI?.getEditorText(), editorCursor: mode.defaultEditor.getCursor(), runtimeOrigin: installedRoot ? { kind: "installed", root: realpathSync(installedRoot) } : { kind: "checkout" }, negativeControl: control ?? null, nativeAvailability }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {
