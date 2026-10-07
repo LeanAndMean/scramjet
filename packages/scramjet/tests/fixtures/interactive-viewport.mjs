@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, fork, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { release, platform, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -253,7 +253,25 @@ async function runProduction() {
 	const ttyState = () => execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
 	const startTerminal = terminal.start.bind(terminal);
 	const stopTerminal = terminal.stop.bind(terminal);
-	terminal.start = (...args) => { terminalStates.push({ start: ttyState() }); startTerminal(...args); };
+	let inputProxy;
+	terminal.start = (...args) => {
+		terminalStates.push({ start: ttyState() }); startTerminal(...args);
+		if (process.env.SCRAMJET_MACOS_INPUT_PROXY === "1") {
+			process.stdin.removeListener("data", terminal.stdinDataHandler);
+			process.stdin.pause();
+			inputProxy = fork(new URL("../../../../.github/scripts/macos-copy-input-proxy.mjs", import.meta.url), [process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC], { stdio: ["inherit", "ignore", "inherit", "ipc"] });
+			inputProxy.on("message", (message) => {
+				if (message.kind === "data") terminal.stdinBuffer?.emit("data", message.data);
+				if (message.kind === "paste") terminal.stdinBuffer?.emit("paste", message.data);
+				if (message.kind === "copy" && terminalFocused && nativeCopyEnabled && message.event.lease === nativeCopyLease && mode.ui.viewport?.selection && !mode.ui.hasOverlay()) {
+					copyKind = "keyCopy"; void mode.ui.viewport.copySelection();
+					safetyState.nativeCopyDelivered = (safetyState.nativeCopyDelivered ?? 0) + 1;
+				}
+			});
+		}
+	};
+	const holdOsc = terminal.holdOscInput.bind(terminal);
+	terminal.holdOscInput = (hold) => { holdOsc(hold); if (inputProxy?.connected) inputProxy.send({ kind: "osc", hold }); };
 	terminal.stop = () => { stopTerminal(); terminalStates.push({ stop: ttyState() }); record(); };
 	const mode = new InteractiveMode(runtime, { terminal });
 	let stopped = false;
@@ -356,7 +374,7 @@ async function runProduction() {
 			const evidence = JSON.parse(readFileSync(mouseEvidence, "utf8"));
 			const hotkeys = evidence.events.filter((event) => event.kind === "hotkey");
 			for (const event of hotkeys.slice(hotkeyEventsSeen)) {
-				if (selection && event.lease === nativeCopyLease) { mode.ui.handleInput("\x03"); safetyState.nativeCopyDelivered = (safetyState.nativeCopyDelivered ?? 0) + 1; }
+				if (!inputProxy && selection && event.lease === nativeCopyLease) { mode.ui.handleInput("\x03"); safetyState.nativeCopyDelivered = (safetyState.nativeCopyDelivered ?? 0) + 1; }
 			}
 			hotkeyEventsSeen = hotkeys.length;
 			safetyState.nativeCopy = { terminalFocused, lease: nativeCopyLease, armed: evidence.armed, registration: evidence.registration, capabilities: evidence.capabilities };
@@ -434,7 +452,7 @@ async function runProduction() {
 			record();
 		}).catch((error) => { safetyState.error = error.message; record(); stop(); console.error(error); process.exitCode = 1; });
 	}, 50);
-	const stop = () => { if (!stopped) { stopped = true; if (nativeCopyEnabled) { nativeCopyEnabled = false; writeFileSync(process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC + ".control", "disarm"); } stopNativeCopy?.(); mode.stop(); finish(); } };
+	const stop = () => { if (!stopped) { stopped = true; if (nativeCopyEnabled) { nativeCopyEnabled = false; writeFileSync(process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC + ".control", "disarm"); } stopNativeCopy?.(); if (inputProxy?.connected) inputProxy.send({ kind: "stop" }); mode.stop(); finish(); } };
 	process.once("SIGINT", stop);
 	process.once("SIGTERM", stop);
 	process.once("SIGHUP", stop);
