@@ -75,6 +75,7 @@ export class ProcessTerminal implements Terminal {
 	private nativeOptions?: NativeCopyOptions;
 	private macosInput?: MacosInput;
 	private draining = false;
+	private keyboardReportingAllowed = true;
 	private started = false;
 	private viewportMode = false;
 	private keyboardFallback?: ReturnType<typeof setTimeout>;
@@ -105,7 +106,10 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
-		if (this.started) return;
+		if (this.started) {
+			this.macosInput?.checkHealth();
+			return;
+		}
 		if (this.macosInput) throw new Error("Previous macOS input ownership is unproven; do not restart this terminal.");
 		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
@@ -121,11 +125,18 @@ export class ProcessTerminal implements Terminal {
 				(notice) => this.nativeOptions?.onCopyIntent(notice),
 				(available, reason) => this.nativeOptions?.onAvailability(available, reason),
 				undefined,
-				(error) => options.onError(error),
+				(error) => {
+					clearTimeout(this.keyboardFallback);
+					this.keyboardFallback = undefined;
+					this.keyboardReportingAllowed = false;
+					options.onError(error);
+				},
 			);
 			if (!this.macosInput.prepare()) this.macosInput = undefined;
 		}
 		this.draining = false;
+		this.keyboardReportingAllowed = true;
+		this.macosInput?.setMouseReporting(this.viewportMode);
 
 		// Save previous state and enable raw mode
 		this.wasRaw = process.stdin.isRaw || false;
@@ -242,6 +253,7 @@ export class ProcessTerminal implements Terminal {
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
 		this.draining = true;
+		this.keyboardReportingAllowed = false;
 		this.macosInput?.setLease(null);
 		clearTimeout(this.keyboardFallback);
 		this.keyboardFallback = undefined;
@@ -259,6 +271,7 @@ export class ProcessTerminal implements Terminal {
 
 		if (this.macosInput) {
 			await this.macosInput.drain(maxMs, idleMs);
+			this.draining = false;
 			return;
 		}
 
@@ -284,6 +297,7 @@ export class ProcessTerminal implements Terminal {
 		} finally {
 			process.stdin.removeListener("data", onData);
 			this.inputHandler = previousHandler;
+			this.draining = false;
 		}
 	}
 
@@ -304,13 +318,13 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		clearTimeout(this.keyboardFallback);
+		this.keyboardFallback = undefined;
 		// SCRAMJET-DIVERGENCE: no terminal handoff or restart follows unproven Worker release.
 		this.macosInput?.stop();
 		this.macosInput = undefined;
 		if (!this.started) return;
 		this.started = false;
-		clearTimeout(this.keyboardFallback);
-		this.keyboardFallback = undefined;
 		this.setViewportMode(false);
 		if (this.clearProgressInterval()) {
 			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
@@ -469,7 +483,7 @@ export class ProcessTerminal implements Terminal {
 	private dispatchSequence(sequence: string): void {
 		if (this.draining) return;
 		if (!this._kittyProtocolActive && /^\x1b\[\?(\d+)u$/.test(sequence)) {
-			if (!this.inputHandler) return;
+			if (!this.inputHandler || !this.keyboardReportingAllowed) return;
 			this._kittyProtocolActive = true;
 			setKittyProtocolActive(true);
 			// SCRAMJET-DIVERGENCE: explicit Enter events prevent legacy release bytes from authorizing twice.

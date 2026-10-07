@@ -21,7 +21,7 @@ export interface NativeCopyControl {
 }
 
 export type InputCommand =
-	| { kind: "commit" | "stop" | "drain" }
+	| { kind: "commit" | "stop" | "drain" | "endDrain" }
 	| { kind: "osc"; hold: boolean }
 	| { kind: "mouse"; enabled: boolean }
 	| { kind: "lease"; lease: number }
@@ -29,7 +29,7 @@ export type InputCommand =
 
 export type InputMessage =
 	| { kind: "data" | "paste"; data: string; bytes: number }
-	| { kind: "copy"; focus: number; registration: number; lease: number }
+	| { kind: "copy"; focus: number; registration: number; lease: number; bytes: number }
 	| { kind: "availability"; available: boolean; reason?: string }
 	| { kind: "fault"; reason: string };
 
@@ -94,6 +94,10 @@ export class MacosInput {
 		return true;
 	}
 
+	checkHealth(): void {
+		this.assertHealthy();
+	}
+
 	commit(): void {
 		this.command({ kind: "commit" });
 		this.state = "running";
@@ -144,6 +148,7 @@ export class MacosInput {
 			if (performance.now() - last >= idleMs) break;
 			await new Promise((resolve) => setTimeout(resolve, Math.min(idleMs, Math.max(1, end - performance.now()))));
 		}
+		this.command({ kind: "endDrain" });
 	}
 
 	stop(): void {
@@ -211,14 +216,12 @@ export class MacosInput {
 			this.onAvailability(message.available, message.reason);
 			return;
 		}
-		if (message.kind === "copy") {
-			if (!this.lease || message.lease !== this.leaseId) return;
-			const notice = { ...message, generation: this.generation, lease: this.lease };
-			if (this.isCurrent(notice)) this.onCopy(notice);
-			return;
-		}
 		try {
-			this.onInput(message.kind, message.data);
+			if (message.kind === "copy") {
+				if (!this.lease || message.lease !== this.leaseId) return;
+				const notice = { ...message, generation: this.generation, lease: this.lease };
+				if (this.isCurrent(notice)) this.onCopy(notice);
+			} else this.onInput(message.kind, message.data);
 		} finally {
 			if (this.state === "running")
 				this.port.postMessage({ command: { kind: "consumed", bytes: message.bytes }, generation: this.generation });

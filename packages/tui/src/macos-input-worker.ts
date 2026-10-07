@@ -42,8 +42,8 @@ export class MacosInputReader {
 		},
 	) {
 		this.parser.on("data", (data) => {
-			if (this.mouse && !this.draining) {
-				if (data === "\x1b[O") this.setFocus(false);
+			if (this.mouse) {
+				if (data === "\x1b[O" || data === "\x1b" || data === "\x1b[") this.setFocus(false);
 				else if (data === "\x1b[I" || /^\x1b\[<(?:0|1|2);[1-9]\d{0,4};[1-9]\d{0,4}M$/.test(data))
 					this.setFocus(true);
 			}
@@ -77,9 +77,12 @@ export class MacosInputReader {
 				this.backlog = Math.max(0, this.backlog - command.bytes);
 				break;
 			case "drain":
-				this.revoke();
+				this.setFocus(false);
 				this.lease = 0;
 				this.draining = true;
+				break;
+			case "endDrain":
+				this.draining = false;
 				break;
 			case "stop":
 				this.running = false;
@@ -144,7 +147,9 @@ export class MacosInputReader {
 		}
 		native.pump((id) => {
 			if (id !== this.registration || !id || !eligible || !native.foreground()) return;
-			this.io.send({ kind: "copy", focus: this.focus, registration: id, lease: this.lease });
+			this.backlog += 64;
+			this.io.send({ kind: "copy", focus: this.focus, registration: id, lease: this.lease, bytes: 64 });
+			if (this.backlog >= BACKLOG_BYTES) this.revoke();
 		});
 	}
 
@@ -195,6 +200,8 @@ function terminalAncestor(): number | undefined {
 	return undefined;
 }
 
+class NativeOwnershipError extends Error {}
+
 export function createNative(koffi: typeof import("koffi"), terminalPid: number): NativeCopy {
 	const carbon = koffi.load("/System/Library/Frameworks/Carbon.framework/Carbon");
 	const Spec = koffi.struct({ eventClass: "uint32", eventKind: "uint32" });
@@ -242,15 +249,32 @@ export function createNative(koffi: typeof import("koffi"), terminalPid: number)
 		koffi.out(koffi.pointer(ID)),
 	]);
 	let copy: ((id: number) => void) | undefined;
+	let callbackError: unknown;
 	let reference: unknown;
 	const callback = koffi.register((_next: unknown, event: unknown) => {
 		const identity = { signature: 0, id: 0 };
-		if (parameter(event, 0x2d2d2d2d, 0x686b6964, null, 8, null, identity) === 0 && identity.signature === 0x5343524d)
-			copy?.(identity.id);
+		try {
+			if (
+				parameter(event, 0x2d2d2d2d, 0x686b6964, null, 8, null, identity) === 0 &&
+				identity.signature === 0x5343524d
+			)
+				copy?.(identity.id);
+		} catch (error) {
+			callbackError = error;
+		}
 		return 0;
 	}, koffi.pointer(Callback));
 	const handler = [null];
-	const installed = install(target(), callback, 1, { eventClass: 0x6b657962, eventKind: 5 }, null, handler);
+	let installed: number;
+	try {
+		installed = install(target(), callback, 1, { eventClass: 0x6b657962, eventKind: 5 }, null, handler);
+	} catch {
+		throw new NativeOwnershipError("Native Copy handler installation has unknown ownership; exit this process.");
+	}
+	if ((installed === 0) !== Boolean(handler[0]))
+		throw new NativeOwnershipError(
+			"Native Copy handler installation returned ambiguous ownership; exit this process.",
+		);
 	if (installed !== 0) {
 		koffi.unregister(callback);
 		throw new Error(`Native Copy handler installation failed (${installed})`);
@@ -293,6 +317,7 @@ export function createNative(koffi: typeof import("koffi"), terminalPid: number)
 					} finally {
 						release(event[0]);
 					}
+					if (callbackError) throw callbackError;
 				}
 			} finally {
 				copy = undefined;
@@ -341,6 +366,14 @@ function run(port: MessagePort, shared: Int32Array, generation: number): void {
 		native = createNative(koffi, terminalPid);
 		port.postMessage({ kind: "availability", available: true });
 	} catch (error) {
+		if (error instanceof NativeOwnershipError) {
+			Atomics.store(shared, 0, 1);
+			Atomics.store(shared, 4, 1);
+			Atomics.notify(shared, 4);
+			port.postMessage({ kind: "fault", reason: error.message });
+			port.close();
+			return;
+		}
 		port.postMessage({
 			kind: "availability",
 			available: false,

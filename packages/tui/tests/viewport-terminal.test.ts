@@ -1,9 +1,15 @@
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MacosInput } from "../src/macos-input.js";
+
+vi.mock("../src/macos-input.js", () => ({ MacosInput: vi.fn() }));
+
 import { StdinBuffer } from "../src/stdin-buffer.js";
 import { ProcessTerminal } from "../src/terminal.js";
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
 	vi.useRealTimers();
 });
 
@@ -171,7 +177,132 @@ describe("mouse transport framing", () => {
 	});
 });
 
+describe("native input terminal contract", () => {
+	function setup() {
+		const order: string[] = [];
+		const native = {
+			prepare: vi.fn(() => {
+				order.push("prepare");
+				return true;
+			}),
+			commit: vi.fn(() => order.push("commit")),
+			stop: vi.fn(() => order.push("stop")),
+			setMouseReporting: vi.fn(() => order.push("mouse")),
+			holdOscInput: vi.fn(() => order.push("osc")),
+			setLease: vi.fn(),
+			isCurrent: vi.fn(),
+			drain: vi.fn(),
+		};
+		vi.mocked(MacosInput).mockImplementation(() => native as unknown as MacosInput);
+		const stdin = Object.assign(new EventEmitter(), {
+			isTTY: true,
+			isRaw: false,
+			readableLength: 0,
+			readableFlowing: false,
+			setEncoding: vi.fn(),
+			setRawMode: vi.fn(),
+			resume: vi.fn(),
+			pause: vi.fn(),
+		});
+		const stdout = Object.assign(new EventEmitter(), {
+			isTTY: true,
+			write: vi.fn(() => {
+				order.push("write");
+				return true;
+			}),
+		});
+		vi.stubGlobal("process", { ...process, platform: "darwin", stdin, stdout, kill: vi.fn() });
+		const terminal = new ProcessTerminal();
+		const options = { onCopyIntent: vi.fn(), onAvailability: vi.fn(), onError: vi.fn() };
+		return { terminal, options, native, stdin, stdout, order };
+	}
+
+	it("commits the Worker before output without ever resuming a direct reader", () => {
+		const f = setup();
+		f.terminal.configureNativeCopy(f.options);
+		f.terminal.start(vi.fn(), vi.fn());
+		expect(f.order.slice(0, 4)).toEqual(["prepare", "mouse", "commit", "write"]);
+		expect(f.stdin.listenerCount("data")).toBe(0);
+		expect(f.stdin.resume).not.toHaveBeenCalled();
+		f.order.length = 0;
+		f.terminal.setViewportMode(true);
+		expect(f.order).toEqual(["mouse", "write"]);
+		f.order.length = 0;
+		f.terminal.holdOscInput(true);
+		f.terminal.write("query");
+		expect(f.order).toEqual(["osc", "write"]);
+		f.terminal.stop();
+	});
+
+	it("initializes pre-start viewport parser mode before committing ownership", () => {
+		const f = setup();
+		f.terminal.setViewportMode(true);
+		f.terminal.configureNativeCopy(f.options);
+		f.order.length = 0;
+		f.terminal.start(vi.fn(), vi.fn());
+		expect(f.native.setMouseReporting).toHaveBeenCalledWith(true);
+		expect(f.order.slice(0, 3)).toEqual(["prepare", "mouse", "commit"]);
+		f.terminal.stop();
+	});
+
+	it("falls back only when preparation proves that ownership was not acquired", () => {
+		const f = setup();
+		f.native.prepare.mockReturnValue(false);
+		f.terminal.configureNativeCopy(f.options);
+		f.terminal.start(vi.fn(), vi.fn());
+		expect(f.native.commit).not.toHaveBeenCalled();
+		expect(f.stdin.listenerCount("data")).toBe(1);
+		expect(f.stdin.resume).toHaveBeenCalledOnce();
+		f.terminal.stop();
+	});
+
+	it("does not replace a reader after uncertain commit or restore terminal state after failed stop", () => {
+		const f = setup();
+		f.terminal.configureNativeCopy(f.options);
+		f.native.commit.mockImplementation(() => {
+			throw new Error("commit uncertain");
+		});
+		expect(() => f.terminal.start(vi.fn(), vi.fn())).toThrow("commit uncertain");
+		expect(() => f.terminal.start(vi.fn(), vi.fn())).toThrow("unproven");
+		f.native.stop.mockImplementation(() => {
+			throw new Error("release uncertain");
+		});
+		expect(() => f.terminal.stop()).toThrow("release uncertain");
+		expect(f.stdin.resume).not.toHaveBeenCalled();
+		expect(f.stdout.write).not.toHaveBeenCalled();
+		expect(f.stdin.setRawMode).toHaveBeenCalledExactlyOnceWith(true);
+	});
+
+	it("defers late configuration without transferring the direct parser", () => {
+		const f = setup();
+		f.terminal.start(vi.fn(), vi.fn());
+		f.stdin.emit("data", "\x1b[");
+		f.terminal.configureNativeCopy(f.options);
+		expect(f.native.prepare).not.toHaveBeenCalled();
+		expect(f.stdin.listenerCount("data")).toBe(1);
+		expect(f.options.onAvailability).toHaveBeenCalledWith(false, expect.stringContaining("restart"));
+		f.terminal.stop();
+	});
+});
+
 describe("candidate terminal modes", () => {
+	it("restores ordinary input after drain without accepting late keyboard replies", async () => {
+		vi.useFakeTimers();
+		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
+		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
+		vi.spyOn(process, "kill").mockReturnValue(true);
+		const terminal = new ProcessTerminal();
+		const input = vi.fn();
+		terminal.start(input, vi.fn());
+		const draining = terminal.drainInput();
+		await vi.advanceTimersByTimeAsync(60);
+		await draining;
+		process.stdin.emit("data", "x\x1b[?0u");
+		expect(input).toHaveBeenCalledExactlyOnceWith("x");
+		expect(output.mock.calls.map(([value]) => value).join("")).not.toContain("\x1b[>7u");
+		terminal.stop();
+	});
 	it("does not re-enable keyboard reporting from a query response received during a handoff drain", async () => {
 		vi.useFakeTimers();
 		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
