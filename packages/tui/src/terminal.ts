@@ -6,6 +6,7 @@ import { MacosInput, type NativeCopyControl, type NativeCopyOptions } from "./ma
 import { StdinBuffer } from "./stdin-buffer.js";
 
 const cjsRequire = createRequire(import.meta.url);
+let workerInputOwner: ProcessTerminal | undefined;
 
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
 const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
@@ -106,6 +107,8 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
+		if (workerInputOwner && workerInputOwner !== this)
+			throw new Error("stdin is already owned by another terminal Worker");
 		if (this.started) {
 			this.macosInput?.checkHealth();
 			return;
@@ -120,6 +123,7 @@ export class ProcessTerminal implements Terminal {
 				throw new Error("Cannot acquire macOS input while another stdin reader or buffered input exists.");
 			}
 			const options = this.nativeOptions;
+			workerInputOwner = this;
 			this.macosInput = new MacosInput(
 				(kind, data) => (kind === "paste" ? this.dispatchPaste(data) : this.dispatchSequence(data)),
 				(notice) => this.nativeOptions?.onCopyIntent(notice),
@@ -129,10 +133,14 @@ export class ProcessTerminal implements Terminal {
 					clearTimeout(this.keyboardFallback);
 					this.keyboardFallback = undefined;
 					this.keyboardReportingAllowed = false;
+					this.clearProgressInterval();
 					options.onError(error);
 				},
 			);
-			if (!this.macosInput.prepare()) this.macosInput = undefined;
+			if (!this.macosInput.prepare()) {
+				this.macosInput = undefined;
+				workerInputOwner = undefined;
+			}
 		}
 		this.draining = false;
 		this.keyboardReportingAllowed = true;
@@ -318,15 +326,17 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		const progressActive = this.clearProgressInterval();
 		clearTimeout(this.keyboardFallback);
 		this.keyboardFallback = undefined;
 		// SCRAMJET-DIVERGENCE: no terminal handoff or restart follows unproven Worker release.
 		this.macosInput?.stop();
 		this.macosInput = undefined;
+		if (workerInputOwner === this) workerInputOwner = undefined;
 		if (!this.started) return;
 		this.started = false;
 		this.setViewportMode(false);
-		if (this.clearProgressInterval()) {
+		if (progressActive) {
 			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
 

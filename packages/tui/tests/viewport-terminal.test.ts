@@ -234,6 +234,17 @@ describe("native input terminal contract", () => {
 		f.terminal.stop();
 	});
 
+	it("refuses a second terminal reader while the Worker owns stdin", () => {
+		const f = setup();
+		f.terminal.configureNativeCopy(f.options);
+		f.terminal.start(vi.fn(), vi.fn());
+		try {
+			expect(() => new ProcessTerminal().start(vi.fn(), vi.fn())).toThrow(/owned/);
+		} finally {
+			f.terminal.stop();
+		}
+	});
+
 	it("initializes pre-start viewport parser mode before committing ownership", () => {
 		const f = setup();
 		f.terminal.setViewportMode(true);
@@ -271,6 +282,25 @@ describe("native input terminal contract", () => {
 		expect(f.stdin.resume).not.toHaveBeenCalled();
 		expect(f.stdout.write).not.toHaveBeenCalled();
 		expect(f.stdin.setRawMode).toHaveBeenCalledExactlyOnceWith(true);
+		f.native.stop.mockImplementation(() => {});
+		f.terminal.stop();
+	});
+
+	it("cancels output timers before an uncertain stop without writing restoration sequences", () => {
+		vi.useFakeTimers();
+		const f = setup();
+		f.terminal.configureNativeCopy(f.options);
+		f.terminal.start(vi.fn(), vi.fn());
+		f.terminal.setProgress(true);
+		f.stdout.write.mockClear();
+		f.native.stop.mockImplementation(() => {
+			throw new Error("release uncertain");
+		});
+		expect(() => f.terminal.stop()).toThrow("release uncertain");
+		vi.advanceTimersByTime(2000);
+		expect(f.stdout.write).not.toHaveBeenCalled();
+		f.native.stop.mockImplementation(() => {});
+		f.terminal.stop();
 	});
 
 	it("defers late configuration without transferring the direct parser", () => {

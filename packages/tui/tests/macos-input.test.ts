@@ -106,6 +106,12 @@ describe("macOS input ownership", () => {
 		f.reader.tick();
 		expect(Atomics.load(f.shared, 3)).toBe(1);
 		expect(f.events).toEqual([]);
+		f.input.push(Buffer.from("A"));
+		f.reader.tick();
+		f.reader.command({ kind: "endDrain" });
+		f.input.push(Buffer.from("x"));
+		f.reader.tick();
+		expect(f.events).toEqual([{ kind: "data", data: "x", bytes: 1 }]);
 		f.reader.command({ kind: "stop" });
 	});
 
@@ -196,6 +202,27 @@ describe("macOS input ownership", () => {
 		f.reader.tick();
 		expect(f.native.register).toHaveBeenCalledOnce();
 		f.reader.command({ kind: "stop" });
+	});
+
+	it("surfaces a raw reader failure rather than substituting another reader", () => {
+		const shared = new Int32Array(new SharedArrayBuffer(24));
+		const native = {
+			register: () => 0,
+			unregister: vi.fn(() => 0),
+			dispose: vi.fn(() => 0),
+			foreground: () => true,
+			pump: vi.fn(),
+		};
+		const read = vi.fn(() => {
+			throw new Error("fd0 lost");
+		});
+		const reader = new MacosInputReader(shared, { read, native, send: vi.fn() });
+		reader.command({ kind: "commit" });
+		expect(() => reader.tick()).toThrow("fd0 lost");
+		reader.command({ kind: "stop" });
+		reader.tick();
+		expect(read).toHaveBeenCalledOnce();
+		expect(native.dispose).toHaveBeenCalledOnce();
 	});
 
 	it("does not certify release when native unregistration fails", () => {
