@@ -754,7 +754,13 @@ try:
                     raise RuntimeError("Second production instance did not initialize")
                 fixture_command("diagnostic-native-copy-on")
                 fixture_command("diagnostic-second-label")
-                second_cell = next(item["firstCell"] for item in json.loads(events("geometry", bundle, "--marker=SECOND-608")) if "firstCell" in item)
+                def second_bounds():
+                    geometry = json.loads(events("geometry", bundle, "--marker=SECOND-608"))
+                    areas = [item for item in geometry if item["role"] == "AXScrollArea"]
+                    return next((item["firstCell"] for item in geometry if "firstCell" in item and any(area["y"] <= item["firstCell"]["y"] < area["y"] + area["height"] for area in areas)), None)
+                if not wait_for(lambda: second_bounds() is not None):
+                    raise RuntimeError("Second-instance header did not become visibly calibrated")
+                second_cell = second_bounds()
                 second_start = (second_cell["x"] + second_cell["width"] / 2, second_cell["y"] + second_cell["height"] / 2)
                 second_end = (second_start[0] + 59 * second_cell["width"], second_start[1])
                 drag(second_start, second_end)

@@ -450,7 +450,7 @@ async function runProduction() {
 			else if (diagnostic && command.action === "diagnostic-native-copy-on") { nativeCopyEnabled = true; const path = process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC; hotkeyEventsSeen = JSON.parse(readFileSync(path, "utf8")).events.filter((event) => event.kind === "hotkey").length; }
 			else if (diagnostic && command.action === "diagnostic-retained-restore") { safetyState.protocolCapture = false; terminal.write("\x1b[?1l\x1b[>1m\x1b[?1007l\x1b[?1002h\x1b[?1006h"); }
 			else if (diagnostic && command.action === "diagnostic-hotkey-copy") mode.ui.handleInput("\x03");
-			else if (diagnostic && command.action === "diagnostic-second-label") { extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth("SECOND-608 synthetic café 界 e\u0301 text", width)] })); mode.ui.scrollViewportTo(0); }
+			else if (diagnostic && command.action === "diagnostic-second-label") { extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth("SECOND-608 synthetic café 界 e\u0301 text", width)] })); await mode.ui.renderNow({ requireFlush: true }); mode.ui.scrollViewportTo(0); }
 			else if (diagnostic && command.action === "diagnostic-draft") extensionUI.setEditorText("PREFIXSUFFIX");
 			else if (diagnostic && command.action === "diagnostic-super-binding") mode.keybindings.setUserBindings({ ...mode.keybindings.getUserBindings(), "tui.input.copy": ["ctrl+c", "super+c"] });
 			else if (diagnostic && command.action === "diagnostic-top") { mode.ui.followViewport(); mode.ui.scrollViewportTo(0); }
