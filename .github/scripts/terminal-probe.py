@@ -626,14 +626,21 @@ try:
         key("paste")
         key("enter")
         time.sleep(0.4)
-        drag(cell(1, 1), cell(14, 1))
+        other_geometry = json.loads(events("geometry", bundle, "--marker=OTHER-TAB-608"))
+        other_cells = [item["firstCell"] for item in other_geometry if "firstCell" in item]
+        if len(other_cells) != 1:
+            raise RuntimeError("Other-tab native text geometry unavailable")
+        other = other_cells[0]
+        observations["otherTabGeometry"] = other
+        start = (other["x"] + other["width"] / 2, other["y"] + other["height"] / 2)
+        drag(start, (start[0] + 13 * other["width"], start[1]))
         seed_clipboard("UNTOUCHED-other-tab-608")
         events("key", 8, 1048576)
         time.sleep(0.3)
         observations["otherTabCopy"] = clipboard()
         screenshot("automatic-other-tab-copy")
         if clipboard() != "OTHER-TAB-608":
-            raise RuntimeError("Unrelated tab native Copy was interfered with")
+            raise RuntimeError("Unrelated tab native Copy check failed")
         events("key", 13, 1048576)
         if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
             raise RuntimeError("Tab return did not rearm")

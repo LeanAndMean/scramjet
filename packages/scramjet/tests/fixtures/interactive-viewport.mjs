@@ -429,7 +429,7 @@ async function runProduction() {
 			record();
 		}).catch((error) => { safetyState.error = error.message; record(); stop(); console.error(error); process.exitCode = 1; });
 	}, 50);
-	const stop = () => { if (!stopped) { stopped = true; mode.stop(); finish(); } };
+	const stop = () => { if (!stopped) { stopped = true; if (nativeCopyEnabled) { nativeCopyEnabled = false; writeFileSync(process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC + ".control", "disarm"); } mode.stop(); finish(); } };
 	process.once("SIGINT", stop);
 	process.once("SIGTERM", stop);
 	process.once("SIGHUP", stop);

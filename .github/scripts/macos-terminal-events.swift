@@ -26,7 +26,8 @@ func geometry(_ element: AXUIElement, depth: Int = 0) -> [[String: Any]] {
         if ["AXWindow", "AXScrollArea", "AXTextArea"].contains(role) {
             var item: [String: Any] = ["role": role, "x": point.x, "y": point.y, "width": dimensions.width, "height": dimensions.height]
             if role == "AXTextArea", let text = attribute(element, kAXValueAttribute) as? String {
-                let marker = (text as NSString).range(of: "ROW-001")
+                let requestedMarker = CommandLine.arguments.first(where: { $0.hasPrefix("--marker=") }).map { String($0.dropFirst(9)) } ?? "ROW-001"
+                let marker = (text as NSString).range(of: requestedMarker)
                 if marker.location != NSNotFound {
                     var range = CFRange(location: marker.location, length: 1)
                     let parameter = AXValueCreate(.cfRange, &range)!
