@@ -14,6 +14,12 @@ if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONM
 
 is_mac = sys.platform == "darwin"
 with_tmux = "--tmux" in sys.argv[2:]
+stock_copy = "--stock-copy" in sys.argv[2:]
+negative_control = next((arg.split("=", 1)[1] for arg in sys.argv[2:] if arg.startswith("--negative-control=")), None)
+if stock_copy and not is_mac:
+    raise SystemExit("Stock Command+C acceptance requires macOS")
+if negative_control not in (None, "noop-copy", "copy-on-selection", "consumed-paste") or (negative_control and not stock_copy):
+    raise SystemExit("Invalid native negative control")
 terminal_kind = next((arg.split("=", 1)[1] for arg in sys.argv[2:] if arg.startswith("--terminal=")), "apple" if is_mac else "vte")
 bundle = "com.googlecode.iterm2" if terminal_kind == "iterm2" else "com.apple.Terminal"
 
@@ -56,7 +62,31 @@ def required_checks():
         expected |= {"narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
                      "narrowWrappedInputVisible", "narrowMultilineEditing", "narrowAutocompleteVisible", "narrowAutocompleteAccepted",
                      "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration"}
+    if stock_copy:
+        expected -= {"rightClickRequestsCopy", "rightClickClipboardExactUnicode", "rightWithoutSelectionPastesWithoutSubmit", "editorRightClickPastesWithoutSubmit"}
+        expected |= {"nativeCommandCCopy", "sentinelSurvivesSelectionAndUpdate", "externalEditorInput", "extensionExternalEditorInput"}
     return expected
+
+
+def native_copy_outcome(sentinel, after_selection, after_copy, expected, selection_active):
+    return bool(sentinel) and sentinel != expected and after_selection == sentinel and after_copy == expected and selection_active is False
+
+
+def native_paste_outcome(before, after, payload):
+    lines = payload.split("\n")
+    cursor = {"line": len(lines) - 1, "col": len(lines[-1]) if len(lines) > 1 else 6 + len(payload)}
+    return (before.get("editor") == "PREFIXSUFFIX" and before.get("editorCursor") == {"line": 0, "col": 6}
+            and after.get("editor") == "PREFIX" + payload + "SUFFIX" and after.get("editorCursor") == cursor
+            and after.get("submissions", 0) == before.get("submissions", 0)
+            and after.get("pasteMatches", -1) == before.get("pasteMatches", 0) + 1 and after.get("frameFlushed") is True)
+
+
+def termios_configuration_equal(before, after, darwin):
+    if not isinstance(before, str) or not isinstance(after, str) or not before or not after:
+        return False
+    def configuration(value):
+        return re.sub(r"(:lflag=)([0-9a-f]+)(?=:)", lambda match: match[1] + format(int(match[2], 16) & ~0x20000000, "x"), value) if darwin else value
+    return configuration(before) == configuration(after)
 
 
 def cleanup_owned_resources(close_windows=None, exit_input=None):
@@ -182,7 +212,7 @@ def type_text(text):
 
 
 def key(name):
-    mac = {"viewportUp": (100, 0) if terminal_kind == "apple" else (116, 524288), "viewportDown": (101, 0) if terminal_kind == "apple" else (121, 524288), "toggleTools": (31, 262144), "paste": (9, 1048576), "enter": (36, 0), "escape": (53, 0), "copy": (8, 262144),
+    mac = {"viewportUp": (100, 0) if terminal_kind == "apple" else (116, 524288), "viewportDown": (101, 0) if terminal_kind == "apple" else (121, 524288), "toggleTools": (31, 262144), "paste": (9, 1048576), "enter": (36, 0), "escape": (53, 0), "copy": (8, 262144), "nativeCopy": (8, 1048576), "external": (5, 262144),
            "a": (0, 0), "b": (11, 0), "c": (8, 0), "left": (123, 0), "down": (125, 0), "right": (124, 0), "backspace": (51, 0), "exit": (12, 262144), "close": (13, 1048576), "f": (3, 0), "g": (5, 0)}
     linux = {"viewportUp": "alt+Prior", "viewportDown": "alt+Next", "toggleTools": "ctrl+o", "paste": "ctrl+shift+v", "enter": "Return", "escape": "Escape", "copy": "ctrl+c",
              "left": "Left", "down": "Down", "right": "Right", "backspace": "BackSpace", "tab": "Tab", "exit": "ctrl+q", "close": "alt+F4"}
@@ -274,10 +304,21 @@ def fixture_command(action):
     temporary = Path(str(path) + ".tmp")
     temporary.write_text(json.dumps({"id": command_id, "action": action}))
     temporary.replace(path)
+    if action == "external" and stock_copy:
+        external_editor_input()
     if not wait_for(lambda: state().get("commandDone") == command_id or (action == "suspend" and state().get("phase") == "suspending") or state().get("error"), timeout=10):
         raise RuntimeError(f"Fixture command did not settle: {action}")
     if state().get("error"):
         raise RuntimeError(state()["error"])
+
+
+def external_editor_input():
+    ready = Path(str(state_path) + ".external-ready")
+    if not wait_for(ready.exists, timeout=10):
+        raise RuntimeError("External editor did not acquire input")
+    ready.unlink()
+    type_text("handoff")
+    key("enter")
 
 
 def wait_for_linux_window():
@@ -439,6 +480,12 @@ try:
         report["packages"] = run("dpkg-query", "-W", executable, "tmux", "xdotool", "xvfb")
     seed_clipboard("SCRAMJET-PROBE-SENTINEL")
     key_profile = " --function-key-browsing" if terminal_kind == "apple" else ""
+    if stock_copy:
+        key_profile += " --native-handoffs"
+    if negative_control:
+        key_profile += " --negative-control=" + negative_control
+    report["negativeControl"] = negative_control
+    report["stockCopy"] = stock_copy
     report["viewportKeys"] = {"profile": "F8/F9" if key_profile else "Alt+PageUp/Alt+PageDown", "qualification": "Apple Terminal emitted unmodified PageUp for Option+PageUp; this is an explicit temporary app-keybinding profile, not a runtime terminal fallback." if key_profile else "default bindings"}
     launcher = output / "launch.sh"
     launcher.write_text("#!/bin/bash\n" + "\n".join([
@@ -464,7 +511,9 @@ try:
     if is_mac:
         if json.loads(events("running", bundle)):
             raise RuntimeError("Refusing to adopt an existing terminal application")
-        if terminal_kind == "iterm2":
+        if stock_copy:
+            report["terminalConfiguration"] = {"stockCopyPaste": True, "ReportRightClickOverride": False}
+        if terminal_kind == "iterm2" and not stock_copy:
             run("defaults", "write", bundle, "ReportRightClick", "-bool", "true")
             report["terminalConfiguration"] = {"ReportRightClick": True, "qualification": "Explicitly approved configuration; default-profile right-click opens the native menu"}
         executable = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleExecutable", plist)
@@ -581,36 +630,61 @@ try:
     check("ordinaryDesktopDragSelects", lambda: state().get("selectionDrag", 0) > 0)
     screenshot("selection")
     expected = "ROW-001 synthetic café 界 e\u0301 text"
-    mouse("rightDown", *cell(10, 1))
-    mouse("rightUp", *cell(10, 1))
-    right_copied = check("rightClickRequestsCopy", lambda: state().get("rightCopy", 0) > 0)
-    check("rightClickClipboardExactUnicode", lambda: clipboard() == expected)
-    screenshot("right-click")
-    if not right_copied:
-        key("escape")
-        time.sleep(0.6)
-    outside_paste = "RIGHT-PASTE"
-    seed_clipboard(outside_paste)
-    before_right = state()
-    mouse("rightDown", *cell(10, 1))
-    mouse("rightUp", *cell(10, 1))
-    if not wait_for(lambda: (current := state())["rightWithoutSelection"] == before_right["rightWithoutSelection"] + 1 and current.get("frameFlushed") is True):
-        raise RuntimeError("No-selection right click did not reach a flushed frame")
-    stable_check("rightWithoutSelectionPastesWithoutSubmit", lambda: right_click_pasted(before_right, outside_paste))
+    if stock_copy:
+        mouse("down", *cell(10, 1))
+        mouse("up", *cell(10, 1))
+        sentinel = "NATIVE-COPY-SENTINEL-" + str(time.monotonic_ns())
+        seed_clipboard(sentinel)
+        if clipboard() != sentinel:
+            raise RuntimeError("Fresh Copy sentinel was not installed")
+        drag(cell(1, 1), cell(60, 1))
+        if not wait_for(lambda: state().get("selectionPainted") is True):
+            raise RuntimeError("Native Copy selection was not painted")
+        fixture_command("update")
+        after_selection = clipboard()
+        check("sentinelSurvivesSelectionAndUpdate", lambda: after_selection == sentinel and state().get("selectionActive") is True and state().get("completed") == 0)
+        key("nativeCopy")
+        check("nativeCommandCCopy", lambda: native_copy_outcome(sentinel, after_selection, clipboard(), expected, state().get("selectionActive")))
+        screenshot("native-copy")
+    else:
+        mouse("rightDown", *cell(10, 1))
+        mouse("rightUp", *cell(10, 1))
+        check("rightClickRequestsCopy", lambda: state().get("rightCopy", 0) > 0)
+        check("rightClickClipboardExactUnicode", lambda: clipboard() == expected)
+        screenshot("right-click")
+        outside_paste = "RIGHT-PASTE"
+        seed_clipboard(outside_paste)
+        before_right = state()
+        mouse("rightDown", *cell(10, 1))
+        mouse("rightUp", *cell(10, 1))
+        if not wait_for(lambda: (current := state())["rightWithoutSelection"] == before_right["rightWithoutSelection"] + 1 and current.get("frameFlushed") is True):
+            raise RuntimeError("No-selection right click did not reach a flushed frame")
+        stable_check("rightWithoutSelectionPastesWithoutSubmit", lambda: right_click_pasted(before_right, outside_paste))
     drag(cell(1, 1), cell(60, 1))
     seed_clipboard("SCRAMJET-PROBE-SENTINEL")
     key("copy")
     check("controlCCopiesSelection", lambda: state().get("keyCopy", 0) > 0 and clipboard() == expected)
+    fixture_command("native-paste")
+    for _ in range(6):
+        key("left")
+    if not wait_for(lambda: state().get("editorCursor") == {"line": 0, "col": 6}):
+        raise RuntimeError("Native paste did not establish an interior caret")
+    paste_before_native = state()
+    native_payload = "NATIVE café 界 e\u0301\nsecond line"
+    seed_clipboard(native_payload)
     key("paste")
-    check("desktopPasteRoundTrip", lambda: state().get("pasteMatches", 0) > 0)
+    check("desktopPasteRoundTrip", lambda: native_paste_outcome(paste_before_native, state(), native_payload))
+    screenshot("native-caret-paste")
+    fixture_command("restore-editor")
     paste_before = state()
-    paste_text = "RIGHT-PASTE café 界\nsecond line"
-    seed_clipboard(paste_text)
-    editor_row = next(i + 1 for i, line in enumerate(paste_before["painted"]) if "Synthetic editor" in line)
-    mouse("rightDown", *cell(3, editor_row))
-    mouse("rightUp", *cell(3, editor_row))
-    check("editorRightClickPastesWithoutSubmit", lambda: state()["editor"] == paste_before["editor"] + paste_text and state().get("submissions", 0) == paste_before.get("submissions", 0))
-    screenshot("editor-right-paste")
+    if not stock_copy:
+        paste_text = "RIGHT-PASTE café 界\nsecond line"
+        seed_clipboard(paste_text)
+        editor_row = next(i + 1 for i, line in enumerate(paste_before["painted"]) if "Synthetic editor" in line)
+        mouse("rightDown", *cell(3, editor_row))
+        mouse("rightUp", *cell(3, editor_row))
+        check("editorRightClickPastesWithoutSubmit", lambda: state()["editor"] == paste_before["editor"] + paste_text and state().get("submissions", 0) == paste_before.get("submissions", 0))
+        screenshot("editor-right-paste")
     fixture_command("editor")
     for name in ("a", "b", "c", "left", "backspace"):
         key(name)
@@ -793,7 +867,16 @@ try:
     key("enter")
     check("subsequentApprovalActivation", lambda: state()["approved"] == 1)
     fixture_command("external")
-    check("externalProgramRoundTrip", lambda: state()["editorHandoffs"] == 1 and state()["handoffTermios"] == state()["termiosBefore"] and state()["editor"] == "edited by synthetic external editor")
+    check("externalProgramRoundTrip", lambda: state()["editorHandoffs"] == 1 and termios_configuration_equal(state().get("termiosBefore"), state().get("handoffTermios"), is_mac) and state()["editor"] == "edited by synthetic external editor")
+    if stock_copy:
+        check("externalEditorInput", lambda: state().get("externalEditorInput") == "handoff" and state().get("handoffAfterRead") == state().get("termiosBefore"))
+        fixture_command("extension-external")
+        key("external")
+        external_editor_input()
+        if not wait_for(lambda: state().get("frameFlushed") is True):
+            raise RuntimeError("Extension editor did not return")
+        key("enter")
+        check("extensionExternalEditorInput", lambda: state().get("extensionEditorResult") == "edited by synthetic external editor" and state().get("externalEditorInput") == "handoff" and state().get("handoffAfterRead") == state().get("termiosBefore"))
     fixture_command("suspend")
     check("jobControlSuspended", lambda: "T" in run("ps", "-o", "stat=", "-p", str(state()["pid"])))
     screenshot("suspended-shell")
@@ -832,7 +915,7 @@ try:
     screenshot("copy-seam")
     key("exit")
     check("orderlyExit", lambda: state().get("stopped") is True and (output / "stty-after.txt").exists() and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
-    check("termiosRestored", lambda: bool(state().get("termiosBefore")) and state().get("termiosBefore") == state().get("termiosAfter"))
+    check("termiosRestored", lambda: termios_configuration_equal(state().get("termiosBefore"), state().get("termiosAfter"), is_mac))
     screenshot("restored")
     if terminal_kind == "vte" and not with_tmux:
         state_path = output / "committed.json"

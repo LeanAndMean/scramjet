@@ -182,7 +182,7 @@ class InteractionVerdictTests(unittest.TestCase):
         self.expression = compile(ast.Expression(body=verdict), "terminal-probe.py", "eval")
         self.context = {"report": {"checks": {name: {"passed": True} for name in EXPECTED_INTERACTION_CHECKS},
                                   "screenshots": {"complete": {"exit": 0}}},
-                        "is_mac": False, "terminal_kind": "vte", "with_tmux": False,
+                        "is_mac": False, "terminal_kind": "vte", "with_tmux": False, "stock_copy": False,
                         "wait_for": Mock(return_value=True), "state": Mock(return_value={}), "time": time}
         exec(compile(ast.Module(body=declarations, type_ignores=[]), "terminal-probe.py", "exec"), self.context)
 
@@ -240,6 +240,42 @@ def interaction_check(name, context):
                      and isinstance(node.func, ast.Name) and node.func.id in ("check", "stable_check")
                      and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == name)
     return eval(compile(ast.Expression(body=predicate), "terminal-probe.py", "eval"), context)
+
+
+class NativeClipboardOracleTests(unittest.TestCase):
+    def setUp(self):
+        names = {"native_copy_outcome", "native_paste_outcome", "termios_configuration_equal"}
+        functions = [node for node in interaction_source().body if isinstance(node, ast.FunctionDef) and node.name in names]
+        self.context = {"re": re}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "terminal-probe.py", "exec"), self.context)
+
+    def test_copy_requires_untouched_selection_sentinel_and_actual_outcome(self):
+        check = self.context["native_copy_outcome"]
+        self.assertTrue(check("sentinel", "sentinel", "café 界", "café 界", False))
+        self.assertFalse(check("sentinel", "sentinel", "sentinel", "café 界", True))
+        self.assertFalse(check("sentinel", "café 界", "café 界", "café 界", False))
+        self.assertFalse(check("sentinel", "sentinel", "café 界", "café 界", None))
+
+    def test_paste_receipt_without_editor_insertion_cannot_pass(self):
+        check = self.context["native_paste_outcome"]
+        before = {"editor": "PREFIXSUFFIX", "editorCursor": {"line": 0, "col": 6}, "submissions": 0, "pasteMatches": 0}
+        after = {"editor": "PREFIXcafé 界\nsecond lineSUFFIX", "editorCursor": {"line": 1, "col": 11}, "submissions": 0, "pasteMatches": 1, "frameFlushed": True}
+        self.assertTrue(check(before, after, "café 界\nsecond line"))
+        self.assertFalse(check(before, {**before, "pasteMatches": 1, "frameFlushed": True}, "café 界\nsecond line"))
+        for field, value in (("submissions", 1), ("editorCursor", {"line": 1, "col": 0}), ("frameFlushed", False)):
+            self.assertFalse(check(before, {**after, field: value}, "café 界\nsecond line"))
+        self.assertFalse(check(before, {key: value for key, value in after.items() if key != "editorCursor"}, "café 界\nsecond line"))
+
+    def test_only_darwin_pendin_state_may_differ_before_read(self):
+        check = self.context["termios_configuration_equal"]
+        baseline = "gfmt1:cflag=4b00:iflag=6b02:lflag=200005cf:oflag=3:discard=f:min=1:time=0:"
+        settled = baseline.replace("lflag=200005cf", "lflag=5cf")
+        self.assertTrue(check(baseline, settled, True))
+        self.assertFalse(check(baseline, settled, False))
+        for field in ("cflag=4b00", "iflag=6b02", "lflag=5cf", "oflag=3", "discard=f", "min=1", "time=0"):
+            self.assertFalse(check(baseline, settled.replace(field, field.split("=")[0] + "=0" if not field.endswith("=0") else "time=1"), True))
+        for invalid in (None, "", "gfmt1:lflag=5cf:"):
+            self.assertFalse(check(baseline, invalid, True))
 
 
 class InteractionExitTests(unittest.TestCase):
@@ -698,6 +734,17 @@ class PasteEvidenceTests(unittest.TestCase):
                                 wait_for(lambda state: state.get("keyCopy") == count and not state.get("selectionActive"))
                                 os.write(master, f"\x1b[200~{expected}\x1b[201~".encode())
                                 wait_for(lambda state: state.get("pasteMatches") == count)
+                            command = Path(str(target) + ".command")
+                            temporary = Path(str(command) + ".tmp")
+                            temporary.write_text(json.dumps({"id": 1, "action": "native-paste"}))
+                            temporary.replace(command)
+                            wait_for(lambda state: state.get("commandDone") == 1)
+                            os.write(master, b"\x1b[D" * 6)
+                            wait_for(lambda state: state.get("editorCursor") == {"line": 0, "col": 6})
+                            os.write(master, "\x1b[200~NATIVE café 界 é\rsecond line\x1b[201~".encode())
+                            inserted = wait_for(lambda state: state.get("editor") == "PREFIXNATIVE café 界 é\nsecond lineSUFFIX")
+                            self.assertEqual(inserted["editorCursor"], {"line": 1, "col": 11})
+                            self.assertEqual(inserted.get("submissions", 0), 0)
                         sentinel = "MISMATCH-PRIVATE-SENTINEL-560"
                         os.write(master, f"\x1b[200~{sentinel}\x1b[201~".encode())
                         state = wait_for(lambda state: state.get("pasteMismatches") == 1)
@@ -1183,7 +1230,7 @@ class MacInteractionOwnershipTests(unittest.TestCase):
             key = Mock()
             context = {"is_mac": True, "terminal_kind": terminal_kind, "bundle": bundle, "plist": plist,
                        "output": output, "root": ROOT, "driver": output / "events", "launcher": output / "launch.sh",
-                       "launch_command": "synthetic launch", "tmux_command": None, "with_tmux": False,
+                       "launch_command": "synthetic launch", "tmux_command": None, "with_tmux": False, "stock_copy": False,
                        "terminal_started": False, "terminal_process": None, "window_id": None,
                        "run": Mock(side_effect=run), "events": events, "subprocess": process, "json": json,
                        "Path": Path, "time": Mock(), "wait_for": lambda predicate, **_kwargs: bool(predicate()),
