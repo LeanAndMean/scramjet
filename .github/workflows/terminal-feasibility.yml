@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         terminal: [apple, iterm2]
-        backend: [proxy]
+        backend: [thread]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,13 +33,13 @@ jobs:
         if: matrix.backend == 'swift'
         run: swiftc .github/scripts/macos-copy-observer.swift -o "$RUNNER_TEMP/macos-copy-observer"
       - name: Launch independently attributed observer without requesting access
-        if: matrix.backend == 'koffi' || matrix.backend == 'swift'
+        if: matrix.backend == 'koffi' || matrix.backend == 'swift' || matrix.backend == 'thread'
         run: |
           mkdir -p "$RUNNER_TEMP/copy-diagnostic" "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS"
           if [ '${{ matrix.backend }}' = swift ]; then
             cp "$RUNNER_TEMP/macos-copy-observer" "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS/observer"
           else
-            printf '#!/bin/bash\nexec %q %q "$@" >%q 2>&1\n' "$(command -v node)" "$GITHUB_WORKSPACE/.github/scripts/macos-copy-koffi.mjs" "$RUNNER_TEMP/copy-diagnostic/koffi.log" > "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS/observer"
+            printf '#!/bin/bash\nexec %q %q "$@" >%q 2>&1\n' "$(command -v node)" "$GITHUB_WORKSPACE/.github/scripts/macos-copy-thread-probe.mjs" "$RUNNER_TEMP/copy-diagnostic/koffi.log" > "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS/observer"
             chmod +x "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS/observer"
           fi
           printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.scramjet.issue608.observer</string><key>CFBundleName</key><string>Issue608Observer</string><key>CFBundleExecutable</key><string>observer</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/></dict></plist>' > "$RUNNER_TEMP/Issue608Observer.app/Contents/Info.plist"
@@ -48,7 +48,7 @@ jobs:
         env:
           SCRAMJET_SCROLL_PROTOCOL: "1"
           SCRAMJET_NATIVE_COPY: "1"
-          SCRAMJET_STALL_PROBE: "1"
+          SCRAMJET_STALL_PROBE: "0"
           SCRAMJET_MACOS_INPROCESS: ${{ matrix.backend == 'inprocess' && '1' || '0' }}
           SCRAMJET_MACOS_INPUT_PROXY: ${{ matrix.backend == 'proxy' && '1' || '0' }}
           SCRAMJET_MACOS_MOUSE_DIAGNOSTIC: ${{ runner.temp }}/copy-diagnostic/independent-observer.json
