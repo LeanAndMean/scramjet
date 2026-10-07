@@ -611,6 +611,38 @@ try:
         drag(cell(1, 1), cell(60, 1))
         if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
             raise RuntimeError("Second selection did not arm")
+        if os.environ.get("SCRAMJET_STALL_PROBE") == "1":
+            fixture_pid = state()["pid"]
+            os.kill(fixture_pid, signal.SIGSTOP)
+            try:
+                events("key", 17, 1048576)
+                time.sleep(0.5)
+                seed_clipboard("printf '\\033[2J\\033[HSTALL-TAB-608\\n'")
+                key("paste")
+                key("enter")
+                time.sleep(0.4)
+                geometry_stall = json.loads(events("geometry", bundle, "--marker=STALL-TAB-608"))
+                marks = [item["firstCell"] for item in geometry_stall if "firstCell" in item]
+                areas = [item for item in geometry_stall if item["role"] == "AXScrollArea"]
+                if len(marks) != 1 or not any(area["y"] <= marks[0]["y"] < area["y"] + area["height"] for area in areas):
+                    raise RuntimeError("Stall-tab text was not visibly calibrated")
+                mark = marks[0]
+                start = (mark["x"] + mark["width"] / 2, mark["y"] + mark["height"] / 2)
+                drag(start, (start[0] + 13 * mark["width"], start[1]))
+                seed_clipboard("UNTOUCHED-stall-608")
+                events("key", 8, 1048576)
+                time.sleep(0.4)
+                observations["stalledFocusTransfer"] = {"clipboard": clipboard(), "expected": "STALL-TAB-608", "fixture": state(), "receiver": json.loads(observer_path.read_text())}
+                screenshot("stalled-other-tab-copy")
+            finally:
+                os.kill(fixture_pid, signal.SIGCONT)
+            if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is False):
+                raise RuntimeError("Receiver did not release after resume")
+            observations["stalledFocusTransfer"]["afterResumeClipboard"] = clipboard()
+            observations["stalledFocusTransfer"]["afterResume"] = state()
+            events("key", 13, 1048576)
+            if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
+                raise RuntimeError("Selection did not rearm after stalled focus return")
         events("activate", "com.apple.finder")
         if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is False and not state().get("nativeCopy", {}).get("terminalFocused")):
             raise RuntimeError("Other app did not disarm")
