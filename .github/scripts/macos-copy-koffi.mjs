@@ -24,7 +24,7 @@ for (const [key, name] of Object.entries({ accessibilityTrusted: "AXIsProcessTru
 let requested = "";
 let ref;
 const record = () => { writeFileSync(target + ".tmp", JSON.stringify(state)); renameSync(target + ".tmp", target); };
-const cb = koffi.register(() => { state.events.push({ kind: "hotkey", lease: requested, foregroundPid: foregroundPid(), sequence: state.events.length }); record(); return 0; }, koffi.pointer(Callback));
+const cb = koffi.register(() => { state.events.push({ kind: "hotkey", lease: requested, foregroundPid: foregroundPid(), sequence: state.events.length }); record(); return requested === "arm-pass" ? -9874 : 0; }, koffi.pointer(Callback));
 const handler = [null];
 state.events.push({ kind: "handler", status: install(getTarget(), cb, 1, { eventClass: 0x6b657962, eventKind: 5 }, null, handler) });
 const timer = setInterval(() => {

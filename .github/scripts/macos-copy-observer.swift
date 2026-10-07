@@ -32,7 +32,7 @@ let installed = InstallEventHandler(GetApplicationEventTarget(), { _, event, _ i
     let result = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &key)
     events.append(["seconds": Date().timeIntervalSince(started), "kind": "hotkey", "lease": requested, "result": result, "id": key.id, "foregroundPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0, "foregroundBundle": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""])
     record()
-    return noErr
+    return requested == "arm-pass" ? OSStatus(eventNotHandledErr) : noErr
 }, 1, &eventType, nil, &handler)
 events.append(["kind": "handler", "status": installed])
 let timer = Timer(timeInterval: 0.02, repeats: true) { _ in

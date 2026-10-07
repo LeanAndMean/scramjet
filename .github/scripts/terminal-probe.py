@@ -631,6 +631,9 @@ try:
         if len(other_cells) != 1:
             raise RuntimeError("Other-tab native text geometry unavailable")
         other = other_cells[0]
+        scroll_areas = [item for item in other_geometry if item["role"] == "AXScrollArea"]
+        if not any(area["y"] <= other["y"] < area["y"] + area["height"] for area in scroll_areas):
+            raise RuntimeError("Other-tab marker is not visibly inside its scroll area")
         observations["otherTabGeometry"] = other
         start = (other["x"] + other["width"] / 2, other["y"] + other["height"] / 2)
         drag(start, (start[0] + 13 * other["width"], start[1]))
@@ -641,6 +644,16 @@ try:
         screenshot("automatic-other-tab-copy")
         if clipboard() != "OTHER-TAB-608":
             raise RuntimeError("Unrelated tab native Copy check failed")
+        control = Path(str(observer_path) + ".control")
+        control.write_text("arm-pass")
+        if not wait_for(lambda: json.loads(observer_path.read_text()).get("armed") is True):
+            raise RuntimeError("Pass-through experiment failed to arm")
+        seed_clipboard("UNTOUCHED-unhandled-608")
+        events("key", 8, 1048576)
+        time.sleep(0.3)
+        observations["unhandledHotkey"] = {"clipboard": clipboard(), "observer": json.loads(observer_path.read_text())}
+        control.write_text("disarm")
+        wait_for(lambda: json.loads(observer_path.read_text()).get("armed") is False)
         events("key", 13, 1048576)
         if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
             raise RuntimeError("Tab return did not rearm")
