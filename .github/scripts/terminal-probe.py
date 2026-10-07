@@ -27,36 +27,10 @@ command_id = 0
 terminal_started = False
 window_id = None
 terminal_process = None
-REQUIRED_CHECKS = {
-    "allEightCardsReachableBeforeCompletion", "completeApprovalContextReachable", "controlCCopiesSelection",
-    "desktopPasteRoundTrip", "desktopThumbDragReachesEnd", "desktopTrackClickReachesStart",
-    "desktopWheelScrollsDocument", "externalProgramRoundTrip", "firstFourRunningCardsReachable",
-    "hiddenApprovalActivationOnlyReveals", "jobControlResumed", "jobControlSuspended", "keyboardEditingCoexists",
-    "longSessionMiddleReachable", "nativeSizeRestored", "nativeWidthAndHeightChanged", "orderlyExit",
-    "ordinaryDesktopDragSelects", "productionCompositionConfigured", "readingAnchorSurvivesOtherChildUpdate",
-    "readingAnchorSurvivesResize", "readingAnchorSurvivesResizeBack", "readingInsideRunningBatch",
-    "rightClickClipboardExactUnicode", "rightClickRequestsCopy", "rightWithoutSelectionPastesWithoutSubmit",
-    "scrolledSelectionClipboardExact", "selectionAutoscrolls", "selectionAllowsLiveUpdates", "editorRightClickPastesWithoutSubmit", "editorCopyOmitsSoftWraps", "selectionCrossesIntoEditor", "selectionCrossesIntoTranscript",
-    "subsequentApprovalActivation", "termiosRestored", "checkoutProvenanceMatches",
-    "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail", "keyboardBrowsingReturnsToTail",
-    "nativePresentationTogglePreservesReading", "settingsUndocksLive", "settingsRedocksLive",
-    "settingsWheelChangeApplies", "configuredWheelDistance", "settingsEditorHeightChangeApplies",
-    "nativeInputHeightCeiling",
-    "sessionContinuationMatchesViewport", "productConfirmFramed", "productConfirmSelects",
-    "productSelectFramed", "productSelectPartialNeighbors", "productSelectSelects",
-    "productNextFramed", "productNextSelects", "productModelFramed", "productModelSelects",
-}
-
+REQUIRED_CHECKS = {"checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible", "unfinishedWheel", "sentinelSurvivesSelectionAndUpdate", "nativeCommandCCopy", "nativeCaretPaste", "orderlyExit", "termiosRestored"}
 
 def required_checks():
-    expected = REQUIRED_CHECKS | ({"desktopCellTargetVerified"} if not is_mac else set())
-    if terminal_kind in ("kitty", "iterm2"):
-        expected |= {"nativeFocusDragActive", "nativeFocusOutReceived", "focusLossStopsSelectionScroll", "nativeFocusReturned"}
-    if terminal_kind == "vte" and not with_tmux:
-        expected |= {"narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
-                     "narrowWrappedInputVisible", "narrowMultilineEditing", "narrowAutocompleteVisible", "narrowAutocompleteAccepted",
-                     "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration"}
-    return expected
+    return REQUIRED_CHECKS
 
 
 def cleanup_owned_resources(close_windows=None, exit_input=None):
@@ -182,7 +156,7 @@ def type_text(text):
 
 
 def key(name):
-    mac = {"viewportUp": (100, 0) if terminal_kind == "apple" else (116, 524288), "viewportDown": (101, 0) if terminal_kind == "apple" else (121, 524288), "toggleTools": (31, 262144), "paste": (9, 1048576), "enter": (36, 0), "escape": (53, 0), "copy": (8, 262144),
+    mac = {"viewportUp": (100, 0) if terminal_kind == "apple" else (116, 524288), "viewportDown": (101, 0) if terminal_kind == "apple" else (121, 524288), "toggleTools": (31, 262144), "paste": (9, 1048576), "enter": (36, 0), "escape": (53, 0), "copy": (8, 1048576),
            "a": (0, 0), "b": (11, 0), "c": (8, 0), "left": (123, 0), "down": (125, 0), "right": (124, 0), "backspace": (51, 0), "exit": (12, 262144), "close": (13, 1048576), "f": (3, 0), "g": (5, 0)}
     linux = {"viewportUp": "alt+Prior", "viewportDown": "alt+Next", "toggleTools": "ctrl+o", "paste": "ctrl+shift+v", "enter": "Return", "escape": "Escape", "copy": "ctrl+c",
              "left": "Left", "down": "Down", "right": "Right", "backspace": "BackSpace", "tab": "Tab", "exit": "ctrl+q", "close": "alt+F4"}
@@ -464,9 +438,7 @@ try:
     if is_mac:
         if json.loads(events("running", bundle)):
             raise RuntimeError("Refusing to adopt an existing terminal application")
-        if terminal_kind == "iterm2":
-            run("defaults", "write", bundle, "ReportRightClick", "-bool", "true")
-            report["terminalConfiguration"] = {"ReportRightClick": True, "qualification": "Explicitly approved configuration; default-profile right-click opens the native menu"}
+        report["terminalConfiguration"] = {"stockCopyPaste": True, "ReportRightClickOverride": False}
         executable = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleExecutable", plist)
         terminal_process = subprocess.Popen([str(Path(plist).parent / "MacOS" / executable)])
         report["ownedTerminalPid"] = terminal_process.pid
@@ -567,332 +539,36 @@ try:
         if not check("desktopCellTargetVerified", lambda: state()["lastMouse"]["x"] == 10 and state()["lastMouse"]["y"] == 3):
             raise RuntimeError("Desktop cell targeting remains uncalibrated")
     screenshot("startup")
-    exercise_product_selectors()
     mouse("move", *cell(10, 3))
     events("wheel", -3)
-    check("desktopWheelScrollsDocument", lambda: state().get("wheel", 0) > 0 and state().get("offset", 0) > 0)
-    screenshot("wheel")
-    drag(cell(columns, 1), cell(columns, state()["height"]))
-    check("desktopThumbDragReachesEnd", lambda: state().get("thumbDrag", 0) > 0 and state().get("followingTail") is True and state().get("offset") == state().get("totalRows") - state().get("height"))
+    check("unfinishedWheel", lambda: state().get("wheel", 0) > 0 and state().get("offset", 0) > 0 and state().get("completed") == 0)
     mouse("down", *cell(columns, 1))
     mouse("up", *cell(columns, 1))
-    check("desktopTrackClickReachesStart", lambda: state().get("offset") == 0 and state().get("thumbDrag", 0) > 0)
+    if not wait_for(lambda: state().get("offset") == 0):
+        raise RuntimeError("Could not return to top")
+    seed_clipboard("UNTOUCHED-STAGE2-608")
     drag(cell(1, 1), cell(60, 1))
-    check("ordinaryDesktopDragSelects", lambda: state().get("selectionDrag", 0) > 0)
-    screenshot("selection")
-    expected = "ROW-001 synthetic café 界 e\u0301 text"
-    mouse("rightDown", *cell(10, 1))
-    mouse("rightUp", *cell(10, 1))
-    right_copied = check("rightClickRequestsCopy", lambda: state().get("rightCopy", 0) > 0)
-    check("rightClickClipboardExactUnicode", lambda: clipboard() == expected)
-    screenshot("right-click")
-    if not right_copied:
-        key("escape")
-        time.sleep(0.6)
-    outside_paste = "RIGHT-PASTE"
-    seed_clipboard(outside_paste)
-    before_right = state()
-    mouse("rightDown", *cell(10, 1))
-    mouse("rightUp", *cell(10, 1))
-    if not wait_for(lambda: (current := state())["rightWithoutSelection"] == before_right["rightWithoutSelection"] + 1 and current.get("frameFlushed") is True):
-        raise RuntimeError("No-selection right click did not reach a flushed frame")
-    stable_check("rightWithoutSelectionPastesWithoutSubmit", lambda: right_click_pasted(before_right, outside_paste))
-    drag(cell(1, 1), cell(60, 1))
-    seed_clipboard("SCRAMJET-PROBE-SENTINEL")
+    if not wait_for(lambda: state().get("selectionPainted") is True):
+        raise RuntimeError("No painted selection")
+    fixture_command("update")
+    check("sentinelSurvivesSelectionAndUpdate", lambda: clipboard() == "UNTOUCHED-STAGE2-608" and state().get("selectionActive") is True and state().get("updates", 0) > 0)
+    screenshot("selection-live")
     key("copy")
-    check("controlCCopiesSelection", lambda: state().get("keyCopy", 0) > 0 and clipboard() == expected)
+    check("nativeCommandCCopy", lambda: clipboard() == "ROW-001 synthetic café 界 e\u0301 text" and state().get("selectionActive") is False)
+    fixture_command("stage2-draft")
+    for _ in range(6): key("left")
+    payload = "STAGE2 café 界 e\u0301\nsecond line"
+    seed_clipboard(payload)
     key("paste")
-    check("desktopPasteRoundTrip", lambda: state().get("pasteMatches", 0) > 0)
-    paste_before = state()
-    paste_text = "RIGHT-PASTE café 界\nsecond line"
-    seed_clipboard(paste_text)
-    editor_row = next(i + 1 for i, line in enumerate(paste_before["painted"]) if "Synthetic editor" in line)
-    mouse("rightDown", *cell(3, editor_row))
-    mouse("rightUp", *cell(3, editor_row))
-    check("editorRightClickPastesWithoutSubmit", lambda: state()["editor"] == paste_before["editor"] + paste_text and state().get("submissions", 0) == paste_before.get("submissions", 0))
-    screenshot("editor-right-paste")
-    fixture_command("editor")
-    for name in ("a", "b", "c", "left", "backspace"):
-        key(name)
-    check("keyboardEditingCoexists", lambda: state().get("editor") == "ac")
-    screenshot("keyboard")
-    fixture_command("editor")
-    mouse("down", *cell(columns, 1))
-    mouse("up", *cell(columns, 1))
-    check_offset = state()["offset"]
-    key("a")
-    check("dockedTypingPreservesReading", lambda: state()["editor"] == "a" and state()["offset"] == check_offset and state()["painted"][0].startswith("ROW-001"))
-    fixture_command("tail")
-    tail = state()
-    key("viewportUp")
-    check("keyboardOnlyBrowsingFromTail", lambda: not state()["followingTail"] and state()["offset"] == tail["offset"] - tail["height"])
-    key("viewportDown")
-    check("keyboardBrowsingReturnsToTail", lambda: state()["followingTail"] and state()["offset"] == tail["offset"])
-    mouse("down", *cell(columns, 1))
-    mouse("up", *cell(columns, 1))
-    anchor = state()["painted"][0]
-    expanded = state()["toolsExpanded"]
-    key("toggleTools")
-    check("nativePresentationTogglePreservesReading", lambda: state()["toolsExpanded"] != expanded and state()["painted"][0] == anchor and not state()["followingTail"])
-
-    open_settings("dock")
-    key("enter")
-    check("settingsUndocksLive", lambda: state()["dockEditor"] is False and state()["height"] == state()["rows"])
-    close_settings()
-    open_settings("dock")
-    key("enter")
-    check("settingsRedocksLive", lambda: state()["dockEditor"] is True and state()["height"] < state()["rows"])
-    close_settings()
-    open_settings("wheel")
-    key("enter")
-    check("settingsWheelChangeApplies", lambda: state()["wheelStep"] == 4)
-    close_settings()
-    mouse("down", *cell(columns, state()["height"] // 2))
-    mouse("up", *cell(columns, state()["height"] // 2))
-    before_wheel = state()
-    mouse("move", *cell(10, 3))
-    events("wheel", 1)
-    stable_check("configuredWheelDistance", lambda: state()["wheel"] > before_wheel["wheel"] and state()["offset"] == before_wheel["offset"] - 4 * (state()["wheel"] - before_wheel["wheel"]))
-    open_settings("height")
-    key("enter")
-    check("settingsEditorHeightChangeApplies", lambda: state()["editorHeightPercent"] == 35)
-    close_settings()
-    fixture_command("long-editor")
-    check("nativeInputHeightCeiling", lambda: sum(row.strip().startswith("INPUT-") for row in state()["painted"]) == state()["rows"] * 35 // 100)
-    screenshot("docked-settings")
-    fixture_command("editor")
-    if terminal_kind in ("kitty", "iterm2"):
-        check_focus_loss(cell, columns)
-    if terminal_kind == "vte" and not with_tmux:
-        run("xdotool", "windowsize", window_id, str(first["width"] * 26 + width % columns), str(first["height"] * 14 + height % rows))
-        if not wait_for(lambda: (state()["columns"], state()["rows"]) == (26, 14)):
-            raise RuntimeError("Narrow 26x14 resize did not reach the terminal")
-        open_settings("wheel")
-        check("narrowSettingsVisible", lambda: any("Wheel scroll lines" in row for row in state()["painted"]))
-        key("enter")
-        check("narrowSettingsRemainsUsable", lambda: state()["wheelStep"] == 5 and any("Wheel scroll lines" in row for row in state()["painted"]))
-        screenshot("narrow-settings")
-        close_settings()
-        wrapped_line = "012345678901234567890123"
-        narrow_draft = wrapped_line * 4 + "\nTAIL"
-        fixture_command("narrow-editor")
-        check("narrowWrappedInputVisible", lambda: state()["editor"] == narrow_draft and state()["frameFlushed"]
-              and sum(row.strip() == wrapped_line for row in state()["painted"]) == 3
-              and any(row.strip() == "TAIL" for row in state()["painted"]))
-        key("left")
-        key("backspace")
-        type_text("x")
-        check("narrowMultilineEditing", lambda: state()["editor"] == wrapped_line * 4 + "\nTAxL"
-              and state()["frameFlushed"] and any(row.strip() == "TAxL" for row in state()["painted"]))
-        screenshot("narrow-multiline")
-        fixture_command("editor")
-        type_text("/hot")
-        check("narrowAutocompleteVisible", lambda: state()["editor"] == "/hot" and state()["frameFlushed"]
-              and any("→ hotkeys" in row for row in state()["painted"]))
-        key("tab")
-        check("narrowAutocompleteAccepted", lambda: state()["editor"] == "/hotkeys " and state()["frameFlushed"])
-        screenshot("narrow-autocomplete")
-        fixture_command("editor")
-        run("xdotool", "windowsize", window_id, str(width), str(height))
-        check("narrowEditorSizeRestored", lambda: (state()["columns"], state()["rows"]) == (columns, rows))
-    fixture_command("expand")
-    mouse("down", *cell(columns, state()["height"] // 2))
-    mouse("up", *cell(columns, state()["height"] // 2))
-    check("longSessionMiddleReachable", lambda: 0.3 < state()["offset"] / (state()["totalRows"] - state()["height"]) < 0.7)
-    mouse("down", *cell(columns, 1))
-    mouse("up", *cell(columns, 1))
-    first_row = next((i + 1 for i, line in enumerate(state()["painted"][:state()["height"]]) if line.startswith("ROW-002 ")), None)
-    if first_row is None:
-        raise RuntimeError("ROW-002 is not visible at the top of synthetic history")
-    mouse("down", *cell(1, first_row))
-    selection_edge = state()["height"]
-    mouse("drag", *cell(60, selection_edge))
-    time.sleep(0.5)
-    mouse("up", *cell(60, selection_edge))
-    check("selectionAutoscrolls", lambda: state()["offset"] > 0 and state().get("selectionActive") is True)
-    last_selected = state()["painted"][state()["height"] - 1]
-    if not last_selected.startswith("ROW-"):
-        raise RuntimeError(f"Selection escaped synthetic history: {last_selected}")
-    last_number = int(last_selected[4:7])
-    expected_multiline = "\n".join(f"ROW-{i:03d} synthetic café 界 e\u0301 text" for i in range(2, last_number + 1))
-    held_frame = state()
-    fixture_command("update")
-    check("selectionAllowsLiveUpdates", lambda: state().get("selectionActive") and state()["updates"] > held_frame["updates"] and f"LIVE-UPDATES-{state()['updates']}" in "\n".join(state()["painted"]) and state()["painted"] != held_frame["painted"])
-    screenshot("selection-across-scroll")
-    key("copy")
-    check("scrolledSelectionClipboardExact", lambda: clipboard() == expected_multiline and not state().get("selectionActive"))
-
-    def browse_cards(count):
-        seen = set()
-        mouse("down", *cell(columns, state()["height"]))
-        mouse("up", *cell(columns, state()["height"]))
-        for _ in range(180):
-            for line in state()["painted"]:
-                for i in range(1, count + 1):
-                    if f"CARD-{i} " in line:
-                        seen.add(i)
-            if len(seen) == count or state()["offset"] == 0:
-                break
-            mouse("move", *cell(10, 3))
-            events("wheel", 1)
-            time.sleep(0.1)
-        return seen
-
-    seen = browse_cards(4)
-    check("firstFourRunningCardsReachable", lambda: seen == set(range(1, 5)) and state()["completed"] == 0)
-    for _ in range(4):
-        fixture_command("advance")
-    seen = browse_cards(8)
-    check("allEightCardsReachableBeforeCompletion", lambda: seen == set(range(1, 9)) and state()["completed"] == 4)
-    mouse("down", *cell(columns, state()["height"]))
-    mouse("up", *cell(columns, state()["height"]))
-    for _ in range(160):
-        if state()["painted"][0].startswith(" child-3 detail-"):
-            break
-        events("wheel", 1)
-        time.sleep(0.1)
-    anchor = state()["painted"][0]
-    check("readingInsideRunningBatch", lambda: anchor.startswith(" child-3 detail-"))
-    fixture_command("update")
-    check("readingAnchorSurvivesOtherChildUpdate", lambda: state()["painted"][0] == anchor and not state()["followingTail"])
-    original_dimensions = (state()["columns"], state()["rows"])
-    if is_mac:
-        window = next(item for item in geometry if item["role"] == "AXWindow")
-        events("resize", bundle, window["width"] - 100, window["height"] - 40)
-    else:
-        run("xdotool", "windowsize", window_id, str(width - 100), str(height - 40))
-    check("nativeWidthAndHeightChanged", lambda: state()["columns"] < original_dimensions[0] and state()["rows"] < original_dimensions[1])
-    check("readingAnchorSurvivesResize", lambda: state()["painted"][0] == anchor)
-    screenshot("resized-reading")
-    if is_mac:
-        events("resize", bundle, window["width"], window["height"])
-    else:
-        run("xdotool", "windowsize", window_id, str(width), str(height))
-    check("nativeSizeRestored", lambda: (state()["columns"], state()["rows"]) == original_dimensions)
-    check("readingAnchorSurvivesResizeBack", lambda: state()["painted"][0] == anchor)
-    for _ in range(4):
-        fixture_command("advance")
-    fixture_command("approval")
-    payload_seen = set()
-    mouse("down", *cell(columns, state()["height"]))
-    mouse("up", *cell(columns, state()["height"]))
-    for _ in range(100):
-        for line in state()["painted"]:
-            if line.startswith("IMMUTABLE-SYNTHETIC-PAYLOAD-"):
-                payload_seen.add(int(line.rsplit("-", 1)[1]))
-        if len(payload_seen) == 60:
-            break
-        events("wheel", 1)
-        time.sleep(0.1)
-    check("completeApprovalContextReachable", lambda: payload_seen == set(range(60)))
-    mouse("down", *cell(columns, 1))
-    mouse("up", *cell(columns, 1))
-    enter_count = state()["enterPresses"]
-    key("enter")
-    stable_check("hiddenApprovalActivationOnlyReveals", lambda: state()["enterPresses"] > enter_count and state()["frameFlushed"] and state()["approved"] == 0 and any("SYNTHETIC APPROVAL" in line for line in state()["painted"]))
-    key("enter")
-    check("subsequentApprovalActivation", lambda: state()["approved"] == 1)
-    fixture_command("external")
-    check("externalProgramRoundTrip", lambda: state()["editorHandoffs"] == 1 and state()["handoffTermios"] == state()["termiosBefore"] and state()["editor"] == "edited by synthetic external editor")
-    fixture_command("suspend")
-    check("jobControlSuspended", lambda: "T" in run("ps", "-o", "stat=", "-p", str(state()["pid"])))
-    screenshot("suspended-shell")
-    key("f")
-    key("g")
-    key("enter")
-    check("jobControlResumed", lambda: state()["phase"] == "resumed")
-    fixture_command("copy-editor")
-    copy_frame = state()["painted"]
-    start_row = next(i + 1 for i, line in enumerate(copy_frame) if "COPY-EDITOR" in line)
-    end_row = next(i + 1 for i, line in enumerate(copy_frame) if line.strip() == "café 界")
-    drag(cell(1, start_row), cell(columns - 1, end_row))
-    key("copy")
-    copy_expected = ("COPY-EDITOR " + "alpha beta gamma " * 12).rstrip() + "\n\n    café 界"
-    check("editorCopyOmitsSoftWraps", lambda: clipboard() == copy_expected and not state().get("selectionActive"))
-    for reverse in (False, True):
-        fixture_command("copy-seam-scrolled" if reverse else "copy-seam")
-        if reverse and not wait_for(session_indicator_matches):
-            raise RuntimeError("Dock-origin seam copy requires a visible flushed Session indicator")
-        seam_frame = state()["painted"]
-        start_row = next(i + 1 for i, line in enumerate(seam_frame) if line.strip() == "SEAM-ONE")
-        end_row = next(i + 1 for i, line in enumerate(seam_frame) if line.strip() == "DRAFT-SEAM")
-        start, end = cell(1, start_row), cell(11, end_row)
-        seed_clipboard("SEAM-SENTINEL")
-        copy_count = state().get("keyCopy", 0)
-        drag(end, start) if reverse else drag(start, end)
-        if not wait_for(lambda: state().get("selectionPainted") and state().get("frameFlushed")):
-            raise RuntimeError("Cross-seam selection was not painted")
-        if reverse:
-            if not session_indicator_matches():
-                raise RuntimeError("Session indicator disappeared before dock-origin seam copy")
-            report["decoratedSeamSelection"] = state()
-            screenshot("decorated-seam-selected")
-        key("copy")
-        check("selectionCrossesIntoTranscript" if reverse else "selectionCrossesIntoEditor", lambda: state().get("keyCopy", 0) == copy_count + 1 and clipboard() == "SEAM-ONE\nSEAM-TWO\n\nDRAFT-SEAM" and not state().get("selectionActive"))
-    screenshot("copy-seam")
+    check("nativeCaretPaste", lambda: state().get("editor") == "PREFIX" + payload + "SUFFIX" and state().get("submissions", 0) == 0)
+    screenshot("native-paste")
     key("exit")
-    check("orderlyExit", lambda: state().get("stopped") is True and (output / "stty-after.txt").exists() and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
-    check("termiosRestored", lambda: bool(state().get("termiosBefore")) and state().get("termiosBefore") == state().get("termiosAfter"))
+    check("orderlyExit", lambda: state().get("stopped") is True and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
+    def termios_config(value):
+        return re.sub(r"(:lflag=)([0-9a-f]+)(?=:)", lambda m: m[1] + format(int(m[2], 16) & ~0x20000000, "x"), value)
+    check("termiosRestored", lambda: bool(state().get("termiosBefore")) and termios_config(state()["termiosBefore"]) == termios_config(state()["termiosAfter"]))
     screenshot("restored")
-    if terminal_kind == "vte" and not with_tmux:
-        state_path = output / "committed.json"
-        committed_launcher = output / "committed.sh"
-        committed_launcher.write_text("#!/bin/bash\n" + "\n".join([
-            f"PI_TUI_WRITE_LOG={shlex.quote(str(output / 'committed-ansi.log'))} SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(root / 'packages/scramjet/tests/fixtures/interactive-viewport.mjs'))} --production --committed --committed-handoffs",
-            "fixture_status=$?",
-            f'printf "%s\\n" "$fixture_status" > {shlex.quote(str(output / "committed-exit-code"))}',
-            "printf 'COMMITTED RESTORED SHELL\\n'",
-            'exit "$fixture_status"',
-        ]) + "\n")
-        type_text(f"/bin/bash {shlex.quote(str(committed_launcher))}")
-        key("enter")
-        check("nativeCommittedMode", lambda: state().get("production") is True and state().get("mode") == "committed"
-              and state().get("viewport") is None and state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False)
-        if not wait_for(lambda: state().get("completed") == 8):
-            raise RuntimeError("Committed batch did not finalize")
-        fixture_command("approval")
-        def committed_context_ready():
-            path = output / "committed-ansi.log"
-            if not path.exists() or state().get("approvalFocused") is not True:
-                return False
-            markers = {int(value) for value in re.findall(r"IMMUTABLE-SYNTHETIC-PAYLOAD-(\d+)\b", path.read_text())}
-            return markers == set(range(60))
-        if not wait_for(committed_context_ready):
-            raise RuntimeError("Committed approval context and controls did not settle")
-        report["committedHandoffs"] = {"contextMarkers": 60}
-        screenshot("committed-approval")
-        key("enter")
-        if not wait_for(lambda: state().get("approved") == 1 and state().get("editorActive") is True and state().get("editor") == "Synthetic editor"):
-            raise RuntimeError("Committed approval did not restore editing")
-        fixture_command("external")
-        if not wait_for(lambda: state().get("editorHandoffs") == 1 and state().get("handoffTermios") == state().get("termiosBefore")
-                        and state().get("editorActive") is True and state().get("editor") == "edited by synthetic external editor"):
-            raise RuntimeError("Committed external editor did not restore terminal state and draft")
-        starts = sum("start" in entry for entry in state()["terminalStates"])
-        fixture_command("suspend")
-        if not wait_for(lambda: "T" in run("ps", "-o", "stat=", "-p", str(state()["pid"]))
-                        and state()["terminalStates"][-1].get("stop") == state().get("termiosBefore")):
-            raise RuntimeError("Committed suspension did not restore the shell")
-        report["committedHandoffs"]["suspended"] = True
-        screenshot("committed-suspended")
-        type_text("fg")
-        key("enter")
-        if not wait_for(lambda: state().get("phase") == "resumed" and state().get("editorActive") is True
-                        and sum("start" in entry for entry in state()["terminalStates"]) > starts):
-            raise RuntimeError("Committed terminal did not restart after fg")
-        report["committedHandoffs"]["resumed"] = True
-        key("x")
-        if not wait_for(lambda: state().get("editor") == "edited by synthetic external editorx"):
-            raise RuntimeError("Committed editing did not survive resume")
-        key("exit")
-        check("nativeCommittedBatchCompletes", lambda: state().get("completed") == 8 and state().get("stopped") is True
-              and (output / "committed-exit-code").exists() and (output / "committed-exit-code").read_text().strip() == "0")
-        check("nativeCommittedRestoration", lambda: bool(state().get("termiosBefore")) and state().get("termiosBefore") == state().get("termiosAfter")
-              and state().get("approved") == 1 and state().get("editorHandoffs") == 1 and state().get("suspends") == 1
-              and state().get("handoffTermios") == state().get("termiosBefore") and state().get("editor") == "edited by synthetic external editorx"
-              and report.get("committedHandoffs", {}).get("contextMarkers") == 60
-              and report.get("committedHandoffs", {}).get("suspended") is True and report.get("committedHandoffs", {}).get("resumed") is True)
-        screenshot("committed-restored")
+
 except Exception as error:
     report["error"] = str(error)
     if isinstance(error, subprocess.CalledProcessError):

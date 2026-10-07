@@ -303,6 +303,29 @@ describe("native input terminal contract", () => {
 		f.terminal.stop();
 	});
 
+	it("does not rearm Copy from a live paint during input drain", async () => {
+		const f = setup();
+		const control = f.terminal.configureNativeCopy(f.options);
+		f.terminal.start(vi.fn(), vi.fn());
+		let finish!: () => void;
+		f.native.drain.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const draining = f.terminal.drainInput();
+		f.native.setLease.mockClear();
+		try {
+			control.setLease({});
+			expect(f.native.setLease).not.toHaveBeenCalled();
+		} finally {
+			finish();
+			await draining;
+			f.terminal.stop();
+		}
+	});
+
 	it("defers late configuration without transferring the direct parser", () => {
 		const f = setup();
 		f.terminal.start(vi.fn(), vi.fn());

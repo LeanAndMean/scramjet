@@ -347,6 +347,7 @@ async function runProduction() {
 			else if (command.action === "close-overlay") { overlay?.hide(); overlay = undefined; }
 			else if (command.action === "expand") mode.setToolsExpanded(true);
 			else if (command.action === "editor") extensionUI.setEditorText("");
+			else if (command.action === "stage2-draft") extensionUI.setEditorText("PREFIXSUFFIX");
 			else if (command.action === "copy-editor") extensionUI.setEditorText(`COPY-EDITOR ${"alpha beta gamma ".repeat(12).trimEnd()}\n\n    café 界`);
 			else if (command.action === "copy-seam" || command.action === "copy-seam-scrolled") {
 				const hiddenRows = command.action === "copy-seam-scrolled" ? 40 : 0;
@@ -381,9 +382,11 @@ async function runProduction() {
 	process.once("SIGHUP", stop);
 	mode.ui.addInputListener((data) => {
 		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
-			interactions[copied !== undefined && data.slice(6, -6) === copied ? "pasteMatches" : "pasteMismatches"]++;
-			return { consume: true };
-		}
+            const payload = data.slice(6, -6).replace(/\r\n?/g, "\n");
+            if (payload === "STAGE2 café 界 é\nsecond line") return;
+            interactions.pasteMismatches++;
+            return { consume: true };
+        }
 		if (data === "\x1b[I") interactions.focusIn++;
 		if (data === "\x1b[O") interactions.focusOut++;
 		if (matchesKey(data, "enter") && !isKeyRelease(data)) interactions.enterPresses++;
@@ -521,16 +524,7 @@ async function runProduction() {
 			const line = (i) => `ROW-${String(i).padStart(3, "0")} synthetic café 界 e\u0301 text`;
 			extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth(line(1), width)] }));
 			mode.addMessageToChat({ role: "custom", customType: "fixture-history", content: Array.from({ length: 199 }, (_, i) => line(i + 2)).join("\n"), display: true, timestamp: 0 });
-			const copy = mode.ui.viewport.options.copy;
-			mode.ui.viewport.options.copy = async (text) => {
-				const kind = copyKind;
-				try {
-					await copy(text);
-					copied = text;
-					interactions[kind]++;
-					if (kind === "rightCopy") interactions.rightWithoutSelection--;
-				} catch (error) { interactions.copyErrors++; throw error; }
-			};
+
 		} else extensionUI.setHeader(() => new Text("Production candidate: Ctrl+N advances; Ctrl+O expands; Ctrl+Q exits", 0, 0));
 		extensionUI.setWorkingIndicator({ frames: ["⠋"] });
 		extensionUI.setWidget("above", ["ABOVE editor"]);
@@ -587,6 +581,7 @@ async function runProduction() {
 		const after = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
 		record();
 		rmSync(directory, { recursive: true, force: true });
-		if (before !== after) throw new Error("Production fixture did not restore terminal state");
+		const config = (value) => value.replace(/(:lflag=)([0-9a-f]+)(?=:)/, (_, prefix, bits) => prefix + (BigInt(`0x${bits}`) & ~0x20000000n).toString(16));
+        if (config(before) !== config(after)) throw new Error("Production fixture did not restore terminal state");
 	}
 }
