@@ -613,6 +613,23 @@ try:
         check("diagnosticPasteInsertion", lambda: state().get("editor") == "PREFIX" + payload + "SUFFIX" and state().get("diagnosticCursor") == {"line": 1, "col": 11} and state().get("submissions", 0) == before_paste.get("submissions", 0) and state().get("frameFlushed") is True)
         observations["nativePaste"] = {"before": before_paste, "after": state()}
         screenshot("diagnostic-paste")
+        for update_during_selection in (False, True):
+            fixture_command("diagnostic-auto-handoff")
+            seed_clipboard("UNTOUCHED-handoff-608")
+            before_handoff = state()
+            handoff_expected = before_handoff["handoffExpected"]
+            drag(cell(1, 1), cell(60, 1))
+            if not wait_for(lambda: state().get("handoffPress", 0) == before_handoff.get("handoffPress", 0) + 1):
+                raise RuntimeError("Handoff press was not received")
+            handoff_after_drag = clipboard()
+            if update_during_selection:
+                fixture_command("update")
+            events("key", 8, 1048576)
+            time.sleep(0.7)
+            name = "automaticPressHandoffWithLiveUpdate" if update_during_selection else "automaticPressHandoff"
+            observations[name] = {"qualification": "Protocol feasibility only; mouse restoration not implemented", "expectedContent": handoff_expected, "afterDrag": handoff_after_drag, "afterCopy": clipboard(), "exactExpected": clipboard() == handoff_expected, "after": state()}
+            screenshot(f"diagnostic-{name}")
+            fixture_command("diagnostic-restore-mouse")
         fixture_command("diagnostic-native-selection")
         seed_clipboard("UNTOUCHED-nativeSelection-608")
         before_native = state()

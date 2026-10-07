@@ -23,10 +23,10 @@ func record() {
     try! data.write(to: target, options: .atomic)
 }
 
-let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
+let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.scrollWheel.rawValue)
 let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: CGEventMask(mask), callback: { _, type, event, _ in
     let key = event.getIntegerValueField(.keyboardEventKeycode)
-    if key == 8 || type == .flagsChanged {
+    if key == 8 || type == .flagsChanged || type == .leftMouseDown || type == .leftMouseUp || type == .scrollWheel {
         taps.append(["seconds": Date().timeIntervalSince(started), "type": type.rawValue, "keyCode": key, "flags": event.flags.rawValue])
         if taps.count > 100 { taps.removeFirst() }
         record()
@@ -44,11 +44,12 @@ let timer = Timer(timeInterval: 0.002, repeats: true) { _ in
     let hidC = CGEventSource.keyState(.hidSystemState, key: 8)
     let flags = CGEventSource.flagsState(.combinedSessionState).rawValue
     let hidFlags = CGEventSource.flagsState(.hidSystemState).rawValue
-    let current = [c ? UInt64(1) : 0, hidC ? UInt64(1) : 0, flags, hidFlags]
+    let left = CGEventSource.buttonState(.combinedSessionState, button: .left)
+    let current = [c ? UInt64(1) : 0, hidC ? UInt64(1) : 0, flags, hidFlags, left ? UInt64(1) : 0]
     if current != previous {
         previous = current
         let foreground = NSWorkspace.shared.frontmostApplication
-        samples.append(["seconds": Date().timeIntervalSince(started), "cDown": c, "hidCDown": hidC, "flags": flags, "hidFlags": hidFlags, "foregroundPid": foreground?.processIdentifier ?? -1, "foregroundBundle": foreground?.bundleIdentifier ?? "unknown"])
+        samples.append(["seconds": Date().timeIntervalSince(started), "cDown": c, "hidCDown": hidC, "leftDown": left, "flags": flags, "hidFlags": hidFlags, "foregroundPid": foreground?.processIdentifier ?? -1, "foregroundBundle": foreground?.bundleIdentifier ?? "unknown"])
         if samples.count > 100 { samples.removeFirst() }
         record()
     }
