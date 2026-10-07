@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         terminal: [apple, iterm2]
-        backend: [thread]
+        backend: [input-thread]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,9 +48,10 @@ jobs:
         env:
           SCRAMJET_SCROLL_PROTOCOL: "1"
           SCRAMJET_NATIVE_COPY: "1"
-          SCRAMJET_STALL_PROBE: "0"
+          SCRAMJET_STALL_PROBE: "1"
           SCRAMJET_MACOS_INPROCESS: ${{ matrix.backend == 'inprocess' && '1' || '0' }}
           SCRAMJET_MACOS_INPUT_PROXY: ${{ matrix.backend == 'proxy' && '1' || '0' }}
+          SCRAMJET_MACOS_INPUT_THREAD: ${{ matrix.backend == 'input-thread' && '1' || '0' }}
           SCRAMJET_MACOS_MOUSE_DIAGNOSTIC: ${{ runner.temp }}/copy-diagnostic/independent-observer.json
         run: python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/copy-diagnostic" --terminal=${{ matrix.terminal }} --copy-diagnostic
       - name: Stop bounded independent observer

@@ -15,6 +15,7 @@ if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONM
 is_mac = sys.platform == "darwin"
 copy_diagnostic = "--copy-diagnostic" in sys.argv[2:]
 scroll_protocol = os.environ.get("SCRAMJET_SCROLL_PROTOCOL") == "1"
+direct_reader = os.environ.get("SCRAMJET_MACOS_INPUT_PROXY") == "1" or os.environ.get("SCRAMJET_MACOS_INPUT_THREAD") == "1"
 with_tmux = "--tmux" in sys.argv[2:]
 terminal_kind = next((arg.split("=", 1)[1] for arg in sys.argv[2:] if arg.startswith("--terminal=")), "apple" if is_mac else "vte")
 bundle = "com.googlecode.iterm2" if terminal_kind == "iterm2" else "com.apple.Terminal"
@@ -613,7 +614,13 @@ try:
             raise RuntimeError("Second selection did not arm")
         if os.environ.get("SCRAMJET_STALL_PROBE") == "1":
             fixture_pid = state()["pid"]
-            os.kill(fixture_pid, signal.SIGSTOP)
+            thread_reader = os.environ.get("SCRAMJET_MACOS_INPUT_THREAD") == "1"
+            if thread_reader:
+                fixture_command("diagnostic-block-loop")
+                if not wait_for(lambda: state().get("blocking") is True):
+                    raise RuntimeError("UI event-loop stall was not established")
+            else:
+                os.kill(fixture_pid, signal.SIGSTOP)
             try:
                 events("key", 17, 1048576)
                 time.sleep(0.5)
@@ -632,14 +639,20 @@ try:
                 seed_clipboard("UNTOUCHED-stall-608")
                 events("key", 8, 1048576)
                 time.sleep(0.4)
-                observations["stalledFocusTransfer"] = {"clipboard": clipboard(), "expected": "STALL-TAB-608", "fixture": state(), "receiver": json.loads(observer_path.read_text())}
+                observations["stalledFocusTransfer"] = {"fault": "UI event loop blocked" if thread_reader else "UI process SIGSTOP", "clipboard": clipboard(), "expected": "STALL-TAB-608", "fixture": state(), "receiver": json.loads(observer_path.read_text())}
                 screenshot("stalled-other-tab-copy")
             finally:
-                os.kill(fixture_pid, signal.SIGCONT)
+                if thread_reader:
+                    if not wait_for(lambda: state().get("blocking") is False, timeout=15):
+                        raise RuntimeError("UI event-loop stall did not end")
+                else:
+                    os.kill(fixture_pid, signal.SIGCONT)
             if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is False):
                 raise RuntimeError("Receiver did not release after resume")
             observations["stalledFocusTransfer"]["afterResumeClipboard"] = clipboard()
             observations["stalledFocusTransfer"]["afterResume"] = state()
+            if direct_reader and (observations["stalledFocusTransfer"]["clipboard"] != "STALL-TAB-608" or clipboard() != "STALL-TAB-608" or state().get("nativeCopyDelivered") != 1):
+                raise RuntimeError("Native Copy was stolen or replayed across the UI stall")
             events("key", 13, 1048576)
             if not wait_for(lambda: state().get("nativeCopy", {}).get("armed") is True):
                 raise RuntimeError("Selection did not rearm after stalled focus return")
@@ -678,7 +691,7 @@ try:
         if clipboard() != "OTHER-TAB-608":
             raise RuntimeError("Unrelated tab native Copy check failed")
         control = Path(str(observer_path) + ".control")
-        if os.environ.get("SCRAMJET_MACOS_INPUT_PROXY") != "1":
+        if not direct_reader:
             control.write_text("arm-pass")
             if not wait_for(lambda: json.loads(observer_path.read_text()).get("armed") is True):
                 raise RuntimeError("Pass-through experiment failed to arm")
@@ -705,7 +718,7 @@ try:
             raise RuntimeError("Native paste regressed")
         observations["paste"] = state()
         screenshot("automatic-paste")
-        if os.environ.get("SCRAMJET_MACOS_INPUT_PROXY") == "1":
+        if direct_reader:
             fixture_command("external")
             if state().get("editorHandoffs") != 1 or state().get("handoffTermios") != state().get("termiosBefore"):
                 raise RuntimeError("External-editor handoff did not restore terminal state")

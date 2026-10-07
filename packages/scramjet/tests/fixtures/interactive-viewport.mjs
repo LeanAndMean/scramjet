@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSyn
 import { release, platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import { Worker } from "node:worker_threads";
 import { decodeKittyPrintable, isKeyRelease, matchesKey, ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
 import { copyToClipboard } from "../../../coding-agent/dist/utils/clipboard.js";
 
@@ -258,16 +259,29 @@ async function runProduction() {
 	terminal.start = (...args) => {
 		nativeCopyDraining = false;
 		terminalStates.push({ start: ttyState() }); startTerminal(...args);
-		if (process.env.SCRAMJET_MACOS_INPUT_PROXY === "1") {
+		if (process.env.SCRAMJET_MACOS_INPUT_PROXY === "1" || process.env.SCRAMJET_MACOS_INPUT_THREAD === "1") {
 			process.stdin.removeListener("data", terminal.stdinDataHandler);
 			process.stdin.pause();
-			inputProxy = fork(new URL("../../../../.github/scripts/macos-copy-input-proxy.mjs", import.meta.url), [process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC], { stdio: ["inherit", "ignore", "inherit", "ipc"] });
+			if (process.env.SCRAMJET_MACOS_INPUT_THREAD === "1") {
+				const control = new Int32Array(new SharedArrayBuffer(16));
+				inputProxy = new Worker(new URL("../../../../.github/scripts/macos-copy-input-thread.mjs", import.meta.url), { workerData: { target: process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC, control: control.buffer } });
+				inputProxy.control = control;
+				inputProxy.connected = true;
+				let nextID = 1;
+				const wait = (id) => { const until = Date.now() + 3000; while (Atomics.load(control, 0) < id) { if (Date.now() >= until) throw new Error("Native input worker acknowledgement timed out"); Atomics.wait(control, 0, Atomics.load(control, 0), Math.max(1, until - Date.now())); } };
+				wait(1);
+				inputProxy.send = (message) => { const id = ++nextID; inputProxy.postMessage({ ...message, id }); wait(id); };
+				inputProxy.kill = () => inputProxy.terminate();
+				const thread = inputProxy;
+				thread.once("exit", () => { thread.connected = false; thread.emit("close"); });
+				thread.on("error", (error) => { safetyState.error = error.message; record(); });
+			} else inputProxy = fork(new URL("../../../../.github/scripts/macos-copy-input-proxy.mjs", import.meta.url), [process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC], { stdio: ["inherit", "ignore", "inherit", "ipc"] });
 			const owner = inputProxy;
 			inputProxy.on("message", (message) => {
 				if (inputProxy !== owner) return;
 				if (message.kind === "data") terminal.stdinBuffer?.emit("data", message.data);
 				if (message.kind === "paste") terminal.stdinBuffer?.emit("paste", message.data);
-				if (message.kind === "copy" && !nativeCopyDraining && terminalFocused && nativeCopyEnabled && message.event.lease === nativeCopyLease && mode.ui.viewport?.selection && !mode.ui.hasOverlay()) {
+				if (message.kind === "copy" && (!owner.control || (Atomics.load(owner.control, 2) === message.event.focusEpoch && Atomics.load(owner.control, 3) === 1)) && !nativeCopyDraining && terminalFocused && nativeCopyEnabled && message.event.lease === nativeCopyLease && mode.ui.viewport?.selection && !mode.ui.hasOverlay()) {
 					copyKind = "keyCopy"; void mode.ui.viewport.copySelection();
 					safetyState.nativeCopyDelivered = (safetyState.nativeCopyDelivered ?? 0) + 1;
 				}
@@ -432,6 +446,7 @@ async function runProduction() {
 				terminal.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" + modes[variant]);
 			}
 			else if (diagnostic && command.action === "diagnostic-capture-reset") safetyState.protocolInputs = [];
+			else if (diagnostic && command.action === "diagnostic-block-loop") { setTimeout(() => { safetyState.blocking = true; record(); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 12000); safetyState.blocking = false; record(); }, 150); }
 			else if (diagnostic && command.action === "diagnostic-native-copy-on") { nativeCopyEnabled = true; const path = process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC; hotkeyEventsSeen = JSON.parse(readFileSync(path, "utf8")).events.filter((event) => event.kind === "hotkey").length; }
 			else if (diagnostic && command.action === "diagnostic-retained-restore") { safetyState.protocolCapture = false; terminal.write("\x1b[?1l\x1b[>1m\x1b[?1007l\x1b[?1002h\x1b[?1006h"); }
 			else if (diagnostic && command.action === "diagnostic-hotkey-copy") mode.ui.handleInput("\x03");
