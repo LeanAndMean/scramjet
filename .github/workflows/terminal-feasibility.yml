@@ -39,6 +39,7 @@ jobs:
       - name: Observe stock shortcuts through production composition
         env:
           SCRAMJET_MACOS_OBSERVER: ${{ runner.temp }}/macos-copy-observer
+          SCRAMJET_MACOS_MOUSE_DIAGNOSTIC: ${{ runner.temp }}/copy-diagnostic/independent-observer.json
         run: python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/copy-diagnostic" --terminal=${{ matrix.terminal }} --copy-diagnostic
       - name: Stop bounded independent observer
         if: always()

@@ -39,7 +39,7 @@ let mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, 
 mouseMonitorInstalled = mouseMonitor != nil
 
 let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.scrollWheel.rawValue)
-let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: CGEventMask(mask), callback: { _, type, event, _ in
+let tap = (capabilities["listenEventAccess"] as? Bool == true) ? CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: CGEventMask(mask), callback: { _, type, event, _ in
     let key = event.getIntegerValueField(.keyboardEventKeycode)
     if key == 8 || type == .flagsChanged || type == .leftMouseDown || type == .leftMouseUp || type == .scrollWheel {
         taps.append(["seconds": Date().timeIntervalSince(started), "type": type.rawValue, "keyCode": key, "flags": event.flags.rawValue])
@@ -47,7 +47,7 @@ let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
         record()
     }
     return Unmanaged.passUnretained(event)
-}, userInfo: nil)
+}, userInfo: nil) : nil
 if let tap {
     tapCreated = true
     let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)

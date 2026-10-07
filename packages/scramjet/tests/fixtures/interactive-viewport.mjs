@@ -266,6 +266,8 @@ async function runProduction() {
 	const journey = process.argv.includes("--journey");
 	const diagnostic = process.argv.includes("--copy-diagnostic");
 	let nativeHandoff = false;
+	let mouseDiagnosticEnabled = false;
+	let lastMouseDiagnosticSeconds = 0;
 	const observer = diagnostic && process.env.SCRAMJET_MACOS_OBSERVER ? spawn(process.env.SCRAMJET_MACOS_OBSERVER, [`${process.env.SCRAMJET_TUI_PROBE_EVIDENCE}.observer.json`], { stdio: "ignore" }) : undefined;
 	const interactions = { wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0, copyErrors: 0, pasteMatches: 0, pasteMismatches: 0, focusIn: 0, focusOut: 0, enterPresses: 0 };
 	const committed = process.argv.includes("--committed");
@@ -335,6 +337,17 @@ async function runProduction() {
 		observation.phase = "waiting";
 	}
 	const timer = setInterval(() => {
+		const mouseEvidence = process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC;
+		if (mouseDiagnosticEnabled && mouseEvidence && existsSync(mouseEvidence)) {
+			for (const event of JSON.parse(readFileSync(mouseEvidence, "utf8")).appKitMouseEvents ?? []) {
+				if (event.seconds <= lastMouseDiagnosticSeconds) continue;
+				lastMouseDiagnosticSeconds = event.seconds;
+				if (event.type === 22) {
+					mode.ui.scrollViewport(-event.deltaY * services.settingsManager.getScrollWheelStep());
+					safetyState.nativeWheelSeen = (safetyState.nativeWheelSeen ?? 0) + 1;
+				}
+			}
+		}
 		record();
 		const path = process.env.SCRAMJET_TUI_PROBE_EVIDENCE && `${process.env.SCRAMJET_TUI_PROBE_EVIDENCE}.command`;
 		if ((!journey && !committedHandoffs) || !path || !existsSync(path)) return;
@@ -353,9 +366,10 @@ async function runProduction() {
 			else if (diagnostic && command.action === "diagnostic-draft") extensionUI.setEditorText("PREFIXSUFFIX");
 			else if (diagnostic && command.action === "diagnostic-super-binding") mode.keybindings.setUserBindings({ ...mode.keybindings.getUserBindings(), "tui.input.copy": ["ctrl+c", "super+c"] });
 			else if (diagnostic && command.action === "diagnostic-top") { mode.ui.followViewport(); mode.ui.scrollViewportTo(0); }
+			else if (diagnostic && command.action === "diagnostic-appkit-browsing") { mouseDiagnosticEnabled = true; const mouseEvidence = process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC; lastMouseDiagnosticSeconds = JSON.parse(readFileSync(mouseEvidence, "utf8")).appKitMouseEvents?.at(-1)?.seconds ?? 0; mode.ui.scrollViewportTo(0); terminal.write("\x1b[?1002l\x1b[?1006l\x1b[?1007l"); }
 			else if (diagnostic && command.action === "diagnostic-auto-handoff") { nativeHandoff = true; safetyState.handoffExpected = `HANDOFF-${command.id} synthetic café 界 e\u0301 text`; extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth(safetyState.handoffExpected, width)] })); mode.ui.followViewport(); mode.ui.scrollViewportTo(0); }
 			else if (diagnostic && command.action === "diagnostic-native-selection") { extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth("ROW-001 synthetic café 界 e\u0301 text", width)] })); mode.ui.followViewport(); mode.ui.scrollViewportTo(0); terminal.write("\x1b[?1002l\x1b[?1006l\x1b[?1007l"); }
-			else if (diagnostic && command.action === "diagnostic-restore-mouse") terminal.write("\x1b[?1002h\x1b[?1006h");
+			else if (diagnostic && command.action === "diagnostic-restore-mouse") { mouseDiagnosticEnabled = false; terminal.write("\x1b[?1002h\x1b[?1006h"); }
 			else if (command.action === "copy-editor") extensionUI.setEditorText(`COPY-EDITOR ${"alpha beta gamma ".repeat(12).trimEnd()}\n\n    café 界`);
 			else if (command.action === "copy-seam" || command.action === "copy-seam-scrolled") {
 				const hiddenRows = command.action === "copy-seam-scrolled" ? 40 : 0;

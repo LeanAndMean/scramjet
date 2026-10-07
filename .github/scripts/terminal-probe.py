@@ -51,7 +51,7 @@ REQUIRED_CHECKS = {
 
 def required_checks():
     if globals().get("copy_diagnostic", False):
-        return {"checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible", "diagnosticControlCopy", "diagnosticPasteInsertion", "orderlyExit", "termiosRestored"}
+        return {"checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible", "diagnosticControlCopy", "diagnosticPasteInsertion", "diagnosticRetainedNativeWheel", "diagnosticNativeCopyWithRetainedBrowsing", "orderlyExit", "termiosRestored"}
     expected = REQUIRED_CHECKS | ({"desktopCellTargetVerified"} if not is_mac else set())
     if terminal_kind in ("kitty", "iterm2"):
         expected |= {"nativeFocusDragActive", "nativeFocusOutReceived", "focusLossStopsSelectionScroll", "nativeFocusReturned"}
@@ -642,6 +642,23 @@ try:
         events("wheel", -3)
         time.sleep(0.7)
         observations["nativeWheelWithReportingDisabled"] = {"before": before_wheel, "after": state(), "qualification": "1007 disabled; inspect independent AppKit observer for wheel delivery"}
+        fixture_command("diagnostic-appkit-browsing")
+        before_bridge = state()
+        events("wheel", -100)
+        check("diagnosticRetainedNativeWheel", lambda: state().get("nativeWheelSeen", 0) > before_bridge.get("nativeWheelSeen", 0) and state().get("offset", 0) > before_bridge.get("offset", 0) and state().get("mode") == "retained" and state().get("completed") == 0 and state().get("editor") == before_bridge.get("editor") and state().get("frameFlushed") is True)
+        observations["retainedUnfinishedBrowsingViaAppKit"] = {"before": before_bridge, "after": state(), "qualification": "Single owned-window diagnostic only; no production geometry/focus integration"}
+        events("wheel", 100)
+        if not wait_for(lambda: state().get("offset") == 0 and state().get("frameFlushed") is True):
+            raise RuntimeError("Native wheel did not return retained history to its beginning")
+        seed_clipboard("UNTOUCHED-native-retained-608")
+        import unicodedata
+        end_column = 1 + sum(0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1 for char in expected)
+        drag(cell(1, 1), cell(end_column, 1))
+        after_bridge_drag = clipboard()
+        events("key", 8, 1048576)
+        check("diagnosticNativeCopyWithRetainedBrowsing", lambda: after_bridge_drag == "UNTOUCHED-native-retained-608" and clipboard() == expected and state().get("mode") == "retained" and state().get("completed") == 0)
+        observations["nativeCopyWithRetainedBrowsing"] = {"afterDrag": after_bridge_drag, "afterCopy": clipboard(), "after": state()}
+        screenshot("diagnostic-retained-native-copy")
         fixture_command("diagnostic-restore-mouse")
         key("exit")
         check("orderlyExit", lambda: state().get("stopped") is True and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
