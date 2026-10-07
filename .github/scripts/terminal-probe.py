@@ -50,6 +50,8 @@ REQUIRED_CHECKS = {
 
 
 def required_checks():
+    if os.environ.get("SCRAMJET_SCROLL_PROTOCOL") == "1":
+        return {"checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible", "orderlyExit", "termiosRestored"}
     if globals().get("copy_diagnostic", False):
         return {"checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible", "diagnosticControlCopy", "diagnosticPasteInsertion", "diagnosticRetainedNativeWheel", "diagnosticNativeCopyWithRetainedBrowsing", "orderlyExit", "termiosRestored"}
     expected = REQUIRED_CHECKS | ({"desktopCellTargetVerified"} if not is_mac else set())
@@ -578,6 +580,45 @@ try:
         if not check("desktopCellTargetVerified", lambda: state()["lastMouse"]["x"] == 10 and state()["lastMouse"]["y"] == 3):
             raise RuntimeError("Desktop cell targeting remains uncalibrated")
     screenshot("startup")
+    if os.environ.get("SCRAMJET_SCROLL_PROTOCOL") == "1":
+        observations = report["scrollProtocol"] = {}
+        for variant in ("off", "on", "appcursor"):
+            fixture_command("diagnostic-protocol-" + variant)
+            fixture_command("diagnostic-protocol-query")
+            time.sleep(0.4)
+            observations[variant] = {"query": state().get("protocolInputs")}
+            mouse("move", *cell(10, 3))
+            for action, values in (("wheelUp", ("wheel", 3)), ("wheelDown", ("wheel", -3)), ("keyUp", ("key", 126, 0)), ("keyDown", ("key", 125, 0))):
+                fixture_command("diagnostic-capture-reset")
+                events(*values)
+                time.sleep(0.5)
+                observations[variant][action] = state().get("protocolInputs")
+                screenshot(f"protocol-{variant}-{action}")
+            fixture_command("diagnostic-capture-reset")
+            expected = "ROW-001 synthetic café 界 e\u0301 text"
+            import unicodedata
+            width = sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in expected)
+            drag(cell(1, 1), cell(1 + width, 1))
+            seed_clipboard("UNTOUCHED-after-selection-608")
+            events("key", 8, 1048576)
+            time.sleep(0.4)
+            observations[variant]["copy"] = {"expected": expected, "actual": clipboard(), "inputs": state().get("protocolInputs")}
+            screenshot(f"protocol-{variant}-copy")
+        observer_path = Path(os.environ["SCRAMJET_MACOS_MOUSE_DIAGNOSTIC"])
+        control = Path(str(observer_path) + ".control")
+        control.write_text("suppress")
+        time.sleep(0.3)
+        fixture_command("diagnostic-protocol-off")
+        events("wheel", 3)
+        time.sleep(0.5)
+        observations["wheelTapSuppression"] = {"observer": json.loads(observer_path.read_text()), "inputs": state().get("protocolInputs")}
+        screenshot("protocol-tap-suppression")
+        control.write_text("observe")
+        fixture_command("diagnostic-protocol-reset")
+        key("exit")
+        check("orderlyExit", lambda: state().get("stopped") is True and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
+        check("termiosRestored", lambda: state().get("termiosBefore") == state().get("termiosAfter"))
+        raise CopyDiagnosticComplete()
     if copy_diagnostic:
         expected = "ROW-001 synthetic café 界 e\u0301 text"
         observations = report["copyDiagnostic"] = {}

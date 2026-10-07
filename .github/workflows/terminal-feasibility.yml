@@ -38,7 +38,7 @@ jobs:
           open -n "$RUNNER_TEMP/Issue608Observer.app" --args "$RUNNER_TEMP/copy-diagnostic/independent-observer.json"
       - name: Observe stock shortcuts through production composition
         env:
-          SCRAMJET_MACOS_OBSERVER: ${{ runner.temp }}/macos-copy-observer
+          SCRAMJET_SCROLL_PROTOCOL: "1"
           SCRAMJET_MACOS_MOUSE_DIAGNOSTIC: ${{ runner.temp }}/copy-diagnostic/independent-observer.json
         run: python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/copy-diagnostic" --terminal=${{ matrix.terminal }} --copy-diagnostic
       - name: Stop bounded independent observer

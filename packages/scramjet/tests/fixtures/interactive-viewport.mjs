@@ -363,6 +363,16 @@ async function runProduction() {
 			else if (command.action === "close-overlay") { overlay?.hide(); overlay = undefined; }
 			else if (command.action === "expand") mode.setToolsExpanded(true);
 			else if (command.action === "editor") extensionUI.setEditorText("");
+			else if (diagnostic && command.action.startsWith("diagnostic-protocol-")) {
+				const variant = command.action.slice("diagnostic-protocol-".length);
+				const modes = { off: "\x1b[?1007l", on: "\x1b[?1007h", appcursor: "\x1b[?1007h\x1b[?1h", query: "\x1b[?1007$p", reset: "\x1b[?1007l\x1b[?1l" };
+				if (!(variant in modes)) throw new Error("Unknown protocol variant");
+				safetyState.protocolCapture = true;
+				safetyState.protocolInputs = [];
+				mode.ui.scrollViewportTo(0);
+				terminal.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" + modes[variant]);
+			}
+			else if (diagnostic && command.action === "diagnostic-capture-reset") safetyState.protocolInputs = [];
 			else if (diagnostic && command.action === "diagnostic-draft") extensionUI.setEditorText("PREFIXSUFFIX");
 			else if (diagnostic && command.action === "diagnostic-super-binding") mode.keybindings.setUserBindings({ ...mode.keybindings.getUserBindings(), "tui.input.copy": ["ctrl+c", "super+c"] });
 			else if (diagnostic && command.action === "diagnostic-top") { mode.ui.followViewport(); mode.ui.scrollViewportTo(0); }
@@ -403,6 +413,11 @@ async function runProduction() {
 	process.once("SIGTERM", stop);
 	process.once("SIGHUP", stop);
 	mode.ui.addInputListener((data) => {
+		if (diagnostic && safetyState.protocolCapture) {
+			safetyState.protocolInputs.push(data);
+			if (safetyState.protocolInputs.length > 1000) safetyState.protocolInputs.shift();
+			if (!matchesKey(data, "ctrl+q")) return { consume: true };
+		}
 		if (nativeHandoff && /^\x1b\[<0;\d+;\d+M$/.test(data)) {
 			nativeHandoff = false;
 			safetyState.handoffPress = (safetyState.handoffPress ?? 0) + 1;
