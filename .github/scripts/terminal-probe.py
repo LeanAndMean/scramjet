@@ -14,6 +14,7 @@ if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONM
 
 is_mac = sys.platform == "darwin"
 copy_diagnostic = "--copy-diagnostic" in sys.argv[2:]
+scroll_protocol = os.environ.get("SCRAMJET_SCROLL_PROTOCOL") == "1"
 with_tmux = "--tmux" in sys.argv[2:]
 terminal_kind = next((arg.split("=", 1)[1] for arg in sys.argv[2:] if arg.startswith("--terminal=")), "apple" if is_mac else "vte")
 bundle = "com.googlecode.iterm2" if terminal_kind == "iterm2" else "com.apple.Terminal"
@@ -50,7 +51,7 @@ REQUIRED_CHECKS = {
 
 
 def required_checks():
-    if os.environ.get("SCRAMJET_SCROLL_PROTOCOL") == "1":
+    if globals().get("scroll_protocol", False):
         return {"checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible", "orderlyExit", "termiosRestored"}
     if globals().get("copy_diagnostic", False):
         return {"checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible", "diagnosticControlCopy", "diagnosticPasteInsertion", "diagnosticRetainedNativeWheel", "diagnosticNativeCopyWithRetainedBrowsing", "orderlyExit", "termiosRestored"}

@@ -265,6 +265,10 @@ async function runProduction() {
 	const safety = process.argv.includes("--safety");
 	const journey = process.argv.includes("--journey");
 	const diagnostic = process.argv.includes("--copy-diagnostic");
+	if (diagnostic && process.env.SCRAMJET_MACOS_INPROCESS === "1") {
+		const { startDiagnosticHotkey } = await import("../../../../.github/scripts/macos-copy-koffi.mjs");
+		startDiagnosticHotkey(process.env.SCRAMJET_MACOS_MOUSE_DIAGNOSTIC);
+	}
 	let nativeHandoff = false;
 	let nativeCopyEnabled = false;
 	let terminalFocused = false;

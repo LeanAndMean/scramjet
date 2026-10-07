@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         terminal: [apple, iterm2]
-        backend: [swift, koffi]
+        backend: [koffi, inprocess]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,6 +33,7 @@ jobs:
         if: matrix.backend == 'swift'
         run: swiftc .github/scripts/macos-copy-observer.swift -o "$RUNNER_TEMP/macos-copy-observer"
       - name: Launch independently attributed observer without requesting access
+        if: matrix.backend != 'inprocess'
         run: |
           mkdir -p "$RUNNER_TEMP/copy-diagnostic" "$RUNNER_TEMP/Issue608Observer.app/Contents/MacOS"
           if [ '${{ matrix.backend }}' = swift ]; then
@@ -47,6 +48,7 @@ jobs:
         env:
           SCRAMJET_SCROLL_PROTOCOL: "1"
           SCRAMJET_NATIVE_COPY: "1"
+          SCRAMJET_MACOS_INPROCESS: ${{ matrix.backend == 'inprocess' && '1' || '0' }}
           SCRAMJET_MACOS_MOUSE_DIAGNOSTIC: ${{ runner.temp }}/copy-diagnostic/independent-observer.json
         run: python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/copy-diagnostic" --terminal=${{ matrix.terminal }} --copy-diagnostic
       - name: Stop bounded independent observer

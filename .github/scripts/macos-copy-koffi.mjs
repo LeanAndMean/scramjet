@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import koffi from "koffi";
+import { fileURLToPath } from "node:url";
 
-const target = process.argv[2];
+export function startDiagnosticHotkey(target) {
 const carbon = koffi.load("/System/Library/Frameworks/Carbon.framework/Carbon");
 const services = koffi.load("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices");
 const Spec = koffi.struct("DiagnosticEventSpec", { eventClass: "uint32", eventKind: "uint32" });
@@ -43,3 +44,5 @@ const stop = () => { clearInterval(timer); if (ref) unregister(ref); process.exi
 process.on("SIGTERM", stop);
 setTimeout(stop, 180_000);
 record();
+}
+if (process.argv[1] === fileURLToPath(import.meta.url)) startDiagnosticHotkey(process.argv[2]);
