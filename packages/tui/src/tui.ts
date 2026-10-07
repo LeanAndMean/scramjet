@@ -824,6 +824,7 @@ export class TUI extends Container {
 		this.stopped = true;
 		this.started = false;
 		this.renderRequested = false;
+		this.viewport?.cancelInteraction();
 		let retained: string[] | undefined;
 		let retentionError: unknown;
 		try {
@@ -846,7 +847,6 @@ export class TUI extends Container {
 		}
 		try {
 			for (const listener of this.lifecycleListeners) listener("stop");
-			this.viewport?.cancelInteraction();
 			this.viewportRevealFocus = false;
 			this.viewportRevealComponent = undefined;
 			if (this.viewport) {

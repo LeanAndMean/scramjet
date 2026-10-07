@@ -143,6 +143,20 @@ describe("native viewport copy", () => {
 		expect(input).not.toHaveBeenCalled();
 	});
 
+	it("revokes Copy before producing the final retained snapshot", async () => {
+		const h = await nativeSetup();
+		h.select();
+		await h.frame();
+		const render = h.text.render.bind(h.text);
+		const leases: (object | null)[] = [];
+		vi.spyOn(h.text, "render").mockImplementation((width) => {
+			leases.push(h.lease());
+			return render(width);
+		});
+		h.tui.stop({ retainContent: true });
+		expect(leases).toEqual([null]);
+	});
+
 	it("keeps mode-release failure faulted across repeated stop and start", async () => {
 		const h = await nativeSetup();
 		vi.spyOn(h.terminal, "setViewportMode").mockImplementationOnce(() => {
