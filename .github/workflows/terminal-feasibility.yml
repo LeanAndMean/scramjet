@@ -150,6 +150,14 @@ jobs:
           args=()
           if [[ "$STOCK_COPY" == true ]]; then args+=(--stock-copy); fi
           python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal=${{ matrix.terminal }} "${args[@]}"
+      - name: Reject native false-positive controls
+        if: matrix.stock == true
+        run: |
+          set -euo pipefail
+          for control in noop-copy copy-on-selection consumed-paste; do
+            python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence/$control" \
+              --terminal=${{ matrix.terminal }} --stock-copy --negative-control="$control"
+          done
       - name: Probe Linux VTE terminal
         if: runner.os == 'Linux'
         env:

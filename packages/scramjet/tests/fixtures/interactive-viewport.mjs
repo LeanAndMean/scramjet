@@ -1,15 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { findPackageJSON } from "node:module";
 import { pathToFileURL } from "node:url";
 import { release, platform, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 const installedRoot = process.env.SCRAMJET_TUI_INSTALLED_ROOT;
-const installedRequire = installedRoot ? createRequire(join(realpathSync(installedRoot), "package.json")) : undefined;
+const installedBase = installedRoot ? pathToFileURL(join(realpathSync(installedRoot), "package.json")) : undefined;
 const closure = installedRoot ? realpathSync(join(installedRoot, "..", "..")) + sep : undefined;
 function runtimeModule(packageName, file = "index.js") {
-	const entry = installedRequire ? installedRequire.resolve(`@leanandmean/${packageName}`) : new URL(`../../../${packageName}/dist/index.js`, import.meta.url).pathname;
+	const entry = installedBase ? join(dirname(findPackageJSON(`@leanandmean/${packageName}`, installedBase)), "dist/index.js") : new URL(`../../../${packageName}/dist/index.js`, import.meta.url).pathname;
 	const path = realpathSync(join(dirname(entry), file));
 	if (closure && !path.startsWith(closure)) throw new Error(`Runtime escaped installed closure: ${path}`);
 	return import(pathToFileURL(path).href);
@@ -576,7 +576,7 @@ async function runProduction() {
 				safetyState.editorFocusedAfterSubmit = mode.ui.isComponentFocused(mode.editor);
 			};
 
-			const line = (i) => `ROW-${String(i).padStart(3, "0")} synthetic café 界 e\u0301 text`;
+			const line = (i) => `${i === 1 && process.argv.includes("--second-instance") ? "SECOND-608" : `ROW-${String(i).padStart(3, "0")}`} synthetic café 界 e\u0301 text`;
 			extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth(line(1), width)] }));
 			mode.addMessageToChat({ role: "custom", customType: "fixture-history", content: Array.from({ length: 199 }, (_, i) => line(i + 2)).join("\n"), display: true, timestamp: 0 });
 			const copy = mode.ui.viewport.options.copy;

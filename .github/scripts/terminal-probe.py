@@ -64,7 +64,7 @@ def required_checks():
                      "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration"}
     if stock_copy:
         expected -= {"rightClickRequestsCopy", "rightClickClipboardExactUnicode", "rightWithoutSelectionPastesWithoutSubmit", "editorRightClickPastesWithoutSubmit"}
-        expected |= {"nativeCommandCCopy", "sentinelSurvivesSelectionAndUpdate", "externalEditorInput", "extensionExternalEditorInput"}
+        expected |= {"nativeCommandCCopy", "sentinelSurvivesSelectionAndUpdate", "externalEditorInput", "extensionExternalEditorInput", "stalledOtherTabCopy", "noDelayedCopyAfterStall", "otherAppIsolation", "twoInstanceCopy"}
     return expected
 
 
@@ -136,6 +136,10 @@ def shell_exited(pid):
 def owned_exit():
     if terminal_process.poll() is None and json.loads(events("frontmost")).get("pid") == terminal_process.pid:
         key("exit")
+        if negative_control:
+            if not wait_for(lambda: (output / "exit-code").exists(), timeout=10):
+                raise RuntimeError("Negative-control fixture did not exit")
+            report["negativeControlExit"] = {"status": (output / "exit-code").read_text().strip(), "fixture": state()}
 
 
 def close_mac_windows():
@@ -304,6 +308,10 @@ def fixture_command(action):
     temporary = Path(str(path) + ".tmp")
     temporary.write_text(json.dumps({"id": command_id, "action": action}))
     temporary.replace(path)
+    if action == "stall":
+        if not wait_for(lambda: state().get("stallStarted") and not state().get("stallEnded")):
+            raise RuntimeError("UI-loop stall did not start")
+        return
     if action == "external" and stock_copy:
         external_editor_input()
     if not wait_for(lambda: state().get("commandDone") == command_id or (action == "suspend" and state().get("phase") == "suspending") or state().get("error"), timeout=10):
@@ -434,6 +442,102 @@ def check_focus_loss(cell, columns):
                     auxiliary.terminate()
                     auxiliary.wait(timeout=10)
     check("nativeFocusReturned", lambda: state()["focusIn"] > before_in)
+
+
+def visible_marker(marker):
+    geometry = json.loads(events("geometry-pid", str(terminal_process.pid), "--marker=" + marker))
+    areas = [item for item in geometry if item["role"] == "AXScrollArea"]
+    cells = [item["firstCell"] for item in geometry if "firstCell" in item and any(
+        area["x"] <= item["firstCell"]["x"] < area["x"] + area["width"]
+        and area["y"] <= item["firstCell"]["y"] < area["y"] + area["height"] for area in areas)]
+    if len(cells) != 1 or cells[0]["width"] <= 0 or cells[0]["height"] <= 0:
+        raise RuntimeError("Marker is not uniquely visible: " + marker)
+    return cells[0]
+
+
+def native_isolation(first, cell, launcher):
+    global state_path, command_id
+    expected = "ROW-001 synthetic café 界 e\u0301 text"
+    drag(cell(1, 1), cell(60, 1))
+    if not wait_for(lambda: state().get("selectionPainted") is True):
+        raise RuntimeError("Isolation selection did not paint")
+    fixture_command("stall")
+    events("key", 17, 1048576)
+    time.sleep(0.5)
+    seed_clipboard("printf '\\033[2J\\033[HSTALL-TAB-608\\n'")
+    key("paste")
+    key("enter")
+    time.sleep(0.4)
+    mark = visible_marker("STALL-TAB-608")
+    start = (mark["x"] + mark["width"] / 2, mark["y"] + mark["height"] / 2)
+    drag(start, (start[0] + 13 * mark["width"], start[1]))
+    seed_clipboard("STALL-SENTINEL")
+    key("nativeCopy")
+    check("stalledOtherTabCopy", lambda: clipboard() == "STALL-TAB-608" and not state().get("stallEnded"))
+    screenshot("stalled-other-tab")
+    if not wait_for(lambda: bool(state().get("stallEnded")), timeout=15):
+        raise RuntimeError("UI-loop stall did not finish")
+    stable_check("noDelayedCopyAfterStall", lambda: clipboard() == "STALL-TAB-608", seconds=1)
+    events("key", 13, 1048576)
+    if not wait_for(lambda: state().get("focusIn", 0) > 0):
+        raise RuntimeError("Focus did not return")
+    first.update(visible_marker("ROW-001"))
+    focus_out = state().get("focusOut", 0)
+    seed_clipboard("APP-SENTINEL")
+    events("activate", "com.apple.finder")
+    if not wait_for(lambda: state().get("focusOut", 0) > focus_out):
+        raise RuntimeError("Other-application focus was not observed")
+    key("nativeCopy")
+    stable_check("otherAppIsolation", lambda: clipboard() == "APP-SENTINEL")
+    events("activate-pid", str(terminal_process.pid))
+    primary_path, primary_command = state_path, command_id
+    second_dir = output / "second-instance"
+    second_dir.mkdir()
+    second_launcher = second_dir / "launch.sh"
+    second_launcher.write_text(launcher.read_text().replace(str(output), str(second_dir)).replace("--production --journey", "--production --journey --second-instance"))
+    events("key", 17, 1048576)
+    seed_clipboard("/bin/bash " + shlex.quote(str(second_launcher)))
+    key("paste")
+    key("enter")
+    second_path = second_dir / "fixture.json"
+    try:
+        state_path, command_id = second_path, 0
+        if not wait_for(lambda: state().get("totalRows", 0) > 240, timeout=30):
+            raise RuntimeError("Second instance did not initialize")
+        mark = visible_marker("SECOND-608")
+        start = (mark["x"] + mark["width"] / 2, mark["y"] + mark["height"] / 2)
+        end = (start[0] + 59 * mark["width"], start[1])
+        drag(start, end)
+        if not wait_for(lambda: state().get("selectionPainted") is True):
+            raise RuntimeError("Second-instance selection did not paint")
+        seed_clipboard("SECOND-SENTINEL")
+        key("nativeCopy")
+        second_expected = "SECOND-608 synthetic café 界 e\u0301 text"
+        if not wait_for(lambda: clipboard() == second_expected and state().get("selectionActive") is False):
+            raise RuntimeError("Second instance copied incorrect text")
+        drag(start, end)
+        if not wait_for(lambda: state().get("selectionPainted") is True):
+            raise RuntimeError("Second-instance replacement selection did not paint")
+        seed_clipboard("FIRST-RETURN-SENTINEL")
+        events("key", 33, 1179648)
+        state_path, command_id = primary_path, primary_command
+        key("nativeCopy")
+        if not wait_for(lambda: clipboard() == expected and state().get("selectionActive") is False):
+            raise RuntimeError("Immediate first-instance return Copy failed")
+        seed_clipboard("SECOND-RETURN-SENTINEL")
+        events("key", 30, 1179648)
+        state_path = second_path
+        key("nativeCopy")
+        check("twoInstanceCopy", lambda: clipboard() == second_expected and state().get("selectionActive") is False)
+        screenshot("two-instances")
+        key("exit")
+        if not wait_for(lambda: (second_dir / "exit-code").exists() and (second_dir / "exit-code").read_text().strip() == "0"):
+            raise RuntimeError("Second instance did not exit cleanly")
+        report["secondInstanceExit"] = state()
+        events("key", 13, 1048576)
+    finally:
+        state_path, command_id = primary_path, primary_command
+    first.update(visible_marker("ROW-001"))
 
 
 def screenshot(name):
@@ -673,9 +777,20 @@ try:
     native_payload = "NATIVE café 界 e\u0301\nsecond line"
     seed_clipboard(native_payload)
     key("paste")
+    if not is_mac and terminal_kind == "vte":
+        dialog = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^Warning: Potentially Unsafe Paste$"], capture_output=True, text=True, timeout=5)
+        if dialog.returncode == 0:
+            windows = dialog.stdout.split()
+            if len(windows) != 1 or int(run("xdotool", "getwindowpid", windows[0])) != terminal_process.pid:
+                raise RuntimeError("Multiline-paste consent window is not uniquely owned")
+            report["multilinePasteConsent"] = {"window": windows[0], "payload": "allowlisted synthetic multiline text"}
+            run("xdotool", "windowactivate", "--sync", windows[0])
+            key("enter")
     check("desktopPasteRoundTrip", lambda: native_paste_outcome(paste_before_native, state(), native_payload))
     screenshot("native-caret-paste")
     fixture_command("restore-editor")
+    if stock_copy and not negative_control:
+        native_isolation(first, cell, launcher)
     paste_before = state()
     if not stock_copy:
         paste_text = "RIGHT-PASTE café 界\nsecond line"
@@ -986,7 +1101,17 @@ finally:
     if is_mac:
         verify_mac_cleanup()
     report["passed"] = report_passed()
+    if negative_control:
+        expected_failure = {"noop-copy": "nativeCommandCCopy", "copy-on-selection": "sentinelSurvivesSelectionAndUpdate", "consumed-paste": "desktopPasteRoundTrip"}[negative_control]
+        receipt = report.get("negativeControlExit", {})
+        final = receipt.get("fixture", {})
+        report["negativeControlRejected"] = (report.get("error") == expected_failure
+            and report["checks"].get(expected_failure, {}).get("passed") is False
+            and "cleanupError" not in report and receipt.get("status") == "0"
+            and final.get("stopped") is True and final.get("negativeControl") == negative_control
+            and termios_configuration_equal(final.get("termiosBefore"), final.get("termiosAfter"), True)
+            and bool(report.get("ownedTerminalClosed")))
     (output / "report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 
-sys.exit(0 if report["passed"] else 1)
+sys.exit(0 if report.get("negativeControlRejected") is True or (not negative_control and report["passed"]) else 1)

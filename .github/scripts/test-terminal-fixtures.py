@@ -278,6 +278,14 @@ class NativeClipboardOracleTests(unittest.TestCase):
             self.assertFalse(check(baseline, invalid, True))
 
 
+class SafetyTermiosOracleTests(unittest.TestCase):
+    def setUp(self):
+        self.context = {"re": re}
+        load_safety_functions({"termios_configuration_equal"}, self.context)
+
+    test_only_darwin_pendin_state_may_differ_before_read = NativeClipboardOracleTests.test_only_darwin_pendin_state_may_differ_before_read
+
+
 class InteractionExitTests(unittest.TestCase):
     def launch(self, code):
         directory = tempfile.TemporaryDirectory()
@@ -1230,7 +1238,7 @@ class MacInteractionOwnershipTests(unittest.TestCase):
             key = Mock()
             context = {"is_mac": True, "terminal_kind": terminal_kind, "bundle": bundle, "plist": plist,
                        "output": output, "root": ROOT, "driver": output / "events", "launcher": output / "launch.sh",
-                       "launch_command": "synthetic launch", "tmux_command": None, "with_tmux": False, "stock_copy": False,
+                       "launch_command": "synthetic launch", "tmux_command": None, "with_tmux": False, "stock_copy": False, "negative_control": None,
                        "terminal_started": False, "terminal_process": None, "window_id": None,
                        "run": Mock(side_effect=run), "events": events, "subprocess": process, "json": json,
                        "Path": Path, "time": Mock(), "wait_for": lambda predicate, **_kwargs: bool(predicate()),

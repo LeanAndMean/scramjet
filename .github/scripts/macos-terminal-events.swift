@@ -2,6 +2,8 @@ import AppKit
 import ApplicationServices
 import Foundation
 
+let markerText = CommandLine.arguments.first(where: { $0.hasPrefix("--marker=") }).map { String($0.dropFirst(9)) } ?? "ROW-001"
+
 func emit(_ value: Any) {
     let data = try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
     print(String(data: data, encoding: .utf8)!)
@@ -26,7 +28,7 @@ func geometry(_ element: AXUIElement, depth: Int = 0) -> [[String: Any]] {
         if ["AXWindow", "AXScrollArea", "AXTextArea"].contains(role) {
             var item: [String: Any] = ["role": role, "x": point.x, "y": point.y, "width": dimensions.width, "height": dimensions.height]
             if role == "AXTextArea", let text = attribute(element, kAXValueAttribute) as? String {
-                let marker = (text as NSString).range(of: "ROW-001")
+                let marker = (text as NSString).range(of: markerText, options: .backwards)
                 if marker.location != NSNotFound {
                     var range = CFRange(location: marker.location, length: 1)
                     let parameter = AXValueCreate(.cfRange, &range)!
@@ -138,7 +140,7 @@ let args = CommandLine.arguments
 switch args[1] {
 case "capabilities":
     emit(["accessibility": AXIsProcessTrusted(), "postEvents": CGPreflightPostEventAccess(),
-          "screenCapture": CGPreflightScreenCaptureAccess()])
+          "screenCapture": CGPreflightScreenCaptureAccess(), "listenEvents": CGPreflightListenEventAccess()])
 case "geometry", "resize":
     guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier?.lowercased() == (args.count > 2 ? args[2].lowercased() : "com.apple.terminal") }) else {
         fatalError("Terminal is not running")

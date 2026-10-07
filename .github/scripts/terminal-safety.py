@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import signal
@@ -48,6 +49,14 @@ def wait(predicate, seconds=10):
             return True
         time.sleep(0.1)
     return False
+
+
+def termios_configuration_equal(before, after, darwin):
+    if not isinstance(before, str) or not isinstance(after, str) or not before or not after:
+        return False
+    def configuration(value):
+        return re.sub(r"(:lflag=)([0-9a-f]+)(?=:)", lambda match: match[1] + format(int(match[2], 16) & ~0x20000000, "x"), value) if darwin else value
+    return configuration(before) == configuration(after)
 
 
 def action_settled(previous, action):
@@ -353,7 +362,7 @@ try:
     check("subsequentActivationAuthorizes", lambda: state().get("approved") == 1)
     key("6")
     check("externalEditorRoundTrip", lambda: state().get("editorHandoffs") == 1 and state().get("editor") == "edited by synthetic external editor")
-    check("externalEditorReceivesRestoredTermios", lambda: state().get("handoffTermios") == state().get("termiosBefore"))
+    check("externalEditorReceivesRestoredTermios", lambda: termios_configuration_equal(state().get("termiosBefore"), state().get("handoffTermios"), mac))
     key("7")
     check("suspendRequested", lambda: state().get("suspends") == 1)
     pid = state()["pid"]
@@ -374,7 +383,7 @@ try:
     check("nativeImageRestoredAfterResume", lambda: pixels("resumed-image") > 400)
     key("exit")
     check("orderlyExit", lambda: (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
-    check("finalTermiosRestored", lambda: state().get("termiosBefore") == state().get("termiosAfter"))
+    check("finalTermiosRestored", lambda: termios_configuration_equal(state().get("termiosBefore"), state().get("termiosAfter"), mac))
     check("nativePlacementsCleanedUp", lambda: state().get("stopped") is True and pixels("final-transcript") == 0, stable_seconds=0.35)
 except Exception as error:
     report["error"] = str(error)
