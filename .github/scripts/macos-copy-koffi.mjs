@@ -13,6 +13,7 @@ const getTarget = carbon.func("void *GetApplicationEventTarget()");
 const install = carbon.func("InstallEventHandler", "int32", ["void *", koffi.pointer(Callback), "uint32", koffi.pointer(Spec), "void *", koffi.out(koffi.pointer("void *"))]);
 const register = carbon.func("RegisterEventHotKey", "int32", ["uint32", "uint32", ID, "void *", "uint32", koffi.out(koffi.pointer("void *"))]);
 const unregister = carbon.func("int32 UnregisterEventHotKey(void *)");
+const removeHandler = carbon.func("int32 RemoveEventHandler(void *)");
 const receive = carbon.func("ReceiveNextEvent", "int32", ["uint32", "void *", "double", "uint8", koffi.out(koffi.pointer("void *"))]);
 const send = carbon.func("int32 SendEventToEventTarget(void *, void *)");
 const dispatcher = carbon.func("void *GetEventDispatcherTarget()");
@@ -40,9 +41,10 @@ const timer = setInterval(() => {
     }
     for (let n = 0; n < 32; n++) { const event = [null]; if (receive(0, null, 0, 1, event) !== 0) break; send(event[0], dispatcher()); release(event[0]); }
 }, 10);
-const stop = () => { clearInterval(timer); if (ref) unregister(ref); process.exit(0); };
-process.on("SIGTERM", stop);
-setTimeout(stop, 180_000);
+const stop = () => { clearInterval(timer); clearTimeout(expiry); if (ref) { unregister(ref); ref = null; } removeHandler(handler[0]); koffi.unregister(cb); state.armed = false; record(); process.removeListener("SIGTERM", stop); };
+if (process.argv[1] === fileURLToPath(import.meta.url)) process.once("SIGTERM", stop);
+const expiry = setTimeout(stop, 180_000);
 record();
+return stop;
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) startDiagnosticHotkey(process.argv[2]);
