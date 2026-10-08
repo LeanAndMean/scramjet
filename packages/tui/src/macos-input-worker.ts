@@ -31,6 +31,8 @@ export class MacosInputReader {
 	private focus = 0;
 	private backlog = 0;
 	private contentionLease = 0;
+	private contentionAttempts = 0;
+	private contentionUntil = 0;
 	private releaseUnknown = false;
 
 	constructor(
@@ -71,6 +73,7 @@ export class MacosInputReader {
 				break;
 			case "lease":
 				this.revoke();
+				this.contentionAttempts = 0;
 				this.lease = command.lease;
 				break;
 			case "consumed":
@@ -128,8 +131,10 @@ export class MacosInputReader {
 		if (!eligible) this.revoke();
 		else if (!this.registration && this.contentionLease !== this.lease) {
 			const id = ++this.nextRegistration;
-			const status = native.register(id);
+			const now = performance.now();
+			const status = this.contentionAttempts > 0 && now > this.contentionUntil ? -9878 : native.register(id);
 			if (status === 0) {
+				this.contentionAttempts = 0;
 				this.registration = id;
 				Atomics.store(this.shared, 2, id);
 				if (this.contentionLease) {
@@ -137,6 +142,10 @@ export class MacosInputReader {
 					this.io.send({ kind: "availability", available: true });
 				}
 			} else {
+				if (this.contentionAttempts === 0) this.contentionUntil = now + 40;
+				this.contentionAttempts++;
+				// Focus transfer can reach the new Worker just before the old Worker releases ownership.
+				if (status === -9878 && this.contentionAttempts < 3 && now < this.contentionUntil) return;
 				this.contentionLease = this.lease;
 				this.io.send({
 					kind: "availability",
@@ -154,6 +163,7 @@ export class MacosInputReader {
 	}
 
 	private setFocus(focused: boolean): void {
+		this.contentionAttempts = 0;
 		this.focus = ((this.focus >>> 1) + 1) * 2 + Number(focused);
 		Atomics.store(this.shared, 1, this.focus);
 		this.revoke();

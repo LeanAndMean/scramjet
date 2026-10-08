@@ -172,20 +172,68 @@ describe("macOS input ownership", () => {
 		f.reader.command({ kind: "stop" });
 	});
 
-	it("leaves a conflict unowned without retrying the same lease", () => {
+	it("bounds explicit contention retries and leaves a persistent conflict unowned", () => {
 		const f = fixture();
-		f.native.register.mockReturnValue(-9878);
-		f.reader.command({ kind: "commit" });
-		f.reader.command({ kind: "mouse", enabled: true });
-		f.reader.command({ kind: "lease", lease: 1 });
-		f.input.push(Buffer.from("\x1b[I"));
-		f.reader.tick();
-		f.reader.tick();
-		expect(f.native.register).toHaveBeenCalledOnce();
-		expect(f.native.unregister).not.toHaveBeenCalled();
-		expect(f.events).toContainEqual(expect.objectContaining({ kind: "availability", available: false }));
-		f.reader.command({ kind: "stop" });
+		const now = vi.spyOn(performance, "now").mockReturnValue(0);
+		try {
+			f.native.register.mockReturnValue(-9878);
+			f.reader.command({ kind: "commit" });
+			f.reader.command({ kind: "mouse", enabled: true });
+			f.reader.command({ kind: "lease", lease: 1 });
+			f.input.push(Buffer.from("\x1b[I"));
+			for (let attempt = 0; attempt < 10; attempt++) f.reader.tick();
+			expect(f.native.register).toHaveBeenCalledTimes(3);
+			expect(f.native.unregister).not.toHaveBeenCalled();
+			expect(f.events).toContainEqual(expect.objectContaining({ kind: "availability", available: false }));
+		} finally {
+			f.reader.command({ kind: "stop" });
+			now.mockRestore();
+		}
 	});
+
+	it("retries transient focus-transfer contention without reporting a persistent conflict", () => {
+		const f = fixture();
+		const now = vi.spyOn(performance, "now").mockReturnValue(0);
+		try {
+			f.native.register.mockReturnValueOnce(-9878);
+			f.reader.command({ kind: "commit" });
+			f.reader.command({ kind: "mouse", enabled: true });
+			f.reader.command({ kind: "lease", lease: 1 });
+			f.input.push(Buffer.from("\x1b[I"));
+			f.reader.tick();
+			f.reader.tick();
+			expect(f.native.register).toHaveBeenCalledTimes(2);
+			expect(Atomics.load(f.shared, 2)).toBe(2);
+			expect(f.events.filter((event) => event.kind === "availability")).toEqual([]);
+		} finally {
+			f.reader.command({ kind: "stop" });
+			now.mockRestore();
+		}
+	});
+
+	it.each(["deadline", "focus", "other-status"])(
+		"does not retry after %s invalidates contention eligibility",
+		(boundary) => {
+			const now = vi.spyOn(performance, "now").mockReturnValue(0);
+			const f = fixture();
+			try {
+				f.native.register.mockReturnValue(boundary === "other-status" ? -1 : -9878);
+				f.reader.command({ kind: "commit" });
+				f.reader.command({ kind: "mouse", enabled: true });
+				f.reader.command({ kind: "lease", lease: 1 });
+				f.input.push(Buffer.from("\x1b[I"));
+				f.reader.tick();
+				if (boundary === "deadline") now.mockReturnValue(41);
+				if (boundary === "focus") f.input.push(Buffer.from("\x1b[O"));
+				f.reader.tick();
+				expect(f.native.register).toHaveBeenCalledOnce();
+				expect(Atomics.load(f.shared, 2)).toBe(0);
+			} finally {
+				f.reader.command({ kind: "stop" });
+				now.mockRestore();
+			}
+		},
+	);
 
 	it("revokes before yielding a saturated read budget", () => {
 		const f = fixture();
