@@ -725,12 +725,16 @@ try:
         else:
             report["terminalConfiguration"] = {"font": "DejaVu Sans Mono 12", "geometry": "80x24", "selectToClipboard": True, "paste": "Shift+Insert"}
             launch = ["xterm", "-fa", "DejaVu Sans Mono", "-fs", "12", "-geometry", "80x24", "-T", "ScramjetProbe", "-xrm", "XTerm*selectToClipboard: true", "-e"]
+        shell_ready = output / f"shell-ready-{os.getpid()}"
+        bootstrap_command = 'while [ ! -e "$1" ]; do sleep 0.02; done; exec bash --noprofile --norc'
         with (output / "terminal.stdout.log").open("w") as stdout, (output / "terminal.stderr.log").open("w") as stderr:
-            terminal_process = subprocess.Popen([*launch, "bash", "--noprofile", "--norc"],
+            terminal_process = subprocess.Popen([*launch, "bash", "--noprofile", "--norc", "-c", bootstrap_command, "scramjet-bootstrap", str(shell_ready)],
                                                 env={**os.environ, "XDG_CONFIG_HOME": str(config_home)}, stdout=stdout, stderr=stderr)
         terminal_started = True
         window_id = wait_for_linux_window()
         run("xdotool", "windowactivate", "--sync", window_id)
+        shell_ready.write_text("desktop ready\n")
+        report["shellStartup"] = "Interactive shell starts after owned desktop readiness, before fixture launch; terminal flags are not rewritten."
         if tmux_command:
             run("xdotool", "type", "--clearmodifiers", "--delay", "20", tmux_command)
             key("enter")

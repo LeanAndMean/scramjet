@@ -261,6 +261,32 @@ def interaction_check(name, context):
     return eval(compile(ast.Expression(body=predicate), "terminal-probe.py", "eval"), context)
 
 
+class NativeShellStartupTests(unittest.TestCase):
+    def test_interactive_shell_waits_for_desktop_readiness(self):
+        assignment = next(node for node in ast.walk(interaction_source()) if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "bootstrap_command" for target in node.targets))
+        bootstrap = ast.literal_eval(assignment.value)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ready = root / "ready"
+            shell = root / "bash"
+            shell.write_text("#!/bin/sh\nprintf 'interactive shell started\\n'\n")
+            shell.chmod(0o700)
+            child = subprocess.Popen(["/bin/bash", "--noprofile", "--norc", "-c", bootstrap, "probe", str(ready)],
+                                     env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"]}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                self.assertFalse(select.select([child.stdout], [], [], 0.1)[0])
+                self.assertIsNone(child.poll())
+                ready.write_text("desktop ready\n")
+                stdout, stderr = child.communicate(timeout=5)
+                self.assertEqual(child.returncode, 0, stderr)
+                self.assertEqual(stdout, "interactive shell started\n")
+            finally:
+                if child.poll() is None:
+                    child.terminate()
+                    child.communicate(timeout=5)
+
+
 class NativeProfileEvidenceTests(unittest.TestCase):
     def test_fixture_control_flags_do_not_claim_function_key_remapping(self):
         assignment = next(node for node in ast.walk(interaction_source()) if isinstance(node, ast.Assign) and any(
