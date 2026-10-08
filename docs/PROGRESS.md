@@ -5,32 +5,32 @@ This is the compact development cursor, not a runtime session database or duplic
 ## Current snapshot
 
 - Updated: 2026-10-08.
-- Stage: S0 — runnable foundation, S0.1 active.
-- Workspace: `/home/user/repos/scramjet-rs`; orientation Markdown and four project-local development commands only.
-- Git/remote: local Git initialized on unborn `main` with the user's authorization; no commits or remote. The nine orientation/command files are untracked. No issue/PR identifiers are available.
-- Rust: installed `rustc 1.99.0` / `cargo 1.99.0` observed; no toolchain changes or dependency installation performed.
-- Implementation evidence: no Rust build, tests, benchmarks, live endpoint calls, or native rewrite UI journeys yet.
-- Active task/owner: S0.1 — `rs:work`, session `01a11d61-1068-78ae-a356-03b1f7884df1`; sole writer for the Cargo/source/test bootstrap, license/ignore files, README and this ledger.
-- Next action: finish S0.1 implementation and offline verification, establish local history, then return to triage if accepted. No dependency or bootstrap authorization blocker was found.
+- Stage: S0 — runnable foundation, complete; S0.1 accepted with its own proportional checks.
+- Workspace: `/home/user/repos/scramjet-rs`; one std-only Cargo package with headless library, CLI and tests, plus orientation and four development commands.
+- Git/remote: local `main` has bootstrap root commit `7a5dc13a00e875b26355288e09749af325f81128`; no remote or issue/PR identifiers. The bootstrap commit includes all nine pre-existing orientation/command files, preserving their content except the scoped README/progress updates. Final handoff updates are progress-only bookkeeping, separate from the candidate.
+- Rust: `rustc 1.99.0 (b940084d7 2026-09-28)` / `cargo 1.99.0 (5f94df478 2026-08-27)`; active `stable-x86_64-unknown-linux-gnu`. No toolchain changes or dependency installation performed.
+- Implementation evidence: offline formatting/build/tests/Clippy and CLI smoke passed on Linux. No provider transport, coding tools, persistence, TUI, benchmarks, live endpoint calls or native rewrite UI journeys yet.
+- Active task/owner: none; S0.1 work released by session `01a11d61-1068-78ae-a356-03b1f7884df1`.
+- Next action: **`/rs:triage`** in a fresh session to select/refine one S1 task. No further implementation task is currently queued.
 
 ## Priority queue
 
-- Selected queue: **S0.1** only — offline CLI/library bootstrap and repeatable checks. Implementation is active; no candidate or pending product review exists yet.
-- S0.1 has no dependencies. Its Cargo layout is a bounded implementation choice, not material uncertainty requiring `rs:plan`; preserve the headless/TUI responsibility boundary without speculative contracts or crate hierarchy.
-- Return to triage after S0 acceptance before selecting between transport and native TUI tracks. **S1.1/S1.2** remain pending future candidates outside the actionable queue; their S0.1 dependency is not yet accepted. Their task-specific acceptance must be refined when selected.
-- Establish S0.1 review need from the actual implementation and record its rationale. No required independent review has been waived; a material shared contract would require independent acceptance.
+- Selected queue: exhausted after **S0.1** acceptance; no interrupted implementation or pending product review.
+- S0.1 used one Cargo package with no dependencies, speculative crate hierarchy or runtime/TUI contract.
+- Return to triage at this S0 boundary before selecting between transport and native TUI tracks. **S1.1/S1.2** remain pending future candidates outside the actionable queue; their S0.1 dependency is now accepted, but task-specific scope/acceptance must be refined when selected.
+- S0.1 needed no independent review for its fixed-message std-only scaffold; rationale and candidate evidence below. Future material shared contracts require independent acceptance.
 
 ## Near-term tasks
 
 | ID | Status | Outcome | Dependency |
 |---|---|---|---|
-| S0.1 | active | Minimal offline Rust CLI/library, Apache-2.0 license, local Git, and repeatable smoke/test loop | None |
+| S0.1 | done | Minimal offline Rust CLI/library, Apache-2.0 license, local Git, and repeatable smoke/test loop | None |
 | S1.1 | pending | First bounded streaming transport fixture and fixed-admission demonstration | S0.1 |
 | S1.2 | pending | Small retained transcript/editor probe with an explicit native test plan and initial available-host evidence | S0.1; native acceptance depends on actual platform access |
 
 These are bounded entry points, not authority to finish the entire roadmap. Refine the selected task before implementation. Define subsequent task IDs only as needed; do not renumber completed IDs. Missing native access should be recorded for S1.2 without blocking unrelated headless tasks.
 
-## Next task: S0.1
+## Completed task: S0.1
 
 **Outcome:** a new session can build, test, and run a minimal Rust executable offline, understand the actual starting layout, and use local Git history without relying on the old Scramjet runtime.
 
@@ -38,17 +38,30 @@ These are bounded entry points, not authority to finish the entire roadmap. Refi
 
 **Out of scope:** live provider calls, adaptive algorithms, full agent/tools, native integration, plugin SDK, remote repository creation, GitHub publication, CI/release infrastructure, or version/changelog preparation.
 
-**Review/candidate:** no independent review required for the selected std-only scaffold: a fixed smoke message and thin CLI, with no material runtime/shared protocol, concurrency, persistence or native interaction contract. This does not exempt future material contracts from review. No implemented candidate exists yet.
+**Review/disposition:** `done`, accepted by work checks; no independent review required for this fixed-message std-only scaffold. Its library function has only the binary/test consumers, with no material runtime/shared protocol, concurrency, persistence or native interaction contract. No established review requirement was waived; future material contracts remain reviewable independently.
 
-**Implementation direction:** one Cargo package with a headless library and binary consumer; no workspace hierarchy, external dependencies, TUI or optional plugin coupling. Add a fixed offline `smoke` command, small library/CLI behavior tests, the standard Apache-2.0 text and `/target/` ignore rule. Current structural mapping confirmed there are no product modules, exported contracts or consumers to preserve; required toolchain components will be checked by execution.
+**Implemented:** one Cargo package with a headless library and binary consumer; no workspace hierarchy, external dependencies, TUI or optional plugin coupling. `smoke` prints a fixed bootstrap message; no arguments, `--help` and `-h` print usage; unsupported arguments exit 1 with usage on stderr. One library test and three process-level tests cover smoke, help/default and invalid/extra arguments. Added the standard Apache-2.0 text, `/target/` ignore rule, tracked lockfile and README development loop. Current-state structural mapping confirmed no existing product modules/contracts/consumers to preserve; no sibling source was copied.
+
+**Candidate identity:** bootstrap root commit `7a5dc13a00e875b26355288e09749af325f81128`, no parent/base revision. Selected implementation paths: `.gitignore`, `Cargo.toml`, `Cargo.lock`, `LICENSE`, `README.md`, `src/lib.rs`, `src/main.rs`, `tests/cli.rs`; all additions relative to unborn Git, with README updated from its pre-existing untracked content. No deletions. Aggregate SHA-256 `6175ea821877623f5e2046bab8a0cf11b4d6a5e4a59c5f863c616b793963bbdb`, produced by `sha256sum .gitignore Cargo.toml Cargo.lock LICENSE README.md src/lib.rs src/main.rs tests/cli.rs | sha256sum`. Progress-only bookkeeping is excluded. Other pre-existing orientation/command files were preserved and included to establish complete local history; they are not new implementation changes.
 
 **Acceptance:** the minimal CLI/library builds, tests, and runs offline on the available Linux host; local Git history is established. Run `cargo fmt --check`, `cargo check --offline`, `cargo test --offline`, `cargo clippy --offline --all-targets -- -D warnings`, and the task-specific CLI smoke; record exact commands/results and toolchain. Source and orientation docs must agree; no performance/platform claims are invented. New dependencies must be necessary and have evidenced compatible licenses.
 
-**Unresolved/blockers:** none blocking S0.1. Exact first Cargo layout and proportional review need are implementation decisions. Remote destination/publication and first real endpoint/authentication remain user-owned decisions outside S0.1. macOS/WSL test access is unestablished and does not block available-host bootstrap acceptance.
+**Checks (2026-10-08, Linux, toolchain above):** all passed:
 
-**Suggested fresh-session invocation:** `/rs:work S0.1`, after the live harness has loaded this project's `rs` command set. Without that command, ask: “Read CLAUDE.md and docs/PROGRESS.md, then complete only task S0.1, verify its outcome, and record the next handoff.”
+- `cargo fmt --check` (after initial `cargo fmt`), `cargo check --offline`, `cargo test --offline` (1 library + 3 integration tests; 0 failures), `cargo clippy --offline --all-targets -- -D warnings`.
+- `cargo run --offline -- smoke` exited 0 and printed `scramjet-rs: offline bootstrap ready`; `cargo run --offline -- --help` exited 0 and printed documented usage. Process tests also establish stderr/exit behavior for unsupported and extra arguments.
+- `cargo metadata --offline --format-version 1` showed only the local package, zero external/transitive dependencies and `Apache-2.0` license metadata; `cmp LICENSE /usr/share/common-licenses/Apache-2.0` confirmed exact standard local license text. No third-party implementation/notices were incorporated.
+- `git check-ignore target/debug/scramjet-rs` confirmed generated output is ignored; `git diff --cached --check` passed before the root commit. Markdown fence/local-file-link check passed across README and the three docs (14 links). Command definitions were unchanged; their earlier lint evidence was not substituted for product acceptance.
+
+**Unresolved/blockers:** none for S0.1. Remote destination/publication and first real endpoint/authentication remain user-owned decisions outside this task. macOS/WSL execution and native test access are unverified; no capacity or interactive-platform claim follows from Linux bootstrap checks.
+
+**Next bounded task:** triage selects and refines one S1 transport or native TUI entry point; it must not implement both tracks or treat pending task IDs as already actionable.
+
+**Suggested fresh-session invocation:** `/rs:triage`, after the live harness has loaded this project's `rs` command set. Without that command, ask: “Read CLAUDE.md and docs/PROGRESS.md, reconcile completed S0.1, and select one bounded authorized S1 task without implementing it.”
 
 ## Last completed work
+
+**2026-10-08 — S0.1 work:** implemented and verified the std-only offline CLI/library scaffold and documented the runnable loop. Established local history at root `7a5dc13`; all required Rust checks and behavioral smoke passed. Candidate paths, checks and proportional no-review rationale are recorded above. S0 is complete; no remote effects or later-stage runtime/UI work occurred. Next: fresh-session triage, not direct execution of pending S1 tasks.
 
 **2026-10-08 — orientation bootstrap:** preserved the founding scope and admission-control clarification; separated agreed invariants from proposed mechanisms; established staged vertical slices, early native TUI evidence, and a single task/progress handoff path. Added a project-local work command for the existing Scramjet harness, not for the Rust product.
 
