@@ -172,6 +172,14 @@ describe("macOS input ownership", () => {
 		f.native.foreground.mockReturnValue(true);
 		f.reader.tick();
 		expect(f.native.register).toHaveBeenCalledOnce();
+		const id = f.native.register.mock.calls[0][0];
+		expect(Atomics.load(f.shared, 2)).toBe(id);
+		f.native.pump.mockImplementation((copy) => copy(id));
+		f.native.foreground.mockReturnValue(false);
+		f.reader.tick();
+		expect(f.native.unregister).toHaveBeenCalledOnce();
+		expect(Atomics.load(f.shared, 2)).toBe(0);
+		expect(f.events.filter((event) => event.kind === "copy")).toEqual([]);
 		f.reader.command({ kind: "stop" });
 	});
 

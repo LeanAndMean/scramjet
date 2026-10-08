@@ -3890,7 +3890,6 @@ export class InteractiveMode {
 	private async shutdown(): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
-		this.unregisterSignalHandlers();
 
 		let exitCode = 0;
 		try {
@@ -3898,14 +3897,19 @@ export class InteractiveMode {
 			await this.settingsManager.flush();
 			try {
 				this.stop({ retainContent: this.settingsManager.getRetainTranscriptOnExit() });
-			} finally {
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException)?.code === "ERR_TERMINAL_INPUT_LOST") throw error;
 				await this.ui.terminal.flush?.();
+				throw error;
 			}
+			await this.ui.terminal.flush?.();
 		} catch (error) {
+			if ((error as NodeJS.ErrnoException)?.code === "ERR_TERMINAL_INPUT_LOST") this.emergencyTerminalExit();
 			exitCode = 1;
 			console.error(`Could not stop terminal safely: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		await this.runtimeHost.dispose();
+		this.unregisterSignalHandlers();
 		process.exit(exitCode);
 	}
 
@@ -3945,6 +3949,7 @@ export class InteractiveMode {
 		try {
 			this.ui.stop();
 		} catch (releaseError) {
+			if ((releaseError as NodeJS.ErrnoException)?.code === "ERR_TERMINAL_INPUT_LOST") this.emergencyTerminalExit();
 			console.error("Terminal release failed; exiting without restart:", releaseError);
 		}
 		console.error("pi exiting due to uncaughtException:");
@@ -6153,14 +6158,14 @@ export class InteractiveMode {
 		let released = false;
 		try {
 			if (this.isInitialized) {
-				this.isInitialized = false;
 				this.ui.stop(options);
+				this.isInitialized = false;
 			}
 			released = true;
 		} finally {
 			this.selectorOpenGeneration++;
 			this.pendingSelectorOpenGeneration = undefined;
-			this.unregisterSignalHandlers();
+			if (!this.isShuttingDown) this.unregisterSignalHandlers();
 			if (released && this.settingsManager.getShowTerminalProgress()) {
 				this.ui.terminal.setProgress(false);
 			}
