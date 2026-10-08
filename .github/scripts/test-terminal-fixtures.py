@@ -100,6 +100,12 @@ class SafetyVerdictTests(unittest.TestCase):
     def test_complete_success_is_accepted(self):
         self.assertTrue(self.context["report_passed"]())
 
+    def test_malformed_pass_values_fail(self):
+        for value in ("true", "false", 1, None, [], {}):
+            with self.subTest(value=value):
+                self.context["report"]["checks"]["checkoutProvenanceMatches"] = {"passed": value}
+                self.assertFalse(self.context["report_passed"]())
+
     def test_startup_alone_cannot_pass_the_native_suite(self):
         self.context["report"]["checks"] = {"productionFixtureStarted": {"passed": True}}
         self.assertFalse(self.context["report_passed"]())
@@ -230,6 +236,12 @@ class InteractionVerdictTests(unittest.TestCase):
         del self.context["report"]["checks"]["focusLossStopsSelectionScroll"]
         self.assertFalse(self.passed())
 
+    def test_malformed_pass_values_fail(self):
+        for value in ("true", "false", 1, None, [], {}):
+            with self.subTest(value=value):
+                self.context["report"]["checks"]["checkoutProvenanceMatches"] = {"passed": value}
+                self.assertFalse(self.passed())
+
     def test_startup_and_a_screenshot_are_not_a_complete_journey(self):
         self.context["report"]["checks"] = {"productionCompositionConfigured": {"passed": True}}
         self.assertFalse(self.passed())
@@ -259,6 +271,40 @@ def interaction_check(name, context):
                      and isinstance(node.func, ast.Name) and node.func.id in ("check", "stable_check")
                      and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == name)
     return eval(compile(ast.Expression(body=predicate), "terminal-probe.py", "eval"), context)
+
+
+class NativeCandidateProvenanceTests(unittest.TestCase):
+    def test_both_drivers_require_exact_caller_sha_and_clean_fixture(self):
+        sha = "a" * 40
+        for driver in ("terminal-probe.py", "terminal-safety.py"):
+            source = ast.parse((ROOT / ".github/scripts" / driver).read_text())
+            predicate = next(node.args[1] for node in ast.walk(source) if isinstance(node, ast.Call)
+                             and isinstance(node.func, ast.Name) and node.func.id == "check"
+                             and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == "checkoutProvenanceMatches")
+            code = compile(ast.Expression(body=predicate), driver, "eval")
+            for installed in ((False, True) if driver == "terminal-probe.py" else (False,)):
+                origin = {"kind": "installed", "root": "/tmp/native-install"} if installed else {"kind": "checkout"}
+                current = {"sourceRevision": sha, "sourceDirty": False, "runtimeOrigin": origin}
+                environment = {"GITHUB_SHA": sha}
+                if installed:
+                    environment["SCRAMJET_TUI_INSTALLED_ROOT"] = "/tmp/native-install"
+                context = {"state": lambda: current, "report": {"commit": sha}, "os": os, "Path": Path, "re": re}
+                with patch.dict(os.environ, environment, clear=True):
+                    self.assertTrue(eval(code, context)())
+                    for candidate in ("b" * 40, "", "main", None):
+                        if candidate is None:
+                            os.environ.pop("GITHUB_SHA", None)
+                        else:
+                            os.environ["GITHUB_SHA"] = candidate
+                        with self.subTest(driver=driver, installed=installed, caller=candidate):
+                            self.assertFalse(eval(code, context)())
+                    os.environ["GITHUB_SHA"] = sha
+                    for field, value in (("sourceRevision", "b" * 40), ("sourceDirty", True), ("sourceDirty", "false")):
+                        with self.subTest(driver=driver, field=field):
+                            original = current[field]
+                            current[field] = value
+                            self.assertFalse(eval(code, context)())
+                            current[field] = original
 
 
 class NativeShellStartupTests(unittest.TestCase):
@@ -972,8 +1018,10 @@ class MacSafetyOwnershipTests(unittest.TestCase):
         self.run_image_consent_journey(visible=True, pressed=pressed)
 
     def run_image_consent_journey(self, visible, pressed):
-        self.current.return_value = {"phase": "image", "protocol": "iterm2", "sourceRevision": "test-head", "sourceDirty": False}
-        self.context["report"]["commit"] = "test-head"
+        self.current.return_value = {"phase": "image", "protocol": "iterm2", "sourceRevision": "a" * 40, "sourceDirty": False, "runtimeOrigin": {"kind": "checkout"}}
+        self.context["report"]["commit"] = "a" * 40
+        self.context["re"] = re
+        self.os.environ = {"GITHUB_SHA": "a" * 40}
         original_run = self.context["run"].side_effect
         def run(*args, **kwargs):
             if args[0] == str(self.output / "events"):
@@ -1080,9 +1128,10 @@ class ImageConsentReadinessTests(unittest.TestCase):
         self.assertFalse(self.context["report"]["inlineImagePermission"][-1]["visible"])
 
     def test_consent_is_serviced_before_waiting_for_the_fixture_image_receipt(self):
-        self.context.update({"mac": True, "state": lambda: {"phase": "image", "protocol": "iterm2", "sourceRevision": "head", "sourceDirty": False} if self.clock >= 1 else {},
+        self.context.update({"mac": True, "state": lambda: {"phase": "image", "protocol": "iterm2", "sourceRevision": "a" * 40, "sourceDirty": False, "runtimeOrigin": {"kind": "checkout"}} if self.clock >= 1 else {},
+                             "re": re, "os": Mock(environ={"GITHUB_SHA": "a" * 40}),
                              "check": lambda _name, predicate: self.assertTrue(predicate())})
-        self.context["report"]["commit"] = "head"
+        self.context["report"]["commit"] = "a" * 40
         source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
         body = next(node.body for node in source.body if isinstance(node, ast.Try))
         startup = next(i for i, node in enumerate(body) if isinstance(node, ast.If)

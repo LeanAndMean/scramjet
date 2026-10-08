@@ -9,6 +9,8 @@ const WORKFLOW_PATH = resolve(import.meta.dirname, "../../../.github/workflows/r
 const REGISTRY_GUARD = resolve(import.meta.dirname, "../../../.github/scripts/validate-registry.sh");
 const source = readFileSync(WORKFLOW_PATH, "utf8");
 const workflow = parse(source);
+const native = parse(readFileSync(resolve(dirname(WORKFLOW_PATH), "terminal-feasibility.yml"), "utf8"));
+const expression = (value: string) => `\${{ ${value} }}`;
 const publishSteps = workflow.jobs.publish.steps as Array<Record<string, any>>;
 const verifySteps = workflow.jobs.verify.steps as Array<Record<string, any>>;
 
@@ -175,6 +177,64 @@ describe("release workflow", () => {
 		expect(source.match(/release\.mjs publish/g)).toHaveLength(1);
 		expect(source.match(/release\.mjs verify/g)).toHaveLength(1);
 		expect(source).not.toMatch(/npm publish|upload-artifact|download-artifact/);
+	});
+
+	it("requires the same-revision native workflow before publication without granting it OIDC", () => {
+		expect(workflow.jobs.native).toEqual({
+			uses: "./.github/workflows/terminal-feasibility.yml",
+			permissions: { contents: "read" },
+		});
+		expect(workflow.jobs.publish.needs).toBe("native");
+		expect(workflow.jobs.publish.if).toBeUndefined();
+		expect(native.on).toEqual({
+			push: { branches: ["main"] },
+			pull_request: { branches: ["main"] },
+			workflow_dispatch: null,
+			workflow_call: null,
+		});
+		expect(native.permissions).toEqual({ contents: "read" });
+		for (const job of Object.values(native.jobs) as Array<Record<string, any>>) {
+			expect(job.permissions).toBeUndefined();
+			expect(job["continue-on-error"]).toBeUndefined();
+			for (const entry of job.steps) {
+				expect(entry["continue-on-error"]).toBeUndefined();
+				if (entry.uses) expect(entry.uses).toMatch(/@[0-9a-f]{40}$/);
+			}
+		}
+		for (const name of ["native-safety", "native-terminal"]) {
+			const steps = native.jobs[name].steps;
+			expect(steps[0].with).toEqual({ ref: expression("github.sha"), "persist-credentials": false });
+			expect(steps[1].name).toBe("Require exact caller checkout");
+			expect(steps[1].run).toContain('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"');
+			expect(steps[1].run).toContain('test -z "$(git status --porcelain)"');
+		}
+		const pack = native.jobs["native-terminal"].steps.find(
+			(entry: any) => entry.name === "Pack isolated native candidate",
+		);
+		expect(pack.run).toContain('"$PACK_DIR/candidate.json"');
+		expect(pack.run).toContain("process.env.GITHUB_SHA");
+		expect(pack.run).toContain("installedRoot");
+		expect(native.jobs["native-terminal"].strategy.matrix.include).toHaveLength(10);
+		expect(native.jobs["native-safety"].strategy.matrix.os).toEqual(["ubuntu-24.04", "macos-15"]);
+	});
+
+	it("executes the native aggregate fail-closed for every non-success dependency result", () => {
+		const gate = native.jobs["native-terminal-result"];
+		expect(gate.if).toBe(expression("always()"));
+		expect(gate.needs).toEqual(["native-safety", "native-terminal"]);
+		const aggregate = gate.steps[0];
+		expect(aggregate.env).toEqual({
+			SAFETY_RESULT: expression("needs.native-safety.result"),
+			INTERACTION_RESULT: expression("needs.native-terminal.result"),
+		});
+		for (const safety of ["success", "failure", "cancelled", "skipped", "", "malformed"]) {
+			for (const interaction of ["success", "failure", "cancelled", "skipped", "", "malformed"]) {
+				const result = spawnSync("bash", ["-e", "-c", aggregate.run], {
+					env: { ...process.env, SAFETY_RESULT: safety, INTERACTION_RESULT: interaction },
+				});
+				expect(result.status === 0).toBe(safety === "success" && interaction === "success");
+			}
+		}
 	});
 
 	it("executes registry and credential validation fail-closed", () => {

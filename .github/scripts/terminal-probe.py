@@ -173,7 +173,7 @@ def verify_mac_cleanup():
 
 
 def report_passed():
-    return (set(report["checks"]) == required_checks() and all(item["passed"] for item in report["checks"].values())
+    return (set(report["checks"]) == required_checks() and all(item.get("passed") is True for item in report["checks"].values())
             and bool(report.get("screenshots")) and all(item["exit"] == 0 for item in report["screenshots"].values())
             and "error" not in report and "cleanupError" not in report)
 
@@ -745,7 +745,9 @@ try:
         raise RuntimeError("Terminal did not start the fixture in a TTY")
     time.sleep(1)
     columns, rows = state()["columns"], state()["rows"]
-    check("checkoutProvenanceMatches", lambda: state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False
+    check("checkoutProvenanceMatches", lambda: re.fullmatch(r"[0-9a-f]{40}", report["commit"]) is not None
+          and report["commit"] == os.environ.get("GITHUB_SHA")
+          and state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False
           and state().get("runtimeOrigin") == ({"kind": "installed", "root": str(Path(os.environ["SCRAMJET_TUI_INSTALLED_ROOT"]).resolve())} if os.environ.get("SCRAMJET_TUI_INSTALLED_ROOT") else {"kind": "checkout"}))
     check("productionCompositionConfigured", lambda: state().get("production") is True and state().get("journey") is True and state().get("totalRows", 0) > 240)
     check("defaultDockKeepsInputVisible", lambda: state().get("dockEditor") is True and state()["height"] < state()["rows"] and any("Synthetic editor" in row for row in state()["painted"]))

@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -32,10 +33,15 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - name: Require exact caller checkout
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
           cache: npm
@@ -61,7 +67,7 @@ jobs:
           '
       - name: Preserve native safety evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: terminal-safety-${{ matrix.os }}
           path: ${{ runner.temp }}/terminal-safety
@@ -111,10 +117,15 @@ jobs:
             terminal: kitty
             tmux: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - name: Require exact caller checkout
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
           cache: npm
@@ -141,6 +152,7 @@ jobs:
           npm install --ignore-scripts --prefix "$PREFIX" -g "$PACK_DIR"/*.tgz
           INSTALLED_ROOT="$PREFIX/lib/node_modules/@leanandmean/scramjet"
           node .github/scripts/installed-runtime-smoke.mjs "$INSTALLED_ROOT" "$RUNNER_TEMP/native-smoke" > "$PACK_DIR/closure.json"
+          node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({sourceRevision: process.env.GITHUB_SHA, installedRoot: process.argv[2]}))' "$PACK_DIR/candidate.json" "$INSTALLED_ROOT"
           echo "SCRAMJET_TUI_INSTALLED_ROOT=$INSTALLED_ROOT" >> "$GITHUB_ENV"
       - name: Probe native macOS terminal
         if: runner.os == 'macOS'
@@ -179,7 +191,7 @@ jobs:
           '
       - name: Preserve feasibility evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: terminal-feasibility-${{ matrix.os }}-${{ matrix.terminal }}-tmux-${{ matrix.tmux }}-stock-${{ matrix.stock || false }}
           path: |

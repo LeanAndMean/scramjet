@@ -241,7 +241,7 @@ def image_confined(name):
 
 
 def report_passed():
-    return set(report["checks"]) == REQUIRED_CHECKS and all(c["passed"] for c in report["checks"].values()) and not any(k in report for k in ("error", "cleanupError"))
+    return set(report["checks"]) == REQUIRED_CHECKS and all(c.get("passed") is True for c in report["checks"].values()) and not any(k in report for k in ("error", "cleanupError"))
 
 
 try:
@@ -252,7 +252,7 @@ try:
     report["pullRequest"] = {key: event.get("pull_request", {}).get(key, {}).get("sha") for key in ("head", "base")}
     report["nodeVersion"] = run("node", "--version")
     report["pythonVersion"] = sys.version.split()[0]
-    report["image"] = {k: os.environ.get(k) for k in ("ImageVersion", "RUNNER_ARCH")}
+    report["image"] = {k: os.environ.get(k) for k in ("ImageVersion", "RUNNER_ARCH", "GITHUB_SHA")}
     launcher = output / "launch.sh"
     launcher.write_text("#!/bin/bash\n" + "\n".join([
         f'printf "%s\\n" "$PPID" > {shlex.quote(str(output / "shell-pid"))}',
@@ -311,7 +311,10 @@ try:
     if mac:
         wait_image_consent(require_image=True)
     check("productionFixtureStarted", lambda: state().get("phase") == "image")
-    check("checkoutProvenanceMatches", lambda: state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False)
+    check("checkoutProvenanceMatches", lambda: re.fullmatch(r"[0-9a-f]{40}", report["commit"]) is not None
+          and report["commit"] == os.environ.get("GITHUB_SHA")
+          and state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False
+          and state().get("runtimeOrigin") == {"kind": "checkout"})
     check("nativeProtocolDetected", lambda: state().get("protocol") == ("iterm2" if mac else "kitty"))
     if not mac:
         window = run("xdotool", "search", "--onlyvisible", "--class", "kitty").splitlines()[-1]
