@@ -1,0 +1,20 @@
+name: stage4-cancel-exercise
+on:
+  push:
+    branches:
+      - diagnostics/issue-608-stage4-gate
+permissions:
+  contents: read
+jobs:
+  cancelled:
+    uses: ./.github/workflows/stage4-controlled-native.yml
+    with:
+      outcome: cancelled
+    permissions:
+      contents: read
+  cancelled-publish:
+    needs: cancelled
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'PUBLICATION_SURROGATE cancelled'; test -z
+          "$ACTIONS_ID_TOKEN_REQUEST_URL"

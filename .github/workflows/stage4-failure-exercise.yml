@@ -1,0 +1,80 @@
+name: stage4-failure-exercise
+on:
+  push:
+    branches:
+      - diagnostics/issue-608-stage4-gate
+permissions:
+  contents: read
+jobs:
+  success:
+    uses: ./.github/workflows/stage4-controlled-native.yml
+    with:
+      outcome: success
+    permissions:
+      contents: read
+  success-publish:
+    needs: success
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'PUBLICATION_SURROGATE success'; test -z
+          "$ACTIONS_ID_TOKEN_REQUEST_URL"
+  failure:
+    uses: ./.github/workflows/stage4-controlled-native.yml
+    with:
+      outcome: failure
+    permissions:
+      contents: read
+  failure-publish:
+    needs: failure
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'PUBLICATION_SURROGATE failure'; test -z
+          "$ACTIONS_ID_TOKEN_REQUEST_URL"
+  skipped:
+    uses: ./.github/workflows/stage4-controlled-native.yml
+    with:
+      outcome: skipped
+    permissions:
+      contents: read
+  skipped-publish:
+    needs: skipped
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'PUBLICATION_SURROGATE skipped'; test -z
+          "$ACTIONS_ID_TOKEN_REQUEST_URL"
+  wrong-sha:
+    uses: ./.github/workflows/stage4-controlled-native.yml
+    with:
+      outcome: wrong-sha
+    permissions:
+      contents: read
+  wrong-sha-publish:
+    needs: wrong-sha
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'PUBLICATION_SURROGATE wrong-sha'; test -z
+          "$ACTIONS_ID_TOKEN_REQUEST_URL"
+  malformed:
+    uses: ./.github/workflows/stage4-controlled-native.yml
+    with:
+      outcome: malformed
+    permissions:
+      contents: read
+  malformed-publish:
+    needs: malformed
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'PUBLICATION_SURROGATE malformed'; test -z
+          "$ACTIONS_ID_TOKEN_REQUEST_URL"
+  incomplete:
+    uses: ./.github/workflows/stage4-controlled-native.yml
+    with:
+      outcome: incomplete
+    permissions:
+      contents: read
+  incomplete-publish:
+    needs: incomplete
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'PUBLICATION_SURROGATE incomplete'; test -z
+          "$ACTIONS_ID_TOKEN_REQUEST_URL"

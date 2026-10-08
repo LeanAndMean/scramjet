@@ -1,0 +1,79 @@
+name: Stage 4 controlled native results
+on:
+  workflow_call:
+    inputs:
+      outcome:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  native-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"
+  native-terminal:
+    runs-on: ubuntu-latest
+    if: inputs.outcome != 'skipped'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Controlled prerequisite
+        env:
+          OUTCOME: ${{ inputs.outcome }}
+        run: >-
+          case "$OUTCOME" in
+            success) true ;;
+            failure) exit 1 ;;
+            cancelled) sleep 600 ;;
+            wrong-sha) GITHUB_SHA=0000000000000000000000000000000000000000 bash -e -c 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' ;;
+            malformed|incomplete)
+              python3 - "$OUTCOME" <<'PY'
+          import ast, sys
+
+          from pathlib import Path
+
+          source =
+          ast.parse(Path('.github/scripts/terminal-safety.py').read_text())
+
+          nodes = [n for n in source.body if isinstance(n, ast.FunctionDef) and
+          n.name == 'report_passed' or isinstance(n, ast.Assign) and
+          any(isinstance(t, ast.Name) and t.id == 'REQUIRED_CHECKS' for t in
+          n.targets)]
+
+          context = {}
+
+          exec(compile(ast.Module(body=nodes, type_ignores=[]),
+          'terminal-safety.py', 'exec'), context)
+
+          checks = {name: {'passed': True} for name in
+          context['REQUIRED_CHECKS']}
+
+          if sys.argv[1] == 'malformed':
+          checks['checkoutProvenanceMatches']['passed'] = 'false'
+
+          else: del checks['checkoutProvenanceMatches']
+
+          context['report'] = {'checks': checks}
+
+          sys.exit(0 if context['report_passed']() else 1)
+
+          PY
+              ;;
+            *) exit 2 ;;
+          esac
+  native-terminal-result:
+    name: Native terminal result
+    if: ${{ always() }}
+    needs:
+      - native-safety
+      - native-terminal
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every native job to succeed
+        env:
+          SAFETY_RESULT: ${{ needs.native-safety.result }}
+          INTERACTION_RESULT: ${{ needs.native-terminal.result }}
+        run: test "$SAFETY_RESULT" = success && test "$INTERACTION_RESULT" = success
