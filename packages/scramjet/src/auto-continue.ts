@@ -18,13 +18,9 @@
  * Either way, once a terminal status is recorded this driver validates the
  * declared next step and dispatches/pauses.
  *
- * The probe MUST be deferred, not sent synchronously from the agent_end
- * listener: during agent_end the run is still streaming, so a synchronous
- * sendMessage routes to steer/followUp and is dropped by the already-exited
- * loop. A setTimeout(0) lands after the run settles — isStreaming clears when
- * agent.prompt() resolves — so triggerTurn correctly reaches agent.prompt().
- * This mirrors why the countdown (setInterval) dispatch works — it fires once
- * the run is idle.
+ * Run-bound agent events capture settlement and return before awaiting it.
+ * Routing waits independently for persistence, retries and owned maintenance;
+ * the deferred probe/dispatch tick then rechecks lifecycle admission guards.
  *
  * The completed-transition dispatch MUST be deferred for the same reason (issue
  * 88 duplicate-dispatch incident). Calling dispatchUserInput synchronously from
@@ -46,7 +42,7 @@
  * See CLAUDE.md "MVP design rationales".
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
+import type { ExtensionAPI, ExtensionContext, RunSettlement } from "@leanandmean/coding-agent";
 import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.js";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.js";
@@ -83,17 +79,7 @@ import type {
 } from "./types.js";
 
 const COUNTDOWN_SECONDS = 3;
-// Liveness watchdog window. Generous on purpose — a live probe turn is a
-// single report_scramjet_command_status tool call and reports well within this,
-// and the guard inside the timer re-checks the facts so a turn that DID
-// complete (or already self-healed) is never clobbered. The value only bounds
-// how long a probe that never produced a turn at all (dropped triggerTurn
-// during run settle, Escape before the turn starts, session teardown mid-turn)
-// lingers at probeInFlight before self-healing; the next real command resets
-// the lifecycle anyway. Kept comfortably longer than any plausible probe turn so
-// it cannot fire while the model is still thinking before its tool call (probe
-// still in flight), which would otherwise drop a legitimate chain — worse than
-// the stall it fixes.
+// Bounds missing probe admission/status, never an attributed run's recovery.
 const PROBE_WATCHDOG_MS = 30_000;
 
 // Parse a raw report entry's message into a dispatchable NextStep, or null
@@ -154,6 +140,16 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	let activeSelectorId = 0;
 	let activeSelectorAbort: AbortController | null = null;
 	let autonomyValidated = false;
+	type RunObservation = {
+		settlement: Promise<RunSettlement>;
+		command: string | null;
+		generation: number;
+		ctx: ExtensionContext;
+		event?: { messages?: unknown[] };
+	};
+	let observation: RunObservation | null = null;
+	let probeDelivery: object | null = null;
+	const observedSettlements = new WeakSet<Promise<RunSettlement>>();
 
 	state.lifecycleTimers = {
 		isProbeScheduled: () => probeTimer !== null,
@@ -189,7 +185,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 	function armProbeWatchdog() {
 		clearProbeWatchdog("rearm");
-		if (isProbeInFlight(state.lifecycle)) {
+		if (isProbeInFlight(state.lifecycle) && !observation) {
 			const command = state.lifecycle.activeCommand!;
 			const watchdogGeneration = state.lifecycleGeneration;
 			probeWatchdog = setTimeout(() => {
@@ -225,6 +221,8 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	state.suspendProbeWatchdog = () => clearProbeWatchdog("suspended");
 	state.rearmProbeWatchdog = armProbeWatchdog;
 	state.clearLifecycleTimers = (reason = "lifecycle-reset") => {
+		observation = null;
+		probeDelivery = null;
 		cancelSelector();
 		clearProbeTimer(reason);
 		clearProbeWatchdog(reason);
@@ -318,7 +316,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	// the run is idle (see file header). triggerTurn starts the short probe turn;
 	// display:false keeps the message out of the TUI while it still persists in
 	// the journal and reaches the model as user context.
-	function scheduleProbe(policy: NextStepPolicy | undefined, commandId: string) {
+	function scheduleProbe(policy: NextStepPolicy | undefined, commandId: string, ctx: ExtensionContext) {
 		if (probeTimer) {
 			clearTimeout(probeTimer);
 			state.logger.lifecycle("status probe timer cleared", {
@@ -349,20 +347,47 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				phase: lp(state.lifecycle),
 				command: commandId,
 			});
+			const delivery = {};
+			probeDelivery = delivery;
+			const current = () => {
+				try {
+					ctx.getRunSettlement?.();
+					return (
+						probeDelivery === delivery &&
+						activeCommandName(state.lifecycle) === commandId &&
+						(state.lifecycleGeneration === probeGeneration ||
+							(observation !== null && observationCurrent(observation)))
+					);
+				} catch {
+					return false;
+				}
+			};
+			if (!current()) return;
+			const failed = (err: unknown) => {
+				if (!current()) return;
+				pauseRecovery(ctx, `status probe failed to send (${selectorErrorMessage(err)})`);
+			};
 			try {
-				pi.sendMessage({ customType: COMMAND_STATUS_PROBE_TYPE, content, display: false }, { triggerTurn: true });
-				state.logger.lifecycle("status probe sent", {
+				if (!ctx.sendMessage)
+					throw new Error("runtime context lacks asynchronous sending; update the context binding");
+				armProbeWatchdog();
+				state.logger.lifecycle("status probe send started", {
 					phase: lp(state.lifecycle),
 					command: commandId,
 					detail: { triggerTurn: true },
 				});
-				armProbeWatchdog();
+				void ctx
+					.sendMessage({ customType: COMMAND_STATUS_PROBE_TYPE, content, display: false }, { triggerTurn: true })
+					.then(() => {
+						if (!current()) return;
+						state.logger.lifecycle("status probe send settled", {
+							phase: lp(state.lifecycle),
+							command: commandId,
+						});
+					})
+					.catch(failed);
 			} catch (err) {
-				const message = (err as Error).message;
-				enterDormant(state, `send-failure: ${message}`);
-				state.logger.warn("probe", `status probe failed to send (${message}); auto-continue paused`, {
-					error: message,
-				});
+				failed(err);
 			}
 		}, 0);
 	}
@@ -819,6 +844,11 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				});
 				return;
 			}
+			try {
+				ctx.getRunSettlement?.();
+			} catch {
+				return;
+			}
 			state.logger.lifecycle("completed dispatch timer fired", {
 				phase: lp(state.lifecycle),
 				command: sourceName,
@@ -930,7 +960,124 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	}
 
+	function pauseRecovery(ctx: ExtensionContext, reason: string) {
+		clearProbeTimer("recovery-paused");
+		clearProbeWatchdog("recovery-paused");
+		clearDispatchTimer("recovery-paused");
+		cancelSelector();
+		observation = null;
+		probeDelivery = null;
+		if (
+			activeCommandName(state.lifecycle) &&
+			!isParkedForInput(state.lifecycle) &&
+			!state.lifecycle.cancellationResumeEligible
+		) {
+			enterDormant(state, "recovery-paused");
+		}
+		state.pendingSuggestion = null;
+		state.logger.warn("probe", `${reason}; auto-continue paused`, { phase: lp(state.lifecycle) });
+		ctx.ui.notify(
+			`scramjet: ${cleanForNotify(reason)}; auto-continue paused. Review the outcome before explicitly resuming or starting new work.`,
+			"warning",
+		);
+	}
+
+	function observationCurrent(candidate: RunObservation) {
+		if (
+			observation !== candidate ||
+			state.lifecycleGeneration !== candidate.generation ||
+			activeCommandName(state.lifecycle) !== candidate.command
+		)
+			return false;
+		try {
+			return candidate.ctx.getRunSettlement?.() === candidate.settlement;
+		} catch {
+			return false;
+		}
+	}
+
+	function observeRun(ctx: ExtensionContext, event?: { messages?: unknown[] }) {
+		const settlement = ctx.getRunSettlement?.();
+		if (!settlement) return false;
+		if (observation?.settlement === settlement) {
+			if (observation.command !== activeCommandName(state.lifecycle)) return true;
+			if (event) {
+				observation.generation = state.lifecycleGeneration;
+				observation.ctx = ctx;
+				observation.event = event;
+			}
+			return true;
+		}
+		if (observedSettlements.has(settlement)) return true;
+		const candidate: RunObservation = {
+			settlement,
+			command: activeCommandName(state.lifecycle),
+			generation: state.lifecycleGeneration,
+			ctx,
+			event,
+		};
+		observation = candidate;
+		observedSettlements.add(settlement);
+		clearProbeWatchdog("run-observed");
+		state.logger.lifecycle("run settlement observed", {
+			phase: lp(state.lifecycle),
+			detail: { stopReason: event ? extractStopReason(event) : undefined },
+		});
+		void settlement
+			.then(async (result) => {
+				if (!observationCurrent(candidate)) return;
+				state.logger.lifecycle("run settlement resolved", {
+					phase: lp(state.lifecycle),
+					detail: { status: result.status },
+				});
+				if (result.status !== "completed") {
+					pauseRecovery(
+						candidate.ctx,
+						result.status === "cancelled" ? "execution cancelled" : `execution failed (${result.errorMessage})`,
+					);
+					return;
+				}
+				try {
+					if (candidate.event) await handleAgentEnd(candidate.event, candidate.ctx);
+					else {
+						observation = null;
+						armProbeWatchdog();
+					}
+				} catch (error) {
+					if (observationCurrent(candidate)) {
+						pauseRecovery(candidate.ctx, `settled execution routing failed (${selectorErrorMessage(error)})`);
+					}
+				} finally {
+					if (observation === candidate) observation = null;
+				}
+			})
+			.catch((error) => {
+				if (!observationCurrent(candidate)) return;
+				pauseRecovery(candidate.ctx, `execution settlement failed (${selectorErrorMessage(error)})`);
+			});
+		return true;
+	}
+
+	pi.on("agent_start", async (_event, ctx) => {
+		observeRun(ctx);
+	});
+
 	pi.on("agent_end", async (event, ctx) => {
+		if (observeRun(ctx, event)) {
+			state.logger.lifecycle("attempt end retained", {
+				phase: lp(state.lifecycle),
+				detail: { stopReason: extractStopReason(event) },
+			});
+			return;
+		}
+		if (!ctx.getRunSettlement && activeCommandName(state.lifecycle)) {
+			pauseRecovery(ctx, "runtime context lacks run settlement; update the context binding");
+			return;
+		}
+		await handleAgentEnd(event, ctx);
+	});
+
+	async function handleAgentEnd(event: { messages?: unknown[] }, ctx: ExtensionContext) {
 		const activeName = activeCommandName(state.lifecycle);
 		const def = activeName ? state.registry.get(activeName) : undefined;
 		const stopReason = extractStopReason(event);
@@ -1041,7 +1188,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				});
 				return;
 			}
-			scheduleProbe(policy, def!.name);
+			scheduleProbe(policy, def!.name, ctx);
 			return;
 		}
 
@@ -1150,9 +1297,18 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			});
 			return;
 		}
-	});
+	}
 
-	pi.on("session_compact", async () => {
+	pi.on("session_compact", async (_event, ctx) => {
+		if (observation && observationCurrent(observation) && ctx.getRunSettlement?.() === observation.settlement) {
+			cancelSelector();
+			clearProbeTimer("owned-compaction");
+			clearProbeWatchdog("owned-compaction");
+			clearDispatchTimer("owned-compaction");
+			state.pendingSuggestion = null;
+			state.logger.lifecycle("owned compaction observation preserved", { phase: lp(state.lifecycle) });
+			return;
+		}
 		const wasProbing = isProbeInFlight(state.lifecycle);
 		state.clearLifecycleTimers?.("session-compact");
 		if (wasProbing && isProbeInFlight(state.lifecycle)) enterDormant(state, "session-compact");

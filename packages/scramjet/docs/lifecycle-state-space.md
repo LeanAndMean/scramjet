@@ -15,6 +15,7 @@ Scramjet command lifecycle behavior is driven by orthogonal boolean facts on `Sc
 | Last report | `lifecycle.lastReport` | Terminal status payload set by the tool, consumed by `agent_end`. |
 | Lifecycle generation | `ScramjetState.lifecycleGeneration` | Monotonic counter; deferred timer callbacks verify they still belong to the active command. |
 | Probe timer, watchdog, dispatch timer | `auto-continue.ts` closures | Timer handles stay imperative; read-only accessors exposed via `lifecycleTimers`. |
+| Originating run observation | `auto-continue.ts` closure | Captured runtime settlement promise, latest matching attempt context/generation, and delivery identity; transient observation, not lifecycle facts or restored execution. |
 | Structured user input state | `user-input.ts` UI promise / parked fact | Lifecycle records whether input parked the command; UI-local details stay outside. |
 | Sidebar history / enabled flag / registries / delegate stack | `ScramjetState` | These affect behavior but are not command lifecycle state. |
 | Pending forced dispatch | `ScramjetState.pendingForcedDispatch` | One-shot dispatch metadata, not lifecycle state. |
@@ -108,10 +109,16 @@ The continue limit is a constant (`CONTINUE_LIMIT = 3`). A fourth consecutive `c
 
 ## `agent_end` decision tree
 
-The `agent_end` handler in `auto-continue.ts` evaluates lifecycle facts in this order:
+Run-bound `agent_start` and `agent_end` contexts expose the originating runtime settlement promise. Scramjet captures it and returns from the hook before awaiting independently; waiting inside the hook would deadlock runtime classification. Repeated attempt ends update one observer by stable promise identity, not command name. Only a matching attempt end refreshes its generation checkpoint, allowing report/continuing/probe-input changes within that execution. After settlement, the observer, guarded context, command and latest checkpoint must still match.
+
+Completed settlement evaluates the decision tree below once. Failed, cancelled or rejected settlement discards any pending terminal report, clears its timers and pauses with an actionable warning; no terminal status is journaled or next step dispatched. Freetext parking and dedicated structured-input cancellation eligibility are preserved. A routing/persistence exception also produces an actionable pause rather than disappearing after observation consumption.
+
+Contexts with an explicitly undefined settlement are non-run contexts; their event handling retains the decision tree. Unsupported constructed contexts missing the settlement capability pause instead of substituting global idle or void sending.
+
+The settled `agent_end` decision tree in `auto-continue.ts` evaluates lifecycle facts in this order:
 
 1. **Abort** (`stopReason === "aborted"`): clear all timers, enter dormant. Command stays associated but disarmed.
-2. **Error** (`stopReason === "error"`): leave armed/probing facts intact for Pi retry safety. If a probe turn errors, the existing generation- and command-guarded watchdog remains responsible for self-healing only when no retried report arrives.
+2. **Error** (`stopReason === "error"`, unattributed context): leave armed/probing facts intact. Attributed failed attempts are retained by the observer instead; final runtime disposition governs the pause.
 3. **Active command not in registry**: warn, clear active command, clear timers.
 4. **Probe due** (`isProbeDue`): begin probe and schedule deferred hidden probe message. Commands with no next-step policy probe identically — the probe message omits the `<scramjet-next-step>` block. An inline terminal report filed during the work turn clears `probeArmed`, so this branch is skipped and the report routes via step 6 — the probe is a fallback, not a requirement.
 5. **Probe in flight without report**: self-heal to dormant (probe turn ended without a status report).
@@ -124,13 +131,15 @@ The `agent_end` handler in `auto-continue.ts` evaluates lifecycle facts in this 
 
 Timer handles (probe, watchdog, dispatch, selector) are closure-local in `auto-continue.ts`. All deferred callbacks verify `lifecycleGeneration` and active command before performing side effects.
 
-Timers are cleared on: command replacement, workflow exit (unknown slash), active command missing from registry, completed clear, blocked/incomplete dormant resolution, freetext park, confirm/select cancellation, abort, and session navigation events (`session_start`, `session_tree`, `session_compact`, `session_shutdown`). Every lifecycle reconstruction on `session_start` or `session_tree` also increments `lifecycleGeneration`, even when the rebuilt command and facts are identical, so an unresolved confirm/select result from the prior tree cannot pass same-name generation guards.
+Command replacement, workflow exit, reconstruction and shutdown clear timers and invalidate closure-local observation, even for a same-name invocation. Every reconstruction advances `lifecycleGeneration`. Manual, unowned or mismatched `session_compact` retains the reset/self-heal behavior. Automatic compaction whose context exposes the live observer's exact promise preserves armed/probing/report facts and observation across the owned continuation, while clearing unrelated selector/suggestion/dispatch transients. Summary authorship does not determine maintenance ownership.
 
-The `setTimeout(0)` deferral for probe scheduling and completed dispatch remains load-bearing: Pi is still streaming during `agent_end` handlers, and the defer ensures `isStreaming` has cleared and `agent.prompt()` has resolved.
+The watchdog bounds a missing admitted probe/status, not a provider timeout. It starts before awaiting the contextual probe sender, stops when the actual originating run is captured, and stays suspended through its retries and owned maintenance. Structured input still suspends it. Once work settles, a probe with no valid report self-heals; an admitted run never loses its command solely because recovery exceeds 30 seconds.
+
+Probe and completed dispatch remain deferred with lifecycle guards after settlement. Contextual asynchronous sending preserves hidden message shape and guarded admission. Rejection pauses only the matching delivery and never blindly resends; it does not prove artifact absence. Settlement observation is not an admission reservation.
 
 ## Replay and resume
 
-Every accepted status report is journaled as a `scramjet:command-status` entry — including `continuing` (issue 278) — so that incremental work summaries form a searchable artifact trail. Terminal statuses (`completed`/`blocked`/`incomplete`) are journaled at `agent_end` dispatch time (`auto-continue.ts`), not at tool-execute time — so an abort before `agent_end` prevents the entry from being written and replay reconstructs dormant (issue 336). `continuing` statuses are journaled at tool-execute time (`command-status.ts`) since they are replay-inert. Persisted `continuing` summaries are **observational only**: `VALID_RESTING_STATUSES` excludes `continuing`, so replay ignores them entirely and never reconstructs a resting state from a `continuing` entry.
+Every accepted status report is journaled as a `scramjet:command-status` entry — including `continuing` (issue 278) — so that incremental work summaries form a searchable artifact trail. Terminal statuses (`completed`/`blocked`/`incomplete`) are journaled during successful originating settlement routing (`auto-continue.ts`), not at tool-execute or failed-attempt time — so an abort or failed settlement prevents the entry from being written and replay reconstructs dormant (issue 336). `continuing` statuses are journaled at tool-execute time (`command-status.ts`) since they are replay-inert. Persisted `continuing` summaries are **observational only**: `VALID_RESTING_STATUSES` excludes `continuing`, so replay ignores them entirely and never reconstructs a resting state from a `continuing` entry.
 
 Durable outcomes cover transitions that mutate live lifecycle facts but would otherwise leave replay reconstructing the preceding durable shape:
 
@@ -169,12 +178,12 @@ Before every agent run, the `before_agent_start` dormant-notice handler evaluate
 - `history.ts`: owns immediate live application plus attached post-message persistence for depth-0 command starts, immediate journaling for delegated starts, replay reconstruction (chronological selected-branch fold), interactive reply resume for parked and cancellation-eligible commands, cancellation true/false outcomes, and workflow exit on unknown slash input.
 - `auto-continue.ts`: owns `agent_end` decision tree, probe scheduling, timer management, status routing, selector/dispatch timers, and terminal resolution.
 - `command-status.ts`: owns status tool gating, `continuing` acceptance (probe and dormant paths), terminal report storage, dormant notice prompt section, and `continuing` status journaling.
-- `auto-continue.ts` also owns terminal status journaling (deferred to `agent_end` dispatch time so aborts prevent the entry from being written — issue 336).
+- `auto-continue.ts` also owns terminal status journaling after successful captured settlement, so aborted/failed execution cannot persist completion (issue 336).
 - `user-input.ts`: owns structured input parking/resuming behavior and guards against interaction during pending report dispatch.
 
 ## Runtime diagnosis
 
-All lifecycle mutations and decision points are instrumented via `state.logger.lifecycle(...)`. Lifecycle log messages from `lifecycle.ts` are prefixed `lifecycle: <event>` (e.g., `lifecycle: startCommand`, `lifecycle: enterDormant`). Log entries from `auto-continue.ts` use descriptive labels (e.g., `agent_end observed`, `status probe preparing`, `status probe sent`). Entries from `auto-continue.ts` include a `phase` field with the derived phase label for filtering. Entries from `lifecycle.ts` include a fact snapshot (`probeArmed`, `probeInFlight`, `parkedForInput`, `cancellationResumeEligible`, `continueCount`, `hasReport`) from which the phase can be derived. Cancellation grant/consume/invalidate/preserve/ignore boundaries use the `cancellation-resume` debug category with command, generation, input source where applicable, and a reason; they never include reply text or command arguments.
+All lifecycle mutations and decision points are instrumented via `state.logger.lifecycle(...)`. Lifecycle log messages from `lifecycle.ts` are prefixed `lifecycle: <event>` (e.g., `lifecycle: startCommand`, `lifecycle: enterDormant`). Log entries from `auto-continue.ts` use descriptive labels (e.g., `agent_end observed`, `status probe preparing`, `status probe send started`, `run settlement resolved`). Entries from `auto-continue.ts` include a `phase` field with the derived phase label for filtering. Entries from `lifecycle.ts` include a fact snapshot (`probeArmed`, `probeInFlight`, `parkedForInput`, `cancellationResumeEligible`, `continueCount`, `hasReport`) from which the phase can be derived. Cancellation grant/consume/invalidate/preserve/ignore boundaries use the `cancellation-resume` debug category with command, generation, input source where applicable, and a reason; they never include reply text or command arguments.
 
 To diagnose why a transition did or didn't happen, query the session JSONL for `scramjet:log` entries. See `docs/logging.md` for the entry schema, query patterns, and a step-by-step diagnostic workflow.
 

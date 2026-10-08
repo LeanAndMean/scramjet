@@ -16,7 +16,14 @@ import {
 	STRUCTURED_INPUT_CANCELLATION_TYPE,
 	USER_INPUT_PARKED_TYPE,
 } from "../src/history.js";
-import { activeCommandName } from "../src/lifecycle.js";
+import {
+	acceptProbeContinuing,
+	activeCommandName,
+	cancelStructuredInput,
+	parkForFreetext,
+	resumeAfterProbeInput,
+	startCommand,
+} from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
 import { buildProbeMessage } from "../src/next-step.js";
 import { createTerminalIndicators } from "../src/terminal-indicators.js";
@@ -328,6 +335,219 @@ async function driveProbeTurn(
 	bag.pi.isStreaming = false;
 	await vi.advanceTimersByTimeAsync(0);
 }
+
+describe("settlement-aware recovery", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	function setup(phase: "running" | "probing" = "probing") {
+		const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:ok" });
+		const state = runningState(def, {
+			lifecycle: lifecycleFor(phase, def.name),
+			registry: registryWith(defWithPolicy("b:ok", undefined)),
+		});
+		const fixture = bootstrap(state, { hasUI: false });
+		let resolve!: (result: any) => void;
+		let reject!: (error: Error) => void;
+		const settlement = new Promise<any>((yes, no) => {
+			resolve = yes;
+			reject = no;
+		});
+		fixture.ctxBag.ctx.getRunSettlement = () => settlement;
+		return { state, ...fixture, settlement, resolve, reject };
+	}
+
+	it("retains repeated attempts beyond the watchdog and routes only once after final settlement", async () => {
+		const f = setup();
+		f.state.rearmProbeWatchdog?.();
+		await f.bag.emit("agent_start", {}, f.ctxBag.ctx);
+		for (let i = 0; i < 2; i++) {
+			await f.bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error" }] }, f.ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(40_000);
+			expect(derivedPhase(f.state.lifecycle)).toBe("probing");
+		}
+		await f.report({ status: "completed", summary: "recovered" });
+		await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+		expect(f.ctxBag.dispatched).toEqual([]);
+		expect(f.bag.pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toEqual([]);
+		f.resolve({ status: "completed" });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(f.ctxBag.dispatched).toHaveLength(1);
+		await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(f.ctxBag.dispatched).toHaveLength(1);
+	});
+
+	it.each(["failed", "cancelled", "rejected"])(
+		"pauses %s without another attempt end and discards a pending report",
+		async (status) => {
+			const f = setup();
+			await f.bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error" }] }, f.ctxBag.ctx);
+			await f.report({ status: "completed", summary: "not settled" });
+			await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+			if (status === "rejected") f.reject(new Error("persistence failed"));
+			else f.resolve({ status, errorMessage: "retries exhausted" });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(derivedPhase(f.state.lifecycle)).toBe("dormant");
+			expect(f.ctxBag.dispatched).toEqual([]);
+			expect(f.state.lifecycleTimers?.isWatchdogActive()).toBe(false);
+			expect(f.ctxBag.notifications.some((n) => n.message.includes("paused"))).toBe(true);
+			expect(f.bag.pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toEqual([]);
+		},
+	);
+
+	it.each(["parked", "cancel"])("preserves %s provenance on cancelled settlement", async (kind) => {
+		const f = setup();
+		await f.bag.emit("agent_start", {}, f.ctxBag.ctx);
+		if (kind === "parked") parkForFreetext(f.state);
+		else cancelStructuredInput(f.state);
+		await f.bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, f.ctxBag.ctx);
+		f.resolve({ status: "cancelled" });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(f.state.lifecycle.parkedForInput).toBe(kind === "parked");
+		expect(f.state.lifecycle.cancellationResumeEligible).toBe(kind === "cancel");
+	});
+
+	it.each(["report", "no-report", "continuing", "probe-input"])(
+		"preserves owned compaction and legitimate %s generation changes",
+		async (kind) => {
+			const f = setup();
+			await f.bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error" }] }, f.ctxBag.ctx);
+			await f.bag.emit("session_compact", {}, f.ctxBag.ctx);
+			expect(derivedPhase(f.state.lifecycle)).toBe("probing");
+			if (kind === "report") await f.report({ status: "completed", summary: "done" });
+			if (kind === "continuing") acceptProbeContinuing(f.state);
+			if (kind === "probe-input") resumeAfterProbeInput(f.state);
+			await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+			f.resolve({ status: "completed" });
+			await vi.advanceTimersByTimeAsync(0);
+			if (kind === "report") expect(f.ctxBag.dispatched).toHaveLength(1);
+			else if (kind === "no-report") expect(derivedPhase(f.state.lifecycle)).toBe("dormant");
+			else expect(f.bag.pi.sent).toHaveLength(1);
+		},
+	);
+
+	it.each(["same-name", "manual-compact", "generation", "stale-context", "shutdown"])(
+		"invalidates %s observation",
+		async (kind) => {
+			const f = setup();
+			await f.report({ status: "completed", summary: "done" });
+			await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+			if (kind === "same-name") {
+				f.state.clearLifecycleTimers?.();
+				startCommand(f.state, "a:cmd");
+			}
+			if (kind === "manual-compact")
+				await f.bag.emit("session_compact", {}, { ...f.ctxBag.ctx, getRunSettlement: () => undefined });
+			if (kind === "generation") f.state.lifecycleGeneration++;
+			if (kind === "stale-context")
+				f.ctxBag.ctx.getRunSettlement = () => {
+					throw new Error("stale runner");
+				};
+			if (kind === "shutdown") await f.bag.emit("session_shutdown", {}, f.ctxBag.ctx);
+			f.resolve({ status: "completed" });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(f.ctxBag.dispatched).toEqual([]);
+		},
+	);
+
+	it("observes asynchronous probe-send rejection without blind resend", async () => {
+		const f = setup("running");
+		f.ctxBag.ctx.sendMessage = vi.fn(async () => {
+			throw new Error("Automatic retry is in progress");
+		});
+		await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+		f.resolve({ status: "completed" });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(derivedPhase(f.state.lifecycle)).toBe("dormant");
+		expect(f.ctxBag.ctx.sendMessage).toHaveBeenCalledOnce();
+		expect(f.state.lifecycleTimers?.isWatchdogActive()).toBe(false);
+	});
+
+	it("pauses when terminal-status persistence fails after successful settlement", async () => {
+		const f = setup();
+		await f.report({ status: "completed", summary: "done" });
+		const append = f.bag.pi.appendEntry;
+		f.bag.pi.appendEntry = (type: string, data: unknown) => {
+			if (type === COMMAND_STATUS_TYPE) throw new Error("disk unavailable");
+			append(type, data);
+		};
+		await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+		f.resolve({ status: "completed" });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(derivedPhase(f.state.lifecycle)).toBe("dormant");
+		expect(f.ctxBag.dispatched).toEqual([]);
+		expect(f.ctxBag.notifications.some((n) => n.message.includes("disk unavailable"))).toBe(true);
+	});
+
+	it("starts watchdog monitoring before the sender settles and stops it when the probe run starts", async () => {
+		const f = setup("running");
+		let release!: () => void;
+		f.ctxBag.ctx.sendMessage = () =>
+			new Promise<void>((resolve) => {
+				release = resolve;
+			});
+		await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+		f.resolve({ status: "completed" });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(f.state.lifecycleTimers?.isWatchdogActive()).toBe(true);
+		let finish!: (value: any) => void;
+		const probe = new Promise<any>((resolve) => {
+			finish = resolve;
+		});
+		f.ctxBag.ctx.getRunSettlement = () => probe;
+		await f.bag.emit("agent_start", {}, f.ctxBag.ctx);
+		await vi.advanceTimersByTimeAsync(40_000);
+		expect(derivedPhase(f.state.lifecycle)).toBe("probing");
+		await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+		finish({ status: "completed" });
+		release();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(derivedPhase(f.state.lifecycle)).toBe("dormant");
+	});
+
+	it("ignores a probe timer whose context becomes stale after settlement", async () => {
+		const f = setup("running");
+		await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+		f.resolve({ status: "completed" });
+		await flushMicrotasks();
+		f.ctxBag.ctx.getRunSettlement = () => {
+			throw new Error("stale runner");
+		};
+		await vi.advanceTimersByTimeAsync(0);
+		expect(f.bag.pi.sent).toEqual([]);
+		expect(f.ctxBag.notifications).toEqual([]);
+		expect(f.state.lifecycleTimers?.isWatchdogActive()).toBe(false);
+	});
+
+	it("ignores late send rejection after same-name replacement", async () => {
+		const f = setup("running");
+		let rejectSend!: (error: Error) => void;
+		f.ctxBag.ctx.sendMessage = () =>
+			new Promise<void>((_resolve, reject) => {
+				rejectSend = reject;
+			});
+		await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+		f.resolve({ status: "completed" });
+		await vi.advanceTimersByTimeAsync(0);
+		f.state.clearLifecycleTimers?.();
+		startCommand(f.state, "a:cmd");
+		rejectSend(new Error("late rejection"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(derivedPhase(f.state.lifecycle)).toBe("running");
+		expect(f.ctxBag.notifications).toEqual([]);
+	});
+
+	it("pauses unsupported context rather than falling back to void sending", async () => {
+		const f = setup("running");
+		f.ctxBag.ctx.sendMessage = undefined;
+		await f.bag.emit("agent_end", {}, f.ctxBag.ctx);
+		f.resolve({ status: "completed" });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(f.bag.pi.sent).toEqual([]);
+		expect(derivedPhase(f.state.lifecycle)).toBe("dormant");
+	});
+});
 
 describe("registerAutoContinue — two-phase command-status protocol", () => {
 	beforeEach(() => vi.useFakeTimers());

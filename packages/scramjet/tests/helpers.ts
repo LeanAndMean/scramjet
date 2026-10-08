@@ -151,6 +151,11 @@ export function recordingPi(): RecordingPi {
 		},
 	};
 	async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
+		const context = ctx as any;
+		if (context && !("getRunSettlement" in context)) context.getRunSettlement = () => undefined;
+		if (context && !("sendMessage" in context)) {
+			context.sendMessage = async (message: unknown, options?: unknown) => pi.sendMessage(message, options);
+		}
 		for (const h of handlers.get(event) ?? []) await h(payload, ctx);
 	}
 	return { pi, tools, commands, handlers, emit };
