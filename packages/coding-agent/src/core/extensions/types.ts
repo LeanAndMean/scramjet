@@ -43,6 +43,7 @@ import type {
 } from "@leanandmean/tui";
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
+import type { RunSettlement } from "../agent-session.js";
 import type { BashResult } from "../bash-executor.js";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.js";
 import type { EventBus } from "../event-bus.js";
@@ -342,6 +343,14 @@ export interface ExtensionContext {
 	model: Model<any> | undefined;
 	/** Scoped models when a model scope is active (via --models or /scoped-models), empty when no scope is configured */
 	scopedModels: ReadonlyArray<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	// SCRAMJET-DIVERGENCE: optional captured run observation and awaited custom sending (#611).
+	/** Captured event run/owned automatic maintenance; undefined for non-run contexts. */
+	getRunSettlement?(): Promise<RunSettlement> | undefined;
+	/** Observe sends outside awaited gating hooks; immediate triggered turns wait for recovery. */
+	sendMessage?<T = unknown>(
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
+		options?: { triggerTurn?: boolean; deliverAs?: SendMessageDeliverAs },
+	): Promise<void>;
 	/** Whether the agent is idle (not streaming) */
 	isIdle(): boolean;
 	/** The current abort signal, or undefined when the agent is not streaming. */
@@ -1670,6 +1679,7 @@ export interface ExtensionActions {
  * Required by all modes.
  */
 export interface ExtensionContextActions {
+	sendMessage?: ReplacedSessionContext["sendMessage"];
 	getModel: () => Model<any> | undefined;
 	getScopedModels: () => ReadonlyArray<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 	isIdle: () => boolean;

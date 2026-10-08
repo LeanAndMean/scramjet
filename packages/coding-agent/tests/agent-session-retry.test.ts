@@ -10,7 +10,12 @@ import { streamOpenAICodexResponses } from "../../ai/src/providers/openai-codex-
 import type { AgentSessionEvent, PromptOptions, RunSettlement } from "../src/core/agent-session.js";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
-import { defineTool, type ExtensionAPI, type ToolDefinition } from "../src/core/extensions/index.js";
+import {
+	defineTool,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type ToolDefinition,
+} from "../src/core/extensions/index.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader } from "../src/core/resource-loader.js";
 import { SessionManager } from "../src/core/session-manager.js";
@@ -2542,6 +2547,261 @@ describe("AgentSession persisted retry authority", () => {
 	});
 });
 
+describe("contextual run settlement and sending", () => {
+	it("shares direct capture across retry events and retains run A after run B and harness output", async () => {
+		const contexts: ExtensionContext[] = [];
+		const unbound: ExtensionContext[] = [];
+		const { session } = await createFixture(
+			(i) => (i === 0 ? assistantError("rate limit") : assistantText(`answer ${i}`)),
+			{
+				customTools: [makeHarnessNoticeTool()],
+				extensionFactory: (pi) => {
+					pi.on("input", (_event, ctx) => {
+						unbound.push(ctx);
+					});
+					pi.on("agent_start", (_event, ctx) => {
+						contexts.push(ctx);
+					});
+					pi.on("agent_end", (_event, ctx) => {
+						contexts.push(ctx);
+					});
+					pi.on("message_end", (event, ctx) => {
+						if (event.message.role === "assistant" && event.message.origin === "harness") unbound.push(ctx);
+						else contexts.push(ctx);
+					});
+				},
+			},
+		);
+		const a = captureSettlement();
+		await session.prompt("A", a.options);
+		expect(contexts.length).toBeGreaterThan(4);
+		for (const ctx of contexts) expect(ctx.getRunSettlement?.()).toBe(a.get());
+		const retained = contexts[0];
+		contexts.length = 0;
+		await session.invokeHarnessTool("harness_notice", {});
+		for (const ctx of contexts) expect(ctx.getRunSettlement?.()).toBeUndefined();
+		contexts.length = 0;
+		const b = captureSettlement();
+		await session.prompt("B", b.options);
+		expect(b.get()).not.toBe(a.get());
+		for (const ctx of contexts) expect(ctx.getRunSettlement?.()).toBe(b.get());
+		expect(retained.getRunSettlement?.()).toBe(a.get());
+		for (const ctx of unbound) expect(ctx.getRunSettlement?.()).toBeUndefined();
+		const runner = session.extensionRunner!;
+		runner.invalidate();
+		expect(() => retained.getRunSettlement?.()).toThrow("stale");
+		expect(() => retained.sendMessage?.({ customType: "stale", content: "no", display: false })).toThrow("stale");
+		session.dispose();
+	});
+
+	it("context capture stays pending through originating unwind and shares infrastructure rejection", async () => {
+		let ctx!: ExtensionContext;
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { session } = await createFixture(() => assistantText("ok"), {
+			extensionFactory: (pi) => {
+				pi.on("agent_end", (_event, context) => {
+					ctx = context;
+				});
+			},
+		});
+		const launch = session.agent.prompt.bind(session.agent);
+		vi.spyOn(session.agent, "prompt").mockImplementation(async (messages) => {
+			await launch(messages);
+			await gate;
+			throw new Error("late failure");
+		});
+		const capture = captureSettlement();
+		const prompt = session.prompt("hello", capture.options);
+		void prompt.catch(() => {});
+		await vi.waitFor(() => expect(ctx).toBeDefined());
+		expect(ctx.getRunSettlement?.()).toBe(capture.get());
+		let settled = false;
+		void ctx.getRunSettlement!()!.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await settle();
+		expect(settled).toBe(false);
+		release();
+		await expect(prompt).rejects.toThrow("late failure");
+		await expect(ctx.getRunSettlement!()!).rejects.toThrow("late failure");
+		session.dispose();
+	});
+
+	it.each(["owned overflow", "owned threshold", "manual", "preflight"])(
+		"attributes compaction contexts: %s",
+		async (kind) => {
+			const compactContexts: ExtensionContext[] = [];
+			const endContexts: ExtensionContext[] = [];
+			const large = { ...assistantText("large"), usage: { input: 95_000, output: 0, cacheRead: 0, cacheWrite: 0 } };
+			const { session } = await createFixture(
+				(i) =>
+					i === 0 && kind === "owned overflow"
+						? assistantError("maximum context length exceeded")
+						: i === 0 && kind === "owned threshold"
+							? large
+							: assistantText("done"),
+				{
+					model: { ...testModel, contextWindow: 100_000 },
+					reserveTokens: 10_000,
+					extensionFactory: (pi) => {
+						pi.on("session_before_compact", (event, ctx) => {
+							compactContexts.push(ctx);
+							return {
+								compaction: {
+									summary: "summary",
+									firstKeptEntryId: event.preparation.firstKeptEntryId,
+									tokensBefore: event.preparation.tokensBefore,
+								},
+							};
+						});
+						pi.on("session_compact", (_event, ctx) => {
+							compactContexts.push(ctx);
+						});
+						pi.on("agent_end", (_event, ctx) => {
+							endContexts.push(ctx);
+						});
+					},
+				},
+			);
+			const prior = { role: "user" as const, content: "old context", timestamp: 0 };
+			const answer = kind === "preflight" ? large : assistantText("old answer");
+			session.sessionManager.appendMessage(prior);
+			session.sessionManager.appendMessage(answer);
+			session.agent.state.messages = [prior, answer];
+			const capture = captureSettlement();
+			if (kind === "manual") await session.compact();
+			else await session.prompt("hello", capture.options);
+			expect(compactContexts).toHaveLength(2);
+			for (const ctx of compactContexts)
+				expect(ctx.getRunSettlement?.()).toBe(kind.startsWith("owned") ? capture.get() : undefined);
+			if (kind.startsWith("owned")) {
+				for (const ctx of endContexts) expect(ctx.getRunSettlement?.()).toBe(capture.get());
+				expect(await capture.get()).toMatchObject({ status: "completed" });
+			}
+			session.dispose();
+		},
+	);
+
+	it("ordinary and replacement senders recover identically while legacy sends retain their error channel", async () => {
+		let ctx!: ExtensionContext;
+		let api!: ExtensionAPI;
+		const { session } = await createFixture(
+			(i) => (i % 2 === 0 ? assistantError("rate limit") : assistantText("recovered")),
+			{
+				extensionFactory: (pi) => {
+					api = pi;
+					pi.on("input", (_event, context) => {
+						ctx = context;
+						return { action: "handled" };
+					});
+				},
+			},
+		);
+		await session.prompt("context");
+		await ctx.sendMessage!({ customType: "ordinary", content: "go", display: false }, { triggerTurn: true });
+		expect(session.messages.at(-1)).toMatchObject({ role: "assistant", content: [{ text: "recovered" }] });
+		const replaced = session.createReplacedSessionContext();
+		expect(replaced.getRunSettlement?.()).toBeUndefined();
+		await replaced.sendMessage({ customType: "replacement", content: "go", display: false }, { triggerTurn: true });
+		expect(session.messages.at(-1)).toMatchObject({ role: "assistant", content: [{ text: "recovered" }] });
+		const errors: string[] = [];
+		session.extensionRunner!.onError((event) => {
+			errors.push(event.error);
+		});
+		vi.spyOn(session.agent, "prompt").mockRejectedValueOnce(new Error("legacy launch failure"));
+		expect(
+			api.sendMessage({ customType: "legacy", content: "go", display: false }, { triggerTurn: true }),
+		).toBeUndefined();
+		await vi.waitFor(() => expect(errors).toContain("legacy launch failure"));
+		session.dispose();
+	});
+
+	it("returns the actual immediate sender promise through retry and propagates admission/launch rejection", async () => {
+		let ctx!: ExtensionContext;
+		const { session } = await createFixture(
+			(i) => (i === 0 ? assistantError("rate limit") : assistantText("recovered")),
+			{
+				baseDelayMs: 10_000,
+				extensionFactory: (pi) => {
+					pi.on("input", (_event, context) => {
+						ctx = context;
+						return { action: "handled" };
+					});
+				},
+			},
+		);
+		await session.prompt("get context");
+		const send = ctx.sendMessage!({ customType: "probe", content: "hello", display: false }, { triggerTurn: true });
+		expect(send).toBeInstanceOf(Promise);
+		let settled = false;
+		void send.then(() => {
+			settled = true;
+		});
+		await vi.waitFor(() => expect(session.isRetrying).toBe(true));
+		expect(settled).toBe(false);
+		await expect(
+			ctx.sendMessage!({ customType: "other", content: "competing", display: false }, { triggerTurn: true }),
+		).rejects.toThrow();
+		session.abortRetry();
+		await send;
+		vi.spyOn(session.agent, "prompt").mockRejectedValueOnce(new Error("launch rejected"));
+		await expect(
+			ctx.sendMessage!({ customType: "probe", content: "retry", display: false }, { triggerTurn: true }),
+		).rejects.toThrow("launch rejected");
+		session.dispose();
+	});
+
+	it("preserves streaming queue acceptance and nextTurn non-triggering semantics", async () => {
+		let ctx!: ExtensionContext;
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { session } = await createFixture(() => assistantText("done"), {
+			extensionFactory: (pi) => {
+				pi.on("agent_start", (_event, context) => {
+					ctx = context;
+				});
+			},
+			streamFn: () => {
+				const stream = createAssistantMessageEventStream();
+				void gate.then(() => stream.push({ type: "done", reason: "stop", message: assistantText("done") }));
+				return stream;
+			},
+		});
+		const prompt = session.prompt("hello");
+		await vi.waitFor(() => expect(ctx).toBeDefined());
+		await expect(
+			ctx.sendMessage!({ customType: "queued", content: "steer", display: false }, { triggerTurn: true }),
+		).resolves.toBeUndefined();
+		await expect(
+			ctx.sendMessage!({ customType: "queued", content: "follow", display: false }, { deliverAs: "followUp" }),
+		).resolves.toBeUndefined();
+		release();
+		await prompt;
+		const launch = vi.spyOn(session.agent, "prompt");
+		await expect(
+			ctx.sendMessage!(
+				{ customType: "later", content: "next", display: false },
+				{ triggerTurn: true, deliverAs: "nextTurn" },
+			),
+		).resolves.toBeUndefined();
+		expect(launch).not.toHaveBeenCalled();
+		expect(
+			session.sessionManager.getBranch().some((e) => e.type === "custom_message" && e.customType === "later"),
+		).toBe(false);
+		session.dispose();
+	});
+});
+
 describe("originating run settlement", () => {
 	it.each([true, false])("retains a failed snapshot when retry enabled is %s", async (retryEnabled) => {
 		const { session } = await createFixture(() => assistantError("rate limit"), { maxRetries: 1, retryEnabled });
@@ -2861,6 +3121,7 @@ describe("originating run settlement", () => {
 			release = resolve;
 		});
 		let started = false;
+		const contexts: ExtensionContext[] = [];
 		const large = {
 			...assistantText("successful output"),
 			usage: { input: 95_000, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -2869,7 +3130,14 @@ describe("originating run settlement", () => {
 			model: { ...testModel, contextWindow: 100_000 },
 			reserveTokens: 10_000,
 			extensionFactory: (pi) => {
-				pi.on("session_before_compact", async (event) => {
+				pi.on("session_compact", (_event, ctx) => {
+					contexts.push(ctx);
+				});
+				pi.on("agent_end", (_event, ctx) => {
+					contexts.push(ctx);
+				});
+				pi.on("session_before_compact", async (event, ctx) => {
+					contexts.push(ctx);
 					started = true;
 					await gate;
 					return {
@@ -2901,6 +3169,8 @@ describe("originating run settlement", () => {
 			status: "completed",
 			assistantMessage: { content: [{ text: "queued output" }] },
 		});
+		expect(contexts).toHaveLength(4);
+		for (const ctx of contexts) expect(ctx.getRunSettlement?.()).toBe(capture.get());
 	});
 
 	it("keeps harness failure capture pending until actual execution unwind", async () => {

@@ -539,7 +539,7 @@ Returning `systemPromptSection` contributes a section for the current turn witho
 
 #### agent_start / agent_end
 
-Fired once per user prompt.
+Fired for each Agent attempt, including automatic retry/compaction continuations. Attempt-level `agent_end` is not final recovery settlement; use the captured context capability described below for deferred completion observation.
 
 ```typescript
 pi.on("agent_start", async (_event, ctx) => {});
@@ -984,6 +984,18 @@ pi.on("tool_result", async (event, ctx) => {
   return { details: data };
 });
 ```
+
+### ctx.getRunSettlement()
+
+Optional `getRunSettlement(): Promise<RunSettlement> | undefined` captures the exact originating execution in queued Agent lifecycle/message/tool-execution events and its owned automatic `session_before_compact` / `session_compact` hooks. All attempts and owned maintenance share the same promise as SDK `PromptOptions.onRunSettlement`; a retained run A context never observes run B. Manual/unowned compaction, new-prompt preflight, harness-origin message events, and contexts without explicit run attribution return `undefined` (including command/input, provider hooks and separately constructed tool/shortcut contexts). `fromExtension` describes summary authorship, not ownership. See [SDK settlement outcomes](sdk.md#capturing-originating-run-settlement) and [automatic handoffs](compaction.md#originating-recovery-and-automatic-handoffs).
+
+Capture during a hook, attach rejection handling immediately, return, and observe from an independent continuation. Awaiting its own completion inside an awaited gating hook deadlocks because classification/persistence needs that hook to return. Settlement is observation, not global quiescence, a lease, or permission to bypass admission. Revalidate context and application identity before subsequent guarded actions; stale runner contexts still throw. Missing capabilities in hand-built/unsupported contexts require an actionable pause, not a streaming-idle fallback.
+
+### ctx.sendMessage(message, options?)
+
+Optional async sender with the same message/options shapes as replacement-context `sendMessage()` and [pi.sendMessage()](#pisendmessagemessage-options). Session-bound runner contexts provide it; unsupported hand-built contexts may omit it. It delegates to the existing `AgentSession.sendCustomMessage` operation: streaming delivery and `nextTurn` resolve at queue acceptance; an immediate triggered turn waits for its run/retries; idle non-triggering delivery persists without starting a turn. `nextTurn` ignores `triggerTurn`. Asynchronous admission, launch and persistence failures reject; rejection does not prove artifact absence, so never blindly resend.
+
+Do not await an immediate-turn send from an awaited gating hook whose return the turn needs. Return from that hook and await independently. The legacy `pi.sendMessage(): void` and its extension error channel remain unchanged; missing async sending must not silently fall back to void delivery.
 
 ### ctx.isIdle() / ctx.abort() / ctx.hasPendingMessages()
 
