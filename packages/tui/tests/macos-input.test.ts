@@ -254,6 +254,7 @@ describe("native API boundary", () => {
 				return 0;
 			},
 			RegisterEventHotKey: (...args) => {
+				expect(args[4]).toBe(1);
 				(args[5] as unknown[])[0] = {};
 				return 0;
 			},

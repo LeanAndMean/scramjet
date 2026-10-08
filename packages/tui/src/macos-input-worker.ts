@@ -282,7 +282,8 @@ export function createNative(koffi: typeof import("koffi"), terminalPid: number)
 	return {
 		register(id) {
 			const result = [null];
-			const status = register(8, 256, { signature: 0x5343524d, id }, target(), 0, result);
+			// Non-exclusive registration can succeed while an exclusive owner silently suppresses delivery.
+			const status = register(8, 256, { signature: 0x5343524d, id }, target(), 1, result);
 			if (status === 0) {
 				if (!result[0]) throw new Error("Native Copy registration succeeded without an ownership reference");
 				reference = result[0];

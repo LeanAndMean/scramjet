@@ -28,13 +28,7 @@ if (isMainThread) {
 		throw new Error(receipt.error);
 	}
 	let exclusive = false;
-	const native = createNative({ ...koffi, load(path) {
-		const library = koffi.load(path);
-		return { func(...args) {
-			const call = library.func(...args);
-			return args[0] === "RegisterEventHotKey" ? (code, modifiers, id, target, options, result) => call(code, modifiers, id, target, exclusive ? 1 : options, result) : call;
-		} };
-	} }, 0);
+	const native = createNative(koffi, 0);
 	let registered = false;
 	let releaseUnknown = false;
 	let timer;

@@ -630,8 +630,8 @@ try:
         report["terminalVersion"] = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", plist)
         subprocess.run(["swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(driver)], text=True, capture_output=True, check=True, timeout=120)
         report["termiosStateMask"] = json.loads(events("termios-mask"))
-        if report["termiosStateMask"] != {"PENDIN": 0x20000000}:
-            raise RuntimeError("Native SDK PENDIN mask does not match the restoration oracle")
+        if report["termiosStateMask"] != {"PENDIN": 0x20000000, "kEventHotKeyExclusive": 1}:
+            raise RuntimeError("Native SDK constants do not match the restoration and registration contracts")
         report["capabilities"] = json.loads(events("capabilities"))
     else:
         executable = {"vte": "xfce4-terminal", "kitty": "kitty", "xterm": "xterm"}[terminal_kind]
