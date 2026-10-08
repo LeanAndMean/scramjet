@@ -694,6 +694,20 @@ class TerminalReadinessTests(unittest.TestCase):
 
 
 class PasteEvidenceTests(unittest.TestCase):
+    def test_checkout_fixture_loads_from_a_path_with_spaces(self):
+        with tempfile.TemporaryDirectory(prefix="scramjet fixture ") as directory:
+            root = Path(directory)
+            fixture = root / "packages/scramjet/tests/fixtures/interactive-viewport.mjs"
+            fixture.parent.mkdir(parents=True)
+            shutil.copyfile(ROOT / "packages/scramjet/tests/fixtures/interactive-viewport.mjs", fixture)
+            for name in ("tui", "coding-agent"):
+                (root / "packages" / name).symlink_to(ROOT / "packages" / name, target_is_directory=True)
+            env = dict(os.environ)
+            env.pop("SCRAMJET_TUI_INSTALLED_ROOT", None)
+            result = subprocess.run(["node", str(fixture), "--help"], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Retained TUI interaction fixture", result.stdout)
+
     def test_installed_fixture_never_falls_back_to_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run(["node", str(ROOT / "packages/scramjet/tests/fixtures/interactive-viewport.mjs"), "--help"],

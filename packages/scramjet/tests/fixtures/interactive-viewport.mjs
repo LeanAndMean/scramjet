@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { findPackageJSON } from "node:module";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { release, platform, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -9,7 +9,7 @@ const installedRoot = process.env.SCRAMJET_TUI_INSTALLED_ROOT;
 const installedBase = installedRoot ? pathToFileURL(join(realpathSync(installedRoot), "package.json")) : undefined;
 const closure = installedRoot ? realpathSync(join(installedRoot, "..", "..")) + sep : undefined;
 function runtimeModule(packageName, file = "index.js") {
-	const entry = installedBase ? join(dirname(findPackageJSON(`@leanandmean/${packageName}`, installedBase)), "dist/index.js") : new URL(`../../../${packageName}/dist/index.js`, import.meta.url).pathname;
+	const entry = installedBase ? join(dirname(findPackageJSON(`@leanandmean/${packageName}`, installedBase)), "dist/index.js") : fileURLToPath(new URL(`../../../${packageName}/dist/index.js`, import.meta.url));
 	const path = realpathSync(join(dirname(entry), file));
 	if (closure && !path.startsWith(closure)) throw new Error(`Runtime escaped installed closure: ${path}`);
 	return import(pathToFileURL(path).href);
