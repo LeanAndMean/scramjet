@@ -685,6 +685,7 @@ try:
                 report["launchConsent"] = json.loads(events("press-pid", pid, "Open"))
             try:
                 if terminal_kind == "iterm2":
+                    events("activate-pid", str(terminal_process.pid))
                     report["startupUpdatePrompt"] = json.loads(events("press-pid", str(terminal_process.pid), "Don't Check"))
                 roles = {item["role"] for item in json.loads(events("geometry", bundle))}
                 if {"AXWindow", "AXTextArea"} <= roles:

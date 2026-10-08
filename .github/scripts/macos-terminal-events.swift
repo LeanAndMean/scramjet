@@ -55,7 +55,7 @@ func geometry(_ element: AXUIElement, depth: Int = 0) -> [[String: Any]] {
 func pressButton(_ element: AXUIElement, title: String, depth: Int = 0) -> Bool {
     if depth > 12 { return false }
     if ["AXButton", "AXCheckBox"].contains(attribute(element, kAXRoleAttribute) as? String ?? ""),
-       [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].contains(where: { attribute(element, $0) as? String == title }) {
+       [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].contains(where: { (attribute(element, $0) as? String)?.replacingOccurrences(of: "’", with: "'") == title }) {
         return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
     }
     for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
