@@ -9,7 +9,6 @@ import { performance } from "node:perf_hooks";
 import { stripVTControlCharacters } from "node:util";
 import { type ImagePlacement, sliceImagePlacements } from "./image-placement.js";
 import { isKeyModifier, isKeyRelease, matchesKey } from "./keys.js";
-import type { NativeCopyControl } from "./macos-input.js";
 import { getRenderedCopy, type RenderedCopyRow, setRenderedCopy } from "./render-copy.js";
 import type { Terminal } from "./terminal.js";
 import { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
@@ -310,9 +309,6 @@ export class TUI extends Container {
 	private viewportRevealComponent?: Component;
 	private started = false;
 	private removeViewportInput?: () => void;
-	private nativeCopy?: NativeCopyControl;
-	private nativeSelection?: object;
-	private nativeLease: object | null = null;
 	private terminalFailure?: Error;
 
 	// SCRAMJET-DIVERGENCE: append-only history and a bounded mutable canvas preserve terminal scrollback (#389).
@@ -358,38 +354,11 @@ export class TUI extends Container {
 		if (options.minimumSize && !this.terminal.flush)
 			throw new Error("Minimum-size input protection requires terminal flushing");
 		this.viewport?.cancelInteraction();
-		this.nativeCopy?.dispose();
-		this.nativeCopy = undefined;
 		this.viewportPaint = undefined;
 		if (!options.minimumSize) this.viewportMinimumPainted = false;
 		this.removeViewportInput?.();
 		this.viewportRevealFocus = false;
-		const viewport = new RetainedViewport(
-			options,
-			() => this.requestRender(),
-			() => this.syncNativeCopy(),
-		);
-		this.viewport = viewport;
-		if (options.copy)
-			this.nativeCopy = this.terminal.configureNativeCopy?.({
-				onCopyIntent: (notice) => {
-					this.syncNativeCopy();
-					if (
-						this.viewport === viewport &&
-						notice.lease === this.nativeLease &&
-						this.nativeCopy?.isCurrent(notice)
-					)
-						void viewport.copySelection();
-				},
-				onAvailability: (available, reason) => {
-					if (options.onNativeCopyAvailability) options.onNativeCopyAvailability(available, reason);
-					else if (!available && reason) console.error(reason);
-				},
-				onError: (error) => {
-					this.terminalFailure = error;
-					throw error;
-				},
-			});
+		this.viewport = new RetainedViewport(options, () => this.requestRender());
 		this.removeViewportInput = this.addInputListener((data) => {
 			const protocol = data === "\x1b[I" || data === "\x1b[O" || /^\x1b\[\d+;\d+;\d+t$/.test(data);
 			if (
@@ -420,30 +389,6 @@ export class TUI extends Container {
 		});
 		if (this.started) this.enterViewportMode();
 		this.requestRender(true);
-	}
-
-	// SCRAMJET-DIVERGENCE: intent leases authorize current painted selection, never synthetic keyboard input.
-	private syncNativeCopy(): void {
-		if (!this.nativeCopy || this.terminalFailure) return;
-		const selection =
-			this.started &&
-			!this.stopped &&
-			this.previousWidth === this.terminal.columns &&
-			this.previousHeight === this.terminal.rows &&
-			!this.hasOverlay() &&
-			!this.viewportHadOverlay &&
-			!this.viewport?.isTooSmall()
-				? this.viewport?.getCopySelection()
-				: undefined;
-		if (selection === this.nativeSelection) return;
-		this.nativeSelection = selection;
-		this.nativeLease = selection ? {} : null;
-		try {
-			this.nativeCopy.setLease(this.nativeLease);
-		} catch (error) {
-			this.terminalFailure = error instanceof Error ? error : new Error(String(error));
-			throw this.terminalFailure;
-		}
 	}
 
 	// SCRAMJET-DIVERGENCE: safety controls use the painted block, not a scheduled scroll position.
@@ -893,7 +838,6 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false): void {
-		this.syncNativeCopy();
 		if (this.stopped || this.terminalFailure) return;
 		if (force) {
 			this.viewportPaint = undefined;
@@ -1649,7 +1593,6 @@ export class TUI extends Container {
 		this.viewportHadImages = hasImages;
 		this.previousWidth = width;
 		this.previousHeight = height;
-		this.syncNativeCopy();
 		if (!this.terminal.flush) return;
 		let flushing: Promise<void>;
 		try {

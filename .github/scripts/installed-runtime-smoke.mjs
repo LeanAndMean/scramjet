@@ -11,7 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [packageRootArg, workDir] = process.argv.slice(2);
@@ -22,12 +22,10 @@ const packageRoot = realpathSync(packageRootArg);
 const installedRequire = createRequire(join(packageRoot, "package.json"));
 const closure = realpathSync(join(packageRoot, "..", "..")) + sep;
 const tuiEntry = installedRequire.resolve("@leanandmean/tui");
-const nativeModules = ["macos-input.js", "macos-input-worker.js"].map((name) => realpathSync(join(dirname(tuiEntry), name)));
 const koffiPath = realpathSync(createRequire(tuiEntry).resolve("koffi"));
-for (const path of [...nativeModules, koffiPath]) {
+for (const path of [realpathSync(tuiEntry), koffiPath]) {
 	if (!path.startsWith(closure)) throw new Error(`Native runtime escaped installed closure: ${path}`);
 }
-for (const path of nativeModules) await import(pathToFileURL(path).href);
 
 const dataRoot = join(workDir, "data");
 const home = join(workDir, "home");
@@ -177,5 +175,5 @@ if (snapshot(legacyRoot) !== legacyBefore) throw new Error("installed runtime ch
 if (readFileSync(outside, "utf-8") !== "outside sentinel\n") throw new Error("installed runtime followed a legacy symlink");
 
 process.stdout.write(
-	`${JSON.stringify({ promptPaths: promptPaths.length, agentCatalog: true, subagentRegistry: true, migrationWarning: true, nativeModules, koffiPath })}\n`,
+	`${JSON.stringify({ promptPaths: promptPaths.length, agentCatalog: true, subagentRegistry: true, migrationWarning: true, tuiEntry, koffiPath })}\n`,
 );

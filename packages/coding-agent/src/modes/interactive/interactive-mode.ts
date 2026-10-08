@@ -568,9 +568,6 @@ export class InteractiveMode {
 				}),
 			keybindings: this.keybindings,
 			copy: copyToClipboard,
-			onNativeCopyAvailability: (available, reason) => {
-				if (!available && reason) this.showWarning(reason);
-			},
 			requestPaste: () => void this.pasteFromClipboard(),
 			minimumSize: { columns: 12, rows: 3 },
 			handleBlockedInput: (data) => {
@@ -3898,13 +3895,11 @@ export class InteractiveMode {
 			try {
 				this.stop({ retainContent: this.settingsManager.getRetainTranscriptOnExit() });
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException)?.code === "ERR_TERMINAL_INPUT_LOST") throw error;
 				await this.ui.terminal.flush?.();
 				throw error;
 			}
 			await this.ui.terminal.flush?.();
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException)?.code === "ERR_TERMINAL_INPUT_LOST") this.emergencyTerminalExit();
 			exitCode = 1;
 			console.error(`Could not stop terminal safely: ${error instanceof Error ? error.message : String(error)}`);
 		}
@@ -3934,8 +3929,6 @@ export class InteractiveMode {
 	 * paste / Kitty / modifyOtherKeys sequences.
 	 */
 	private uncaughtCrash(error: Error): never {
-		// SCRAMJET-DIVERGENCE: input loss can precede SIGHUP or an output error; never write to a known dead terminal.
-		if ((error as NodeJS.ErrnoException).code === "ERR_TERMINAL_INPUT_LOST") this.emergencyTerminalExit();
 		if (this.isShuttingDown) {
 			process.exit(1);
 		}
@@ -3949,7 +3942,6 @@ export class InteractiveMode {
 		try {
 			this.ui.stop();
 		} catch (releaseError) {
-			if ((releaseError as NodeJS.ErrnoException)?.code === "ERR_TERMINAL_INPUT_LOST") this.emergencyTerminalExit();
 			console.error("Terminal release failed; exiting without restart:", releaseError);
 		}
 		console.error("pi exiting due to uncaughtException:");

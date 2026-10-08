@@ -2,7 +2,6 @@ import AppKit
 import ApplicationServices
 import Foundation
 import Darwin
-import Carbon
 
 let markerText = CommandLine.arguments.first(where: { $0.hasPrefix("--marker=") }).map { String($0.dropFirst(9)) } ?? "ROW-001"
 
@@ -141,7 +140,7 @@ func sendKey(_ code: CGKeyCode, _ rawFlags: UInt64) {
 let args = CommandLine.arguments
 switch args[1] {
 case "termios-mask":
-    emit(["PENDIN": UInt64(PENDIN), "kEventHotKeyExclusive": UInt64(kEventHotKeyExclusive)])
+    emit(["PENDIN": UInt64(PENDIN)])
 case "capabilities":
     emit(["accessibility": AXIsProcessTrusted(), "postEvents": CGPreflightPostEventAccess(),
           "screenCapture": CGPreflightScreenCaptureAccess(), "listenEvents": CGPreflightListenEventAccess()])

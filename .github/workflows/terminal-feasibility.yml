@@ -75,7 +75,7 @@ jobs:
           retention-days: 7
 
   native-terminal:
-    name: native-terminal (${{ matrix.os }}, ${{ matrix.terminal }}, tmux=${{ matrix.tmux }}, stock=${{ matrix.stock || false }})
+    name: native-terminal (${{ matrix.os }}, ${{ matrix.terminal }}, tmux=${{ matrix.tmux }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -88,22 +88,12 @@ jobs:
           - os: macos-15
             terminal: iterm2
             tmux: false
-          - os: macos-15
-            terminal: apple
-            tmux: false
-            stock: true
-          - os: macos-15
-            terminal: iterm2
-            tmux: false
-            stock: true
           - os: macos-15-intel
             terminal: apple
             tmux: false
-            stock: true
           - os: macos-15-intel
             terminal: iterm2
             tmux: false
-            stock: true
           - os: ubuntu-24.04
             terminal: vte
             tmux: false
@@ -140,7 +130,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run build
       - name: Pack isolated native candidate
-        if: matrix.stock == true
+        if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           PACK_DIR="$RUNNER_TEMP/native-pack"
@@ -156,26 +146,26 @@ jobs:
           echo "SCRAMJET_TUI_INSTALLED_ROOT=$INSTALLED_ROOT" >> "$GITHUB_ENV"
       - name: Probe native macOS terminal
         if: runner.os == 'macOS'
-        env:
-          STOCK_COPY: ${{ matrix.stock || false }}
+        run: python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal=${{ matrix.terminal }}
+      - name: Probe checkout runtime
+        if: runner.os == 'macOS'
         run: |
-          args=()
-          if [[ "$STOCK_COPY" == true ]]; then args+=(--stock-copy); fi
-          python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal=${{ matrix.terminal }} "${args[@]}"
-      - name: Probe stock checkout runtime
-        if: matrix.stock == true
-        run: |
-          SCRAMJET_TUI_RECEIVER_ROOT="$SCRAMJET_TUI_INSTALLED_ROOT" env -u SCRAMJET_TUI_INSTALLED_ROOT \
+          env -u SCRAMJET_TUI_INSTALLED_ROOT \
             python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence/checkout" \
-              --terminal=${{ matrix.terminal }} --stock-copy
+              --terminal=${{ matrix.terminal }}
       - name: Reject native false-positive controls
-        if: matrix.stock == true
+        if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           for control in noop-copy copy-on-selection consumed-paste; do
             python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence/$control" \
-              --terminal=${{ matrix.terminal }} --stock-copy --negative-control="$control"
+              --terminal=${{ matrix.terminal }} --negative-control="$control"
           done
+      - name: Diagnose iTerm2 default-off right-click
+        if: matrix.os == 'macos-15' && matrix.terminal == 'iterm2'
+        run: |
+          python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence/default-off" \
+            --terminal=iterm2 --iterm-default-off
       - name: Probe Linux VTE terminal
         if: runner.os == 'Linux'
         env:
@@ -193,7 +183,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: terminal-feasibility-${{ matrix.os }}-${{ matrix.terminal }}-tmux-${{ matrix.tmux }}-stock-${{ matrix.stock || false }}
+          name: terminal-feasibility-${{ matrix.os }}-${{ matrix.terminal }}-tmux-${{ matrix.tmux }}
           path: |
             ${{ runner.temp }}/terminal-evidence
             ${{ runner.temp }}/native-pack/*.json

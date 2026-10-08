@@ -40,7 +40,7 @@ Uses actual TUI/RetainedViewport/ProcessTerminal input, selection and rendering.
 4. Right-click selection; independently compare exact desktop clipboard text.
 5. Select again and Ctrl+C; successful copying clears the selection.
 6. Unexpected paste is consumed without recording its content. Journey action
-   native-paste arms one known synthetic payload for real editor insertion.
+   native-paste/right-paste explicitly arm the known synthetic payload for real editor insertion.
 7. Ctrl+Home/Ctrl+End browse the transcript; use --production to test Home/End editing.
 8. Type and use arrows/backspace; at-tail PageUp belongs to the focused component.
 9. Production right-click without selection pastes into the focused editor from
@@ -277,12 +277,6 @@ async function runProduction() {
 	const stopTerminal = terminal.stop.bind(terminal);
 	terminal.start = (...args) => { terminalStates.push({ start: ttyState() }); startTerminal(...args); };
 	terminal.stop = () => { stopTerminal(); terminalStates.push({ stop: ttyState() }); record(); };
-	const nativeAvailability = [];
-	const configureNativeCopy = terminal.configureNativeCopy.bind(terminal);
-	terminal.configureNativeCopy = (options) => configureNativeCopy({ ...options, onAvailability(available, reason) {
-		nativeAvailability.push({ available, reason });
-		options.onAvailability(available, reason);
-	} });
 	const mode = new InteractiveMode(runtime, { terminal });
 	let stopped = false;
 	let finish;
@@ -292,18 +286,20 @@ async function runProduction() {
 	let updates = 0;
 	const safety = process.argv.includes("--safety");
 	const journey = process.argv.includes("--journey");
-	const interactions = { wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0, copyErrors: 0, pasteMatches: 0, pasteMismatches: 0, focusIn: 0, focusOut: 0, enterPresses: 0 };
+	const interactions = { wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0, copyErrors: 0, pasteMatches: 0, pasteMismatches: 0, focusIn: 0, focusOut: 0, enterPresses: 0, rightPasteInsertions: 0 };
 	const committed = process.argv.includes("--committed");
 	const committedHandoffs = process.argv.includes("--committed-handoffs");
 	if (committed && (journey || safety)) throw new Error("Committed smoke is separate from retained native journeys");
 	let copyKind;
 	let copied;
 	let armedPaste = false;
+	let armedRightPaste = false;
+	let forwardingPaste = false;
 	let earlyCopy = false;
 	let thumbGesture = false;
 	let lastMouse;
 	let commandId = 0;
-	const safetyState = { protocol: undefined, phase: "starting", approved: 0, editorHandoffs: 0, suspends: 0 };
+	const safetyState = { protocol: undefined, phase: "starting", approved: 0, editorHandoffs: 0, suspends: 0, submissions: 0 };
 	let imageTool;
 	let overlay;
 	let approval;
@@ -316,7 +312,7 @@ async function runProduction() {
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, architecture: process.arch, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), editor: extensionUI?.getEditorText(), editorCursor: mode.defaultEditor.getCursor(), runtimeOrigin: installedRoot ? { kind: "installed", root: realpathSync(installedRoot) } : { kind: "checkout" }, negativeControl: control ?? null, nativeAvailability }));
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, architecture: process.arch, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), editor: extensionUI?.getEditorText(), editorCursor: mode.defaultEditor.getCursor(), runtimeOrigin: installedRoot ? { kind: "installed", root: realpathSync(installedRoot) } : { kind: "checkout" }, negativeControl: control ?? null }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {
@@ -383,11 +379,10 @@ async function runProduction() {
 			else if (command.action === "expand") mode.setToolsExpanded(true);
 			else if (command.action === "editor") extensionUI.setEditorText("");
 			else if (command.action === "restore-editor") extensionUI.setEditorText("Synthetic editor");
-			else if (command.action === "native-paste") { extensionUI.setEditorText("PREFIXSUFFIX"); armedPaste = true; }
-			else if (command.action === "stall") {
-				safetyState.stallStarted = Date.now(); record();
-				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 12000);
-				safetyState.stallEnded = Date.now();
+			else if (command.action === "native-paste" || command.action === "right-paste") {
+				extensionUI.setEditorText("PREFIXSUFFIX");
+				armedPaste = command.action === "native-paste";
+				armedRightPaste = command.action === "right-paste";
 			}
 			else if (command.action === "copy-editor") extensionUI.setEditorText(`COPY-EDITOR ${"alpha beta gamma ".repeat(12).trimEnd()}\n\n    café 界`);
 			else if (command.action === "copy-seam" || command.action === "copy-seam-scrolled") {
@@ -416,7 +411,7 @@ async function runProduction() {
 					safetyState.extensionEditorResult = text;
 					readExternalReceipt();
 					record();
-				});
+				}, (error) => { safetyState.error = error.message; record(); stop(); process.exitCode = 1; });
 			}
 			else if (command.action === "suspend") { await safetyAction("7"); return; }
 			else throw new Error(`Unknown fixture action: ${command.action}`);
@@ -435,7 +430,8 @@ async function runProduction() {
 			if (armedPaste && payload === nativePayload) {
 				armedPaste = false;
 				interactions.pasteMatches++;
-				return control === "consumed-paste" ? { consume: true } : undefined;
+				forwardingPaste = control !== "consumed-paste";
+				return forwardingPaste ? undefined : { consume: true };
 			}
 			interactions[copied !== undefined && payload === copied ? "pasteMatches" : "pasteMismatches"]++;
 			return { consume: true };
@@ -465,6 +461,12 @@ async function runProduction() {
 			}
 		}
 		if (isKeyRelease(data)) return { consume: true };
+		if (journey && matchesKey(data, "ctrl+z")) {
+			safetyState.suspends++;
+			safetyState.phase = "suspending";
+			record();
+			process.once("SIGCONT", () => { safetyState.phase = "resumed"; setTimeout(record, 50); });
+		}
 		if (matchesKey(data, "ctrl+q") || (safety && matchesKey(data, "0"))) { void terminal.drainInput().then(stop); return { consume: true }; }
 		const action = safety && ["1", "2", "3", "4", "5", "6", "7", "8", "9", "g", "h", "i", "j"].find((key) => matchesKey(data, key));
 		if (action) {
@@ -570,6 +572,15 @@ async function runProduction() {
 		if (journey) {
 			const editorInput = mode.defaultEditor.handleInput.bind(mode.defaultEditor);
 			mode.defaultEditor.handleInput = (data) => {
+				if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+					const payload = data.slice(6, -6).replace(/\r\n?/g, "\n");
+					const allowed = payload === nativePayload && (forwardingPaste || armedRightPaste);
+					const rightPaste = !forwardingPaste && armedRightPaste;
+					forwardingPaste = false;
+					armedRightPaste = false;
+					if (!allowed) { interactions.pasteMismatches++; return; }
+					if (rightPaste) interactions.rightPasteInsertions++;
+				}
 				const beforeLength = mode.defaultEditor.getText().length;
 				const completionPrefixLength = mode.defaultEditor.autocompletePrefix.length;
 				editorInput(data);
@@ -587,7 +598,7 @@ async function runProduction() {
 				safetyState.editorFocusedAfterSubmit = mode.ui.isComponentFocused(mode.editor);
 			};
 
-			const line = (i) => `${i === 1 && process.argv.includes("--second-instance") ? "SECOND-608" : `ROW-${String(i).padStart(3, "0")}`} synthetic café 界 e\u0301 text`;
+			const line = (i) => `ROW-${String(i).padStart(3, "0")} synthetic café 界 e\u0301 text`;
 			extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth(line(1), width)] }));
 			mode.addMessageToChat({ role: "custom", customType: "fixture-history", content: Array.from({ length: 199 }, (_, i) => line(i + 2)).join("\n"), display: true, timestamp: 0 });
 			const copy = mode.ui.viewport.options.copy;

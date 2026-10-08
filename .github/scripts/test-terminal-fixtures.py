@@ -127,6 +127,7 @@ class SafetyVerdictTests(unittest.TestCase):
 
 
 EXPECTED_INTERACTION_CHECKS = {
+    "sentinelSurvivesSelectionAndUpdate", "selectorRejectsPaste", "overlayRejectsPaste", "approvalRejectsPaste",
     "allEightCardsReachableBeforeCompletion", "completeApprovalContextReachable", "controlCCopiesSelection",
     "desktopCellTargetVerified", "desktopPasteRoundTrip", "desktopThumbDragReachesEnd",
     "desktopTrackClickReachesStart", "desktopWheelScrollsDocument", "externalProgramRoundTrip",
@@ -189,7 +190,7 @@ class InteractionVerdictTests(unittest.TestCase):
         self.expression = compile(ast.Expression(body=verdict), "terminal-probe.py", "eval")
         self.context = {"report": {"checks": {name: {"passed": True} for name in EXPECTED_INTERACTION_CHECKS},
                                   "screenshots": {"complete": {"exit": 0}}},
-                        "is_mac": False, "terminal_kind": "vte", "with_tmux": False, "stock_copy": False,
+                        "is_mac": False, "terminal_kind": "vte", "with_tmux": False, "default_off": False,
                         "wait_for": Mock(return_value=True), "state": Mock(return_value={}), "time": time}
         exec(compile(ast.Module(body=declarations, type_ignores=[]), "terminal-probe.py", "exec"), self.context)
 
@@ -204,26 +205,37 @@ class InteractionVerdictTests(unittest.TestCase):
                      "narrowWrappedInputVisible", "narrowMultilineEditing", "narrowAutocompleteVisible", "narrowAutocompleteAccepted",
                      "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration"):
             del self.context["report"]["checks"][name]
+        self.context["report"]["checks"].update({name: {"passed": True} for name in ("externalEditorInput", "extensionExternalEditorInput", "postResumeInput", "postResumePaste")})
         self.assertTrue(self.passed())
 
-    def test_stock_profile_requires_native_outcomes_and_isolation(self):
-        self.context.update(is_mac=True, terminal_kind="apple", stock_copy=True)
-        checks = self.context["report"]["checks"]
-        for name in ("desktopCellTargetVerified", "narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
-                     "narrowWrappedInputVisible", "narrowMultilineEditing", "narrowAutocompleteVisible", "narrowAutocompleteAccepted",
-                     "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration",
-                     "rightClickRequestsCopy", "rightClickClipboardExactUnicode", "rightWithoutSelectionPastesWithoutSubmit", "editorRightClickPastesWithoutSubmit"):
-            del checks[name]
-        native = {"nativeCommandCCopy", "sentinelSurvivesSelectionAndUpdate", "externalEditorInput", "extensionExternalEditorInput",
-                  "stalledOtherTabCopy", "noDelayedCopyAfterStall", "otherAppIsolation", "twoInstanceCopy",
-                  "deniedPermissionNativeAdapter", "nativeRegistrationConflict", "nativeRegistrationRecovered", "staleAndFailedNativeCleanup"}
-        checks.update({name: {"passed": True} for name in native})
+    def test_every_supported_mac_profile_requires_right_click_and_real_handoffs(self):
+        for terminal in ("apple", "iterm2"):
+            self.context.update(is_mac=True, terminal_kind=terminal)
+            required = self.context["required_checks"]()
+            self.context["report"]["checks"] = {name: {"passed": True} for name in required}
+            self.assertTrue(self.passed())
+            for name in ("rightClickRequestsCopy", "rightClickClipboardExactUnicode", "rightWithoutSelectionPastesWithoutSubmit",
+                         "editorRightClickPastesWithoutSubmit", "sentinelSurvivesSelectionAndUpdate", "externalEditorInput",
+                         "extensionExternalEditorInput", "postResumeInput", "postResumePaste"):
+                with self.subTest(terminal=terminal, missing=name):
+                    del self.context["report"]["checks"][name]
+                    self.assertFalse(self.passed())
+                    self.context["report"]["checks"][name] = {"passed": True}
+
+    def test_default_off_diagnostic_is_separate_and_requires_both_missing_routes_and_alternatives(self):
+        self.context.update(is_mac=True, terminal_kind="iterm2", default_off=True)
+        expected = {"checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible",
+                    "defaultOffCopyNotDelivered", "defaultOffPasteNotDelivered", "controlCCopiesSelection",
+                    "desktopPasteRoundTrip", "orderlyExit", "termiosRestored"}
+        self.assertEqual(self.context["required_checks"](), expected)
+        self.context["report"]["checks"] = {name: {"passed": True} for name in expected}
         self.assertTrue(self.passed())
-        for name in native:
-            with self.subTest(missing=name):
-                del checks[name]
-                self.assertFalse(self.passed())
-                checks[name] = {"passed": True}
+        for name in expected:
+            del self.context["report"]["checks"][name]
+            self.assertFalse(self.passed())
+            self.context["report"]["checks"][name] = {"passed": True}
+        self.context["default_off"] = False
+        self.assertFalse(self.passed())
 
     def test_focus_profile_requires_focus_checks(self):
         self.context["terminal_kind"] = "kitty"
@@ -360,27 +372,42 @@ class NativeProfileEvidenceTests(unittest.TestCase):
 
 class NativeClipboardOracleTests(unittest.TestCase):
     def setUp(self):
-        names = {"native_copy_outcome", "native_paste_outcome", "termios_configuration_equal"}
+        names = {"right_copy_outcome", "editor_paste_outcome", "native_paste_outcome", "termios_configuration_equal"}
         functions = [node for node in interaction_source().body if isinstance(node, ast.FunctionDef) and node.name in names]
         self.context = {"re": re}
         exec(compile(ast.Module(body=functions, type_ignores=[]), "terminal-probe.py", "exec"), self.context)
 
     def test_copy_requires_untouched_selection_sentinel_and_actual_outcome(self):
-        check = self.context["native_copy_outcome"]
-        self.assertTrue(check("sentinel", "sentinel", "café 界", "café 界", False))
-        self.assertFalse(check("sentinel", "sentinel", "sentinel", "café 界", True))
-        self.assertFalse(check("sentinel", "café 界", "café 界", "café 界", False))
-        self.assertFalse(check("sentinel", "sentinel", "café 界", "café 界", None))
+        check = self.context["right_copy_outcome"]
+        before = {"editor": "draft", "editorCursor": {"line": 0, "col": 2}, "submissions": 0}
+        after = {**before, "selectionActive": False, "frameFlushed": True}
+        self.assertTrue(check("sentinel", "sentinel", "café 界", "café 界", before, after))
+        self.assertFalse(check("sentinel", "sentinel", "sentinel", "café 界", before, after))
+        self.assertFalse(check("sentinel", "café 界", "café 界", "café 界", before, after))
+        for field, value in (("selectionActive", True), ("selectionActive", None), ("editor", ""),
+                             ("editorCursor", {"line": 0, "col": 0}), ("submissions", 1), ("frameFlushed", False)):
+            self.assertFalse(check("sentinel", "sentinel", "café 界", "café 界", before, {**after, field: value}))
 
     def test_paste_receipt_without_editor_insertion_cannot_pass(self):
         check = self.context["native_paste_outcome"]
-        before = {"editor": "PREFIXSUFFIX", "editorCursor": {"line": 0, "col": 6}, "submissions": 0, "pasteMatches": 0}
-        after = {"editor": "PREFIXcafé 界\nsecond lineSUFFIX", "editorCursor": {"line": 1, "col": 11}, "submissions": 0, "pasteMatches": 1, "frameFlushed": True}
+        before = {"editor": "PREFIXSUFFIX", "editorCursor": {"line": 0, "col": 6}, "submissions": 0, "pasteMatches": 0, "pasteMismatches": 0}
+        after = {"editor": "PREFIXcafé 界\nsecond lineSUFFIX", "editorCursor": {"line": 1, "col": 11}, "submissions": 0, "pasteMatches": 1, "pasteMismatches": 0, "frameFlushed": True}
         self.assertTrue(check(before, after, "café 界\nsecond line"))
         self.assertFalse(check(before, {**before, "pasteMatches": 1, "frameFlushed": True}, "café 界\nsecond line"))
         for field, value in (("submissions", 1), ("editorCursor", {"line": 1, "col": 0}), ("frameFlushed", False)):
             self.assertFalse(check(before, {**after, field: value}, "café 界\nsecond line"))
         self.assertFalse(check(before, {key: value for key, value in after.items() if key != "editorCursor"}, "café 界\nsecond line"))
+        self.assertFalse(check({key: value for key, value in before.items() if key != "submissions"}, after, "café 界\nsecond line"))
+
+    def test_paste_oracle_rejects_duplicate_delivery_consumed_by_fixture(self):
+        before = {"editor": "PREFIXSUFFIX", "editorCursor": {"line": 0, "col": 6}, "submissions": 0,
+                  "pasteMatches": 2, "pasteMismatches": 1}
+        after = {**before, "editor": "PREFIXcafé 界\nsecond lineSUFFIX", "editorCursor": {"line": 1, "col": 11},
+                 "pasteMatches": 3, "frameFlushed": True}
+        check = self.context["native_paste_outcome"]
+        self.assertTrue(check(before, after, "café 界\nsecond line"))
+        self.assertFalse(check(before, {**after, "pasteMismatches": 2}, "café 界\nsecond line"))
+        self.assertFalse(check(before, {key: value for key, value in after.items() if key != "pasteMismatches"}, "café 界\nsecond line"))
 
     def test_pty_restoration_masks_only_darwin_pendin(self):
         baseline = [1, 2, 3, 1483, 9600, 9600, [b"x", b"y"]]
@@ -408,78 +435,102 @@ class NativeClipboardOracleTests(unittest.TestCase):
             self.assertFalse(check(baseline, invalid, True))
 
 
+class DefaultOffDiagnosticTests(unittest.TestCase):
+    def test_copy_and_paste_require_absent_application_delivery_and_unchanged_editor(self):
+        before = {"rightCopy": 0, "rightWithoutSelection": 0, "keyCopy": 0, "editor": "draft",
+                  "editorCursor": {"line": 0, "col": 2}, "submissions": 0, "pasteMatches": 0,
+                  "pasteMismatches": 0, "rightPasteInsertions": 0, "selectionActive": True}
+        for name in ("defaultOffCopyNotDelivered", "defaultOffPasteNotDelivered"):
+            current = dict(before)
+            clipboard = ["sentinel"]
+            predicate = interaction_check(name, {"diagnostic_before": before, "state": lambda: current,
+                                                "sentinel": "sentinel", "clipboard": lambda: clipboard[0]})
+            self.assertTrue(predicate())
+            for field, value in (("rightCopy", 1), ("rightWithoutSelection", 1), ("editor", "changed"),
+                                 ("editorCursor", {"line": 0, "col": 0}), ("submissions", 1), ("pasteMatches", 1), ("pasteMismatches", 1)):
+                with self.subTest(check=name, field=field):
+                    current[field] = value
+                    self.assertFalse(predicate())
+                    current[field] = before[field]
+            if name == "defaultOffCopyNotDelivered":
+                clipboard[0] = "copied"
+                self.assertFalse(predicate())
+                clipboard[0] = "sentinel"
+                current["selectionActive"] = False
+                self.assertFalse(predicate())
+            else:
+                current["rightPasteInsertions"] = 1
+                self.assertFalse(predicate())
+
+
 class NativeNegativeControlVerdictTests(unittest.TestCase):
-    def test_noop_copy_control_rejects_failed_screenshot_acquisition(self):
+    def setUp(self):
         source = interaction_source()
         finalizer = next(node for node in source.body if isinstance(node, ast.Try))
         classifier = next(node for node in finalizer.finalbody if isinstance(node, ast.If)
                           and isinstance(node.test, ast.Name) and node.test.id == "negative_control")
-        declarations = [node for node in source.body if
-                        isinstance(node, ast.FunctionDef) and node.name in
-                        ("screenshot", "required_checks", "report_passed", "termios_configuration_equal")
-                        or isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
-                        and target.id == "REQUIRED_CHECKS" for target in node.targets)]
-        code = compile(ast.Module(body=declarations, type_ignores=[]), "terminal-probe.py", "exec")
-        classify = compile(ast.Module(body=[classifier], type_ignores=[]), "terminal-probe.py", "exec")
-        exit_status = compile(ast.Expression(body=source.body[-1].value.args[0]), "terminal-probe.py", "eval")
-        reached = ("checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible",
-                   "sessionContinuationMatchesViewport", "productConfirmFramed", "productConfirmSelects",
-                   "productSelectFramed", "productSelectPartialNeighbors", "productSelectSelects",
-                   "productNextFramed", "productNextSelects", "productModelFramed", "productModelSelects",
-                   "desktopWheelScrollsDocument", "desktopThumbDragReachesEnd", "desktopTrackClickReachesStart",
-                   "ordinaryDesktopDragSelects", "sentinelSurvivesSelectionAndUpdate")
-        screenshots = ("startup", "selector-confirm", "selector-select", "selector-next", "selector-model",
-                       "wheel", "selection", "failure")
-        baseline = "gfmt1:cflag=4b00:iflag=6b02:lflag=5cf:oflag=3:min=1:time=0:"
-        with tempfile.TemporaryDirectory() as directory:
-            for screenshot_exit in (0, 1):
-                report = {"error": "nativeCommandCCopy", "passed": False,
-                          "checks": {**{name: {"passed": True} for name in reached},
-                                     "nativeCommandCCopy": {"passed": False}},
-                          "negativeControlExit": {"status": "0", "fixture": {"stopped": True,
-                              "negativeControl": "noop-copy", "termiosBefore": baseline, "termiosAfter": baseline}},
-                          "ownedTerminalClosed": {"pid": 42, "shellPid": 43}}
-                process = Mock()
-                process.run.return_value = Mock(returncode=0, stderr="")
-                context = {"re": re, "negative_control": "noop-copy", "report": report, "is_mac": True,
-                           "stock_copy": True, "terminal_kind": "apple", "with_tmux": False,
-                           "output": Path(directory), "subprocess": process}
-                exec(code, context)
-                for name in screenshots:
-                    process.run.return_value = Mock(returncode=screenshot_exit if name == "startup" else 0,
-                                                    stderr="screen capture failed" if name == "startup" and screenshot_exit else "")
-                    context["screenshot"](name)
-                report["passed"] = context["report_passed"]()
-                exec(classify, context)
-                with self.subTest(screenshot_exit=screenshot_exit):
-                    self.assertFalse(report["passed"])
-                    self.assertEqual((report["negativeControlRejected"], eval(exit_status, context)),
-                                     (screenshot_exit == 0, screenshot_exit))
+        functions = [node for node in source.body if isinstance(node, ast.FunctionDef)
+                     and node.name in ("termios_configuration_equal", "screenshot")]
+        self.code = compile(ast.Module(body=functions + [classifier], type_ignores=[]), "terminal-probe.py", "exec")
+        self.exit_status = compile(ast.Expression(body=source.body[-1].value.args[0]), "terminal-probe.py", "eval")
 
-    def test_only_expected_outcome_failure_with_provenance_and_cleanup_is_accepted(self):
-        source = interaction_source()
-        finalizer = next(node for node in source.body if isinstance(node, ast.Try))
-        classifier = next(node for node in finalizer.finalbody if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "negative_control")
-        functions = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "termios_configuration_equal"]
-        code = compile(ast.Module(body=functions + [classifier], type_ignores=[]), "terminal-probe.py", "exec")
-        for control, failure in (("noop-copy", "nativeCommandCCopy"), ("copy-on-selection", "sentinelSurvivesSelectionAndUpdate"), ("consumed-paste", "desktopPasteRoundTrip")):
-            report = {"error": failure, "checks": {failure: {"passed": False}, **{name: {"passed": True} for name in ("checkoutProvenanceMatches", "productionCompositionConfigured", "ordinaryDesktopDragSelects")}},
-                      "negativeControlExit": {"status": "0", "fixture": {"stopped": True, "negativeControl": control, "termiosBefore": "saved", "termiosAfter": "saved"}},
-                      "ownedTerminalClosed": {"pid": 42}, "screenshots": {"startup": {"exit": 0, "error": ""}}}
-            def accepted(candidate):
-                context = {"re": re, "negative_control": control, "report": candidate}
-                exec(code, context)
-                return candidate["negativeControlRejected"]
+    def report(self, control):
+        failure = {"noop-copy": "rightClickClipboardExactUnicode", "copy-on-selection": "sentinelSurvivesSelectionAndUpdate",
+                   "consumed-paste": "desktopPasteRoundTrip"}[control]
+        reached = {"checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible",
+                   "sessionContinuationMatchesViewport", "productConfirmFramed", "selectorRejectsPaste", "productConfirmSelects",
+                   "productSelectFramed", "productSelectPartialNeighbors", "productSelectSelects", "productNextFramed",
+                   "productNextSelects", "productModelFramed", "productModelSelects", "desktopWheelScrollsDocument",
+                   "desktopThumbDragReachesEnd", "desktopTrackClickReachesStart", "ordinaryDesktopDragSelects"}
+        screenshots = {"startup", "selector-confirm", "selector-select", "selector-next", "selector-model", "wheel", "selection", "failure"}
+        if control != "copy-on-selection":
+            reached |= {"sentinelSurvivesSelectionAndUpdate", "rightClickRequestsCopy"}
+        if control == "consumed-paste":
+            reached |= {"rightClickClipboardExactUnicode", "rightWithoutSelectionPastesWithoutSubmit", "controlCCopiesSelection"}
+            screenshots.add("right-click")
+        return {"error": failure, "passed": False,
+                "checks": {failure: {"passed": False}, **{name: {"passed": True} for name in reached}},
+                "negativeControlExit": {"status": "0", "fixture": {"stopped": True, "negativeControl": control,
+                    "termiosBefore": "saved", "termiosAfter": "saved"}},
+                "ownedTerminalClosed": {"pid": 42, "shellPid": 43},
+                "screenshots": {name: {"exit": 0} for name in screenshots}}
+
+    def accepted(self, control, report):
+        context = {"re": re, "negative_control": control, "report": report}
+        exec(self.code, context)
+        self.assertIs(report["passed"], False)
+        self.assertEqual(eval(self.exit_status, context), 0 if report["negativeControlRejected"] else 1)
+        return report["negativeControlRejected"]
+
+    def test_only_expected_outcome_failure_with_complete_prerequisites_and_cleanup_is_accepted(self):
+        for control in ("noop-copy", "copy-on-selection", "consumed-paste"):
+            report = self.report(control)
             with self.subTest(control=control):
-                self.assertTrue(accepted(report))
+                self.assertTrue(self.accepted(control, report))
+                for name in report["checks"]:
+                    self.assertFalse(self.accepted(control, {**report, "checks": {key: value for key, value in report["checks"].items() if key != name}}))
+                for name in report["screenshots"]:
+                    self.assertFalse(self.accepted(control, {**report, "screenshots": {key: value for key, value in report["screenshots"].items() if key != name}}))
+                    self.assertFalse(self.accepted(control, {**report, "screenshots": {**report["screenshots"], name: {"exit": 1}}}))
                 for field in ("negativeControlExit", "ownedTerminalClosed", "screenshots"):
-                    self.assertFalse(accepted({key: value for key, value in report.items() if key != field}))
-                for screenshots in ({}, {"startup": {"exit": 1, "error": "capture failed"}},
-                                    {**report["screenshots"], "failure": {"exit": 1, "error": "capture failed"}}):
-                    self.assertFalse(accepted({**report, "screenshots": screenshots}))
-                self.assertFalse(accepted({**report, "cleanupError": "surviving process"}))
-                self.assertFalse(accepted({**report, "error": "startup failed"}))
-                self.assertFalse(accepted({**report, "checks": {failure: {"passed": False}}}))
+                    self.assertFalse(self.accepted(control, {key: value for key, value in report.items() if key != field}))
+                for delta in ({"cleanupError": "surviving process"}, {"error": "startup failed"},
+                              {"negativeControlExit": {"status": "7", "fixture": report["negativeControlExit"]["fixture"]}}):
+                    self.assertFalse(self.accepted(control, {**report, **delta}))
+                for value in (None, "false", 0):
+                    self.assertFalse(self.accepted(control, {**report, "checks": {**report["checks"], report["error"]: {"passed": value}}}))
+
+    def test_noop_copy_control_rejects_failed_screenshot_acquisition(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for status in (0, 1):
+                report = self.report("noop-copy")
+                process = Mock()
+                process.run.return_value = Mock(returncode=status, stderr="capture failed" if status else "")
+                context = {"re": re, "negative_control": "noop-copy", "report": report,
+                           "output": Path(directory), "subprocess": process, "is_mac": True}
+                exec(self.code, context)
+                context["screenshot"]("startup")
+                self.assertEqual(self.accepted("noop-copy", report), status == 0)
 
 
 class SafetyTermiosOracleTests(unittest.TestCase):
@@ -1010,6 +1061,106 @@ class PasteEvidenceTests(unittest.TestCase):
                             os.close(slave)
 
 
+class RightClickFixtureTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "Uses a disposable Linux clipboard command, never the desktop clipboard")
+    def test_real_editor_and_copy_controls_with_isolated_clipboard_backend(self):
+        payload = "NATIVE café 界 e\u0301\nsecond line"
+        for control in (None, "noop-copy", "copy-on-selection", "consumed-paste"):
+            with self.subTest(control=control), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target, clipboard_path = root / "fixture.json", root / "clipboard.txt"
+                clipboard_path.write_text("fresh sentinel")
+                for name, command in (("get", 'cat "$SYNTHETIC_CLIPBOARD_FILE"'), ("set", 'cat > "$SYNTHETIC_CLIPBOARD_FILE"')):
+                    executable = root / ("termux-clipboard-" + name)
+                    executable.write_text("#!/bin/sh\n" + command + "\n")
+                    executable.chmod(0o700)
+                env = {key: value for key, value in os.environ.items() if key not in
+                       ("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "TERM_PROGRAM", "SSH_CONNECTION", "SSH_CLIENT",
+                        "MOSH_CONNECTION", "TMUX", "WSL_DISTRO_NAME", "WSL_INTEROP", "SCRAMJET_TUI_INSTALLED_ROOT")}
+                env.update(HOME=directory, TERM="xterm-256color", TERMUX_VERSION="synthetic", PATH=directory + os.pathsep + env["PATH"],
+                           SYNTHETIC_CLIPBOARD_FILE=str(clipboard_path), SCRAMJET_TUI_PROBE_EVIDENCE=str(target))
+                master, slave = pty.openpty()
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+                before_termios = termios.tcgetattr(slave)
+                with (root / "stderr").open("w+") as stderr:
+                    args = ["--negative-control=" + control] if control else []
+                    child = subprocess.Popen(["node", str(ROOT / "packages/scramjet/tests/fixtures/interactive-viewport.mjs"),
+                                              "--production", "--journey", *args], cwd=ROOT, env=env,
+                                             stdin=slave, stdout=slave, stderr=stderr, start_new_session=True)
+                    output = bytearray()
+                    def wait_for(predicate):
+                        deadline = time.monotonic() + 15
+                        while time.monotonic() < deadline:
+                            if select.select([master], [], [], 0.02)[0]:
+                                output.extend(os.read(master, 65536))
+                            if target.exists():
+                                state = json.loads(target.read_text())
+                                if predicate(state):
+                                    return state
+                            if child.poll() is not None:
+                                break
+                        stderr.seek(0)
+                        self.fail("Fixture did not settle: " + stderr.read())
+                    command_id = 0
+                    def command(action):
+                        nonlocal command_id
+                        command_id += 1
+                        temporary = Path(str(target) + ".command.tmp")
+                        temporary.write_text(json.dumps({"id": command_id, "action": action}))
+                        temporary.replace(str(target) + ".command")
+                        return wait_for(lambda state: state.get("commandDone") == command_id and state.get("frameFlushed"))
+                    try:
+                        initial = wait_for(lambda state: state.get("totalRows", 0) > 240 and state.get("frameFlushed"))
+                        os.write(master, b"\x1b[<0;1;1M\x1b[<32;60;1M\x1b[<0;60;1m")
+                        wait_for(lambda state: state.get("selectionPainted") and state.get("frameFlushed"))
+                        command("update")
+                        if control == "copy-on-selection":
+                            wait_for(lambda _state: clipboard_path.read_text() != "fresh sentinel")
+                        self.assertEqual(clipboard_path.read_text() == "fresh sentinel", control != "copy-on-selection")
+                        os.write(master, b"\x1b[<2;10;1M\x1b[<2;10;1m")
+                        copied = wait_for(lambda state: state.get("rightCopy") == 1 and not state.get("selectionActive") and state.get("frameFlushed"))
+                        self.assertEqual(clipboard_path.read_text(), "fresh sentinel" if control == "noop-copy" else "ROW-001 synthetic café 界 e\u0301 text")
+                        self.assertEqual(copied["editor"], initial["editor"])
+                        self.assertEqual(copied.get("submissions", 0), 0)
+                        command("right-paste")
+                        os.write(master, b"\x1b[D" * 6)
+                        wait_for(lambda state: state.get("editorCursor") == {"line": 0, "col": 6})
+                        clipboard_path.write_text(payload)
+                        os.write(master, b"\x1b[<2;10;1M\x1b[<2;10;1m")
+                        inserted = wait_for(lambda state: state.get("rightPasteInsertions") == 1 and state.get("frameFlushed"))
+                        self.assertEqual(inserted["editor"], "PREFIX" + payload + "SUFFIX")
+                        self.assertEqual(inserted["editorCursor"], {"line": 1, "col": 11})
+                        self.assertEqual(inserted.get("submissions", 0), 0)
+                        command("native-paste")
+                        os.write(master, b"\x1b[D" * 6)
+                        wait_for(lambda state: state.get("editorCursor") == {"line": 0, "col": 6})
+                        os.write(master, ("\x1b[200~" + payload + "\x1b[201~").encode())
+                        native = wait_for(lambda state: state.get("pasteMatches") == 1 and state.get("frameFlushed"))
+                        self.assertEqual(native["editor"], "PREFIXSUFFIX" if control == "consumed-paste" else "PREFIX" + payload + "SUFFIX")
+                        command("right-paste")
+                        secret = "UNEXPECTED-PRIVATE-CLIPBOARD"
+                        clipboard_path.write_text(secret)
+                        os.write(master, b"\x1b[<2;10;1M\x1b[<2;10;1m")
+                        rejected = wait_for(lambda state: state.get("pasteMismatches") == 1)
+                        self.assertEqual(rejected["editor"], "PREFIXSUFFIX")
+                        self.assertNotIn(secret, json.dumps(rejected))
+                        self.assertNotIn(secret.encode(), output)
+                        os.write(master, b"\x11")
+                        wait_for(lambda state: state.get("stopped") and child.poll() is not None)
+                        self.assertEqual(child.returncode, 0)
+                        self.assertEqual(termios_configuration(termios.tcgetattr(slave)), termios_configuration(before_termios))
+                    finally:
+                        if child.poll() is None:
+                            child.terminate()
+                            try:
+                                child.wait(timeout=10)
+                            except subprocess.TimeoutExpired:
+                                child.kill()
+                                child.wait(timeout=5)
+                        os.close(master)
+                        os.close(slave)
+
+
 class MacSafetyOwnershipTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -1278,14 +1429,14 @@ class NoSelectionPasteTests(unittest.TestCase):
                     and node.args and isinstance(node.args[0], ast.Constant)
                     and node.args[0].value == "rightWithoutSelectionPastesWithoutSubmit")
         declarations = [node for node in source.body if isinstance(node, ast.FunctionDef)
-                        and node.name in ("check", "stable_check", "right_click_pasted")]
+                        and node.name in ("check", "stable_check", "right_click_pasted", "editor_paste_outcome")]
         for counter in (None, "missing", "submissions", "pasteMatches", "pasteMismatches", "copyErrors", "keyCopy", "rightCopy", "editor"):
             with self.subTest(counter=counter):
                 baseline = {"rightWithoutSelection": 0, "rightCopy": 1, "keyCopy": 0, "copyErrors": 0,
-                            "pasteMatches": 0, "pasteMismatches": 0, "editor": "Synthetic editor", "submissions": 0, "frameFlushed": True}
+                            "pasteMatches": 0, "pasteMismatches": 0, "editor": "PREFIXSUFFIX", "editorCursor": {"line": 0, "col": 6}, "rightPasteInsertions": 0, "submissions": 0, "frameFlushed": True}
                 clock = [0.0]
                 def state():
-                    current = {**baseline, "rightWithoutSelection": 1, "editor": baseline["editor"] + "RIGHT-PASTE"}
+                    current = {**baseline, "rightWithoutSelection": 1, "editor": "PREFIXRIGHT-PASTESUFFIX", "editorCursor": {"line": 0, "col": 17}, "rightPasteInsertions": 1}
                     if counter == "missing":
                         current["editor"] = baseline["editor"]
                     elif clock[0] >= 0.15 and counter:
@@ -1454,6 +1605,7 @@ class MacInteractionOwnershipTests(unittest.TestCase):
                 return json.dumps({"pressed": True})
             def run(*args, **_kwargs):
                 if args[0] == "/usr/libexec/PlistBuddy": return executable
+                if args[:2] == ("defaults", "read"): return "1"
                 if args[0] == str(output / "events"): return events(*args[1:])
                 return ""
             system = Mock()
@@ -1466,7 +1618,7 @@ class MacInteractionOwnershipTests(unittest.TestCase):
             key = Mock()
             context = {"is_mac": True, "terminal_kind": terminal_kind, "bundle": bundle, "plist": plist,
                        "output": output, "root": ROOT, "driver": output / "events", "launcher": output / "launch.sh",
-                       "launch_command": "synthetic launch", "tmux_command": None, "with_tmux": False, "stock_copy": False, "negative_control": None,
+                       "launch_command": "synthetic launch", "tmux_command": None, "with_tmux": False, "default_off": False, "negative_control": None,
                        "terminal_started": False, "terminal_process": None, "window_id": None,
                        "run": Mock(side_effect=run), "events": events, "subprocess": process, "json": json,
                        "Path": Path, "time": Mock(), "wait_for": lambda predicate, **_kwargs: bool(predicate()),

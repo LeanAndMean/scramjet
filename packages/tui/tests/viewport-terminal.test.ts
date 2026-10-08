@@ -1,11 +1,9 @@
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MacosInput } from "../src/macos-input.js";
-
-vi.mock("../src/macos-input.js", () => ({ MacosInput: vi.fn() }));
 
 import { StdinBuffer } from "../src/stdin-buffer.js";
 import { ProcessTerminal } from "../src/terminal.js";
+import { TUI } from "../src/tui.js";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -177,182 +175,105 @@ describe("mouse transport framing", () => {
 	});
 });
 
-describe("native input terminal contract", () => {
+describe("ordinary Darwin input lifecycle", () => {
 	function setup() {
-		const order: string[] = [];
-		const native = {
-			prepare: vi.fn(() => {
-				order.push("prepare");
-				return true;
-			}),
-			commit: vi.fn(() => order.push("commit")),
-			stop: vi.fn(() => order.push("stop")),
-			setMouseReporting: vi.fn(() => order.push("mouse")),
-			holdOscInput: vi.fn(() => order.push("osc")),
-			setLease: vi.fn(),
-			isCurrent: vi.fn(),
-			drain: vi.fn(),
-		};
-		vi.mocked(MacosInput).mockImplementation(() => native as unknown as MacosInput);
+		vi.useFakeTimers();
 		const stdin = Object.assign(new EventEmitter(), {
 			isTTY: true,
 			isRaw: false,
-			readableLength: 0,
-			readableFlowing: false,
 			setEncoding: vi.fn(),
 			setRawMode: vi.fn(),
 			resume: vi.fn(),
 			pause: vi.fn(),
 		});
-		const stdout = Object.assign(new EventEmitter(), {
-			isTTY: true,
-			write: vi.fn(() => {
-				order.push("write");
-				return true;
-			}),
-		});
+		const stdout = Object.assign(new EventEmitter(), { isTTY: true, write: vi.fn(() => true) });
 		vi.stubGlobal("process", { ...process, platform: "darwin", stdin, stdout, kill: vi.fn() });
 		const terminal = new ProcessTerminal();
-		const options = { onCopyIntent: vi.fn(), onAvailability: vi.fn(), onError: vi.fn() };
-		return { terminal, options, native, stdin, stdout, order };
+		return { terminal, stdin, stdout };
 	}
 
-	it("commits the Worker before output without ever resuming a direct reader", () => {
-		const f = setup();
-		f.terminal.configureNativeCopy(f.options);
-		f.terminal.start(vi.fn(), vi.fn());
-		expect(f.order.slice(0, 4)).toEqual(["prepare", "mouse", "commit", "write"]);
-		expect(f.stdin.listenerCount("data")).toBe(0);
-		expect(f.stdin.resume).not.toHaveBeenCalled();
-		f.order.length = 0;
-		f.terminal.setViewportMode(true);
-		expect(f.order).toEqual(["mouse", "write"]);
-		f.order.length = 0;
-		f.terminal.holdOscInput(true);
-		f.terminal.write("query");
-		expect(f.order).toEqual(["osc", "write"]);
-		f.terminal.stop();
-	});
-
-	it("refuses a second terminal reader while the Worker owns stdin", () => {
-		const f = setup();
-		f.terminal.configureNativeCopy(f.options);
-		f.terminal.start(vi.fn(), vi.fn());
+	it("starts retained Copy with one ordinary reader installed before stdin resumes", () => {
+		const { terminal, stdin } = setup();
+		const tui = new TUI(terminal);
+		const input = vi.fn();
+		tui.configureViewport({ getBlocks: () => [], copy: vi.fn(async () => {}) });
+		tui.addInputListener(input);
+		stdin.resume.mockImplementation(() => {
+			expect(stdin.listenerCount("data")).toBe(1);
+			stdin.emit("data", "x");
+		});
 		try {
-			expect(() => new ProcessTerminal().start(vi.fn(), vi.fn())).toThrow(/owned/);
+			tui.start();
+			tui.start();
+			expect(input).toHaveBeenCalledExactlyOnceWith("x");
+			expect(stdin.setEncoding).toHaveBeenCalledExactlyOnceWith("utf8");
+			expect(stdin.resume).toHaveBeenCalledOnce();
 		} finally {
-			f.terminal.stop();
+			tui.stop();
 		}
+		expect(stdin.listenerCount("data")).toBe(0);
 	});
 
-	it("releases provisional ownership when Worker construction fails", () => {
-		const f = setup();
-		vi.mocked(MacosInput).mockImplementationOnce(() => {
-			throw new Error("worker spawn failed");
-		});
-		f.terminal.configureNativeCopy(f.options);
-		expect(() => f.terminal.start(vi.fn(), vi.fn())).toThrow("worker spawn failed");
-		expect(f.stdin.listenerCount("data")).toBe(0);
-		const second = new ProcessTerminal();
+	it("delivers fragmented keys, mouse and multiline Unicode paste once across clean restarts", () => {
+		const { terminal, stdin, stdout } = setup();
+		const input = vi.fn();
+		const packets = ["\x1b[A", "\x1b[<32;12;4M", "\x1b[200~café 界 é\nsecond line\x1b[201~"];
 		try {
-			expect(() => second.start(vi.fn(), vi.fn())).not.toThrow();
-			expect(f.stdin.listenerCount("data")).toBe(1);
+			for (let round = 0; round < 2; round++) {
+				terminal.start(input, vi.fn());
+				terminal.setViewportMode(true);
+				terminal.start(input, vi.fn());
+				expect(stdin.listenerCount("data")).toBe(1);
+				expect(stdout.listenerCount("resize")).toBe(1);
+				input.mockClear();
+				for (const packet of packets) for (const character of packet) stdin.emit("data", character);
+				expect(input.mock.calls.flat()).toEqual(packets);
+				stdin.emit("data", "\x1b[");
+				terminal.stop();
+				expect(stdin.listenerCount("data")).toBe(0);
+				expect(stdout.listenerCount("resize")).toBe(0);
+				stdin.emit("data", "ignored");
+				vi.advanceTimersByTime(200);
+				expect(input.mock.calls.flat()).toEqual(packets);
+			}
 		} finally {
-			second.stop();
-			f.terminal.stop();
+			terminal.stop();
 		}
+		expect(stdin.setRawMode.mock.calls).toEqual([[true], [false], [true], [false]]);
+		expect(stdin.pause).toHaveBeenCalledTimes(2);
 	});
 
-	it("initializes pre-start viewport parser mode before committing ownership", () => {
-		const f = setup();
-		f.terminal.setViewportMode(true);
-		f.terminal.configureNativeCopy(f.options);
-		f.order.length = 0;
-		f.terminal.start(vi.fn(), vi.fn());
-		expect(f.native.setMouseReporting).toHaveBeenCalledWith(true);
-		expect(f.order.slice(0, 3)).toEqual(["prepare", "mouse", "commit"]);
-		f.terminal.stop();
-	});
-
-	it("falls back only when preparation proves that ownership was not acquired", () => {
-		const f = setup();
-		f.native.prepare.mockReturnValue(false);
-		f.terminal.configureNativeCopy(f.options);
-		f.terminal.start(vi.fn(), vi.fn());
-		expect(f.native.commit).not.toHaveBeenCalled();
-		expect(f.stdin.listenerCount("data")).toBe(1);
-		expect(f.stdin.resume).toHaveBeenCalledOnce();
-		f.terminal.stop();
-	});
-
-	it("does not replace a reader after uncertain commit or restore terminal state after failed stop", () => {
-		const f = setup();
-		f.terminal.configureNativeCopy(f.options);
-		f.native.commit.mockImplementation(() => {
-			throw new Error("commit uncertain");
-		});
-		expect(() => f.terminal.start(vi.fn(), vi.fn())).toThrow("commit uncertain");
-		expect(() => f.terminal.start(vi.fn(), vi.fn())).toThrow("unproven");
-		f.native.stop.mockImplementation(() => {
-			throw new Error("release uncertain");
-		});
-		expect(() => f.terminal.stop()).toThrow("release uncertain");
-		expect(f.stdin.resume).not.toHaveBeenCalled();
-		expect(f.stdout.write).not.toHaveBeenCalled();
-		expect(f.stdin.setRawMode).toHaveBeenCalledExactlyOnceWith(true);
-		f.native.stop.mockImplementation(() => {});
-		f.terminal.stop();
-	});
-
-	it("cancels output timers before an uncertain stop without writing restoration sequences", () => {
-		vi.useFakeTimers();
-		const f = setup();
-		f.terminal.configureNativeCopy(f.options);
-		f.terminal.start(vi.fn(), vi.fn());
-		f.terminal.setProgress(true);
-		f.stdout.write.mockClear();
-		f.native.stop.mockImplementation(() => {
-			throw new Error("release uncertain");
-		});
-		expect(() => f.terminal.stop()).toThrow("release uncertain");
-		vi.advanceTimersByTime(2000);
-		expect(f.stdout.write).not.toHaveBeenCalled();
-		f.native.stop.mockImplementation(() => {});
-		f.terminal.stop();
-	});
-
-	it("does not rearm Copy from a live paint during input drain", async () => {
-		const f = setup();
-		const control = f.terminal.configureNativeCopy(f.options);
-		f.terminal.start(vi.fn(), vi.fn());
-		let finish!: () => void;
-		f.native.drain.mockImplementation(
-			() =>
-				new Promise<void>((resolve) => {
-					finish = resolve;
-				}),
-		);
-		const draining = f.terminal.drainInput();
-		f.native.setLease.mockClear();
+	it("resumes input after bounded drain without rearming reporting until restart", async () => {
+		const { terminal, stdin, stdout } = setup();
+		const input = vi.fn();
 		try {
-			control.setLease({});
-			expect(f.native.setLease).not.toHaveBeenCalled();
-		} finally {
-			finish();
+			terminal.start(input, vi.fn());
+			terminal.setViewportMode(true);
+			stdin.emit("data", "\x1b[?0u");
+			expect(terminal.kittyProtocolActive).toBe(true);
+			const draining = terminal.drainInput(100, 20);
+			stdout.write.mockClear();
+			for (let elapsed = 0; elapsed < 100; elapsed += 10) {
+				stdin.emit("data", "x\x1b[?0u");
+				await vi.advanceTimersByTimeAsync(10);
+			}
 			await draining;
-			f.terminal.stop();
+			expect(input).not.toHaveBeenCalled();
+			expect(stdin.listenerCount("data")).toBe(1);
+			stdin.emit("data", "z\x1b[?0u");
+			expect(input).toHaveBeenCalledExactlyOnceWith("z");
+			await vi.advanceTimersByTimeAsync(200);
+			expect(stdout.write).not.toHaveBeenCalled();
+			expect(terminal.kittyProtocolActive).toBe(false);
+			terminal.stop();
+			terminal.start(input, vi.fn());
+			terminal.setViewportMode(true);
+			stdin.emit("data", "\x1b[?0u");
+			expect(terminal.kittyProtocolActive).toBe(true);
+			expect(stdout.write).toHaveBeenCalledWith("\x1b[>15u");
+		} finally {
+			terminal.stop();
 		}
-	});
-
-	it("defers late configuration without transferring the direct parser", () => {
-		const f = setup();
-		f.terminal.start(vi.fn(), vi.fn());
-		f.stdin.emit("data", "\x1b[");
-		f.terminal.configureNativeCopy(f.options);
-		expect(f.native.prepare).not.toHaveBeenCalled();
-		expect(f.stdin.listenerCount("data")).toBe(1);
-		expect(f.options.onAvailability).toHaveBeenCalledWith(false, expect.stringContaining("restart"));
-		f.terminal.stop();
 	});
 });
 

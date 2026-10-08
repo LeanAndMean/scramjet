@@ -214,8 +214,71 @@ describe("release workflow", () => {
 		expect(pack.run).toContain('"$PACK_DIR/candidate.json"');
 		expect(pack.run).toContain("process.env.GITHUB_SHA");
 		expect(pack.run).toContain("installedRoot");
-		expect(native.jobs["native-terminal"].strategy.matrix.include).toHaveLength(10);
+		expect(pack.if).toBe("runner.os == 'macOS'");
 		expect(native.jobs["native-safety"].strategy.matrix.os).toEqual(["ubuntu-24.04", "macos-15"]);
+	});
+
+	it("runs installed, checkout and controls on every supported macOS terminal and architecture", () => {
+		const job = native.jobs["native-terminal"];
+		const rows = job.strategy.matrix.include as Array<Record<string, any>>;
+		expect(rows).toEqual([
+			{ os: "macos-15", terminal: "apple", tmux: false },
+			{ os: "macos-15", terminal: "iterm2", tmux: false },
+			{ os: "macos-15-intel", terminal: "apple", tmux: false },
+			{ os: "macos-15-intel", terminal: "iterm2", tmux: false },
+			{ os: "ubuntu-24.04", terminal: "vte", tmux: false },
+			{ os: "ubuntu-24.04", terminal: "vte", tmux: true },
+			{ os: "ubuntu-24.04", terminal: "xterm", tmux: false },
+			{ os: "ubuntu-24.04", terminal: "kitty", tmux: false },
+		]);
+		const names = [
+			"Pack isolated native candidate",
+			"Probe native macOS terminal",
+			"Probe checkout runtime",
+			"Reject native false-positive controls",
+		];
+		const steps = names.map((name) => step(name, job.steps));
+		for (const row of rows) {
+			const mac = row.os.startsWith("macos-");
+			for (const entry of steps) {
+				expect(entry.if).toBe("runner.os == 'macOS'");
+				const executes = entry.if === "runner.os == 'macOS'" && mac;
+				expect(executes).toBe(["macos-15", "macos-15-intel"].includes(row.os));
+			}
+		}
+		const [pack, installed, checkout, controls] = steps;
+		const build = job.steps.find((entry: any) => entry.run === "npm run build");
+		expect(build.if).toBeUndefined();
+		expect(job.steps.indexOf(build)).toBeLessThan(job.steps.indexOf(pack));
+		expect(steps.map((entry) => job.steps.indexOf(entry))).toEqual(
+			steps.map((entry) => job.steps.indexOf(entry)).sort((a, b) => a - b),
+		);
+		expect(pack.run).toContain("for package in tui ai agent coding-agent scramjet");
+		expect(pack.run).toContain('npm pack -w "packages/$package" --pack-destination "$PACK_DIR" --json');
+		expect(pack.run).toContain('installed-runtime-smoke.mjs "$INSTALLED_ROOT"');
+		expect(pack.run).toContain('echo "SCRAMJET_TUI_INSTALLED_ROOT=$INSTALLED_ROOT" >> "$GITHUB_ENV"');
+		expect(installed.run).toContain(
+			`terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal=${expression("matrix.terminal")}`,
+		);
+		expect(installed.run).not.toContain("env -u");
+		expect(checkout.run).toContain("env -u SCRAMJET_TUI_INSTALLED_ROOT");
+		expect(checkout.run).toContain(`--terminal=${expression("matrix.terminal")}`);
+		expect(controls.run).toContain("set -euo pipefail");
+		expect(controls.run).toContain("for control in noop-copy copy-on-selection consumed-paste");
+		expect(controls.run).toContain(`--terminal=${expression("matrix.terminal")} --negative-control="$control"`);
+		expect(controls.run).not.toContain("env -u");
+		for (const entry of steps) expect(JSON.stringify(entry)).not.toMatch(/stock|--iterm-default-off/);
+		const diagnostic = step("Diagnose iTerm2 default-off right-click", job.steps);
+		expect(diagnostic.if).toBe("matrix.os == 'macos-15' && matrix.terminal == 'iterm2'");
+		expect(diagnostic.run).toContain("--terminal=iterm2 --iterm-default-off");
+		expect(diagnostic.run).toContain("terminal-evidence/default-off");
+		expect(job.steps.indexOf(diagnostic)).toBeGreaterThan(job.steps.indexOf(controls));
+		const linux = step("Probe Linux VTE terminal", job.steps);
+		expect(linux.if).toBe("runner.os == 'Linux'");
+		expect(linux.run).toContain("args+=(--tmux)");
+		const artifacts = step("Preserve feasibility evidence", job.steps);
+		expect(artifacts.if).toBe("always()");
+		expect(artifacts.with.path).toContain("native-pack/*.json");
 	});
 
 	it("executes the native aggregate fail-closed for every non-success dependency result", () => {

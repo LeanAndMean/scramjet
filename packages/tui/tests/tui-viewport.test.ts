@@ -4,7 +4,6 @@ import { Box } from "../src/components/box.js";
 import { Image } from "../src/components/image.js";
 import { Text } from "../src/components/text.js";
 import { KeybindingsManager, TUI_KEYBINDINGS } from "../src/keybindings.js";
-import type { NativeCopyNotice, NativeCopyOptions } from "../src/macos-input.js";
 import {
 	getCellDimensions,
 	resetCapabilitiesCache,
@@ -47,192 +46,62 @@ async function setup(blocks: ViewportBlock[], width = 21, height = 4, options: P
 
 const mouse = (button: number, x: number, y: number, action = "M") => `\x1b[<${button};${x};${y}${action}`;
 
-describe("native viewport copy", () => {
-	async function nativeSetup(copy = vi.fn(async (_text: string) => {}), keybindings?: KeybindingsManager) {
-		const terminal = new HeadlessTerminal(31, 6);
-		let callbacks!: NativeCopyOptions;
-		let lease: object | null = null;
-		let current = true;
-		const setLease = vi.fn((value: object | null) => {
-			lease = value;
-		});
-		const configure = vi.fn((options: NativeCopyOptions) => {
-			callbacks = options;
-			return { setLease, isCurrent: () => current, dispose: vi.fn() };
-		});
-		Object.assign(terminal, { configureNativeCopy: configure });
-		const tui = new TUI(terminal);
-		const text = new Text("café 界 é tail", 2, 0);
-		tui.configureViewport({ getBlocks: () => [{ component: text }], copy, keybindings });
-		expect(configure).toHaveBeenCalledOnce();
-		running.push(tui);
-		tui.start();
-		const frame = () => tui.renderNow({ requireFlush: true });
-		await frame();
-		const select = () => {
-			terminal.sendInput(mouse(0, 1, 1));
-			terminal.sendInput(mouse(32, 13, 1));
-			terminal.sendInput(mouse(0, 13, 1, "m"));
-		};
-		const notice = (): NativeCopyNotice => ({ generation: 1, focus: 3, registration: 1, lease: lease! });
-		return {
-			terminal,
-			tui,
-			text,
-			copy,
-			callbacks,
-			setLease,
-			frame,
-			select,
-			notice,
-			lease: () => lease,
-			stale: () => {
-				current = false;
-			},
-		};
-	}
-
-	it("copies painted Unicode provenance, without input injection or live-paint lease churn", async () => {
-		const h = await nativeSetup();
-		const input = vi.fn();
-		h.tui.setFocus({ render: () => [], invalidate() {}, handleInput: input });
-		h.select();
-		expect(h.lease()).toBeNull();
-		await h.frame();
-		const notice = h.notice();
-		expect(notice.lease).toBeTruthy();
-		await h.frame();
-		expect(h.lease()).toBe(notice.lease);
-		h.text.setText("NEW unpainted producer output");
-		h.callbacks.onCopyIntent(notice);
-		expect(h.copy).toHaveBeenCalledExactlyOnceWith("café 界 é ");
-		expect(h.lease()).toBeNull();
-		expect(input).not.toHaveBeenCalled();
-	});
-
-	it.each(["overlay", "reset", "replacement", "resize", "stop", "stale focus"])(
-		"rejects notices after %s before repaint",
-		async (action) => {
-			const h = await nativeSetup();
-			h.select();
-			await h.frame();
-			const notice = h.notice();
-			const input = vi.fn();
-			h.tui.setFocus({ render: () => [], invalidate() {}, handleInput: input });
-			if (action === "overlay") h.tui.showOverlay(new Text("overlay"), { nonCapturing: true });
-			if (action === "reset") h.tui.resetViewport();
-			if (action === "replacement") h.select();
-			if (action === "resize") h.terminal.resize(32, 6);
-			if (action === "stop") h.tui.stop();
-			if (action === "stale focus") h.stale();
-			else expect(h.lease()).toBeNull();
-			h.callbacks.onCopyIntent(notice);
-			expect(h.copy).not.toHaveBeenCalled();
-			expect(input).not.toHaveBeenCalled();
-		},
-	);
-
-	it("keeps native Copy semantic when keyboard Copy conflicts with submit", async () => {
-		const h = await nativeSetup(undefined, new KeybindingsManager(TUI_KEYBINDINGS, { "tui.input.copy": "enter" }));
-		const input = vi.fn();
-		h.tui.setFocus({ render: () => [], invalidate() {}, handleInput: input });
-		h.select();
-		await h.frame();
-		h.callbacks.onCopyIntent(h.notice());
-		expect(h.copy).toHaveBeenCalledOnce();
-		expect(input).not.toHaveBeenCalled();
-	});
-
-	it("revokes Copy before producing the final retained snapshot", async () => {
-		const h = await nativeSetup();
-		h.select();
-		await h.frame();
-		const render = h.text.render.bind(h.text);
-		const leases: (object | null)[] = [];
-		vi.spyOn(h.text, "render").mockImplementation((width) => {
-			leases.push(h.lease());
-			return render(width);
-		});
-		h.tui.stop({ retainContent: true });
-		expect(leases).toEqual([null]);
-	});
-
-	it("latches viewport entry failure before reporting successful startup", async () => {
+describe("ordinary terminal failure protection", () => {
+	it.each(["start", "setViewportMode"] as const)("latches %s failure before reporting startup", async (boundary) => {
 		const terminal = new HeadlessTerminal(31, 6);
 		const tui = new TUI(terminal);
 		tui.configureViewport({ getBlocks: () => [] });
-		const error = new Error("mouse ACK failed");
-		const start = vi.spyOn(terminal, "start");
-		const mode = vi.spyOn(terminal, "setViewportMode").mockImplementationOnce(() => {
+		const error = new Error("terminal startup failed");
+		const failed = vi.spyOn(terminal, boundary).mockImplementationOnce(() => {
 			throw error;
 		});
 		const listener = vi.fn();
+		const input = vi.fn();
 		tui.addLifecycleListener(listener);
+		tui.addInputListener(input);
 		expect(() => tui.start()).toThrow(error);
 		expect(() => tui.start()).toThrow(error);
 		await expect(tui.renderNow()).rejects.toBe(error);
-		expect(start).toHaveBeenCalledOnce();
-		expect(mode).toHaveBeenCalledOnce();
+		terminal.sendInput("x");
+		expect(input).not.toHaveBeenCalled();
+		expect(failed).toHaveBeenCalledOnce();
 		expect(listener).not.toHaveBeenCalled();
 	});
 
-	it("keeps mode-release failure faulted across repeated stop and start", async () => {
-		const h = await nativeSetup();
-		vi.spyOn(h.terminal, "setViewportMode").mockImplementationOnce(() => {
-			throw new Error("mode ACK failed");
-		});
-		expect(() => h.tui.stop()).toThrow("mode ACK failed");
-		running.splice(running.indexOf(h.tui), 1);
-		expect(() => h.tui.stop()).toThrow("mode ACK failed");
-		expect(() => h.tui.start()).toThrow("mode ACK failed");
-	});
+	it.each(["stop", "setViewportMode"] as const)(
+		"does not retry failed %s or dispatch stopped input",
+		async (boundary) => {
+			const { tui, terminal } = await setup([{ component: new Rows(["content"]) }]);
+			const error = new Error("terminal restoration failed");
+			const failed = vi.spyOn(terminal, boundary).mockImplementationOnce(() => {
+				throw error;
+			});
+			const input = vi.fn();
+			tui.addInputListener(input);
+			expect(() => tui.stop()).toThrow(error);
+			running.splice(running.indexOf(tui), 1);
+			const mark = terminal.markWrites();
+			expect(() => tui.stop()).toThrow(error);
+			expect(() => tui.start()).toThrow(error);
+			await expect(tui.renderNow()).rejects.toBe(error);
+			tui.requestRender();
+			terminal.sendInput("x");
+			expect(input).not.toHaveBeenCalled();
+			expect(failed).toHaveBeenCalledOnce();
+			expect(terminal.writesSince(mark)).toBe("");
+		},
+	);
 
-	it("faults stop and restart after failed native revocation", async () => {
-		const h = await nativeSetup();
-		h.select();
-		await h.frame();
-		h.setLease.mockImplementationOnce(() => {
-			throw new Error("unregister failed");
-		});
-		const mark = h.terminal.markWrites();
-		expect(() => h.tui.stop()).toThrow("unregister failed");
-		expect(() => h.tui.stop()).toThrow("unregister failed");
-		expect(() => h.tui.start()).toThrow("unregister failed");
-		expect(h.terminal.writesSince(mark)).toBe("");
-		running.splice(running.indexOf(h.tui), 1);
-	});
-
-	it("retains failed selection, rejects old leases and keeps replacement settlement single-flight", async () => {
-		let reject!: (error: Error) => void;
-		const copy = vi.fn(
-			(_text: string) =>
-				new Promise<void>((_resolve, fail) => {
-					reject = fail;
-				}),
-		);
-		const h = await nativeSetup(copy);
-		h.select();
-		await h.frame();
-		const first = h.notice();
-		h.callbacks.onCopyIntent(first);
-		h.select();
-		await h.frame();
-		expect(h.lease()).toBeNull();
-		h.callbacks.onCopyIntent(first);
-		expect(copy).toHaveBeenCalledOnce();
-		reject(new Error("clipboard locked"));
-		await h.frame();
-		expect(h.lease()).toBeTruthy();
-		expect(h.lease()).not.toBe(first.lease);
-		h.callbacks.onCopyIntent(first);
-		expect(copy).toHaveBeenCalledOnce();
-		const next = h.notice();
-		h.callbacks.onCopyIntent(next);
-		reject(new Error("clipboard locked"));
-		await Promise.resolve();
-		await h.frame();
-		expect(h.terminal.visibleLines().join("\n")).toContain("Copy failed: clipboard lock");
-		expect(h.lease()).toBeTruthy();
+	it("ignores input while stopped and accepts it after restart", async () => {
+		const { tui, terminal } = await setup([{ component: new Rows(["content"]) }]);
+		const input = vi.fn();
+		tui.addInputListener(input);
+		tui.stop();
+		terminal.sendInput("x");
+		expect(input).not.toHaveBeenCalled();
+		tui.start();
+		terminal.sendInput("y");
+		expect(input).toHaveBeenCalledExactlyOnceWith("y");
 	});
 });
 

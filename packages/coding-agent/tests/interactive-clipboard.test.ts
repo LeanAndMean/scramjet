@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { type EditorComponent, getCellDimensions, type NativeCopyOptions, Text } from "@leanandmean/tui";
+import { type EditorComponent, getCellDimensions, Text } from "@leanandmean/tui";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
@@ -212,16 +212,25 @@ it("accepts terminal-native text paste independently of clipboard reads", async 
 	expect(submit).not.toHaveBeenCalled();
 });
 
-it.each(["main", "extension"])("does not restart the %s editor after unproven input release", async (owner) => {
+it.each([
+	["main", "drain"],
+	["main", "stop"],
+	["extension", "drain"],
+	["extension", "stop"],
+])("does not restart the %s editor after ordinary %s failure", async (owner, boundary) => {
 	vi.stubEnv("VISUAL", "unused-editor-608");
 	const spawn = vi.mocked(spawnSync).mockImplementation(() => {
 		throw new Error("editor must not spawn before release");
 	});
 	const start = vi.spyOn(h.internals.ui, "start");
-	const error = new Error("native release unproven");
-	const stop = vi.spyOn(h.internals.ui, "stop").mockImplementationOnce(() => {
-		throw error;
-	});
+	const error = new Error("terminal restoration failed");
+	const stop = vi.spyOn(h.internals.ui, "stop");
+	const drain = vi.spyOn(h.terminal, "drainInput");
+	if (boundary === "drain") drain.mockRejectedValueOnce(error);
+	else
+		stop.mockImplementationOnce(() => {
+			throw error;
+		});
 	const target =
 		owner === "main"
 			? h.mode
@@ -239,54 +248,54 @@ it.each(["main", "extension"])("does not restart the %s editor after unproven in
 		);
 		expect(start).not.toHaveBeenCalled();
 		expect(spawn).not.toHaveBeenCalled();
+		expect(stop).toHaveBeenCalledTimes(boundary === "stop" ? 1 : 0);
 	} finally {
 		stop.mockRestore();
 		vi.unstubAllEnvs();
 	}
 });
 
-it.each(["ERR_TERMINAL_INPUT_LOST", "EIO", "EPIPE", "ENOTCONN", undefined])(
-	"routes input-loss-first %s errors without confusing generic faults with terminal loss",
-	async (code) => {
-		const error = Object.assign(new Error("macOS input failed"), { code });
-		let callbacks!: NativeCopyOptions;
-		Object.assign(h.terminal, {
-			configureNativeCopy: (options: NativeCopyOptions) => {
-				callbacks = options;
-				return { setLease() {}, isCurrent: () => false, dispose() {} };
-			},
+it.each(["SIGHUP", "EIO", "EPIPE", "ENOTCONN"])("exits without terminal writes on %s", async (source) => {
+	await h.frame();
+	const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+		throw new Error("exit intercepted");
+	});
+	const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+	const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+	const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});
+	const stop = vi.spyOn(h.internals.ui, "stop");
+	const mark = h.terminal.markWrites();
+	const signal = source === "SIGHUP" ? process.listeners("SIGHUP")[0] : process.stdout.listeners("error").at(-1)!;
+	expect(() => signal(Object.assign(new Error("terminal lost"), { code: source }))).toThrow("exit intercepted");
+	expect(exit).toHaveBeenCalledExactlyOnceWith(129);
+	expect(stop).not.toHaveBeenCalled();
+	expect(stdout).not.toHaveBeenCalled();
+	expect(stderr).not.toHaveBeenCalled();
+	expect(diagnostics).not.toHaveBeenCalled();
+	expect(h.terminal.writesSince(mark)).toBe("");
+});
+
+it.each([false, true])("reports ordinary crashes and restoration failure=%s", async (fails) => {
+	await h.frame();
+	const error = new Error("ordinary crash");
+	const releaseError = new Error("terminal restoration failed");
+	const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+		throw new Error("exit intercepted");
+	});
+	const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});
+	const stop = vi.spyOn(h.internals.ui, "stop");
+	if (fails)
+		stop.mockImplementationOnce(() => {
+			throw releaseError;
 		});
-		h.internals.configureRetainedViewport();
-		const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-			throw new Error("exit intercepted");
-		});
-		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});
-		const stop = vi.spyOn(h.internals.ui, "stop");
-		const signal = process.listeners("uncaughtException")[0] as (error: Error) => void;
-		const mark = h.terminal.markWrites();
-		try {
-			expect(() => callbacks.onError(error)).toThrow(error);
-			await expect(h.internals.ui.renderNow()).rejects.toBe(error);
-			expect(() => signal(error)).toThrow("exit intercepted");
-			if (code === "ERR_TERMINAL_INPUT_LOST") {
-				expect(exit).toHaveBeenCalledExactlyOnceWith(129);
-				expect(stop).not.toHaveBeenCalled();
-				expect(stdout).not.toHaveBeenCalled();
-				expect(stderr).not.toHaveBeenCalled();
-				expect(diagnostics).not.toHaveBeenCalled();
-				expect(h.terminal.writesSince(mark)).toBe("");
-			} else {
-				expect(exit).toHaveBeenCalledExactlyOnceWith(1);
-				expect(stop).toHaveBeenCalledOnce();
-				expect(diagnostics).toHaveBeenCalledWith(error);
-			}
-		} finally {
-			stop.mockImplementation(() => h.terminal.stop());
-		}
-	},
-);
+	const signal = process.listeners("uncaughtException")[0] as (error: Error) => void;
+	expect(() => signal(error)).toThrow("exit intercepted");
+	expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+	expect(stop).toHaveBeenCalledOnce();
+	expect(diagnostics).toHaveBeenCalledWith(error);
+	if (fails)
+		expect(diagnostics).toHaveBeenCalledWith("Terminal release failed; exiting without restart:", releaseError);
+});
 
 it.each(["drain", "stop"])("removes the resume handler when suspension %s fails", async (boundary) => {
 	const listeners = process.listeners("SIGCONT");
@@ -315,114 +324,55 @@ it.each(["drain", "stop"])("removes the resume handler when suspension %s fails"
 	}
 });
 
-it.each(["drain", "stop"])("exits without output when shutdown %s discovers terminal loss", async (boundary) => {
-	await h.frame();
-	const error = Object.assign(new Error("terminal lost"), { code: "ERR_TERMINAL_INPUT_LOST" });
-	const exitSignal = new Error("exit intercepted");
-	const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-		throw exitSignal;
-	});
-	const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-	const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-	const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});
-	const runtime = (h.mode as unknown as { runtimeHost: { dispose(): Promise<void> } }).runtimeHost;
-	const dispose = vi.spyOn(runtime, "dispose").mockResolvedValue();
-	const flush = vi.spyOn(h.terminal, "flush");
-	const stop = vi.spyOn(h.internals.ui, "stop");
-	if (boundary === "drain") vi.spyOn(h.terminal, "drainInput").mockRejectedValueOnce(error);
-	else
-		stop.mockImplementationOnce(() => {
-			throw error;
+it.each(["drain", "flush", "dispose"])(
+	"keeps emergency handlers active during orderly shutdown %s",
+	async (boundary) => {
+		await h.frame();
+		const exitSignal = new Error("exit intercepted");
+		const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+			throw exitSignal;
 		});
-	const mark = h.terminal.markWrites();
-	try {
-		await expect((h.mode as unknown as { shutdown(): Promise<void> }).shutdown()).rejects.toBe(exitSignal);
-		expect(exit).toHaveBeenCalledExactlyOnceWith(129);
-		expect(flush).not.toHaveBeenCalled();
-		expect(dispose).not.toHaveBeenCalled();
-		expect(diagnostics).not.toHaveBeenCalled();
-		expect(stdout).not.toHaveBeenCalled();
-		expect(stderr).not.toHaveBeenCalled();
-		expect(h.terminal.writesSince(mark)).toBe("");
-	} finally {
-		stop.mockRestore();
-		dispose.mockRestore();
-	}
-});
-
-it("exits without diagnostics when crash-time stop discovers terminal loss", async () => {
-	await h.frame();
-	const original = new Error("generic crash");
-	const loss = Object.assign(new Error("terminal lost"), { code: "ERR_TERMINAL_INPUT_LOST" });
-	const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-		throw new Error("exit intercepted");
-	});
-	const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-	const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-	const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});
-	vi.spyOn(h.internals.ui, "stop").mockImplementationOnce(() => {
-		throw loss;
-	});
-	const mark = h.terminal.markWrites();
-	expect(() => (h.mode as unknown as { uncaughtCrash(error: Error): never }).uncaughtCrash(original)).toThrow(
-		"exit intercepted",
-	);
-	expect(exit).toHaveBeenCalledExactlyOnceWith(129);
-	expect(diagnostics).not.toHaveBeenCalled();
-	expect(stdout).not.toHaveBeenCalled();
-	expect(stderr).not.toHaveBeenCalled();
-	expect(h.terminal.writesSince(mark)).toBe("");
-});
-
-it.each(["drain", "flush"])("keeps the terminal-loss handler active during shutdown %s", async (boundary) => {
-	await h.frame();
-	const error = Object.assign(new Error("terminal lost"), { code: "ERR_TERMINAL_INPUT_LOST" });
-	const exitSignal = new Error("exit intercepted");
-	const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-		throw exitSignal;
-	});
-	const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});
-	const handler = process.listeners("uncaughtException")[0] as (error: Error) => void;
-	let reject!: (error: Error) => void;
-	const pending = () =>
-		new Promise<void>((_resolve, fail) => {
-			reject = fail;
-		});
-	const drain = vi.spyOn(h.terminal, "drainInput");
-	if (boundary === "drain") drain.mockImplementationOnce(pending);
-	const runtime = (h.mode as unknown as { runtimeHost: { dispose(): Promise<void> } }).runtimeHost;
-	const dispose = vi.spyOn(runtime, "dispose").mockResolvedValue();
-	const flush = vi.spyOn(h.terminal, "flush");
-	if (boundary === "flush") flush.mockImplementationOnce(pending);
-	const stopping = (h.mode as unknown as { shutdown(): Promise<void> }).shutdown();
-	const settlement = expect(stopping).rejects.toBe(exitSignal);
-	await vi.waitFor(() => expect(reject).toBeTypeOf("function"));
-	const mark = h.terminal.markWrites();
-	try {
-		expect(process.listeners("uncaughtException")).toContain(handler);
-		expect(() => handler(error)).toThrow(exitSignal);
-		expect(exit).toHaveBeenCalledExactlyOnceWith(129);
-	} finally {
-		reject(error);
+		const crash = process.listeners("uncaughtException")[0];
+		const hangup = process.listeners("SIGHUP")[0];
+		const deadOutput = process.stdout.listeners("error").at(-1)!;
+		let resolve!: () => void;
+		const pending = () =>
+			new Promise<void>((done) => {
+				resolve = done;
+			});
+		const runtime = (h.mode as unknown as { runtimeHost: { dispose(): Promise<void> } }).runtimeHost;
+		const dispose = vi.spyOn(runtime, "dispose").mockResolvedValue();
+		if (boundary === "dispose") dispose.mockImplementationOnce(pending);
+		else vi.spyOn(h.terminal, boundary === "drain" ? "drainInput" : "flush").mockImplementationOnce(pending);
+		const stopping = (h.mode as unknown as { shutdown(): Promise<void> }).shutdown();
+		const settlement = expect(stopping).rejects.toBe(exitSignal);
 		try {
-			await settlement;
-			expect(dispose).not.toHaveBeenCalled();
+			await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
+			expect(process.listeners("uncaughtException")).toContain(crash);
+			expect(process.listeners("SIGHUP")).toContain(hangup);
+			expect(process.stdout.listeners("error")).toContain(deadOutput);
+			expect(process.stderr.listeners("error")).toContain(deadOutput);
+			expect(exit).not.toHaveBeenCalled();
 		} finally {
+			resolve();
+			await settlement;
 			dispose.mockRestore();
 		}
-	}
-	expect(diagnostics).not.toHaveBeenCalled();
-	expect(flush).toHaveBeenCalledTimes(boundary === "flush" ? 1 : 0);
-	expect(h.terminal.writesSince(mark)).toBe("");
-});
+		expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+		expect(process.listeners("uncaughtException")).not.toContain(crash);
+		expect(process.listeners("SIGHUP")).not.toContain(hangup);
+		expect(process.stdout.listeners("error")).not.toContain(deadOutput);
+		expect(process.stderr.listeners("error")).not.toContain(deadOutput);
+	},
+);
 
-it("repeated application stop rejects unproven release without retry or progress output", async () => {
+it("repeated application stop rejects failed mode restoration without retry or progress output", async () => {
 	await h.frame();
 	const settings = (h.mode as unknown as { settingsManager: SettingsManager }).settingsManager;
 	settings.setShowTerminalProgress(true);
 	const progress = vi.spyOn(h.terminal, "setProgress");
 	const release = vi.spyOn(h.terminal, "stop");
-	const error = new Error("native release unproven");
+	const error = new Error("terminal restoration failed");
 	vi.spyOn(h.terminal, "setViewportMode").mockImplementationOnce(() => {
 		throw error;
 	});
@@ -487,3 +437,53 @@ it("reports a shared clipboard failure once and permits a fresh read afterward",
 	expect(read).toHaveBeenCalledTimes(2);
 	expect(submit).not.toHaveBeenCalled();
 });
+
+it.each(["copy", "read"])(
+	"keeps typing, terminal paste and browsing usable after clipboard %s failure",
+	async (operation) => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockRejectedValueOnce(new Error("clipboard unavailable"));
+		const read = vi.spyOn(clipboard, "readClipboardText").mockRejectedValueOnce(new Error("clipboard unavailable"));
+		h.internals.configureRetainedViewport();
+		const editor = h.internals.editorContainer.children[0] as EditorComponent;
+		const submit = vi.spyOn(editor, "onSubmit");
+		h.internals.chatContainer.addChild(new Text(Array.from({ length: 60 }, (_, i) => `ROW-${i}`).join("\n"), 0, 0));
+		await h.frame();
+		if (operation === "copy") {
+			h.internals.ui.scrollViewportTo(0);
+			await h.frame();
+			for (const packet of ["\x1b[<0;1;1M", "\x1b[<32;6;1M", "\x1b[<0;6;1m"]) h.terminal.sendInput(packet);
+			await h.frame();
+			h.terminal.sendInput("\x03");
+			await h.frame();
+			expect(copy).toHaveBeenCalledExactlyOnceWith("ROW-0");
+			expect(h.extensionUI.getEditorText()).toBe("DRAFT");
+			await h.frame();
+			expect(h.terminal.visibleLines().join("\n")).toContain("Copy failed: clipboard unavailable");
+			expect(h.terminal.cell(0, 0).inverse).toBe(true);
+			copy.mockResolvedValueOnce();
+			h.terminal.sendInput("\x1b[<2;2;1M");
+			await h.frame();
+			await h.frame();
+			expect(copy).toHaveBeenCalledTimes(2);
+			expect(h.terminal.cell(0, 0).inverse).toBe(false);
+		} else {
+			await requestPaste();
+			await h.frame();
+			expect((await h.frame()).join("\n")).toContain("Paste failed: clipboard unavailable");
+		}
+		h.terminal.sendInput("x");
+		h.terminal.sendInput("\x1b[200~café 界\nsecond line\x1b[201~");
+		expect(h.extensionUI.getEditorText()).toBe("DRAFTxcafé 界\nsecond line");
+		h.internals.ui.followViewport();
+		await h.frame();
+		const offset = h.internals.ui.getViewportState()!.offset;
+		h.terminal.sendInput("\x1b[<64;2;2M");
+		await h.frame();
+		expect(h.internals.ui.getViewportState()!.offset).toBeLessThan(offset);
+		h.terminal.sendInput("\x03");
+		expect(h.extensionUI.getEditorText()).toBe("");
+		expect(copy).toHaveBeenCalledTimes(operation === "copy" ? 2 : 0);
+		expect(read).toHaveBeenCalledTimes(operation === "read" ? 1 : 0);
+		expect(submit).not.toHaveBeenCalled();
+	},
+);
