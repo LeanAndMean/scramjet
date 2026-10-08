@@ -245,6 +245,24 @@ describe("native input terminal contract", () => {
 		}
 	});
 
+	it("releases provisional ownership when Worker construction fails", () => {
+		const f = setup();
+		vi.mocked(MacosInput).mockImplementationOnce(() => {
+			throw new Error("worker spawn failed");
+		});
+		f.terminal.configureNativeCopy(f.options);
+		expect(() => f.terminal.start(vi.fn(), vi.fn())).toThrow("worker spawn failed");
+		expect(f.stdin.listenerCount("data")).toBe(0);
+		const second = new ProcessTerminal();
+		try {
+			expect(() => second.start(vi.fn(), vi.fn())).not.toThrow();
+			expect(f.stdin.listenerCount("data")).toBe(1);
+		} finally {
+			second.stop();
+			f.terminal.stop();
+		}
+	});
+
 	it("initializes pre-start viewport parser mode before committing ownership", () => {
 		const f = setup();
 		f.terminal.setViewportMode(true);
