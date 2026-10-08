@@ -366,7 +366,7 @@ it.each(["drain", "flush", "dispose"])(
 	},
 );
 
-it("repeated application stop rejects failed mode restoration without retry or progress output", async () => {
+it("surfaces failed mode restoration without retry or progress output", async () => {
 	await h.frame();
 	const settings = (h.mode as unknown as { settingsManager: SettingsManager }).settingsManager;
 	settings.setShowTerminalProgress(true);
@@ -379,12 +379,9 @@ it("repeated application stop rejects failed mode restoration without retry or p
 	const stop = vi.spyOn(h.internals.ui, "stop");
 	try {
 		expect(() => h.mode.stop()).toThrow(error);
-		const mark = h.terminal.markWrites();
-		expect(() => h.mode.stop()).toThrow(error);
-		expect(stop).toHaveBeenCalledTimes(2);
+		expect(stop).toHaveBeenCalledOnce();
 		expect(release).not.toHaveBeenCalled();
 		expect(progress).not.toHaveBeenCalled();
-		expect(h.terminal.writesSince(mark)).toBe("");
 	} finally {
 		stop.mockImplementation(() => h.terminal.stop());
 	}

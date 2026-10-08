@@ -309,7 +309,6 @@ export class TUI extends Container {
 	private viewportRevealComponent?: Component;
 	private started = false;
 	private removeViewportInput?: () => void;
-	private terminalFailure?: Error;
 
 	// SCRAMJET-DIVERGENCE: append-only history and a bounded mutable canvas preserve terminal scrollback (#389).
 	private liveRegionStart: Component | undefined;
@@ -502,7 +501,6 @@ export class TUI extends Container {
 	}
 
 	async renderNow(options?: { requireFlush?: boolean }): Promise<void> {
-		if (this.terminalFailure) throw this.terminalFailure;
 		if (this.stopped) throw new Error("Cannot render a stopped TUI");
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
@@ -682,24 +680,16 @@ export class TUI extends Container {
 	}
 
 	start(): void {
-		if (this.terminalFailure) throw this.terminalFailure;
 		if (this.started) return;
 		this.stopped = false;
 		this.started = true;
-		try {
-			this.terminal.start(
-				(data) => this.handleInput(data),
-				() => this.requestRender(),
-			);
-			if (this.viewport) {
-				this.enterViewportMode();
-				this.previousLines = [];
-			}
-		} catch (error) {
-			this.stopped = true;
-			this.started = false;
-			this.terminalFailure = error instanceof Error ? error : new Error(String(error));
-			throw this.terminalFailure;
+		this.terminal.start(
+			(data) => this.handleInput(data),
+			() => this.requestRender(),
+		);
+		if (this.viewport) {
+			this.enterViewportMode();
+			this.previousLines = [];
 		}
 		this.terminal.hideCursor();
 		this.queryCellSize();
@@ -763,7 +753,6 @@ export class TUI extends Container {
 
 	// SCRAMJET-DIVERGENCE: callers opt into final-exit retention, never temporary stops.
 	stop(options?: { retainContent?: boolean }): void {
-		if (this.terminalFailure) throw this.terminalFailure;
 		if (this.stopped) return;
 		this.viewportPaint = undefined;
 		this.stopped = true;
@@ -790,55 +779,50 @@ export class TUI extends Container {
 		} catch (error) {
 			retentionError = error;
 		}
-		try {
-			for (const listener of this.lifecycleListeners) listener("stop");
-			this.viewportRevealFocus = false;
-			this.viewportRevealComponent = undefined;
-			if (this.viewport) {
-				this.terminal.write(this.deleteKittyImages(this.previousKittyImageIds));
-				this.previousKittyImageIds.clear();
-				this.terminal.setViewportMode?.(false);
-			}
-			if (this.renderTimer) {
-				clearTimeout(this.renderTimer);
-				this.renderTimer = undefined;
-			}
-			if (this.bgColorTimeout) {
-				clearTimeout(this.bgColorTimeout);
-				this.bgColorTimeout = undefined;
-			}
-			if (this.bgColorResolve) {
-				this.bgColorDiscardCredit = true;
-				this.bgColorResolve(undefined);
-				this.bgColorResolve = undefined;
-			}
-			// Move cursor to the end of the content to prevent overwriting/artifacts on exit
-			const renderedLineCount = this.liveRegionStart
-				? this.committedLines.length + this.previousLiveLines.length
-				: this.previousLines.length;
-			if (!this.viewport && renderedLineCount > 0) {
-				const targetRow = renderedLineCount; // Line after the last content
-				const lineDiff = targetRow - this.hardwareCursorRow;
-				if (lineDiff > 0) {
-					this.terminal.write(`\x1b[${lineDiff}B`);
-				} else if (lineDiff < 0) {
-					this.terminal.write(`\x1b[${-lineDiff}A`);
-				}
-				this.terminal.write("\r\n");
-			}
-
-			this.terminal.showCursor();
-			this.terminal.stop();
-		} catch (error) {
-			this.terminalFailure = error instanceof Error ? error : new Error(String(error));
-			throw this.terminalFailure;
+		for (const listener of this.lifecycleListeners) listener("stop");
+		this.viewportRevealFocus = false;
+		this.viewportRevealComponent = undefined;
+		if (this.viewport) {
+			this.terminal.write(this.deleteKittyImages(this.previousKittyImageIds));
+			this.previousKittyImageIds.clear();
+			this.terminal.setViewportMode?.(false);
 		}
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = undefined;
+		}
+		if (this.bgColorTimeout) {
+			clearTimeout(this.bgColorTimeout);
+			this.bgColorTimeout = undefined;
+		}
+		if (this.bgColorResolve) {
+			this.bgColorDiscardCredit = true;
+			this.bgColorResolve(undefined);
+			this.bgColorResolve = undefined;
+		}
+		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
+		const renderedLineCount = this.liveRegionStart
+			? this.committedLines.length + this.previousLiveLines.length
+			: this.previousLines.length;
+		if (!this.viewport && renderedLineCount > 0) {
+			const targetRow = renderedLineCount; // Line after the last content
+			const lineDiff = targetRow - this.hardwareCursorRow;
+			if (lineDiff > 0) {
+				this.terminal.write(`\x1b[${lineDiff}B`);
+			} else if (lineDiff < 0) {
+				this.terminal.write(`\x1b[${-lineDiff}A`);
+			}
+			this.terminal.write("\r\n");
+		}
+
+		this.terminal.showCursor();
+		this.terminal.stop();
 		if (retained?.length) this.terminal.write(`${TUI.SEGMENT_RESET}${retained.join("\r\n")}\r\n`);
 		if (retentionError) throw retentionError;
 	}
 
 	requestRender(force = false): void {
-		if (this.stopped || this.terminalFailure) return;
+		if (this.stopped) return;
 		if (force) {
 			this.viewportPaint = undefined;
 			this.viewport?.invalidate();
@@ -892,7 +876,7 @@ export class TUI extends Container {
 	}
 
 	private handleInput(data: string): void {
-		if (this.stopped || this.terminalFailure) return;
+		if (this.stopped) return;
 		if (this.consumeOsc11Response(data)) {
 			return;
 		}
@@ -1626,7 +1610,7 @@ export class TUI extends Container {
 	}
 
 	private doRender(): Promise<void> | undefined {
-		if (this.stopped || this.terminalFailure) return;
+		if (this.stopped) return;
 		if (this.viewport) return this.doViewportRender();
 		if (this.liveRegionStart && !this.children.includes(this.liveRegionStart)) {
 			this.resetDetachedLiveRegion();

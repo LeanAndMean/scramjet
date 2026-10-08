@@ -182,7 +182,9 @@ describe("ordinary Darwin input lifecycle", () => {
 			isTTY: true,
 			isRaw: false,
 			setEncoding: vi.fn(),
-			setRawMode: vi.fn(),
+			setRawMode: vi.fn((raw: boolean) => {
+				stdin.isRaw = raw;
+			}),
 			resume: vi.fn(),
 			pause: vi.fn(),
 		});
@@ -191,6 +193,91 @@ describe("ordinary Darwin input lifecycle", () => {
 		const terminal = new ProcessTerminal();
 		return { terminal, stdin, stdout };
 	}
+
+	it.each(["kitty", "modifyOtherKeys"])("cleans up partial viewport entry with %s reporting", (protocol) => {
+		const { terminal, stdin, stdout } = setup();
+		const tui = new TUI(terminal);
+		const input = vi.fn();
+		const lifecycle = vi.fn();
+		tui.configureViewport({ getBlocks: () => [] });
+		tui.addInputListener(input);
+		tui.addLifecycleListener(lifecycle);
+		const error = new Error("viewport entry failed after acquiring modes");
+		const setViewportMode = terminal.setViewportMode.bind(terminal);
+		vi.spyOn(terminal, "setViewportMode").mockImplementationOnce((enabled) => {
+			setViewportMode(enabled);
+			if (protocol === "kitty") stdin.emit("data", "\x1b[?0u");
+			else vi.advanceTimersByTime(151);
+			throw error;
+		});
+		try {
+			expect(() => tui.start()).toThrow(error);
+			expect(lifecycle).not.toHaveBeenCalled();
+			expect(stdin.isRaw).toBe(true);
+			expect(stdin.listenerCount("data")).toBe(1);
+			expect(stdout.listenerCount("resize")).toBe(1);
+			expect(stdout.write).toHaveBeenCalledWith("\x1b[?1049h\x1b[?1004h\x1b[?1002h\x1b[?1006h");
+			expect(stdout.write).toHaveBeenCalledWith(protocol === "kitty" ? "\x1b[>15u" : "\x1b[>4;2m");
+			stdout.write.mockClear();
+			expect(() => tui.stop()).not.toThrow();
+			expect(stdin.listenerCount("data")).toBe(0);
+			expect(stdout.listenerCount("resize")).toBe(0);
+			expect(stdin.isRaw).toBe(false);
+			expect(stdin.setRawMode.mock.calls).toEqual([[true], [false]]);
+			expect(stdin.pause).toHaveBeenCalledOnce();
+			expect(terminal.kittyProtocolActive).toBe(false);
+			const output = stdout.write.mock.calls.flat().join("");
+			expect(output).toContain("\x1b[?1002l\x1b[?1006l\x1b[?1004l\x1b[0m\x1b[?1049l");
+			expect(output).toContain("\x1b[?2004l");
+			expect(output).toContain("\x1b[?25h");
+			expect(output.endsWith(protocol === "kitty" ? "\x1b[<u" : "\x1b[>4;0m")).toBe(true);
+			stdout.write.mockClear();
+			stdin.emit("data", "ignored");
+			tui.stop();
+			vi.advanceTimersByTime(200);
+			expect(input).not.toHaveBeenCalled();
+			expect(stdout.write).not.toHaveBeenCalled();
+			tui.start();
+			stdin.emit("data", "y");
+			expect(input).toHaveBeenCalledExactlyOnceWith("y");
+		} finally {
+			try {
+				tui.stop();
+			} finally {
+				terminal.stop();
+			}
+		}
+	});
+
+	it.each(["setEncoding", "resume"] as const)("restores resources after ordinary startup fails at %s", (boundary) => {
+		const { terminal, stdin, stdout } = setup();
+		const input = vi.fn();
+		const error = new Error("ordinary startup failed");
+		stdin[boundary].mockImplementationOnce(() => {
+			throw error;
+		});
+		try {
+			expect(() => terminal.start(input, vi.fn())).toThrow(error);
+			expect(stdin.isRaw).toBe(true);
+			expect(stdin.listenerCount("data")).toBe(boundary === "resume" ? 1 : 0);
+			terminal.stop();
+			expect(stdin.isRaw).toBe(false);
+			expect(stdin.setRawMode.mock.calls).toEqual([[true], [false]]);
+			expect(stdin.listenerCount("data")).toBe(0);
+			expect(stdout.listenerCount("resize")).toBe(0);
+			expect(stdin.pause).toHaveBeenCalledOnce();
+			stdout.write.mockClear();
+			stdin.emit("data", "ignored");
+			vi.advanceTimersByTime(200);
+			expect(input).not.toHaveBeenCalled();
+			expect(stdout.write).not.toHaveBeenCalled();
+			terminal.start(input, vi.fn());
+			stdin.emit("data", "z");
+			expect(input).toHaveBeenCalledExactlyOnceWith("z");
+		} finally {
+			terminal.stop();
+		}
+	});
 
 	it("starts retained Copy with one ordinary reader installed before stdin resumes", () => {
 		const { terminal, stdin } = setup();

@@ -47,27 +47,6 @@ async function setup(blocks: ViewportBlock[], width = 21, height = 4, options: P
 const mouse = (button: number, x: number, y: number, action = "M") => `\x1b[<${button};${x};${y}${action}`;
 
 describe("ordinary terminal failure protection", () => {
-	it.each(["start", "setViewportMode"] as const)("latches %s failure before reporting startup", async (boundary) => {
-		const terminal = new HeadlessTerminal(31, 6);
-		const tui = new TUI(terminal);
-		tui.configureViewport({ getBlocks: () => [] });
-		const error = new Error("terminal startup failed");
-		const failed = vi.spyOn(terminal, boundary).mockImplementationOnce(() => {
-			throw error;
-		});
-		const listener = vi.fn();
-		const input = vi.fn();
-		tui.addLifecycleListener(listener);
-		tui.addInputListener(input);
-		expect(() => tui.start()).toThrow(error);
-		expect(() => tui.start()).toThrow(error);
-		await expect(tui.renderNow()).rejects.toBe(error);
-		terminal.sendInput("x");
-		expect(input).not.toHaveBeenCalled();
-		expect(failed).toHaveBeenCalledOnce();
-		expect(listener).not.toHaveBeenCalled();
-	});
-
 	it.each(["stop", "setViewportMode"] as const)(
 		"does not retry failed %s or dispatch stopped input",
 		async (boundary) => {
@@ -81,9 +60,8 @@ describe("ordinary terminal failure protection", () => {
 			expect(() => tui.stop()).toThrow(error);
 			running.splice(running.indexOf(tui), 1);
 			const mark = terminal.markWrites();
-			expect(() => tui.stop()).toThrow(error);
-			expect(() => tui.start()).toThrow(error);
-			await expect(tui.renderNow()).rejects.toBe(error);
+			expect(() => tui.stop()).not.toThrow();
+			await expect(tui.renderNow()).rejects.toThrow("Cannot render a stopped TUI");
 			tui.requestRender();
 			terminal.sendInput("x");
 			expect(input).not.toHaveBeenCalled();

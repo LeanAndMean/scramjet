@@ -102,6 +102,7 @@ export class ProcessTerminal implements Terminal {
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
 		if (this.started) return;
+		this.started = true;
 		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
 
@@ -118,7 +119,6 @@ export class ProcessTerminal implements Terminal {
 		this.setupStdinBuffer();
 		process.stdin.on("data", this.stdinDataHandler!);
 		process.stdin.resume();
-		this.started = true;
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		process.stdout.write("\x1b[?2004h");
