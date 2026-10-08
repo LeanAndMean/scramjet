@@ -25,7 +25,7 @@ async function run(command: string, cwd: string, env?: NodeJS.ProcessEnv) {
 }
 
 function processes() {
-	const result = spawnSync("ps", ["-axo", "pid=,pgid=,stat=,command="], { encoding: "utf8", timeout: 2000 });
+	const result = spawnSync("ps", ["-axww", "-o", "pid=,pgid=,stat=,command="], { encoding: "utf8", timeout: 2000 });
 	if (result.error || result.status !== 0) throw result.error ?? new Error(result.stderr);
 	return result.stdout.split("\n").flatMap((line) => {
 		const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
@@ -62,7 +62,7 @@ setInterval(() => {}, 1000);
 `;
 
 async function qualifyCleanup(cwd: string, kind: "abort" | "timeout") {
-	const fixture = join(cwd, "detached-descendant.cjs");
+	const fixture = join(await realpath(cwd), "detached-descendant.cjs");
 	await writeFile(fixture, DESCENDANT_FIXTURE);
 	let ready = false;
 	const server = createServer((_request, response) => {
@@ -73,7 +73,7 @@ async function qualifyCleanup(cwd: string, kind: "abort" | "timeout") {
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error("Missing loopback address");
 	const url = `http://127.0.0.1:${address.port}/${kind}`;
-	const grandchildCommand = `${process.execPath} ${fixture} grandchild ${url}`;
+	const grandchildCommand = `${fixture} grandchild ${url}`;
 	const controller = new AbortController();
 	let output = "";
 	let settled = false;
@@ -96,8 +96,11 @@ async function qualifyCleanup(cwd: string, kind: "abort" | "timeout") {
 	try {
 		expect(await waitUntil(() => ready || settled, 2500), output).toBe(true);
 		expect(ready, `Grandchild never became ready: ${output}`).toBe(true);
-		const grandchild = processes().find((entry) => entry.command === grandchildCommand);
-		expect(grandchild, "Host ps must independently identify the detached grandchild").toBeDefined();
+		const descendants = processes().filter((entry) => entry.command.includes(grandchildCommand));
+		expect(descendants, `Host ps must identify exactly one detached grandchild: ${grandchildCommand}`).toHaveLength(
+			1,
+		);
+		const grandchild = descendants[0];
 		grandchildPid = grandchild!.pid;
 		expect(grandchild!.pgid).toBe(grandchildPid);
 		expect(grandchild!.state.startsWith("Z")).toBe(false);
@@ -113,7 +116,7 @@ async function qualifyCleanup(cwd: string, kind: "abort" | "timeout") {
 		controller.abort();
 		await operation;
 		for (const entry of processes()) {
-			if (entry.pid === grandchildPid || entry.command === grandchildCommand) {
+			if (entry.pid === grandchildPid || entry.command.includes(`${fixture} `)) {
 				try {
 					process.kill(entry.pid, "SIGKILL");
 				} catch (error) {
