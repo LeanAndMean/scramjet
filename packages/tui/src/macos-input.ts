@@ -31,7 +31,7 @@ export type InputMessage =
 	| { kind: "data" | "paste"; data: string; bytes: number }
 	| { kind: "copy"; focus: number; registration: number; lease: number; bytes: number }
 	| { kind: "availability"; available: boolean; reason?: string }
-	| { kind: "fault"; reason: string };
+	| { kind: "fault"; reason: string; code?: "ERR_TERMINAL_INPUT_LOST" };
 
 let nextGeneration = 0;
 const DEADLINE_MS = 3000;
@@ -166,7 +166,7 @@ export class MacosInput {
 		this.port.postMessage({ command, generation: this.generation, sequence, ack: ack.buffer });
 		this.wait(ack, 0, () => Atomics.load(ack, 0) === sequence, command.kind);
 		if (Atomics.load(ack, 1) !== 1) {
-			this.failure = new Error(
+			this.failure = this.faultError(
 				`macOS input ${command.kind} failed; input/native release is unproven. Exit this session; do not restart or hand off stdin.`,
 			);
 			this.state = "faulted";
@@ -180,7 +180,7 @@ export class MacosInput {
 			const remaining = deadline - performance.now();
 			if (remaining <= 0 || Atomics.load(this.shared, 0) !== 0) {
 				this.state = "faulted";
-				this.failure = new Error(
+				this.failure = this.faultError(
 					`macOS input ${operation} did not settle; ownership is unknown. Exit this session before attempting another terminal handoff.`,
 				);
 				throw this.failure;
@@ -189,10 +189,19 @@ export class MacosInput {
 		}
 	}
 
+	private faultError(
+		reason: string,
+		code = Atomics.load(this.shared, 0) === 2 ? "ERR_TERMINAL_INPUT_LOST" : undefined,
+	): Error {
+		const error: NodeJS.ErrnoException = new Error(reason);
+		if (code) error.code = code;
+		return error;
+	}
+
 	private assertHealthy(): void {
 		if (this.failure) throw this.failure;
 		if (Atomics.load(this.shared, 0) !== 0 || this.state === "stopped")
-			throw new Error(
+			throw this.faultError(
 				"macOS input transport is not usable; do not restart or hand off stdin without proven release.",
 			);
 	}
@@ -208,7 +217,7 @@ export class MacosInput {
 	private receive(message: InputMessage): void {
 		if (this.state === "stopped") return;
 		if (message.kind === "fault") {
-			this.fail(new Error(message.reason));
+			this.fail(this.faultError(message.reason, message.code));
 			return;
 		}
 		if (this.state === "faulted") return;

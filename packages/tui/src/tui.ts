@@ -746,15 +746,15 @@ export class TUI extends Container {
 				(data) => this.handleInput(data),
 				() => this.requestRender(),
 			);
+			if (this.viewport) {
+				this.enterViewportMode();
+				this.previousLines = [];
+			}
 		} catch (error) {
 			this.stopped = true;
 			this.started = false;
 			this.terminalFailure = error instanceof Error ? error : new Error(String(error));
 			throw this.terminalFailure;
-		}
-		if (this.viewport) {
-			this.enterViewportMode();
-			this.previousLines = [];
 		}
 		this.terminal.hideCursor();
 		this.queryCellSize();

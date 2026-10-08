@@ -337,6 +337,33 @@ export function createNative(koffi: typeof import("koffi"), terminalPid: number)
 	};
 }
 
+class TerminalInputLoss extends Error {
+	readonly code = "ERR_TERMINAL_INPUT_LOST";
+}
+
+export function readTerminalInput(
+	poll: (descriptor: { fd: number; events: number; revents: number }, count: number, timeout: number) => number,
+	buffer: Buffer,
+): Buffer | null {
+	const descriptor = { fd: 0, events: 1, revents: 0 };
+	const ready = poll(descriptor, 1, 0);
+	if (ready < 0) throw new Error("macOS input poll failed");
+	if (descriptor.revents & 0x18) throw new TerminalInputLoss("macOS terminal input was lost");
+	if (descriptor.revents & 0x20) throw new Error("macOS input descriptor is invalid");
+	if (!(descriptor.revents & 1)) return null;
+	try {
+		const count = readSync(0, buffer, 0, buffer.length, null);
+		if (count === 0) throw new TerminalInputLoss("macOS terminal input reached EOF");
+		return buffer.subarray(0, count);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "EAGAIN" || code === "EINTR") return null;
+		if (code === "EIO" || code === "EPIPE" || code === "ENOTCONN")
+			throw new TerminalInputLoss(`macOS terminal input was lost (${code})`);
+		throw error;
+	}
+}
+
 function run(port: MessagePort, shared: Int32Array, generation: number): void {
 	let read: () => Buffer | null;
 	let koffi: typeof import("koffi");
@@ -346,21 +373,7 @@ function run(port: MessagePort, shared: Int32Array, generation: number): void {
 		const PollFD = koffi.struct({ fd: "int", events: "short", revents: "short" });
 		const poll = libc.func("poll", "int", [koffi.inout(koffi.pointer(PollFD)), "uint32", "int"]);
 		const buffer = Buffer.alloc(16384);
-		read = () => {
-			const descriptor = { fd: 0, events: 1, revents: 0 };
-			const ready = poll(descriptor, 1, 0);
-			if (ready < 0) throw new Error("macOS input poll failed");
-			if (descriptor.revents & 0x38) throw new Error("macOS terminal input was lost");
-			if (!(descriptor.revents & 1)) return null;
-			try {
-				const count = readSync(0, buffer, 0, buffer.length, null);
-				if (count === 0) throw new Error("macOS terminal input reached EOF");
-				return buffer.subarray(0, count);
-			} catch (error) {
-				if (["EAGAIN", "EINTR"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
-				throw error;
-			}
-		};
+		read = () => readTerminalInput(poll, buffer);
 	} catch {
 		Atomics.store(shared, 4, 2);
 		Atomics.notify(shared, 4);
@@ -400,9 +413,11 @@ function run(port: MessagePort, shared: Int32Array, generation: number): void {
 		} catch {
 			/* Unknown native ownership remains a transport fault. */
 		}
-		Atomics.store(shared, 0, 1);
+		const terminalLost = error instanceof TerminalInputLoss || Atomics.load(shared, 0) === 2;
+		Atomics.store(shared, 0, terminalLost ? 2 : 1);
 		port.postMessage({
 			kind: "fault",
+			code: terminalLost ? "ERR_TERMINAL_INPUT_LOST" : undefined,
 			reason: `macOS input failed: ${error instanceof Error ? error.message : "unknown error"}. Exit this session; input/native release cannot be assumed.`,
 		});
 	};

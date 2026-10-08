@@ -1,4 +1,4 @@
-import { type EditorComponent, getCellDimensions, Text } from "@leanandmean/tui";
+import { type EditorComponent, getCellDimensions, type NativeCopyOptions, Text } from "@leanandmean/tui";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
@@ -238,6 +238,49 @@ it.each(["main", "extension"])("does not restart the %s editor after unproven in
 		vi.unstubAllEnvs();
 	}
 });
+
+it.each(["ERR_TERMINAL_INPUT_LOST", "EIO", "EPIPE", "ENOTCONN", undefined])(
+	"routes input-loss-first %s errors without confusing generic faults with terminal loss",
+	async (code) => {
+		const error = Object.assign(new Error("macOS input failed"), { code });
+		let callbacks!: NativeCopyOptions;
+		Object.assign(h.terminal, {
+			configureNativeCopy: (options: NativeCopyOptions) => {
+				callbacks = options;
+				return { setLease() {}, isCurrent: () => false, dispose() {} };
+			},
+		});
+		h.internals.configureRetainedViewport();
+		const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("exit intercepted");
+		});
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});
+		const stop = vi.spyOn(h.internals.ui, "stop");
+		const signal = process.listeners("uncaughtException")[0] as (error: Error) => void;
+		const mark = h.terminal.markWrites();
+		try {
+			expect(() => callbacks.onError(error)).toThrow(error);
+			await expect(h.internals.ui.renderNow()).rejects.toBe(error);
+			expect(() => signal(error)).toThrow("exit intercepted");
+			if (code === "ERR_TERMINAL_INPUT_LOST") {
+				expect(exit).toHaveBeenCalledExactlyOnceWith(129);
+				expect(stop).not.toHaveBeenCalled();
+				expect(stdout).not.toHaveBeenCalled();
+				expect(stderr).not.toHaveBeenCalled();
+				expect(diagnostics).not.toHaveBeenCalled();
+				expect(h.terminal.writesSince(mark)).toBe("");
+			} else {
+				expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+				expect(stop).toHaveBeenCalledOnce();
+				expect(diagnostics).toHaveBeenCalledWith(error);
+			}
+		} finally {
+			stop.mockImplementation(() => h.terminal.stop());
+		}
+	},
+);
 
 it("removes the resume handler when suspension release fails", async () => {
 	const listeners = process.listeners("SIGCONT");

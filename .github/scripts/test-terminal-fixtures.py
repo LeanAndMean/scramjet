@@ -12,6 +12,7 @@ import shutil
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import time
@@ -273,7 +274,18 @@ def interaction_check(name, context):
     return eval(compile(ast.Expression(body=predicate), "terminal-probe.py", "eval"), context)
 
 
+def termios_configuration(attrs):
+    configuration = list(attrs)
+    if sys.platform == "darwin":
+        configuration[3] &= ~0x20000000
+    return configuration
+
+
 class NativeCandidateProvenanceTests(unittest.TestCase):
+    def test_installed_origin_follows_darwin_tmp_canonicalization(self):
+        with patch.object(Path, "resolve", return_value=Path("/private/tmp/native-install")):
+            self.test_both_drivers_require_exact_caller_sha_and_clean_fixture()
+
     def test_both_drivers_require_exact_caller_sha_and_clean_fixture(self):
         sha = "a" * 40
         for driver in ("terminal-probe.py", "terminal-safety.py"):
@@ -283,7 +295,7 @@ class NativeCandidateProvenanceTests(unittest.TestCase):
                              and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == "checkoutProvenanceMatches")
             code = compile(ast.Expression(body=predicate), driver, "eval")
             for installed in ((False, True) if driver == "terminal-probe.py" else (False,)):
-                origin = {"kind": "installed", "root": "/tmp/native-install"} if installed else {"kind": "checkout"}
+                origin = {"kind": "installed", "root": str(Path("/tmp/native-install").resolve())} if installed else {"kind": "checkout"}
                 current = {"sourceRevision": sha, "sourceDirty": False, "runtimeOrigin": origin}
                 environment = {"GITHUB_SHA": sha}
                 if installed:
@@ -369,6 +381,20 @@ class NativeClipboardOracleTests(unittest.TestCase):
         for field, value in (("submissions", 1), ("editorCursor", {"line": 1, "col": 0}), ("frameFlushed", False)):
             self.assertFalse(check(before, {**after, field: value}, "café 界\nsecond line"))
         self.assertFalse(check(before, {key: value for key, value in after.items() if key != "editorCursor"}, "café 界\nsecond line"))
+
+    def test_pty_restoration_masks_only_darwin_pendin(self):
+        baseline = [1, 2, 3, 1483, 9600, 9600, [b"x", b"y"]]
+        transient = [*baseline[:3], baseline[3] | 0x20000000, *baseline[4:]]
+        for platform in ("darwin", "linux"):
+            with self.subTest(platform=platform), patch.object(sys, "platform", platform):
+                self.assertEqual(termios_configuration(baseline) == termios_configuration(transient), platform == "darwin")
+                for field in range(6):
+                    changed = list(transient)
+                    changed[field] ^= 1
+                    self.assertNotEqual(termios_configuration(baseline), termios_configuration(changed))
+                changed = [*transient[:6], [b"z", b"y"]]
+                self.assertNotEqual(termios_configuration(baseline), termios_configuration(changed))
+        self.assertEqual(transient[3], baseline[3] | 0x20000000)
 
     def test_only_darwin_pendin_state_may_differ_before_read(self):
         check = self.context["termios_configuration_equal"]
@@ -828,7 +854,7 @@ class PasteEvidenceTests(unittest.TestCase):
                     self.assertIn(b"Production candidate", output)
                     self.assertNotIn(b"\x1b[?1049h", output)
                     self.assertNotIn(b"\x1b[?1002h", output)
-                    self.assertEqual(termios.tcgetattr(slave), before)
+                    self.assertEqual(termios_configuration(termios.tcgetattr(slave)), termios_configuration(before))
                 finally:
                     try:
                         if child.poll() is None:
@@ -918,7 +944,7 @@ class PasteEvidenceTests(unittest.TestCase):
                         self.assertIn(b"\x1b[?1049l", output)
                         restored = bytes(output).rsplit(b"\x1b[?1049l", 1)[1]
                         self.assertNotRegex(restored, rb"ROW-|CARD-|NATIVE-IMAGE-TRANSCRIPT")
-                        self.assertEqual(termios.tcgetattr(slave), before)
+                        self.assertEqual(termios_configuration(termios.tcgetattr(slave)), termios_configuration(before))
                     finally:
                         try:
                             if child.poll() is None:

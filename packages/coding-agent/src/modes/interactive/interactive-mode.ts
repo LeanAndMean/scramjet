@@ -3930,6 +3930,8 @@ export class InteractiveMode {
 	 * paste / Kitty / modifyOtherKeys sequences.
 	 */
 	private uncaughtCrash(error: Error): never {
+		// SCRAMJET-DIVERGENCE: input loss can precede SIGHUP or an output error; never write to a known dead terminal.
+		if ((error as NodeJS.ErrnoException).code === "ERR_TERMINAL_INPUT_LOST") this.emergencyTerminalExit();
 		if (this.isShuttingDown) {
 			process.exit(1);
 		}

@@ -1,7 +1,10 @@
+import { readSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { type InputMessage, MacosInput } from "../src/macos-input.js";
-import { createNative, MacosInputReader } from "../src/macos-input-worker.js";
+import { createNative, MacosInputReader, readTerminalInput } from "../src/macos-input-worker.js";
+
+vi.mock("node:fs", { spy: true });
 
 function fixture() {
 	const shared = new Int32Array(new SharedArrayBuffer(24));
@@ -288,6 +291,52 @@ describe("macOS input ownership", () => {
 	});
 });
 
+describe("terminal input loss classification", () => {
+	it.each(["hangup", "poll-error", "eof", "EIO", "EPIPE", "ENOTCONN", "invalid-fd", "poll-failure", "EBADF"])(
+		"classifies only proven terminal loss at %s",
+		(mode) => {
+			const read = vi.mocked(readSync).mockImplementation(() => {
+				if (mode === "eof") return 0;
+				throw Object.assign(new Error("read failed"), { code: mode });
+			});
+			try {
+				const poll = (descriptor: { revents: number }) => {
+					descriptor.revents =
+						mode === "hangup" ? 0x10 : mode === "poll-error" ? 0x8 : mode === "invalid-fd" ? 0x20 : 1;
+					return mode === "poll-failure" ? -1 : 1;
+				};
+				let error: NodeJS.ErrnoException | undefined;
+				try {
+					readTerminalInput(poll, Buffer.alloc(16));
+				} catch (caught) {
+					error = caught as NodeJS.ErrnoException;
+				}
+				expect(error).toBeInstanceOf(Error);
+				const terminalLost = ["hangup", "poll-error", "eof", "EIO", "EPIPE", "ENOTCONN"].includes(mode);
+				expect(error?.code === "ERR_TERMINAL_INPUT_LOST").toBe(terminalLost);
+			} finally {
+				read.mockRestore();
+			}
+		},
+	);
+
+	it.each(["EAGAIN", "EINTR"])("keeps %s retryable without classifying terminal loss", (code) => {
+		const read = vi.mocked(readSync).mockImplementation(() => {
+			throw Object.assign(new Error("read interrupted"), { code });
+		});
+		try {
+			expect(
+				readTerminalInput((descriptor) => {
+					descriptor.revents = 1;
+					return 1;
+				}, Buffer.alloc(16)),
+			).toBeNull();
+		} finally {
+			read.mockRestore();
+		}
+	});
+});
+
 describe("native API boundary", () => {
 	it("validates parameter status and signature, preserves the event ID and checks release statuses", () => {
 		let callback!: (next: unknown, event: unknown) => number;
@@ -401,6 +450,69 @@ describe("synchronous Worker settlement", () => {
 			transport.stop();
 		}
 	});
+	it.each(["notification", "atomic", "ack", "wait", "generic"])(
+		"preserves terminal-loss classification through %s failure settlement",
+		async (mode) => {
+			let worker!: Worker;
+			let shared!: Int32Array;
+			const onError = vi.fn();
+			const transport = new MacosInput(
+				vi.fn(),
+				vi.fn(),
+				vi.fn(),
+				(data) => {
+					shared = new Int32Array(data.shared);
+					worker = new Worker(
+						`
+						const { workerData } = require('node:worker_threads');
+						const { port, shared, mode } = workerData;
+						const state = new Int32Array(shared);
+						Atomics.store(state, 4, 1); Atomics.notify(state, 4);
+						port.on('message', (m) => {
+							if (!m.ack) return;
+							const ack = new Int32Array(m.ack);
+							if (m.command.kind === 'mouse') {
+								Atomics.store(state, 0, 2);
+								if (mode === 'wait') return;
+								Atomics.store(ack, 1, -1);
+							} else Atomics.store(ack, 1, 1);
+							Atomics.store(ack, 0, m.sequence); Atomics.notify(ack, 0);
+							if (m.command.kind === 'commit' && (mode === 'notification' || mode === 'generic')) {
+								port.postMessage({kind:'fault', reason:'input lost', code:mode === 'notification' ? 'ERR_TERMINAL_INPUT_LOST' : undefined});
+							}
+						});
+						`,
+						{ eval: true, workerData: { ...data, mode }, transferList: [data.port] },
+					);
+					return worker;
+				},
+				onError,
+			);
+			try {
+				transport.prepare();
+				transport.commit();
+				if (mode === "notification" || mode === "generic") {
+					await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+					expect(onError.mock.calls[0][0].code).toBe(
+						mode === "notification" ? "ERR_TERMINAL_INPUT_LOST" : undefined,
+					);
+				} else {
+					if (mode === "atomic") Atomics.store(shared, 0, 2);
+					let error: unknown;
+					try {
+						transport.setMouseReporting(true);
+					} catch (caught) {
+						error = caught;
+					}
+					expect(error).toMatchObject({ code: "ERR_TERMINAL_INPUT_LOST" });
+				}
+				expect(() => transport.commit()).toThrow();
+				expect(() => transport.stop()).toThrow();
+			} finally {
+				await worker.terminate();
+			}
+		},
+	);
 	it.each(["failure", "timeout", "exit"])(
 		"faults instead of restarting after uncertain %s settlement",
 		async (mode) => {

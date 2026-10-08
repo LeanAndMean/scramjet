@@ -157,6 +157,25 @@ describe("native viewport copy", () => {
 		expect(leases).toEqual([null]);
 	});
 
+	it("latches viewport entry failure before reporting successful startup", async () => {
+		const terminal = new HeadlessTerminal(31, 6);
+		const tui = new TUI(terminal);
+		tui.configureViewport({ getBlocks: () => [] });
+		const error = new Error("mouse ACK failed");
+		const start = vi.spyOn(terminal, "start");
+		const mode = vi.spyOn(terminal, "setViewportMode").mockImplementationOnce(() => {
+			throw error;
+		});
+		const listener = vi.fn();
+		tui.addLifecycleListener(listener);
+		expect(() => tui.start()).toThrow(error);
+		expect(() => tui.start()).toThrow(error);
+		await expect(tui.renderNow()).rejects.toBe(error);
+		expect(start).toHaveBeenCalledOnce();
+		expect(mode).toHaveBeenCalledOnce();
+		expect(listener).not.toHaveBeenCalled();
+	});
+
 	it("keeps mode-release failure faulted across repeated stop and start", async () => {
 		const h = await nativeSetup();
 		vi.spyOn(h.terminal, "setViewportMode").mockImplementationOnce(() => {
