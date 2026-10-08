@@ -409,6 +409,53 @@ class NativeClipboardOracleTests(unittest.TestCase):
 
 
 class NativeNegativeControlVerdictTests(unittest.TestCase):
+    def test_noop_copy_control_rejects_failed_screenshot_acquisition(self):
+        source = interaction_source()
+        finalizer = next(node for node in source.body if isinstance(node, ast.Try))
+        classifier = next(node for node in finalizer.finalbody if isinstance(node, ast.If)
+                          and isinstance(node.test, ast.Name) and node.test.id == "negative_control")
+        declarations = [node for node in source.body if
+                        isinstance(node, ast.FunctionDef) and node.name in
+                        ("screenshot", "required_checks", "report_passed", "termios_configuration_equal")
+                        or isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                        and target.id == "REQUIRED_CHECKS" for target in node.targets)]
+        code = compile(ast.Module(body=declarations, type_ignores=[]), "terminal-probe.py", "exec")
+        classify = compile(ast.Module(body=[classifier], type_ignores=[]), "terminal-probe.py", "exec")
+        exit_status = compile(ast.Expression(body=source.body[-1].value.args[0]), "terminal-probe.py", "eval")
+        reached = ("checkoutProvenanceMatches", "productionCompositionConfigured", "defaultDockKeepsInputVisible",
+                   "sessionContinuationMatchesViewport", "productConfirmFramed", "productConfirmSelects",
+                   "productSelectFramed", "productSelectPartialNeighbors", "productSelectSelects",
+                   "productNextFramed", "productNextSelects", "productModelFramed", "productModelSelects",
+                   "desktopWheelScrollsDocument", "desktopThumbDragReachesEnd", "desktopTrackClickReachesStart",
+                   "ordinaryDesktopDragSelects", "sentinelSurvivesSelectionAndUpdate")
+        screenshots = ("startup", "selector-confirm", "selector-select", "selector-next", "selector-model",
+                       "wheel", "selection", "failure")
+        baseline = "gfmt1:cflag=4b00:iflag=6b02:lflag=5cf:oflag=3:min=1:time=0:"
+        with tempfile.TemporaryDirectory() as directory:
+            for screenshot_exit in (0, 1):
+                report = {"error": "nativeCommandCCopy", "passed": False,
+                          "checks": {**{name: {"passed": True} for name in reached},
+                                     "nativeCommandCCopy": {"passed": False}},
+                          "negativeControlExit": {"status": "0", "fixture": {"stopped": True,
+                              "negativeControl": "noop-copy", "termiosBefore": baseline, "termiosAfter": baseline}},
+                          "ownedTerminalClosed": {"pid": 42, "shellPid": 43}}
+                process = Mock()
+                process.run.return_value = Mock(returncode=0, stderr="")
+                context = {"re": re, "negative_control": "noop-copy", "report": report, "is_mac": True,
+                           "stock_copy": True, "terminal_kind": "apple", "with_tmux": False,
+                           "output": Path(directory), "subprocess": process}
+                exec(code, context)
+                for name in screenshots:
+                    process.run.return_value = Mock(returncode=screenshot_exit if name == "startup" else 0,
+                                                    stderr="screen capture failed" if name == "startup" and screenshot_exit else "")
+                    context["screenshot"](name)
+                report["passed"] = context["report_passed"]()
+                exec(classify, context)
+                with self.subTest(screenshot_exit=screenshot_exit):
+                    self.assertFalse(report["passed"])
+                    self.assertEqual((report["negativeControlRejected"], eval(exit_status, context)),
+                                     (screenshot_exit == 0, screenshot_exit))
+
     def test_only_expected_outcome_failure_with_provenance_and_cleanup_is_accepted(self):
         source = interaction_source()
         finalizer = next(node for node in source.body if isinstance(node, ast.Try))
