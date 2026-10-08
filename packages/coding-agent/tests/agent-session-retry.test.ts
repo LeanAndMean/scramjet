@@ -6,7 +6,8 @@ import type { AssistantMessage, Model } from "@leanandmean/ai";
 import { createAssistantMessageEventStream, getModel, streamSimpleOpenAIResponses } from "@leanandmean/ai";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentSessionEvent } from "../src/core/agent-session.js";
+import { streamOpenAICodexResponses } from "../../ai/src/providers/openai-codex-responses.js";
+import type { AgentSessionEvent, PromptOptions, RunSettlement } from "../src/core/agent-session.js";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { defineTool, type ExtensionAPI, type ToolDefinition } from "../src/core/extensions/index.js";
@@ -230,6 +231,21 @@ async function createFixture(
 	return { session, events };
 }
 
+function captureSettlement(): { options: PromptOptions; get: () => Promise<RunSettlement> } {
+	let captured: Promise<RunSettlement> | undefined;
+	return {
+		options: {
+			onRunSettlement: (settlement) => {
+				captured = settlement;
+			},
+		},
+		get: () => {
+			if (!captured) throw new Error("No run settlement captured");
+			return captured;
+		},
+	};
+}
+
 function retryEvents(events: AgentSessionEvent[]) {
 	return events.filter((e) => e.type === "auto_retry_start" || e.type === "auto_retry_end");
 }
@@ -361,7 +377,7 @@ describe("Provider failure recovery policy", () => {
 				await session.prompt("next");
 				if (kind === "eligible") {
 					expect(compact).toHaveBeenCalledTimes(1);
-					expect(compact).toHaveBeenCalledWith("threshold", false);
+					expect(compact).toHaveBeenCalledWith("threshold", false, undefined, false);
 				} else expect(compact).not.toHaveBeenCalled();
 				expect(retryEvents(events)).toEqual([]);
 			} finally {
@@ -413,7 +429,7 @@ describe("Provider failure recovery policy", () => {
 			await session.prompt("next");
 			expect(calls).toBe(3);
 			expect(compact).toHaveBeenCalledTimes(1);
-			expect(compact).toHaveBeenCalledWith("threshold", false);
+			expect(compact).toHaveBeenCalledWith("threshold", false, undefined, false);
 			expect(retryEvents(events)).toEqual([]);
 		} finally {
 			compact.mockRestore();
@@ -444,7 +460,7 @@ describe("Provider failure recovery policy", () => {
 				await internal._checkCompaction(failed);
 				expect(compact).not.toHaveBeenCalled();
 				await session.prompt("next");
-				expect(compact).toHaveBeenCalledWith("threshold", false);
+				expect(compact).toHaveBeenCalledWith("threshold", false, undefined, false);
 			} finally {
 				compact.mockRestore();
 				session.dispose();
@@ -465,7 +481,7 @@ describe("Provider failure recovery policy", () => {
 		await internal._checkCompaction(failed, "settlement");
 		expect(compact).not.toHaveBeenCalled();
 		await internal._checkCompaction(failed, "new_prompt");
-		expect(compact).toHaveBeenCalledWith("threshold", false);
+		expect(compact).toHaveBeenCalledWith("threshold", false, undefined, false);
 		session.dispose();
 	});
 });
@@ -595,7 +611,7 @@ describe("AgentSession context window", () => {
 
 		expect(exactCompact).not.toHaveBeenCalled();
 		expect(aboveCompact).toHaveBeenCalledOnce();
-		expect(aboveCompact).toHaveBeenCalledWith("threshold", false);
+		expect(aboveCompact).toHaveBeenCalledWith("threshold", false, undefined);
 	});
 
 	it("compacts provider input-limit overflow errors instead of auto-retrying them", async () => {
@@ -904,7 +920,7 @@ describe("context migration recovery invariants", () => {
 		await internal._checkCompaction(failure);
 		await internal._checkCompaction(failure);
 		expect(compact).toHaveBeenCalledTimes(1);
-		expect(compact).toHaveBeenCalledWith("overflow", true);
+		expect(compact).toHaveBeenCalledWith("overflow", true, undefined);
 		expect(events).not.toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
 		expect(events).toContainEqual(
 			expect.objectContaining({
@@ -2522,6 +2538,494 @@ describe("AgentSession persisted retry authority", () => {
 					message.role === "assistant" &&
 					message.content.some((block) => block.type === "text" && block.text === "steered reply"),
 			),
+		).toBe(true);
+	});
+});
+
+describe("originating run settlement", () => {
+	it.each([true, false])("retains a failed snapshot when retry enabled is %s", async (retryEnabled) => {
+		const { session } = await createFixture(() => assistantError("rate limit"), { maxRetries: 1, retryEnabled });
+		const capture = captureSettlement();
+		await session.prompt("hello", capture.options);
+		expect(await capture.get()).toMatchObject({ status: "failed", assistantMessage: { stopReason: "error" } });
+		await expect(session.prompt("next")).resolves.toBeUndefined();
+	});
+
+	it("captures before a delayed launch and rejects launch without a start", async () => {
+		const { session } = await createFixture(() => assistantText("ok"));
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const launch = session.agent.prompt.bind(session.agent);
+		vi.spyOn(session.agent, "prompt").mockImplementation(async (messages) => {
+			await gate;
+			await launch(messages);
+		});
+		const capture = captureSettlement();
+		const prompt = session.prompt("hello", capture.options);
+		await vi.waitFor(() => expect(session.agent.prompt).toHaveBeenCalledOnce());
+		let settled = false;
+		void capture.get().then(() => {
+			settled = true;
+		});
+		await settle();
+		expect(settled).toBe(false);
+		release();
+		await prompt;
+		expect(await capture.get()).toMatchObject({
+			status: "completed",
+			assistantMessage: { content: [{ text: "ok" }] },
+		});
+		vi.spyOn(session.agent, "prompt").mockResolvedValueOnce();
+		const refused = captureSettlement();
+		await expect(session.prompt("no start", refused.options)).rejects.toThrow("before agent_start");
+		await expect(refused.get()).rejects.toThrow("before agent_start");
+	});
+
+	it("does not launch if the synchronous capture callback throws", async () => {
+		const { session } = await createFixture(() => assistantText("ok"));
+		const launch = vi.spyOn(session.agent, "prompt");
+		let captured!: Promise<RunSettlement>;
+		await expect(
+			session.prompt("hello", {
+				onRunSettlement: (promise) => {
+					captured = promise;
+					throw new Error("capture refused");
+				},
+			}),
+		).rejects.toThrow("capture refused");
+		await expect(captured).rejects.toThrow("capture refused");
+		expect(launch).not.toHaveBeenCalled();
+		await session.prompt("next");
+	});
+
+	it("does not capture handled input or rejected preflight", async () => {
+		const { session } = await createFixture(() => assistantText("ok"), {
+			extensionFactory: (pi) => {
+				pi.on("input", (event) => (event.text === "handled" ? { action: "handled" } : { action: "continue" }));
+			},
+		});
+		const onRunSettlement = vi.fn();
+		await session.prompt("handled", { onRunSettlement });
+		session.agent.state.model = undefined as never;
+		await expect(session.prompt("invalid", { onRunSettlement })).rejects.toThrow();
+		expect(onRunSettlement).not.toHaveBeenCalled();
+	});
+
+	it("rejects a captured success when originating execution later rejects", async () => {
+		const { session } = await createFixture(() => assistantText("ok"));
+		const launch = session.agent.prompt.bind(session.agent);
+		vi.spyOn(session.agent, "prompt").mockImplementation(async (messages) => {
+			await launch(messages);
+			await settle();
+			throw new Error("late unwind failure");
+		});
+		const capture = captureSettlement();
+		await expect(session.prompt("hello", capture.options)).rejects.toThrow();
+		await expect(capture.get()).rejects.toThrow("late unwind failure");
+	});
+
+	it("rejects a retry success when continuation execution later rejects after phase release", async () => {
+		const { session } = await createFixture((i) => (i === 0 ? assistantError("rate limit") : assistantText("ok")));
+		const launch = session.agent.continue.bind(session.agent);
+		vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			await launch();
+			await settle();
+			throw new Error("late continuation unwind failure");
+		});
+		const capture = captureSettlement();
+		await expect(session.prompt("hello", capture.options)).rejects.toThrow();
+		await expect(capture.get()).rejects.toThrow("late continuation unwind failure");
+		expect(session.isRetrying).toBe(false);
+	});
+
+	it("latches cancellation before persisted error classification creates backoff", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { session, events } = await createFixture(() => assistantError("rate limit"), {
+			extensionFactory: (pi) => {
+				pi.on("agent_end", async () => {
+					await gate;
+				});
+			},
+		});
+		const capture = captureSettlement();
+		const prompt = session.prompt("hello", capture.options);
+		await vi.waitFor(() =>
+			expect(
+				session.sessionManager.getBranch().some((e) => e.type === "message" && e.message.role === "assistant"),
+			).toBe(true),
+		);
+		session.abortRetry();
+		release();
+		await prompt;
+		expect(await capture.get()).toMatchObject({ status: "cancelled" });
+		expect(retryEvents(events)).toEqual([]);
+	});
+
+	it.each(["nested error", "close 1000"])(
+		"recovers actual Codex %s through legitimate tools and final text",
+		async (kind) => {
+			const model = getModel("openai-codex", "gpt-6-astra");
+			const apiKey = `x.${btoa(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test" } }))}.x`;
+			let attempt = 0;
+			const failedTool = {
+				type: "response.output_item.done",
+				output_index: 0,
+				item: {
+					type: "function_call",
+					id: "fc_bad",
+					call_id: "bad",
+					name: "dummy",
+					arguments: "{}",
+					status: "completed",
+				},
+			};
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(
+					async () =>
+						new Response(
+							[
+								{ type: "response.created", response: { id: "resp_1" } },
+								failedTool,
+								{
+									type: "error",
+									error: {
+										message: "An error occurred while processing your request.",
+										type: "server_error",
+										param: null,
+										code: "server_error",
+									},
+									status: 503,
+									sequence_number: 2,
+								},
+							]
+								.map((e) => `data: ${JSON.stringify(e)}\n\n`)
+								.join(""),
+						),
+				),
+			);
+			class Socket extends EventTarget {
+				readyState = 1;
+				constructor() {
+					super();
+					queueMicrotask(() => this.dispatchEvent(new Event("open")));
+				}
+				send() {
+					setTimeout(() => {
+						for (const event of [{ type: "response.created", response: { id: "resp_1" } }, failedTool])
+							this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
+						this.dispatchEvent(Object.assign(new Event("close"), { code: 1000 }));
+					}, 0);
+				}
+				close() {
+					this.readyState = 3;
+				}
+			}
+			vi.stubGlobal("WebSocket", Socket);
+			const tool = makeDummyTool();
+			const execute = vi.spyOn(tool, "execute");
+			try {
+				const { session } = await createFixture(() => assistantText("unused"), {
+					customTools: [tool],
+					streamFn: () => {
+						if (attempt++ === 0)
+							return streamOpenAICodexResponses(
+								model,
+								{ messages: [{ role: "user", content: "hello", timestamp: 0 }], tools: [] },
+								{ apiKey, transport: kind === "nested error" ? "sse" : "websocket" },
+							);
+						const message =
+							attempt === 2 ? assistantToolCall("dummy", "legitimate") : assistantText("recovered final text");
+						const stream = createAssistantMessageEventStream();
+						stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
+						return stream;
+					},
+				});
+				const capture = captureSettlement();
+				await session.prompt("hello", capture.options);
+				expect(execute).toHaveBeenCalledOnce();
+				expect(execute.mock.calls[0][0]).toBe("legitimate");
+				expect(await capture.get()).toMatchObject({
+					status: "completed",
+					assistantMessage: { content: [{ text: "recovered final text" }] },
+				});
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		},
+	);
+
+	it.each([
+		"success",
+		"cancel maintenance",
+		"cancel handoff",
+		"dispose handoff",
+		"reject continuation",
+		"persist failure",
+		"skip overflow",
+		"failed maintenance",
+	])("owns automatic compaction and continuation: %s", async (kind) => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let maintenanceStarted = false;
+		const { session, events } = await createFixture(
+			(i) => (i === 0 ? assistantError("maximum context length exceeded") : assistantText("after compaction")),
+			{
+				extensionFactory: (pi) => {
+					pi.on("session_before_compact", async (event) => {
+						maintenanceStarted = true;
+						await gate;
+						if (kind === "skip overflow") return { cancel: true };
+						if (kind === "failed maintenance") return { cancel: true };
+						return {
+							compaction: {
+								summary: "summary",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+							},
+						};
+					});
+				},
+			},
+		);
+		const prior = { role: "user" as const, content: "old conversation", timestamp: Date.now() - 1000 };
+		if (kind !== "failed maintenance") {
+			session.sessionManager.appendMessage(prior);
+			session.sessionManager.appendMessage(assistantText("old answer"));
+		}
+		const launch = vi.spyOn(session.agent, "continue");
+		if (kind === "reject continuation") launch.mockRejectedValue(new Error("maintenance continuation rejected"));
+		if (kind === "persist failure")
+			vi.spyOn(session.sessionManager, "appendCompaction").mockImplementation(() => {
+				throw new Error("compaction persistence failed");
+			});
+		const capture = captureSettlement();
+		const prompt = session.prompt("hello", capture.options);
+		prompt.catch(() => {});
+		if (kind === "failed maintenance") {
+			release();
+			await prompt;
+			expect(await capture.get()).toMatchObject({
+				status: "failed",
+				errorMessage: expect.stringContaining("could not compact"),
+			});
+			return;
+		}
+		await vi.waitFor(() => expect(maintenanceStarted).toBe(true));
+		let settled = false;
+		void capture.get().then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await settle();
+		expect(settled).toBe(false);
+		if (kind === "cancel maintenance") session.abortRetry();
+		release();
+		if (kind === "cancel handoff" || kind === "dispose handoff") {
+			await vi.waitFor(() => expect(events.some((e) => e.type === "compaction_end" && e.result)).toBe(true), {
+				interval: 1,
+			});
+			expect(settled).toBe(false);
+			if (kind === "cancel handoff") session.abortRetry();
+			else session.dispose();
+		}
+		if (kind === "reject continuation" || kind === "dispose handoff" || kind === "persist failure") {
+			await expect(prompt).rejects.toThrow();
+			await expect(capture.get()).rejects.toThrow();
+		} else {
+			await prompt;
+			expect(await capture.get()).toMatchObject({
+				status: kind.startsWith("cancel") ? "cancelled" : kind === "skip overflow" ? "failed" : "completed",
+			});
+		}
+		if (kind.startsWith("cancel") || kind === "dispose handoff") {
+			await new Promise((resolve) => setTimeout(resolve, 120));
+			expect(launch).not.toHaveBeenCalled();
+		}
+	});
+
+	it("retains successful output through optional threshold maintenance and owns queued continuation", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let started = false;
+		const large = {
+			...assistantText("successful output"),
+			usage: { input: 95_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+		};
+		const { session } = await createFixture((i) => (i === 0 ? large : assistantText("queued output")), {
+			model: { ...testModel, contextWindow: 100_000 },
+			reserveTokens: 10_000,
+			extensionFactory: (pi) => {
+				pi.on("session_before_compact", async (event) => {
+					started = true;
+					await gate;
+					return {
+						compaction: {
+							summary: "summary",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+						},
+					};
+				});
+			},
+		});
+		const prior = { role: "user" as const, content: "old context", timestamp: Date.now() - 1000 };
+		session.sessionManager.appendMessage(prior);
+		session.sessionManager.appendMessage(assistantText("old result"));
+		const capture = captureSettlement();
+		const prompt = session.prompt("hello", capture.options);
+		await vi.waitFor(() => expect(started).toBe(true));
+		let settled = false;
+		void capture.get().then(() => {
+			settled = true;
+		});
+		await settle();
+		expect(settled).toBe(false);
+		session.agent.followUp({ role: "user", content: "queued", timestamp: Date.now() });
+		release();
+		await prompt;
+		expect(await capture.get()).toMatchObject({
+			status: "completed",
+			assistantMessage: { content: [{ text: "queued output" }] },
+		});
+	});
+
+	it("keeps harness failure capture pending until actual execution unwind", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { session } = await createFixture(() => assistantError("infrastructure failure"), {
+			extensionFactory: (pi) => {
+				pi.on("message_end", (event) =>
+					event.message.role === "assistant" ? { message: { ...event.message, origin: "harness" } } : undefined,
+				);
+			},
+		});
+		const launch = session.agent.prompt.bind(session.agent);
+		vi.spyOn(session.agent, "prompt").mockImplementation(async (messages) => {
+			await launch(messages);
+			await gate;
+		});
+		const capture = captureSettlement();
+		const prompt = session.prompt("hello", capture.options);
+		await vi.waitFor(() =>
+			expect(
+				session.sessionManager.getBranch().some((e) => e.type === "message" && e.message.role === "assistant"),
+			).toBe(true),
+		);
+		let settled = false;
+		void capture.get().then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await settle();
+		expect(settled).toBe(false);
+		release();
+		await prompt;
+		await expect(capture.get()).rejects.toThrow("infrastructure failure");
+	});
+
+	it("new-prompt threshold preflight does not schedule a competing queued continuation", async () => {
+		const { session } = await createFixture(() => assistantText("new answer"), {
+			model: { ...testModel, contextWindow: 100_000 },
+			reserveTokens: 10_000,
+			extensionFactory: (pi) => {
+				pi.on("session_before_compact", (event) => ({
+					compaction: {
+						summary: "summary",
+						firstKeptEntryId: event.preparation.firstKeptEntryId,
+						tokensBefore: event.preparation.tokensBefore,
+					},
+				}));
+			},
+		});
+		const prior = { role: "user" as const, content: "old context", timestamp: Date.now() - 1000 };
+		const large = {
+			...assistantText("old answer"),
+			usage: { input: 95_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+		};
+		session.sessionManager.appendMessage(prior);
+		session.sessionManager.appendMessage(large);
+		session.agent.state.messages = [prior, large];
+		session.agent.followUp({ role: "user", content: "retained followup", timestamp: Date.now() });
+		const continuation = vi.spyOn(session.agent, "continue");
+		const capture = captureSettlement();
+		await session.prompt("deliberate new prompt", capture.options);
+		expect(await capture.get()).toMatchObject({ status: "completed" });
+		await new Promise((resolve) => setTimeout(resolve, 120));
+		expect(continuation).not.toHaveBeenCalled();
+		expect(
+			session.messages.some((m) => m.role === "user" && JSON.stringify(m.content).includes("deliberate new prompt")),
+		).toBe(true);
+	});
+
+	it("does not capture explicit streaming queues and cancels backoff without stranding capture", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { session, events } = await createFixture(() => assistantError("rate limit"), {
+			baseDelayMs: 10_000,
+			streamFn: () => {
+				const stream = createAssistantMessageEventStream();
+				void gate.then(() => {
+					stream.push({ type: "error", reason: "error", error: assistantError("rate limit") });
+				});
+				return stream;
+			},
+		});
+		const capture = captureSettlement();
+		const prompt = session.prompt("hello", capture.options);
+		await vi.waitFor(() => expect(session.isStreaming).toBe(true));
+		const onRunSettlement = vi.fn();
+		await session.prompt("queued", { streamingBehavior: "followUp", onRunSettlement });
+		expect(onRunSettlement).not.toHaveBeenCalled();
+		release();
+		await vi.waitFor(() => expect(events.some((e) => e.type === "auto_retry_start")).toBe(true));
+		session.abortRetry();
+		await prompt;
+		expect(await capture.get()).toMatchObject({ status: "cancelled", assistantMessage: { stopReason: "error" } });
+		expect(session.isRetrying).toBe(false);
+	});
+
+	it("keeps disk-backed final output independent of later prompts and harness output", async () => {
+		const { session } = await createFixture(() => assistantText("original"), {
+			persist: true,
+			customTools: [makeHarnessNoticeTool()],
+		});
+		const capture = captureSettlement();
+		await session.prompt("hello", capture.options);
+		const result = await capture.get();
+		await session.invokeHarnessTool("harness_notice", {});
+		await session.prompt("next");
+		expect(await capture.get()).toBe(result);
+		expect(result).toMatchObject({
+			status: "completed",
+			assistantMessage: { origin: "provider", content: [{ text: "original" }] },
+		});
+		const reopened = SessionManager.open(session.sessionFile!);
+		expect(
+			reopened
+				.getBranch()
+				.some((e) => e.type === "message" && e.message.role === "assistant" && e.message.origin === "provider"),
 		).toBe(true);
 	});
 });
