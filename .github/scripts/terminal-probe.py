@@ -645,7 +645,7 @@ try:
         key_profile += " --negative-control=" + negative_control
     report["negativeControl"] = negative_control
     report["stockCopy"] = stock_copy
-    report["viewportKeys"] = {"profile": "F8/F9" if key_profile else "Alt+PageUp/Alt+PageDown", "qualification": "Apple Terminal emitted unmodified PageUp for Option+PageUp; this is an explicit temporary app-keybinding profile, not a runtime terminal fallback." if key_profile else "default bindings"}
+    report["viewportKeys"] = {"profile": "F8/F9" if terminal_kind == "apple" else "Alt+PageUp/Alt+PageDown", "qualification": "Apple Terminal emitted unmodified PageUp for Option+PageUp; this is an explicit temporary app-keybinding profile, not a runtime terminal fallback." if terminal_kind == "apple" else "default bindings"}
     launcher = output / "launch.sh"
     launcher.write_text("#!/bin/bash\n" + "\n".join([
         f"rm -f {shlex.quote(str(output / 'exit-code'))} {shlex.quote(str(output / 'stty-after.txt'))}",

@@ -261,6 +261,19 @@ def interaction_check(name, context):
     return eval(compile(ast.Expression(body=predicate), "terminal-probe.py", "eval"), context)
 
 
+class NativeProfileEvidenceTests(unittest.TestCase):
+    def test_fixture_control_flags_do_not_claim_function_key_remapping(self):
+        assignment = next(node for node in ast.walk(interaction_source()) if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) and target.value.id == "report"
+            and isinstance(target.slice, ast.Constant) and target.slice.value == "viewportKeys" for target in node.targets))
+        code = compile(ast.Module(body=[assignment], type_ignores=[]), "terminal-probe.py", "exec")
+        for terminal, expected in (("apple", "F8/F9"), ("iterm2", "Alt+PageUp/Alt+PageDown")):
+            with self.subTest(terminal=terminal):
+                context = {"terminal_kind": terminal, "key_profile": " --native-handoffs --negative-control=noop-copy", "report": {}}
+                exec(code, context)
+                self.assertEqual(context["report"]["viewportKeys"]["profile"], expected)
+
+
 class NativeClipboardOracleTests(unittest.TestCase):
     def setUp(self):
         names = {"native_copy_outcome", "native_paste_outcome", "termios_configuration_equal"}
