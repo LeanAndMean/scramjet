@@ -124,19 +124,24 @@ export class ProcessTerminal implements Terminal {
 			}
 			const options = this.nativeOptions;
 			workerInputOwner = this;
-			this.macosInput = new MacosInput(
-				(kind, data) => (kind === "paste" ? this.dispatchPaste(data) : this.dispatchSequence(data)),
-				(notice) => this.nativeOptions?.onCopyIntent(notice),
-				(available, reason) => this.nativeOptions?.onAvailability(available, reason),
-				undefined,
-				(error) => {
-					clearTimeout(this.keyboardFallback);
-					this.keyboardFallback = undefined;
-					this.keyboardReportingAllowed = false;
-					this.clearProgressInterval();
-					options.onError(error);
-				},
-			);
+			try {
+				this.macosInput = new MacosInput(
+					(kind, data) => (kind === "paste" ? this.dispatchPaste(data) : this.dispatchSequence(data)),
+					(notice) => this.nativeOptions?.onCopyIntent(notice),
+					(available, reason) => this.nativeOptions?.onAvailability(available, reason),
+					undefined,
+					(error) => {
+						clearTimeout(this.keyboardFallback);
+						this.keyboardFallback = undefined;
+						this.keyboardReportingAllowed = false;
+						this.clearProgressInterval();
+						options.onError(error);
+					},
+				);
+			} catch (error) {
+				if (workerInputOwner === this) workerInputOwner = undefined;
+				throw error;
+			}
 			if (!this.macosInput.prepare()) {
 				this.macosInput = undefined;
 				workerInputOwner = undefined;
