@@ -465,15 +465,18 @@ class NativeNegativeControlVerdictTests(unittest.TestCase):
         for control, failure in (("noop-copy", "nativeCommandCCopy"), ("copy-on-selection", "sentinelSurvivesSelectionAndUpdate"), ("consumed-paste", "desktopPasteRoundTrip")):
             report = {"error": failure, "checks": {failure: {"passed": False}, **{name: {"passed": True} for name in ("checkoutProvenanceMatches", "productionCompositionConfigured", "ordinaryDesktopDragSelects")}},
                       "negativeControlExit": {"status": "0", "fixture": {"stopped": True, "negativeControl": control, "termiosBefore": "saved", "termiosAfter": "saved"}},
-                      "ownedTerminalClosed": {"pid": 42}}
+                      "ownedTerminalClosed": {"pid": 42}, "screenshots": {"startup": {"exit": 0, "error": ""}}}
             def accepted(candidate):
                 context = {"re": re, "negative_control": control, "report": candidate}
                 exec(code, context)
                 return candidate["negativeControlRejected"]
             with self.subTest(control=control):
                 self.assertTrue(accepted(report))
-                for field in ("negativeControlExit", "ownedTerminalClosed"):
+                for field in ("negativeControlExit", "ownedTerminalClosed", "screenshots"):
                     self.assertFalse(accepted({key: value for key, value in report.items() if key != field}))
+                for screenshots in ({}, {"startup": {"exit": 1, "error": "capture failed"}},
+                                    {**report["screenshots"], "failure": {"exit": 1, "error": "capture failed"}}):
+                    self.assertFalse(accepted({**report, "screenshots": screenshots}))
                 self.assertFalse(accepted({**report, "cleanupError": "surviving process"}))
                 self.assertFalse(accepted({**report, "error": "startup failed"}))
                 self.assertFalse(accepted({**report, "checks": {failure: {"passed": False}}}))

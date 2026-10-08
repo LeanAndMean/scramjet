@@ -1175,6 +1175,7 @@ finally:
             and report["checks"].get(expected_failure, {}).get("passed") is False
             and all(report["checks"].get(name, {}).get("passed") is True for name in ("checkoutProvenanceMatches", "productionCompositionConfigured", "ordinaryDesktopDragSelects"))
             and all(item.get("passed") is True for name, item in report["checks"].items() if name != expected_failure)
+            and bool(report.get("screenshots")) and all(item["exit"] == 0 for item in report["screenshots"].values())
             and "cleanupError" not in report and receipt.get("status") == "0"
             and final.get("stopped") is True and final.get("negativeControl") == negative_control
             and termios_configuration_equal(final.get("termiosBefore"), final.get("termiosAfter"), True)
