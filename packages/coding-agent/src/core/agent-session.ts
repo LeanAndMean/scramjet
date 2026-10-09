@@ -802,6 +802,9 @@ export class AgentSession {
 				void this.agent.waitForIdle().then(() => resolveDeferred(run.execution, undefined));
 			}
 			this._activeAgentRunSettlement = run;
+			void run.execution.promise.then(() => {
+				if (this._activeAgentRunSettlement === run) this._activeAgentRunSettlement = undefined;
+			});
 			this._unsettledAgentRuns.add(run);
 			if (chain.cancelled) this.agent.abort();
 			const reservation = this._pendingAgentRunStart;
@@ -814,9 +817,8 @@ export class AgentSession {
 		}
 
 		const run = this._activeAgentRunSettlement;
-		if (event.type === "agent_end" && this._activeAgentRunSettlement === run) {
-			this._activeAgentRunSettlement = undefined;
-		}
+		// An awaited end listener can still fail and emit another end before execution unwinds.
+		if (event.type === "agent_end" && run) run.chain.terminal = false;
 		return run;
 	}
 
