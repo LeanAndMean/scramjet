@@ -92,7 +92,10 @@ function Check([string]$Name, [scriptblock]$Predicate, [int]$StableMilliseconds 
 function Right-ClickPasted($Before, [string]$Text) {
     $current = State
     if ($current.rightWithoutSelection -ne ($Before.rightWithoutSelection + 1)) { return $false }
-    if ($current.editor -cne ($Before.editor + $Text) -or $current.submissions -ne $Before.submissions) { return $false }
+    if ($Before.editor -cne 'PREFIXSUFFIX' -or $Before.editorCursor.line -ne 0 -or $Before.editorCursor.col -ne 6) { return $false }
+    if ($current.editor -cne ('PREFIX' + $Text + 'SUFFIX') -or $current.submissions -ne $Before.submissions) { return $false }
+    if ($current.editorCursor.line -ne 1 -or $current.editorCursor.col -ne 11 -or $current.frameFlushed -ne $true) { return $false }
+    if ($current.rightPasteInsertions -ne ($Before.rightPasteInsertions + 1)) { return $false }
     foreach ($name in @('rightCopy', 'keyCopy', 'copyErrors', 'pasteMatches', 'pasteMismatches')) {
         if ($current.$name -cne $Before.$name) { return $false }
     }
@@ -376,7 +379,10 @@ try {
     [void](Check 'rightClickRequestsCopy' { (State).rightCopy -gt 0 })
     [void](Check 'rightClickClipboardExactUnicode' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expected, [StringComparison]::Ordinal) })
     Screenshot 'right-click'
-    $outsidePaste = 'RIGHT-PASTE'
+    Fixture-Command 'right-paste'
+    1..6 | ForEach-Object { Key 37 }
+    if (-not (Wait-For { (State).editorCursor.col -eq 6 })) { throw 'Interior paste caret was not established' }
+    $outsidePaste = "NATIVE caf$([char]0xE9) $([char]0x754C) e$([char]0x301)`nsecond line"
     [System.Windows.Forms.Clipboard]::SetText($outsidePaste)
     $beforeRight = State
     Mouse 8 $point[0] $point[1]
@@ -389,15 +395,18 @@ try {
     [void](Check 'controlCCopiesSelection' { (State).keyCopy -gt 0 -and [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expected, [StringComparison]::Ordinal) })
     Key 86 @(17, 16)
     [void](Check 'desktopPasteRoundTrip' { (State).pasteMatches -gt 0 })
+    Fixture-Command 'right-paste'
+    1..6 | ForEach-Object { Key 37 }
+    if (-not (Wait-For { (State).editorCursor.col -eq 6 })) { throw 'Interior paste caret was not established' }
     $pasteBefore = State
-    $pasteText = "RIGHT-PASTE caf$([char]0xE9) $([char]0x754C)`nsecond line"
+    $pasteText = $outsidePaste
     [System.Windows.Forms.Clipboard]::SetText($pasteText)
-    $editorRow = @(0..($pasteBefore.painted.Count - 1) | Where-Object { $pasteBefore.painted[$_].Contains('Synthetic editor') })[0]
+    $editorRow = @(0..($pasteBefore.painted.Count - 1) | Where-Object { $pasteBefore.painted[$_].Contains('PREFIXSUFFIX') })[0]
     if ($null -eq $editorRow) { throw 'Paste target editor is not painted' }
     $point = Cell 3 ($editorRow + 1)
     Mouse 8 $point[0] $point[1]
     Mouse 16 $point[0] $point[1]
-    [void](Check 'editorRightClickPastesWithoutSubmit' { (State).editor -ceq ($pasteBefore.editor + $pasteText) -and (State).submissions -eq $pasteBefore.submissions })
+    [void](Check 'editorRightClickPastesWithoutSubmit' { Right-ClickPasted $pasteBefore $pasteText } 350)
     Screenshot 'editor-right-paste'
     Check-HeldWheelSelections $expected.Substring(7)
     Fixture-Command 'editor'

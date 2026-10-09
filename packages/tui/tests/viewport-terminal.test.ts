@@ -1,9 +1,13 @@
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
 import { StdinBuffer } from "../src/stdin-buffer.js";
 import { ProcessTerminal } from "../src/terminal.js";
+import { TUI } from "../src/tui.js";
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
 	vi.useRealTimers();
 });
 
@@ -171,7 +175,213 @@ describe("mouse transport framing", () => {
 	});
 });
 
+describe("ordinary Darwin input lifecycle", () => {
+	function setup() {
+		vi.useFakeTimers();
+		const stdin = Object.assign(new EventEmitter(), {
+			isTTY: true,
+			isRaw: false,
+			setEncoding: vi.fn(),
+			setRawMode: vi.fn((raw: boolean) => {
+				stdin.isRaw = raw;
+			}),
+			resume: vi.fn(),
+			pause: vi.fn(),
+		});
+		const stdout = Object.assign(new EventEmitter(), { isTTY: true, write: vi.fn(() => true) });
+		vi.stubGlobal("process", { ...process, platform: "darwin", stdin, stdout, kill: vi.fn() });
+		const terminal = new ProcessTerminal();
+		return { terminal, stdin, stdout };
+	}
+
+	it.each(["kitty", "modifyOtherKeys"])("cleans up partial viewport entry with %s reporting", (protocol) => {
+		const { terminal, stdin, stdout } = setup();
+		const tui = new TUI(terminal);
+		const input = vi.fn();
+		const lifecycle = vi.fn();
+		tui.configureViewport({ getBlocks: () => [] });
+		tui.addInputListener(input);
+		tui.addLifecycleListener(lifecycle);
+		const error = new Error("viewport entry failed after acquiring modes");
+		const setViewportMode = terminal.setViewportMode.bind(terminal);
+		vi.spyOn(terminal, "setViewportMode").mockImplementationOnce((enabled) => {
+			setViewportMode(enabled);
+			if (protocol === "kitty") stdin.emit("data", "\x1b[?0u");
+			else vi.advanceTimersByTime(151);
+			throw error;
+		});
+		try {
+			expect(() => tui.start()).toThrow(error);
+			expect(lifecycle).not.toHaveBeenCalled();
+			expect(stdin.isRaw).toBe(true);
+			expect(stdin.listenerCount("data")).toBe(1);
+			expect(stdout.listenerCount("resize")).toBe(1);
+			expect(stdout.write).toHaveBeenCalledWith("\x1b[?1049h\x1b[?1004h\x1b[?1002h\x1b[?1006h");
+			expect(stdout.write).toHaveBeenCalledWith(protocol === "kitty" ? "\x1b[>15u" : "\x1b[>4;2m");
+			stdout.write.mockClear();
+			expect(() => tui.stop()).not.toThrow();
+			expect(stdin.listenerCount("data")).toBe(0);
+			expect(stdout.listenerCount("resize")).toBe(0);
+			expect(stdin.isRaw).toBe(false);
+			expect(stdin.setRawMode.mock.calls).toEqual([[true], [false]]);
+			expect(stdin.pause).toHaveBeenCalledOnce();
+			expect(terminal.kittyProtocolActive).toBe(false);
+			const output = stdout.write.mock.calls.flat().join("");
+			expect(output).toContain("\x1b[?1002l\x1b[?1006l\x1b[?1004l\x1b[0m\x1b[?1049l");
+			expect(output).toContain("\x1b[?2004l");
+			expect(output).toContain("\x1b[?25h");
+			expect(output.endsWith(protocol === "kitty" ? "\x1b[<u" : "\x1b[>4;0m")).toBe(true);
+			stdout.write.mockClear();
+			stdin.emit("data", "ignored");
+			tui.stop();
+			vi.advanceTimersByTime(200);
+			expect(input).not.toHaveBeenCalled();
+			expect(stdout.write).not.toHaveBeenCalled();
+			tui.start();
+			stdin.emit("data", "y");
+			expect(input).toHaveBeenCalledExactlyOnceWith("y");
+		} finally {
+			try {
+				tui.stop();
+			} finally {
+				terminal.stop();
+			}
+		}
+	});
+
+	it.each(["setEncoding", "resume"] as const)("restores resources after ordinary startup fails at %s", (boundary) => {
+		const { terminal, stdin, stdout } = setup();
+		const input = vi.fn();
+		const error = new Error("ordinary startup failed");
+		stdin[boundary].mockImplementationOnce(() => {
+			throw error;
+		});
+		try {
+			expect(() => terminal.start(input, vi.fn())).toThrow(error);
+			expect(stdin.isRaw).toBe(true);
+			expect(stdin.listenerCount("data")).toBe(boundary === "resume" ? 1 : 0);
+			terminal.stop();
+			expect(stdin.isRaw).toBe(false);
+			expect(stdin.setRawMode.mock.calls).toEqual([[true], [false]]);
+			expect(stdin.listenerCount("data")).toBe(0);
+			expect(stdout.listenerCount("resize")).toBe(0);
+			expect(stdin.pause).toHaveBeenCalledOnce();
+			stdout.write.mockClear();
+			stdin.emit("data", "ignored");
+			vi.advanceTimersByTime(200);
+			expect(input).not.toHaveBeenCalled();
+			expect(stdout.write).not.toHaveBeenCalled();
+			terminal.start(input, vi.fn());
+			stdin.emit("data", "z");
+			expect(input).toHaveBeenCalledExactlyOnceWith("z");
+		} finally {
+			terminal.stop();
+		}
+	});
+
+	it("starts retained Copy with one ordinary reader installed before stdin resumes", () => {
+		const { terminal, stdin } = setup();
+		const tui = new TUI(terminal);
+		const input = vi.fn();
+		tui.configureViewport({ getBlocks: () => [], copy: vi.fn(async () => {}) });
+		tui.addInputListener(input);
+		stdin.resume.mockImplementation(() => {
+			expect(stdin.listenerCount("data")).toBe(1);
+			stdin.emit("data", "x");
+		});
+		try {
+			tui.start();
+			tui.start();
+			expect(input).toHaveBeenCalledExactlyOnceWith("x");
+			expect(stdin.setEncoding).toHaveBeenCalledExactlyOnceWith("utf8");
+			expect(stdin.resume).toHaveBeenCalledOnce();
+		} finally {
+			tui.stop();
+		}
+		expect(stdin.listenerCount("data")).toBe(0);
+	});
+
+	it("delivers fragmented keys, mouse and multiline Unicode paste once across clean restarts", () => {
+		const { terminal, stdin, stdout } = setup();
+		const input = vi.fn();
+		const packets = ["\x1b[A", "\x1b[<32;12;4M", "\x1b[200~café 界 é\nsecond line\x1b[201~"];
+		try {
+			for (let round = 0; round < 2; round++) {
+				terminal.start(input, vi.fn());
+				terminal.setViewportMode(true);
+				terminal.start(input, vi.fn());
+				expect(stdin.listenerCount("data")).toBe(1);
+				expect(stdout.listenerCount("resize")).toBe(1);
+				input.mockClear();
+				for (const packet of packets) for (const character of packet) stdin.emit("data", character);
+				expect(input.mock.calls.flat()).toEqual(packets);
+				stdin.emit("data", "\x1b[");
+				terminal.stop();
+				expect(stdin.listenerCount("data")).toBe(0);
+				expect(stdout.listenerCount("resize")).toBe(0);
+				stdin.emit("data", "ignored");
+				vi.advanceTimersByTime(200);
+				expect(input.mock.calls.flat()).toEqual(packets);
+			}
+		} finally {
+			terminal.stop();
+		}
+		expect(stdin.setRawMode.mock.calls).toEqual([[true], [false], [true], [false]]);
+		expect(stdin.pause).toHaveBeenCalledTimes(2);
+	});
+
+	it("resumes input after bounded drain without rearming reporting until restart", async () => {
+		const { terminal, stdin, stdout } = setup();
+		const input = vi.fn();
+		try {
+			terminal.start(input, vi.fn());
+			terminal.setViewportMode(true);
+			stdin.emit("data", "\x1b[?0u");
+			expect(terminal.kittyProtocolActive).toBe(true);
+			const draining = terminal.drainInput(100, 20);
+			stdout.write.mockClear();
+			for (let elapsed = 0; elapsed < 100; elapsed += 10) {
+				stdin.emit("data", "x\x1b[?0u");
+				await vi.advanceTimersByTimeAsync(10);
+			}
+			await draining;
+			expect(input).not.toHaveBeenCalled();
+			expect(stdin.listenerCount("data")).toBe(1);
+			stdin.emit("data", "z\x1b[?0u");
+			expect(input).toHaveBeenCalledExactlyOnceWith("z");
+			await vi.advanceTimersByTimeAsync(200);
+			expect(stdout.write).not.toHaveBeenCalled();
+			expect(terminal.kittyProtocolActive).toBe(false);
+			terminal.stop();
+			terminal.start(input, vi.fn());
+			terminal.setViewportMode(true);
+			stdin.emit("data", "\x1b[?0u");
+			expect(terminal.kittyProtocolActive).toBe(true);
+			expect(stdout.write).toHaveBeenCalledWith("\x1b[>15u");
+		} finally {
+			terminal.stop();
+		}
+	});
+});
+
 describe("candidate terminal modes", () => {
+	it("restores ordinary input after drain without accepting late keyboard replies", async () => {
+		vi.useFakeTimers();
+		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
+		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
+		vi.spyOn(process, "kill").mockReturnValue(true);
+		const terminal = new ProcessTerminal();
+		const input = vi.fn();
+		terminal.start(input, vi.fn());
+		const draining = terminal.drainInput();
+		await vi.advanceTimersByTimeAsync(60);
+		await draining;
+		process.stdin.emit("data", "x\x1b[?0u");
+		expect(input).toHaveBeenCalledExactlyOnceWith("x");
+		expect(output.mock.calls.map(([value]) => value).join("")).not.toContain("\x1b[>7u");
+		terminal.stop();
+	});
 	it("does not re-enable keyboard reporting from a query response received during a handoff drain", async () => {
 		vi.useFakeTimers();
 		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);

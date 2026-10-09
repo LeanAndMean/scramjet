@@ -69,6 +69,8 @@ export interface Terminal {
  */
 export class ProcessTerminal implements Terminal {
 	private wasRaw = false;
+	private draining = false;
+	private keyboardReportingAllowed = true;
 	private started = false;
 	private viewportMode = false;
 	private keyboardFallback?: ReturnType<typeof setTimeout>;
@@ -104,12 +106,18 @@ export class ProcessTerminal implements Terminal {
 		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
 
+		this.draining = false;
+		this.keyboardReportingAllowed = true;
+
 		// Save previous state and enable raw mode
 		this.wasRaw = process.stdin.isRaw || false;
 		if (process.stdin.setRawMode) {
 			process.stdin.setRawMode(true);
 		}
+		// SCRAMJET-DIVERGENCE: install the parser and listener before resuming ordinary stdin.
 		process.stdin.setEncoding("utf8");
+		this.setupStdinBuffer();
+		process.stdin.on("data", this.stdinDataHandler!);
 		process.stdin.resume();
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
@@ -148,41 +156,8 @@ export class ProcessTerminal implements Terminal {
 		this.stdinBuffer = new StdinBuffer({ timeout: 10 });
 		this.stdinBuffer.setMouseReporting(this.viewportMode);
 
-		// Kitty protocol response pattern: \x1b[?<flags>u
-		const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
-
-		// Forward individual sequences to the input handler
-		this.stdinBuffer.on("data", (sequence) => {
-			// Check for Kitty protocol response (only if not already enabled)
-			if (!this._kittyProtocolActive) {
-				const match = sequence.match(kittyResponsePattern);
-				if (match) {
-					if (!this.inputHandler) return;
-					this._kittyProtocolActive = true;
-					setKittyProtocolActive(true);
-
-					// Enable Kitty keyboard protocol (push flags)
-					// Flag 1 = disambiguate escape codes
-					// Flag 2 = report event types (press/repeat/release)
-					// Flag 4 = report alternate keys (shifted key, base layout key)
-					// Base layout key enables shortcuts to work with non-Latin keyboard layouts
-					// SCRAMJET-DIVERGENCE: explicit Enter events prevent legacy release bytes from authorizing twice.
-					process.stdout.write(this.viewportMode ? "\x1b[>15u" : "\x1b[>7u");
-					return; // Don't forward protocol response to TUI
-				}
-			}
-
-			if (this.inputHandler) {
-				this.inputHandler(sequence);
-			}
-		});
-
-		// Re-wrap paste content with bracketed paste markers for existing editor handling
-		this.stdinBuffer.on("paste", (content) => {
-			if (this.inputHandler) {
-				this.inputHandler(`\x1b[200~${content}\x1b[201~`);
-			}
-		});
+		this.stdinBuffer.on("data", (sequence) => this.dispatchSequence(sequence));
+		this.stdinBuffer.on("paste", (content) => this.dispatchPaste(content));
 
 		// Handler that pipes stdin data through the buffer
 		this.stdinDataHandler = (data: string) => {
@@ -205,8 +180,6 @@ export class ProcessTerminal implements Terminal {
 	 * handles the case where the response arrives split across multiple stdin events.
 	 */
 	private queryAndEnableKittyProtocol(): void {
-		this.setupStdinBuffer();
-		process.stdin.on("data", this.stdinDataHandler!);
 		process.stdout.write("\x1b[?u");
 		this.keyboardFallback = setTimeout(() => {
 			this.keyboardFallback = undefined;
@@ -247,6 +220,8 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
+		this.draining = true;
+		this.keyboardReportingAllowed = false;
 		clearTimeout(this.keyboardFallback);
 		this.keyboardFallback = undefined;
 		if (this._kittyProtocolActive) {
@@ -283,6 +258,7 @@ export class ProcessTerminal implements Terminal {
 		} finally {
 			process.stdin.removeListener("data", onData);
 			this.inputHandler = previousHandler;
+			this.draining = false;
 		}
 	}
 
@@ -302,12 +278,13 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
-		if (!this.started) return;
-		this.started = false;
+		const progressActive = this.clearProgressInterval();
 		clearTimeout(this.keyboardFallback);
 		this.keyboardFallback = undefined;
+		if (!this.started) return;
+		this.started = false;
 		this.setViewportMode(false);
-		if (this.clearProgressInterval()) {
+		if (progressActive) {
 			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
 
@@ -435,6 +412,23 @@ export class ProcessTerminal implements Terminal {
 
 	holdOscInput(hold: boolean): void {
 		this.stdinBuffer?.holdOscInput(hold);
+	}
+
+	private dispatchSequence(sequence: string): void {
+		if (this.draining) return;
+		if (!this._kittyProtocolActive && /^\x1b\[\?(\d+)u$/.test(sequence)) {
+			if (!this.inputHandler || !this.keyboardReportingAllowed) return;
+			this._kittyProtocolActive = true;
+			setKittyProtocolActive(true);
+			// SCRAMJET-DIVERGENCE: explicit Enter events prevent legacy release bytes from authorizing twice.
+			process.stdout.write(this.viewportMode ? "\x1b[>15u" : "\x1b[>7u");
+			return;
+		}
+		this.inputHandler?.(sequence);
+	}
+
+	private dispatchPaste(content: string): void {
+		if (!this.draining) this.inputHandler?.(`\x1b[200~${content}\x1b[201~`);
 	}
 
 	private clearProgressInterval(): boolean {

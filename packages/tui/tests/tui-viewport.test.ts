@@ -46,6 +46,43 @@ async function setup(blocks: ViewportBlock[], width = 21, height = 4, options: P
 
 const mouse = (button: number, x: number, y: number, action = "M") => `\x1b[<${button};${x};${y}${action}`;
 
+describe("ordinary terminal failure protection", () => {
+	it.each(["stop", "setViewportMode"] as const)(
+		"does not retry failed %s or dispatch stopped input",
+		async (boundary) => {
+			const { tui, terminal } = await setup([{ component: new Rows(["content"]) }]);
+			const error = new Error("terminal restoration failed");
+			const failed = vi.spyOn(terminal, boundary).mockImplementationOnce(() => {
+				throw error;
+			});
+			const input = vi.fn();
+			tui.addInputListener(input);
+			expect(() => tui.stop()).toThrow(error);
+			running.splice(running.indexOf(tui), 1);
+			const mark = terminal.markWrites();
+			expect(() => tui.stop()).not.toThrow();
+			await expect(tui.renderNow()).rejects.toThrow("Cannot render a stopped TUI");
+			tui.requestRender();
+			terminal.sendInput("x");
+			expect(input).not.toHaveBeenCalled();
+			expect(failed).toHaveBeenCalledOnce();
+			expect(terminal.writesSince(mark)).toBe("");
+		},
+	);
+
+	it("ignores input while stopped and accepts it after restart", async () => {
+		const { tui, terminal } = await setup([{ component: new Rows(["content"]) }]);
+		const input = vi.fn();
+		tui.addInputListener(input);
+		tui.stop();
+		terminal.sendInput("x");
+		expect(input).not.toHaveBeenCalled();
+		tui.start();
+		terminal.sendInput("y");
+		expect(input).toHaveBeenCalledExactlyOnceWith("y");
+	});
+});
+
 describe("viewport interactions", () => {
 	it("notifies lifecycle listeners once per transition and supports unsubscription", async () => {
 		const { tui } = await setup([{ component: new Rows(["content"]) }]);
