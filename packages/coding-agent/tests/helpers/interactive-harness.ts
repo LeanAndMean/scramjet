@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Agent } from "@leanandmean/agent";
+import { Agent, type AgentOptions } from "@leanandmean/agent";
 import type { Container, TUI } from "@leanandmean/tui";
 import { expect, vi } from "vitest";
 import { HeadlessTerminal } from "../../../tui/tests/helpers/headless-terminal.js";
@@ -49,10 +49,14 @@ export async function createProductionInteractiveHarness(
 	viewport = true,
 	settings?: SettingsManager,
 	scopedModels?: AgentSession["scopedModels"],
+	execution?: { agent: AgentOptions; initialMessage?: string },
 ) {
 	const directory = mkdtempSync(join(tmpdir(), "scramjet-interactive-test-"));
 	const terminal = new HeadlessTerminal(columns, rows);
 	const authStorage = AuthStorage.inMemory();
+	if (execution?.agent.initialState?.model) {
+		authStorage.setRuntimeApiKey(execution.agent.initialState.model.provider, "offline");
+	}
 	const settingsManager =
 		settings ??
 		SettingsManager.inMemory({
@@ -94,15 +98,18 @@ export async function createProductionInteractiveHarness(
 				...services,
 				sessionManager,
 				initialActiveToolNames: [],
+				sessionDir: directory,
 				scopedModels,
-				agent: new Agent({
-					streamFn: () => {
-						throw new Error("Production layout tests must not invoke a model");
+				agent: new Agent(
+					execution?.agent ?? {
+						streamFn: () => {
+							throw new Error("Production layout tests must not invoke a model");
+						},
 					},
-				}),
+				),
 			}),
 		}),
-		{ cwd: directory, agentDir: directory, sessionManager: SessionManager.inMemory(directory) },
+		{ cwd: directory, agentDir: directory, sessionManager: SessionManager.create(directory, directory) },
 	);
 	const keybindings = vi.spyOn(KeybindingsManager, "create").mockImplementation(() => new KeybindingsManager());
 	const clipboardFactory = vi.isMockFunction(clipboard.createWslClipboardReader)
@@ -110,7 +117,7 @@ export async function createProductionInteractiveHarness(
 		: vi.spyOn(clipboard, "createWslClipboardReader").mockReturnValue(undefined);
 	let mode: InteractiveMode;
 	try {
-		mode = new InteractiveMode(runtime, { terminal });
+		mode = new InteractiveMode(runtime, { terminal, initialMessage: execution?.initialMessage });
 	} finally {
 		keybindings.mockRestore();
 		clipboardFactory?.mockRestore();
@@ -133,6 +140,8 @@ export async function createProductionInteractiveHarness(
 		internals,
 		extensionUI,
 		session: runtime.session,
+		runtime,
+		startLoop: () => mode.run(),
 		// Await the real UI consumer; session subscriptions do not await async listeners.
 		emit: (event: AgentSessionEvent) => internals.handleEvent(event),
 		async frame() {

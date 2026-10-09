@@ -93,6 +93,54 @@ describe("shouldRingBell", () => {
 });
 
 describe("createTerminalIndicators", () => {
+	it("keeps recovery working between attempts, preserves choices and notifies once after settlement", async () => {
+		const fixture = indicatorFixture("title_indicator: true\nbell: true\n");
+		const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+		Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+		const restoreTTY = () => {
+			if (descriptor) Object.defineProperty(process.stdout, "isTTY", descriptor);
+			else Reflect.deleteProperty(process.stdout, "isTTY");
+		};
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		let resolve!: (value: { status: "completed" }) => void;
+		const settlement = new Promise<{ status: "completed" }>((done) => {
+			resolve = done;
+		});
+		const ctx = { ...fixture.ctx, getRunSettlement: () => settlement };
+		await fixture.emit("agent_start", {}, ctx);
+		await fixture.emit("agent_end", {}, ctx);
+		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^● scramjet/);
+		expect(write).not.toHaveBeenCalled();
+		const lease = fixture.indicators.beginChoice(ctx);
+		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^○ scramjet/);
+		await fixture.emit("agent_end", {}, ctx);
+		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^○ scramjet/);
+		lease.complete("resume-work");
+		fixture.state.lifecycleGeneration++;
+		fixture.state.lifecycle = lifecycleFor("idle");
+		resolve({ status: "completed" });
+		await new Promise((done) => setTimeout(done, 10));
+		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^○ scramjet/);
+		restoreTTY();
+		expect(write).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not let a settled observer affect new input", async () => {
+		const fixture = indicatorFixture();
+		let resolve!: (value: { status: "completed" }) => void;
+		const settlement = new Promise<{ status: "completed" }>((done) => {
+			resolve = done;
+		});
+		const ctx = { ...fixture.ctx, getRunSettlement: () => settlement, isIdle: () => true };
+		await fixture.emit("agent_start", {}, ctx);
+		await fixture.emit("agent_end", {}, ctx);
+		await fixture.emit("input", { text: "new work" }, ctx);
+		resolve({ status: "completed" });
+		const count = fixture.setTitle.mock.calls.length;
+		await new Promise((done) => setTimeout(done, 10));
+		expect(fixture.setTitle).toHaveBeenCalledTimes(count);
+	});
+
 	it("shows waiting during an active choice and resumes the working title", async () => {
 		const fixture = indicatorFixture();
 		await fixture.emit("session_start", {}, fixture.ctx);

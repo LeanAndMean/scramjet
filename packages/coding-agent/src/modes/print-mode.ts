@@ -6,7 +6,8 @@
  * - `pi --mode json "prompt"` - JSON event stream
  */
 
-import type { AssistantMessage, ImageContent } from "@leanandmean/ai";
+import type { ImageContent } from "@leanandmean/ai";
+import type { RunSettlement } from "../core/agent-session.js";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.js";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.js";
 import { killTrackedDetachedChildren } from "../utils/shell.js";
@@ -32,6 +33,7 @@ export interface PrintModeOptions {
 export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: PrintModeOptions): Promise<number> {
 	const { mode, messages = [], initialMessage, initialImages } = options;
 	let exitCode = 0;
+	let outcome: RunSettlement | undefined;
 	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
 	let disposed = false;
@@ -117,30 +119,48 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		await rebindSession();
 
+		// SCRAMJET-DIVERGENCE: select the invocation's result, never mutable live history.
+		const prompt = async (text: string, images?: ImageContent[]) => {
+			outcome = undefined;
+			if (mode === "json") {
+				await session.prompt(text, { images });
+				return;
+			}
+			let captured: Promise<RunSettlement> | undefined;
+			await session.prompt(text, {
+				images,
+				onRunSettlement(settlement) {
+					captured = settlement;
+					void settlement.catch(() => {});
+				},
+			});
+			if (captured) outcome = await captured;
+		};
 		if (initialMessage) {
-			await session.prompt(initialMessage, { images: initialImages });
+			await prompt(initialMessage, initialImages);
 		}
 
 		for (const message of messages) {
-			await session.prompt(message);
+			await prompt(message);
 		}
 
 		if (mode === "text") {
-			const state = session.state;
-			const lastMessage = state.messages[state.messages.length - 1];
-
-			if (lastMessage?.role === "assistant") {
-				const assistantMsg = lastMessage as AssistantMessage;
-				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
-					if (assistantMsg.stopReason === "error") {
-						const snapshot = assistantMsg.diagnostics?.find(
-							(diagnostic) => diagnostic.type === "provider_failure_snapshot",
-						)?.details?.text;
-						if (typeof snapshot === "string") console.error(`Error details (local):\n${snapshot}`);
-					}
-					exitCode = 1;
-				} else {
+			const assistantMsg = outcome?.assistantMessage;
+			if (outcome && outcome.status !== "completed") {
+				console.error(
+					outcome.status === "cancelled"
+						? "Execution cancelled. Review interrupted work before submitting a new prompt."
+						: `Execution failed: ${outcome.errorMessage}. Review the failure before trying again.`,
+				);
+				exitCode = 1;
+			}
+			if (assistantMsg) {
+				if (outcome?.status === "failed") {
+					const snapshot = assistantMsg.diagnostics?.find(
+						(diagnostic) => diagnostic.type === "provider_failure_snapshot",
+					)?.details?.text;
+					if (typeof snapshot === "string") console.error(`Error details (local):\n${snapshot}`);
+				} else if (outcome?.status === "completed") {
 					for (const content of assistantMsg.content) {
 						if (content.type === "text") {
 							writeRawStdout(`${content.text}\n`);
@@ -152,7 +172,9 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		return exitCode;
 	} catch (error: unknown) {
-		console.error(error instanceof Error ? error.message : String(error));
+		console.error(
+			`${error instanceof Error ? error.message : String(error)}. Review the failure before trying again.`,
+		);
 		return 1;
 	} finally {
 		for (const cleanup of signalCleanupHandlers) {

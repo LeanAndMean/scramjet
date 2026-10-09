@@ -51,7 +51,12 @@ import {
 } from "@leanandmean/tui";
 import { spawn, spawnSync } from "child_process";
 import { APP_NAME, APP_TITLE, getAgentDir, getAuthPath, getDebugLogPath, getDocsPath, VERSION } from "../../config.js";
-import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
+import {
+	type AgentSession,
+	type AgentSessionEvent,
+	parseSkillBlock,
+	type RunSettlement,
+} from "../../core/agent-session.js";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.js";
 import type {
 	AutocompleteProviderFactory,
@@ -254,6 +259,12 @@ export class InteractiveMode {
 	private version: string;
 	private isInitialized = false;
 	private onInputCallback?: (text: string) => void;
+	private promptSubmission?: {
+		session: AgentSession;
+		settlement?: Promise<RunSettlement>;
+		retryFailure?: string;
+		retried: boolean;
+	};
 	private loadingAnimation: Loader | undefined = undefined;
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
@@ -1111,7 +1122,7 @@ export class InteractiveMode {
 		// Process initial messages
 		if (initialMessage) {
 			try {
-				await this.session.prompt(initialMessage, { images: initialImages });
+				await this.promptInteractive(initialMessage, initialImages);
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
@@ -1121,7 +1132,7 @@ export class InteractiveMode {
 		if (initialMessages) {
 			for (const message of initialMessages) {
 				try {
-					await this.session.prompt(message);
+					await this.promptInteractive(message);
 				} catch (error: unknown) {
 					const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 					this.showError(errorMessage);
@@ -1133,11 +1144,73 @@ export class InteractiveMode {
 		while (true) {
 			const userInput = await this.getUserInput();
 			try {
-				await this.session.prompt(userInput);
+				await this.promptInteractive(userInput);
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
 			}
+		}
+	}
+
+	// SCRAMJET-DIVERGENCE: native consumers retain invocation identity through recovery.
+	private async promptInteractive(text: string, images?: ImageContent[]): Promise<void> {
+		const submission = { session: this.session, retried: false } as NonNullable<typeof this.promptSubmission>;
+		this.promptSubmission = submission;
+		const draftGeneration = this.clipboardPasteGeneration;
+		try {
+			await submission.session.prompt(text, {
+				images,
+				onRunSettlement: (settlement) => {
+					submission.settlement = settlement;
+					void settlement.catch(() => {});
+				},
+			});
+			const outcome = submission.settlement ? await submission.settlement : undefined;
+			if (this.promptSubmission !== submission || this.session !== submission.session) return;
+			if (outcome?.status === "cancelled") {
+				this.showStatus("Execution cancelled. Review interrupted work before submitting a new prompt.");
+			} else if (outcome?.status === "failed") {
+				const retryRecord = submission.session.sessionManager
+					.getBranch()
+					.reverse()
+					.find((entry) => entry.type === "custom" && entry.customType === "coding-agent:auto-retry");
+				const exhausted =
+					submission.retryFailure &&
+					retryRecord?.type === "custom" &&
+					(retryRecord.data as { outcome?: string } | undefined)?.outcome === "exhausted";
+				const prefix = exhausted ? "Recovery exhausted" : "Execution failed";
+				this.showError(`${prefix}: ${outcome.errorMessage}. Review the failure before trying again.`);
+			} else if (outcome?.status === "completed" && submission.retried) {
+				this.showStatus("Execution recovered and continued.");
+			}
+		} catch (error) {
+			if (this.promptSubmission !== submission || this.session !== submission.session) return;
+			if (!this.editor.getText() && this.clipboardPasteGeneration === draftGeneration) this.editor.setText(text);
+			this.showError(
+				`${error instanceof Error ? error.message : String(error)}. Review the failure before trying again.`,
+			);
+		} finally {
+			if (this.promptSubmission === submission && this.session === submission.session) {
+				this.promptSubmission = undefined;
+				this.clearRetryControls();
+				this.stopWorkingLoader();
+				if (this.settingsManager.getShowTerminalProgress()) this.ui.terminal.setProgress(false);
+				this.ui.requestRender();
+			}
+		}
+	}
+
+	private clearRetryControls(): void {
+		if (this.retryEscapeHandler) {
+			this.defaultEditor.onEscape = this.retryEscapeHandler;
+			this.retryEscapeHandler = undefined;
+		}
+		this.retryCountdown?.dispose();
+		this.retryCountdown = undefined;
+		if (this.retryLoader) {
+			this.statusContainer.removeChild(this.retryLoader);
+			this.retryLoader.stop();
+			this.retryLoader = undefined;
 		}
 	}
 
@@ -1904,6 +1977,12 @@ export class InteractiveMode {
 	}
 
 	private async rebindCurrentSession(): Promise<void> {
+		if (this.promptSubmission && this.promptSubmission.session !== this.session) {
+			this.promptSubmission = undefined;
+			this.clearRetryControls();
+			this.stopWorkingLoader();
+			if (this.settingsManager.getShowTerminalProgress()) this.ui.terminal.setProgress(false);
+		}
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
@@ -2875,7 +2954,7 @@ export class InteractiveMode {
 				this.pendingSelectorOpenGeneration = undefined;
 				return;
 			}
-			if (this.session.isStreaming) {
+			if (this.promptSubmission?.session === this.session || this.session.isStreaming || this.session.isRetrying) {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			} else if (this.session.isBashRunning) {
 				this.session.abortBash();
@@ -3121,9 +3200,17 @@ export class InteractiveMode {
 			if (this.session.isStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.session.prompt(text, { streamingBehavior: "steer" });
+				await this.submitQueuedPrompt(text, "steer");
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
+				return;
+			}
+
+			if (!this.onInputCallback) {
+				this.editor.setText(text);
+				this.showWarning(
+					"Execution is still settling or recovering. Wait, or press Esc to cancel before submitting again.",
+				);
 				return;
 			}
 
@@ -3370,10 +3457,10 @@ export class InteractiveMode {
 				await Promise.all(pendingToolFinalizations);
 				if (runGeneration !== this.agentRunGeneration || pendingToolFinalizations !== this.pendingToolFinalizations)
 					break;
-				if (this.settingsManager.getShowTerminalProgress()) {
+				if (this.promptSubmission?.session !== this.session && this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
-				if (this.loadingAnimation) {
+				if (this.loadingAnimation && this.promptSubmission?.session !== this.session) {
 					this.loadingAnimation.stop();
 					this.loadingAnimation = undefined;
 					this.statusContainer.clear();
@@ -3403,8 +3490,11 @@ export class InteractiveMode {
 				}
 				// Keep editor active; submissions are queued during compaction.
 				this.autoCompactionEscapeHandler = this.defaultEditor.onEscape;
+				const compactingSession = this.session;
 				this.defaultEditor.onEscape = () => {
-					this.session.abortCompaction();
+					if (this.session !== compactingSession) return;
+					if (this.promptSubmission?.session === compactingSession) compactingSession.abortRetry();
+					else compactingSession.abortCompaction();
 				};
 				this.statusContainer.clear();
 				const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
@@ -3424,7 +3514,7 @@ export class InteractiveMode {
 			}
 
 			case "compaction_end": {
-				if (this.settingsManager.getShowTerminalProgress()) {
+				if (this.promptSubmission?.session !== this.session && this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
 				if (this.autoCompactionEscapeHandler) {
@@ -3468,9 +3558,12 @@ export class InteractiveMode {
 
 			case "auto_retry_start": {
 				// Set up escape to abort retry
+				if (this.promptSubmission?.session === this.session) this.promptSubmission.retried = true;
+				this.clearRetryControls();
 				this.retryEscapeHandler = this.defaultEditor.onEscape;
+				const retrySession = this.session;
 				this.defaultEditor.onEscape = () => {
-					this.session.abortRetry();
+					if (this.session === retrySession) this.restoreQueuedMessagesToEditor({ abort: true });
 				};
 				// Show retry indicator
 				this.statusContainer.clear();
@@ -3521,8 +3614,10 @@ export class InteractiveMode {
 					this.statusContainer.clear();
 				}
 				// Show error only on final failure (success shows normal response)
-				if (!event.success) {
-					this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
+				if (!event.success && this.promptSubmission?.session === this.session) {
+					this.promptSubmission.retryFailure = event.finalError;
+				} else if (!event.success) {
+					this.showStatus("Recovery stopped. Review interrupted work before submitting a new prompt.");
 				}
 				this.ui.requestRender();
 				break;
@@ -4037,6 +4132,20 @@ export class InteractiveMode {
 		}
 	}
 
+	private async submitQueuedPrompt(text: string, streamingBehavior: DeliverAs): Promise<void> {
+		const session = this.session;
+		const generation = this.clipboardPasteGeneration;
+		try {
+			await session.prompt(text, { streamingBehavior });
+		} catch (error) {
+			if (this.session !== session) return;
+			if (!this.editor.getText() && generation === this.clipboardPasteGeneration) this.editor.setText(text);
+			this.showError(
+				`${error instanceof Error ? error.message : String(error)}. Wait or cancel recovery before submitting again.`,
+			);
+		}
+	}
+
 	private async handleFollowUp(): Promise<void> {
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
@@ -4059,14 +4168,14 @@ export class InteractiveMode {
 		if (this.session.isStreaming) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			await this.session.prompt(text, { streamingBehavior: "followUp" });
+			await this.submitQueuedPrompt(text, "followUp");
 			this.updatePendingMessagesDisplay();
 			this.ui.requestRender();
 		}
 		// If not streaming, Alt+Enter acts like regular Enter (trigger onSubmit)
 		else if (this.editor.onSubmit) {
 			this.editor.setText("");
-			this.editor.onSubmit(text);
+			await this.editor.onSubmit(text);
 		}
 	}
 
@@ -4307,7 +4416,7 @@ export class InteractiveMode {
 		if (allQueued.length === 0) {
 			this.updatePendingMessagesDisplay();
 			if (options?.abort) {
-				this.agent.abort();
+				this.session.abortRetry();
 			}
 			return 0;
 		}
@@ -4317,7 +4426,7 @@ export class InteractiveMode {
 		this.editor.setText(combinedText);
 		this.updatePendingMessagesDisplay();
 		if (options?.abort) {
-			this.agent.abort();
+			this.session.abortRetry();
 		}
 		return allQueued.length;
 	}
