@@ -11,6 +11,7 @@ export {
 	type ParsedSkillBlock,
 	type PromptOptions,
 	parseSkillBlock,
+	type RunSettlement,
 	type SessionStats,
 } from "./core/agent-session.js";
 // Auth and model registry

@@ -200,6 +200,7 @@ interface PromptOptions {
   streamingBehavior?: "steer" | "followUp";
   source?: InputSource;
   preflightResult?: (success: boolean) => void;
+  onRunSettlement?: (settlement: Promise<RunSettlement>) => void;
 }
 ```
 
@@ -464,6 +465,30 @@ OpenRouter's implicit aggregate output maximum is omitted because it can exclude
 AgentSession classifies the finalized persisted assistant snapshot. Built-in adapters distinguish provider failures from payload/response callback failures without changing message origin; callback exceptions persist only a fixed stage-specific error and closed diagnostic, not private exception text. Typed local allocation overflows retain compaction recovery, while arbitrary runtime errors cannot request recovery through suggestive prose.
 
 Recognized incomplete responses can use the existing bounded agent retry loop; tools from a failed response do not execute. Provider/SDK retries remain a separate layer. See [settings.md](settings.md#retry) for numeric validation, zero semantics and Codex-only server-delay suppression, and [custom-provider.md](custom-provider.md#failure-evidence) for evidence precedence. Neither these attempt limits nor forwarding provider options guarantees a universal request-count or elapsed-time bound.
+
+#### Capturing originating run settlement
+
+`onRunSettlement` synchronously receives one stable promise after an immediate Agent run is reserved, before launch (including a delayed `agent_start`). It is not called for handled commands/input, explicit streaming queue acceptance, or rejected preflight. A command handler's separately launched custom turn is not adopted. New-prompt threshold maintenance is preflight, not part of an earlier run's capture.
+
+The exported `RunSettlement` union has `status: "completed" | "failed" | "cancelled"`. Results retain the eligible finalized provider `assistantMessage` snapshot when available; failed results also carry `errorMessage`. Operational provider failure, exhausted/disabled retry, failed required overflow recovery, and cancellation resolve with their disposition. Persistence/infrastructure failure, disposal, capture-callback refusal, and launch without a start reject. Completion waits for terminal persistence/classification, originating execution unwind, bounded retries, and applicable automatic maintenance plus its selected continuation. Awaited public Agent-listener failures during execution unwind reject the uncancelled capture even after an earlier successful or retryable `agent_end`; cancellation retains its cancelled disposition. Retry backoff and unwind waiting run outside the Session event queue so caught-failure events can drain before continuation admission. Agent's existing caught-error behavior for `prompt()` is unchanged. It means execution recovered, not that the task or a Scramjet command completed.
+
+```typescript
+let captured: Promise<RunSettlement> | undefined;
+await session.prompt("Continue the work", {
+  onRunSettlement(settlement) {
+    captured = settlement;
+    void settlement.catch((error) => console.error("Run settlement failed:", error));
+  },
+});
+if (captured) {
+  const outcome = await captured;
+  console.log(outcome.status);
+}
+```
+
+Run-bound extension event contexts expose the exact same promise through optional `ctx.getRunSettlement()`, including matching owned automatic compaction hooks across retries/continuations. Manual/unowned maintenance and new-prompt preflight expose no originating capture; command/input handling and explicit queue acceptance do not borrow a previous run. A retained event context is bound to its original run, not a mutable latest-result lookup. Contexts from direct public `session.agent.prompt()` / `continue()` executions also wait for that execution's idle boundary and queued classification before settling; those calls still bypass Session prompt preflight. Optional `ctx.sendMessage()` exposes existing asynchronous custom sending without changing void `pi.sendMessage`; see [context capabilities and deadlock cautions](extensions.md#ctxgetrunsettlement).
+
+Import `RunSettlement` from `@leanandmean/coding-agent`. Attach rejection handling immediately and observe independently; the callback is notification, not an awaited consumer hook. Throwing from it rejects the reservation before launch and propagates through `prompt()`. Never await a run's own settlement from an awaited gating hook: classification needs that hook to return. Capture observes one originating run, not global idleness or an admission lease; retained captures never substitute later prompts or harness output. Revalidate session/context before subsequent guarded actions. `prompt()` remains `Promise<void>` with operational outcomes delivered separately rather than newly thrown provider failures.
 
 ### API Keys and OAuth
 

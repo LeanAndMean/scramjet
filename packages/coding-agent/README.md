@@ -217,6 +217,10 @@ Submit messages while the agent is working:
 - **Escape** aborts and restores queued messages to editor
 - **Alt+Up** retrieves queued messages back to editor
 
+Failed requests are displayed as **attempts**, not final outcomes. Automatic recovery stays within the configured [retry limits](docs/settings.md#retry), including applicable automatic compaction. During non-streaming recovery/settlement, Enter and Alt+Enter retain your text with a wait/cancel explanation rather than silently dropping or replaying it. Escape cancels the originating execution and restores explicitly queued messages. A rejected submission restores its text only if no newer draft was typed. Cancellation and final failure give a safe next action; recovered execution does not mean the entire task completed.
+
+Text print mode (`--print`) uses the final prompt invocation's captured provider result, not earlier answers or later harness artifacts. Failed/cancelled execution reports to stderr and exits nonzero; a handled command that starts no immediate run prints no borrowed answer. JSON and RPC event framing remain unchanged.
+
 On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so scramjet can receive the follow-up shortcut.
 
 Configure delivery in [settings](docs/settings.md): `steeringMode` defaults to `"all"` (delivers all queued at once), while `followUpMode` defaults to `"one-at-a-time"` (waits for a response). Both settings accept either value. `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.

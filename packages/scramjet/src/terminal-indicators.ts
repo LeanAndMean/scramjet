@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { ExtensionAPI } from "@leanandmean/coding-agent";
+import type { ExtensionAPI, ExtensionContext, RunSettlement } from "@leanandmean/coding-agent";
 import { derivePhaseLabel } from "./lifecycle.js";
 import { DEFAULT_PREFERENCES, loadPreferences, type Preferences } from "./preferences.js";
 import type { ScramjetState } from "./types.js";
@@ -57,6 +57,9 @@ export function createTerminalIndicators(pi: ExtensionAPI, state: ScramjetState)
 	let agentIsRunning = false;
 	let deriveFromLifecycle = false;
 	const activeChoices = new Set<symbol>();
+	let recovery: { settlement: Promise<RunSettlement>; generation: number; command: string | null } | undefined;
+	let boundary = 0;
+	const observed = new WeakSet<Promise<RunSettlement>>();
 
 	function safeLoadPreferences(): Preferences {
 		try {
@@ -115,6 +118,8 @@ export function createTerminalIndicators(pi: ExtensionAPI, state: ScramjetState)
 		pi.on("session_start", (_event, ctx) => {
 			agentIsRunning = false;
 			clearTransientState();
+			recovery = undefined;
+			boundary++;
 			if (ctx.hasUI) {
 				ctx.ui.setTitleProvider(titleProvider);
 			}
@@ -123,42 +128,112 @@ export function createTerminalIndicators(pi: ExtensionAPI, state: ScramjetState)
 		pi.on("session_tree", (_event, ctx) => {
 			agentIsRunning = false;
 			clearTransientState();
+			recovery = undefined;
+			boundary++;
 			setTitleForPhase(ctx, "idle", safeLoadPreferences());
 		});
 
 		pi.on("agent_start", (_event, ctx) => {
 			clearTransientState();
+			if (recovery?.settlement !== ctx.getRunSettlement?.()) {
+				recovery = undefined;
+				boundary++;
+			}
 			agentIsRunning = true;
 			setTitleForPhase(ctx, "running", safeLoadPreferences());
 		});
 
-		pi.on("agent_end", (_event, ctx) => {
-			agentIsRunning = false;
-			clearTransientState();
-			const prefs = safeLoadPreferences();
-			const phase = derivePhaseLabel(state.lifecycle);
-			setTitleForPhase(ctx, phase, prefs);
+		pi.on("input", (_event, ctx) => {
+			if (ctx.isIdle()) boundary++;
+		});
 
-			const isTTY = process.stdout.isTTY === true;
-			const isDispatchScheduled = state.lifecycleTimers?.isDispatchScheduled() ?? false;
-			const isProbeScheduled = state.lifecycleTimers?.isProbeScheduled() ?? false;
-			const now = Date.now();
+		pi.on("session_shutdown", () => {
+			recovery = undefined;
+			boundary++;
+		});
 
-			if (
-				shouldRingBell({
-					bellEnabled: prefs.bell,
-					isTTY,
-					isDispatchScheduled,
-					isProbeScheduled,
-					phase,
-					lastBellMs,
-					nowMs: now,
-				})
-			) {
-				process.stdout.write("\x07");
-				lastBellMs = now;
+		pi.on("session_compact", (_event, ctx) => {
+			if (recovery?.settlement !== ctx.getRunSettlement?.()) {
+				recovery = undefined;
+				boundary++;
+				agentIsRunning = false;
+				clearTransientState();
+				setCurrentTitle(ctx);
 			}
 		});
+
+		pi.on("agent_end", (_event, ctx) => {
+			const settlement = ctx.getRunSettlement?.();
+			if (!settlement) {
+				finish(ctx);
+				return;
+			}
+			if (recovery?.settlement === settlement) {
+				recovery.generation = state.lifecycleGeneration;
+				return;
+			}
+			if (observed.has(settlement)) return;
+			observed.add(settlement);
+			const observer = { settlement, generation: state.lifecycleGeneration, command: state.lifecycle.activeCommand };
+			recovery = observer;
+			const checkpoint = boundary;
+			agentIsRunning = true;
+			setCurrentTitle(ctx);
+			// Routing observers registered earlier must publish their final timer/lifecycle facts first.
+			void settlement.then(
+				() => settle(),
+				() => settle(),
+			);
+			function settle() {
+				setTimeout(() => {
+					if (recovery !== observer) return;
+					try {
+						ctx.getRunSettlement?.();
+					} catch {
+						return;
+					}
+					recovery = undefined;
+					if (boundary !== checkpoint) {
+						agentIsRunning = false;
+						setCurrentTitle(ctx);
+						return;
+					}
+					const phase = derivePhaseLabel(state.lifecycle);
+					const routedToRest =
+						(state.lifecycle.activeCommand === null || state.lifecycle.activeCommand === observer.command) &&
+						WAITING_PHASES.has(phase);
+					if (state.lifecycleGeneration !== observer.generation && !routedToRest) {
+						agentIsRunning = false;
+						setCurrentTitle(ctx);
+						return;
+					}
+					finish(ctx);
+				}, 0);
+			}
+		});
+	}
+
+	function finish(ctx: ExtensionContext): void {
+		agentIsRunning = false;
+		clearTransientState();
+		const prefs = safeLoadPreferences();
+		const phase = currentPhase();
+		setTitleForPhase(ctx, phase, prefs);
+		const now = Date.now();
+		if (
+			shouldRingBell({
+				bellEnabled: prefs.bell,
+				isTTY: process.stdout.isTTY === true,
+				isDispatchScheduled: state.lifecycleTimers?.isDispatchScheduled() ?? false,
+				isProbeScheduled: state.lifecycleTimers?.isProbeScheduled() ?? false,
+				phase,
+				lastBellMs,
+				nowMs: now,
+			})
+		) {
+			process.stdout.write("\x07");
+			lastBellMs = now;
+		}
 	}
 
 	return { beginChoice, register };

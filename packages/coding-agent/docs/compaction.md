@@ -44,6 +44,12 @@ A new user prompt independently checks threshold maintenance using trustworthy s
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
+### Originating recovery and automatic handoffs
+
+A captured [run settlement](sdk.md#capturing-originating-run-settlement) remains pending through its settlement-triggered automatic compaction and any selected 100 ms overflow or queued-message continuation. The continuation waits for originating Agent execution to unwind and adopts the same obligation; it cannot restart after cancellation, disposal, or manual-compaction drain. New-prompt threshold maintenance is independent preflight and does not inherit a previous run's obligation.
+
+Skipped optional maintenance may retain successful output. Skipped or failed required overflow recovery produces a failed disposition with actionable detail rather than claiming completion; cancellation produces a cancelled disposition after owned active work unwinds. Compaction persistence/reconstruction and continuation infrastructure failures reject the captured obligation. Existing threshold policy, one-attempt overflow cap, queue semantics, and manual admission remain unchanged. Neither retry records nor continuation ownership restore execution on resume.
+
 ### Manual admission and terminal drain
 
 Manual compaction has one owner. It rejects while manual/automatic compaction or branch summarization is in progress, or while an idle-origin harness tool is still executing. Refusal leaves execution, abort signals, accounting, subscriptions, and context untouched. Await the conflicting operation's persisted settlement before deliberately retrying; requests are not queued.
