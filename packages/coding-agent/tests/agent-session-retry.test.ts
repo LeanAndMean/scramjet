@@ -2928,6 +2928,74 @@ describe("originating run settlement", () => {
 		}
 	});
 
+	it.each([false, true])("unwinds a retryable-response listener failure with cancellation %s", async (cancel) => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const response = vi.fn((index: number) =>
+			index === 0 ? assistantError("rate limit") : assistantText("next prompt"),
+		);
+		const { session } = await createFixture(response);
+		const capture = captureSettlement();
+		let injected = false;
+		const unsubscribe = session.agent.subscribe(async (event) => {
+			if (event.type !== "agent_end" || injected) return;
+			injected = true;
+			await gate;
+			throw new Error("retryable agent_end listener failed");
+		});
+		const { handoff, restore } = captureRetryHandoff();
+		try {
+			let finished = false;
+			const prompt = session.prompt("hello", capture.options);
+			void prompt.then(
+				() => {
+					finished = true;
+				},
+				() => {
+					finished = true;
+				},
+			);
+			await vi.waitFor(() => expect(handoff()).toBeDefined());
+			void capture.get().catch(() => {});
+			handoff()!();
+			await settle();
+			expect(finished).toBe(false);
+			expect(session.isRetrying).toBe(true);
+			expect(session.isStreaming).toBe(true);
+			if (cancel) session.abortRetry();
+			release();
+			await vi.waitFor(() => expect(finished).toBe(true));
+			await prompt.catch(() => {});
+			if (cancel) {
+				expect(await capture.get()).toMatchObject({ status: "cancelled" });
+			} else {
+				await expect(capture.get()).rejects.toThrow("retryable agent_end listener failed");
+			}
+			expect(session.sessionManager.getBranch()).toContainEqual(
+				expect.objectContaining({
+					type: "message",
+					message: expect.objectContaining({
+						origin: "harness",
+						stopReason: cancel ? "aborted" : "error",
+						errorMessage: "retryable agent_end listener failed",
+					}),
+				}),
+			);
+			expect(session.isRetrying).toBe(false);
+			expect(session.isStreaming).toBe(false);
+			expect(response).toHaveBeenCalledOnce();
+			await session.prompt("next");
+			expect(response).toHaveBeenCalledTimes(2);
+		} finally {
+			release();
+			restore();
+			unsubscribe();
+			session.dispose();
+		}
+	});
+
 	it("rejects a captured success when originating execution later rejects", async () => {
 		const { session } = await createFixture(() => assistantText("ok"));
 		const launch = session.agent.prompt.bind(session.agent);

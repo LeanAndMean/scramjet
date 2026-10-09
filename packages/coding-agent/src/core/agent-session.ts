@@ -1145,7 +1145,7 @@ export class AgentSession {
 			}
 
 			if (classification.kind === "retry") {
-				const didRetry = await this._handleRetryableError(msg, classification.evidence, run);
+				const didRetry = this._handleRetryableError(msg, classification.evidence, run);
 				if (didRetry) return;
 			} else {
 				const { kind: _kind, ...cause } = classification;
@@ -3567,11 +3567,11 @@ export class AgentSession {
 		return normalized;
 	}
 
-	private async _handleRetryableError(
+	private _handleRetryableError(
 		message: AssistantMessage,
 		evidence: RetryFailureEvidence | "legacy_text",
 		run: AgentRunSettlement,
-	): Promise<boolean> {
+	): boolean {
 		const settings = this.settingsManager.getRetrySettings();
 		const attempt = (this._retry?.attempt ?? 0) + 1;
 		const cumulativeCap = Math.min(Number.MAX_SAFE_INTEGER, settings.maxRetries * 2);
@@ -3662,20 +3662,36 @@ export class AgentSession {
 			this.agent.state.messages = messages.slice(0, -1);
 		}
 
+		// Execution unwind may need queued failure events, so retry waiting cannot occupy that queue.
+		void this._resumeRetry(backoff, delayMs).catch((error) => {
+			if (this._disposed) return;
+			const failure = this._reportRetryFailure(error);
+			if (this._retry === backoff) this._releaseRetryForFailedRun(failure);
+			this._completeAgentRun(run, failure);
+		});
+		return true;
+	}
+
+	private async _resumeRetry(backoff: Extract<RetryPhase, { phase: "backoff" }>, delayMs: number): Promise<void> {
+		const { controller, run, attempt } = backoff;
 		try {
 			await sleep(delayMs, controller.signal);
 			await sleep(0, controller.signal);
 		} catch {
-			return this._finishCancelledRetry("cancelled_during_backoff", backoff);
-		}
-		if (controller.signal.aborted || run.chain.cancelled || this._disposed) {
-			return this._finishCancelledRetry("cancelled_during_backoff", backoff);
+			this._finishCancelledRetry("cancelled_during_backoff", backoff);
+			this._completeAgentRun(run);
+			return;
 		}
 
 		await run.execution.promise;
-		if (run.chain.error) throw run.chain.error;
-		if (run.chain.cancelled || this._manualCompactionDrain)
-			return this._finishCancelledRetry("cancelled_during_backoff", backoff);
+		await this._drainAgentEventQueue();
+		if (this._disposed || this._retry !== backoff) return;
+		if (run.chain.error || run.chain.resultError) throw run.chain.error ?? run.chain.resultError;
+		if (controller.signal.aborted || run.chain.cancelled || this._manualCompactionDrain) {
+			this._finishCancelledRetry("cancelled_during_backoff", backoff);
+			this._completeAgentRun(run);
+			return;
+		}
 
 		// Hand the chain to the continuation before `continue()`; the run that eventually emits
 		// `agent_start` adopts it (see `_captureAgentRunSettlement`), however long Agent defers that start.
@@ -3708,8 +3724,6 @@ export class AgentSession {
 			}
 			this._settleRetryChain(run.chain, settlementError);
 		});
-
-		return true;
 	}
 
 	private _finishCancelledRetry(

@@ -138,20 +138,20 @@ The duplicate `invocationText` metadata field is replay-inert: replay projects o
 
 ## Command-status artifacts
 
-Every **accepted** `report_scramjet_command_status` call is journaled as a `scramjet:command-status` custom entry (issue 278) — including `continuing`. The payload carries the reporting command, the status, and the incremental `summary`:
+Accepted `continuing` calls to `report_scramjet_command_status` are journaled during execution as `scramjet:command-status` custom entries (issue 278). Accepted terminal reports are stored pending and journaled only when eligible routing and persistence succeed; aborted, failed, cancelled or rejected originating settlement discards them without a command-status entry. The payload carries the reporting command, the status, and the incremental `summary`:
 
 ```jsonc
 { "type": "custom", "customType": "scramjet:command-status",
   "data": { "commandName": "mach12:issue-plan", "status": "continuing", "summary": "..." } }
 ```
 
-Summaries are incremental: the first accepted report summarizes work done so far, each later report summarizes only work completed since the previous report. Because every accepted report is journaled, the summaries form a searchable trail that can be aggregated offline into a full record of a command's work.
+Summaries are incremental: the first accepted report summarizes work done so far, each later report summarizes only work completed since the previous report. Successfully persisted reports form a searchable trail that can be aggregated offline; it does not include accepted terminal reports discarded before journaling or reports whose persistence failed.
 
 **Legacy and rejection behavior:** entries written before issue 278 have no `summary` field — filter them out with `(.data.summary // "") != ""`. Rejected calls and mutation failures are *not* journaled as command-status entries, so they never become false evidence (a rejection is a `scramjet:log` `status`-category warn, not a command-status artifact).
 
 ### Direct summary search (all branches)
 
-Returns every accepted report with a non-empty summary across the whole file, regardless of branch:
+Returns every persisted report with a non-empty summary across the whole file, regardless of branch:
 
 ```sh
 jq -c 'select(.type == "custom" and .customType == "scramjet:command-status" and (.data.summary // "") != "") | {id, cmd: .data.commandName, status: .data.status, summary: .data.summary}' session.jsonl
@@ -200,7 +200,7 @@ jq -n --arg leaf "$LEAF" '
 ' session.jsonl
 ```
 
-The result is the invocation's reports in chronological (root→leaf) order — the incremental summaries that, concatenated, reconstruct the full record of that invocation's work.
+The result is the invocation's persisted reports in chronological (root→leaf) order — the available incremental summaries, not a guarantee of a complete record of that invocation's work.
 
 ## Lifecycle replay outcomes
 
