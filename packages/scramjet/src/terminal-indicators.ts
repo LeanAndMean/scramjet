@@ -186,13 +186,18 @@ export function createTerminalIndicators(pi: ExtensionAPI, state: ScramjetState)
 			);
 			function settle() {
 				setTimeout(() => {
-					if (recovery !== observer || boundary !== checkpoint) return;
+					if (recovery !== observer) return;
 					try {
 						ctx.getRunSettlement?.();
 					} catch {
 						return;
 					}
 					recovery = undefined;
+					if (boundary !== checkpoint) {
+						agentIsRunning = false;
+						setCurrentTitle(ctx);
+						return;
+					}
 					const phase = derivePhaseLabel(state.lifecycle);
 					const routedToRest =
 						(state.lifecycle.activeCommand === null || state.lifecycle.activeCommand === observer.command) &&

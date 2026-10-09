@@ -135,10 +135,42 @@ describe("createTerminalIndicators", () => {
 		await fixture.emit("agent_start", {}, ctx);
 		await fixture.emit("agent_end", {}, ctx);
 		await fixture.emit("input", { text: "new work" }, ctx);
+		await fixture.emit("agent_start", {}, { ...ctx, getRunSettlement: () => new Promise(() => {}) });
 		resolve({ status: "completed" });
 		const count = fixture.setTitle.mock.calls.length;
 		await new Promise((done) => setTimeout(done, 10));
 		expect(fixture.setTitle).toHaveBeenCalledTimes(count);
+	});
+
+	it("waits for settlement after idle input and refreshes the title without a stale bell", async () => {
+		const fixture = indicatorFixture("title_indicator: true\nbell: true\n");
+		const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+		Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		vi.useFakeTimers();
+		try {
+			await fixture.emit("session_start", {}, fixture.ctx);
+			let resolve!: (value: { status: "completed" }) => void;
+			const settlement = new Promise<{ status: "completed" }>((done) => {
+				resolve = done;
+			});
+			const ctx = { ...fixture.ctx, getRunSettlement: () => settlement, isIdle: () => true };
+			const provider = fixture.setTitleProvider.mock.calls[0][0] as () => string | undefined;
+			await fixture.emit("agent_start", {}, ctx);
+			await fixture.emit("agent_end", {}, ctx);
+			await fixture.emit("input", { text: "handled locally" }, ctx);
+			await vi.runAllTimersAsync();
+			expect(provider()).toMatch(/^● scramjet/);
+			resolve({ status: "completed" });
+			await vi.runAllTimersAsync();
+			expect(provider()).toMatch(/^○ scramjet/);
+			expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toBe(provider());
+			expect(write).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+			if (descriptor) Object.defineProperty(process.stdout, "isTTY", descriptor);
+			else Reflect.deleteProperty(process.stdout, "isTTY");
+		}
 	});
 
 	it("shows waiting during an active choice and resumes the working title", async () => {
