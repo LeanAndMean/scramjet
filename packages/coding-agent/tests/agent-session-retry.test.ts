@@ -2873,6 +2873,61 @@ describe("originating run settlement", () => {
 		expect(onRunSettlement).not.toHaveBeenCalled();
 	});
 
+	it("rejects originating settlement after an awaited agent_end listener fails", async () => {
+		let captured: Promise<RunSettlement> | undefined;
+		let endContext: ExtensionContext | undefined;
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { session } = await createFixture(() => assistantText("ok"), {
+			extensionFactory: (pi) => {
+				pi.on("agent_end", (_event, ctx) => {
+					endContext ??= ctx;
+				});
+			},
+		});
+		let injected = false;
+		const unsubscribe = session.agent.subscribe(async (event) => {
+			if (event.type !== "agent_end" || injected) return;
+			injected = true;
+			await gate;
+			throw new Error("originating agent_end listener failed");
+		});
+		try {
+			const prompt = session.prompt("hello", {
+				onRunSettlement(promise) {
+					captured = promise;
+					void promise.catch(() => {});
+				},
+			});
+			void prompt.catch(() => {});
+			await vi.waitFor(() => expect(endContext).toBeDefined());
+			expect(captured).toBeDefined();
+			expect(endContext!.getRunSettlement?.()).toBe(captured);
+			release();
+			await prompt.catch(() => {});
+			await vi.waitFor(() =>
+				expect(session.sessionManager.getBranch()).toContainEqual(
+					expect.objectContaining({
+						type: "message",
+						message: expect.objectContaining({
+							role: "assistant",
+							origin: "harness",
+							stopReason: "error",
+							errorMessage: "originating agent_end listener failed",
+						}),
+					}),
+				),
+			);
+			await expect(captured!).rejects.toThrow("originating agent_end listener failed");
+		} finally {
+			release();
+			unsubscribe();
+			session.dispose();
+		}
+	});
+
 	it("rejects a captured success when originating execution later rejects", async () => {
 		const { session } = await createFixture(() => assistantText("ok"));
 		const launch = session.agent.prompt.bind(session.agent);
