@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
@@ -15,6 +15,7 @@ import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../src/com
 import { COMMAND_STATUS_TYPE } from "../src/history.js";
 import { startCommand } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
+import { createTerminalIndicators } from "../src/terminal-indicators.js";
 import { derivedPhase, freshState } from "./helpers.js";
 
 const model: Model<"openai-chat"> = {
@@ -49,6 +50,85 @@ afterEach(() => {
 });
 
 describe("real Session to Scramjet recovery", () => {
+	it("shows an idle title after handled input invalidates deferred completion", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "scramjet-handled-title-"));
+		dirs.push(dir);
+		const state = freshState({ preferencesPath: join(dir, "preferences.yaml") });
+		writeFileSync(state.preferencesPath, "title_indicator: true\nbell: false\n");
+		const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
+		const auth = AuthStorage.inMemory();
+		auth.setRuntimeApiKey("openai", "fake");
+		const modelRegistry = ModelRegistry.create(auth, join(dir, "models.json"));
+		const handled = vi.fn();
+		const setTitle = vi.fn();
+		let titleProvider: (() => string | undefined) | undefined;
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: dir,
+			agentDir: dir,
+			settingsManager,
+			extensionFactories: [
+				(pi) => {
+					state.logger = createLogger(pi);
+					registerAutoContinue(pi, state);
+					createTerminalIndicators(pi, state).register();
+					pi.on("input", (event, ctx) => {
+						if (event.text !== "handled locally") return;
+						handled(ctx.isIdle());
+						return { action: "handled" };
+					});
+				},
+			],
+		});
+		await resourceLoader.reload();
+		const streamFn = vi.fn(() => {
+			const result = message("answer");
+			const stream = createAssistantMessageEventStream();
+			stream.push({ type: "start", partial: result });
+			stream.push({ type: "done", reason: "stop", message: result });
+			return stream;
+		});
+		const session = new AgentSession({
+			agent: new Agent({
+				initialState: { model, tools: [], systemPrompt: "", messages: [] },
+				getApiKey: async () => "fake",
+				streamFn,
+			}),
+			settingsManager,
+			modelRegistry,
+			resourceLoader,
+			cwd: dir,
+			sessionManager: SessionManager.inMemory(dir),
+			sessionStartEvent: { type: "session_start", hasUI: true, mode: "sdk" } as never,
+		});
+		try {
+			await session.bindExtensions({
+				uiContext: {
+					setTitle,
+					setTitleProvider: (provider: () => string | undefined) => {
+						titleProvider = provider;
+					},
+				} as never,
+			});
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			await session.prompt("answer normally");
+			expect(titleProvider).toBeDefined();
+			const onRunSettlement = vi.fn();
+			await session.prompt("handled locally", { onRunSettlement });
+			expect(handled).toHaveBeenCalledExactlyOnceWith(true);
+			expect(onRunSettlement).not.toHaveBeenCalled();
+			expect(streamFn).toHaveBeenCalledOnce();
+			expect(session.isStreaming).toBe(false);
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+			await vi.runAllTimersAsync();
+			expect(titleProvider?.()).toMatch(/^○ scramjet/);
+			expect(setTitle.mock.calls.at(-1)?.[0]).toBe(titleProvider?.());
+		} finally {
+			state.clearLifecycleTimers?.("test-cleanup");
+			session.dispose();
+			vi.useRealTimers();
+		}
+	});
+
 	it.each(["retry", "overflow-report", "overflow-no-report"])("settles %s before guarded routing", async (kind) => {
 		const dir = mkdtempSync(join(tmpdir(), "scramjet-recovery-"));
 		dirs.push(dir);
