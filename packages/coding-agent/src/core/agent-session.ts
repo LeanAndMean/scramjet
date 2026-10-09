@@ -799,7 +799,18 @@ export class AgentSession {
 				execution: this._pendingAgentRunStart?.execution ?? createDeferred(),
 			};
 			if (!this._pendingAgentRunStart) {
-				void this.agent.waitForIdle().then(() => resolveDeferred(run.execution, undefined));
+				chain.executions++;
+				void this.agent.waitForIdle().then(async () => {
+					resolveDeferred(run.execution, undefined);
+					try {
+						await this._drainAgentEventQueue();
+					} catch (error) {
+						chain.error ??= error instanceof Error ? error : new Error(String(error));
+					} finally {
+						chain.executions--;
+						this._trySettleRetryChain(chain);
+					}
+				});
 			}
 			this._activeAgentRunSettlement = run;
 			void run.execution.promise.then(() => {

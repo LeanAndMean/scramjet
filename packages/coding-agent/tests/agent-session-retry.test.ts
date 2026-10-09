@@ -2928,6 +2928,111 @@ describe("originating run settlement", () => {
 		}
 	});
 
+	it.each([
+		["prompt", false],
+		["prompt", true],
+		["continue", false],
+		["continue", true],
+	] as const)("waits for unreserved %s listener unwind with failure %s", async (method, fail) => {
+		let captured: Promise<RunSettlement> | undefined;
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { session } = await createFixture(() => assistantText("ok"), {
+			retryEnabled: false,
+			extensionFactory: (pi) => {
+				pi.on("agent_end", (_event, ctx) => {
+					captured ??= ctx.getRunSettlement?.();
+				});
+			},
+		});
+		let injected = false;
+		const unsubscribe = session.agent.subscribe(async (event) => {
+			if (event.type !== "agent_end" || injected) return;
+			injected = true;
+			await gate;
+			if (fail) throw new Error("unreserved listener failed");
+		});
+		try {
+			if (method === "continue") {
+				const input = { role: "user" as const, content: "hello", timestamp: Date.now() };
+				session.agent.state.messages.push(input);
+				session.sessionManager.appendMessage(input);
+			}
+			const execution = method === "prompt" ? session.agent.prompt("hello") : session.agent.continue();
+			void execution.catch(() => {});
+			await vi.waitFor(() => expect(captured).toBeDefined());
+			let settled = false;
+			void captured!.then(
+				() => {
+					settled = true;
+				},
+				() => {
+					settled = true;
+				},
+			);
+			await settle();
+			expect(session.isStreaming).toBe(true);
+			expect(settled).toBe(false);
+			release();
+			await execution;
+			if (fail) {
+				await expect(captured!).rejects.toThrow("unreserved listener failed");
+				expect(session.sessionManager.getBranch()).toContainEqual(
+					expect.objectContaining({
+						type: "message",
+						message: expect.objectContaining({ origin: "harness", errorMessage: "unreserved listener failed" }),
+					}),
+				);
+			} else {
+				expect(await captured!).toMatchObject({
+					status: "completed",
+					assistantMessage: { content: [{ text: "ok" }] },
+				});
+			}
+			expect(session.isStreaming).toBe(false);
+			expect(session.isRetrying).toBe(false);
+			await expect(session.prompt("next")).resolves.toBeUndefined();
+		} finally {
+			release();
+			unsubscribe();
+			session.dispose();
+		}
+	});
+
+	it("waits for unreserved execution classification after Agent becomes idle", async () => {
+		let captured: Promise<RunSettlement> | undefined;
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { session } = await createFixture(() => assistantText("ok"), {
+			extensionFactory: (pi) => {
+				pi.on("agent_end", async (_event, ctx) => {
+					captured = ctx.getRunSettlement?.();
+					await gate;
+				});
+			},
+		});
+		try {
+			await session.agent.prompt("hello");
+			await vi.waitFor(() => expect(captured).toBeDefined());
+			let settled = false;
+			void captured!.then(() => {
+				settled = true;
+			});
+			await settle();
+			expect(session.isStreaming).toBe(false);
+			expect(settled).toBe(false);
+			release();
+			expect(await captured!).toMatchObject({ status: "completed" });
+		} finally {
+			release();
+			session.dispose();
+		}
+	});
+
 	it.each([false, true])("unwinds a retryable-response listener failure with cancellation %s", async (cancel) => {
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => {
