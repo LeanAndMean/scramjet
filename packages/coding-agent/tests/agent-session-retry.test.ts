@@ -3070,6 +3070,50 @@ describe("originating run settlement", () => {
 		},
 	);
 
+	it("excludes direct Agent harness messages from originating settlement contexts", async () => {
+		let providerContext: ExtensionContext | undefined;
+		let harnessContext: ExtensionContext | undefined;
+		const capture = captureSettlement();
+		const { session } = await createFixture(() => assistantText("provider answer"), {
+			retryEnabled: false,
+			extensionFactory: (pi) => {
+				pi.on("agent_end", (_event, ctx) => {
+					providerContext = ctx;
+				});
+				pi.on("message_start", (event, ctx) => {
+					if (
+						event.message.role === "assistant" &&
+						event.message.origin === "harness" &&
+						event.message.content.some((block) => block.type === "toolCall" && block.name === "harness_notice")
+					)
+						harnessContext = ctx;
+				});
+			},
+		});
+		let harness: Promise<void> | undefined;
+		const unsubscribe = session.agent.subscribe((event) => {
+			if (event.type !== "agent_end" || harness) return;
+			harness = session.agent.runHarnessTool(makeHarnessNoticeTool(), {});
+			void harness.catch(() => {});
+		});
+		try {
+			await session.prompt("hello", capture.options);
+			expect(harness).toBeDefined();
+			await harness;
+			await vi.waitFor(() => expect(harnessContext).toBeDefined());
+			expect(providerContext?.getRunSettlement?.()).toBe(capture.get());
+			expect(await capture.get()).toMatchObject({
+				status: "completed",
+				assistantMessage: { content: [{ text: "provider answer" }] },
+			});
+			expect(session.isStreaming).toBe(false);
+			expect(harnessContext!.getRunSettlement?.()).toBeUndefined();
+		} finally {
+			unsubscribe();
+			session.dispose();
+		}
+	});
+
 	it("settles originating execution independently of later idle harness work", async () => {
 		let captured: Promise<RunSettlement> | undefined;
 		let releaseEnd!: () => void;
