@@ -346,6 +346,7 @@ function createRetryChain(): RetryChainSettlement {
 type AgentRunSettlement = Deferred & {
 	chain: RetryChainSettlement;
 	execution: Deferred;
+	processingTail: Promise<void>;
 	persistedAssistantSnapshot?: AssistantMessage;
 	assistantPersistenceError?: Error;
 };
@@ -713,6 +714,7 @@ export class AgentSession {
 		);
 		this._agentEventQueue = processing;
 		if (harnessAck) harnessAck.persistenceTail = processing;
+		if (runSettlement && this.agent.getRunExecution()) runSettlement.processingTail = processing;
 
 		// Keep queue alive if an event handler fails
 		processing.catch(() => {});
@@ -797,6 +799,7 @@ export class AgentSession {
 				...createDeferred(),
 				chain,
 				execution: this._pendingAgentRunStart?.execution ?? createDeferred(),
+				processingTail: Promise.resolve(),
 			};
 			if (!this._pendingAgentRunStart) {
 				chain.executions++;
@@ -808,7 +811,7 @@ export class AgentSession {
 					.then(async () => {
 						resolveDeferred(run.execution, undefined);
 						try {
-							await this._drainAgentEventQueue();
+							await run.processingTail;
 						} catch (error) {
 							chain.error ??= error instanceof Error ? error : new Error(String(error));
 						} finally {
