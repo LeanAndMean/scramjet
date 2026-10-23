@@ -10,7 +10,8 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [packageRootArg, workDir] = process.argv.slice(2);
@@ -18,6 +19,13 @@ if (!packageRootArg || !workDir) {
 	throw new Error("usage: installed-runtime-smoke.mjs <installed-package-root> <work-dir>");
 }
 const packageRoot = realpathSync(packageRootArg);
+const installedRequire = createRequire(join(packageRoot, "package.json"));
+const closure = realpathSync(join(packageRoot, "..", "..")) + sep;
+const tuiEntry = installedRequire.resolve("@leanandmean/tui");
+const koffiPath = realpathSync(createRequire(tuiEntry).resolve("koffi"));
+for (const path of [realpathSync(tuiEntry), koffiPath]) {
+	if (!path.startsWith(closure)) throw new Error(`Native runtime escaped installed closure: ${path}`);
+}
 
 const dataRoot = join(workDir, "data");
 const home = join(workDir, "home");
@@ -167,5 +175,5 @@ if (snapshot(legacyRoot) !== legacyBefore) throw new Error("installed runtime ch
 if (readFileSync(outside, "utf-8") !== "outside sentinel\n") throw new Error("installed runtime followed a legacy symlink");
 
 process.stdout.write(
-	`${JSON.stringify({ promptPaths: promptPaths.length, agentCatalog: true, subagentRegistry: true, migrationWarning: true })}\n`,
+	`${JSON.stringify({ promptPaths: promptPaths.length, agentCatalog: true, subagentRegistry: true, migrationWarning: true, tuiEntry, koffiPath })}\n`,
 );

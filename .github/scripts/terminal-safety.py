@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import signal
@@ -48,6 +49,14 @@ def wait(predicate, seconds=10):
             return True
         time.sleep(0.1)
     return False
+
+
+def termios_configuration_equal(before, after, darwin):
+    if not isinstance(before, str) or not isinstance(after, str) or not before or not after:
+        return False
+    def configuration(value):
+        return re.sub(r"(:lflag=)([0-9a-f]+)(?=:)", lambda match: match[1] + format(int(match[2], 16) & ~0x20000000, "x"), value) if darwin else value
+    return configuration(before) == configuration(after)
 
 
 def action_settled(previous, action):
@@ -232,7 +241,7 @@ def image_confined(name):
 
 
 def report_passed():
-    return set(report["checks"]) == REQUIRED_CHECKS and all(c["passed"] for c in report["checks"].values()) and not any(k in report for k in ("error", "cleanupError"))
+    return set(report["checks"]) == REQUIRED_CHECKS and all(c.get("passed") is True for c in report["checks"].values()) and not any(k in report for k in ("error", "cleanupError"))
 
 
 try:
@@ -243,7 +252,7 @@ try:
     report["pullRequest"] = {key: event.get("pull_request", {}).get(key, {}).get("sha") for key in ("head", "base")}
     report["nodeVersion"] = run("node", "--version")
     report["pythonVersion"] = sys.version.split()[0]
-    report["image"] = {k: os.environ.get(k) for k in ("ImageVersion", "RUNNER_ARCH")}
+    report["image"] = {k: os.environ.get(k) for k in ("ImageVersion", "RUNNER_ARCH", "GITHUB_SHA")}
     launcher = output / "launch.sh"
     launcher.write_text("#!/bin/bash\n" + "\n".join([
         f'printf "%s\\n" "$PPID" > {shlex.quote(str(output / "shell-pid"))}',
@@ -302,7 +311,10 @@ try:
     if mac:
         wait_image_consent(require_image=True)
     check("productionFixtureStarted", lambda: state().get("phase") == "image")
-    check("checkoutProvenanceMatches", lambda: state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False)
+    check("checkoutProvenanceMatches", lambda: re.fullmatch(r"[0-9a-f]{40}", report["commit"]) is not None
+          and report["commit"] == os.environ.get("GITHUB_SHA")
+          and state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False
+          and state().get("runtimeOrigin") == {"kind": "checkout"})
     check("nativeProtocolDetected", lambda: state().get("protocol") == ("iterm2" if mac else "kitty"))
     if not mac:
         window = run("xdotool", "search", "--onlyvisible", "--class", "kitty").splitlines()[-1]
@@ -353,7 +365,7 @@ try:
     check("subsequentActivationAuthorizes", lambda: state().get("approved") == 1)
     key("6")
     check("externalEditorRoundTrip", lambda: state().get("editorHandoffs") == 1 and state().get("editor") == "edited by synthetic external editor")
-    check("externalEditorReceivesRestoredTermios", lambda: state().get("handoffTermios") == state().get("termiosBefore"))
+    check("externalEditorReceivesRestoredTermios", lambda: termios_configuration_equal(state().get("termiosBefore"), state().get("handoffTermios"), mac))
     key("7")
     check("suspendRequested", lambda: state().get("suspends") == 1)
     pid = state()["pid"]
@@ -374,7 +386,7 @@ try:
     check("nativeImageRestoredAfterResume", lambda: pixels("resumed-image") > 400)
     key("exit")
     check("orderlyExit", lambda: (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
-    check("finalTermiosRestored", lambda: state().get("termiosBefore") == state().get("termiosAfter"))
+    check("finalTermiosRestored", lambda: termios_configuration_equal(state().get("termiosBefore"), state().get("termiosAfter"), mac))
     check("nativePlacementsCleanedUp", lambda: state().get("stopped") is True and pixels("final-transcript") == 0, stable_seconds=0.35)
 except Exception as error:
     report["error"] = str(error)

@@ -1,6 +1,9 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import Darwin
+
+let markerText = CommandLine.arguments.first(where: { $0.hasPrefix("--marker=") }).map { String($0.dropFirst(9)) } ?? "ROW-001"
 
 func emit(_ value: Any) {
     let data = try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
@@ -26,7 +29,7 @@ func geometry(_ element: AXUIElement, depth: Int = 0) -> [[String: Any]] {
         if ["AXWindow", "AXScrollArea", "AXTextArea"].contains(role) {
             var item: [String: Any] = ["role": role, "x": point.x, "y": point.y, "width": dimensions.width, "height": dimensions.height]
             if role == "AXTextArea", let text = attribute(element, kAXValueAttribute) as? String {
-                let marker = (text as NSString).range(of: "ROW-001")
+                let marker = (text as NSString).range(of: markerText, options: .backwards)
                 if marker.location != NSNotFound {
                     var range = CFRange(location: marker.location, length: 1)
                     let parameter = AXValueCreate(.cfRange, &range)!
@@ -51,7 +54,7 @@ func geometry(_ element: AXUIElement, depth: Int = 0) -> [[String: Any]] {
 func pressButton(_ element: AXUIElement, title: String, depth: Int = 0) -> Bool {
     if depth > 12 { return false }
     if ["AXButton", "AXCheckBox"].contains(attribute(element, kAXRoleAttribute) as? String ?? ""),
-       [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].contains(where: { attribute(element, $0) as? String == title }) {
+       [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].contains(where: { (attribute(element, $0) as? String)?.replacingOccurrences(of: "’", with: "'") == title }) {
         return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
     }
     for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
@@ -136,9 +139,11 @@ func sendKey(_ code: CGKeyCode, _ rawFlags: UInt64) {
 
 let args = CommandLine.arguments
 switch args[1] {
+case "termios-mask":
+    emit(["PENDIN": UInt64(PENDIN)])
 case "capabilities":
     emit(["accessibility": AXIsProcessTrusted(), "postEvents": CGPreflightPostEventAccess(),
-          "screenCapture": CGPreflightScreenCaptureAccess()])
+          "screenCapture": CGPreflightScreenCaptureAccess(), "listenEvents": CGPreflightListenEventAccess()])
 case "geometry", "resize":
     guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier?.lowercased() == (args.count > 2 ? args[2].lowercased() : "com.apple.terminal") }) else {
         fatalError("Terminal is not running")

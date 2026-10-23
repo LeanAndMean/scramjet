@@ -3887,22 +3887,24 @@ export class InteractiveMode {
 	private async shutdown(): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
-		this.unregisterSignalHandlers();
 
-		// Drain any in-flight Kitty key release events before stopping.
-		// This prevents escape sequences from leaking to the parent shell over slow SSH.
-		await this.ui.terminal.drainInput(1000);
-
-		await this.settingsManager.flush();
 		let exitCode = 0;
 		try {
-			this.stop({ retainContent: this.settingsManager.getRetainTranscriptOnExit() });
+			await this.ui.terminal.drainInput(1000);
+			await this.settingsManager.flush();
+			try {
+				this.stop({ retainContent: this.settingsManager.getRetainTranscriptOnExit() });
+			} catch (error) {
+				await this.ui.terminal.flush?.();
+				throw error;
+			}
+			await this.ui.terminal.flush?.();
 		} catch (error) {
 			exitCode = 1;
-			console.error(`Could not retain terminal history: ${error instanceof Error ? error.message : String(error)}`);
+			console.error(`Could not stop terminal safely: ${error instanceof Error ? error.message : String(error)}`);
 		}
-		await this.ui.terminal.flush?.();
 		await this.runtimeHost.dispose();
+		this.unregisterSignalHandlers();
 		process.exit(exitCode);
 	}
 
@@ -3939,7 +3941,9 @@ export class InteractiveMode {
 		} catch {}
 		try {
 			this.ui.stop();
-		} catch {}
+		} catch (releaseError) {
+			console.error("Terminal release failed; exiting without restart:", releaseError);
+		}
 		console.error("pi exiting due to uncaughtException:");
 		console.error(error);
 		process.exit(1);
@@ -4016,12 +4020,13 @@ export class InteractiveMode {
 		process.on("SIGINT", ignoreSigint);
 
 		// Set up handler to restore TUI when resumed
-		process.once("SIGCONT", () => {
+		const resume = () => {
 			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
 			this.ui.start();
 			this.ui.rebuild();
-		});
+		};
+		process.once("SIGCONT", resume);
 
 		try {
 			// SCRAMJET-DIVERGENCE: drain releases before handing keyboard ownership back to the shell.
@@ -4033,6 +4038,7 @@ export class InteractiveMode {
 		} catch (error) {
 			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
+			process.removeListener("SIGCONT", resume);
 			throw error;
 		}
 	}
@@ -4162,6 +4168,7 @@ export class InteractiveMode {
 
 		const currentText = this.editor.getExpandedText?.() ?? this.editor.getText();
 		const tmpFile = path.join(os.tmpdir(), `pi-editor-${Date.now()}.pi.md`);
+		let released = false;
 
 		try {
 			// Write current content to temp file
@@ -4170,6 +4177,8 @@ export class InteractiveMode {
 			// SCRAMJET-DIVERGENCE: the editor must not inherit the key release that opened it.
 			await this.ui.terminal.drainInput();
 			this.ui.stop();
+
+			released = true;
 
 			// Split by space to support editor arguments (e.g., "code --wait")
 			const [editor, ...editorArgs] = editorCmd.split(" ");
@@ -4194,9 +4203,11 @@ export class InteractiveMode {
 				// Ignore cleanup errors
 			}
 
-			// Restart TUI
-			this.ui.start();
-			this.ui.rebuild();
+			// SCRAMJET-DIVERGENCE: failed release is not permission to reacquire inherited stdin.
+			if (released) {
+				this.ui.start();
+				this.ui.rebuild();
+			}
 		}
 	}
 
@@ -6136,16 +6147,18 @@ export class InteractiveMode {
 	}
 
 	stop(options?: { retainContent?: boolean }): void {
+		let released = false;
 		try {
 			if (this.isInitialized) {
-				this.isInitialized = false;
 				this.ui.stop(options);
+				this.isInitialized = false;
 			}
+			released = true;
 		} finally {
 			this.selectorOpenGeneration++;
 			this.pendingSelectorOpenGeneration = undefined;
-			this.unregisterSignalHandlers();
-			if (this.settingsManager.getShowTerminalProgress()) {
+			if (!this.isShuttingDown) this.unregisterSignalHandlers();
+			if (released && this.settingsManager.getShowTerminalProgress()) {
 				this.ui.terminal.setProgress(false);
 			}
 			if (this.loadingAnimation) {
