@@ -800,17 +800,22 @@ export class AgentSession {
 			};
 			if (!this._pendingAgentRunStart) {
 				chain.executions++;
-				void this.agent.waitForIdle().then(async () => {
-					resolveDeferred(run.execution, undefined);
-					try {
-						await this._drainAgentEventQueue();
-					} catch (error) {
+				void this.agent
+					.getRunExecution()!
+					.catch((error) => {
 						chain.error ??= error instanceof Error ? error : new Error(String(error));
-					} finally {
-						chain.executions--;
-						this._trySettleRetryChain(chain);
-					}
-				});
+					})
+					.then(async () => {
+						resolveDeferred(run.execution, undefined);
+						try {
+							await this._drainAgentEventQueue();
+						} catch (error) {
+							chain.error ??= error instanceof Error ? error : new Error(String(error));
+						} finally {
+							chain.executions--;
+							this._trySettleRetryChain(chain);
+						}
+					});
 			}
 			this._activeAgentRunSettlement = run;
 			void run.execution.promise.then(() => {

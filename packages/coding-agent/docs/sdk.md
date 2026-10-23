@@ -284,6 +284,8 @@ session.agent.state.tools = tools; // copies the top-level array
 await session.agent.waitForIdle();
 ```
 
+`session.agent.getRunExecution()` synchronously captures the active execution's `Promise<void>`, or returns `undefined` outside a run. It settles after runtime cleanup and rejects with any escaping `prompt()` / `continue()` failure, including final harness-drain failures. It preserves Agent's caught-error behavior and does not include Session recovery or persistence. `waitForIdle()` still resolves even when execution rejects. Capture in a listener and observe independently after the listener returns; awaiting the originating execution inside its own awaited listener deadlocks.
+
 ### Events
 
 Subscribe to events to receive streaming output and lifecycle notifications.
@@ -486,7 +488,7 @@ if (captured) {
 }
 ```
 
-Run-bound extension event contexts expose the exact same promise through optional `ctx.getRunSettlement()`, including matching owned automatic compaction hooks across retries/continuations. Manual/unowned maintenance and new-prompt preflight expose no originating capture; command/input handling and explicit queue acceptance do not borrow a previous run. A retained event context is bound to its original run, not a mutable latest-result lookup. Contexts from direct public `session.agent.prompt()` / `continue()` executions also wait for that execution's idle boundary and queued classification before settling; those calls still bypass Session prompt preflight. Optional `ctx.sendMessage()` exposes existing asynchronous custom sending without changing void `pi.sendMessage`; see [context capabilities and deadlock cautions](extensions.md#ctxgetrunsettlement).
+Run-bound extension event contexts expose the exact same promise through optional `ctx.getRunSettlement()`, including matching owned automatic compaction hooks across retries/continuations. Manual/unowned maintenance and new-prompt preflight expose no originating capture; command/input handling and explicit queue acceptance do not borrow a previous run. A retained event context is bound to its original run, not a mutable latest-result lookup. Contexts from direct public `session.agent.prompt()` / `continue()` executions also wait for that execution's captured outcome and queued classification before settling, rejecting escaping execution failures even when the idle wait resolves; those calls still bypass Session prompt preflight. Optional `ctx.sendMessage()` exposes existing asynchronous custom sending without changing void `pi.sendMessage`; see [context capabilities and deadlock cautions](extensions.md#ctxgetrunsettlement).
 
 Import `RunSettlement` from `@leanandmean/coding-agent`. Attach rejection handling immediately and observe independently; the callback is notification, not an awaited consumer hook. Throwing from it rejects the reservation before launch and propagates through `prompt()`. Never await a run's own settlement from an awaited gating hook: classification needs that hook to return. Capture observes one originating run, not global idleness or an admission lease; retained captures never substitute later prompts or harness output. Revalidate session/context before subsequent guarded actions. `prompt()` remains `Promise<void>` with operational outcomes delivered separately rather than newly thrown provider failures.
 

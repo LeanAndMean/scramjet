@@ -3001,6 +3001,75 @@ describe("originating run settlement", () => {
 		}
 	});
 
+	it.each(["prompt", "continue", "reserved"] as const)(
+		"rejects contextual settlement after %s final-drain execution failure",
+		async (method) => {
+			let captured: Promise<RunSettlement> | undefined;
+			const { session } = await createFixture(() => assistantText("ok"), {
+				retryEnabled: false,
+				extensionFactory: (pi) => {
+					pi.on("agent_end", (_event, ctx) => {
+						captured ??= ctx.getRunSettlement?.();
+						void captured?.catch(() => {});
+					});
+				},
+			});
+			let harness: Promise<void> | undefined;
+			let idle: Promise<void> | undefined;
+			let failed = false;
+			const unsubscribe = session.agent.subscribe((event) => {
+				if (event.type === "agent_end" && !harness) {
+					idle = session.agent.waitForIdle();
+					harness = session.agent.runHarnessTool(
+						{
+							name: "probe_notice",
+							label: "Probe",
+							description: "Offline notice",
+							parameters: Type.Object({}),
+							execute: async () => ({ content: [{ type: "text", text: "noted" }], details: undefined }),
+						},
+						{},
+					);
+					void harness.catch(() => {});
+				}
+				if (
+					event.type === "message_end" &&
+					event.message.role === "toolResult" &&
+					event.message.toolName === "probe_notice" &&
+					!failed
+				) {
+					failed = true;
+					throw new Error("real final-drain listener failed");
+				}
+			});
+			try {
+				if (method === "continue") {
+					const input = { role: "user" as const, content: "hello", timestamp: Date.now() };
+					session.agent.state.messages.push(input);
+					session.sessionManager.appendMessage(input);
+				}
+				const execution =
+					method === "reserved"
+						? session.prompt("hello")
+						: method === "prompt"
+							? session.agent.prompt("hello")
+							: session.agent.continue();
+				await expect(execution).rejects.toThrow("real final-drain listener failed");
+				await expect(harness!).rejects.toThrow("real final-drain listener failed");
+				await expect(idle!).resolves.toBeUndefined();
+				await vi.waitFor(() => expect(captured).toBeDefined());
+				await expect(captured!).rejects.toThrow("real final-drain listener failed");
+				expect(session.isStreaming).toBe(false);
+				expect(session.isRetrying).toBe(false);
+				expect(session.agent.state.pendingToolCalls.size).toBe(0);
+				await expect(session.prompt("next")).resolves.toBeUndefined();
+			} finally {
+				unsubscribe();
+				session.dispose();
+			}
+		},
+	);
+
 	it("waits for unreserved execution classification after Agent becomes idle", async () => {
 		let captured: Promise<RunSettlement> | undefined;
 		let release!: () => void;
