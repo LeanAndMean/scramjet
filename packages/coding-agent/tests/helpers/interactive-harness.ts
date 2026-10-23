@@ -109,7 +109,11 @@ export async function createProductionInteractiveHarness(
 				),
 			}),
 		}),
-		{ cwd: directory, agentDir: directory, sessionManager: SessionManager.create(directory, directory) },
+		{
+			cwd: directory,
+			agentDir: directory,
+			sessionManager: execution ? SessionManager.create(directory, directory) : SessionManager.inMemory(directory),
+		},
 	);
 	const keybindings = vi.spyOn(KeybindingsManager, "create").mockImplementation(() => new KeybindingsManager());
 	const clipboardFactory = vi.isMockFunction(clipboard.createWslClipboardReader)
