@@ -956,7 +956,7 @@ describe("retained approval and exit safety", () => {
 			expect(h.terminal.writesSince(mark)).toContain("\x1b[?1049l");
 			expect(h.terminal.bufferLines().join("\n")).not.toContain("LIVE");
 			expect(disposed).toHaveBeenCalledOnce();
-			expect(diagnostic).toHaveBeenCalledExactlyOnceWith("Could not retain terminal history: snapshot failed");
+			expect(diagnostic).toHaveBeenCalledExactlyOnceWith("Could not stop terminal safely: snapshot failed");
 			expect(exit).toHaveBeenCalledExactlyOnceWith(1);
 		} finally {
 			exit.mockRestore();

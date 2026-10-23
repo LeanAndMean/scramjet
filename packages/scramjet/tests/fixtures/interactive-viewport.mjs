@@ -1,12 +1,29 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { findPackageJSON } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { release, platform, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { decodeKittyPrintable, isKeyRelease, matchesKey, ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
-import { copyToClipboard } from "../../../coding-agent/dist/utils/clipboard.js";
+const installedRoot = process.env.SCRAMJET_TUI_INSTALLED_ROOT;
+const installedBase = installedRoot ? pathToFileURL(join(realpathSync(installedRoot), "package.json")) : undefined;
+const closure = installedRoot ? realpathSync(join(installedRoot, "..", "..")) + sep : undefined;
+function runtimeModule(packageName, file = "index.js") {
+	const entry = installedBase ? join(dirname(findPackageJSON(`@leanandmean/${packageName}`, installedBase)), "dist/index.js") : fileURLToPath(new URL(`../../../${packageName}/dist/index.js`, import.meta.url));
+	const path = realpathSync(join(dirname(entry), file));
+	if (closure && !path.startsWith(closure)) throw new Error(`Runtime escaped installed closure: ${path}`);
+	return import(pathToFileURL(path).href);
+}
+const { decodeKittyPrintable, isKeyRelease, matchesKey, ProcessTerminal, TUI, truncateToWidth } = await runtimeModule("tui");
+const { copyToClipboard } = await runtimeModule("coding-agent", "utils/clipboard.js");
 
 const stripAnsi = (text) => stripVTControlCharacters(text.replace(/\x1b\[[0-9;:]*m/g, ""));
+const nativePayload = "NATIVE café 界 é\nsecond line";
+const control = process.argv.find((arg) => arg.startsWith("--negative-control="))?.split("=")[1];
+if (control && !["noop-copy", "copy-on-selection", "consumed-paste"].includes(control)) throw new Error("Unknown negative control");
+function terminalConfiguration(value) {
+	return platform() === "darwin" ? value.replace(/(:lflag=)([0-9a-f]+)(?=:)/, (_, prefix, bits) => prefix + (BigInt(`0x${bits}`) & ~0x20000000n).toString(16)) : value;
+}
 
 const help = `Retained TUI interaction fixture for #551.
 Run from the repository after npm run build:
@@ -22,7 +39,8 @@ Uses actual TUI/RetainedViewport/ProcessTerminal input, selection and rendering.
 3. Drag-select Unicode without modifiers, including across the screen edge.
 4. Right-click selection; independently compare exact desktop clipboard text.
 5. Select again and Ctrl+C; successful copying clears the selection.
-6. Paste back here: only equality is recorded, never pasted content.
+6. Unexpected paste is consumed without recording its content. Journey action
+   native-paste/right-paste explicitly arm the known synthetic payload for real editor insertion.
 7. Ctrl+Home/Ctrl+End browse the transcript; use --production to test Home/End editing.
 8. Type and use arrows/backspace; at-tail PageUp belongs to the focused component.
 9. Production right-click without selection pastes into the focused editor from
@@ -37,7 +55,11 @@ subagent cards, queues, widgets, editor and footer. Ctrl+N advances one child,
 Ctrl+O expands/collapses, Ctrl+Q exits. No child processes or models are invoked.
 Use --production --journey for the native activation matrix: synthetic history,
 real grouped cards, clipboard observation, and controlled updates/approval/handoffs.
-Only that mode polls <SCRAMJET_TUI_PROBE_EVIDENCE>.command for fixture actions.
+Only journey/committed-handoff modes poll <SCRAMJET_TUI_PROBE_EVIDENCE>.command.
+Set SCRAMJET_TUI_INSTALLED_ROOT to an isolated installed Scramjet package root
+(Node 22.14+); runtime imports must stay in that closure, without checkout fallback.
+--native-handoffs requires real external-editor stdin; --negative-control selects
+noop-copy, copy-on-selection or consumed-paste solely to challenge native oracles.
 selector-confirm/select/next/model open actual Scramjet controls; their opening
 receipt precedes the eventual answer, recorded separately in selector.result.
 The default mode retains the Stage 3 desktop driver's fixed-row protocol.
@@ -59,7 +81,7 @@ if (process.argv.includes("--help")) {
 	process.exit(0);
 }
 if (process.argv.includes("--inspect-screenshot")) {
-	const { loadPhoton } = await import("../../../coding-agent/dist/utils/photon.js");
+	const { loadPhoton } = await runtimeModule("coding-agent", "utils/photon.js");
 	const photon = await loadPhoton();
 	const image = photon.PhotonImage.new_from_byteslice(readFileSync(process.argv[process.argv.indexOf("--inspect-screenshot") + 1]));
 	const pixels = image.get_raw_pixels();
@@ -215,19 +237,19 @@ async function runProduction() {
 	process.env.SCRAMJET_OFFLINE = "1";
 	const functionKeyBrowsing = process.argv.includes("--function-key-browsing");
 	if (functionKeyBrowsing) writeFileSync(join(directory, "keybindings.json"), JSON.stringify({ "tui.viewport.pageUp": "f8", "tui.viewport.pageDown": "f9" }));
-	const { Agent } = await import("../../../agent/dist/index.js");
-	const { AgentSession, AuthStorage, ModelRegistry, SessionManager, SettingsManager, InteractiveMode } = await import("../../../coding-agent/dist/index.js");
-	const { createAgentSessionServices } = await import("../../../coding-agent/dist/core/agent-session-services.js");
-	const { createAgentSessionRuntime } = await import("../../../coding-agent/dist/core/agent-session-runtime.js");
-	const { stopThemeWatcher } = await import("../../../coding-agent/dist/modes/interactive/theme/theme.js");
-	const { registerSubagentTool } = await import("../../dist/subagent/index.js");
-	const { registerUserInputTool } = await import("../../dist/user-input.js");
-	const { selectNextStep } = await import("../../dist/next-step-selector.js");
-	const { createLifecycle } = await import("../../dist/lifecycle.js");
+	const { Agent } = await runtimeModule("agent");
+	const { AgentSession, AuthStorage, ModelRegistry, SessionManager, SettingsManager, InteractiveMode } = await runtimeModule("coding-agent");
+	const { createAgentSessionServices } = await runtimeModule("coding-agent", "core/agent-session-services.js");
+	const { createAgentSessionRuntime } = await runtimeModule("coding-agent", "core/agent-session-runtime.js");
+	const { stopThemeWatcher } = await runtimeModule("coding-agent", "modes/interactive/theme/theme.js");
+	const { registerSubagentTool } = await runtimeModule("scramjet", "subagent/index.js");
+	const { registerUserInputTool } = await runtimeModule("scramjet", "user-input.js");
+	const { selectNextStep } = await runtimeModule("scramjet", "next-step-selector.js");
+	const { createLifecycle } = await runtimeModule("scramjet", "lifecycle.js");
 	const selectorState = { lifecycle: createLifecycle(), lifecycleGeneration: 0, logger: { warn() {}, debug() {}, lifecycle() {} } };
 	let productAPI;
 	let selectorDone;
-	const { Text } = await import("../../../tui/dist/index.js");
+	const { Text } = await runtimeModule("tui");
 	const authStorage = AuthStorage.inMemory();
 	let extensionUI;
 	const services = await createAgentSessionServices({
@@ -264,16 +286,20 @@ async function runProduction() {
 	let updates = 0;
 	const safety = process.argv.includes("--safety");
 	const journey = process.argv.includes("--journey");
-	const interactions = { wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0, copyErrors: 0, pasteMatches: 0, pasteMismatches: 0, focusIn: 0, focusOut: 0, enterPresses: 0 };
+	const interactions = { wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0, copyErrors: 0, pasteMatches: 0, pasteMismatches: 0, focusIn: 0, focusOut: 0, enterPresses: 0, rightPasteInsertions: 0 };
 	const committed = process.argv.includes("--committed");
 	const committedHandoffs = process.argv.includes("--committed-handoffs");
 	if (committed && (journey || safety)) throw new Error("Committed smoke is separate from retained native journeys");
 	let copyKind;
 	let copied;
+	let armedPaste = false;
+	let armedRightPaste = false;
+	let forwardingPaste = false;
+	let earlyCopy = false;
 	let thumbGesture = false;
 	let lastMouse;
 	let commandId = 0;
-	const safetyState = { protocol: undefined, phase: "starting", approved: 0, editorHandoffs: 0, suspends: 0 };
+	const safetyState = { protocol: undefined, phase: "starting", approved: 0, editorHandoffs: 0, suspends: 0, submissions: 0 };
 	let imageTool;
 	let overlay;
 	let approval;
@@ -286,7 +312,7 @@ async function runProduction() {
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), editor: extensionUI?.getEditorText() }));
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, architecture: process.arch, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), editor: extensionUI?.getEditorText(), editorCursor: mode.defaultEditor.getCursor(), runtimeOrigin: installedRoot ? { kind: "installed", root: realpathSync(installedRoot) } : { kind: "checkout" }, negativeControl: control ?? null }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {
@@ -332,6 +358,11 @@ async function runProduction() {
 		observation.phase = "waiting";
 	}
 	const timer = setInterval(() => {
+		if (!mode.ui.viewport?.selection) earlyCopy = false;
+		if (control === "copy-on-selection" && !earlyCopy && mode.ui.viewport?.paintedSelection) {
+			earlyCopy = true;
+			void copyToClipboard("ROW-001 synthetic café 界 é text").catch((error) => { safetyState.error = error.message; });
+		}
 		record();
 		const path = process.env.SCRAMJET_TUI_PROBE_EVIDENCE && `${process.env.SCRAMJET_TUI_PROBE_EVIDENCE}.command`;
 		if ((!journey && !committedHandoffs) || !path || !existsSync(path)) return;
@@ -347,6 +378,12 @@ async function runProduction() {
 			else if (command.action === "close-overlay") { overlay?.hide(); overlay = undefined; }
 			else if (command.action === "expand") mode.setToolsExpanded(true);
 			else if (command.action === "editor") extensionUI.setEditorText("");
+			else if (command.action === "restore-editor") extensionUI.setEditorText("Synthetic editor");
+			else if (command.action === "native-paste" || command.action === "right-paste") {
+				extensionUI.setEditorText("PREFIXSUFFIX");
+				armedPaste = command.action === "native-paste";
+				armedRightPaste = command.action === "right-paste";
+			}
 			else if (command.action === "copy-editor") extensionUI.setEditorText(`COPY-EDITOR ${"alpha beta gamma ".repeat(12).trimEnd()}\n\n    café 界`);
 			else if (command.action === "copy-seam" || command.action === "copy-seam-scrolled") {
 				const hiddenRows = command.action === "copy-seam-scrolled" ? 40 : 0;
@@ -368,6 +405,14 @@ async function runProduction() {
 			else if (command.action === "copy-prose") await mode.handleEvent({ type: "message_start", message: { role: "user", content: ("COPY-PROSE " + "alpha beta gamma ".repeat(18)).trimEnd() + "\n\n```ts\n    const value = 1;\n```", timestamp: 0 } });
 			else if (command.action === "approval") await safetyAction("4");
 			else if (command.action === "external") await safetyAction("6");
+			else if (command.action === "extension-external") {
+				prepareExternalEditor();
+				void extensionUI.editor("SYNTHETIC EXTENSION EDITOR", "extension draft").then((text) => {
+					safetyState.extensionEditorResult = text;
+					readExternalReceipt();
+					record();
+				}, (error) => { safetyState.error = error.message; record(); stop(); process.exitCode = 1; });
+			}
 			else if (command.action === "suspend") { await safetyAction("7"); return; }
 			else throw new Error(`Unknown fixture action: ${command.action}`);
 			await mode.ui.renderNow({ requireFlush: true });
@@ -381,7 +426,14 @@ async function runProduction() {
 	process.once("SIGHUP", stop);
 	mode.ui.addInputListener((data) => {
 		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
-			interactions[copied !== undefined && data.slice(6, -6) === copied ? "pasteMatches" : "pasteMismatches"]++;
+			const payload = data.slice(6, -6).replace(/\r\n?/g, "\n");
+			if (armedPaste && payload === nativePayload) {
+				armedPaste = false;
+				interactions.pasteMatches++;
+				forwardingPaste = control !== "consumed-paste";
+				return forwardingPaste ? undefined : { consume: true };
+			}
+			interactions[copied !== undefined && payload === copied ? "pasteMatches" : "pasteMismatches"]++;
 			return { consume: true };
 		}
 		if (data === "\x1b[I") interactions.focusIn++;
@@ -409,6 +461,12 @@ async function runProduction() {
 			}
 		}
 		if (isKeyRelease(data)) return { consume: true };
+		if (journey && matchesKey(data, "ctrl+z")) {
+			safetyState.suspends++;
+			safetyState.phase = "suspending";
+			record();
+			process.once("SIGCONT", () => { safetyState.phase = "resumed"; setTimeout(record, 50); });
+		}
 		if (matchesKey(data, "ctrl+q") || (safety && matchesKey(data, "0"))) { void terminal.drainInput().then(stop); return { consume: true }; }
 		const action = safety && ["1", "2", "3", "4", "5", "6", "7", "8", "9", "g", "h", "i", "j"].find((key) => matchesKey(data, key));
 		if (action) {
@@ -420,6 +478,22 @@ async function runProduction() {
 			return { consume: true };
 		}
 	});
+	function prepareExternalEditor() {
+		const editor = join(directory, "editor.sh");
+		const receipt = join(directory, "handoff.txt");
+		const interactive = process.argv.includes("--native-handoffs");
+		const ready = `${process.env.SCRAMJET_TUI_PROBE_EVIDENCE}.external-ready`;
+		writeFileSync(editor, `#!/bin/sh\nset -eu\nstty -g > '${receipt}'\nprintf 'SYNTHETIC EXTERNAL EDITOR\\n'\n${interactive ? `printf ready > '${ready}'\nIFS= read -r input\nprintf '%s' "$input" > '${receipt}.input'\nstty -g > '${receipt}.after'\n` : ""}printf 'edited by synthetic external editor' > "$1"\n`, { mode: 0o700 });
+		process.env.VISUAL = editor;
+	}
+	function readExternalReceipt() {
+		const receipt = join(directory, "handoff.txt");
+		safetyState.handoffTermios = readFileSync(receipt, "utf8").trim();
+		if (process.argv.includes("--native-handoffs")) {
+			safetyState.externalEditorInput = readFileSync(`${receipt}.input`, "utf8");
+			safetyState.handoffAfterRead = readFileSync(`${receipt}.after`, "utf8").trim();
+		}
+	}
 	async function safetyAction(key) {
 		if (key === "1" || key === "2") {
 			if (overlay) { overlay.hide(); overlay = undefined; }
@@ -437,7 +511,7 @@ async function runProduction() {
 			else { overlay = mode.ui.showOverlay(new Text("OVERLAY WITHOUT GRAPHICS", 1, 1)); safetyState.phase = "overlay"; }
 		} else if (key === "g" || key === "h") {
 			overlay?.hide();
-			const { Box, Image } = await import("../../../tui/dist/index.js");
+			const { Box, Image } = await runtimeModule("tui");
 			const image = new Image(Buffer.from(safetyImage.get_bytes()).toString("base64"), "image/png", { fallbackColor: (text) => text });
 			const box = new Box(1, 1);
 			box.addChild(new Text("OVERLAY IMAGE", 0, 0));
@@ -460,12 +534,9 @@ async function runProduction() {
 			mode.ui.scrollViewportTo(0);
 			safetyState.phase = "browsing";
 		} else if (key === "6") {
-			const editor = join(directory, "editor.sh");
-			const receipt = join(directory, "handoff.txt");
-			writeFileSync(editor, `#!/bin/sh\nstty -g > '${receipt}'\nprintf 'SYNTHETIC EXTERNAL EDITOR\\n'\nprintf 'edited by synthetic external editor' > "$1"\n`, { mode: 0o700 });
-			process.env.VISUAL = editor;
+			prepareExternalEditor();
 			await mode.openExternalEditor();
-			safetyState.handoffTermios = readFileSync(receipt, "utf8").trim();
+			readExternalReceipt();
 			safetyState.editorHandoffs++;
 			safetyState.phase = "editor-return";
 		} else if (key === "8") {
@@ -501,6 +572,15 @@ async function runProduction() {
 		if (journey) {
 			const editorInput = mode.defaultEditor.handleInput.bind(mode.defaultEditor);
 			mode.defaultEditor.handleInput = (data) => {
+				if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+					const payload = data.slice(6, -6).replace(/\r\n?/g, "\n");
+					const allowed = payload === nativePayload && (forwardingPaste || armedRightPaste);
+					const rightPaste = !forwardingPaste && armedRightPaste;
+					forwardingPaste = false;
+					armedRightPaste = false;
+					if (!allowed) { interactions.pasteMismatches++; return; }
+					if (rightPaste) interactions.rightPasteInsertions++;
+				}
 				const beforeLength = mode.defaultEditor.getText().length;
 				const completionPrefixLength = mode.defaultEditor.autocompletePrefix.length;
 				editorInput(data);
@@ -525,9 +605,10 @@ async function runProduction() {
 			mode.ui.viewport.options.copy = async (text) => {
 				const kind = copyKind;
 				try {
-					await copy(text);
+					if (control !== "noop-copy") await copy(text);
 					copied = text;
-					interactions[kind]++;
+					if (kind) interactions[kind]++;
+					copyKind = undefined;
 					if (kind === "rightCopy") interactions.rightWithoutSelection--;
 				} catch (error) { interactions.copyErrors++; throw error; }
 			};
@@ -548,8 +629,8 @@ async function runProduction() {
 					return [...rows.slice(0, -1), ` \x1b[48;2;255;255;0m${" ".repeat(Math.max(0, width - 2))}\x1b[0m `];
 				},
 			}));
-			const { loadPhoton } = await import("../../../coding-agent/dist/utils/photon.js");
-			const { getCapabilities } = await import("../../../tui/dist/index.js");
+			const { loadPhoton } = await runtimeModule("coding-agent", "utils/photon.js");
+			const { getCapabilities } = await runtimeModule("tui");
 			const photon = await loadPhoton();
 			const pixels = new Uint8Array(300 * 3000 * 4);
 			for (let i = 0; i < pixels.length; i += 4) { pixels[i] = 255; pixels[i + 2] = 255; pixels[i + 3] = 255; }
@@ -587,6 +668,6 @@ async function runProduction() {
 		const after = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
 		record();
 		rmSync(directory, { recursive: true, force: true });
-		if (before !== after) throw new Error("Production fixture did not restore terminal state");
+		if (terminalConfiguration(before) !== terminalConfiguration(after)) throw new Error("Production fixture did not restore terminal state");
 	}
 }

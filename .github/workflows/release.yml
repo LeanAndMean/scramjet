@@ -12,8 +12,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  native:
+    uses: ./.github/workflows/terminal-feasibility.yml
+    permissions:
+      contents: read
+
   publish:
     name: publish to npm
+    needs: native
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:

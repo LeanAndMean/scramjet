@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.109.0 — Harden clipboard acceptance and terminal lifecycle safety
+
+Strengthen clipboard verification and require exact-revision native acceptance before npm publication under the amended [#608](https://github.com/LeanAndMean/scramjet/issues/608) scope. Existing right-click Copy/Paste, Ctrl+C and terminal Command+V behavior is preserved; Command+C remains terminal-owned, and reporter-specific clipboard symptoms remain unresolved.
+
+### Changed
+
+- Gate publication on the complete read-only native terminal matrix at the tagged revision, including Apple Terminal and explicitly configured iTerm2 on ARM64/x64, checkout and installed candidates, intended negative-control rejection, handoffs and restoration.
+- Clarify that iTerm2 right-click Copy/Paste requires `ReportRightClick=true`, affects other mouse-reporting applications and is never enabled automatically by Scramjet.
+
+### Fixed
+
+- Install the ordinary stdin parser/listener before resuming input, suppress drain-time input and late keyboard-protocol reactivation, and restore resources after partial startup.
+- Restart external editors only after successful terminal release, remove stale suspension-resume handlers, retain emergency cleanup through shutdown/flush, and cancel viewport interaction before exit snapshots.
+
+### Tests
+
+- Require untouched clipboard sentinels, exact right-click Copy and actual multiline/Unicode paste at the real editor's interior caret exactly once without submission; reject no-op Copy, copy-on-selection and consumed-paste controls only with complete prerequisite and cleanup evidence.
+- Cover ordinary input, partial-start cleanup, stopped-TUI input, both external-editor paths, shutdown ordering and release-workflow prerequisites. Native results remain revision/profile-specific and do not establish acceptance-archive equality with later publication archives.
+
 ## 0.108.1 — Bound abort-listener lifetimes
 
 Clean up settled provider and tool operations without changing caller cancellation state or retry policy. Fixes [#587](https://github.com/LeanAndMean/scramjet/issues/587).
