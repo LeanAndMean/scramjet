@@ -3070,6 +3070,86 @@ describe("originating run settlement", () => {
 		},
 	);
 
+	it("settles originating execution independently of later idle harness work", async () => {
+		let captured: Promise<RunSettlement> | undefined;
+		let releaseEnd!: () => void;
+		const endGate = new Promise<void>((resolve) => {
+			releaseEnd = resolve;
+		});
+		let releaseHarness!: () => void;
+		const harnessGate = new Promise<void>((resolve) => {
+			releaseHarness = resolve;
+		});
+		let harnessEntered = false;
+		let endExited = false;
+		const { session } = await createFixture(() => assistantText("A"), {
+			retryEnabled: false,
+			customTools: [makeHarnessNoticeTool()],
+			extensionFactory: (pi) => {
+				pi.on("agent_end", async (_event, ctx) => {
+					captured = ctx.getRunSettlement?.();
+					void captured?.catch(() => {});
+					await endGate;
+					endExited = true;
+				});
+				pi.on("message_start", async (event, ctx) => {
+					if (event.message.role !== "assistant" || event.message.origin !== "harness") return;
+					expect(ctx.getRunSettlement?.()).toBeUndefined();
+					harnessEntered = true;
+					await harnessGate;
+				});
+			},
+		});
+		let harness: Promise<void> | undefined;
+		let harnessSettled = false;
+		const unsubscribe = session.agent.subscribe((event) => {
+			if (event.type !== "agent_end") return;
+			void session.agent.waitForIdle().then(() => {
+				harness = session.invokeHarnessTool("harness_notice", {});
+				void harness.then(
+					() => {
+						harnessSettled = true;
+					},
+					() => {
+						harnessSettled = true;
+					},
+				);
+			});
+		});
+		try {
+			await session.agent.prompt("hello");
+			await vi.waitFor(() => expect(harness).toBeDefined());
+			expect(session.isStreaming).toBe(false);
+			releaseEnd();
+			await vi.waitFor(() => expect(harnessEntered && endExited).toBe(true));
+			expect(captured).toBeDefined();
+			expect(harnessSettled).toBe(false);
+			let outcome: RunSettlement | { rejection: unknown } | undefined;
+			void captured!.then(
+				(result) => {
+					outcome = result;
+				},
+				(rejection) => {
+					outcome = { rejection };
+				},
+			);
+			await vi.waitFor(() =>
+				expect(outcome).toMatchObject({
+					status: "completed",
+					assistantMessage: { content: [{ text: "A" }] },
+				}),
+			);
+			expect(harnessSettled).toBe(false);
+		} finally {
+			releaseEnd();
+			releaseHarness();
+			unsubscribe();
+			await harness;
+			expect(await captured).toMatchObject({ status: "completed", assistantMessage: { content: [{ text: "A" }] } });
+			session.dispose();
+		}
+	});
+
 	it("waits for unreserved execution classification after Agent becomes idle", async () => {
 		let captured: Promise<RunSettlement> | undefined;
 		let release!: () => void;
