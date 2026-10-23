@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.110.0 — Recover originating execution after Codex failures
+
+Recover eligible Codex failures within existing retry limits while preserving truthful originating execution outcomes. Fixes [#611](https://github.com/LeanAndMean/scramjet/issues/611).
+
+### Added
+
+- Expose captured SDK run settlement and optional extension-context settlement observation and asynchronous messaging, following originating retries, persistence, execution unwind and owned automatic compaction/continuation.
+
+### Fixed
+
+- Normalize witnessed nested Codex errors and serialize WebSocket frame/close handling; recover incomplete close-1000 streams without asserting an unknown cause or executing partial failed-response tools.
+- Keep Scramjet report routing, waiting titles and bells behind successful originating settlement; pause on failure or cancellation without journaling a pending terminal report or changing durable workflow state.
+- Preserve refused interactive drafts, restore retry/Escape controls and select text-print output from the correct invocation rather than stale or harness-origin messages.
+- Retain escaping direct-Agent execution failures and isolate originating settlement from unrelated post-idle harness processing and harness-message contexts.
+
+### Tests
+
+- Cover offline Codex error envelopes and frame ordering, real Agent/Session settlement and listener failures, retry/maintenance cancellation, context provenance, interactive drafts, print attribution and Scramjet recovery routing/indicators. Synthetic checks do not establish live provider acceptance or historical incident causality; native recovery evidence remains revision- and platform-qualified.
+
 ## 0.109.0 — Harden clipboard acceptance and terminal lifecycle safety
 
 Strengthen clipboard verification and require exact-revision native acceptance before npm publication under the amended [#608](https://github.com/LeanAndMean/scramjet/issues/608) scope. Existing right-click Copy/Paste, Ctrl+C and terminal Command+V behavior is preserved; Command+C remains terminal-owned, and reporter-specific clipboard symptoms remain unresolved.

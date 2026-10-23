@@ -314,7 +314,7 @@ jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.cate
 
 ### Healthy probe cycle
 
-Note: an agent may report a terminal status inline during the work turn (issue 331); such a session shows `"status report accepted"` and `"lifecycle: acceptTerminalReport"` with **no probe entries at all** (steps 2–7 and 10 absent). Note also that the ordering below is the probe-cycle ordering: in an inline session the report entries (steps 8/9) are filed during the work turn and therefore **precede** that turn's `"agent_end observed"` (step 1), which then routes the report. That trace is healthy, not a broken cycle — the probe is a fallback for agents that do not self-report.
+An agent may report a terminal status inline during the work turn (issue 331). Such a session has no probe preparation, send or watchdog entries (steps 2–8 below). Its report entries precede that work turn's retained attempt end and successful settlement, followed by `"agent_end observed"` and report routing. That trace is healthy — the probe is a fallback for agents that do not self-report.
 
 A successful command completion produces this sequence of lifecycle entries:
 
@@ -325,18 +325,21 @@ A successful command completion produces this sequence of lifecycle entries:
 5. `"status probe timer fired"` — timer callback ran
 6. `"probe watchdog armed"` — missing-admission/status monitoring begins before sender settlement
 7. `"status probe send started"` — contextual asynchronous send invoked (not yet evidence of success)
-8. `"status report accepted"` — `report_scramjet_command_status` called with valid payload
-9. `"lifecycle: acceptTerminalReport"` — fact mutation: `probeArmed (inline), probeInFlight, or dormant → lastReport`
-10. `"probe watchdog cleared"` — watchdog cancelled (report received in time)
-11. `"agent_end observed"` — second agent_end (probe turn completed)
-12. `"lifecycle: clearActiveCommand"` — fact mutation: command cleared (for completed)
-13. `"completed dispatch scheduled"` — deferred next-step dispatch timer set (policy commands only)
-14. `"next-step policy evaluated"` — policy mode determined (policy commands only)
-15. `"next step dispatching"` or `"next-step dispatch skipped"` — dispatch decision
+8. `"probe watchdog cleared"` — probe execution observed at `agent_start` (`reason: "run-observed"`)
+9. `"run settlement observed"` — originating probe promise captured
+10. `"status report accepted"` — `report_scramjet_command_status` called with valid payload
+11. `"lifecycle: acceptTerminalReport"` — fact mutation: `probeArmed (inline), probeInFlight, or dormant → lastReport`
+12. `"attempt end retained"` — probe attempt ended; routing still waits for originating settlement
+13. `"run settlement resolved"` — originating execution completed successfully
+14. `"agent_end observed"` — settled probe result enters report routing
+15. `"lifecycle: clearActiveCommand"` — fact mutation: command cleared (for completed)
+16. `"completed dispatch scheduled"` — deferred next-step dispatch timer set (policy commands only)
+17. `"next-step policy evaluated"` — policy mode determined (policy commands only)
+18. `"next step dispatching"` or `"next-step dispatch skipped"` — dispatch decision
 
 Run-bound events add `"run settlement observed"` and `"attempt end retained"` before routing. Attempts share one originating promise; a started probe clears the watchdog with reason `run-observed`. `"owned compaction observation preserved"` records matching automatic maintenance without treating compaction as navigation. `"run settlement resolved"` records completed/failed/cancelled execution, not command success. Only successful settlement reaches the report decision tree. `"status probe send settled"` records actual sender promise completion when delivery is still current; it is not an admission-only acknowledgement or a command-completion claim. Its ordering may follow routing because the sender waits for full run/retry completion.
 
-For no-policy commands (`policyMode: "none"` in log details), steps 13–15 are replaced by a single `"next-step dispatch skipped"` with `reason: "no-next-policy-after-report"`.
+For no-policy commands (`policyMode: "none"` in log details), steps 16–18 are replaced by a single `"next-step dispatch skipped"` with `reason: "no-next-policy-after-report"`.
 
 ### Probe failure patterns
 
