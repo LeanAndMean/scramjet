@@ -1215,6 +1215,14 @@ export class AgentSession {
 
 	/** Emit extension events based on agent events */
 	private async _emitExtensionEvent(event: AgentEvent, settlement?: Promise<RunSettlement>): Promise<void> {
+		// SCRAMJET-DIVERGENCE: message provenance is independent of Session persistence acknowledgements (#611).
+		if (
+			(event.type === "message_start" || event.type === "message_update" || event.type === "message_end") &&
+			event.message.role === "assistant" &&
+			event.message.origin === "harness"
+		) {
+			settlement = undefined;
+		}
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
 			await this._extensionRunner.emit({ type: "agent_start" }, settlement);
