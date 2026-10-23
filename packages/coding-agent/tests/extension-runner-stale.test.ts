@@ -1,5 +1,6 @@
 import type { Model } from "@leanandmean/ai";
 import { describe, expect, it } from "vitest";
+import type { RunSettlement } from "../src/core/agent-session.js";
 import { ExtensionRunner } from "../src/core/extensions/runner.js";
 import type { Extension, ExtensionError, HandlerFn } from "../src/core/extensions/types.js";
 
@@ -51,6 +52,29 @@ function makeRunner(extensions: Extension[]): { runner: ExtensionRunner; errors:
 const agentEndEvent = { type: "agent_end", messages: [] } as any;
 
 describe("ExtensionRunner stale short-circuit", () => {
+	it("captures explicit event identity without polluting unbound or command contexts", async () => {
+		const settlement = Promise.resolve<RunSettlement>({ status: "completed" });
+		const seen: unknown[] = [];
+		const ext = makeExtension("ext", "agent_end", [
+			async (_event, ctx) => {
+				seen.push(ctx.getRunSettlement?.());
+				await Promise.resolve();
+			},
+			(_event, ctx) => {
+				seen.push(ctx.getRunSettlement?.());
+			},
+		]);
+		const { runner } = makeRunner([ext]);
+		await runner.emit(agentEndEvent, settlement);
+		expect(seen).toEqual([settlement, settlement]);
+		expect(runner.createContext().getRunSettlement?.()).toBeUndefined();
+		expect(runner.createContext().sendMessage).toBeUndefined();
+		const command = runner.createCommandContext();
+		expect(command.getRunSettlement?.()).toBeUndefined();
+		runner.invalidate();
+		expect(() => command.getRunSettlement?.()).toThrow("stale");
+	});
+
 	it("R1: skips all handlers when the runner is already invalidated", async () => {
 		let called = false;
 		const ext = makeExtension("ext", "agent_end", [

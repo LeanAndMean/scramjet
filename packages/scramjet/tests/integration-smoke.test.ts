@@ -357,6 +357,9 @@ describe("integration smoke — end-to-end chain under /autopilot on (S21)", () 
 			},
 		};
 		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
+			const context = ctx as any;
+			context.getRunSettlement ??= () => undefined;
+			context.sendMessage ??= async (message: unknown, options?: unknown) => pi.sendMessage(message, options);
 			const sessionEntries: { customType: string; data: unknown }[] = [];
 			const acceptanceCallbacks: Array<() => void> = [];
 			for (const h of handlers.get(event) ?? []) {
@@ -537,6 +540,9 @@ describe("integration smoke — lifecycle event sequences", () => {
 			},
 		};
 		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
+			const context = ctx as any;
+			context.getRunSettlement ??= () => undefined;
+			context.sendMessage ??= async (message: unknown, options?: unknown) => pi.sendMessage(message, options);
 			const sessionEntries: { customType: string; data: unknown }[] = [];
 			const acceptanceCallbacks: Array<() => void> = [];
 			for (const h of handlers.get(event) ?? []) {

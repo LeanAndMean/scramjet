@@ -115,6 +115,8 @@ An active command can use either resource, but its own Goals, user decisions, tr
 
 No workflow engine, no queue, no DAG, no state machine. The workflow emerges from what each command declares as its next step.
 
+Command routing waits for the originating runtime execution to settle, including configured bounded retries and owned automatic compaction/continuation. A failed request attempt is not final command failure or completion; an active recovered probe is not timed out by the missing-status watchdog. Final execution failure, cancellation or settlement error pauses without dispatching a pending completion report, with guidance to review the outcome before explicitly resuming or starting new work. Freetext parking and structured-choice cancellation resumability remain intact. No unrelated prompt is automatically replayed, and successful recovery alone does not complete the command. The title remains working across unsettled recovery attempts, with no idle bell between them; explicit interactive choices still show waiting. Enter/Alt+Enter during non-streaming recovery retain the draft and explain waiting or Escape cancellation. Text print output is bound to the final direct prompt's provider outcome, not a prior answer or later harness row.
+
 ## Command authoring
 
 Bundled commands and lint-clean new commands use an early `## Goals` section with Markdown list items describing durable user- or caller-visible outcomes. Goals are ordinary Markdown, not frontmatter or runtime schema. Runtime compatibility remains permissive: legacy and user-owned commands without Goals still load and execute, and missing or malformed Goals produce authoring warnings rather than runtime rejection.

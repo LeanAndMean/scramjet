@@ -42,6 +42,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
 	appendBuiltinFailure,
 	failureFromProviderError,
+	httpFailureCategory,
 	invokeProviderCallback,
 	RequestFailureError,
 	type RequestFailureV1,
@@ -291,6 +292,13 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 								kind: "stream",
 								reason: "transport",
 							});
+						// SCRAMJET-DIVERGENCE: A normal close proves incompleteness, not its cause.
+						if (error instanceof WebSocketCloseError && error.code === 1000)
+							throw new RequestFailureError(error.message, {
+								schemaVersion: 1,
+								kind: "stream",
+								reason: "missing_terminal_event",
+							});
 						if (error instanceof WebSocketCloseError)
 							throw new RequestFailureError(error.message, {
 								schemaVersion: 1,
@@ -416,11 +424,12 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 							: error instanceof CodexApiError
 								? new RequestFailureError(
 										error.message,
-										failureFromProviderError(error) ?? {
-											schemaVersion: 1,
-											kind: "provider",
-											category: "unknown",
-										},
+										error.failure ??
+											failureFromProviderError(error) ?? {
+												schemaVersion: 1,
+												kind: "provider",
+												category: "unknown",
+											},
 									)
 								: error,
 				);
@@ -581,13 +590,18 @@ async function processStream(
 class CodexApiError extends Error {
 	readonly code?: string;
 	readonly payload?: Record<string, unknown>;
+	readonly failure?: RequestFailureV1;
 
-	constructor(message: string, options?: { code?: string; payload?: Record<string, unknown>; cause?: unknown }) {
+	constructor(
+		message: string,
+		options?: { code?: string; payload?: Record<string, unknown>; cause?: unknown; failure?: RequestFailureV1 },
+	) {
 		super(message);
 		this.name = "CodexApiError";
 		this.code = options?.code;
 		this.payload = options?.payload;
 		this.cause = options?.cause;
+		this.failure = options?.failure;
 	}
 }
 
@@ -606,26 +620,53 @@ function isCodexNonTransportError(error: unknown): boolean {
 	return error instanceof CodexApiError || error instanceof CodexProtocolError;
 }
 
+function codexErrorDetail(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const detail = value
+		.slice(0, 2048)
+		.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+		.trim();
+	return detail || undefined;
+}
+
 async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): AsyncGenerator<ResponseStreamEvent> {
 	for await (const event of events) {
 		const type = typeof event.type === "string" ? event.type : undefined;
 		if (!type) continue;
 
 		if (type === "error") {
-			const code = (event as { code?: string }).code || "";
-			const message = (event as { message?: string }).message || "";
-			throw new CodexApiError(`Codex error: ${message || code || JSON.stringify(event)}`, {
-				code: code || undefined,
-				payload: event,
-			});
+			const nested =
+				event.error && typeof event.error === "object" && !Array.isArray(event.error)
+					? (event.error as Record<string, unknown>)
+					: undefined;
+			const detail =
+				codexErrorDetail(event.message) ??
+				codexErrorDetail(nested?.message) ??
+				codexErrorDetail(event.code) ??
+				codexErrorDetail(nested?.code) ??
+				codexErrorDetail(nested?.type);
+			// SCRAMJET-DIVERGENCE: Stream status qualifies provider facts, not HTTP request rejection.
+			const observed = failureFromProviderError(event);
+			const failure: RequestFailureV1 =
+				observed?.kind === "http"
+					? {
+							schemaVersion: 1,
+							kind: "provider",
+							category: observed.reason === "status" ? httpFailureCategory(observed.status) : observed.reason,
+						}
+					: (observed ?? { schemaVersion: 1, kind: "provider", category: "unknown" });
+			throw new CodexApiError(`Codex error: ${detail ?? "Provider error event"}`, { failure });
 		}
 
 		if (type === "response.failed") {
 			const response = (event as { response?: { error?: { code?: string; message?: string } } }).response;
-			const code = response?.error?.code;
-			const message = response?.error?.message;
-			// SCRAMJET-DIVERGENCE: Preserve provider codes so runtime recovery can classify generic failure messages.
-			const detail = code ? `${message || "Codex response failed"} (${code})` : message || "Codex response failed";
+			const code = typeof response?.error?.code === "string" ? response.error.code : undefined;
+			const displayCode = codexErrorDetail(code);
+			const message = codexErrorDetail(response?.error?.message);
+			// SCRAMJET-DIVERGENCE: Preserve raw provider codes independently of terminal-safe display.
+			const detail = displayCode
+				? `${message || "Codex response failed"} (${displayCode})`
+				: message || "Codex response failed";
 			throw new CodexApiError(detail, { code, payload: event });
 		}
 
@@ -1120,6 +1161,8 @@ async function* parseWebSocket(socket: WebSocketLike, signal?: AbortSignal): Asy
 	let done = false;
 	let failed: Error | null = null;
 	let sawCompletion = false;
+	// SCRAMJET-DIVERGENCE: Blob decoding must preserve message/close arrival order.
+	let decoding = Promise.resolve();
 
 	const wake = () => {
 		if (!pending) return;
@@ -1129,12 +1172,13 @@ async function* parseWebSocket(socket: WebSocketLike, signal?: AbortSignal): Asy
 	};
 
 	const onMessage: WebSocketListener = (event) => {
-		void (async () => {
+		decoding = decoding.then(async () => {
+			if (done) return;
 			let text: string | null = null;
 			try {
 				if (!event || typeof event !== "object" || !("data" in event)) return;
 				text = await decodeWebSocketData((event as { data?: unknown }).data);
-				if (!text) return;
+				if (done || !text) return;
 				const parsed = JSON.parse(text) as Record<string, unknown>;
 				const type = typeof parsed.type === "string" ? parsed.type : "";
 				if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
@@ -1151,26 +1195,25 @@ async function* parseWebSocket(socket: WebSocketLike, signal?: AbortSignal): Asy
 				done = true;
 				wake();
 			}
-		})();
+		});
 	};
 
 	const onError: WebSocketListener = (event) => {
-		failed = new WebSocketTransportError(extractWebSocketError(event).message);
-		done = true;
-		wake();
+		decoding = decoding.then(() => {
+			if (done) return;
+			failed = new WebSocketTransportError(extractWebSocketError(event).message);
+			done = true;
+			wake();
+		});
 	};
 
 	const onClose: WebSocketListener = (event) => {
-		if (sawCompletion) {
+		decoding = decoding.then(() => {
+			if (done) return;
+			if (!sawCompletion && !failed) failed = extractWebSocketCloseError(event);
 			done = true;
 			wake();
-			return;
-		}
-		if (!failed) {
-			failed = extractWebSocketCloseError(event);
-		}
-		done = true;
-		wake();
+		});
 	};
 
 	const onAbort = () => {
@@ -1206,6 +1249,7 @@ async function* parseWebSocket(socket: WebSocketLike, signal?: AbortSignal): Asy
 			throw new Error("WebSocket stream closed before response.completed");
 		}
 	} finally {
+		done = true;
 		socket.removeEventListener("message", onMessage);
 		socket.removeEventListener("error", onError);
 		socket.removeEventListener("close", onClose);

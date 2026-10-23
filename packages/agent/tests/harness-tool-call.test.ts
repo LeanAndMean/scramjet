@@ -914,12 +914,19 @@ describe("Agent.runHarnessTool", () => {
 			execute: async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }),
 		});
 
+		expect(agent.getRunExecution()).toBeUndefined();
+		let execution: Promise<void> | undefined;
+		let idle: Promise<void> | undefined;
 		let listenerFailed = false;
 		let p1!: Promise<void>;
 		let p2!: Promise<void>;
 		agent.subscribe((event) => {
 			// Queue two calls during the run's final turn (agent_end), each observed immediately.
 			if (event.type === "agent_end") {
+				execution = agent.getRunExecution();
+				expect(agent.getRunExecution()).toBe(execution);
+				void execution?.catch(() => {});
+				idle = agent.waitForIdle();
 				p1 = agentRef.runHarnessTool(makeNamed("harness_a"), {});
 				p1.catch(() => {});
 				p2 = agentRef.runHarnessTool(makeNamed("harness_b"), {});
@@ -943,6 +950,11 @@ describe("Agent.runHarnessTool", () => {
 		await expect(agent.prompt({ role: "user", content: "go", timestamp: Date.now() })).rejects.toThrow(
 			"listener exploded",
 		);
+
+		await expect(execution!).rejects.toThrow("listener exploded");
+		await expect(idle!).resolves.toBeUndefined();
+		expect(agent.getRunExecution()).toBeUndefined();
+		expect(agent.state.isStreaming).toBe(false);
 
 		// The failing call and the un-executed remnant both reject.
 		await expect(p1).rejects.toThrow("listener exploded");

@@ -119,6 +119,8 @@ Agent retries include validated missing-terminal Responses streams and accepted 
 
 Codex SSE honors `retry.provider.maxRetries` (default three) and rejects server-requested waits above `retry.provider.maxRetryDelayMs`, including after the final inner attempt. That rejection suppresses outer agent retries too. Set the delay cap to `0` to disable the policy cap; long representable waits remain cancellable, and unrepresentable waits fail without retry. Other SDKs do not necessarily implement this delay cap or these request controls; forwarding an option is not proof of enforcement.
 
+The interactive countdown describes a recovery attempt, not final task completion. Escape cancels the originating recovery even between attempt completion and retry classification. Enter/Alt+Enter in non-streaming recovery retain your draft with a wait/cancel explanation; existing streaming and compaction queues stay explicit. Final cancellation/failure leaves the editor usable and tells you to review interrupted work before submitting again. Recovered execution is not a claim that the task completed. No additional retry setting or universal timeout is introduced.
+
 Counts must be nonnegative safe integers; millisecond settings must be integers from 0 through 2,147,483,647. Invalid values generate scoped settings diagnostics and inherit a valid lower-priority value or the default without rewriting the file. Nested `retry.provider` leaves merge individually. Zero retries disables that layer's retries; zero base delay removes intentional backoff; timeout zero retains provider/SDK semantics and does not universally disable timeouts. Codex direct API callers receive a local validation failure for invalid retry options.
 
 ```json

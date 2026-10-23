@@ -7,6 +7,7 @@ import type { ImageContent, Model, SystemPromptSection } from "@leanandmean/ai";
 import { flattenSystemPrompt } from "@leanandmean/ai";
 import type { KeyId } from "@leanandmean/tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
+import type { RunSettlement } from "../agent-session.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
@@ -283,6 +284,7 @@ export class ExtensionRunner {
 	private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
 	private compactFn: (options?: CompactOptions) => void = () => {};
 	private getSystemPromptFn: () => string = () => "";
+	private sendMessageFn: ReplacedSessionContext["sendMessage"] | undefined;
 	// The two defaults immediately below throw rather than fabricate success:
 	// silently dropping input (dispatchUserInput) or reporting a session swap
 	// that never happened (newSession) hides real bugs in headless/SDK
@@ -359,6 +361,7 @@ export class ExtensionRunner {
 		this.compactFn = contextActions.compact;
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 		this.dispatchUserInputFn = contextActions.dispatchUserInput;
+		this.sendMessageFn = contextActions.sendMessage;
 
 		// Flush provider registrations queued during extension loading
 		for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
@@ -642,7 +645,8 @@ export class ExtensionRunner {
 	 * Create an ExtensionContext for use in event handlers and tool execution.
 	 * Context values are resolved at call time, so changes via bindCore/bindUI are reflected.
 	 */
-	createContext(): ExtensionContext {
+	// SCRAMJET-DIVERGENCE: capture identity at construction, never on deferred observation (#611).
+	createContext(settlement?: Promise<RunSettlement>): ExtensionContext {
 		const runner = this;
 		const getModel = this.getModel;
 		const getScopedModels = this.getScopedModelsFn;
@@ -675,6 +679,16 @@ export class ExtensionRunner {
 				runner.assertActive();
 				return getScopedModels();
 			},
+			getRunSettlement: () => {
+				runner.assertActive();
+				return settlement;
+			},
+			sendMessage: this.sendMessageFn
+				? (message, options) => {
+						runner.assertActive();
+						return runner.sendMessageFn!(message, options);
+					}
+				: undefined,
 			isIdle: () => {
 				runner.assertActive();
 				return runner.isIdleFn();
@@ -776,9 +790,12 @@ export class ExtensionRunner {
 		return true;
 	}
 
-	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
+	async emit<TEvent extends RunnerEmitEvent>(
+		event: TEvent,
+		settlement?: Promise<RunSettlement>,
+	): Promise<RunnerEmitResult<TEvent>> {
 		if (this.skipStale(event.type)) return undefined as RunnerEmitResult<TEvent>;
-		const ctx = this.createContext();
+		const ctx = this.createContext(settlement);
 		let result: SessionBeforeEventResult | undefined;
 
 		for (const ext of this.extensions) {
@@ -812,9 +829,12 @@ export class ExtensionRunner {
 		return result as RunnerEmitResult<TEvent>;
 	}
 
-	async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {
+	async emitMessageEnd(
+		event: MessageEndEvent,
+		settlement?: Promise<RunSettlement>,
+	): Promise<AgentMessage | undefined> {
 		if (this.skipStale("message_end")) return undefined;
-		const ctx = this.createContext();
+		const ctx = this.createContext(settlement);
 		let currentMessage = event.message;
 		let modified = false;
 

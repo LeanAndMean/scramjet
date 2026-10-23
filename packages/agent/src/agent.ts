@@ -186,6 +186,7 @@ class PendingMessageQueue {
 }
 
 type ActiveRun = {
+	execution: Promise<void>;
 	promise: Promise<void>;
 	resolve: () => void;
 	abortController: AbortController;
@@ -383,6 +384,12 @@ export class Agent {
 		return this.activeRun?.promise ?? Promise.resolve();
 	}
 
+	// SCRAMJET-DIVERGENCE: capture escaping execution failure separately from resolving idle (#611).
+	/** Capture the active execution; rejects on escaping failure and is undefined outside a run. */
+	getRunExecution(): Promise<void> | undefined {
+		return this.activeRun?.execution;
+	}
+
 	// SCRAMJET-DIVERGENCE: execution truth survives revocation of public harness promises (#598).
 	get hasActiveTransientHarnessTools(): boolean {
 		return this.transientRuns.size > 0;
@@ -575,7 +582,14 @@ export class Agent {
 		const promise = new Promise<void>((resolve) => {
 			resolvePromise = resolve;
 		});
-		this.activeRun = { promise, resolve: resolvePromise, abortController };
+		let resolveExecution = () => {};
+		let rejectExecution: (error: unknown) => void = () => {};
+		const execution = new Promise<void>((resolve, reject) => {
+			resolveExecution = resolve;
+			rejectExecution = reject;
+		});
+		void execution.catch(() => {});
+		this.activeRun = { execution, promise, resolve: resolvePromise, abortController };
 
 		this._state.isStreaming = true;
 		this._state.streamingMessage = undefined;
@@ -588,6 +602,7 @@ export class Agent {
 		// is deliberate: it distinguishes "no drain error" from a falsy throw (e.g. `throw undefined`),
 		// which a `!== undefined` check on a bare field would silently swallow.
 		let finalDrainError: { error: unknown } | undefined;
+		let executionError: { error: unknown } | undefined;
 		try {
 			// Wait for in-flight transient harness-tool runs so their events do not interleave
 			// with this run's transcript.
@@ -596,7 +611,12 @@ export class Agent {
 			}
 			await executor(abortController.signal);
 		} catch (error) {
-			await this.handleRunFailure(error, abortController.signal.aborted);
+			try {
+				await this.handleRunFailure(error, abortController.signal.aborted);
+			} catch (failureError) {
+				executionError = { error: failureError };
+				throw failureError;
+			}
 		} finally {
 			try {
 				// Flush harness tool calls queued during the run's final turn — including failed or
@@ -610,6 +630,9 @@ export class Agent {
 				finalDrainError = { error: drainError };
 			} finally {
 				this.finishRun();
+				const failure = executionError ?? finalDrainError;
+				if (failure) rejectExecution(failure.error);
+				else resolveExecution();
 			}
 		}
 		if (finalDrainError) {

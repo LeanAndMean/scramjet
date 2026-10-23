@@ -13,7 +13,181 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.useRealTimers();
 });
+const recordedServerError = {
+	type: "error",
+	error: {
+		message:
+			"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists.",
+		type: "server_error",
+		param: null,
+		code: "server_error",
+	},
+	status: 503,
+	sequence_number: 2,
+};
+
+function stubStream(transport: "sse" | "websocket", events: Record<string, unknown>[]) {
+	const fetch = vi.fn(async () => new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")));
+	vi.stubGlobal("fetch", fetch);
+	if (transport === "websocket") {
+		class Socket extends EventTarget {
+			readyState = 1;
+			constructor() {
+				super();
+				queueMicrotask(() => this.dispatchEvent(new Event("open")));
+			}
+			send() {
+				setTimeout(() => {
+					for (const event of events)
+						this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
+					this.dispatchEvent(Object.assign(new Event("close"), { code: 1000 }));
+				}, 0);
+			}
+			close() {
+				this.readyState = 3;
+			}
+		}
+		vi.stubGlobal("WebSocket", Socket);
+	}
+	return fetch;
+}
+
+describe.each(["sse", "websocket"] as const)("Codex %s error envelopes", (transport) => {
+	it.each([
+		["recorded nested server", recordedServerError, "server", true],
+		["nested type only", { type: "error", error: { type: "server_error" } }, "server", true],
+		[
+			"top-level compatibility",
+			{ type: "error", code: "rate_limit_exceeded", message: "try later" },
+			"rate_limit",
+			true,
+		],
+		["unknown code", { type: "error", error: { code: "new_code", message: "503 server error" } }, "unknown", false],
+		["conflicting codes", { ...recordedServerError, code: "insufficient_quota" }, "unknown", false],
+		["conflicting status", { ...recordedServerError, status: 401 }, "authentication", false],
+		["invalid scalars", { type: "error", error: { code: {}, type: [], message: {} }, message: [] }, "unknown", false],
+	] as const)("classifies %s from witnessed facts", async (_name, event, category, transient) => {
+		const fetch = stubStream(transport, [{ type: "response.created", response: { id: "resp_1" } }, event]);
+		const result = await run({ transport });
+		expect(fetch).toHaveBeenCalledTimes(transport === "sse" ? 1 : 0);
+		expect(result.stopReason).toBe("error");
+		expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+			status: "valid",
+			family: "request_failure",
+			category,
+			transient,
+		});
+		expect(result.diagnostics?.find((d) => d.type === "request_failure")?.details?.kind).toBe("provider");
+		if (event === recordedServerError) expect(result.errorMessage).toContain(recordedServerError.error.message);
+	});
+	it("bounds and neutralizes scalar detail without exposing arbitrary payloads", async () => {
+		stubStream(transport, [
+			{
+				type: "error",
+				error: { message: `detail\u001b[31m\u009b${"x".repeat(5000)}` },
+				private: "payload sentinel",
+			},
+		]);
+		const result = await run({ transport });
+		expect(result.errorMessage).toContain("detail");
+		expect(result.errorMessage!.length).toBeLessThanOrEqual(2100);
+		expect(result.errorMessage).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+		expect(JSON.stringify(result)).not.toContain("payload sentinel");
+	});
+});
+
+describe("Codex WebSocket decode ordering", () => {
+	it.each(["completed", "terminal", "semantic", "protocol", "abort"] as const)(
+		"preserves delayed frame before close: %s",
+		async (kind) => {
+			let resolveFrame!: (value: ArrayBuffer) => void;
+			let frameReceived!: () => void;
+			const received = new Promise<void>((resolve) => {
+				frameReceived = resolve;
+			});
+			const frame = new Promise<ArrayBuffer>((resolve) => {
+				resolveFrame = resolve;
+			});
+			let socket!: Socket;
+			class Socket extends EventTarget {
+				readyState = 1;
+				constructor() {
+					super();
+					socket = this;
+					queueMicrotask(() => this.dispatchEvent(new Event("open")));
+				}
+				send() {
+					setTimeout(() => {
+						this.dispatchEvent(new MessageEvent("message", { data: { arrayBuffer: () => frame } }));
+						if (kind !== "terminal")
+							this.dispatchEvent(
+								new MessageEvent("message", {
+									data: JSON.stringify({ type: "response.completed", response: { status: "completed" } }),
+								}),
+							);
+						this.dispatchEvent(Object.assign(new Event("close"), { code: 1000 }));
+						frameReceived();
+					}, 0);
+				}
+				close() {
+					this.readyState = 3;
+				}
+			}
+			vi.stubGlobal("WebSocket", Socket);
+			const fetch = vi.fn();
+			vi.stubGlobal("fetch", fetch);
+			const controller = new AbortController();
+			const pending = run({ transport: "websocket", signal: controller.signal });
+			await received;
+			const remove = vi.spyOn(socket, "removeEventListener");
+			if (kind === "abort") controller.abort();
+			else
+				resolveFrame(
+					new TextEncoder().encode(
+						kind === "protocol"
+							? "not JSON"
+							: JSON.stringify(
+									kind === "semantic"
+										? recordedServerError
+										: {
+												type: kind === "terminal" ? "response.completed" : "response.created",
+												response: { id: "resp_1", status: "completed" },
+											},
+								),
+					).buffer,
+				);
+			const result = await pending;
+			expect(fetch).not.toHaveBeenCalled();
+			expect(result.stopReason).toBe(
+				kind === "completed" || kind === "terminal" ? "stop" : kind === "abort" ? "aborted" : "error",
+			);
+			if (kind === "semantic")
+				expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ category: "server", transient: true });
+			if (kind === "protocol")
+				expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({
+					category: "malformed_event",
+					transient: false,
+				});
+			if (kind === "completed" || kind === "terminal") {
+				expect(result.responseId).toBe("resp_1");
+				expect(inspectFailureEvidence(result.diagnostics)).toEqual({ status: "absent" });
+			}
+			expect(remove.mock.calls.map(([type]) => type)).toEqual(["message", "error", "close"]);
+			resolveFrame(new ArrayBuffer(0));
+		},
+	);
+});
+
 describe("Codex retry boundaries", () => {
+	it.each([" server_error ", "server_error\u001b", "rate_limit_exceeded\u009b"])(
+		"does not classify a display-sanitized response.failed code %s",
+		async (code) => {
+			stubStream("sse", [{ type: "response.failed", response: { error: { code, message: "Request failed" } } }]);
+			const result = await run();
+			expect(inspectFailureEvidence(result.diagnostics)).toMatchObject({ category: "unknown", transient: false });
+			expect(result.errorMessage).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+		},
+	);
 	it("rejects a malformed URL before fetch with local detail", async () => {
 		const fetch = vi.fn();
 		vi.stubGlobal("fetch", fetch);
@@ -272,7 +446,7 @@ describe("Codex retry boundaries", () => {
 		["protocol", "malformed_event", false],
 		["abnormal_close", "transport", true],
 		["policy_close", "unknown", false],
-		["normal_close", "unknown", false],
+		["normal_close", "missing_terminal_event", false],
 		["semantic", "rate_limit", true],
 	] as const)("classifies started WebSocket %s independently of prose", async (kind, category, transient) => {
 		class FailingWebSocket extends EventTarget {
