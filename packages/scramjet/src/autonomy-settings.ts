@@ -21,8 +21,11 @@ const VALID_REC_SETTINGS = new Set(["chain", "pause", "default"]);
 const VALID_PUBLICATION_OVERRIDES = new Set(["always-ask", "auto-approve"]);
 const VALID_PUBLICATION_DEFAULTS = new Set(["require-approval", "auto-approve"]);
 
+export type AutonomyScope = "global" | "project";
+
 let cache: {
 	path: string;
+	scope: AutonomyScope;
 	mtimeMs: number;
 	ctimeMs: number;
 	size: number;
@@ -36,6 +39,25 @@ export type AutonomyConfigLoadResult =
 	| { status: "valid"; config: AutonomyConfig }
 	| { status: "invalid"; error: Error };
 
+export type ScopedAutonomySource = AutonomyConfigLoadResult & { scope: AutonomyScope; path: string };
+
+export interface ScopedAutonomySnapshot {
+	status: "valid" | "invalid";
+	global: ScopedAutonomySource;
+	project: ScopedAutonomySource;
+}
+
+export type ResolvedScopedEdge =
+	| { status: "invalid" }
+	| { status: "absent" }
+	| {
+			status: "resolved";
+			setting: NonNullable<EdgeSetting>;
+			scope: AutonomyScope;
+			path: string;
+			match: "exact" | "wildcard";
+	  };
+
 const LOCK_RETRY_MS = 10;
 const LOCK_ATTEMPTS = 50;
 const INCOMPLETE_LOCK_STALE_MS = 5_000;
@@ -45,10 +67,16 @@ export function defaultConfigPath(): string {
 	return path.join(configHome, "scramjet", "autonomy.yaml");
 }
 
-export function parseAutonomyConfig(raw: string): AutonomyConfig {
+export function projectConfigPath(cwd: string): string {
+	return path.join(cwd, ".scramjet", "autonomy.yaml");
+}
+
+export function parseAutonomyConfig(raw: string, scope: AutonomyScope = "global"): AutonomyConfig {
 	const doc = parseYaml(raw);
 	if (doc == null) return { edges: {} };
 	if (typeof doc !== "object" || Array.isArray(doc)) throw new Error("autonomy.yaml: root must be a map");
+	if (scope === "project" && "publications" in doc)
+		throw new Error("autonomy.yaml: publications are global-only; use the global autonomy configuration");
 	for (const key of Object.keys(doc)) {
 		if (key !== "edges" && key !== "publications") throw new Error(`autonomy.yaml: unknown top-level key ${key}`);
 	}
@@ -111,7 +139,11 @@ function parsePublicationMap<T extends string>(
 	return publications;
 }
 
-export function loadAutonomyConfigResult(configPath: string, fresh = false): AutonomyConfigLoadResult {
+export function loadAutonomyConfigResult(
+	configPath: string,
+	fresh = false,
+	scope: AutonomyScope = "global",
+): AutonomyConfigLoadResult {
 	let stat: fs.Stats;
 	try {
 		stat = fs.statSync(configPath);
@@ -125,6 +157,7 @@ export function loadAutonomyConfigResult(configPath: string, fresh = false): Aut
 	if (
 		!fresh &&
 		cache?.path === configPath &&
+		cache.scope === scope &&
 		stat.mtimeMs === cache.mtimeMs &&
 		stat.ctimeMs === cache.ctimeMs &&
 		stat.size === cache.size &&
@@ -136,9 +169,10 @@ export function loadAutonomyConfigResult(configPath: string, fresh = false): Aut
 
 	try {
 		const raw = fs.readFileSync(configPath, "utf-8");
-		const config = parseAutonomyConfig(raw);
+		const config = parseAutonomyConfig(raw, scope);
 		cache = {
 			path: configPath,
+			scope,
 			mtimeMs: stat.mtimeMs,
 			ctimeMs: stat.ctimeMs,
 			size: stat.size,
@@ -151,6 +185,7 @@ export function loadAutonomyConfigResult(configPath: string, fresh = false): Aut
 		const error = new Error(`autonomy.yaml: failed to load config: ${msg}`);
 		cache = {
 			path: configPath,
+			scope,
 			mtimeMs: stat.mtimeMs,
 			ctimeMs: stat.ctimeMs,
 			size: stat.size,
@@ -161,11 +196,58 @@ export function loadAutonomyConfigResult(configPath: string, fresh = false): Aut
 	}
 }
 
-export function loadAutonomyConfig(configPath: string, fresh = false): AutonomyConfig | null {
-	const result = loadAutonomyConfigResult(configPath, fresh);
+export function loadAutonomyConfig(
+	configPath: string,
+	fresh = false,
+	scope: AutonomyScope = "global",
+): AutonomyConfig | null {
+	const result = loadAutonomyConfigResult(configPath, fresh, scope);
 	if (result.status === "missing") return null;
 	if (result.status === "invalid") throw result.error;
 	return result.config;
+}
+
+export function loadScopedAutonomyConfig(globalPath: string, cwd: string, fresh = false): ScopedAutonomySnapshot {
+	const projectPath = projectConfigPath(cwd);
+	const global: ScopedAutonomySource = {
+		scope: "global",
+		path: globalPath,
+		...loadAutonomyConfigResult(globalPath, fresh),
+	};
+	const project: ScopedAutonomySource = {
+		scope: "project",
+		path: projectPath,
+		...loadAutonomyConfigResult(projectPath, fresh, "project"),
+	};
+	return {
+		status: global.status === "invalid" || project.status === "invalid" ? "invalid" : "valid",
+		global,
+		project,
+	};
+}
+
+export function resolveScopedEdge(
+	snapshot: ScopedAutonomySnapshot,
+	source: string,
+	target: string,
+): ResolvedScopedEdge {
+	if (snapshot.status === "invalid") return { status: "invalid" };
+	for (const layer of [snapshot.project, snapshot.global]) {
+		if (layer.status !== "valid") continue;
+		const targets = layer.config.edges[source];
+		const exact = targets?.[target];
+		const setting = exact ?? targets?.["*"];
+		if (setting) {
+			return {
+				status: "resolved",
+				setting,
+				scope: layer.scope,
+				path: layer.path,
+				match: exact ? "exact" : "wildcard",
+			};
+		}
+	}
+	return { status: "absent" };
 }
 
 export function lookupEdge(config: AutonomyConfig | null, source: string, target: string): EdgeSetting {
@@ -269,23 +351,28 @@ export function parseAutonomyRecommendations(raw: string, warnings?: string[]): 
 export function applyRecommendations(
 	configPath: string,
 	recommendations: AutonomyRecommendations,
+	scope: AutonomyScope = "global",
 ): { applied: number; skipped: number } {
 	let applied = 0;
 	let skipped = 0;
-	updateAutonomyConfig(configPath, (config) => {
-		for (const [source, targets] of Object.entries(recommendations.edges)) {
-			for (const [target, setting] of Object.entries(targets)) {
-				if (setting === "default" || config.edges[source]?.[target]) {
-					skipped++;
-					continue;
+	updateAutonomyConfig(
+		configPath,
+		(config) => {
+			for (const [source, targets] of Object.entries(recommendations.edges)) {
+				for (const [target, setting] of Object.entries(targets)) {
+					if (setting === "default" || config.edges[source]?.[target]) {
+						skipped++;
+						continue;
+					}
+					config.edges[source] ??= {};
+					config.edges[source][target] = setting;
+					applied++;
 				}
-				config.edges[source] ??= {};
-				config.edges[source][target] = setting;
-				applied++;
 			}
-		}
-		return applied > 0;
-	});
+			return applied > 0;
+		},
+		scope,
+	);
 	return { applied, skipped };
 }
 
@@ -313,18 +400,19 @@ export function mergeAllRecommendations(recs: ReadonlyMap<string, AutonomyRecomm
 	return merged;
 }
 
-export function saveAutonomyConfig(configPath: string, config: AutonomyConfig): void {
-	withConfigLock(configPath, () => writeAutonomyConfigUnlocked(configPath, config));
+export function saveAutonomyConfig(configPath: string, config: AutonomyConfig, scope: AutonomyScope = "global"): void {
+	withConfigLock(configPath, () => writeAutonomyConfigUnlocked(configPath, config, scope));
 }
 
 export function updateAutonomyConfig(
 	configPath: string,
 	update: (config: AutonomyConfig) => boolean,
+	scope: AutonomyScope = "global",
 ): { config: AutonomyConfig; changed: boolean } {
 	return withConfigLock(configPath, () => {
-		const config = loadAutonomyConfig(configPath, true) ?? { edges: {} };
+		const config = loadAutonomyConfig(configPath, true, scope) ?? { edges: {} };
 		const changed = update(config);
-		if (changed) writeAutonomyConfigUnlocked(configPath, config);
+		if (changed) writeAutonomyConfigUnlocked(configPath, config, scope);
 		return { config, changed };
 	});
 }
@@ -585,7 +673,8 @@ function reclaimDeadClaim(lockPath: string, claimPath: string): boolean {
 	}
 }
 
-function writeAutonomyConfigUnlocked(configPath: string, config: AutonomyConfig): void {
+function writeAutonomyConfigUnlocked(configPath: string, config: AutonomyConfig, scope: AutonomyScope): void {
+	if (scope === "project") parseAutonomyConfig(stringifyYaml(config), scope);
 	const cleaned = cleanConfig(config);
 	if (Object.keys(cleaned.edges).length === 0 && Object.keys(cleaned.publications ?? {}).length === 0) {
 		try {

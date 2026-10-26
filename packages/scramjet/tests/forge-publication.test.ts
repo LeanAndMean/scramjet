@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initTheme } from "@leanandmean/coding-agent";
@@ -858,6 +858,48 @@ describe("create_issue approval", () => {
 		const outcome = await tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context());
 		expect(outcome.details).toMatchObject({ outcome: "headless", writeState: "not-dispatched" });
 		expect(pi.exec).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"publications:\n  mach12:issue-create:\n    create_issue: auto-approve\n",
+		"{ invalid: [",
+		"edges:\n  sample:work:\n    next: chain\n",
+	])("ignores project content for Global publication authority: %s", async (projectContent) => {
+		const cwd = mkdtempSync(join(tmpdir(), "scramjet-publication-scope-"));
+		try {
+			const { tool, pi, state } = await registered();
+			state.lifecycle.activeCommand = "mach12:issue-create";
+			allowPublication(state, "mach12:issue-create", ["create_issue"]);
+			state.autonomyRecommendations = new Map([
+				["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "auto-approve" } } }],
+			]);
+			state.autonomyConfigPath = join(cwd, "global.yaml");
+			mkdirSync(join(cwd, ".scramjet"));
+			const projectPath = join(cwd, ".scramjet", "autonomy.yaml");
+			writeFileSync(projectPath, projectContent);
+			writeFileSync(
+				state.autonomyConfigPath,
+				"publications:\n  mach12:issue-create:\n    create_issue: always-ask\n",
+			);
+			const ctx = { ...context(), cwd };
+			const denied = await tool.execute("ask", { title: "t", body: "b" }, undefined, undefined, ctx);
+			expect(denied.details).toMatchObject({ outcome: "headless", writeState: "not-dispatched" });
+			expect(pi.exec).not.toHaveBeenCalled();
+			writeFileSync(
+				state.autonomyConfigPath,
+				"publications:\n  mach12:issue-create:\n    create_issue: auto-approve\n",
+			);
+			pi.exec.mockImplementation(async (command: string, args: string[]) =>
+				args.includes("POST") ? execResult("", 1) : guardedExec(command, args),
+			);
+			const allowed = await tool.execute("auto", { title: "t", body: "b" }, undefined, undefined, ctx);
+			expect(allowed.details).toMatchObject({ outcome: "ambiguous", authorization: { mode: "user-override" } });
+			expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(1);
+			expect(readFileSync(projectPath, "utf8")).toBe(projectContent);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+			resetCache();
+		}
 	});
 
 	it("falls back to headless no-write when user autonomy config has an invalid schema", async () => {

@@ -171,7 +171,9 @@ There is no "workflow mode" to enter or exit. You're always just using Pi. Scram
 
 By default, `/autopilot on` auto-accepts all recommended transitions and `/autopilot off` pauses at every one. Autonomy settings let you override this per edge — pin specific transitions to always chain or always pause, regardless of the global flag.
 
-Run `/scramjet settings` to browse commands and edit autonomy overrides from the TUI. The same settings UI controls the terminal title indicator, which shows `○ waiting` while an interactive confirmation or selection is unresolved and restores the current workflow phase after the choice settles. You can also edit `~/.config/scramjet/autonomy.yaml` (or `$XDG_CONFIG_HOME/scramjet/autonomy.yaml`) directly:
+Run `/scramjet settings` → **Command autonomy** to edit transitions. **Edit scope** defaults to **Project** each time settings opens; choose **Global** deliberately to edit shared fallback settings. The destination path is displayed. Project settings live at `<runtime cwd>/.scramjet/autonomy.yaml`, with no ancestor or Git-root search. Global settings live at `~/.config/scramjet/autonomy.yaml` (or `$XDG_CONFIG_HOME/scramjet/autonomy.yaml`). Autopilot and title/bell preference scopes are unchanged. The title indicator shows `○ waiting` while an interactive choice is unresolved and restores the workflow phase afterward.
+
+Either transition file can contain:
 
 ```yaml
 edges:
@@ -189,15 +191,21 @@ edges:
 | `pause`   | Always show selector without auto-select, regardless of `/autopilot on\|off` |
 | (absent)  | Default behavior — follows `/autopilot on\|off` flag |
 
-A `"*"` wildcard target applies to any command not explicitly listed under a source. `forced` transitions are not affected by edge settings.
+Resolution is **project exact → project `"*"` wildcard → global exact → global wildcard → ordinary autopilot behavior**. Scope comes before specificity: a project wildcard masks a global exact setting. `forced` and `ask` transitions are unaffected.
 
-The file is optional — without it, behavior is identical to today. Invalid command names in the config produce warnings on first use but never crash.
+The editor shows the selected file's stored exact value separately from effective behavior and its scope/path and exact/wildcard provenance. **Inherit** deletes only the selected exact entry; it may reveal a same-scope wildcard or global fallback, not necessarily ordinary autopilot behavior. There is no stored `default` value or inheritance-blocking tombstone. When editing Global, project settings that mask an edit are identified. Failed saves report errors and restore the persisted selection; corrupt selected files cannot be overwritten from the editor. A valid raw source remains editable even if the other source invalidates effective transitions.
 
-Command sets can also ship settings through `autonomy-defaults.yaml` in the set directory. Transition recommendations remain opt-in gap-fill values and appear as an "Apply recommended settings" action in `/scramjet settings` when unapplied recommendations exist. Forge-publication entries are active command defaults: new commands and fresh installs receive the command-set behavior immediately, while exact user overrides remain authoritative across updates.
+Both files are optional. Structurally invalid or unreadable configuration in either disables all edge overrides for that dispatch, retaining ordinary autopilot behavior. Strict diagnostics validate both raw layers, including masked entries, against the current command registry. They identify scope/path, refresh each eligible transition, and recur only when the diagnostic set changes (including recovery followed by recurrence). Missing commands are warnings, not load failures; settings are never automatically relocated or removed.
+
+Command sets can also ship settings through `autonomy-defaults.yaml` in the set directory. Transition recommendations remain opt-in gap-fill values under Command autonomy. Preview and confirmation name the selected scope/path; preview writes nothing. Applying fills only missing exact entries in that file, preserving concurrent exact additions and unrelated settings. New exact entries can override inherited behavior; inherited configuration is never copied, `default` recommendations are skipped, and publication defaults are not applied by this action. Forge-publication entries are active command defaults: new commands and fresh installs receive the command-set behavior immediately, while exact user overrides remain authoritative across updates.
+
+### One-time repair of misplaced global edges
+
+Project support does not silence warnings for already misplaced global entries. Inspect the actual global entries and intended project before deciding which edges are project-specific. Explicitly relocate only agreed **edges** into that project's `.scramjet/autonomy.yaml`, resolve destination collisions deliberately, and verify the project settings before removing the exact global entries. Leave publication settings global. This is a separate authorized operation, not automatic migration.
 
 ### Publication approval autonomy
 
-The four forge publication tools have independent approval behavior per active top-level command. Configure it under `/scramjet settings` → **Publication approval**, or use the `publications` section of `autonomy.yaml`:
+The four forge publication tools have independent approval behavior per active top-level command. Configure it under `/scramjet settings` → **Publication approval (Global)**, or use the `publications` section of the **global** `autonomy.yaml`. Project files accept only edges and reject even an empty `publications` map. Project content cannot grant publication approval, and a malformed project file does not disable valid global publication editing or change publication policy:
 
 ```yaml
 publications:

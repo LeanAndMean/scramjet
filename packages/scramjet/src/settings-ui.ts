@@ -2,12 +2,15 @@ import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import type { Component } from "@leanandmean/tui";
 import { Container, type SettingItem, SettingsList, type SettingsListTheme, Text } from "@leanandmean/tui";
 import {
+	type AutonomyScope,
 	applyRecommendations,
 	defaultConfigPath,
-	loadAutonomyConfigResult,
+	loadScopedAutonomyConfig,
 	lookupEdge,
 	mergeAllRecommendations,
 	resolvePublicationPolicy,
+	resolveScopedEdge,
+	type ScopedAutonomySnapshot,
 	updateAutonomyConfig,
 } from "./autonomy-settings.js";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
@@ -44,7 +47,17 @@ export function classifyRecommendationEdges(
 	return result;
 }
 
-const EDGE_VALUES = ["default", "chain", "pause"] as const;
+const EDGE_VALUES = ["inherit", "chain", "pause"] as const;
+
+export interface TransitionEditor {
+	scope: AutonomyScope;
+	snapshot: () => ScopedAutonomySnapshot;
+}
+
+function selectedConfig(editor: TransitionEditor): AutonomyConfig | null {
+	const source = editor.snapshot()[editor.scope];
+	return source.status === "valid" ? source.config : null;
+}
 
 type SettingsThemeFactory = (theme: {
 	fg: (color: string, text: string) => string;
@@ -59,27 +72,26 @@ const buildSettingsTheme: SettingsThemeFactory = (theme) => ({
 	hint: (text) => theme.fg("dim", text),
 });
 
-export function buildEdgeItems(
-	commandName: string,
-	policy: NextStepPolicy,
-	config: AutonomyConfig | null,
-): SettingItem[] {
-	const targets = resolveTargets(policy);
-	return targets.map((target) => {
-		const exactSetting = config?.edges[commandName]?.[target.name] ?? null;
-		const effectiveSetting = lookupEdge(config, commandName, target.name);
-		const wildcardInherited = !target.forced && exactSetting == null && effectiveSetting != null;
-		const description = target.forced
-			? "Forced transition — autonomy settings are ignored"
-			: wildcardInherited
-				? `Inherited wildcard override: ${effectiveSetting}; choose chain or pause to create an exact override`
-				: `Override: chain (always run), pause (always ask), default (use policy)`;
+export function buildEdgeItems(commandName: string, policy: NextStepPolicy, editor: TransitionEditor): SettingItem[] {
+	const snapshot = editor.snapshot();
+	const selected = snapshot[editor.scope];
+	return resolveTargets(policy).map((target) => {
+		const exact = selected.status === "valid" ? selected.config.edges[commandName]?.[target.name] : undefined;
+		const effective = resolveScopedEdge(snapshot, commandName, target.name);
+		const behavior =
+			effective.status === "invalid"
+				? "Effective transitions invalid — all overrides disabled; ordinary autopilot behavior applies"
+				: effective.status === "absent"
+					? "Effective: ordinary autopilot behavior"
+					: `Effective: ${effective.setting} from ${effective.scope} ${effective.match} (${effective.path})${editor.scope === "global" && effective.scope === "project" ? "; project setting masks Global edits" : ""}`;
 		return {
 			id: `${commandName}::${target.name}`,
 			label: target.name,
-			description,
-			currentValue: effectiveSetting ?? "default",
-			values: target.forced ? undefined : wildcardInherited ? ["chain", "pause"] : [...EDGE_VALUES],
+			description: target.forced
+				? "Forced transition — autonomy settings are ignored"
+				: `Stored ${editor.scope} exact: ${exact ?? "none (inherited)"}. ${behavior}. Inherit removes only this file's exact entry; wildcard/global fallback may remain.${selected.status === "invalid" ? ` Cannot edit ${selected.path}: ${selected.error.message}` : ""}`,
+			currentValue: exact ?? "inherit",
+			values: target.forced || selected.status === "invalid" ? undefined : [...EDGE_VALUES],
 		};
 	});
 }
@@ -103,7 +115,7 @@ function resolveTargets(policy: NextStepPolicy): ResolvedTarget[] {
 
 export function buildCommandItems(
 	state: ScramjetState,
-	configGetter: () => AutonomyConfig | null,
+	editor: TransitionEditor,
 	theme: SettingsListTheme,
 	onChange: (commandName: string, target: string, value: string) => boolean | undefined,
 ): SettingItem[] {
@@ -113,15 +125,15 @@ export function buildCommandItems(
 		.sort(([a], [b]) => a.localeCompare(b));
 
 	for (const [name, def] of sorted) {
-		const edgeSummary = summarizeEdges(name, def.next!, configGetter());
+		const edgeSummary = summarizeEdges(name, def.next!, selectedConfig(editor));
 		items.push({
 			id: name,
 			label: name,
 			description: def.description,
 			currentValue: edgeSummary,
 			submenu: (_currentValue, done) =>
-				buildEdgeSubmenu(name, def.next!, configGetter, theme, onChange, () =>
-					done(summarizeEdges(name, def.next!, configGetter())),
+				buildEdgeSubmenu(name, def.next!, editor, theme, onChange, () =>
+					done(summarizeEdges(name, def.next!, selectedConfig(editor))),
 				),
 		});
 	}
@@ -148,20 +160,25 @@ function summarizeEdges(commandName: string, policy: NextStepPolicy, config: Aut
 function buildEdgeSubmenu(
 	commandName: string,
 	policy: NextStepPolicy,
-	configGetter: () => AutonomyConfig | null,
+	editor: TransitionEditor,
 	theme: SettingsListTheme,
 	onChange: (commandName: string, target: string, value: string) => boolean | undefined,
 	onCancel: () => void,
 ): Component {
-	const edgeItems = buildEdgeItems(commandName, policy, configGetter());
+	const edgeItems = buildEdgeItems(commandName, policy, editor);
 	const list = new SettingsList(
 		edgeItems,
 		Math.min(edgeItems.length, 10),
 		theme,
 		(id, newValue) => {
 			const target = id.split("::")[1];
-			if (onChange(commandName, target, newValue) === false)
-				list.updateValue(id, lookupEdge(configGetter(), commandName, target) ?? "default");
+			onChange(commandName, target, newValue);
+			const refreshed = buildEdgeItems(commandName, policy, editor);
+			for (const item of edgeItems)
+				Object.assign(
+					item,
+					refreshed.find((fresh) => fresh.id === item.id),
+				);
 		},
 		onCancel,
 	);
@@ -175,6 +192,7 @@ export function buildApplyRecommendationsItem(
 	exitSubmenu: () => void,
 	notify: (message: string, type?: "info" | "warning" | "error") => void,
 	theme: SettingsListTheme,
+	scope: AutonomyScope,
 ): SettingItem | null {
 	if (recommendations.size === 0) return null;
 
@@ -189,6 +207,7 @@ export function buildApplyRecommendationsItem(
 	return {
 		id: "apply-recommendations",
 		label,
+		description: `Destination: ${scope} (${configPath}). Adds missing exact entries only; these can override inherited settings. Publication defaults are not applied.`,
 		currentValue: "",
 		submenu: (_currentValue, done) => {
 			const freshEdges = classifyRecommendationEdges(merged, configGetter());
@@ -198,12 +217,14 @@ export function buildApplyRecommendationsItem(
 				id: `rec-${edge.source}::${edge.target}`,
 				label: `${edge.source} → ${edge.target}`,
 				currentValue: `${edge.setting} (${edge.status})`,
+				description: `${scope} (${configPath}): pending exact additions override inherited behavior; existing exact entries are preserved.`,
 			}));
 
 			if (pending > 0) {
 				edgeItems.push({
 					id: "confirm-apply",
-					label: `Apply ${pending} pending`,
+					label: `Apply ${pending} pending to ${scope}`,
+					description: `Save to ${configPath}. New exact entries override inherited behavior; no publication settings are applied.`,
 					currentValue: "",
 					values: ["apply"],
 				});
@@ -216,8 +237,11 @@ export function buildApplyRecommendationsItem(
 				(id, _newValue) => {
 					if (id === "confirm-apply") {
 						try {
-							const result = applyRecommendations(configPath, merged);
-							notify(`Applied ${result.applied} recommended setting${result.applied !== 1 ? "s" : ""}`, "info");
+							const result = applyRecommendations(configPath, merged, scope);
+							notify(
+								`Applied ${result.applied} recommended setting${result.applied !== 1 ? "s" : ""} to ${scope} (${configPath})`,
+								"info",
+							);
 						} catch (err: unknown) {
 							const msg = err instanceof Error ? err.message : String(err);
 							notify(`Failed to apply recommendations: ${msg}`, "error");
@@ -385,14 +409,17 @@ function publicationCommandDescription(description: string | undefined, summary:
 
 export function buildTopLevelItems(
 	state: ScramjetState,
-	configGetter: () => AutonomyConfig | null,
+	editor: TransitionEditor,
 	theme: SettingsListTheme,
 	commandOnChange: (commandName: string, target: string, value: string) => boolean | undefined,
-	configPath?: string,
 	notify?: (message: string, type?: "info" | "warning" | "error") => void,
 	publicationOnChange?: (commandName: string, tool: PublicationTool, value: string) => boolean | undefined,
-	configInvalid: () => boolean = () => false,
 ): SettingItem[] {
+	const configGetter = () => {
+		const global = editor.snapshot().global;
+		return global.status === "valid" ? global.config : null;
+	};
+	const configInvalid = () => editor.snapshot().global.status === "invalid";
 	const items: SettingItem[] = [];
 
 	items.push({
@@ -426,40 +453,65 @@ export function buildTopLevelItems(
 
 	const commandsWithEdges = [...state.registry.values()].filter((def) => def.next != null);
 	if (commandsWithEdges.length > 0) {
-		const edgeSummary = buildRegistrySummary(configGetter());
-		const invalid = configInvalid();
 		items.push({
 			id: "command-autonomy",
 			label: "Command autonomy",
-			description: invalid
-				? "autonomy.yaml is invalid; fix it before editing command autonomy"
-				: "Per-edge overrides for command chaining behavior",
-			currentValue: invalid ? "config error" : edgeSummary,
-			submenu: invalid
-				? undefined
-				: (_currentValue, done) => {
-						const closeSummary = () => done(buildRegistrySummary(configGetter()));
-						const commandItems = buildCommandItems(state, configGetter, theme, commandOnChange);
-						const applyItem =
-							configPath && notify
-								? buildApplyRecommendationsItem(
-										state.autonomyRecommendations,
-										configGetter,
-										configPath,
-										closeSummary,
-										notify,
-										theme,
-									)
-								: null;
-						const allItems = applyItem ? [applyItem, ...commandItems] : commandItems;
-						return new SettingsList(
-							allItems,
-							Math.min(allItems.length, 10),
-							theme,
-							(_id, _newValue) => {},
-							closeSummary,
-						);
+			description: "Project / Global transition overrides; publication approval remains Global",
+			currentValue: buildRegistrySummary(editor),
+			submenu: (_currentValue, done) => {
+				let list: SettingsList;
+				const closeSummary = () => done(buildRegistrySummary(editor));
+				const rebuild = () => {
+					const selected = editor.snapshot()[editor.scope];
+					const scopeItem: SettingItem = {
+						id: "transition-scope",
+						label: "Edit scope",
+						currentValue: editor.scope === "project" ? "Project" : "Global",
+						values: ["Project", "Global"],
+						description: `Destination: ${selected.path}${selected.status === "invalid" ? ` — read-only: ${selected.error.message}` : ""}`,
+					};
+					const commandItems = buildCommandItems(state, editor, theme, commandOnChange);
+					const applyItem =
+						notify && selected.status !== "invalid"
+							? buildApplyRecommendationsItem(
+									state.autonomyRecommendations,
+									() => selectedConfig(editor),
+									selected.path,
+									rebuild,
+									notify,
+									theme,
+									editor.scope,
+								)
+							: null;
+					const allItems = [scopeItem, ...(applyItem ? [applyItem] : []), ...commandItems];
+					const focused = list?.focused ?? false;
+					list = new SettingsList(
+						allItems,
+						Math.min(allItems.length, 10),
+						theme,
+						(id, value) => {
+							if (id === "transition-scope") {
+								editor.scope = value === "Project" ? "project" : "global";
+								rebuild();
+							}
+						},
+						closeSummary,
+					);
+					list.focused = focused;
+				};
+				rebuild();
+				return {
+					get focused() {
+						return list.focused;
 					},
+					set focused(value: boolean) {
+						list.focused = value;
+					},
+					render: (width) => list.render(width),
+					invalidate: () => list.invalidate(),
+					handleInput: (data) => list.handleInput(data),
+				};
+			},
 		});
 	} else {
 		items.push({
@@ -476,8 +528,8 @@ export function buildTopLevelItems(
 	if (publicationCommands.length > 0 && publicationOnChange) {
 		items.push({
 			id: "publication-approval",
-			label: "Publication approval",
-			description: "Per-command approval behavior for eligible forge publication tools",
+			label: "Publication approval (Global)",
+			description: `Global-only approval settings: ${editor.snapshot().global.path}`,
 			currentValue: `${publicationCommands.length} command${publicationCommands.length === 1 ? "" : "s"}`,
 			submenu: (_currentValue, done) => {
 				const commandItems = buildPublicationCommandItems(
@@ -502,7 +554,10 @@ export function buildTopLevelItems(
 	return items;
 }
 
-function buildRegistrySummary(config: AutonomyConfig | null): string {
+function buildRegistrySummary(editor: TransitionEditor): string {
+	const source = editor.snapshot()[editor.scope];
+	if (source.status === "invalid") return "config error";
+	const config = source.status === "valid" ? source.config : null;
 	const totalOverrides = config
 		? Object.values(config.edges).reduce((sum, targets) => sum + Object.keys(targets).length, 0)
 		: 0;
@@ -512,43 +567,48 @@ function buildRegistrySummary(config: AutonomyConfig | null): string {
 
 export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, state: ScramjetState): Promise<void> {
 	const configPath = state.autonomyConfigPath || defaultConfigPath();
-	let configInvalid = false;
 	let lastConfigError = "";
-	const configGetter = () => {
-		const result = loadAutonomyConfigResult(configPath);
-		configInvalid = result.status === "invalid";
-		if (result.status === "invalid") {
-			if (result.error.message !== lastConfigError) {
-				lastConfigError = result.error.message;
-				ctx.ui.notify(
-					`autonomy.yaml is corrupt or unreadable — approval is required: ${result.error.message}`,
-					"warning",
-				);
-			}
-			return null;
-		}
-		lastConfigError = "";
-		return result.status === "valid" ? result.config : null;
+	const editor: TransitionEditor = {
+		scope: "project",
+		snapshot: () => {
+			const snapshot = loadScopedAutonomyConfig(configPath, ctx.cwd);
+			const errors = [snapshot.global, snapshot.project].flatMap((source) =>
+				source.status === "invalid"
+					? [
+							`${source.scope} (${source.path}): ${source.error.message}${source.scope === "global" ? "; publication approval is required" : ""}`,
+						]
+					: [],
+			);
+			const message = errors.join("; ");
+			if (message && message !== lastConfigError) ctx.ui.notify(message, "warning");
+			lastConfigError = message;
+			return snapshot;
+		},
 	};
 
 	const handleAutonomyChange = (commandName: string, target: string, value: string): boolean => {
+		const path = editor.snapshot()[editor.scope].path;
 		try {
-			updateAutonomyConfig(configPath, (current) => {
-				if (value === "default") {
-					if (!current.edges[commandName]?.[target]) return false;
-					delete current.edges[commandName][target];
-					if (Object.keys(current.edges[commandName]).length === 0) delete current.edges[commandName];
-				} else {
-					current.edges[commandName] ??= {};
-					if (current.edges[commandName][target] === value) return false;
-					current.edges[commandName][target] = value as "chain" | "pause";
-				}
-				return true;
-			});
+			updateAutonomyConfig(
+				path,
+				(current) => {
+					if (value === "inherit") {
+						if (!current.edges[commandName]?.[target]) return false;
+						delete current.edges[commandName][target];
+						if (Object.keys(current.edges[commandName]).length === 0) delete current.edges[commandName];
+					} else {
+						current.edges[commandName] ??= {};
+						if (current.edges[commandName][target] === value) return false;
+						current.edges[commandName][target] = value as "chain" | "pause";
+					}
+					return true;
+				},
+				editor.scope,
+			);
 			return true;
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
-			ctx.ui.notify(`Failed to save autonomy config: ${msg}`, "error");
+			ctx.ui.notify(`Failed to save ${editor.scope} autonomy config (${path}): ${msg}`, "error");
 			return false;
 		}
 	};
@@ -582,13 +642,11 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 
 		const topItems = buildTopLevelItems(
 			state,
-			configGetter,
+			editor,
 			settingsTheme,
 			handleAutonomyChange,
-			configPath,
 			(msg, type) => ctx.ui.notify(msg, type),
 			handlePublicationChange,
-			() => configInvalid,
 		);
 		const list = new SettingsList(
 			topItems,
