@@ -979,11 +979,13 @@ class SharedDriverTests(unittest.TestCase):
         binary = self.output / "shared events"
         binary.write_bytes(b"synthetic executable")
         binary.chmod(0o700)
-        self.assertEqual(self.context["select_driver"](str(binary)), binary)
+        alias = self.output / "shared alias"
+        alias.symlink_to(binary)
+        self.assertEqual(self.context["select_driver"](str(alias)), binary.resolve())
         self.process.run.assert_not_called()
         evidence = self.context["report"]["desktopDriver"]
         self.assertEqual(evidence["mode"], "shared")
-        self.assertEqual(evidence["executable"], str(binary))
+        self.assertEqual(evidence["executable"], str(binary.resolve()))
         self.assertEqual(evidence["binarySha256"], __import__("hashlib").sha256(binary.read_bytes()).hexdigest())
         self.assertNotIn("swiftCompilation", self.context["report"].get("phaseSeconds", {}))
 

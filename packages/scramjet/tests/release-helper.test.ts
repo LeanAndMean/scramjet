@@ -799,6 +799,7 @@ if (!productionMain) try {
     state.calls.push(["installed-runtime-smoke", packageRoot, workDir]);
     elapsedMs += state.commandDurationMs?.runtime ?? 0;
     state.verificationPaths.smoke = workDir;
+    state.verificationPaths.project = realpathSync(state.verificationPaths.project);
     state.verificationPaths.packageRoot = realpathSync(packageRoot);
     writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
     if (state.runtimeSmokeFailure) throw Object.assign(new Error("runtime smoke failed"), { stderr: "runtime smoke failed" });
