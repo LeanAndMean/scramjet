@@ -447,6 +447,9 @@ def open_settings(query):
         settings_transaction = None
         try:
             transaction["fixture"] = state().get("settingsInput")
+        except Exception:
+            transaction["diagnosticError"] = "fixture-evidence-unavailable"
+        try:
             fixture_command("settings-trace-end")
             transaction["fixture"] = state().get("settingsInput")
         except Exception:
