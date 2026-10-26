@@ -17,8 +17,11 @@ def run(*args):
         raise RuntimeError(f'{args[0]} failed: {result.stderr}')
     return result.stdout.strip()
 
-def apple(script):
-    return run('osascript', '-e', script)
+driver = out / 'desktop-events'
+subprocess.run(['swiftc', str(root / '.github/scripts/macos-terminal-events.swift'), '-o', str(driver)], check=True, timeout=120)
+
+def events(*args):
+    return run(str(driver), *map(str,args))
 
 fixture = out / 'fixture.mjs'
 fixture.write_text(r'''
@@ -84,10 +87,31 @@ try:
     report['terminalVersion'] = run('/usr/libexec/PlistBuddy','-c','Print :CFBundleShortVersionString','/System/Applications/Utilities/Terminal.app/Contents/Info.plist')
     if subprocess.run(['pgrep','-x','Terminal'],capture_output=True).returncode == 0:
         raise RuntimeError('Refusing to adopt an existing Terminal process')
-    apple('tell application "Terminal"\nactivate\nset w to do script ""\nset current settings of w to settings set "Basic"\nset number of columns of w to 100\nset number of rows of w to 30\nset font name of w to "Menlo"\nset font size of w to 18\nset bounds of front window to {20, 40, 1220, 850}\nend tell')
-    report['profile'] = apple('tell application "Terminal"\nset t to selected tab of front window\nreturn {name of current settings of t, background color of current settings of t, normal text color of current settings of t}\nend tell')
+    run('defaults','write','com.apple.Terminal','Default Window Settings','-string','Basic')
+    run('defaults','write','com.apple.Terminal','Startup Window Settings','-string','Basic')
+    report['profile'] = run('defaults','read','com.apple.Terminal')
+    report['capabilities'] = json.loads(events('capabilities'))
+    terminal_process = subprocess.Popen(['/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal'])
+    report['terminalPid'] = terminal_process.pid
+    for _ in range(30):
+        time.sleep(1)
+        for pid in subprocess.run(['pgrep','-x','CoreServicesUIAgent'],capture_output=True,text=True).stdout.split():
+            events('press-pid',pid,'Open')
+        try:
+            if {'AXWindow','AXTextArea'} <= {x['role'] for x in json.loads(events('geometry-pid',terminal_process.pid))}:
+                break
+        except RuntimeError:
+            pass
+    else:
+        raise RuntimeError('Native Terminal window did not become ready')
+    events('activate-pid',terminal_process.pid)
+    if json.loads(events('frontmost')).get('pid') != terminal_process.pid:
+        raise RuntimeError('Terminal did not acquire focus')
     command='/bin/bash '+shlex.quote(str(launcher))
-    apple('tell application "Terminal" to do script '+json.dumps(command)+' in selected tab of front window')
+    subprocess.run(['pbcopy'],input=command,text=True,check=True)
+    events('key',9,1048576)
+    time.sleep(.3)
+    events('key',36,0)
     seen=set()
     deadline=time.monotonic()+180
     while time.monotonic()<deadline:
@@ -96,8 +120,7 @@ try:
             phase=json.loads(state.read_text())['name']
             if phase not in seen:
                 time.sleep(1)
-                text=apple('tell application "Terminal" to get contents of selected tab of front window')
-                (out/(phase+'.txt')).write_text(text)
+                (out/(phase+'-geometry.json')).write_text(events('geometry-pid',terminal_process.pid))
                 shot=out/(phase+'.png')
                 run('screencapture','-x',str(shot))
                 report['screenshots'].append({'phase':phase,'bytes':shot.stat().st_size})
@@ -115,4 +138,6 @@ try:
         raise RuntimeError('Incomplete diagnostic phase evidence')
 finally:
     (out/'report.json').write_text(json.dumps(report,indent=2))
-    subprocess.run(['osascript','-e','tell application "Terminal" to quit'],capture_output=True,timeout=20)
+    if 'terminal_process' in globals() and terminal_process.poll() is None:
+        terminal_process.terminate()
+        terminal_process.wait(timeout=20)
