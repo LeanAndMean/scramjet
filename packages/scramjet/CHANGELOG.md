@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.111.0 — Add project-scoped transition autonomy
+
+Configure transition autonomy per runtime working directory with shared global fallback. Fixes [#616](https://github.com/LeanAndMean/scramjet/issues/616).
+
+### Added
+
+- Support edges-only `.scramjet/autonomy.yaml` with project exact → project wildcard → global exact → global wildcard precedence, resolving eligible transitions from one captured snapshot.
+- Default the Command autonomy editor to Project scope, with explicit Global selection, destination paths, stored/effective provenance, inheritance, masked-edit explanations and scope-specific recommendation previews and application.
+
+### Changed
+
+- Validate both raw configuration layers with scope/path-qualified diagnostics; invalid or unreadable configuration in either disables all transition overrides for that dispatch. Publication approval remains global-only, and existing configuration is never automatically relocated.
+
+### Tests
+
+- Cover scoped precedence, invalid-layer fallback, diagnostics, isolated working directories, inheritance, concurrent recommendation writes, failed saves and global-only publication approval; isolate lifecycle fixtures and make rendered masking assertions independent of soft wrapping.
+
 ## 0.110.0 — Recover originating execution after Codex failures
 
 Recover eligible Codex failures within existing retry limits while preserving truthful originating execution outcomes. Fixes [#611](https://github.com/LeanAndMean/scramjet/issues/611).
