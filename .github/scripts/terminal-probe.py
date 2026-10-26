@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,9 @@ output = Path(sys.argv[1]).resolve()
 output.mkdir(parents=True, exist_ok=True)
 root = Path.cwd()
 state_path = output / "fixture.json"
+shared_driver = next((arg.split("=", 1)[1] for arg in sys.argv[2:] if arg.startswith("--desktop-driver=")), None)
+if shared_driver is not None and not is_mac:
+    raise SystemExit("Shared desktop driver requires macOS")
 driver = output / "desktop-events"
 report = {"scope": "Production InteractiveMode native activation journey", "terminal": terminal_kind, "tmux": with_tmux, "checks": {}}
 command_id = 0
@@ -211,6 +215,22 @@ def clipboard():
 def seed_clipboard(text):
     command = ["pbcopy"] if is_mac else ["xclip", "-selection", "clipboard"]
     subprocess.run(command, input=text, text=True, check=True, timeout=10)
+
+
+def select_driver(shared):
+    selected = Path(shared).resolve() if shared is not None else output / "desktop-events"
+    if shared is not None:
+        if not shared or not selected.is_file() or not os.access(selected, os.X_OK):
+            raise RuntimeError(f"Invalid shared desktop driver: {shared}")
+    else:
+        started = time.monotonic()
+        try:
+            subprocess.run(["swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(selected)], text=True, capture_output=True, check=True, timeout=120)
+        finally:
+            report.setdefault("phaseSeconds", {})["swiftCompilation"] = time.monotonic() - started
+    report["desktopDriver"] = {"mode": "shared" if shared is not None else "standalone",
+                               "executable": str(selected), "binarySha256": hashlib.sha256(selected.read_bytes()).hexdigest()}
+    return selected
 
 
 def events(*args):
@@ -550,11 +570,7 @@ try:
     if is_mac:
         plist = "/Applications/iTerm.app/Contents/Info.plist" if terminal_kind == "iterm2" else "/System/Applications/Utilities/Terminal.app/Contents/Info.plist"
         report["terminalVersion"] = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", plist)
-        compile_started = time.monotonic()
-        try:
-            subprocess.run(["swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(driver)], text=True, capture_output=True, check=True, timeout=120)
-        finally:
-            report.setdefault("phaseSeconds", {})["swiftCompilation"] = time.monotonic() - compile_started
+        driver = select_driver(shared_driver)
         report["termiosStateMask"] = json.loads(events("termios-mask"))
         if report["termiosStateMask"] != {"PENDIN": 0x20000000}:
             raise RuntimeError("Native SDK constants do not match the restoration contract")

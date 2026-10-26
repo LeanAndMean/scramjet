@@ -928,6 +928,55 @@ class LinuxTerminalStartupTests(unittest.TestCase):
         self.assertIsNone(startup["exitBeforeCleanup"])
 
 
+class SharedDriverTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.output = Path(self.temporary.name)
+        self.process = Mock()
+        self.context = {"Path": Path, "os": os, "time": time, "subprocess": self.process,
+                        "root": ROOT, "output": self.output, "report": {}, "hashlib": __import__("hashlib")}
+        source = ast.parse((ROOT / ".github/scripts/terminal-probe.py").read_text())
+        function = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "select_driver")
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "terminal-probe.py", "exec"), self.context)
+
+    def test_shared_executable_is_used_without_compiling(self):
+        binary = self.output / "shared events"
+        binary.write_bytes(b"synthetic executable")
+        binary.chmod(0o700)
+        self.assertEqual(self.context["select_driver"](str(binary)), binary)
+        self.process.run.assert_not_called()
+        evidence = self.context["report"]["desktopDriver"]
+        self.assertEqual(evidence["mode"], "shared")
+        self.assertEqual(evidence["executable"], str(binary))
+        self.assertEqual(evidence["binarySha256"], __import__("hashlib").sha256(binary.read_bytes()).hexdigest())
+        self.assertNotIn("swiftCompilation", self.context["report"].get("phaseSeconds", {}))
+
+    def test_invalid_explicit_path_never_falls_back(self):
+        not_executable = self.output / "not-executable"
+        not_executable.write_text("not executable")
+        for value in ("", str(self.output / "absent"), str(not_executable), str(self.output)):
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, "Invalid shared desktop driver"):
+                self.context["select_driver"](value)
+        self.process.run.assert_not_called()
+
+    def test_omitted_path_compiles_standalone_and_records_duration(self):
+        binary = self.output / "desktop-events"
+        self.process.run.side_effect = lambda *args, **kwargs: binary.write_bytes(b"compiled")
+        self.assertEqual(self.context["select_driver"](None), binary)
+        self.process.run.assert_called_once_with(
+            ["swiftc", str(ROOT / ".github/scripts/macos-terminal-events.swift"), "-o", str(binary)],
+            text=True, capture_output=True, check=True, timeout=120)
+        self.assertEqual(self.context["report"]["desktopDriver"]["mode"], "standalone")
+        self.assertGreaterEqual(self.context["report"]["phaseSeconds"]["swiftCompilation"], 0)
+
+    def test_compile_failure_preserves_error_and_timing(self):
+        self.process.run.side_effect = subprocess.CalledProcessError(1, "swiftc")
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.context["select_driver"](None)
+        self.assertIn("swiftCompilation", self.context["report"]["phaseSeconds"])
+
+
 class TerminalReadinessTests(unittest.TestCase):
     def setUp(self):
         source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
