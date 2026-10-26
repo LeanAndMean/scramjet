@@ -1,10 +1,39 @@
-name: Issue 615 Terminal.app diagnostic
+name: Issue 615 native terminal diagnostic
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  xterm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y xterm xvfb openbox scrot fonts-dejavu-core
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Run native xterm diagnostic
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1000x24' bash -c '
+            openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
+            sleep 2
+            python3 .github/scripts/issue-615-xterm.py
+          '
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: issue-615-xterm
+          path: ${{ runner.temp }}/issue-615-xterm
+          if-no-files-found: error
+          retention-days: 7
   reproduce:
+    if: false
     runs-on: macos-15
     timeout-minutes: 20
     steps:
