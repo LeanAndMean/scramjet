@@ -8,7 +8,8 @@ import subprocess
 import time
 
 root = Path.cwd()
-out = Path(os.environ['RUNNER_TEMP']) / 'issue-615-xterm'
+kind = os.environ.get('DIAG_TERMINAL', 'xterm')
+out = Path(os.environ['RUNNER_TEMP']) / ('issue-615-'+kind)
 out.mkdir()
 report = {'revision': os.environ['GITHUB_SHA'], 'run': os.environ['GITHUB_RUN_ID'], 'screenshots': []}
 
@@ -33,10 +34,17 @@ launcher.write_text('#!/bin/bash\n' + f'cd {shlex.quote(str(root))}\n' +
     f'{shlex.quote(shutil.which("node"))} {shlex.quote(str(fixture))} 2>{shlex.quote(str(out / "fixture.stderr"))}\n' +
     f'printf "%s" "$?" > {shlex.quote(str(out / "exit-code"))}\n')
 try:
-    report['xtermVersion'] = run('xterm','-version')
-    report['packages'] = run('dpkg-query','-W','xterm','xvfb','libvte-2.91-0') if shutil.which('xfce4-terminal') else run('dpkg-query','-W','xterm','xvfb')
-    report['profile'] = {'background':'white','foreground':'black','font':'DejaVu Sans Mono 14','geometry':'100x30'}
-    terminal = subprocess.Popen(['xterm','-fa','DejaVu Sans Mono','-fs','14','-bg','white','-fg','black','-geometry','100x30','-T','Issue 615 xterm spelling diagnostic','-e','bash',str(launcher)], env={**os.environ,'TERM_PROGRAM':'','COLORTERM':''})
+    report['terminal'] = kind
+    report['terminalVersion'] = run(kind, '-version' if kind == 'xterm' else '--version')
+    report['packages'] = run('dpkg-query','-W',kind,'xvfb')
+    report['profile'] = {'background':'white','foreground':'black','font':'DejaVu Sans Mono 14'}
+    if kind == 'xterm':
+        command = ['xterm','-fa','DejaVu Sans Mono','-fs','14','-bg','white','-fg','black','-geometry','100x30','-T','Issue 615 xterm spelling diagnostic','-e','bash',str(launcher)]
+    elif kind == 'kitty':
+        command = ['kitty','--config','NONE','-o','background=white','-o','foreground=black','-o','font_family=DejaVu Sans Mono','-o','font_size=14','-o','initial_window_width=1200','-o','initial_window_height=800','-o','remember_window_size=no','-o','confirm_os_window_close=0','bash',str(launcher)]
+    else:
+        raise RuntimeError('Unsupported diagnostic terminal')
+    terminal = subprocess.Popen(command, env={**os.environ,'TERM_PROGRAM':'','COLORTERM':''})
     seen = set()
     deadline = time.monotonic()+180
     while time.monotonic() < deadline:

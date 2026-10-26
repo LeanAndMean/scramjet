@@ -38,7 +38,7 @@ const theme = loadThemeFromPath(path.join(root,'packages/coding-agent/src/modes/
 setThemeInstance(theme);
 const pause = ms => new Promise(r=>setTimeout(r,ms));
 const record = value => fs.appendFileSync(path.join(out,'fixture.jsonl'),JSON.stringify(value)+'\n');
-record({theme:theme.name,env:{TERM:process.env.TERM,TERM_PROGRAM:process.env.TERM_PROGRAM,TERM_PROGRAM_VERSION:process.env.TERM_PROGRAM_VERSION,COLORTERM:process.env.COLORTERM},tty:process.stdout.isTTY,columns:process.stdout.columns,rows:process.stdout.rows});
+record({theme:theme.name,env:{TERM:process.env.TERM,TERM_PROGRAM:process.env.TERM_PROGRAM,TERM_PROGRAM_VERSION:process.env.TERM_PROGRAM_VERSION,COLORTERM:process.env.COLORTERM,XTERM_VERSION:process.env.XTERM_VERSION,KITTY_WINDOW_ID:process.env.KITTY_WINDOW_ID,TMUX:process.env.TMUX,STY:process.env.STY},tty:process.stdout.isTTY,columns:process.stdout.columns,rows:process.stdout.rows});
 async function phase(name, extra={}) {
  record({phase:name,...extra});
  fs.writeFileSync(path.join(out,'phase.json'),JSON.stringify({name,...extra}));

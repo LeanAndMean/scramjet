@@ -7,6 +7,11 @@ jobs:
   xterm:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      matrix:
+        terminal: [xterm, kitty]
+    env:
+      DIAG_TERMINAL: ${{ matrix.terminal }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -15,7 +20,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: sudo apt-get update && sudo apt-get install -y xterm xvfb openbox scrot fonts-dejavu-core
+      - run: sudo apt-get update && sudo apt-get install -y xterm kitty xvfb openbox scrot fonts-dejavu-core
       - run: npm ci --ignore-scripts
       - run: npm run build
       - name: Run native xterm diagnostic
@@ -28,8 +33,8 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: issue-615-xterm
-          path: ${{ runner.temp }}/issue-615-xterm
+          name: issue-615-${{ matrix.terminal }}
+          path: ${{ runner.temp }}/issue-615-${{ matrix.terminal }}
           if-no-files-found: error
           retention-days: 7
   reproduce:
