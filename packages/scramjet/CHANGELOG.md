@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.113.0 — Publish to explicit repositories without a local origin
+
+Allow guarded forge publication outside Git checkouts or without a usable origin. Fixes [#619](https://github.com/LeanAndMean/scramjet/issues/619).
+
+### Added
+
+- Support explicit canonical public HTTPS repository targets for all four publication tools without requiring a local origin; omitted targets still require a readable, supported origin.
+
+### Changed
+
+- Require interactive approval when current-repository identity is unknown, freeze the selected destination, and retain known-origin continuity, session freshness, exact verification and ambiguous-write safeguards.
+
+### Tests
+
+- Cover GitHub and nested GitLab targets, approval and cancellation, invalid selectors, origin transitions, remote PR branches and no-write boundaries. Automated coverage does not establish live forge authentication or manual non-Git terminal presentation.
+
 ## 0.112.0 — Diagnose release delays and reuse native test tooling
 
 Improve release observability and reduce repeated native-driver compilation without weakening publication or terminal acceptance gates. Fixes [#617](https://github.com/LeanAndMean/scramjet/issues/617).
