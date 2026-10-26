@@ -112,7 +112,7 @@ Do NOT attempt to fix any issues -- this command is for review only. Fixes happe
 
 Prepare the review comment body. It must include:
 - `<!-- mach12-review -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
-- The complete review findings (Critical, Important, Suggestions, Strengths), preserving source attribution for each selected reviewer.
+- The complete review findings (Critical, Important, Suggestions, Strengths), preserving source attribution for each selected reviewer. Explain each finding's problematic behavior, relevant conditions or a useful example, practical consequence, and why correction is needed. Make the explanation understandable with ordinary PR context; identifiers and locations support it rather than substitute for it. Keep evidence and uncertainty visible without burying the explanation in procedural metadata.
 - Assessment-relevant structural evidence, when established, as a concise descriptive handoff separate from F/S findings, retaining citations, scope, source-state context, uncertainties, and uncovered questions.
 - F/S identifiers on every finding -- Critical and Important findings use `F<n>` numbered sequentially across both sections, Suggestions use `S<n>` with a separate counter (e.g., `**F1:** ...`, `**F2:** ...`, `**S1:** ...`).
 - Model attribution at the bottom -- use the model attribution from the Model Identity section of your system prompt (e.g., "Reviewed by <model name>").

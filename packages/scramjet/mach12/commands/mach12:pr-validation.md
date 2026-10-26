@@ -66,6 +66,8 @@ Prepare a review body beginning `<!-- mach12-review -->`. Use stable candidate I
 - suspected production path and competing explanations;
 - scope, practical impact, and uncertainty.
 
+Explain the challenged behavior, relevant conditions, and practical consequence in language understandable with ordinary PR context; test metadata supports rather than replaces the explanation. Distinguish observed failures from suspected causes and evidence limits without presenting preliminary candidates as accepted defects or designing production repairs.
+
 Also include removed-candidate disposition counts, unreviewed boundaries, `P`, the actual merge base, and the exact candidate test paths intentionally left uncommitted for assessment. State clearly that these are preliminary claims awaiting independent assessment and that the primary worktree contains only those candidate test changes.
 
 State the candidate count, reviewed head, dirty-worktree consequence, and publication target concisely, then call `add_pr_comment` with the PR number and complete preliminary review. Continue only when publication is verified, then extract and retain the numeric GitHub comment ID from the verified canonical URL. If the ID cannot be extracted, block the transition without retrying publication. Cancellation leaves the candidate tests intact and reports incomplete; ambiguity prohibits automatic retry. Do not normalize tests into final suites, design production fixes, commit, or push in this command.
