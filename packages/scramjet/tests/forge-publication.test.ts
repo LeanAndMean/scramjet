@@ -58,6 +58,84 @@ async function guardedExec(command: string, args: string[]) {
 	return execResult("", 1);
 }
 
+function explicitPublicationFixture(provider: "github" | "gitlab", operation: string) {
+	const github = provider === "github";
+	const repository = github ? "https://github.com/other/project" : "https://gitlab.com/group/sub/project";
+	const project = github ? "other/project" : "group/sub/project";
+	const root = github ? `repos/${project}` : `projects/${encodeURIComponent(project)}`;
+	const pr = operation === "create_pr" || operation === "add_pr_comment";
+	const comment = operation.startsWith("add_");
+	const collection = github ? (pr ? "pulls" : "issues") : pr ? "merge_requests" : "issues";
+	const parentUrl = `${repository}/${github ? (pr ? "pull" : "issues") : `-/${collection}`}/9`;
+	const params = comment
+		? { number: 9, body: "exact body\r\n", repository }
+		: {
+				title: "exact title",
+				body: "exact body\r\n",
+				...(pr ? { head: "feature", base: "main", draft: false } : {}),
+				repository,
+			};
+	const payload = comment
+		? { body: params.body }
+		: github
+			? { title: params.title, body: params.body, ...(pr ? { head: "feature", base: "main", draft: false } : {}) }
+			: {
+					title: params.title,
+					description: params.body,
+					...(pr ? { source_branch: "feature", target_branch: "main" } : {}),
+				};
+	const endpoint = comment
+		? `${root}/${github ? "issues" : collection}/9/${github ? "comments" : "notes"}`
+		: `${root}/${collection}`;
+	const verificationEndpoint = comment ? (github ? `${root}/issues/comments/17` : `${endpoint}/17`) : `${endpoint}/9`;
+	const url = comment ? `${parentUrl}${github ? "#issuecomment-17" : "#note_17"}` : parentUrl;
+	const parent = github
+		? { number: 9, html_url: parentUrl, ...(pr ? { pull_request: {} } : {}) }
+		: { iid: 9, project_id: 23, web_url: parentUrl };
+	const item = github
+		? comment
+			? { id: 17, html_url: url, body: params.body, issue_url: `https://api.github.com/repos/${project}/issues/9` }
+			: {
+					number: 9,
+					html_url: url,
+					...payload,
+					...(pr
+						? {
+								head: { ref: "feature", repo: { full_name: project } },
+								base: { ref: "main", repo: { full_name: project } },
+							}
+						: {}),
+				}
+		: comment
+			? { id: 17, project_id: 23, noteable_iid: 9, noteable_type: pr ? "MergeRequest" : "Issue", body: params.body }
+			: {
+					iid: 9,
+					project_id: 23,
+					web_url: url,
+					...payload,
+					...(pr ? { source_project_id: 23, target_project_id: 23, draft: false } : {}),
+				};
+	const exec = async (command: string, args: string[]) => {
+		if (command === "git" && args[0] === "remote") return execResult("", 128);
+		if (command === "git") return guardedExec(command, args);
+		if (command !== (github ? "gh" : "glab")) return execResult("", 1);
+		const path = args.at(-1);
+		if (path === root)
+			return execResult(
+				JSON.stringify(
+					github
+						? { id: 23, full_name: project, html_url: repository }
+						: { id: 23, path_with_namespace: project, web_url: repository },
+				),
+			);
+		if ((args.includes("POST") && path === endpoint) || path === verificationEndpoint)
+			return execResult(JSON.stringify(item));
+		if (comment && path === `${root}/${github ? "issues" : collection}/9`) return execResult(JSON.stringify(parent));
+		return execResult("", 1);
+	};
+	return { params, payload, repository, project, root, endpoint, verificationEndpoint, url, exec };
+}
+
 async function registered(terminalIndicators = noOpTerminalIndicators()) {
 	const bag = recordingPi();
 	bag.pi.exec = vi.fn(guardedExec);
@@ -67,6 +145,35 @@ async function registered(terminalIndicators = noOpTerminalIndicators()) {
 }
 
 describe("create_issue approval", () => {
+	it("publishes an approved explicit target without a readable origin", async () => {
+		const { tool, pi } = await registered();
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "git" && args[0] === "remote") return execResult("", 128);
+			const item = {
+				number: 9,
+				title: "exact",
+				body: "body",
+				html_url: "https://github.com/LeanAndMean/scramjet/issues/9",
+			};
+			if (args.includes("POST") || args.at(-1) === "repos/LeanAndMean/scramjet/issues/9")
+				return execResult(JSON.stringify(item));
+			return guardedExec(command, args);
+		});
+		const custom = vi.fn(async () => "approved");
+		const outcome = await tool.execute(
+			"call",
+			{ title: "exact", body: "body", repository: "https://github.com/LeanAndMean/scramjet" },
+			undefined,
+			undefined,
+			context(custom),
+		);
+		expect(outcome.details).toMatchObject({
+			outcome: "verified",
+			authorization: { mode: "interactive" },
+		});
+		expect(custom).toHaveBeenCalledOnce();
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(1);
+	});
 	it.each(["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"] as const)(
 		"forces external approval for %s despite command auto-approval and freezes the destination",
 		async (name) => {
@@ -125,6 +232,61 @@ describe("create_issue approval", () => {
 			expect(posts[0][2].stdin).not.toContain("repository");
 		},
 	);
+	it.each(["github", "gitlab"] as const)("verifies every approved no-origin publication on %s", async (provider) => {
+		for (const name of ["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"]) {
+			const { tools, pi, state } = await registered();
+			const fixture = explicitPublicationFixture(provider, name);
+			pi.exec.mockImplementation(fixture.exec);
+			state.lifecycle.activeCommand = "mach12:publish";
+			allowPublication(state, "mach12:publish", [name]);
+			state.autonomyRecommendations = new Map([
+				["mach12", { edges: {}, publications: { "mach12:publish": { [name]: "auto-approve" } } }],
+			]);
+			const params = { ...fixture.params };
+			const custom = vi.fn(async (factory: any, options: any) => {
+				const preview = options.toolAttachedContext.render({}, theme()).render(100).join("\n");
+				expect(preview).toContain(fixture.repository);
+				expect(preview).toContain("exact body");
+				Object.assign(params, {
+					repository: "https://github.com/attacker/repo",
+					title: "changed",
+					body: "changed",
+					number: 99,
+					head: "changed",
+				});
+				let answer: unknown;
+				const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+					answer = value;
+				});
+				component.handleInput("\r");
+				return answer;
+			});
+			const result = await tools
+				.find((tool) => tool.name === name)
+				.execute("call", params, undefined, undefined, { ...context(custom), cwd: "/non-git" });
+			expect(result.details).toMatchObject({
+				outcome: "verified",
+				writeState: "verified",
+				url: fixture.url,
+				repository: fixture.project,
+				authorization: { mode: "interactive" },
+			});
+			expect(custom).toHaveBeenCalledOnce();
+			const posts = pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"));
+			expect(posts).toHaveLength(1);
+			expect(posts[0][1].at(-1)).toBe(fixture.endpoint);
+			expect(JSON.parse(posts[0][2].stdin)).toEqual(fixture.payload);
+			expect(pi.exec.mock.calls.at(-1)?.[1].at(-1)).toBe(fixture.verificationEndpoint);
+			expect(pi.exec.mock.calls.filter((call: any[]) => call[0] === "git" && call[1][0] === "remote")).toHaveLength(
+				1,
+			);
+			if (name === "create_pr")
+				expect(
+					pi.exec.mock.calls.filter((call: any[]) => call[1][0] === "ls-remote").map((call: any[]) => call[1][4]),
+				).toEqual(Array(4).fill(`${fixture.repository}.git`));
+		}
+	});
+
 	it("rejects malformed explicit targets rather than treating them as omitted", async () => {
 		const { tool, pi, state } = await registered();
 		state.lifecycle.activeCommand = "mach12:publish";
@@ -132,7 +294,7 @@ describe("create_issue approval", () => {
 		state.autonomyRecommendations = new Map([
 			["mach12", { edges: {}, publications: { "mach12:publish": { create_issue: "auto-approve" } } }],
 		]);
-		for (const repository of ["", "other/project", "https://github.com/other/project.git", undefined]) {
+		for (const repository of ["", "other/project", "https://github.com/other/project.git", undefined, null, 42]) {
 			const result = await tool.execute(
 				"call",
 				{ title: "t", body: "b", repository },
@@ -141,8 +303,9 @@ describe("create_issue approval", () => {
 				context(),
 			);
 			expect(result.details).toMatchObject({ outcome: "pre-dispatch-failure", writeState: "not-dispatched" });
+			expect(result.details.reason).toContain("canonical public HTTPS URL");
 		}
-		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+		expect(pi.exec).not.toHaveBeenCalled();
 	});
 
 	it("keeps explicit same-origin command autonomy and requires approval under an exact user override", async () => {
@@ -235,6 +398,173 @@ describe("create_issue approval", () => {
 		});
 		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
 	});
+
+	it.each(["rejected", "empty", "unsupported"])(
+		"treats %s origin discovery as unknown only for explicit targets",
+		async (failure) => {
+			const { tool, pi } = await registered();
+			const fixture = explicitPublicationFixture("github", "create_issue");
+			pi.exec.mockImplementation(async (command: string, args: string[]) => {
+				if (command === "git" && args[0] === "remote") {
+					if (failure === "rejected") throw new Error("git unavailable");
+					return execResult(failure === "empty" ? "" : "https://unsupported.example/repo.git");
+				}
+				return fixture.exec(command, args);
+			});
+			const result = await tool.execute(
+				"call",
+				fixture.params,
+				undefined,
+				undefined,
+				context(async () => "approved"),
+			);
+			expect(result.details.outcome).toBe("verified");
+			const omitted = await tool.execute(
+				"call",
+				{ title: "t", body: "b" },
+				undefined,
+				undefined,
+				context(async () => "approved"),
+			);
+			expect(omitted.details).toMatchObject({ outcome: "pre-dispatch-failure", writeState: "not-dispatched" });
+			expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(1);
+		},
+	);
+
+	it.each(["headless", "unavailable", "cancelled", "rejected"])(
+		"keeps unknown-origin %s approval no-write despite exact auto-approval",
+		async (approval) => {
+			const directory = mkdtempSync(join(tmpdir(), "scramjet-no-origin-"));
+			try {
+				const { tool, pi, state } = await registered();
+				const fixture = explicitPublicationFixture("github", "create_issue");
+				pi.exec.mockImplementation(fixture.exec);
+				state.lifecycle.activeCommand = "mach12:publish";
+				allowPublication(state, "mach12:publish", ["create_issue"]);
+				state.autonomyConfigPath = join(directory, "autonomy.yaml");
+				writeFileSync(
+					state.autonomyConfigPath,
+					"publications:\n  mach12:publish:\n    create_issue: auto-approve\n",
+				);
+				const custom = vi.fn(async (factory: any) => {
+					if (approval === "unavailable") return undefined;
+					if (approval === "rejected") throw new Error("no UI");
+					let answer: unknown;
+					const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+						answer = value;
+					});
+					component.handleInput("\u001b");
+					return answer;
+				});
+				const result = await tool.execute(
+					"call",
+					fixture.params,
+					undefined,
+					undefined,
+					context(approval === "headless" ? undefined : custom),
+				);
+				expect(result.details).toMatchObject({
+					outcome:
+						approval === "headless"
+							? "headless"
+							: approval === "cancelled"
+								? "cancelled"
+								: "pre-dispatch-failure",
+					writeState: "not-dispatched",
+				});
+				if (approval !== "headless") expect(custom).toHaveBeenCalledOnce();
+				expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+				resetCache();
+			}
+		},
+	);
+
+	it("does not promote an unknown snapshot or switch PR transport when origin appears during approval", async () => {
+		const { tools, pi } = await registered();
+		const fixture = explicitPublicationFixture("github", "create_pr");
+		let appeared = false;
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (appeared && command === "git" && args[0] === "remote")
+				return execResult("git@github.com:other/project.git\n");
+			return fixture.exec(command, args);
+		});
+		const result = await tools
+			.find((tool) => tool.name === "create_pr")
+			.execute(
+				"call",
+				fixture.params,
+				undefined,
+				undefined,
+				context(async () => {
+					appeared = true;
+					return "approved";
+				}),
+			);
+		expect(result.details).toMatchObject({ outcome: "verified", authorization: { mode: "interactive" } });
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1][0] === "remote")).toHaveLength(1);
+		expect(
+			pi.exec.mock.calls.filter((call: any[]) => call[1][0] === "ls-remote").map((call: any[]) => call[1][4]),
+		).toEqual(Array(4).fill(`${fixture.repository}.git`));
+	});
+
+	it("rejects an initially known origin becoming unreadable after approval", async () => {
+		const { tool, pi } = await registered();
+		const fixture = explicitPublicationFixture("github", "create_issue");
+		let approved = false;
+		pi.exec.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "git" && args[0] === "remote")
+				return approved ? execResult("", 128) : guardedExec(command, args);
+			return fixture.exec(command, args);
+		});
+		const result = await tool.execute(
+			"call",
+			fixture.params,
+			undefined,
+			undefined,
+			context(async () => {
+				approved = true;
+				return "approved";
+			}),
+		);
+		expect(result.details).toMatchObject({
+			outcome: "stale",
+			reason: "origin-could-not-be-revalidated",
+			writeState: "not-dispatched",
+		});
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it.each(["origin discovery", "approval", "target revalidation"])(
+		"keeps freshness unconditional across unknown-origin %s",
+		async (phase) => {
+			const { tool, pi, state } = await registered();
+			const fixture = explicitPublicationFixture("github", "create_issue");
+			let metadataReads = 0;
+			pi.exec.mockImplementation(async (command: string, args: string[]) => {
+				const result = await fixture.exec(command, args);
+				if (
+					(phase === "origin discovery" && command === "git" && args[0] === "remote") ||
+					(phase === "target revalidation" && args.at(-1) === fixture.root && ++metadataReads === 2)
+				)
+					state.lifecycleGeneration++;
+				return result;
+			});
+			const result = await tool.execute(
+				"call",
+				fixture.params,
+				undefined,
+				undefined,
+				context(async () => {
+					if (phase === "approval") state.lifecycleGeneration++;
+					return "approved";
+				}),
+			);
+			expect(result.details).toMatchObject({ outcome: "stale", writeState: "not-dispatched" });
+			expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+		},
+	);
 
 	it("shows waiting only while publication approval is unresolved", async () => {
 		let resolveApproval!: (result: "cancelled") => void;
