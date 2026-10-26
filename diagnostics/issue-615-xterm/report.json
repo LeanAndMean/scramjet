@@ -1,0 +1,43 @@
+{
+  "revision": "0f4c8b49324bd23ef12bdd2e4e8df05418de85f5",
+  "run": "40418810551",
+  "screenshots": [
+    {
+      "phase": "01-raw-comparison",
+      "bytes": 54078
+    },
+    {
+      "phase": "02-editor-end",
+      "bytes": 16335
+    },
+    {
+      "phase": "03-editor-start",
+      "bytes": 16492
+    },
+    {
+      "phase": "04-editor-inside-typo",
+      "bytes": 16633
+    },
+    {
+      "phase": "05-editor-wrapped",
+      "bytes": 21661
+    },
+    {
+      "phase": "06-editor-hard-newline",
+      "bytes": 16593
+    },
+    {
+      "phase": "07-editor-replacement",
+      "bytes": 16306
+    }
+  ],
+  "xtermVersion": "XTerm(390)",
+  "packages": "xterm\t390-1ubuntu3\nxvfb\t2:21.1.12-1ubuntu1.9",
+  "profile": {
+    "background": "white",
+    "foreground": "black",
+    "font": "DejaVu Sans Mono 14",
+    "geometry": "100x30"
+  },
+  "exitCode": "0"
+}
