@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.112.0 — Diagnose release delays and reuse native test tooling
+
+Improve release observability and reduce repeated native-driver compilation without weakening publication or terminal acceptance gates. Fixes [#617](https://github.com/LeanAndMean/scramjet/issues/617).
+
+### Added
+
+- Emit bounded release phase, registry-readiness and retry-sleep diagnostics while preserving existing deadlines, publication predicates and sequential fail-stop behavior.
+- Retain correlated synthetic settings-input evidence at HID posting, parsed callback, listener and painted-query boundaries, with bounded retention and paste redaction; always attempt tracing disarm even when snapshot reads fail.
+
+### Changed
+
+- Compile the macOS interaction driver once per job and record source/binary provenance, retaining standalone compilation, all native journeys, negative controls and cleanup checks.
+
+### Tests
+
+- Cover diagnostic timing, retry reasons, privacy, transaction lifecycle, snapshot/disarm failures and shared-driver validation. Matched native samples are environment-qualified; these changes do not establish a lost-character root cause or full-release speedup. Comparable live publication timing requires a separately authorized normal release.
+
 ## 0.111.0 — Add project-scoped transition autonomy
 
 Configure transition autonomy per runtime working directory with shared global fallback. Fixes [#616](https://github.com/LeanAndMean/scramjet/issues/616).
