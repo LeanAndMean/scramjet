@@ -748,7 +748,9 @@ Users can configure per-edge autonomy settings in `~/.config/scramjet/autonomy.y
 - **`chain`**: auto-dispatches the transition immediately, bypassing the selector — even when `/autopilot off`.
 - **`pause`**: forces the selector without auto-select or countdown — even when `/autopilot on`.
 
-These settings are user-controlled and invisible to command authors. They do not affect `forced` transitions. As an author, you don't need to account for them — declare policies based on what makes sense for the command's semantics, and trust that users who configure edge overrides know what they want.
+Eligible `closed`/`open` transitions read one snapshot of the global file (under `$XDG_CONFIG_HOME/scramjet` when configured) and `<runtime cwd>/.scramjet/autonomy.yaml`. Resolution is project exact → project wildcard → global exact → global wildcard. Missing files are normal; an invalid or unreadable file disables both layers' edge overrides for that dispatch, retaining ordinary autopilot behavior. Valid raw layers are checked against the complete current registry, including shadowed entries; unknown references remain warnings. Diagnostics identify scope/path, refresh each eligible dispatch, and are repeated only when the diagnostic set changes (including recurrence after recovery). No settings are automatically relocated or removed. Project configuration accepts edges only; publication approval remains global-only.
+
+These settings are user-controlled and invisible to command authors. They do not affect `forced` or `ask` transitions. As an author, you don't need to account for them — declare policies based on what makes sense for the command's semantics, and trust that users who configure edge overrides know what they want.
 
 ### Autonomy recommendations
 

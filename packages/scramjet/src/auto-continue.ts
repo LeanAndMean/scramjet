@@ -43,7 +43,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext, RunSettlement } from "@leanandmean/coding-agent";
-import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.js";
+import { loadScopedAutonomyConfig, resolveScopedEdge, validateConfig } from "./autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.js";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.js";
 import {
@@ -139,7 +139,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	let dispatchTimer: ReturnType<typeof setTimeout> | null = null;
 	let activeSelectorId = 0;
 	let activeSelectorAbort: AbortController | null = null;
-	let autonomyValidated = false;
+	let autonomyDiagnostics = new Set<string>();
 	type RunObservation = {
 		settlement: Promise<RunSettlement>;
 		command: string | null;
@@ -754,31 +754,26 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			ctx.ui.notify(`scramjet: skipped invalid next step(s): ${skippedSummary(result.skipped)}`, "info");
 		}
 
-		if (!autonomyValidated && state.registry.size > 0) {
-			try {
-				const config = loadAutonomyConfig(state.autonomyConfigPath);
-				autonomyValidated = true;
-				if (config) {
-					const warnings = validateConfig(config, state.registry);
-					for (const w of warnings) {
-						ctx.ui.notify(`scramjet: autonomy.yaml: ${w}`, "warning");
-					}
+		const snapshot = loadScopedAutonomyConfig(state.autonomyConfigPath, ctx.cwd);
+		const diagnostics = new Set<string>();
+		for (const layer of [snapshot.global, snapshot.project]) {
+			const prefix = `scramjet: ${layer.scope} (${layer.path}): `;
+			if (layer.status === "invalid") {
+				diagnostics.add(`${prefix}${layer.error.message}; edge settings ignored this dispatch`);
+			} else if (layer.status === "valid") {
+				for (const warning of validateConfig(layer.config, state.registry)) {
+					diagnostics.add(`${prefix}${warning}`);
 				}
-			} catch (err) {
-				autonomyValidated = false;
-				ctx.ui.notify(`scramjet: ${(err as Error).message}; edge settings ignored until fixed`, "warning");
 			}
+		}
+		if (diagnostics.size !== autonomyDiagnostics.size || [...diagnostics].some((d) => !autonomyDiagnostics.has(d))) {
+			autonomyDiagnostics = diagnostics;
+			for (const diagnostic of diagnostics) ctx.ui.notify(diagnostic, "warning");
 		}
 
 		const recommendedName = result.recommended?.parsedCommand?.name;
-		let edgeSetting: EdgeSetting = null;
-		if (recommendedName) {
-			try {
-				edgeSetting = resolveEdgeBehavior(state.autonomyConfigPath, sourceName, recommendedName);
-			} catch (err) {
-				ctx.ui.notify(`scramjet: ${(err as Error).message}; edge settings ignored this dispatch`, "warning");
-			}
-		}
+		const edge = recommendedName ? resolveScopedEdge(snapshot, sourceName, recommendedName) : null;
+		const edgeSetting: EdgeSetting = edge?.status === "resolved" ? edge.setting : null;
 
 		if (edgeSetting === "chain" && result.recommended?.parsedCommand) {
 			state.logger.lifecycle("next-step edge setting applied", {
