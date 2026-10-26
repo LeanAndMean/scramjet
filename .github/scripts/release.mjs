@@ -201,18 +201,18 @@ function readAttestations(pkg, timeout = READ_TIMEOUT_MS) {
 		["view", `${pkg.name}@${pkg.version}`, "dist.attestations", "--json", "--registry", REGISTRY_URL],
 		{ timeout },
 	);
-	if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
+	if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`, "missing attestation");
 	return parseJson(output, description);
 }
 
 function requireAttestations(value, pkg) {
 	const attestations = requireObject(value, `${pkg.name}@${pkg.version} attestations`);
 	if (typeof attestations.url !== "string" || attestations.url.length === 0) {
-		throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
+		throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`, "missing attestation");
 	}
 	const provenance = requireObject(attestations.provenance, `${pkg.name}@${pkg.version} provenance`);
 	if (provenance.predicateType !== "https://slsa.dev/provenance/v1") {
-		throw registryPropagationError(`${pkg.name}@${pkg.version} has no SLSA v1 provenance predicate`);
+		throw registryPropagationError(`${pkg.name}@${pkg.version} has no SLSA v1 provenance predicate`, "missing attestation");
 	}
 }
 
@@ -299,35 +299,35 @@ export async function reconcileCandidates(candidates, dependencies = {}) {
 			async ({ remainingMs }) => {
 				const readTimeout = () => {
 					const timeout = Math.floor(Math.min(READ_TIMEOUT_MS, remainingMs()));
-					if (timeout <= 0) throw registryPropagationError(`${description} observation budget expired`);
+					if (timeout <= 0) throw registryPropagationError(`${description} observation budget expired`, "budget expired");
 					return timeout;
 				};
 				const versions = requireVersions(npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions`, readTimeout()), pkg.name);
 				if (versions.includes(pkg.version)) observedPresence.add(pkg.name);
 				const distTags = requireDistTags(npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags`, readTimeout()), pkg.name);
-				if (typeof distTags.latest !== "string") throw registryPropagationError(`${pkg.name} has no latest dist-tag yet`);
+				if (typeof distTags.latest !== "string") throw registryPropagationError(`${pkg.name} has no latest dist-tag yet`, "missing latest");
 				const order = compareVersions(pkg.version, distTags.latest);
 				if (order < 0) fail(`${description} is superseded by latest ${distTags.latest}`);
 				if (order === 0) observedPresence.add(pkg.name);
 				if (observedPresence.has(pkg.name)) {
 					if (!versions.includes(pkg.version) && order === 0) {
-						throw registryPropagationError(`${pkg.name} latest is ${pkg.version} but versions omit it`);
+						throw registryPropagationError(`${pkg.name} latest is ${pkg.version} but versions omit it`, "versions/latest disagreement");
 					}
 					const output = run("npm", ["view", description, "dist", "--json", "--registry", REGISTRY_URL], { timeout: readTimeout() });
-					if (output === "") throw registryPropagationError(`${description} has no dist metadata yet`);
+					if (output === "") throw registryPropagationError(`${description} has no dist metadata yet`, "missing dist");
 					const dist = requireObject(parseJson(output, `${description} dist`), `${description} dist`);
-					if (dist.integrity === undefined) throw registryPropagationError(`${description} has no integrity yet`);
+					if (dist.integrity === undefined) throw registryPropagationError(`${description} has no integrity yet`, "missing integrity");
 					sha512Digest(dist.integrity, `${description} registry integrity`);
 					if (dist.integrity !== pkg.integrity) fail(`${description} registry integrity differs from candidate archive`);
-					if (dist.attestations === undefined) throw registryPropagationError(`${description} has no attestations yet`);
+					if (dist.attestations === undefined) throw registryPropagationError(`${description} has no attestations yet`, "missing attestation");
 					requireAttestations(dist.attestations, pkg);
-					if (order !== 0) throw registryPropagationError(`${pkg.name} latest is not ${pkg.version} yet`);
+					if (order !== 0) throw registryPropagationError(`${pkg.name} latest is not ${pkg.version} yet`, "unmatched latest");
 					return { ...pkg, status: "retained", distTags: { ...distTags } };
 				}
-				if (dependencies.requirePresence) throw registryPropagationError(`${description} was not visible after publish`);
+				if (dependencies.requirePresence) throw registryPropagationError(`${description} was not visible after publish`, "target absent");
 				return { ...pkg, status: "missing", distTags: { ...distTags } };
 			},
-			{ ...dependencies, retryIf: isRegistryVisibilityRetryError },
+			{ ...dependencies, diagnosticPhase: dependencies.diagnosticPhase ?? "candidate reconciliation", package: pkg, retryIf: isRegistryVisibilityRetryError },
 		);
 		results.push(result);
 	}
@@ -357,6 +357,48 @@ function tagsEqual(left, right) {
 	return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
 }
 
+function diagnostic(record) {
+	console.log(`\nrelease diagnostic: ${JSON.stringify(record)}`);
+}
+
+function phaseTimer(scope, now) {
+	const startedAt = now();
+	let active;
+	const end = (outcome = "success") => {
+		if (!active) return;
+		const finishedAt = now();
+		diagnostic({ kind: "phase", scope, phase: active.phase, package: active.pkg?.name ?? null,
+			version: active.pkg?.version ?? null, outcome, durationMs: Math.max(0, finishedAt - active.startedAt),
+			cumulativeMs: Math.max(0, finishedAt - startedAt) });
+		active = undefined;
+	};
+	return {
+		begin(phase, pkg) {
+			end();
+			active = { phase, pkg, startedAt: now() };
+		},
+		end,
+		finish(outcome) {
+			end(outcome);
+			diagnostic({ kind: "total", phase: scope, outcome, durationMs: Math.max(0, now() - startedAt) });
+		},
+	};
+}
+
+function observationReason(error) {
+	if (error?.code === "REGISTRY_PROPAGATION") {
+		const reasons = ["budget expired", "target absent", "versions/latest disagreement", "missing latest",
+			"missing dist", "missing integrity", "missing attestation", "unmatched latest"];
+		return { reason: reasons.includes(error.reason) ? error.reason : "registry visibility" };
+	}
+	const code = npmErrorCode(error) ?? error?.code ?? error?.name;
+	const safeCode = ["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENETUNREACH",
+		"AbortError", "TimeoutError", "E401", "E403", "E404", "E408", "E429", "EINTEGRITY", "ETARGET", "ELIFECYCLE"].includes(code) || /^E5\d\d$/.test(code ?? "");
+	const transport = isTransientTransportError(error) || ["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENETUNREACH"].includes(code);
+	return { reason: transport ? "transport" : "unclassified", code: safeCode ? code : "unknown",
+		...(Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? { status: error.status } : {}) };
+}
+
 export async function pollRead(description, operation, dependencies = {}) {
 	const budgetMs = dependencies.budgetMs ?? POST_PUBLISH_BUDGET_MS;
 	const delayMs = dependencies.delayMs ?? POST_PUBLISH_DELAY_MS;
@@ -366,18 +408,33 @@ export async function pollRead(description, operation, dependencies = {}) {
 	const startedAt = now();
 	let observations = 0;
 	let lastError;
+	let accumulatedSleepMs = 0;
+	const report = (kind, fields) => {
+		const elapsedMs = Math.max(0, now() - startedAt);
+		diagnostic({ kind, phase: dependencies.diagnosticPhase ?? "read", package: dependencies.package?.name ?? null,
+			version: dependencies.package?.version ?? null, observation: observations, elapsedMs,
+			remainingMs: Math.max(0, budgetMs - elapsedMs), budgetMs, accumulatedSleepMs, ...fields });
+	};
 	while (true) {
 		const elapsedMs = now() - startedAt;
 		const remainingMs = budgetMs - elapsedMs;
 		if (observations > 0 && remainingMs <= 0) break;
 		observations += 1;
+		const operationStartedAt = now();
 		try {
 			const result = await operation({ remainingMs: () => Math.max(0, budgetMs - (now() - startedAt)) });
-			if (now() - startedAt < budgetMs) return result;
+			if (now() - startedAt < budgetMs) {
+				report("observation", { outcome: "success", operationMs: Math.max(0, now() - operationStartedAt) });
+				return result;
+			}
 			lastError = new Error("observation completed after the budget expired");
+			report("observation", { outcome: "exhausted", reason: "late success", operationMs: Math.max(0, now() - operationStartedAt) });
 			break;
 		} catch (error) {
-			if (!retryIf(error)) throw error;
+			const retryable = retryIf(error);
+			report("observation", { outcome: retryable ? "retry" : "failure", ...observationReason(error),
+				operationMs: Math.max(0, now() - operationStartedAt) });
+			if (!retryable) throw error;
 			lastError = error;
 		}
 		const afterOperationMs = now() - startedAt;
@@ -385,8 +442,13 @@ export async function pollRead(description, operation, dependencies = {}) {
 		if (remainingAfterOperationMs <= 0) break;
 		const sleepMs = Math.min(delayMs, remainingAfterOperationMs);
 		console.log(`${description} not ready (observation ${observations}); retrying in ${sleepMs}ms`);
+		const sleepStartedAt = now();
 		await sleep(sleepMs);
+		const actualSleepMs = Math.max(0, now() - sleepStartedAt);
+		accumulatedSleepMs += actualSleepMs;
+		report("sleep", { requestedSleepMs: sleepMs, actualSleepMs });
 	}
+	report("poll", { outcome: "exhausted", ...observationReason(lastError) });
 	const elapsedMs = Math.max(0, now() - startedAt);
 	throw new Error(
 		`${description} did not converge within ${budgetMs}ms after ${elapsedMs}ms and ${observations} observations: ${lastError?.message ?? String(lastError)}`,
@@ -423,9 +485,10 @@ function isTransientTransportError(error) {
 	);
 }
 
-function registryPropagationError(message) {
+function registryPropagationError(message, reason = "registry visibility") {
 	const error = new Error(message);
 	error.code = "REGISTRY_PROPAGATION";
+	error.reason = reason;
 	return error;
 }
 
@@ -471,17 +534,35 @@ export async function publish(inventory, dependencies = {}) {
 	const directory = mkdtempSync(join(tmpdir(), "scramjet-release-candidates-"));
 	const now = dependencies.pollDependencies?.now ?? (() => performance.now());
 	const startedAt = now();
+	const timings = phaseTimer("publication", now);
+	let outcome = "failure";
+	let activePackage;
+	let packageStartedAt;
+	const finishPackage = (result) => {
+		timings.end(result);
+		if (!activePackage) return;
+		const finishedAt = now();
+		diagnostic({ kind: "package", phase: "publication", package: activePackage.name, version: activePackage.version,
+			outcome: result, durationMs: Math.max(0, finishedAt - packageStartedAt), cumulativeMs: Math.max(0, finishedAt - startedAt) });
+		activePackage = undefined;
+	};
 	const states = inventory.map(() => "unattempted");
 	const observedPresence = new Set();
 	let phase = "candidate preparation";
 	const elapsed = () => Math.max(0, Math.round(now() - startedAt));
 	try {
+		timings.begin("candidate preparation");
 		const candidates = packCandidates(inventory, directory);
 		phase = "complete-set reconciliation";
-		const plan = await reconcileCandidates(candidates, { ...dependencies.pollDependencies, observedPresence });
+		timings.begin(phase);
+		const plan = await reconcileCandidates(candidates, { ...dependencies.pollDependencies, observedPresence, diagnosticPhase: phase });
+		timings.end();
 		for (const [index, pkg] of plan.entries()) {
+			activePackage = pkg;
+			packageStartedAt = now();
 			phase = `immediate reread for ${pkg.name}@${pkg.version}`;
-			const [current] = await reconcileCandidates([pkg], { ...dependencies.pollDependencies, observedPresence });
+			timings.begin("immediate reread", pkg);
+			const [current] = await reconcileCandidates([pkg], { ...dependencies.pollDependencies, observedPresence, diagnosticPhase: "immediate reread" });
 			if (current.status === "retained") {
 				if (pkg.status === "missing") {
 					const before = { ...pkg.distTags };
@@ -494,23 +575,29 @@ export async function publish(inventory, dependencies = {}) {
 				}
 				states[index] = "matching content retained; skipped (original publisher not established)";
 				console.log(`${pkg.name}@${pkg.version}: ${states[index]}`);
+				finishPackage("success");
 				continue;
 			}
 			if (pkg.status === "retained") fail(`${pkg.name}@${pkg.version} previously observed present but is now missing`);
 			if (!tagsEqual(current.distTags, pkg.distTags)) fail(`${pkg.name} dist-tags changed after reconciliation`);
 			if (compareVersions(pkg.version, current.distTags.latest) <= 0) fail(`${pkg.name}@${pkg.version} is not newer than latest`);
+			phase = `archive rehash for ${pkg.name}@${pkg.version}`;
+			timings.begin("archive rehash", pkg);
 			checkCandidateBytes(pkg);
 			phase = `publish command for ${pkg.name}@${pkg.version}`;
+			timings.begin("publish invocation", pkg);
 			let commandError;
 			try {
 				publishPackage(pkg, dependencies.publishCommand);
 			} catch (error) {
 				commandError = error;
 			}
+			timings.end(commandError ? "failure" : "success");
 			states[index] = commandError ? "acceptance ambiguous" : "command accepted; observation incomplete";
 			phase = `post-publish observation for ${pkg.name}@${pkg.version}`;
+			timings.begin("post-publication observation", pkg);
 			try {
-				const [observed] = await reconcileCandidates([pkg], { ...dependencies.pollDependencies, observedPresence, requirePresence: true });
+				const [observed] = await reconcileCandidates([pkg], { ...dependencies.pollDependencies, observedPresence, requirePresence: true, diagnosticPhase: "post-publication observation" });
 				if (observed.status !== "retained") throw registryPropagationError(`${pkg.name}@${pkg.version} was not visible after publish`);
 				const before = { ...pkg.distTags };
 				const after = { ...observed.distTags };
@@ -525,15 +612,19 @@ export async function publish(inventory, dependencies = {}) {
 			}
 			states[index] = commandError ? "command errored; matching content observed (publisher not established)" : "command accepted; matching content observed";
 			console.log(`${pkg.name}@${pkg.version}: ${states[index]} after ${elapsed()}ms`);
+			finishPackage("success");
 		}
+		outcome = "success";
 		console.log(`publication summary: ${states.map((status, index) => `${inventory[index].name}@${inventory[index].version}: ${status}`).join("; ")}; final verification: pending`);
 	} catch (error) {
+		finishPackage("failure");
 		const summary = states.map((status, index) => `${inventory[index].name}@${inventory[index].version}: ${status}`).join("; ");
 		throw new Error(
 			`${error.message}\nPublication summary: ${summary}; failed phase: ${phase}; elapsed ${elapsed()}ms; budget ${POST_PUBLISH_BUDGET_MS}ms; final verification: not completed. Inspect the cause and prior attempt facts before authorizing a same-run rerun. A differing candidate cannot be retained or overwritten: diagnose build drift; if intended content differs, use a new five-fresh forward release. Superseded latest or altered tags must not be repaired. If publication cannot be authorized, use forward recovery.`,
 			{ cause: error },
 		);
 	} finally {
+		timings.finish(outcome);
 		rmSync(directory, { recursive: true, force: true });
 	}
 }
@@ -574,6 +665,9 @@ function commandFailureDetail(error) {
 }
 
 export async function verify(inventory, dependencies = {}) {
+	const now = dependencies.pollDependencies?.now ?? (() => performance.now());
+	const timings = phaseTimer("verification", now);
+	let outcome = "failure";
 	let root;
 	let phase = "metadata";
 	const observed = [];
@@ -581,7 +675,7 @@ export async function verify(inventory, dependencies = {}) {
 	const readVerificationMetadata = dependencies.readVerificationMetadata ?? ((pkg, { remainingMs }) => {
 		const readTimeout = () => {
 			const timeout = Math.floor(Math.min(READ_TIMEOUT_MS, remainingMs()));
-			if (timeout <= 0) throw registryPropagationError(`${pkg.name}@${pkg.version} observation budget expired`);
+			if (timeout <= 0) throw registryPropagationError(`${pkg.name}@${pkg.version} observation budget expired`, "budget expired");
 			return timeout;
 		};
 		const versions = requireVersions(
@@ -589,29 +683,31 @@ export async function verify(inventory, dependencies = {}) {
 			pkg.name,
 		);
 		if (!versions.includes(pkg.version)) {
-			throw registryPropagationError(`${pkg.name}@${pkg.version} is not visible`);
+			throw registryPropagationError(`${pkg.name}@${pkg.version} is not visible`, "target absent");
 		}
 		const distTags = requireDistTags(
 			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags during verification`, readTimeout()),
 			pkg.name,
 		);
 		if (distTags.latest !== pkg.version) {
-			throw registryPropagationError(`${pkg.name} latest is not ${pkg.version}`);
+			throw registryPropagationError(`${pkg.name} latest is not ${pkg.version}`, "unmatched latest");
 		}
 		requireAttestations(readAttestations(pkg, readTimeout()), pkg);
 	});
 	try {
 		for (const pkg of inventory) {
 			phase = `metadata for ${pkg.name}@${pkg.version}`;
+			timings.begin("verification metadata", pkg);
 			await pollRead(
 				`${pkg.name}@${pkg.version} verification metadata`,
 				(context) => readVerificationMetadata(pkg, context),
-				{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
+				{ ...dependencies.pollDependencies, diagnosticPhase: "verification metadata", package: pkg, retryIf: isRegistryVisibilityRetryError },
 			);
 			observed.push(pkg);
 		}
 
 		phase = "install";
+		timings.begin(phase);
 		const scramjet = inventory.at(-1);
 		await pollRead(
 			"exact release install",
@@ -638,11 +734,12 @@ export async function verify(inventory, dependencies = {}) {
 					if (root !== attemptRoot) rmSync(attemptRoot, { recursive: true, force: true });
 				}
 			},
-			{ ...dependencies.pollDependencies, retryIf: (error) => isRetryableInstallError(error, inventory) },
+			{ ...dependencies.pollDependencies, diagnosticPhase: "install", package: scramjet, retryIf: (error) => isRetryableInstallError(error, inventory) },
 		);
 		const project = join(root, "project");
 		const env = { ...process.env, HOME: join(root, "home"), XDG_DATA_HOME: join(root, "xdg"), npm_config_cache: join(root, "cache") };
 		phase = "installed closure";
+		timings.begin(phase);
 		for (const pkg of inventory) {
 			const manifestPath = join(project, "node_modules", pkg.name, "package.json");
 			const manifest = requireObject(parseJson(readFileSync(manifestPath, "utf8"), manifestPath), manifestPath);
@@ -651,12 +748,14 @@ export async function verify(inventory, dependencies = {}) {
 			}
 		}
 		phase = "signature audit";
+		timings.begin(phase);
 		run("npm", ["audit", "signatures", "--registry", REGISTRY_URL], {
 			cwd: project,
 			env,
 			timeout: PUBLISH_TIMEOUT_MS,
 		});
 		phase = "installed runtime smoke";
+		timings.begin(phase);
 		const packageRoot = join(project, "node_modules", "@leanandmean", "scramjet");
 		const smokeRoot = join(root, "installed-runtime-smoke");
 		const runInstalledRuntimeSmoke = dependencies.runInstalledRuntimeSmoke ?? ((installedRoot, workDir) => {
@@ -667,11 +766,14 @@ export async function verify(inventory, dependencies = {}) {
 		});
 		runInstalledRuntimeSmoke(packageRoot, smokeRoot);
 		phase = "installed CLI probe";
+		timings.begin(phase);
 		try {
 			run(join(project, "node_modules", ".bin", "scramjet"), ["--help"], { cwd: project, env });
 		} catch (error) {
 			throw new Error(`installed scramjet --help failed: ${commandFailureDetail(error)}`, { cause: error });
 		}
+		timings.end();
+		outcome = "success";
 		console.log("final verification: completed");
 	} catch (error) {
 		throw new Error(
@@ -679,6 +781,7 @@ export async function verify(inventory, dependencies = {}) {
 			{ cause: error },
 		);
 	} finally {
+		timings.finish(outcome);
 		if (root !== undefined) rmSync(root, { recursive: true, force: true });
 	}
 }

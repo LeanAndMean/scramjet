@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,12 +28,18 @@ output = Path(sys.argv[1]).resolve()
 output.mkdir(parents=True, exist_ok=True)
 root = Path.cwd()
 state_path = output / "fixture.json"
+shared_driver = next((arg.split("=", 1)[1] for arg in sys.argv[2:] if arg.startswith("--desktop-driver=")), None)
+if shared_driver is not None and not is_mac:
+    raise SystemExit("Shared desktop driver requires macOS")
 driver = output / "desktop-events"
 report = {"scope": "Production InteractiveMode native activation journey", "terminal": terminal_kind, "tmux": with_tmux, "checks": {}}
 command_id = 0
 terminal_started = False
 window_id = None
 terminal_process = None
+settings_transaction = None
+phase_started = time.monotonic()
+native_phase = "startupCalibration"
 REQUIRED_CHECKS = {
     "allEightCardsReachableBeforeCompletion", "completeApprovalContextReachable", "controlCCopiesSelection",
     "desktopPasteRoundTrip", "desktopThumbDragReachesEnd", "desktopTrackClickReachesStart",
@@ -210,6 +217,22 @@ def seed_clipboard(text):
     subprocess.run(command, input=text, text=True, check=True, timeout=10)
 
 
+def select_driver(shared):
+    selected = Path(shared).resolve() if shared is not None else output / "desktop-events"
+    if shared is not None:
+        if not shared or not selected.is_file() or not os.access(selected, os.X_OK):
+            raise RuntimeError(f"Invalid shared desktop driver: {shared}")
+    else:
+        started = time.monotonic()
+        try:
+            subprocess.run(["swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(selected)], text=True, capture_output=True, check=True, timeout=120)
+        finally:
+            report.setdefault("phaseSeconds", {})["swiftCompilation"] = time.monotonic() - started
+    report["desktopDriver"] = {"mode": "shared" if shared is not None else "standalone",
+                               "executable": str(selected), "binarySha256": hashlib.sha256(selected.read_bytes()).hexdigest()}
+    return selected
+
+
 def events(*args):
     if is_mac:
         return run(str(driver), *map(str, args))
@@ -229,7 +252,12 @@ def events(*args):
 
 def type_text(text):
     if is_mac:
-        events("text", text)
+        receipt = events("text", text)
+        if settings_transaction is not None:
+            try:
+                settings_transaction["posting"] = json.loads(receipt)
+            except (ValueError, TypeError):
+                settings_transaction["diagnosticError"] = "posting-receipt-unavailable"
     else:
         run("xdotool", "type", "--clearmodifiers", "--delay", "20", text)
 
@@ -400,12 +428,33 @@ def open_settings(query):
     key("enter")
     if not wait_for(lambda: any("Auto-compact" in row for row in state().get("painted", []))):
         raise RuntimeError("Real settings selector did not open")
-    type_text(query)
-    def search_painted():
-        current = state()
-        return current.get("frameFlushed") is True and any(row.strip() == f"> {query}" for row in current.get("painted", []))
-    if not wait_for(search_painted):
-        raise RuntimeError("Complete settings search did not flush")
+    global settings_transaction
+    started = time.monotonic()
+    transaction = {"queryId": query, "accepted": False}
+    report.setdefault("settingsTransactions", []).append(transaction)
+    try:
+        fixture_command("settings-trace-" + query)
+        transaction["id"] = command_id
+        settings_transaction = transaction
+        type_text(query)
+        def search_painted():
+            current = state()
+            return current.get("frameFlushed") is True and any(row.strip() == f"> {query}" for row in current.get("painted", []))
+        transaction["accepted"] = wait_for(search_painted)
+        if not transaction["accepted"]:
+            raise RuntimeError("Complete settings search did not flush")
+    finally:
+        settings_transaction = None
+        try:
+            transaction["fixture"] = state().get("settingsInput")
+        except Exception:
+            transaction["diagnosticError"] = "fixture-evidence-unavailable"
+        try:
+            fixture_command("settings-trace-end")
+            transaction["fixture"] = state().get("settingsInput")
+        except Exception:
+            transaction["diagnosticError"] = "fixture-evidence-unavailable"
+        transaction["durationSeconds"] = time.monotonic() - started
 
 
 def close_settings():
@@ -524,7 +573,7 @@ try:
     if is_mac:
         plist = "/Applications/iTerm.app/Contents/Info.plist" if terminal_kind == "iterm2" else "/System/Applications/Utilities/Terminal.app/Contents/Info.plist"
         report["terminalVersion"] = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", plist)
-        subprocess.run(["swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(driver)], text=True, capture_output=True, check=True, timeout=120)
+        driver = select_driver(shared_driver)
         report["termiosStateMask"] = json.loads(events("termios-mask"))
         if report["termiosStateMask"] != {"PENDIN": 0x20000000}:
             raise RuntimeError("Native SDK constants do not match the restoration contract")
@@ -684,6 +733,9 @@ try:
         if not check("desktopCellTargetVerified", lambda: state()["lastMouse"]["x"] == 10 and state()["lastMouse"]["y"] == 3):
             raise RuntimeError("Desktop cell targeting remains uncalibrated")
     screenshot("startup")
+    report.setdefault("phaseSeconds", {})[native_phase] = time.monotonic() - phase_started
+    native_phase = "interaction"
+    phase_started = time.monotonic()
     if default_off:
         sentinel = "DEFAULT-OFF-SENTINEL-" + str(time.monotonic_ns())
         seed_clipboard(sentinel)
@@ -1088,9 +1140,12 @@ except Exception as error:
         report["stderr"] = error.stderr
     screenshot("failure")
 finally:
+    report.setdefault("phaseSeconds", {})[native_phase] = time.monotonic() - phase_started
+    cleanup_started = time.monotonic()
     cleanup_owned_resources(close_mac_windows if is_mac and terminal_process else None, owned_exit if is_mac and terminal_process else None)
     if is_mac:
         verify_mac_cleanup()
+    report.setdefault("phaseSeconds", {})["cleanup"] = time.monotonic() - cleanup_started
     report["passed"] = report_passed()
     if negative_control:
         expected_failure = {"noop-copy": "rightClickClipboardExactUnicode", "copy-on-selection": "sentinelSurvivesSelectionAndUpdate", "consumed-paste": "desktopPasteRoundTrip"}[negative_control]

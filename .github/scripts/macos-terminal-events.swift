@@ -107,7 +107,10 @@ func imageConsent(_ pid: pid_t, allow: Bool) -> [String: Any] {
     return ["visible": true, "remembered": remembered, "pressed": pressed]
 }
 
-func sendKey(_ code: CGKeyCode, _ rawFlags: UInt64) {
+func sendKey(_ code: CGKeyCode, _ rawFlags: UInt64) -> [String: Any] {
+    let started = ProcessInfo.processInfo.systemUptime
+    let frontmost = NSWorkspace.shared.frontmostApplication
+    var postings: [[String: Any]] = []
     var flags = CGEventFlags(rawValue: rawFlags)
     // iTerm2's Kitty encoder requires device bits on physical modifier events.
     let modifiers: [(CGEventFlags, CGKeyCode)] = [(.maskControl.union(CGEventFlags(rawValue: 0x1)), 59), (.maskShift.union(CGEventFlags(rawValue: 0x2)), 56), (.maskAlternate.union(CGEventFlags(rawValue: 0x20)), 58), (.maskCommand.union(CGEventFlags(rawValue: 0x8)), 55)]
@@ -119,12 +122,14 @@ func sendKey(_ code: CGKeyCode, _ rawFlags: UInt64) {
         event.type = .flagsChanged
         event.flags = active
         event.post(tap: .cghidEventTap)
+        postings.append(["code": modifier, "down": true, "kind": "modifier", "offsetSeconds": ProcessInfo.processInfo.systemUptime - started])
         usleep(20_000)
     }
     for down in [true, false] {
         let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)!
         event.flags = flags
         event.post(tap: .cghidEventTap)
+        postings.append(["code": code, "down": down, "kind": "key", "offsetSeconds": ProcessInfo.processInfo.systemUptime - started])
         usleep(20_000)
     }
     for (flag, modifier) in modifiers.reversed() where flags.contains(flag) {
@@ -133,8 +138,13 @@ func sendKey(_ code: CGKeyCode, _ rawFlags: UInt64) {
         event.type = .flagsChanged
         event.flags = active
         event.post(tap: .cghidEventTap)
+        postings.append(["code": modifier, "down": false, "kind": "modifier", "offsetSeconds": ProcessInfo.processInfo.systemUptime - started])
         usleep(20_000)
     }
+    return ["code": code, "flags": rawFlags, "boundary": "hid-posting-only", "startedMonotonicSeconds": started,
+            "endedMonotonicSeconds": ProcessInfo.processInfo.systemUptime, "postings": postings,
+            "frontmostBundle": frontmost?.bundleIdentifier ?? "", "frontmostPid": frontmost?.processIdentifier ?? 0,
+            "endFrontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0]
 }
 
 let args = CommandLine.arguments
@@ -196,14 +206,16 @@ case "press":
     let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier?.lowercased() == args[2].lowercased() }
     emit(["applications": apps.map { $0.localizedName ?? "unknown" }, "pressed": apps.contains { pressButton(AXUIElementCreateApplication($0.processIdentifier), title: args[3]) }])
 case "key":
-    sendKey(CGKeyCode(args[2])!, UInt64(args[3])!)
+    emit(["boundary": "hid-posting-only", "keys": [sendKey(CGKeyCode(args[2])!, UInt64(args[3])!)]])
 case "text":
     // Hosted fixtures use the runner's US keyboard layout and synthetic lowercase commands.
     let codes: [Character: CGKeyCode] = ["a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3, "g": 5, "h": 4, "i": 34, "j": 38, "k": 40, "l": 37, "m": 46, "n": 45, "o": 31, "p": 35, "q": 12, "r": 15, "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6, "/": 44, " ": 49]
+    var receipts: [[String: Any]] = []
     for character in args[2] {
         guard let code = codes[character] else { fatalError("Unsupported synthetic character") }
-        sendKey(code, 0)
+        receipts.append(sendKey(code, 0))
     }
+    emit(["boundary": "hid-posting-only", "keys": receipts])
 case "activate":
     let app = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier?.lowercased() == args[2].lowercased() }
     emit(["activated": app?.activate(options: [.activateIgnoringOtherApps]) ?? false])

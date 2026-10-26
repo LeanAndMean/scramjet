@@ -88,6 +88,7 @@ interface FakeState {
 	packDirectory?: string;
 	unexpectedTagChange?: string;
 	laterTagChange?: string;
+	commandDurationMs?: Record<string, number>;
 	registryReadMs?: Record<string, number>;
 	registryTimeouts?: Array<{ field: string; timeout: number; elapsedMs: number }>;
 	versionQueries?: Record<string, number>;
@@ -383,6 +384,13 @@ function runHelper(
 
 function readState(path: string): FakeState {
 	return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function diagnostics(stdout: string): any[] {
+	return stdout
+		.split("\n")
+		.filter((line) => line.startsWith("release diagnostic: "))
+		.map((line) => JSON.parse(line.slice("release diagnostic: ".length)));
 }
 
 function publishCalls(state: FakeState): string[][] {
@@ -710,9 +718,17 @@ let elapsedMs = 0;
 const publicationFixture = ["publish", "publish-main"].includes(process.argv[2]);
 if (process.env.IN_PROCESS_NPM === "1") {
   const realExec = childProcess.execFileSync;
+  const realSpawn = childProcess.spawnSync;
+  childProcess.spawnSync = (command, args, options) => {
+    const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+    elapsedMs += state.commandDurationMs?.[args[0]] ?? 0;
+    return realSpawn(command, args, options);
+  };
   childProcess.execFileSync = (command, args, options) => {
     if (command === "git") return realExec(command, args, options);
     const cli = command.endsWith("/node_modules/.bin/scramjet");
+    const timingState = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+    elapsedMs += timingState.commandDurationMs?.[command === "npm" ? args[0] : cli ? "cli" : command] ?? 0;
     if (command === "tar") return realExec(command, args, options);
     if (publicationFixture && (command !== "npm" || !["view", "pack"].includes(args[0]))) {
       throw new Error("Unexpected publication fixture command: " + command + " " + args.join(" "));
@@ -781,7 +797,9 @@ if (!productionMain) try {
   const runInstalledRuntimeSmoke = (packageRoot, workDir) => {
     const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
     state.calls.push(["installed-runtime-smoke", packageRoot, workDir]);
+    elapsedMs += state.commandDurationMs?.runtime ?? 0;
     state.verificationPaths.smoke = workDir;
+    state.verificationPaths.project = realpathSync(state.verificationPaths.project);
     state.verificationPaths.packageRoot = realpathSync(packageRoot);
     writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
     if (state.runtimeSmokeFailure) throw Object.assign(new Error("runtime smoke failed"), { stderr: "runtime smoke failed" });
@@ -959,6 +977,45 @@ if (!productionMain) try {
 			writeFileSync(statePath, JSON.stringify(state));
 			await expect(reconcileCandidates(candidates, clock())).rejects.toThrow(/superseded/);
 			expect(readState(statePath).calls.some(([command]) => command === "publish")).toBe(false);
+		});
+	});
+
+	it.each([
+		"target absent",
+		"versions/latest disagreement",
+		"missing latest",
+		"missing dist",
+		"missing integrity",
+		"missing attestation",
+		"unmatched latest",
+	])("categorizes %s at the existing readiness check", async (reason) => {
+		await withCandidates(async (candidates, state) => {
+			const first = INVENTORY[0];
+			if (reason !== "target absent") markPresent(state, 0);
+			if (reason === "versions/latest disagreement") state.versionOmissions = { [first.name]: 10 };
+			if (reason === "missing latest") delete state.packages[first.name].distTags.latest;
+			if (reason === "missing dist") state.failure = { name: first.name, field: "dist", output: "", remaining: 10 };
+			if (reason === "missing integrity") state.distOverrides = { [first.name]: {} };
+			if (reason === "missing attestation") state.attestationDelays = { [first.name]: 10 };
+			if (reason === "unmatched latest") state.packages[first.name].distTags.latest = previousVersion(first.version);
+			writeFileSync(statePath, JSON.stringify(state));
+			const log = vi.spyOn(console, "log").mockImplementation(() => {});
+			try {
+				await expect(
+					reconcileCandidates([candidates[0]], { ...clock(1_000), requirePresence: true }),
+				).rejects.toThrow(/did not converge/);
+				const records = diagnostics(log.mock.calls.map((args) => args.join(" ")).join("\n"));
+				expect(records[0]).toMatchObject({
+					kind: "observation",
+					package: first.name,
+					phase: "candidate reconciliation",
+					outcome: "retry",
+					reason,
+				});
+				expect(records.at(-1)).toMatchObject({ outcome: "exhausted", reason });
+			} finally {
+				log.mockRestore();
+			}
 		});
 	});
 
@@ -1178,6 +1235,12 @@ exit 1
 			expect(result.stdout).toContain(
 				`${INVENTORY[0].name}@${INVENTORY[0].version}: command errored; matching content observed`,
 			);
+			expect(diagnostics(result.stdout).find((record) => record.phase === "publish invocation")).toMatchObject({
+				outcome: "failure",
+			});
+			expect(diagnostics(result.stdout).find((record) => record.kind === "package")).toMatchObject({
+				outcome: "success",
+			});
 			expect(publishCalls(readState(statePath))).toHaveLength(5);
 		},
 	);
@@ -1189,6 +1252,12 @@ exit 1
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("candidate archive changed before publication");
+		expect(
+			diagnostics(result.stdout)
+				.filter((record) => record.kind === "phase")
+				.at(-1),
+		).toMatchObject({ phase: "archive rehash", outcome: "failure" });
+		expect(diagnostics(result.stdout).at(-1)).toMatchObject({ kind: "total", outcome: "failure" });
 		const stateAfterFailure = readState(statePath);
 		expect(publishCalls(stateAfterFailure)).toHaveLength(0);
 		expect(stateAfterFailure.packDirectory).toBeDefined();
@@ -1276,6 +1345,46 @@ exit 1
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("canonical positive decimal attempt");
 		expect(readState(statePath).calls).toHaveLength(0);
+	});
+
+	it("reports publication phases, per-package and cumulative timing without changing mutation order", () => {
+		const state = initialState();
+		state.commandDurationMs = { pack: 2, tar: 3, publish: 11 };
+		state.registryReadMs = { versions: 3, "dist-tags": 5, dist: 7 };
+		state.visibilityDelays = { [INVENTORY[0].name]: 1 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).toBe(0);
+		const records = diagnostics(result.stdout);
+		const phases = records.filter((record) => record.kind === "phase");
+		expect(phases.map((record) => record.phase)).toEqual([
+			"candidate preparation",
+			"complete-set reconciliation",
+			...INVENTORY.flatMap(() => [
+				"immediate reread",
+				"archive rehash",
+				"publish invocation",
+				"post-publication observation",
+			]),
+		]);
+		expect(phases.every((record) => record.outcome === "success" && record.durationMs >= 0)).toBe(true);
+		expect(phases[0]).toMatchObject({ durationMs: 40, cumulativeMs: 40 });
+		expect(phases.find((record) => record.phase === "publish invocation")).toMatchObject({ durationMs: 11 });
+		expect(phases.find((record) => record.phase === "post-publication observation")).toMatchObject({
+			package: INVENTORY[0].name,
+			durationMs: 10_023,
+		});
+		const packages = records.filter((record) => record.kind === "package");
+		expect(packages).toHaveLength(5);
+		expect(packages[0]).toMatchObject({ durationMs: 10_034, cumulativeMs: 10_074, outcome: "success" });
+		expect(packages[1]).toMatchObject({ durationMs: 34, cumulativeMs: 10_108 });
+		expect(records.at(-1)).toMatchObject({
+			kind: "total",
+			phase: "publication",
+			durationMs: 10_210,
+			outcome: "success",
+		});
+		expect(publishCalls(readState(statePath))).toHaveLength(5);
 	});
 
 	it("publishes all missing packages in dependency order with explicit latest and provenance", () => {
@@ -1722,9 +1831,60 @@ exit 1
 		10_000,
 	);
 
+	it("records each verifier phase and stops timing at a failed audit", () => {
+		const state = publishedState();
+		state.auditFailure = true;
+		state.commandDurationMs = { audit: 17 };
+		state.installDurationMs = 13;
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1" });
+		expect(result.status).not.toBe(0);
+		const records = diagnostics(result.stdout);
+		expect(
+			records.filter((record) => record.kind === "phase").map((record) => [record.phase, record.outcome]),
+		).toEqual([
+			...INVENTORY.map(() => ["verification metadata", "success"]),
+			["install", "success"],
+			["installed closure", "success"],
+			["signature audit", "failure"],
+		]);
+		expect(records.find((record) => record.kind === "phase" && record.phase === "install")).toMatchObject({
+			durationMs: 13,
+		});
+		expect(records.at(-1)).toMatchObject({
+			kind: "total",
+			phase: "verification",
+			durationMs: 30,
+			outcome: "failure",
+		});
+		expect(publishCalls(readState(statePath))).toHaveLength(0);
+	});
+
 	it("verifies metadata, a normal exact install, native signatures, installed closure, and the CLI", () => {
-		writeFileSync(statePath, JSON.stringify(publishedState()));
-		const result = runHelper("verify", statePath);
+		const initial = publishedState();
+		initial.installDurationMs = 13;
+		initial.commandDurationMs = { audit: 17, runtime: 19, cli: 23 };
+		writeFileSync(statePath, JSON.stringify(initial));
+		const result = runHelper("verify", statePath, [], { IN_PROCESS_NPM: "1" });
+		const records = diagnostics(result.stdout);
+		expect(
+			records
+				.filter((record) => record.kind === "phase")
+				.slice(-5)
+				.map((record) => [record.phase, record.durationMs]),
+		).toEqual([
+			["install", 13],
+			["installed closure", 0],
+			["signature audit", 17],
+			["installed runtime smoke", 19],
+			["installed CLI probe", 23],
+		]);
+		expect(records.at(-1)).toMatchObject({
+			kind: "total",
+			phase: "verification",
+			durationMs: 72,
+			outcome: "success",
+		});
 		expect(result.stderr).toBe("");
 		expect(result.status).toBe(0);
 		const state = readState(statePath);
@@ -1993,6 +2153,106 @@ describe("release operation bounds and post-publish polling", () => {
 		expect(operation).toHaveBeenCalledOnce();
 		expect(sleep).not.toHaveBeenCalled();
 	});
+	it("separates read time, requested/actual sleep, allowance and safe transport codes", async () => {
+		let elapsedMs = 0;
+		let attempts = 0;
+		const sentinel = "SECRET https://private.example/token";
+		await pollRead(
+			"published package",
+			async () => {
+				elapsedMs += ++attempts === 1 ? 3 : 5;
+				if (attempts === 1)
+					throw Object.assign(new Error(sentinel), {
+						stdout: JSON.stringify({ error: { code: "E429", summary: sentinel } }),
+					});
+				return "ok";
+			},
+			{
+				budgetMs: 30,
+				delayMs: 10,
+				now: () => elapsedMs,
+				sleep: async (duration) => {
+					elapsedMs += duration + 2;
+				},
+				retryIf: isTransientReadError,
+			},
+		);
+		const output = vi
+			.mocked(console.log)
+			.mock.calls.map((args) => args.join(" "))
+			.join("\n");
+		expect(output).not.toContain(sentinel);
+		expect(diagnostics(output)).toEqual([
+			expect.objectContaining({
+				kind: "observation",
+				observation: 1,
+				outcome: "retry",
+				reason: "transport",
+				code: "E429",
+				operationMs: 3,
+				elapsedMs: 3,
+				remainingMs: 27,
+				accumulatedSleepMs: 0,
+			}),
+			expect.objectContaining({
+				kind: "sleep",
+				observation: 1,
+				requestedSleepMs: 10,
+				actualSleepMs: 12,
+				accumulatedSleepMs: 12,
+				elapsedMs: 15,
+				remainingMs: 15,
+			}),
+			expect.objectContaining({
+				kind: "observation",
+				observation: 2,
+				outcome: "success",
+				operationMs: 5,
+				elapsedMs: 20,
+				remainingMs: 10,
+				accumulatedSleepMs: 12,
+			}),
+		]);
+	});
+
+	it.each(["fatal", "late", "exhausted"])(
+		"reports %s observations without leaking errors and preserves causes",
+		async (mode) => {
+			let elapsedMs = 0;
+			const failure = new Error("SECRET https://private.example/token");
+			let caught: any;
+			try {
+				await pollRead(
+					"published package",
+					async () => {
+						elapsedMs += mode === "late" ? 10 : 2;
+						if (mode !== "late") throw failure;
+					},
+					{
+						budgetMs: 10,
+						delayMs: 10,
+						now: () => elapsedMs,
+						sleep: async (duration) => {
+							elapsedMs += duration;
+						},
+						retryIf: () => mode !== "fatal",
+					},
+				);
+			} catch (error) {
+				caught = error;
+			}
+			expect(caught).toBeDefined();
+			if (mode === "fatal") expect(caught).toBe(failure);
+			if (mode === "exhausted") expect(caught.cause).toBe(failure);
+			const output = vi
+				.mocked(console.log)
+				.mock.calls.map((args) => args.join(" "))
+				.join("\n");
+			expect(output).not.toContain("SECRET");
+			expect(diagnostics(output).at(-1)).toMatchObject({ outcome: mode === "fatal" ? "failure" : "exhausted" });
+		},
+	);
+
 	it("terminates a bounded external read", () => {
 		expect(() => run(process.execPath, ["-e", "setTimeout(() => {}, 1000)"], { timeout: 10 })).toThrow();
 	});
