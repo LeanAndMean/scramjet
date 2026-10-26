@@ -1,0 +1,45 @@
+{
+  "revision": "5f65846afaf8b0910a2f09a45c11c3c19351b23c",
+  "run": "40416646876",
+  "screenshots": [
+    {
+      "phase": "01-raw-comparison",
+      "bytes": 109123
+    },
+    {
+      "phase": "02-editor-end",
+      "bytes": 89586
+    },
+    {
+      "phase": "03-editor-start",
+      "bytes": 90180
+    },
+    {
+      "phase": "04-editor-inside-typo",
+      "bytes": 90296
+    },
+    {
+      "phase": "05-editor-wrapped",
+      "bytes": 95503
+    },
+    {
+      "phase": "06-editor-hard-newline",
+      "bytes": 90578
+    },
+    {
+      "phase": "07-editor-replacement",
+      "bytes": 90375
+    }
+  ],
+  "macOS": "ProductName:\t\tmacOS\nProductVersion:\t\t15.7.9\nBuildVersion:\t\t24G830",
+  "terminalVersion": "2.14",
+  "profile": "{\n    \"Default Window Settings\" = Basic;\n    \"Startup Window Settings\" = Basic;\n}",
+  "capabilities": {
+    "accessibility": true,
+    "listenEvents": true,
+    "postEvents": true,
+    "screenCapture": true
+  },
+  "terminalPid": 1744,
+  "exitCode": "0"
+}
