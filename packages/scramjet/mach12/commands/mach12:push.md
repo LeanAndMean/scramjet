@@ -62,7 +62,7 @@ Accepted validation-proof mode returns `P`, proof commit `V`, accepted paths and
 
 For ordinary mode, determine the active PR or issue from the caller context, preferring an open PR on the current branch. Exhaust current session context and branch-based detection before concluding no target exists. Skip publication only when neither source supports an associated PR or issue, and say why.
 
-Prepare a concise body beginning `<!-- mach12-progress -->` with the completed change, commit, meaningful decisions, and verification. Preserve an exact originating review ID supplied by a static or executable review-fix caller. Do not include next-step suggestions.
+Prepare a concise body beginning `<!-- mach12-progress -->` explaining what changed and why, with the commit, meaningful decisions, verification, and unresolved limitations. For review fixes, carry the caller's finding-linked before/after explanation into the comment; for substantial patches, distinguish the core repair from tests/supporting work and explain evidence-backed reasons for complexity. Apply proportionately to other ordinary callers without requiring review-specific input. Keep technical references available without displacing the explanation. Preserve an exact originating review ID supplied by a static or executable review-fix caller. Do not include next-step suggestions.
 
 Format intentional GitHub relationships consistently: same-repository issue or pull-request references use `#N`; cross-repository relationships use `owner/repo#N` or an already verified canonical URL. Artifact-local identifiers use stable labels or plain words and never bare `#N`.
 

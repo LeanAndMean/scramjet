@@ -112,7 +112,7 @@ For every publishable body authored in this command—including the assessment, 
 Prepare the assessment body. It must include:
 - `<!-- mach12-assessment -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
 - A reference to the review comment it is assessing (link to the specific comment URL recorded in Step 2).
-- Each finding with its classification and reasoning. Mark any **Regression** finding distinctly (e.g., "Sn -- Regression -- do not apply") so the human and future sessions see it was actively rejected as harmful rather than overlooked.
+- Each finding with its assessor-owned classification and reasoning. Briefly restate the concern and connect the decisive evidence to the disposition so readers can understand the judgment without reconstructing earlier artifacts. Explain material disagreement, narrowing, and uncertainty without changing the assessor's verdict. Keep identifiers and technical references available as supporting evidence. Mark any **Regression** finding distinctly (e.g., "Sn -- Regression -- do not apply") so the human and future sessions see it was actively rejected as harmful rather than overlooked.
 - One compact assessment-method item naming the selected assessors, assigned partitions, and material evidence limitations.
 - Fix-relevant verified structural additions or corrections, when any were needed, as a concise descriptive handoff with their citations, scope, source-state context, uncertainties, and uncovered questions; reference the exact review rather than copying its structural map.
 - A bounded follow-up plan at the end, grouping accepted identifiers and affected surfaces. Do not invent correction designs for command findings.

@@ -70,7 +70,7 @@ If a push succeeds but later publication is uncertain, preserve the pushed `V` a
 
 Prepare an assessment body beginning `<!-- mach12-assessment -->` and link the exact preliminary review comment. Include:
 
-- every candidate's accepted or rejected disposition and concise evidence;
+- every candidate's assessor-owned accepted or rejected disposition and concise evidence, briefly restating the concern and explaining why the decisive evidence supports the judgment, including material narrowing or uncertainty;
 - one compact assessment-method item naming the selected assessors, assigned partitions, and material evidence limits;
 - stable F/S identifiers only for accepted defects;
 - `P`, the actual merge base, and proof commit `V`, or `proof commit: none` when nothing survives;
