@@ -129,6 +129,31 @@ jobs:
         run: brew install --cask iterm2
       - run: npm ci --ignore-scripts
       - run: npm run build
+      - name: Compile job-local desktop driver
+        if: runner.os == 'macOS'
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, platform, subprocess, time
+          from pathlib import Path
+          output = Path(os.environ["RUNNER_TEMP"]) / "native-driver"
+          output.mkdir()
+          source = Path(".github/scripts/macos-terminal-events.swift")
+          binary = output / "desktop-events"
+          evidence = {
+              "sourceRevision": os.environ["GITHUB_SHA"],
+              "sourceSha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+              "compilerVersion": subprocess.check_output(["swiftc", "--version"], text=True).strip(),
+              "architecture": platform.machine(),
+              "executable": str(binary),
+          }
+          started = time.monotonic()
+          try:
+              subprocess.run(["swiftc", str(source), "-o", str(binary)], check=True, timeout=120)
+              evidence["binarySha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+          finally:
+              evidence["compilationSeconds"] = time.monotonic() - started
+              (output / "compilation.json").write_text(json.dumps(evidence, indent=2))
+          PY
       - name: Pack isolated native candidate
         if: runner.os == 'macOS'
         run: |
@@ -146,26 +171,26 @@ jobs:
           echo "SCRAMJET_TUI_INSTALLED_ROOT=$INSTALLED_ROOT" >> "$GITHUB_ENV"
       - name: Probe native macOS terminal
         if: runner.os == 'macOS'
-        run: python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal=${{ matrix.terminal }}
+        run: python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal=${{ matrix.terminal }} --desktop-driver="$RUNNER_TEMP/native-driver/desktop-events"
       - name: Probe checkout runtime
         if: runner.os == 'macOS'
         run: |
           env -u SCRAMJET_TUI_INSTALLED_ROOT \
             python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence/checkout" \
-              --terminal=${{ matrix.terminal }}
+              --terminal=${{ matrix.terminal }} --desktop-driver="$RUNNER_TEMP/native-driver/desktop-events"
       - name: Reject native false-positive controls
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           for control in noop-copy copy-on-selection consumed-paste; do
             python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence/$control" \
-              --terminal=${{ matrix.terminal }} --negative-control="$control"
+              --terminal=${{ matrix.terminal }} --negative-control="$control" --desktop-driver="$RUNNER_TEMP/native-driver/desktop-events"
           done
       - name: Diagnose iTerm2 default-off right-click
         if: matrix.os == 'macos-15' && matrix.terminal == 'iterm2'
         run: |
           python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence/default-off" \
-            --terminal=iterm2 --iterm-default-off
+            --terminal=iterm2 --iterm-default-off --desktop-driver="$RUNNER_TEMP/native-driver/desktop-events"
       - name: Probe Linux VTE terminal
         if: runner.os == 'Linux'
         env:
@@ -187,5 +212,6 @@ jobs:
           path: |
             ${{ runner.temp }}/terminal-evidence
             ${{ runner.temp }}/native-pack/*.json
+            ${{ runner.temp }}/native-driver/*.json
           if-no-files-found: error
           retention-days: 7

@@ -281,6 +281,36 @@ describe("release workflow", () => {
 		expect(artifacts.with.path).toContain("native-pack/*.json");
 	});
 
+	it("compiles one job-local macOS driver after the revision guard and passes it to every journey", () => {
+		const steps = native.jobs["native-terminal"].steps;
+		const compile = step("Compile job-local desktop driver", steps);
+		expect(compile).toBeDefined();
+		expect(compile.if).toBe("runner.os == 'macOS'");
+		expect(steps.indexOf(compile)).toBeGreaterThan(steps.indexOf(step("Require exact caller checkout", steps)));
+		expect(steps.indexOf(compile)).toBeLessThan(steps.indexOf(step("Probe native macOS terminal", steps)));
+		for (const name of [
+			"Probe native macOS terminal",
+			"Probe checkout runtime",
+			"Reject native false-positive controls",
+			"Diagnose iTerm2 default-off right-click",
+		]) {
+			expect(step(name, steps).run).toContain('--desktop-driver="$RUNNER_TEMP/native-driver/desktop-events"');
+		}
+		for (const field of [
+			"sourceRevision",
+			"sourceSha256",
+			"binarySha256",
+			"compilerVersion",
+			"architecture",
+			"compilationSeconds",
+		]) {
+			expect(compile.run).toContain(field);
+		}
+		expect(compile.run.match(/subprocess\.run\(\["swiftc", str\(source\), "-o", str\(binary\)\]/g)).toHaveLength(1);
+		expect(step("Preserve feasibility evidence", steps).with.path).toContain("native-driver/*.json");
+		expect(JSON.stringify(native.jobs["native-safety"])).not.toContain("--desktop-driver");
+	});
+
 	it("executes the native aggregate fail-closed for every non-success dependency result", () => {
 		const gate = native.jobs["native-terminal-result"];
 		expect(gate.if).toBe(expression("always()"));

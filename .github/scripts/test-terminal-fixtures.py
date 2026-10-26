@@ -616,12 +616,104 @@ class SettingsSearchReadinessTests(unittest.TestCase):
                     observations.append(predicate())
             return observations[-1]
         current = {}
-        context = {"fixture_command": Mock(), "type_text": Mock(), "key": Mock(),
-                   "state": lambda: current, "wait_for": wait_for}
+        context = {"fixture_command": Mock(), "type_text": Mock(), "key": Mock(), "command_id": 0,
+                   "report": {}, "time": time, "state": lambda: current, "wait_for": wait_for}
         exec(compile(ast.Module(body=[function], type_ignores=[]), "terminal-probe.py", "exec"), context)
         context["open_settings"]("dock")
         self.assertEqual(observations, [True, False, False, True])
         context["key"].assert_called_once_with("enter")
+
+
+class SettingsInputEvidenceTests(unittest.TestCase):
+    def exercise(self, diagnostic_failure=False):
+        current = {"editorActive": True, "frameFlushed": True, "painted": []}
+        calls = []
+        report = {}
+        context = {"command_id": 0, "time": time, "report": report, "state": lambda: current}
+        def command(action):
+            calls.append(action)
+            context["command_id"] += 1
+            if action.startswith("settings-trace-") and action != "settings-trace-end":
+                current["settingsInput"] = {"id": context["command_id"], "queryId": "wheel", "events": []}
+            if action == "settings-trace-end" and diagnostic_failure:
+                raise RuntimeError("diagnostic unavailable")
+        def typing(text):
+            if text == "wheel":
+                current.update(painted=["> whee"], frameFlushed=False)
+                current["settingsInput"]["events"] = [{"boundary": "parsed", "key": "w"}]
+            else:
+                current.update(painted=["Auto-compact"], editorActive=False)
+        context.update(fixture_command=command, type_text=Mock(side_effect=typing), key=Mock(),
+                       wait_for=lambda predicate: bool(predicate()))
+        functions = [node for node in interaction_source().body if isinstance(node, ast.FunctionDef)
+                     and node.name == "open_settings"]
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "terminal-probe.py", "exec"), context)
+        with self.assertRaisesRegex(RuntimeError, "Complete settings search did not flush"):
+            context["open_settings"]("wheel")
+        self.assertEqual([call.args[0] for call in context["type_text"].call_args_list], ["/settings", "wheel"])
+        self.assertEqual(calls, ["editor", "settings-trace-wheel", "settings-trace-end"])
+        evidence = report["settingsTransactions"][0]
+        self.assertEqual(evidence["queryId"], "wheel")
+        self.assertFalse(evidence["accepted"])
+        self.assertEqual(evidence["fixture"]["events"][0]["boundary"], "parsed")
+        self.assertGreaterEqual(evidence["durationSeconds"], 0)
+        self.assertEqual("diagnosticError" in evidence, diagnostic_failure)
+
+    def test_mac_text_receipt_is_correlated_only_during_the_armed_window(self):
+        receipt = {"boundary": "hid-posting-only", "keys": [{"code": 37, "postings": [{"down": True}, {"down": False}]}]}
+        context = {"is_mac": True, "events": Mock(return_value=json.dumps(receipt)), "json": json,
+                   "settings_transaction": {"id": 7}, "run": Mock()}
+        function = next(node for node in interaction_source().body if isinstance(node, ast.FunctionDef) and node.name == "type_text")
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "terminal-probe.py", "exec"), context)
+        context["type_text"]("wheel")
+        self.assertEqual(context["settings_transaction"]["posting"], receipt)
+        context["events"].assert_called_once_with("text", "wheel")
+        context["events"].return_value = "malformed receipt"
+        context["type_text"]("wheel")
+        self.assertEqual(context["settings_transaction"]["diagnosticError"], "posting-receipt-unavailable")
+        context["settings_transaction"] = None
+        context["type_text"]("unrelated")
+
+    def test_incomplete_query_is_preserved_without_retyping(self):
+        self.exercise()
+
+    def test_disarm_failure_does_not_replace_acceptance_failure(self):
+        self.exercise(diagnostic_failure=True)
+
+    def test_snapshot_read_failure_still_attempts_disarm(self):
+        current = {"editorActive": True, "frameFlushed": True, "painted": []}
+        snapshot_failed = False
+        search_finished = False
+        def state():
+            nonlocal snapshot_failed
+            if search_finished and not snapshot_failed:
+                snapshot_failed = True
+                raise OSError("fixture snapshot temporarily unreadable")
+            return current
+        def typing(text):
+            current.update(editorActive=False, painted=["Auto-compact"] if text == "/settings" else ["> whee"])
+        waits = 0
+        def wait_for(predicate):
+            nonlocal waits, search_finished
+            waits += 1
+            result = bool(predicate())
+            if waits == 3:
+                search_finished = True
+            return result
+        context = {"command_id": 0, "time": time, "report": {}, "state": state,
+                   "fixture_command": Mock(), "type_text": Mock(side_effect=typing),
+                   "key": Mock(), "wait_for": wait_for}
+        function = next(node for node in interaction_source().body
+                        if isinstance(node, ast.FunctionDef) and node.name == "open_settings")
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "terminal-probe.py", "exec"), context)
+        with self.assertRaisesRegex(RuntimeError, "Complete settings search did not flush"):
+            context["open_settings"]("wheel")
+        self.assertTrue(snapshot_failed)
+        self.assertIsNone(context["settings_transaction"])
+        self.assertEqual(context["report"]["settingsTransactions"][0]["diagnosticError"], "fixture-evidence-unavailable")
+        self.assertEqual([call.args[0] for call in context["type_text"].call_args_list], ["/settings", "wheel"])
+        self.assertEqual([call.args[0] for call in context["fixture_command"].call_args_list],
+                         ["editor", "settings-trace-wheel", "settings-trace-end"])
 
 
 class SettingsCloseReadinessTests(unittest.TestCase):
@@ -869,6 +961,57 @@ class LinuxTerminalStartupTests(unittest.TestCase):
         startup = self.context["report"]["terminalStartup"]
         self.assertEqual(startup["diagnostics"]["windowManager"], {"error": "diagnostic unavailable"})
         self.assertIsNone(startup["exitBeforeCleanup"])
+
+
+class SharedDriverTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.output = Path(self.temporary.name)
+        self.process = Mock()
+        self.context = {"Path": Path, "os": os, "time": time, "subprocess": self.process,
+                        "root": ROOT, "output": self.output, "report": {}, "hashlib": __import__("hashlib")}
+        source = ast.parse((ROOT / ".github/scripts/terminal-probe.py").read_text())
+        function = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "select_driver")
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "terminal-probe.py", "exec"), self.context)
+
+    def test_shared_executable_is_used_without_compiling(self):
+        binary = self.output / "shared events"
+        binary.write_bytes(b"synthetic executable")
+        binary.chmod(0o700)
+        alias = self.output / "shared alias"
+        alias.symlink_to(binary)
+        self.assertEqual(self.context["select_driver"](str(alias)), binary.resolve())
+        self.process.run.assert_not_called()
+        evidence = self.context["report"]["desktopDriver"]
+        self.assertEqual(evidence["mode"], "shared")
+        self.assertEqual(evidence["executable"], str(binary.resolve()))
+        self.assertEqual(evidence["binarySha256"], __import__("hashlib").sha256(binary.read_bytes()).hexdigest())
+        self.assertNotIn("swiftCompilation", self.context["report"].get("phaseSeconds", {}))
+
+    def test_invalid_explicit_path_never_falls_back(self):
+        not_executable = self.output / "not-executable"
+        not_executable.write_text("not executable")
+        for value in ("", str(self.output / "absent"), str(not_executable), str(self.output)):
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, "Invalid shared desktop driver"):
+                self.context["select_driver"](value)
+        self.process.run.assert_not_called()
+
+    def test_omitted_path_compiles_standalone_and_records_duration(self):
+        binary = self.output / "desktop-events"
+        self.process.run.side_effect = lambda *args, **kwargs: binary.write_bytes(b"compiled")
+        self.assertEqual(self.context["select_driver"](None), binary)
+        self.process.run.assert_called_once_with(
+            ["swiftc", str(ROOT / ".github/scripts/macos-terminal-events.swift"), "-o", str(binary)],
+            text=True, capture_output=True, check=True, timeout=120)
+        self.assertEqual(self.context["report"]["desktopDriver"]["mode"], "standalone")
+        self.assertGreaterEqual(self.context["report"]["phaseSeconds"]["swiftCompilation"], 0)
+
+    def test_compile_failure_preserves_error_and_timing(self):
+        self.process.run.side_effect = subprocess.CalledProcessError(1, "swiftc")
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.context["select_driver"](None)
+        self.assertIn("swiftCompilation", self.context["report"]["phaseSeconds"])
 
 
 class TerminalReadinessTests(unittest.TestCase):
@@ -1621,8 +1764,8 @@ class MacInteractionOwnershipTests(unittest.TestCase):
                        "launch_command": "synthetic launch", "tmux_command": None, "with_tmux": False, "default_off": False, "negative_control": None,
                        "terminal_started": False, "terminal_process": None, "window_id": None,
                        "run": Mock(side_effect=run), "events": events, "subprocess": process, "json": json,
-                       "Path": Path, "time": Mock(), "wait_for": lambda predicate, **_kwargs: bool(predicate()),
-                       "state": current, "key": key, "seed_clipboard": Mock(), "shlex": shlex, "os": system, "signal": signal,
+                       "Path": Path, "time": Mock(monotonic=Mock(return_value=0)), "phase_started": 0, "native_phase": "interaction",
+                       "wait_for": lambda predicate, **_kwargs: bool(predicate()), "state": current, "key": key, "seed_clipboard": Mock(), "shlex": shlex, "os": system, "signal": signal,
                        "report": {"checks": {}, "screenshots": {"complete": {"exit": 0}}}}
             source = interaction_source()
             names = {"cleanup_owned_resources", "required_checks", "report_passed", "shell_exited", "close_mac_windows", "verify_mac_cleanup", "owned_exit"}
@@ -1742,6 +1885,118 @@ class StableGraphicsAbsenceTests(unittest.TestCase):
                     if result["passed"]:
                         self.assertGreaterEqual(result["stableSeconds"], 0.35)
                         self.assertGreaterEqual(len(observations), 2)
+
+
+class SettingsInputPtyTests(unittest.TestCase):
+    def test_parsed_listener_privacy_bounds_and_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "fixture.json"
+            env = {**os.environ, "HOME": directory, "SCRAMJET_TUI_PROBE_EVIDENCE": str(target), "TERM": "xterm-256color"}
+            for key in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "TERMUX_VERSION", "SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION", "TMUX", "TERM_PROGRAM"):
+                env.pop(key, None)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            before = termios.tcgetattr(slave)
+            with (Path(directory) / "stderr").open("w+") as stderr:
+                hook = Path(directory) / "query-background.mjs"
+                hook.write_text(f'''import {{ TUI }} from {json.dumps((ROOT / "packages/tui/dist/index.js").as_uri())};
+const start = TUI.prototype.start;
+TUI.prototype.start = function(...args) {{
+    const result = start.apply(this, args);
+    void this.queryTerminalBackgroundColor({{ timeoutMs: 5000 }});
+    return result;
+}};
+const kill = process.kill.bind(process);
+process.kill = (pid, signal) => kill(pid, signal === "SIGTSTP" ? "SIGSTOP" : signal);
+''')
+                child = subprocess.Popen(["node", "--import", str(hook), str(ROOT / "packages/scramjet/tests/fixtures/interactive-viewport.mjs"), "--production", "--journey"], cwd=ROOT, env=env, stdin=slave, stdout=slave, stderr=stderr, start_new_session=True)
+                def wait_for(predicate):
+                    deadline = time.monotonic() + 20
+                    while time.monotonic() < deadline:
+                        if select.select([master], [], [], 0.02)[0]: os.read(master, 65536)
+                        if target.exists():
+                            current = json.loads(target.read_text())
+                            if predicate(current): return current
+                        if child.poll() is not None: break
+                    stderr.seek(0)
+                    self.fail(f"Settings evidence did not settle: {stderr.read()}")
+                identifier = 0
+                def command(action):
+                    nonlocal identifier
+                    identifier += 1
+                    pending = Path(str(target) + ".command.tmp")
+                    pending.write_text(json.dumps({"id": identifier, "action": action}))
+                    pending.replace(str(target) + ".command")
+                    return wait_for(lambda state: state.get("commandDone") == identifier or (action == "suspend" and state.get("phase") == "suspending"))
+                try:
+                    wait_for(lambda state: state.get("editorActive"))
+                    command("settings-trace-wheel")
+                    os.write(master, b"\x1b]11;rgb:ffff/ffff/ffff\x07")
+                    current = wait_for(lambda state: len(state["settingsInput"]["events"]) >= 1)
+                    self.assertEqual([event["boundary"] for event in current["settingsInput"]["events"]], ["parsed"], (current["settingsInput"], current.get("inputs")))
+                    self.assertEqual(current["settingsInput"]["events"][0]["kind"], "unrelated")
+                    os.write(master, b"\x1b[200~PRIVATE-PASTE-whe")
+                    time.sleep(0.05)
+                    os.write(master, b"el\x1b[201~")
+                    current = wait_for(lambda state: state.get("pasteMismatches") == 1)
+                    events = current["settingsInput"]["events"]
+                    self.assertEqual([event["kind"] for event in events[1:]], ["redacted-paste", "redacted-paste"])
+                    self.assertNotIn("PRIVATE", json.dumps(current["settingsInput"]))
+                    os.write(master, b"PRIVATE-UNRELATED")
+                    wait_for(lambda state: state["settingsInput"]["observations"] > len(events))
+                    current = command("settings-trace-end")
+                    frozen = current["settingsInput"]
+                    os.write(master, b"wheel")
+                    current = command("update")
+                    self.assertEqual(current["settingsInput"], frozen)
+                    current = command("settings-trace-dock")
+                    self.assertEqual(current["settingsInput"]["events"], [])
+                    starts = len(current["terminalStates"])
+                    command("external")
+                    current = wait_for(lambda state: state.get("editorHandoffs") == 1 and len(state["terminalStates"]) > starts and state.get("editorActive"))
+                    command("settings-trace-wheel")
+                    os.write(master, b"w")
+                    current = wait_for(lambda state: state["settingsInput"]["observations"] == 2)
+                    self.assertEqual([event["boundary"] for event in current["settingsInput"]["events"]], ["parsed", "listener"])
+                    self.assertEqual([event["key"] for event in current["settingsInput"]["events"]], ["w", "w"])
+                    os.write(master, b"w" * 100)
+                    current = wait_for(lambda state: state["settingsInput"]["dropped"] > 0)
+                    self.assertEqual(len(current["settingsInput"]["events"]), 128)
+                    self.assertEqual(current["settingsInput"]["observations"], 128 + current["settingsInput"]["dropped"])
+                    command("suspend")
+                    wait_for(lambda state: "T" in subprocess.check_output(["ps", "-o", "stat=", "-p", str(child.pid)], text=True))
+                    os.killpg(child.pid, signal.SIGCONT)
+                    wait_for(lambda state: state.get("phase") == "resumed" and state.get("editorActive"))
+                    command("editor")
+                    os.write(master, b"/settings\r")
+                    wait_for(lambda state: any("Auto-compact" in row for row in state.get("painted", [])))
+                    command("settings-trace-wheel")
+                    os.write(master, b"whee")
+                    current = wait_for(lambda state: state["settingsInput"].get("paintedQuery") == "whee" and state["settingsInput"].get("frameFlushed"))
+                    self.assertFalse(current["settingsInput"]["editorFocused"])
+                    self.assertEqual(current["settingsInput"]["observations"], 8)
+                    self.assertEqual([event["sequence"] for event in current["settingsInput"]["events"]], list(range(1, 9)))
+                    command("settings-trace-end")
+                    os.write(master, b"\x1b")
+                    wait_for(lambda state: state.get("editorActive"))
+                    current = command("settings-trace-height")
+                    self.assertEqual(current["settingsInput"]["observations"], 0)
+                    current = wait_for(lambda state: state["settingsInput"].get("expired"))
+                    self.assertFalse(current["settingsInput"]["active"])
+                    self.assertGreater(current["settingsInput"]["durationMs"], 10000)
+                    os.write(master, b"\x11")
+                    wait_for(lambda state: state.get("stopped"))
+                    child.wait(timeout=10)
+                    self.assertEqual(child.returncode, 0)
+                    self.assertEqual(termios.tcgetattr(slave), before)
+                finally:
+                    if child.poll() is None:
+                        os.killpg(child.pid, signal.SIGCONT)
+                        child.terminate()
+                        try: child.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            child.kill(); child.wait(timeout=5)
+                    os.close(master); os.close(slave)
 
 
 class CommittedHandoffEvidenceTests(unittest.TestCase):
