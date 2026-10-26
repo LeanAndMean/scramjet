@@ -1436,7 +1436,7 @@ describe("scoped transition editing", () => {
 			keys(component, "\x1b", "\x1b[A", "\r");
 			expect(renderText(component)).toContain(globalPath);
 			keys(component, "\x1b[B", "\r", "\r");
-			expect(renderText(component)).toContain("project setting masks Global edits");
+			expect(renderText(component)).toMatch(/project\s+setting\s+masks\s+Global\s+edits/);
 		});
 		expect(loadAutonomyConfig(globalPath)?.edges["sample:work"].next).toBe("pause");
 		expect(loadAutonomyConfig(projectPath, true, "project")?.edges["sample:work"]).toEqual({ "*": "pause" });
