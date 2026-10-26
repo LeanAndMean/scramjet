@@ -680,6 +680,41 @@ class SettingsInputEvidenceTests(unittest.TestCase):
     def test_disarm_failure_does_not_replace_acceptance_failure(self):
         self.exercise(diagnostic_failure=True)
 
+    def test_snapshot_read_failure_still_attempts_disarm(self):
+        current = {"editorActive": True, "frameFlushed": True, "painted": []}
+        snapshot_failed = False
+        search_finished = False
+        def state():
+            nonlocal snapshot_failed
+            if search_finished and not snapshot_failed:
+                snapshot_failed = True
+                raise OSError("fixture snapshot temporarily unreadable")
+            return current
+        def typing(text):
+            current.update(editorActive=False, painted=["Auto-compact"] if text == "/settings" else ["> whee"])
+        waits = 0
+        def wait_for(predicate):
+            nonlocal waits, search_finished
+            waits += 1
+            result = bool(predicate())
+            if waits == 3:
+                search_finished = True
+            return result
+        context = {"command_id": 0, "time": time, "report": {}, "state": state,
+                   "fixture_command": Mock(), "type_text": Mock(side_effect=typing),
+                   "key": Mock(), "wait_for": wait_for}
+        function = next(node for node in interaction_source().body
+                        if isinstance(node, ast.FunctionDef) and node.name == "open_settings")
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "terminal-probe.py", "exec"), context)
+        with self.assertRaisesRegex(RuntimeError, "Complete settings search did not flush"):
+            context["open_settings"]("wheel")
+        self.assertTrue(snapshot_failed)
+        self.assertIsNone(context["settings_transaction"])
+        self.assertEqual(context["report"]["settingsTransactions"][0]["diagnosticError"], "fixture-evidence-unavailable")
+        self.assertEqual([call.args[0] for call in context["type_text"].call_args_list], ["/settings", "wheel"])
+        self.assertEqual([call.args[0] for call in context["fixture_command"].call_args_list],
+                         ["editor", "settings-trace-wheel", "settings-trace-end"])
+
 
 class SettingsCloseReadinessTests(unittest.TestCase):
     def test_waits_for_selector_to_disappear_after_escape(self):
