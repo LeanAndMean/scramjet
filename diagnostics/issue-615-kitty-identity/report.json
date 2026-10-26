@@ -1,0 +1,43 @@
+{
+  "revision": "2b38344d62d2c96bc523d3821c88053896f1ea7b",
+  "run": "40420425907",
+  "screenshots": [
+    {
+      "phase": "01-raw-comparison",
+      "bytes": 44521
+    },
+    {
+      "phase": "02-editor-end",
+      "bytes": 12376
+    },
+    {
+      "phase": "03-editor-start",
+      "bytes": 12467
+    },
+    {
+      "phase": "04-editor-inside-typo",
+      "bytes": 12586
+    },
+    {
+      "phase": "05-editor-wrapped",
+      "bytes": 16355
+    },
+    {
+      "phase": "06-editor-hard-newline",
+      "bytes": 12685
+    },
+    {
+      "phase": "07-editor-replacement",
+      "bytes": 12267
+    }
+  ],
+  "terminal": "kitty",
+  "terminalVersion": "kitty 0.32.2 created by Kovid Goyal",
+  "packages": "kitty\t0.32.2-1ubuntu0.4\nxvfb\t2:21.1.12-1ubuntu1.9",
+  "profile": {
+    "background": "white",
+    "foreground": "black",
+    "font": "DejaVu Sans Mono 14"
+  },
+  "exitCode": "0"
+}
