@@ -73,7 +73,7 @@ export function registerForgePublication(
 			name: "create_issue",
 			label: "Create Issue",
 			description:
-				"Create an issue in the current or explicitly selected public GitHub/GitLab repository; external targets always require interactive approval.",
+				"Create an issue in a public GitHub/GitLab repository. A canonical HTTPS repository URL works without a local origin; omission requires origin. Different or unknown current identity requires interactive approval; matching origin retains current-repository policy.",
 			parameters: Type.Object({
 				title: Type.String({ minLength: 1 }),
 				body: Type.String(),
@@ -84,7 +84,7 @@ export function registerForgePublication(
 			name: "create_pr",
 			label: "Create Pull Request",
 			description:
-				"Create a pull/merge request from branches in the current or explicitly selected public GitHub/GitLab repository; external targets always require interactive approval.",
+				"Create a pull/merge request from branches in a public GitHub/GitLab repository. A canonical HTTPS repository URL works without a local origin; omission requires origin. Different or unknown current identity requires interactive approval; matching origin retains current-repository policy.",
 			parameters: Type.Object({
 				title: Type.String({ minLength: 1 }),
 				body: Type.String(),
@@ -98,7 +98,7 @@ export function registerForgePublication(
 			name: "add_issue_comment",
 			label: "Add Issue Comment",
 			description:
-				"Add a comment to an issue in the current or explicitly selected public GitHub/GitLab repository; external targets always require interactive approval.",
+				"Add a comment to an issue in a public GitHub/GitLab repository. A canonical HTTPS repository URL works without a local origin; omission requires origin. Different or unknown current identity requires interactive approval; matching origin retains current-repository policy.",
 			parameters: Type.Object({
 				number: Type.Integer({ minimum: 1 }),
 				body: Type.String(),
@@ -109,7 +109,7 @@ export function registerForgePublication(
 			name: "add_pr_comment",
 			label: "Add PR Comment",
 			description:
-				"Add a comment to a pull request or merge request in the current or explicitly selected public GitHub/GitLab repository; external targets always require interactive approval.",
+				"Add a comment to a pull request or merge request in a public GitHub/GitLab repository. A canonical HTTPS repository URL works without a local origin; omission requires origin. Different or unknown current identity requires interactive approval; matching origin retains current-repository policy.",
 			parameters: Type.Object({
 				number: Type.Integer({ minimum: 1 }),
 				body: Type.String(),
@@ -188,13 +188,22 @@ export function registerForgePublication(
 						writeState: "not-dispatched",
 						reason: "interactive-approval-unavailable",
 					});
-				let origin: ForgeRepository;
+				let origin: ForgeRepository | undefined;
 				let repository: ForgeRepository;
 				try {
-					origin = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd, signal);
-					if (request.targetSupplied && typeof request.repository !== "string")
-						throw new Error("Repository target must be a canonical public HTTPS URL");
-					repository = request.targetSupplied ? parseForgeRepository(request.repository!) : origin;
+					if (request.targetSupplied) {
+						if (typeof request.repository !== "string")
+							throw new Error("Repository target must be a canonical public HTTPS URL");
+						repository = parseForgeRepository(request.repository);
+						try {
+							origin = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd, signal);
+						} catch {
+							origin = undefined;
+						}
+					} else {
+						origin = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd, signal);
+						repository = origin;
+					}
 				} catch (error) {
 					return toolResult(request.operation, {
 						outcome: "pre-dispatch-failure",
@@ -202,7 +211,7 @@ export function registerForgePublication(
 						reason: safeError(error),
 					});
 				}
-				const external = !sameRepository(origin, repository);
+				const external = !origin || !sameRepository(origin, repository);
 				const policy = external ? "require-approval" : decision.policy;
 				if (policy === "require-approval" && (!ctx.hasUI || !ctx.ui))
 					return toolResult(
@@ -339,25 +348,30 @@ export function registerForgePublication(
 						repository,
 						authorization,
 					);
-				let current: ForgeRepository;
-				try {
-					current = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd, signal);
-				} catch {
-					return toolResult(
-						request.operation,
-						{ outcome: "stale", writeState: "not-dispatched", reason: "origin-could-not-be-revalidated" },
-						repository,
-						authorization,
-					);
+				if (origin) {
+					let current: ForgeRepository;
+					try {
+						current = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd, signal);
+					} catch {
+						return toolResult(
+							request.operation,
+							{ outcome: "stale", writeState: "not-dispatched", reason: "origin-could-not-be-revalidated" },
+							repository,
+							authorization,
+						);
+					}
+					if (!sameRepository(origin, current))
+						return toolResult(
+							request.operation,
+							{ outcome: "stale", writeState: "not-dispatched", reason: "origin-changed" },
+							repository,
+							authorization,
+						);
 				}
-				if (!fresh() || !sameRepository(origin, current))
+				if (!fresh())
 					return toolResult(
 						request.operation,
-						{
-							outcome: "stale",
-							writeState: "not-dispatched",
-							reason: sameRepository(origin, current) ? undefined : "origin-changed",
-						},
+						{ outcome: "stale", writeState: "not-dispatched" },
 						repository,
 						authorization,
 					);
