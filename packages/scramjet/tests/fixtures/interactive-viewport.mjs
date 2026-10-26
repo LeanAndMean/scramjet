@@ -275,7 +275,10 @@ async function runProduction() {
 	const ttyState = () => execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
 	const startTerminal = terminal.start.bind(terminal);
 	const stopTerminal = terminal.stop.bind(terminal);
-	terminal.start = (...args) => { terminalStates.push({ start: ttyState() }); startTerminal(...args); };
+	terminal.start = (onInput, ...args) => {
+		terminalStates.push({ start: ttyState() });
+		startTerminal((...input) => { observeSettingsInput("parsed", input[0]); return onInput(...input); }, ...args);
+	};
 	terminal.stop = () => { stopTerminal(); terminalStates.push({ stop: ttyState() }); record(); };
 	const mode = new InteractiveMode(runtime, { terminal });
 	let stopped = false;
@@ -308,11 +311,43 @@ async function runProduction() {
 	let safetyImage;
 	const before = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
 	let sequence = Promise.resolve();
+	let settingsInput;
+	let settingsInputStarted = 0;
+	const settingsQueries = ["dock", "wheel", "height"];
+	function settingsOutcome() {
+		if (!settingsInput?.active) return;
+		settingsInput.durationMs = performance.now() - settingsInputStarted;
+		settingsInput.editorFocused = mode.ui.isComponentFocused(mode.editor);
+		settingsInput.frameFlushed = mode.ui.isViewportFrameFlushed();
+		const rows = mode.ui.previousLines.map((line) => stripAnsi(line).slice(0, -1).trim());
+		const prefixes = Array.from({ length: settingsInput.queryId.length + 1 }, (_, i) => settingsInput.queryId.slice(0, i));
+		settingsInput.paintedQuery = prefixes.find((prefix) => rows.includes(`> ${prefix}`.trimEnd())) ?? "other-or-absent";
+		if (settingsInput.durationMs > 10_000) {
+			settingsInput.active = false;
+			settingsInput.expired = true;
+		}
+	}
+	function observeSettingsInput(boundary, data) {
+		settingsOutcome();
+		if (!settingsInput?.active) return;
+		const sequence = ++settingsInput.observations;
+		if (settingsInput.events.length >= 128) { settingsInput.dropped++; return; }
+		const event = { sequence, offsetMs: performance.now() - settingsInputStarted, boundary,
+			editorFocused: mode.ui.isComponentFocused(mode.editor), frameFlushed: mode.ui.isViewportFrameFlushed() };
+		if (data.startsWith("\x1b[200~")) event.kind = "redacted-paste";
+		else {
+			const key = [...new Set(settingsInput.queryId)].find((key) => matchesKey(data, key));
+			event.kind = key ? (isKeyRelease(data) ? "release" : "press") : "unrelated";
+			if (key) event.key = key;
+		}
+		settingsInput.events.push(event);
+	}
 	const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, architecture: process.arch, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), editor: extensionUI?.getEditorText(), editorCursor: mode.defaultEditor.getCursor(), runtimeOrigin: installedRoot ? { kind: "installed", root: realpathSync(installedRoot) } : { kind: "checkout" }, negativeControl: control ?? null }));
+		settingsOutcome();
+		writeFileSync(`${target}.tmp`, JSON.stringify({ settingsInput, production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, architecture: process.arch, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), selectionPainted: Boolean(mode.ui.viewport?.paintedSelection), editor: extensionUI?.getEditorText(), editorCursor: mode.defaultEditor.getCursor(), runtimeOrigin: installedRoot ? { kind: "installed", root: realpathSync(installedRoot) } : { kind: "checkout" }, negativeControl: control ?? null }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {
@@ -377,6 +412,15 @@ async function runProduction() {
 			else if (command.action === "overlay") overlay = mode.ui.showOverlay(new Text("SYNTHETIC SELECTOR OVERLAY", 1, 1));
 			else if (command.action === "close-overlay") { overlay?.hide(); overlay = undefined; }
 			else if (command.action === "expand") mode.setToolsExpanded(true);
+			else if (command.action === "settings-trace-end") {
+				settingsOutcome();
+				if (settingsInput) settingsInput.active = false;
+			}
+			else if (settingsQueries.some((query) => command.action === `settings-trace-${query}`)) {
+				settingsInputStarted = performance.now();
+				settingsInput = { id: command.id, queryId: command.action.slice("settings-trace-".length), active: true,
+					expired: false, observations: 0, dropped: 0, events: [] };
+			}
 			else if (command.action === "editor") extensionUI.setEditorText("");
 			else if (command.action === "restore-editor") extensionUI.setEditorText("Synthetic editor");
 			else if (command.action === "native-paste" || command.action === "right-paste") {
@@ -425,6 +469,7 @@ async function runProduction() {
 	process.once("SIGTERM", stop);
 	process.once("SIGHUP", stop);
 	mode.ui.addInputListener((data) => {
+		observeSettingsInput("listener", data);
 		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
 			const payload = data.slice(6, -6).replace(/\r\n?/g, "\n");
 			if (armedPaste && payload === nativePayload) {
