@@ -7,14 +7,17 @@ import {
 	defaultConfigPath,
 	loadAutonomyConfig,
 	loadAutonomyConfigResult,
+	loadScopedAutonomyConfig,
 	lookupEdge,
 	lookupPublicationPolicy,
 	mergeAllRecommendations,
 	parseAutonomyConfig,
 	parseAutonomyRecommendations,
+	projectConfigPath,
 	resetCache,
 	resolveEdgeBehavior,
 	resolvePublicationPolicy,
+	resolveScopedEdge,
 	saveAutonomyConfig,
 	updateAutonomyConfig,
 	validateConfig,
@@ -87,6 +90,161 @@ publications:
 
 	it("throws on malformed YAML", () => {
 		expect(() => parseAutonomyConfig("{ invalid yaml: [")).toThrow();
+	});
+});
+
+describe("scoped autonomy", () => {
+	let tmpDir: string;
+	let globalPath: string;
+	let cwd: string;
+	let projectPath: string;
+
+	beforeEach(() => {
+		resetCache();
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-scoped-test-"));
+		globalPath = path.join(tmpDir, "global.yaml");
+		cwd = path.join(tmpDir, "project");
+		projectPath = path.join(cwd, ".scramjet", "autonomy.yaml");
+		fs.mkdirSync(path.dirname(projectPath), { recursive: true });
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it.each(["publications: {}", "publications:", "publications:\n  cmd:a:\n    create_issue: auto-approve"])(
+		"rejects project publication keys, including empty values: %s",
+		(raw) => {
+			expect(() => parseAutonomyConfig(raw, "project")).toThrow(/publications.*global-only/);
+			expect(() => parseAutonomyConfig(raw)).not.toThrow();
+		},
+	);
+
+	it("retains strict project schema checks and accepts edges only", () => {
+		expect(parseAutonomyConfig("edges:\n  cmd:a:\n    cmd:b: pause", "project")).toEqual({
+			edges: { "cmd:a": { "cmd:b": "pause" } },
+		});
+		for (const raw of [
+			"other: {}",
+			"[]",
+			"edges: []",
+			"edges:\n  cmd:a: []",
+			"edges:\n  cmd:a:\n    cmd:b: default",
+		]) {
+			expect(() => parseAutonomyConfig(raw, "project")).toThrow();
+		}
+	});
+
+	it("uses only the supplied CWD, without ancestor lookup", () => {
+		expect(projectConfigPath(cwd)).toBe(projectPath);
+		fs.writeFileSync(projectPath, "edges:\n  cmd:a:\n    cmd:b: pause\n");
+		const nested = path.join(cwd, "nested");
+		const snapshot = loadScopedAutonomyConfig(globalPath, nested);
+		expect(snapshot.status).toBe("valid");
+		expect(snapshot.global).toEqual({ scope: "global", path: globalPath, status: "missing" });
+		expect(snapshot.project).toEqual({ scope: "project", path: projectConfigPath(nested), status: "missing" });
+		expect(resolveScopedEdge(snapshot, "cmd:a", "cmd:b")).toEqual({ status: "absent" });
+	});
+
+	it("resolves scope before specificity and retains raw inputs and provenance", () => {
+		const globalRaw =
+			"edges:\n  cmd:a:\n    cmd:b: chain\n    '*': chain\npublications:\n  cmd:a:\n    create_issue: always-ask\n";
+		const projectRaw = "edges:\n  cmd:a:\n    cmd:c: chain\n    '*': pause\n";
+		fs.writeFileSync(globalPath, globalRaw);
+		fs.writeFileSync(projectPath, projectRaw);
+		const snapshot = loadScopedAutonomyConfig(globalPath, cwd);
+		const before = structuredClone(snapshot);
+		expect(resolveScopedEdge(snapshot, "cmd:a", "cmd:b")).toEqual({
+			status: "resolved",
+			setting: "pause",
+			scope: "project",
+			path: projectPath,
+			match: "wildcard",
+		});
+		expect(resolveScopedEdge(snapshot, "cmd:a", "cmd:c")).toEqual({
+			status: "resolved",
+			setting: "chain",
+			scope: "project",
+			path: projectPath,
+			match: "exact",
+		});
+		expect(resolveScopedEdge(snapshot, "other", "cmd:b")).toEqual({ status: "absent" });
+		expect(snapshot).toEqual(before);
+		expect(fs.readFileSync(globalPath, "utf-8")).toBe(globalRaw);
+		expect(fs.readFileSync(projectPath, "utf-8")).toBe(projectRaw);
+		expect(snapshot.global).toMatchObject({ config: { publications: { "cmd:a": { create_issue: "always-ask" } } } });
+	});
+
+	it("prefers project exact over global exact, then falls back to global exact and wildcard", () => {
+		fs.writeFileSync(globalPath, "edges:\n  cmd:a:\n    cmd:b: chain\n    '*': pause\n");
+		fs.writeFileSync(projectPath, "edges:\n  cmd:a:\n    cmd:b: pause\n");
+		expect(resolveScopedEdge(loadScopedAutonomyConfig(globalPath, cwd), "cmd:a", "cmd:b")).toMatchObject({
+			setting: "pause",
+			scope: "project",
+			match: "exact",
+		});
+		fs.unlinkSync(projectPath);
+		const snapshot = loadScopedAutonomyConfig(globalPath, cwd);
+		expect(resolveScopedEdge(snapshot, "cmd:a", "cmd:b")).toEqual({
+			status: "resolved",
+			setting: "chain",
+			scope: "global",
+			path: globalPath,
+			match: "exact",
+		});
+		expect(resolveScopedEdge(snapshot, "cmd:a", "cmd:c")).toMatchObject({
+			setting: "pause",
+			scope: "global",
+			match: "wildcard",
+		});
+	});
+
+	it.each(["global", "project"] as const)(
+		"disables all overrides for invalid %s and observes repair and deletion",
+		(scope) => {
+			fs.writeFileSync(globalPath, "edges:\n  cmd:a:\n    cmd:b: chain\n");
+			fs.writeFileSync(projectPath, "edges:\n  cmd:a:\n    cmd:b: pause\n");
+			const badPath = scope === "global" ? globalPath : projectPath;
+			fs.writeFileSync(badPath, "edges: []\n");
+			const snapshot = loadScopedAutonomyConfig(globalPath, cwd);
+			expect(snapshot.status).toBe("invalid");
+			expect(snapshot[scope]).toMatchObject({ path: badPath, status: "invalid", error: expect.any(Error) });
+			expect(resolveScopedEdge(snapshot, "cmd:a", "cmd:b")).toEqual({ status: "invalid" });
+			fs.writeFileSync(badPath, "edges: {}\n");
+			expect(loadScopedAutonomyConfig(globalPath, cwd).status).toBe("valid");
+			fs.unlinkSync(badPath);
+			expect(loadScopedAutonomyConfig(globalPath, cwd)[scope].status).toBe("missing");
+		},
+	);
+
+	it("reports unreadable sources separately from missing sources", () => {
+		fs.mkdirSync(projectPath);
+		const snapshot = loadScopedAutonomyConfig(globalPath, cwd);
+		expect(snapshot.status).toBe("invalid");
+		expect(snapshot.project).toMatchObject({ status: "invalid", error: expect.any(Error) });
+		expect(snapshot.global.status).toBe("missing");
+	});
+
+	it("observes edits without changing an already captured snapshot", () => {
+		fs.writeFileSync(projectPath, "edges:\n  cmd:a:\n    cmd:b: pause\n");
+		const first = loadScopedAutonomyConfig(globalPath, cwd);
+		fs.writeFileSync(projectPath, "edges:\n  cmd:a:\n    cmd:b: chain\n");
+		const future = new Date(Date.now() + 2000);
+		fs.utimesSync(projectPath, future, future);
+		expect(resolveScopedEdge(loadScopedAutonomyConfig(globalPath, cwd), "cmd:a", "cmd:b")).toMatchObject({
+			setting: "chain",
+		});
+		expect(resolveScopedEdge(first, "cmd:a", "cmd:b")).toMatchObject({ setting: "pause" });
+	});
+
+	it("includes parsing scope in cache identity in both directions", () => {
+		fs.writeFileSync(globalPath, "publications: {}\n");
+		expect(loadAutonomyConfigResult(globalPath).status).toBe("valid");
+		expect(loadAutonomyConfigResult(globalPath, false, "project").status).toBe("invalid");
+		expect(loadAutonomyConfigResult(globalPath).status).toBe("valid");
+		expect(loadAutonomyConfigResult(globalPath, true, "project").status).toBe("invalid");
+		resetCache();
+		expect(loadAutonomyConfigResult(globalPath).status).toBe("valid");
 	});
 });
 
@@ -482,6 +640,61 @@ describe("saveAutonomyConfig", () => {
 		expect(fs.readdirSync(tmpDir).some((name) => name.endsWith(".lock") || name.endsWith(".tmp"))).toBe(false);
 	});
 
+	it.each(["global", "project"] as const)(
+		"fresh-loads sparse %s updates and touches only the selected file",
+		(scope) => {
+			const otherPath = path.join(tmpDir, "other.yaml");
+			fs.writeFileSync(otherPath, "edges:\n  other:a:\n    other:b: chain\n");
+			const otherRaw = fs.readFileSync(otherPath, "utf-8");
+			saveAutonomyConfig(configPath, { edges: { "cmd:a": { "cmd:b": "chain" } } }, scope);
+			loadAutonomyConfig(configPath, false, scope);
+			fs.appendFileSync(configPath, "  cmd:external:\n    cmd:new: pause\n");
+			updateAutonomyConfig(
+				configPath,
+				(config) => {
+					config.edges["cmd:a"]["cmd:c"] = "pause";
+					return true;
+				},
+				scope,
+			);
+			expect(loadAutonomyConfig(configPath, true, scope)).toEqual({
+				edges: { "cmd:a": { "cmd:b": "chain", "cmd:c": "pause" }, "cmd:external": { "cmd:new": "pause" } },
+			});
+			expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+			expect(fs.readFileSync(otherPath, "utf-8")).toBe(otherRaw);
+			expect(fs.readdirSync(path.dirname(configPath))).toEqual(["autonomy.yaml"]);
+			updateAutonomyConfig(
+				configPath,
+				(config) => {
+					delete config.edges["cmd:a"]["cmd:b"];
+					return true;
+				},
+				scope,
+			);
+			expect(loadAutonomyConfig(configPath, true, scope)?.edges["cmd:a"]).toEqual({ "cmd:c": "pause" });
+		},
+	);
+
+	it("does not overwrite invalid project config or allow updates to add publications", () => {
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(configPath, "publications: {}\n");
+		expect(() => updateAutonomyConfig(configPath, () => true, "project")).toThrow(/global-only/);
+		expect(fs.readFileSync(configPath, "utf-8")).toBe("publications: {}\n");
+		fs.writeFileSync(configPath, "edges: {}\n");
+		expect(() =>
+			updateAutonomyConfig(
+				configPath,
+				(config) => {
+					config.publications = {};
+					return true;
+				},
+				"project",
+			),
+		).toThrow(/global-only/);
+		expect(() => saveAutonomyConfig(configPath, { edges: {}, publications: {} }, "project")).toThrow(/global-only/);
+		expect(fs.readFileSync(configPath, "utf-8")).toBe("edges: {}\n");
+	});
+
 	it("writes atomically (no .tmp file left behind)", () => {
 		const config: AutonomyConfig = {
 			edges: { "cmd:a": { "cmd:b": "chain" } },
@@ -769,6 +982,32 @@ describe("applyRecommendations", () => {
 		const result = applyRecommendations(configPath, recs);
 		expect(result).toEqual({ applied: 0, skipped: 2 });
 		expect(fs.existsSync(configPath)).toBe(false);
+	});
+
+	it("applies project recommendations as selected-file exact gaps, never inherited or publication values", () => {
+		const globalPath = path.join(tmpDir, "global.yaml");
+		saveAutonomyConfig(globalPath, {
+			edges: { "cmd:a": { "cmd:c": "pause" } },
+			publications: { "cmd:a": { create_issue: "always-ask" } },
+		});
+		const globalRaw = fs.readFileSync(globalPath, "utf-8");
+		saveAutonomyConfig(configPath, { edges: { "cmd:a": { "*": "pause" } } }, "project");
+		loadAutonomyConfig(configPath, false, "project");
+		fs.appendFileSync(configPath, "    cmd:b: pause\n  cmd:other:\n    cmd:last: chain\n");
+		expect(
+			applyRecommendations(
+				configPath,
+				{
+					edges: { "cmd:a": { "cmd:b": "chain", "cmd:c": "chain", "cmd:d": "default" } },
+					publications: { "cmd:a": { create_issue: "auto-approve" } },
+				},
+				"project",
+			),
+		).toEqual({ applied: 1, skipped: 2 });
+		expect(loadAutonomyConfig(configPath, true, "project")).toEqual({
+			edges: { "cmd:a": { "*": "pause", "cmd:b": "pause", "cmd:c": "chain" }, "cmd:other": { "cmd:last": "chain" } },
+		});
+		expect(fs.readFileSync(globalPath, "utf-8")).toBe(globalRaw);
 	});
 
 	it("empty recommendations is a no-op", () => {
