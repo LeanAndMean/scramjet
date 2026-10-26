@@ -495,8 +495,15 @@ describe("integration smoke — end-to-end chain under /autopilot on (S21)", () 
 // command-status, auto-continue, user-input) in the same process rather than
 // testing individual modules in isolation.
 describe("integration smoke — lifecycle event sequences", () => {
-	beforeEach(() => vi.useFakeTimers());
-	afterEach(() => vi.useRealTimers());
+	let cwd: string;
+	beforeEach(() => {
+		cwd = mkdtempSync(join(tmpdir(), "scramjet-lifecycle-"));
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+		rmSync(cwd, { recursive: true, force: true });
+	});
 
 	interface RegisteredCommand {
 		name: string;
@@ -569,6 +576,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 		const notifications: { message: string; type?: string }[] = [];
 		const dispatched: { input: string; options?: any }[] = [];
 		const ctx: any = {
+			cwd,
 			hasUI: false,
 			scopedModels: [],
 			modelRegistry: { getAvailable: () => [] },
@@ -588,6 +596,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 	}
 
 	function wireAll(bag: ReturnType<typeof lifecyclePi>, state: ScramjetState) {
+		state.autonomyConfigPath = join(cwd, "global-autonomy.yaml");
 		registerHistory(bag.pi, state);
 		registerCommandStatusTool(bag.pi, state);
 		registerUserInputTool(bag.pi, state, noOpTerminalIndicators());

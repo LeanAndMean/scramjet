@@ -39,13 +39,16 @@ import {
 } from "./helpers.js";
 
 let previousKeybindings: KeybindingsManager;
+let testCwd: string;
 
 beforeEach(() => {
 	previousKeybindings = getKeybindings();
+	testCwd = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-routing-cwd-"));
 });
 
 afterEach(() => {
 	setKeybindings(previousKeybindings);
+	fs.rmSync(testCwd, { recursive: true, force: true });
 });
 
 type StatusParams = {
@@ -152,6 +155,7 @@ function fakeCtx({
 		}),
 	};
 	bag.ctx = {
+		cwd: testCwd,
 		hasUI,
 		model,
 		modelRegistry: { getAvailable: () => models, hasConfiguredAuth },
@@ -266,7 +270,7 @@ function bootstrap(
 	const statusTool = bag.tools.find((t) => t.name === "report_scramjet_command_status");
 	if (!statusTool) throw new Error("report_scramjet_command_status not registered");
 	const report = (params: StatusParams) => statusTool.execute("call-id", params, undefined, undefined, undefined);
-	return { bag, ctxBag, report };
+	return { bag, ctxBag, report, state };
 }
 
 async function flushMicrotasks() {
@@ -3424,23 +3428,181 @@ describe("edge-level autonomy settings integration", () => {
 		expect(rendered).toContain("auto-selects");
 	});
 
-	it("malformed YAML in edge lookup: warns and falls through to default", async () => {
-		// Write valid config first so validation passes, then corrupt it before edge lookup
-		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
-		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
-		const state = runningState(def, { enabled: true, autonomyConfigPath: configPath });
-		const { bag, ctxBag, report } = bootstrap(state);
+	function writeProject(cwd: string, yaml: string) {
+		const file = path.join(cwd, ".scramjet", "autonomy.yaml");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, yaml);
+		return file;
+	}
 
-		// First turn triggers validation (succeeds with valid config)
-		await simulateTwoTurns(bag, ctxBag, report, {
+	async function complete(harness: ReturnType<typeof bootstrap>, source = "a:cmd", target = "b:ok") {
+		harness.bag.pi.sent.length = 0;
+		startCommand(harness.state, source);
+		await simulateTwoTurns(harness.bag, harness.ctxBag, harness.report, {
 			status: "completed",
 			summary: "done",
-			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			next_steps: [{ message: `/${target}`, reason: "continue" }],
 			recommended_next_step: 0,
 		});
+	}
 
-		// Edge setting resolved as chain — dispatched without selector
-		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	it("isolates project edges across two CWDs sharing global fallback", async () => {
+		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
+		const projectA = path.join(configDir, "A");
+		const localPath = writeProject(projectA, "edges:\n  rs:triage:\n    rs:work: chain\n");
+		const original = fs.readFileSync(localPath, "utf8");
+		const globalOriginal = fs.readFileSync(configPath, "utf8");
+		const a = defWithPolicy("rs:triage", { mode: "open", candidates: [] });
+		const b = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const harnessA = bootstrap(
+			runningState(a, {
+				enabled: false,
+				autonomyConfigPath: configPath,
+				registry: registryWith(b, defWithPolicy("b:ok", undefined), defWithPolicy("rs:work", undefined)),
+			}),
+		);
+		harnessA.ctxBag.ctx.cwd = projectA;
+		await complete(harnessA, a.name, "rs:work");
+		expect(harnessA.ctxBag.dispatched.map((d) => d.input)).toEqual(["/rs:work"]);
+		expect(harnessA.ctxBag.notifications).toEqual([]);
+
+		const harnessB = bootstrap(runningState(b, { enabled: false, autonomyConfigPath: configPath }));
+		await complete(harnessB);
+		expect(harnessB.ctxBag.dispatched.map((d) => d.input)).toEqual(["/b:ok"]);
+		expect(harnessB.ctxBag.notifications).toEqual([]);
+		expect(fs.readFileSync(localPath, "utf8")).toBe(original);
+		expect(fs.readFileSync(configPath, "utf8")).toBe(globalOriginal);
+	});
+
+	it("refreshes path-qualified diagnostics on edits, registry replacement, recovery, and CWD changes", async () => {
+		const raw =
+			"edges:\n  rs:triage:\n    rs:work: chain\n  a:cmd:\n    b:ok: chain\npublications:\n  rs:triage:\n    create_issue: always-ask\n";
+		writeConfig(raw);
+		const localPath = writeProject(testCwd, 'edges:\n  a:cmd:\n    "*": chain\n    missing:target: pause\n');
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const h = bootstrap(runningState(def, { enabled: false, autonomyConfigPath: configPath }));
+		await complete(h);
+		const messages = () => h.ctxBag.notifications.map((n) => n.message);
+		expect(messages()).toHaveLength(4);
+		expect(messages().filter((m) => m.includes(`global (${configPath})`))).toHaveLength(3);
+		expect(messages().some((m) => m.includes(`project (${localPath})`) && m.includes("missing:target"))).toBe(true);
+		expect(h.ctxBag.dispatched).toHaveLength(1);
+		expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+		await complete(h);
+		expect(messages()).toHaveLength(4);
+
+		h.state.registry = registryWith(
+			def,
+			defWithPolicy("b:ok", undefined),
+			defWithPolicy("rs:triage", undefined),
+			defWithPolicy("rs:work", undefined),
+			defWithPolicy("missing:target", undefined),
+		);
+		await complete(h);
+		expect(messages()).toHaveLength(4);
+		h.state.registry = registryWith(def, defWithPolicy("b:ok", undefined));
+		await complete(h);
+		expect(messages()).toHaveLength(8);
+		fs.unlinkSync(configPath);
+		fs.unlinkSync(localPath);
+		await complete(h);
+		expect(messages()).toHaveLength(8);
+		writeProject(testCwd, "edges:\n  absent:source:\n    absent:target: chain\n");
+		await complete(h);
+		expect(messages()).toHaveLength(10);
+		h.ctxBag.ctx.cwd = path.join(configDir, "another-cwd");
+		await complete(h);
+		expect(messages()).toHaveLength(10);
+		const otherPath = writeProject(h.ctxBag.ctx.cwd, "edges:\n  absent:source:\n    absent:target: chain\n");
+		await complete(h);
+		expect(messages()).toHaveLength(12);
+		expect(
+			messages()
+				.slice(-2)
+				.every((m) => m.includes(otherPath)),
+		).toBe(true);
+	});
+
+	it.each(["global", "project"])("invalid %s layer disables both layers and recovers after repair", async (scope) => {
+		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
+		const localPath = writeProject(testCwd, "edges:\n  a:cmd:\n    b:ok: chain\n");
+		const invalidPath = scope === "global" ? configPath : localPath;
+		fs.writeFileSync(invalidPath, "edges: [");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const h = bootstrap(runningState(def, { enabled: true, autonomyConfigPath: configPath }));
+		await complete(h);
+		expect(h.ctxBag.notifications.some((n) => n.message.includes(`${scope} (${invalidPath})`))).toBe(true);
+		expect(h.ctxBag.dispatched).toEqual([]);
+		expect(h.ctxBag.customComponents[0].render(80).join("\n")).toContain("auto-selects");
+		h.ctxBag.customComponents[0].handleInput("\x1b");
+		await flushMicrotasks();
+		fs.writeFileSync(invalidPath, "edges: {}\n");
+		await complete(h);
+		expect(h.ctxBag.dispatched.map((d) => d.input)).toEqual(["/b:ok"]);
+		fs.writeFileSync(invalidPath, "edges: [");
+		await complete(h);
+		expect(h.ctxBag.notifications.filter((n) => n.message.includes(invalidPath))).toHaveLength(2);
+	});
+
+	it("observes project precedence, edits, deletion, and CWD replacement on subsequent dispatches", async () => {
+		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
+		const localPath = writeProject(testCwd, 'edges:\n  a:cmd:\n    "*": pause\n');
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const h = bootstrap(runningState(def, { enabled: true, autonomyConfigPath: configPath }), { hasUI: false });
+		await complete(h);
+		expect(h.ctxBag.dispatched).toHaveLength(0);
+		writeProject(testCwd, 'edges:\n  a:cmd:\n    "*": pause\n    b:ok: chain\n');
+		await complete(h);
+		expect(h.ctxBag.dispatched).toHaveLength(1);
+		fs.unlinkSync(localPath);
+		await complete(h);
+		expect(h.ctxBag.dispatched).toHaveLength(2);
+		h.ctxBag.ctx.cwd = path.join(configDir, "replacement");
+		writeProject(h.ctxBag.ctx.cwd, 'edges:\n  a:cmd:\n    "*": pause\n');
+		await complete(h);
+		expect(h.ctxBag.dispatched).toHaveLength(2);
+	});
+
+	it.each([true, false])("invalid project uses ordinary headless autopilot fallback (enabled=%s)", async (enabled) => {
+		writeConfig('edges:\n  a:cmd:\n    "*": pause\n');
+		writeProject(testCwd, "publications: {}\n");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const h = bootstrap(runningState(def, { enabled, autonomyConfigPath: configPath }), { hasUI: false });
+		await complete(h);
+		expect(h.ctxBag.dispatched).toHaveLength(enabled ? 1 : 0);
+		expect(h.ctxBag.notifications.some((n) => n.message.includes("global-only"))).toBe(true);
+	});
+
+	it("uses the validated snapshot even if notification delivery corrupts the source", async () => {
+		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n  missing:source:\n    '*': pause\n");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const h = bootstrap(runningState(def, { enabled: false, autonomyConfigPath: configPath }));
+		const notify = h.ctxBag.ctx.ui.notify;
+		h.ctxBag.ctx.ui.notify = (message: string, type: string) => {
+			notify(message, type);
+			fs.writeFileSync(configPath, "edges: [");
+		};
+		await complete(h);
+		expect(fs.readFileSync(configPath, "utf8")).toBe("edges: [");
+		expect(h.ctxBag.dispatched.map((d) => d.input)).toEqual(["/b:ok"]);
+		await complete(h);
+		expect(h.ctxBag.dispatched).toHaveLength(1);
+		expect(h.ctxBag.customComponents).toHaveLength(1);
+	});
+
+	it.each(["forced", "ask"] as const)("%s mode bypasses invalid scoped configuration", async (mode) => {
+		writeConfig("edges: [");
+		writeProject(testCwd, "publications: {}\n");
+		const def = defWithPolicy("a:cmd", mode === "forced" ? { mode, target: "b:ok" } : { mode });
+		const h = bootstrap(
+			runningState(def, {
+				autonomyConfigPath: configPath,
+				registry: registryWith(defWithPolicy("b:ok", undefined)),
+			}),
+		);
+		await complete(h);
+		expect(h.ctxBag.notifications.some((n) => n.message.includes("autonomy.yaml"))).toBe(false);
+		expect(h.ctxBag.dispatched).toHaveLength(mode === "forced" ? 1 : 0);
 	});
 });
 

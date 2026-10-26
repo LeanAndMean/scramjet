@@ -3,7 +3,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type Component, CURSOR_MARKER } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadAutonomyConfig, resetCache, saveAutonomyConfig } from "../src/autonomy-settings.js";
+import {
+	loadAutonomyConfig,
+	loadScopedAutonomyConfig,
+	projectConfigPath,
+	resetCache,
+	saveAutonomyConfig,
+} from "../src/autonomy-settings.js";
 import { loadPreferences, resetCache as resetPrefsCache, savePreferences } from "../src/preferences.js";
 import {
 	buildApplyRecommendationsItem,
@@ -13,6 +19,7 @@ import {
 	buildTopLevelItems,
 	classifyRecommendationEdges,
 	showSettingsPage,
+	type TransitionEditor,
 } from "../src/settings-ui.js";
 import type {
 	AutonomyConfig,
@@ -57,14 +64,36 @@ function renderText(component: Component | undefined): string {
 	return component?.render(120).join("\n") ?? "";
 }
 
+function editorFor(config: () => AutonomyConfig | null): TransitionEditor {
+	return {
+		scope: "global",
+		snapshot: () => {
+			const raw = config();
+			return {
+				status: "valid",
+				global: {
+					scope: "global",
+					path: "/fixture/global.yaml",
+					...(raw ? ({ status: "valid", config: raw } as const) : ({ status: "missing" } as const)),
+				},
+				project: { scope: "project", path: "/fixture/.scramjet/autonomy.yaml", status: "missing" },
+			};
+		},
+	};
+}
+
 describe("buildEdgeItems", () => {
 	it("returns a forced edge as non-cycleable with annotation", () => {
 		const policy: NextStepPolicy = { mode: "forced", target: "mach12:push" };
-		const items = buildEdgeItems("mach12:pr-create", policy, null);
+		const items = buildEdgeItems(
+			"mach12:pr-create",
+			policy,
+			editorFor(() => null),
+		);
 
 		expect(items).toHaveLength(1);
 		expect(items[0].label).toBe("mach12:push");
-		expect(items[0].currentValue).toBe("default");
+		expect(items[0].currentValue).toBe("inherit");
 		expect(items[0].values).toBeUndefined();
 		expect(items[0].description).toContain("Forced");
 	});
@@ -75,15 +104,19 @@ describe("buildEdgeItems", () => {
 			candidates: [{ name: "mach12:pr-create" }, { name: "mach12:issue-implement" }],
 		};
 		const config: AutonomyConfig = { edges: { "mach12:plan": { "mach12:pr-create": "chain" } } };
-		const items = buildEdgeItems("mach12:plan", policy, config);
+		const items = buildEdgeItems(
+			"mach12:plan",
+			policy,
+			editorFor(() => config),
+		);
 
 		expect(items).toHaveLength(2);
 		expect(items[0].label).toBe("mach12:pr-create");
 		expect(items[0].currentValue).toBe("chain");
-		expect(items[0].values).toEqual(["default", "chain", "pause"]);
+		expect(items[0].values).toEqual(["inherit", "chain", "pause"]);
 		expect(items[1].label).toBe("mach12:issue-implement");
-		expect(items[1].currentValue).toBe("default");
-		expect(items[1].values).toEqual(["default", "chain", "pause"]);
+		expect(items[1].currentValue).toBe("inherit");
+		expect(items[1].values).toEqual(["inherit", "chain", "pause"]);
 	});
 
 	it("returns open policy edges as cycleable", () => {
@@ -91,11 +124,15 @@ describe("buildEdgeItems", () => {
 			mode: "open",
 			candidates: [{ name: "mach12:pr-review" }],
 		};
-		const items = buildEdgeItems("mach12:implement", policy, null);
+		const items = buildEdgeItems(
+			"mach12:implement",
+			policy,
+			editorFor(() => null),
+		);
 
 		expect(items).toHaveLength(1);
-		expect(items[0].currentValue).toBe("default");
-		expect(items[0].values).toEqual(["default", "chain", "pause"]);
+		expect(items[0].currentValue).toBe("inherit");
+		expect(items[0].values).toEqual(["inherit", "chain", "pause"]);
 	});
 
 	it("shows wildcard-inherited closed policy settings distinctly", () => {
@@ -104,13 +141,17 @@ describe("buildEdgeItems", () => {
 			candidates: [{ name: "mach12:pr-create" }, { name: "mach12:issue-implement" }],
 		};
 		const config: AutonomyConfig = { edges: { "mach12:plan": { "*": "pause", "mach12:pr-create": "chain" } } };
-		const items = buildEdgeItems("mach12:plan", policy, config);
+		const items = buildEdgeItems(
+			"mach12:plan",
+			policy,
+			editorFor(() => config),
+		);
 
 		expect(items[0].currentValue).toBe("chain");
-		expect(items[0].description).toContain("Override:");
-		expect(items[1].currentValue).toBe("pause");
-		expect(items[1].description).toContain("Inherited wildcard override: pause");
-		expect(items[1].values).toEqual(["chain", "pause"]);
+		expect(items[0].description).toContain("Stored global exact:");
+		expect(items[1].currentValue).toBe("inherit");
+		expect(items[1].description).toContain("global wildcard");
+		expect(items[1].values).toEqual(["inherit", "chain", "pause"]);
 	});
 
 	it("shows wildcard-inherited open policy settings distinctly", () => {
@@ -119,29 +160,41 @@ describe("buildEdgeItems", () => {
 			candidates: [{ name: "mach12:pr-review" }],
 		};
 		const config: AutonomyConfig = { edges: { "mach12:implement": { "*": "chain" } } };
-		const items = buildEdgeItems("mach12:implement", policy, config);
+		const items = buildEdgeItems(
+			"mach12:implement",
+			policy,
+			editorFor(() => config),
+		);
 
-		expect(items[0].currentValue).toBe("chain");
-		expect(items[0].description).toContain("Inherited wildcard override: chain");
-		expect(items[0].values).toEqual(["chain", "pause"]);
+		expect(items[0].currentValue).toBe("inherit");
+		expect(items[0].description).toContain("global wildcard");
+		expect(items[0].values).toEqual(["inherit", "chain", "pause"]);
 	});
 
 	it("returns empty array for ask policy (no targets)", () => {
 		const policy: NextStepPolicy = { mode: "ask" };
-		const items = buildEdgeItems("mach12:review", policy, null);
+		const items = buildEdgeItems(
+			"mach12:review",
+			policy,
+			editorFor(() => null),
+		);
 		expect(items).toEqual([]);
 	});
 
 	it("uses null config gracefully (all defaults)", () => {
 		const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "mach12:x" }] };
-		const items = buildEdgeItems("mach12:cmd", policy, null);
-		expect(items[0].currentValue).toBe("default");
+		const items = buildEdgeItems(
+			"mach12:cmd",
+			policy,
+			editorFor(() => null),
+		);
+		expect(items[0].currentValue).toBe("inherit");
 	});
 });
 
 describe("buildPublicationCommandItems", () => {
 	it("shows only eligible commands and tools with friendly effective policies", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:review", { ...makeCommandDef("mach12:review"), allowedTools: ["create_issue", "add_pr_comment"] }],
 			["mach12:none", makeCommandDef("mach12:none")],
@@ -186,7 +239,7 @@ describe("buildPublicationCommandItems", () => {
 	});
 
 	it("uses Always ask for a missing command default and translates friendly choices", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
 		]);
@@ -209,7 +262,7 @@ describe("buildPublicationCommandItems", () => {
 	});
 
 	it("restores the persisted policy when saving a changed value fails", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
 		]);
@@ -226,7 +279,7 @@ describe("buildPublicationCommandItems", () => {
 	});
 
 	it("confirms Follow command when its effective default is Auto-approve", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
 		]);
@@ -250,7 +303,7 @@ describe("buildPublicationCommandItems", () => {
 	});
 
 	it("shows corrupt policy as read-only Always ask instead of an author auto-approve default", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
 		]);
@@ -273,7 +326,7 @@ describe("buildPublicationCommandItems", () => {
 
 describe("buildCommandItems", () => {
 	it("returns sorted items for commands with next policies", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:z-last", makeCommandDef("mach12:z-last", { mode: "forced", target: "mach12:push" })],
 			["mach12:a-first", makeCommandDef("mach12:a-first", { mode: "closed", candidates: [{ name: "x" }] })],
@@ -282,7 +335,7 @@ describe("buildCommandItems", () => {
 
 		const items = buildCommandItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -293,14 +346,14 @@ describe("buildCommandItems", () => {
 	});
 
 	it("includes description from the command def", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "forced", target: "mach12:push" })],
 		]);
 
 		const items = buildCommandItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -308,7 +361,7 @@ describe("buildCommandItems", () => {
 	});
 
 	it("shows override count in currentValue when config has overrides", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }, { name: "b" }] })],
 		]);
@@ -316,7 +369,7 @@ describe("buildCommandItems", () => {
 
 		const items = buildCommandItems(
 			state,
-			() => config,
+			editorFor(() => config),
 			noopTheme,
 			() => {},
 		);
@@ -324,7 +377,7 @@ describe("buildCommandItems", () => {
 	});
 
 	it("includes wildcard-inherited edges in currentValue summaries", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }, { name: "b" }] })],
 		]);
@@ -332,7 +385,7 @@ describe("buildCommandItems", () => {
 
 		const items = buildCommandItems(
 			state,
-			() => config,
+			editorFor(() => config),
 			noopTheme,
 			() => {},
 		);
@@ -340,12 +393,12 @@ describe("buildCommandItems", () => {
 	});
 
 	it("returns empty array when no commands have next policies", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([["mach12:cmd", makeCommandDef("mach12:cmd")]]);
 
 		const items = buildCommandItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -353,14 +406,14 @@ describe("buildCommandItems", () => {
 	});
 
 	it("each item has a submenu function", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "forced", target: "mach12:push" })],
 		]);
 
 		const items = buildCommandItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -368,14 +421,14 @@ describe("buildCommandItems", () => {
 	});
 
 	it("reads fresh config when opening an edge submenu", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }] })],
 		]);
 		let config: AutonomyConfig | null = null;
 		const items = buildCommandItems(
 			state,
-			() => config,
+			editorFor(() => config),
 			noopTheme,
 			() => {},
 		);
@@ -387,14 +440,14 @@ describe("buildCommandItems", () => {
 	});
 
 	it("passes a refreshed command summary when closing an edge submenu", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }, { name: "b" }] })],
 		]);
 		let config: AutonomyConfig | null = null;
 		const items = buildCommandItems(
 			state,
-			() => config,
+			editorFor(() => config),
 			noopTheme,
 			() => {},
 		);
@@ -417,13 +470,13 @@ describe("buildTopLevelItems", () => {
 
 		const itemsOn = buildTopLevelItems(
 			stateOn,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
 		const itemsOff = buildTopLevelItems(
 			stateOff,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -437,14 +490,14 @@ describe("buildTopLevelItems", () => {
 	});
 
 	it("includes command autonomy submenu when registry has commands with next policies", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "forced", target: "mach12:push" })],
 		]);
 
 		const items = buildTopLevelItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -454,12 +507,12 @@ describe("buildTopLevelItems", () => {
 	});
 
 	it("shows informational item when no commands have next policies", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([["mach12:cmd", makeCommandDef("mach12:cmd")]]);
 
 		const items = buildTopLevelItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -470,27 +523,25 @@ describe("buildTopLevelItems", () => {
 		expect(autonomy?.submenu).toBeUndefined();
 	});
 
-	it("makes command autonomy read-only when user config is invalid", () => {
-		const state = freshState();
+	it("allows entering command autonomy to choose a scope", () => {
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:a", makeCommandDef("mach12:a", { mode: "closed", candidates: [{ name: "mach12:b" }] })],
 		]);
 		const item = buildTopLevelItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => undefined,
 			undefined,
 			undefined,
-			undefined,
-			() => true,
 		).find((candidate) => candidate.id === "command-autonomy")!;
-		expect(item.currentValue).toBe("config error");
-		expect(item.submenu).toBeUndefined();
+		expect(item.currentValue).toBe("all defaults");
+		expect(item.submenu).toBeTypeOf("function");
 	});
 
 	it("shows override count in command autonomy summary", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }] })],
 		]);
@@ -498,7 +549,7 @@ describe("buildTopLevelItems", () => {
 
 		const items = buildTopLevelItems(
 			state,
-			() => config,
+			editorFor(() => config),
 			noopTheme,
 			() => {},
 		);
@@ -507,12 +558,12 @@ describe("buildTopLevelItems", () => {
 	});
 
 	it("shows 'all defaults' when no overrides configured", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "forced", target: "x" })]]);
 
 		const items = buildTopLevelItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -521,14 +572,14 @@ describe("buildTopLevelItems", () => {
 	});
 
 	it("reads fresh config when opening the command autonomy submenu", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }] })],
 		]);
 		let config: AutonomyConfig | null = null;
 		const items = buildTopLevelItems(
 			state,
-			() => config,
+			editorFor(() => config),
 			noopTheme,
 			() => {},
 		);
@@ -541,14 +592,14 @@ describe("buildTopLevelItems", () => {
 	});
 
 	it("passes a refreshed registry summary when closing the command autonomy submenu", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }] })],
 		]);
 		let config: AutonomyConfig | null = null;
 		const items = buildTopLevelItems(
 			state,
-			() => config,
+			editorFor(() => config),
 			noopTheme,
 			() => {},
 		);
@@ -565,7 +616,7 @@ describe("buildTopLevelItems", () => {
 	});
 
 	it("omits publication approval when no top-level command allows a publication tool", () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map([
 			["mach12:none", makeCommandDef("mach12:none")],
 			[
@@ -575,10 +626,9 @@ describe("buildTopLevelItems", () => {
 		]);
 		const items = buildTopLevelItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
-			undefined,
 			undefined,
 			() => {},
 		);
@@ -587,7 +637,7 @@ describe("buildTopLevelItems", () => {
 
 	it("enables search only for long publication command lists", () => {
 		const build = (count: number) => {
-			const state = freshState();
+			const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 			state.registry = new Map(
 				Array.from({ length: count }, (_, index) => [
 					`mach12:publish-${index}`,
@@ -596,10 +646,9 @@ describe("buildTopLevelItems", () => {
 			);
 			const items = buildTopLevelItems(
 				state,
-				() => null,
+				editorFor(() => null),
 				noopTheme,
 				() => {},
-				undefined,
 				undefined,
 				() => {},
 			);
@@ -616,7 +665,7 @@ describe("buildTopLevelItems — notification preferences", () => {
 		const state = freshState({ preferencesPath: path.join(tmpDir!, "preferences.yaml") });
 		const items = buildTopLevelItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -631,7 +680,7 @@ describe("buildTopLevelItems — notification preferences", () => {
 		const state = freshState({ preferencesPath: path.join(tmpDir!, "preferences.yaml") });
 		const items = buildTopLevelItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -648,7 +697,7 @@ describe("buildTopLevelItems — notification preferences", () => {
 		const state = freshState({ preferencesPath: prefsPath });
 		const items = buildTopLevelItems(
 			state,
-			() => null,
+			editorFor(() => null),
 			noopTheme,
 			() => {},
 		);
@@ -665,6 +714,7 @@ describe("showSettingsPage", () => {
 
 		const pi = { appendEntry: vi.fn() };
 		const ctx = {
+			cwd: tmpDir!,
 			ui: {
 				notify: vi.fn(),
 				custom: async (
@@ -692,6 +742,7 @@ describe("showSettingsPage", () => {
 
 		const pi = { appendEntry: vi.fn() };
 		const ctx = {
+			cwd: tmpDir!,
 			ui: {
 				notify: vi.fn(),
 				custom: async (
@@ -735,6 +786,7 @@ describe("showSettingsPage", () => {
 			],
 		]);
 		const ctx = {
+			cwd: tmpDir!,
 			ui: {
 				notify: vi.fn(),
 				custom: async (
@@ -768,6 +820,7 @@ describe("showSettingsPage", () => {
 			["mach12:publish", { ...makeCommandDef("mach12:publish"), allowedTools: ["create_issue", "add_pr_comment"] }],
 		]);
 		const ctx = {
+			cwd: tmpDir!,
 			ui: {
 				notify: vi.fn(),
 				custom: async (
@@ -795,7 +848,7 @@ describe("showSettingsPage", () => {
 	});
 
 	it("forwards settings-page focus to the searchable publication list", async () => {
-		const state = freshState();
+		const state = freshState({ autonomyConfigPath: path.join(tmpDir!, "autonomy.yaml") });
 		state.registry = new Map(
 			Array.from({ length: 11 }, (_, index) => [
 				`mach12:publish-${index}`,
@@ -804,6 +857,7 @@ describe("showSettingsPage", () => {
 		);
 		let rendered = "";
 		const ctx = {
+			cwd: tmpDir!,
 			ui: {
 				notify: vi.fn(),
 				custom: async (
@@ -834,6 +888,7 @@ describe("showSettingsPage", () => {
 		state.registry = new Map([["mach12:cmd", { ...makeCommandDef("mach12:cmd"), allowedTools: ["create_issue"] }]]);
 		const notify = vi.fn();
 		const ctx = {
+			cwd: tmpDir!,
 			ui: {
 				notify,
 				custom: async (
@@ -865,6 +920,7 @@ describe("showSettingsPage", () => {
 
 		const pi = { appendEntry: vi.fn() };
 		const ctx = {
+			cwd: tmpDir!,
 			ui: {
 				notify: vi.fn(),
 				custom: async (
@@ -877,6 +933,8 @@ describe("showSettingsPage", () => {
 					component.handleInput?.("\x1b[B"); // terminal-bell
 					component.handleInput?.("\x1b[B"); // command-autonomy
 					component.handleInput?.("\r"); // open command submenu
+					component.handleInput?.("\r"); // select Global
+					component.handleInput?.("\x1b[B");
 					component.handleInput?.("\r"); // open edge submenu
 					expect(renderText(component)).toContain("a  chain");
 					component.handleInput?.("\r");
@@ -899,6 +957,7 @@ describe("buildApplyRecommendationsItem", () => {
 			() => {},
 			() => {},
 			noopTheme,
+			"global",
 		);
 		expect(item).toBeNull();
 	});
@@ -915,6 +974,7 @@ describe("buildApplyRecommendationsItem", () => {
 			() => {},
 			() => {},
 			noopTheme,
+			"global",
 		);
 		expect(item).not.toBeNull();
 		expect(item!.label).toContain("all applied");
@@ -931,6 +991,7 @@ describe("buildApplyRecommendationsItem", () => {
 			() => {},
 			() => {},
 			noopTheme,
+			"global",
 		);
 		expect(item).toBeNull();
 	});
@@ -954,6 +1015,7 @@ describe("buildApplyRecommendationsItem", () => {
 			() => {},
 			() => {},
 			noopTheme,
+			"global",
 		);
 		expect(item).not.toBeNull();
 		expect(item!.label).toBe("Apply recommended settings (3 pending)");
@@ -970,6 +1032,7 @@ describe("buildApplyRecommendationsItem", () => {
 			() => {},
 			() => {},
 			noopTheme,
+			"global",
 		);
 		expect(item!.label).toBe("Apply recommended settings (1 pending)");
 	});
@@ -993,6 +1056,7 @@ describe("buildApplyRecommendationsItem", () => {
 			() => {},
 			() => {},
 			noopTheme,
+			"global",
 		);
 		expect(item!.label).toBe("Apply recommended settings (1 pending)");
 	});
@@ -1015,6 +1079,7 @@ describe("buildApplyRecommendationsItem", () => {
 				notifications.push({ msg, type });
 			},
 			noopTheme,
+			"global",
 		);
 
 		item!.submenu!("", () => {});
@@ -1042,6 +1107,7 @@ describe("buildApplyRecommendationsItem", () => {
 				notifications.push({ msg, type });
 			},
 			noopTheme,
+			"global",
 		);
 
 		const submenu = item!.submenu!("", () => {});
@@ -1080,6 +1146,7 @@ describe("buildApplyRecommendationsItem", () => {
 				notifications.push({ msg, type });
 			},
 			noopTheme,
+			"global",
 		);
 
 		const submenu = item!.submenu!("", () => {});
@@ -1113,6 +1180,7 @@ describe("buildApplyRecommendationsItem", () => {
 			() => {},
 			() => {},
 			noopTheme,
+			"global",
 		);
 		expect(item!.label).toBe("Apply recommended settings (1 pending)");
 
@@ -1148,6 +1216,7 @@ describe("buildApplyRecommendationsItem", () => {
 			() => {},
 			() => {},
 			noopTheme,
+			"global",
 		);
 
 		const submenu = item!.submenu!("", () => {});
@@ -1170,6 +1239,7 @@ describe("buildApplyRecommendationsItem", () => {
 			() => {},
 			() => {},
 			noopTheme,
+			"global",
 		);
 
 		const submenu = item!.submenu!("", () => {});
@@ -1190,6 +1260,7 @@ describe("buildApplyRecommendationsItem", () => {
 			() => {},
 			() => {},
 			noopTheme,
+			"global",
 		);
 		expect(item!.label).toContain("1 pending");
 
@@ -1216,6 +1287,7 @@ describe("buildApplyRecommendationsItem", () => {
 			},
 			() => {},
 			noopTheme,
+			"global",
 		);
 
 		const submenu = item!.submenu!("", () => {
@@ -1277,5 +1349,223 @@ describe("classifyRecommendationEdges", () => {
 			{ source: "mach12:impl", target: "mach12:pr", setting: "chain", status: "configured" },
 			{ source: "mach12:impl", target: "mach12:merge", setting: "pause", status: "pending" },
 		]);
+	});
+});
+
+describe("scoped transition editing", () => {
+	const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "next" }] };
+	function setup() {
+		const globalPath = path.join(tmpDir!, "global.yaml");
+		const projectPath = projectConfigPath(tmpDir!);
+		const state = freshState({
+			autonomyConfigPath: globalPath,
+			preferencesPath: path.join(tmpDir!, "preferences.yaml"),
+		});
+		state.registry = new Map([
+			["sample:work", { ...makeCommandDef("sample:work", policy), allowedTools: ["create_issue"] }],
+		]);
+		const editor: TransitionEditor = {
+			scope: "project",
+			snapshot: () => loadScopedAutonomyConfig(globalPath, tmpDir!),
+		};
+		return { globalPath, projectPath, state, editor };
+	}
+	async function exercise(state: ReturnType<typeof freshState>, action: (component: Component) => void) {
+		const notify = vi.fn();
+		await showSettingsPage(
+			{ appendEntry: vi.fn() } as never,
+			{
+				cwd: tmpDir!,
+				ui: {
+					notify,
+					custom: async (factory: any) => {
+						const component = factory({ requestRender: vi.fn() }, tuiTheme, {}, vi.fn());
+						action(component);
+					},
+				},
+			} as never,
+			state,
+		);
+		return notify;
+	}
+	function keys(component: Component, ...input: string[]) {
+		for (const key of input) {
+			component.handleInput?.(key);
+			component.render(120);
+		}
+	}
+	function openAutonomy(component: Component) {
+		keys(component, "\x1b[B", "\x1b[B", "\x1b[B", "\r");
+	}
+	it("displays raw inherited selection separately from scope-first provenance and masked Global edits", () => {
+		const { globalPath, projectPath, editor } = setup();
+		saveAutonomyConfig(globalPath, { edges: { "sample:work": { next: "chain" } } });
+		saveAutonomyConfig(projectPath, { edges: { "sample:work": { "*": "pause" } } }, "project");
+		const inherited = buildEdgeItems("sample:work", policy, editor)[0];
+		expect(inherited.currentValue).toBe("inherit");
+		expect(inherited.values).toEqual(["inherit", "chain", "pause"]);
+		expect(inherited.description).toContain("none (inherited)");
+		expect(inherited.description).toContain(`pause from project wildcard (${projectPath})`);
+		editor.scope = "global";
+		const masked = buildEdgeItems("sample:work", policy, editor)[0];
+		expect(masked.currentValue).toBe("chain");
+		expect(masked.description).toContain("project setting masks Global edits");
+	});
+	it("defaults to Project, saves and resets only its exact key, then deliberately edits Global", async () => {
+		const { globalPath, projectPath, state } = setup();
+		saveAutonomyConfig(globalPath, { edges: { "sample:work": { next: "chain" } } });
+		saveAutonomyConfig(projectPath, { edges: { "sample:work": { "*": "pause" } } }, "project");
+		const originalGlobal = fs.readFileSync(globalPath, "utf8");
+		await exercise(state, (component) => {
+			openAutonomy(component);
+			expect(renderText(component)).toContain("Edit scope");
+			expect(renderText(component)).toContain("Project");
+			expect(renderText(component)).toContain(projectPath);
+			keys(component, "\x1b[B", "\r");
+			expect(renderText(component)).toContain("none (inherited)");
+			keys(component, "\r");
+			expect(loadAutonomyConfig(projectPath, true, "project")?.edges["sample:work"]).toEqual({
+				"*": "pause",
+				next: "chain",
+			});
+			expect(renderText(component)).toContain("project exact");
+			keys(component, "\r", "\r");
+			expect(loadAutonomyConfig(projectPath, true, "project")?.edges["sample:work"]).toEqual({ "*": "pause" });
+			expect(renderText(component)).toContain("project wildcard");
+			expect(fs.readFileSync(globalPath, "utf8")).toBe(originalGlobal);
+			keys(component, "\x1b", "\x1b[A", "\r");
+			expect(renderText(component)).toContain(globalPath);
+			keys(component, "\x1b[B", "\r", "\r");
+			expect(renderText(component)).toMatch(/project\s+setting\s+masks\s+Global\s+edits/);
+		});
+		expect(loadAutonomyConfig(globalPath)?.edges["sample:work"].next).toBe("pause");
+		expect(loadAutonomyConfig(projectPath, true, "project")?.edges["sample:work"]).toEqual({ "*": "pause" });
+	});
+	it("reset reveals global fallback, then ordinary autopilot when Global exact is removed", () => {
+		const { globalPath, editor } = setup();
+		saveAutonomyConfig(globalPath, { edges: { "sample:work": { next: "pause" } } });
+		expect(buildEdgeItems("sample:work", policy, editor)[0].description).toContain("global exact");
+		fs.unlinkSync(globalPath);
+		expect(buildEdgeItems("sample:work", policy, editor)[0].description).toContain("ordinary autopilot behavior");
+	});
+	it("restores persisted raw selection and reports failed writes without overwriting corruption", async () => {
+		const { projectPath, state } = setup();
+		saveAutonomyConfig(projectPath, { edges: { "sample:work": { next: "pause" } } }, "project");
+		const notify = await exercise(state, (component) => {
+			openAutonomy(component);
+			keys(component, "\x1b[B", "\r");
+			fs.writeFileSync(projectPath, "edges: [broken]");
+			keys(component, "\r");
+			expect(renderText(component)).toContain("inherit");
+			expect(renderText(component)).toContain("Cannot edit");
+			expect(renderText(component)).toContain("all overrides disabled");
+		});
+		expect(notify.mock.calls.some(([message]) => message.includes("Failed to save"))).toBe(true);
+		expect(fs.readFileSync(projectPath, "utf8")).toBe("edges: [broken]");
+	});
+	it("preserves a valid raw selection on lock failure", async () => {
+		const { projectPath, state } = setup();
+		saveAutonomyConfig(projectPath, { edges: { "sample:work": { next: "pause" } } }, "project");
+		const notify = await exercise(state, (component) => {
+			openAutonomy(component);
+			keys(component, "\x1b[B", "\r");
+			fs.mkdirSync(`${projectPath}.lock`);
+			keys(component, "\r");
+			expect(renderText(component).split("\n")[0]).toContain("pause");
+		});
+		expect(notify.mock.calls.some(([message]) => message.includes("Failed to save"))).toBe(true);
+		expect(loadAutonomyConfig(projectPath, true, "project")?.edges["sample:work"].next).toBe("pause");
+	});
+	it("edits valid Project raw settings while corrupt Global disables effective overrides and publication editing", async () => {
+		const { projectPath, globalPath, state } = setup();
+		fs.writeFileSync(globalPath, "{ broken: [");
+		await exercise(state, (component) => {
+			openAutonomy(component);
+			keys(component, "\x1b[B", "\r", "\r");
+			expect(renderText(component)).toContain("Stored project exact: chain");
+			expect(renderText(component)).toContain("all overrides disabled");
+			keys(component, "\x1b", "\x1b", "\x1b[B", "\r", "\r");
+			expect(renderText(component)).toContain("Always ask (config error)");
+		});
+		expect(loadAutonomyConfig(projectPath, true, "project")?.edges["sample:work"].next).toBe("chain");
+		expect(fs.readFileSync(globalPath, "utf8")).toBe("{ broken: [");
+	});
+
+	it("keeps valid Global publication editing available with a malformed Project file", async () => {
+		const { projectPath, globalPath, state } = setup();
+		saveAutonomyConfig(globalPath, { edges: {}, publications: { "sample:work": { create_issue: "always-ask" } } });
+		fs.mkdirSync(path.dirname(projectPath), { recursive: true });
+		fs.writeFileSync(projectPath, "publications: {}");
+		await exercise(state, (component) => {
+			openAutonomy(component);
+			keys(component, "\x1b[B", "\r");
+			expect(renderText(component)).toContain("all overrides disabled");
+			expect(renderText(component)).toContain("Cannot edit");
+			keys(component, "\x1b", "\x1b", "\x1b[B", "\r", "\r");
+			expect(renderText(component)).toContain("Always ask");
+			expect(renderText(component)).not.toContain("config error");
+			keys(component, "\r");
+		});
+		expect(loadAutonomyConfig(globalPath)?.publications).toBeUndefined();
+		expect(fs.readFileSync(projectPath, "utf8")).toBe("publications: {}");
+	});
+	it.each(["project", "global"] as const)(
+		"previews and gap-fills recommendations only in selected %s file with fresh exact protection",
+		async (scope) => {
+			const { globalPath, projectPath, state } = setup();
+			state.autonomyRecommendations = new Map([
+				[
+					"sample",
+					{
+						edges: { "sample:work": { next: "chain", other: "pause" } },
+						publications: { "sample:work": { create_issue: "auto-approve" } },
+					},
+				],
+			]);
+			saveAutonomyConfig(globalPath, {
+				edges: { "sample:work": { "*": "pause" } },
+				publications: { "sample:work": { create_issue: "always-ask" } },
+			});
+			const destination = scope === "project" ? projectPath : globalPath;
+			const otherPath = scope === "project" ? globalPath : projectPath;
+			const otherOriginal = fs.existsSync(otherPath) ? fs.readFileSync(otherPath, "utf8") : null;
+			await exercise(state, (component) => {
+				openAutonomy(component);
+				if (scope === "global") keys(component, "\r");
+				keys(component, "\x1b[B");
+				expect(renderText(component)).toContain(destination);
+				keys(component, "\r");
+				expect(renderText(component)).toContain("override inherited");
+				if (scope === "project") expect(fs.existsSync(destination)).toBe(false);
+				const current = loadAutonomyConfig(destination, true, scope) ?? { edges: {} };
+				current.edges["sample:work"] ??= {};
+				current.edges["sample:work"].next = "pause";
+				saveAutonomyConfig(destination, current, scope);
+				keys(component, "\x1b[B", "\x1b[B");
+				expect(renderText(component)).toContain(`to ${scope}`);
+				expect(renderText(component)).toContain(destination);
+				keys(component, "\r");
+				expect(renderText(component)).toContain("all applied");
+			});
+			const saved = loadAutonomyConfig(destination, true, scope)!;
+			expect(saved.edges["sample:work"]).toMatchObject({ next: "pause", other: "pause" });
+			expect(saved.publications).toEqual(
+				scope === "global" ? { "sample:work": { create_issue: "always-ask" } } : undefined,
+			);
+			expect(fs.existsSync(otherPath) ? fs.readFileSync(otherPath, "utf8") : null).toBe(otherOriginal);
+		},
+	);
+	it("Escape from recommendation preview and scope switching saves nothing at narrow width", async () => {
+		const { state, globalPath, projectPath } = setup();
+		state.autonomyRecommendations = new Map([["sample", { edges: { "sample:work": { next: "chain" } } }]]);
+		await exercise(state, (component) => {
+			openAutonomy(component);
+			expect(component.render(32).join("\n")).toContain("Project");
+			keys(component, "\r");
+			expect(component.render(32).join("\n")).toContain("Global");
+			keys(component, "\x1b[B", "\r", "\x1b", "\x1b", "\x1b");
+		});
+		expect(fs.existsSync(globalPath)).toBe(false);
+		expect(fs.existsSync(projectPath)).toBe(false);
 	});
 });
