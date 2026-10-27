@@ -758,7 +758,7 @@ export class AgentSession {
 		return;
 	}
 
-	// SCRAMJET-DIVERGENCE: Capture provider events synchronously and reset stale throughput lifecycles (#476).
+	// SCRAMJET-DIVERGENCE: Capture Agent duration before queued Session work and reset stale throughput (#476, #625).
 	private _captureOutputThroughput(event: AgentEvent): void {
 		if (event.type === "message_start" && event.message.role === "assistant" && event.message.origin === "provider") {
 			this._outputThroughputGeneration = this._outputThroughputTracker.start({

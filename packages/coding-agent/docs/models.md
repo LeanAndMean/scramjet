@@ -158,7 +158,7 @@ Override defaults when you need specific values:
 
 The file reloads each time you open `/model`. Edit during session; no restart needed.
 
-When valid history exists, `/model` and `/scoped-models` append a recent median output-rate estimate to the requested provider/model row. The estimate uses normalized final output usage over first-to-last generated output, excluding time to first token and trailing completion latency; no placeholder is shown for models without history.
+When valid history exists, `/model` and `/scoped-models` append a recent median effective output rate (for example, `42tok/s effective`) to the requested provider/model row. This is the median of the latest 20 qualified whole-response rates, including prompt processing, not pure generation speed; no placeholder is shown for unsampled models. History cold-starts in the isolated v2 file without importing legacy estimates. See [timing, usage and comparison semantics](usage.md#effective-output-rate).
 
 ## Google AI Studio Example
 

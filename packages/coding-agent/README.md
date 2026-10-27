@@ -134,7 +134,9 @@ The interface from top to bottom:
 - **Startup header** - Shows shortcuts (`/hotkeys` for all), loaded AGENTS.md files, prompt templates, skills, and extensions
 - **Messages** - Your messages, assistant responses, tool calls and results, notifications, errors, and extension UI
 - **Editor** - Where you type; border color indicates thinking level
-- **Footer** - Working directory, session name, total token/cache usage, cost, context usage, current model, and recent median output speed
+- **Footer** - Working directory, session name, total token/cache usage, cost, context usage, current model, and recent median effective output rate
+
+Rates such as `42tok/s effective` are the median of the latest 20 successful whole-response rates per requested provider/model: final provider-reported output tokens (possibly including hidden reasoning) divided by client-observed provider-stream duration, including prompt processing. This is not pure generation speed; prompt size, caching, effort and workload affect comparisons. Unsampled models omit the rate, and history cold-starts in the isolated v2 file without importing legacy estimates. See [effective output rate](docs/usage.md#effective-output-rate) for timing boundaries and migration.
 
 The default footer's existing dollar amount combines parent assistant costs across the whole journal with tool-reported costs, including nested subagents and failed/interrupted work. Cumulative tool updates replace earlier reports live; saved final costs survive resume. Recoverable legacy details are interpreted by the registered tool without rewriting history or enabling execution. Token/cache/context metrics remain parent-only; `/session`, RPC statistics, and custom footer examples retain their existing accounting.
 

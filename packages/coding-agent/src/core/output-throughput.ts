@@ -1,6 +1,6 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@leanandmean/ai";
 
-// SCRAMJET-DIVERGENCE: Measure and aggregate qualified provider output throughput by requested model (#476).
+// SCRAMJET-DIVERGENCE: Aggregate whole-response effective output rates by requested model (#476, #625).
 
 const LIVE_WINDOW_MS = 2000;
 const BYTES_PER_TOKEN = 4;
@@ -167,12 +167,13 @@ export class OutputThroughputHistory {
 }
 
 export function formatLiveOutputRate(rate: number): string | undefined {
-	return formatCompletedOutputRate(rate);
+	if (!Number.isFinite(rate) || rate <= 0) return undefined;
+	return `${Math.round(rate)}tok/s`;
 }
 
 export function formatCompletedOutputRate(rate: number): string | undefined {
-	if (!Number.isFinite(rate) || rate <= 0) return undefined;
-	return `${Math.round(rate)}tok/s`;
+	const formatted = formatLiveOutputRate(rate);
+	return formatted ? `${formatted} effective` : undefined;
 }
 
 export function formatHistoricalOutputRate(rate: number): string | undefined {

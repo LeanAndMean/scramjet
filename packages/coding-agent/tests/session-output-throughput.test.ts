@@ -2,7 +2,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, type AgentEvent } from "@leanandmean/agent";
-import { type AssistantMessage, createAssistantMessageEventStream } from "@leanandmean/ai";
+import { type AssistantMessage, createAssistantMessageEventStream, type Model } from "@leanandmean/ai";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -11,6 +12,17 @@ import { DefaultResourceLoader } from "../src/core/resource-loader.js";
 import { createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+
+const google = vi.hoisted(() => ({ stream: vi.fn() }));
+vi.mock("@google/genai", async (original) => {
+	const actual = await original<typeof import("@google/genai")>();
+	return {
+		...actual,
+		GoogleGenAI: class {
+			models = { generateContentStream: google.stream };
+		},
+	};
+});
 
 const model = {
 	id: "requested-model",
@@ -68,34 +80,38 @@ async function profile() {
 	return { dir, settingsManager, authStorage, modelRegistry, resourceLoader };
 }
 
-async function fixture(options: { times?: number[]; normalizedStart?: boolean; duration?: number } = {}) {
+async function fixture(
+	options: { times?: number[]; normalizedStart?: boolean; duration?: number; adapterModel?: Model<any> } = {},
+) {
 	const resources = await profile();
 	let now = 0;
 	vi.spyOn(performance, "now").mockImplementation(() => now);
 	let response = assistant();
 	const agent = new Agent({
-		initialState: { model },
+		initialState: { model: options.adapterModel ?? model },
 		getApiKey: async () => "offline-key",
-		streamFn: () => {
-			const start = now;
-			const message = response;
-			const stream = createAssistantMessageEventStream();
-			stream[Symbol.asyncIterator] = async function* () {
-				if (options.normalizedStart !== false) yield { type: "start", partial: message };
-				for (const time of options.times ?? []) {
-					now = start + time;
-					yield { type: "text_delta", contentIndex: 0, delta: "abcd", partial: message };
-				}
-				now = start + (options.duration ?? 2000);
-				if (message.stopReason === "error" || message.stopReason === "aborted") {
-					yield { type: "error", reason: message.stopReason, error: message };
-				} else {
-					yield { type: "done", reason: message.stopReason, message };
-				}
-			};
-			vi.spyOn(stream, "result").mockResolvedValue(message);
-			return stream;
-		},
+		streamFn: options.adapterModel
+			? undefined
+			: () => {
+					const start = now;
+					const message = response;
+					const stream = createAssistantMessageEventStream();
+					stream[Symbol.asyncIterator] = async function* () {
+						if (options.normalizedStart !== false) yield { type: "start", partial: message };
+						for (const time of options.times ?? []) {
+							now = start + time;
+							yield { type: "text_delta", contentIndex: 0, delta: "abcd", partial: message };
+						}
+						now = start + (options.duration ?? 2000);
+						if (message.stopReason === "error" || message.stopReason === "aborted") {
+							yield { type: "error", reason: message.stopReason, error: message };
+						} else {
+							yield { type: "done", reason: message.stopReason, message };
+						}
+					};
+					vi.spyOn(stream, "result").mockResolvedValue(message);
+					return stream;
+				},
 	});
 	const session = new AgentSession({
 		agent,
@@ -124,10 +140,132 @@ afterEach(async () => {
 		session.dispose();
 	}
 	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
+	google.stream.mockReset();
 	await Promise.all(directories.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 describe("Session whole-response throughput", () => {
+	it("measures Responses hidden output independently of summaries and synthetic separators", async () => {
+		const route = { ...model, api: "openai-responses" as const, reasoning: true };
+		const { agent, session, advance } = await fixture({ adapterModel: route });
+		const deltas: string[] = [];
+		agent.subscribe((event) => {
+			if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+				deltas.push(event.assistantMessageEvent.delta);
+			}
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				advance(1500);
+				const item = { id: "reasoning_1", type: "reasoning", summary: [] };
+				const events = [
+					{ type: "response.created", response: { id: "response_1" } },
+					{ type: "response.output_item.added", output_index: 0, item },
+					{ type: "response.reasoning_summary_part.added", part: { type: "summary_text", text: "" } },
+					{ type: "response.reasoning_summary_text.delta", delta: "Brief summary" },
+					{ type: "response.reasoning_summary_part.done" },
+					{ type: "response.output_item.done", output_index: 0, item },
+					{
+						type: "response.completed",
+						response: {
+							id: "response_1",
+							status: "completed",
+							usage: {
+								input_tokens: 10,
+								output_tokens: 84,
+								total_tokens: 94,
+								input_tokens_details: { cached_tokens: 0 },
+								output_tokens_details: { reasoning_tokens: 80 },
+							},
+						},
+					},
+				];
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							advance(500);
+							controller.enqueue(
+								new TextEncoder().encode(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")),
+							);
+							controller.close();
+						},
+					}),
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			}),
+		);
+		await agent.prompt("offline reasoning");
+		expect(deltas).toEqual(["Brief summary", "\n\n"]);
+		expect(agent.state.messages.at(-1)).toMatchObject({ stopReason: "stop", usage: { output: 84 } });
+		expect(session.medianOutputRate).toBe(42);
+	});
+
+	it.each(["error", "aborted"] as const)(
+		"rejects Google %s then measures thought-inclusive whole-object tool output",
+		async (failure) => {
+			const route = { ...model, api: "google-generative-ai" as const, provider: "google", reasoning: true };
+			const { agent, session, advance } = await fixture({ adapterModel: route });
+			const deltas: string[] = [];
+			agent.subscribe((event) => {
+				if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_delta") {
+					deltas.push(event.assistantMessageEvent.delta);
+				}
+			});
+			agent.state.tools = [
+				{
+					name: "finish",
+					label: "Finish",
+					description: "Finish offline fixture",
+					parameters: Type.Object({}),
+					execute: async () => ({ content: [{ type: "text", text: "done" }], details: {}, terminate: true }),
+				},
+			];
+			google.stream.mockImplementationOnce(async () => {
+				advance(2000);
+				if (failure === "aborted") agent.abort();
+				throw new Error("offline failure");
+			});
+			await agent.prompt("fail");
+			expect(agent.state.messages.at(-1)).toMatchObject({ stopReason: failure });
+			expect(session.medianOutputRate).toBeUndefined();
+			google.stream.mockImplementationOnce(async () => {
+				advance(1500);
+				return (async function* () {
+					advance(500);
+					yield {
+						candidates: [
+							{
+								finishReason: "STOP",
+								content: {
+									parts: [
+										{ text: "brief thought", thought: true },
+										{ functionCall: { name: "finish", args: { result: "done" } } },
+									],
+								},
+							},
+						],
+						usageMetadata: {
+							promptTokenCount: 10,
+							candidatesTokenCount: 4,
+							thoughtsTokenCount: 80,
+							totalTokenCount: 94,
+						},
+					};
+				})();
+			});
+			await agent.prompt("success");
+			expect(deltas).toEqual(['{"result":"done"}']);
+			await session.flushOutputThroughputHistory();
+			expect(session.outputThroughputHistory.allSamples()).toMatchObject([
+				{ provider: "google", model: model.id, outputTokens: 84, durationMs: 2000 },
+			]);
+			expect(session.outputThroughputHistory.allSamples()).toHaveLength(1);
+			expect(session.medianOutputRate).toBe(42);
+		},
+	);
+
 	it.each([
 		{ times: [500, 1500] },
 		{ times: [1999, 2000] },

@@ -256,8 +256,8 @@ describe("OutputThroughputHistory", () => {
 describe("output throughput formatting", () => {
 	it("formats compact footer rates and explicit historical estimates", () => {
 		expect(formatLiveOutputRate(41.6)).toBe("42tok/s");
-		expect(formatCompletedOutputRate(41.6)).toBe("42tok/s");
-		expect(formatHistoricalOutputRate(41.6)).toBe("42tok/s");
+		expect(formatCompletedOutputRate(41.6)).toBe("42tok/s effective");
+		expect(formatHistoricalOutputRate(41.6)).toBe("42tok/s effective");
 		expect(formatLiveOutputRate(0)).toBeUndefined();
 		expect(formatCompletedOutputRate(Number.NaN)).toBeUndefined();
 		expect(formatHistoricalOutputRate(Number.NaN)).toBeUndefined();

@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { OutputThroughputHistory, type OutputThroughputSample } from "./output-throughput.js";
 
-// SCRAMJET-DIVERGENCE: Persist bounded, profile-scoped provider throughput across concurrent processes (#476).
+// SCRAMJET-DIVERGENCE: Persist bounded whole-response v2 history without reinterpreting legacy samples (#476, #625).
 
 const HISTORY_VERSION = 2;
 const MAX_SAMPLES_PER_MODEL = 20;
