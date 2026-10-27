@@ -1,19 +1,25 @@
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import type { AgentTool } from "@leanandmean/agent";
 import type { Api, ImageContent, Model, TextContent } from "@leanandmean/ai";
-import { Text } from "@leanandmean/tui";
+import { Container, Markdown, Spacer, sanitizeUntrustedText, Text } from "@leanandmean/tui";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
-import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.js";
+import {
+	getLanguageFromPath,
+	getMarkdownTheme,
+	highlightCode,
+	type Theme,
+} from "../../modes/interactive/theme/theme.js";
+import { stripAnsi } from "../../utils/ansi.js";
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveReadPath } from "./path-utils.js";
-import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
+import { getTextOutput, invalidArgText, normalizeDisplayText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
@@ -26,6 +32,8 @@ const readSchema = Type.Object({
 export type ReadToolInput = Static<typeof readSchema>;
 
 export interface ReadToolDetails {
+	// SCRAMJET-DIVERGENCE: original UTF-16 document prefix, before generated guidance and display sanitization.
+	sourceTextLength?: number;
 	truncation?: TruncationResult;
 }
 
@@ -60,6 +68,30 @@ export interface ReadToolOptions {
 	autoResizeImages?: boolean;
 	/** Custom operations for file reading. Default: local filesystem */
 	operations?: ReadOperations;
+}
+
+// SCRAMJET-DIVERGENCE: compose read documents without flattening displayed-copy provenance.
+class ReadMarkdownPreview extends Container {
+	private document = new Markdown("", 0, 0, getMarkdownTheme(), undefined, { contentMode: "untrusted" });
+	private source?: string;
+	private header = new Spacer(1);
+	private footer = new Text("", 0, 0);
+
+	update(source: string, footer: string): void {
+		this.clear();
+		this.footer.setText(footer);
+		if (source !== this.source) {
+			this.source = source;
+			this.document.setText(source);
+		}
+		this.addChild(this.header);
+		if (source) this.addChild(this.document);
+		if (footer) this.addChild(this.footer);
+	}
+}
+
+function sanitizeFileDisplayText(text: string): string {
+	return sanitizeUntrustedText(normalizeDisplayText(stripAnsi(text)));
 }
 
 type ReadRenderArgs = { path?: string; file_path?: string; offset?: number; limit?: number };
@@ -178,7 +210,7 @@ function formatReadResult(
 	}
 
 	const rawPath = str(args?.file_path ?? args?.path);
-	const output = getTextOutput(result, showImages);
+	const output = sanitizeFileDisplayText(getTextOutput(result, showImages));
 	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 	const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
 	const lines = trimTrailingEmptyLines(renderedLines);
@@ -190,7 +222,12 @@ function formatReadResult(
 		text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
 	}
 
-	const truncation = result.details?.truncation;
+	return text + formatReadTruncation(result.details, theme);
+}
+
+function formatReadTruncation(details: ReadToolDetails | undefined, theme: Theme): string {
+	let text = "";
+	const truncation = details?.truncation;
 	if (truncation?.truncated) {
 		if (truncation.firstLineExceedsLimit) {
 			text += `\n${theme.fg("warning", `[First line exceeds ${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit]`)}`;
@@ -201,6 +238,29 @@ function formatReadResult(
 		}
 	}
 	return text;
+}
+
+// SCRAMJET-DIVERGENCE: only proven document prefixes may enter the Markdown parser.
+function readDocumentBoundary(result: {
+	content: (TextContent | ImageContent)[];
+	details?: ReadToolDetails;
+}): number | undefined {
+	if (result.content.length !== 1 || result.content[0].type !== "text") return undefined;
+	const text = result.content[0].text;
+	const boundary = result.details?.sourceTextLength;
+	if (boundary !== undefined) {
+		return Number.isInteger(boundary) && boundary >= 0 && boundary <= text.length ? boundary : undefined;
+	}
+	const truncation = result.details?.truncation;
+	if (
+		truncation?.truncated &&
+		!truncation.firstLineExceedsLimit &&
+		truncation.content &&
+		(text === truncation.content || text.startsWith(`${truncation.content}\n\n`))
+	) {
+		return truncation.content.length;
+	}
+	return undefined;
 }
 
 export function createReadToolDefinition(
@@ -326,6 +386,10 @@ export function createReadToolDefinition(
 									// No truncation and no remaining user-limited content.
 									outputText = truncation.content;
 								}
+								details = {
+									...details,
+									sourceTextLength: truncation.firstLineExceedsLimit ? 0 : truncation.content.length,
+								};
 								content = [{ type: "text", text: outputText }];
 							}
 
@@ -349,9 +413,50 @@ export function createReadToolDefinition(
 			return text;
 		},
 		renderResult(result, options, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const args = context.args as ReadRenderArgs | undefined;
+			const rawPath = str(args?.file_path ?? args?.path);
+			const eligible =
+				context.markdownToolDisplay === "rendered" &&
+				!context.isError &&
+				rawPath &&
+				getLanguageFromPath(rawPath) === "markdown";
+			const boundary = eligible ? readDocumentBoundary(result) : undefined;
+			if (
+				eligible &&
+				boundary !== undefined &&
+				(options.expanded || !getCompactReadClassification(context.args, context.cwd))
+			) {
+				const original = (result.content[0] as TextContent).text;
+				const lines = trimTrailingEmptyLines(sanitizeFileDisplayText(original.slice(0, boundary)).split("\n"));
+				const shown = options.expanded ? lines.length : Math.min(lines.length, 10);
+				const remaining = lines.length - shown;
+				const hint =
+					remaining > 0
+						? `${theme.fg("muted", `\n... (${remaining} more source lines, `)}${keyHint("app.tools.expand", "to expand")})`
+						: "";
+				const guidance = sanitizeFileDisplayText(original.slice(boundary));
+				const component =
+					context.lastComponent instanceof ReadMarkdownPreview ? context.lastComponent : new ReadMarkdownPreview();
+				component.update(
+					lines.slice(0, shown).join("\n"),
+					hint + (guidance ? theme.fg("toolOutput", guidance) : "") + formatReadTruncation(result.details, theme),
+				);
+				return component;
+			}
+			const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+			const output = formatReadResult(
+				context.args,
+				result,
+				options,
+				theme,
+				context.showImages,
+				context.cwd,
+				context.isError,
+			);
 			text.setText(
-				formatReadResult(context.args, result, options, theme, context.showImages, context.cwd, context.isError),
+				eligible && boundary === undefined && output
+					? theme.fg("muted", "\n[Source: document boundary unavailable]") + output
+					: output,
 			);
 			return text;
 		},

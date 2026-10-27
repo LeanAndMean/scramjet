@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.114.0 — Render Markdown file reads
+
+Render Markdown reads as documents with persistent Source access. Fixes [#629](https://github.com/LeanAndMean/scramjet/issues/629).
+
+### Added
+
+- Render textual Markdown reads by default, with a persistent **Markdown reads: Rendered / Source** setting that respects project overrides and refreshes current and historical cards.
+- Keep generated continuation guidance outside the document through validated optional prefix metadata, sanitize file-controlled display text, and fall back to Source when document provenance is unavailable.
+
+### Tests
+
+- Cover settings persistence, project precedence, source-line previews, safe document boundaries, compact reads, historical cards and interactive refresh. Recorded Windows Terminal/WSL acceptance covers tested rendered/source and clipboard journeys, not every emulator's graphics behavior.
+
 ## 0.113.3 — Correct whole-response throughput rates
 
 Correct provider throughput measurements and label their timing semantics. Fixes [#625](https://github.com/LeanAndMean/scramjet/issues/625).

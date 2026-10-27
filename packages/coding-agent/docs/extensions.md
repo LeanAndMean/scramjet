@@ -2148,6 +2148,9 @@ pi.registerTool({
 - `lastComponent` - the previously returned component for that slot, if any
 - `invalidate()` - request a rerender of this tool row
 - `toolCallId`, `cwd`, `executionStarted`, `argsComplete`, `isPartial`, `expanded`, `showImages`, `isError`
+- Optional `markdownToolDisplay: "rendered" | "source"` - interactive presentation preference, independent of expansion; omission means Source. Built-in read renderers (including inherited result renderers) honor it; fully custom renderers may ignore it. Write presentation is unchanged. HTML renderer contexts omit it.
+
+`ReadToolDetails.sourceTextLength?: number` marks the original text block's document-prefix length in UTF-16 code units, before display normalization and generated guidance. Successful textual built-in reads populate it (diagnostic-only first-line overflow uses zero); result text and execution schemas do not change. Overrides that use the inherited read renderer should preserve this optional metadata when preserving content, or recompute/remove it when replacing content. The renderer validates the boundary before use; invalid or absent/ambiguous provenance falls back to labelled Source, except verified legacy truncation prefixes. Do not guess boundaries by stripping notice-like prose. See [session metadata](session-format.md#base-message-types-from-leanandmeanai).
 
 Use `context.state` for cross-slot shared state. Keep slot-local caches on the returned component instance when you want to reuse and mutate the same component across renders.
 

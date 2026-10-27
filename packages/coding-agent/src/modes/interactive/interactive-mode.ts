@@ -697,7 +697,7 @@ export class InteractiveMode {
 		this.ui.rebuild();
 	}
 
-	private updateToolImagePresentation(update: (component: ToolExecutionComponent) => void): void {
+	private updateToolPresentation(update: (component: ToolExecutionComponent) => void): void {
 		for (const container of [this.committedChatContainer, this.chatContainer]) {
 			for (const child of container.children) {
 				if (child instanceof ToolExecutionComponent) update(child);
@@ -3325,6 +3325,7 @@ export class InteractiveMode {
 									{
 										showImages: this.settingsManager.getShowImages(),
 										imageWidthCells: this.settingsManager.getImageWidthCells(),
+										markdownToolDisplay: this.settingsManager.getMarkdownToolDisplay(),
 									},
 									this.getRegisteredToolDefinition(content.name),
 									this.ui,
@@ -3401,6 +3402,7 @@ export class InteractiveMode {
 						{
 							showImages: this.settingsManager.getShowImages(),
 							imageWidthCells: this.settingsManager.getImageWidthCells(),
+							markdownToolDisplay: this.settingsManager.getMarkdownToolDisplay(),
 						},
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
@@ -3846,6 +3848,7 @@ export class InteractiveMode {
 							{
 								showImages: this.settingsManager.getShowImages(),
 								imageWidthCells: this.settingsManager.getImageWidthCells(),
+								markdownToolDisplay: this.settingsManager.getMarkdownToolDisplay(),
 							},
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
@@ -4628,6 +4631,9 @@ export class InteractiveMode {
 					editorMaxHeightPercent: this.settingsManager.getEditorMaxHeightPercent(),
 					scrollWheelStep: this.settingsManager.getScrollWheelStep(),
 					viewportProjectOverrides: Object.keys(this.settingsManager.getProjectSettings()),
+					markdownToolDisplay: this.settingsManager.getMarkdownToolDisplay(),
+					markdownToolDisplayProjectOverride:
+						this.settingsManager.getProjectSettings().markdown?.toolDisplay !== undefined,
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4636,11 +4642,11 @@ export class InteractiveMode {
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
-						this.updateToolImagePresentation((component) => component.setShowImages(enabled));
+						this.updateToolPresentation((component) => component.setShowImages(enabled));
 					},
 					onImageWidthCellsChange: (width) => {
 						this.settingsManager.setImageWidthCells(width);
-						this.updateToolImagePresentation((component) => component.setImageWidthCells(width));
+						this.updateToolPresentation((component) => component.setImageWidthCells(width));
 					},
 					onAutoResizeImagesChange: (enabled) => {
 						this.settingsManager.setImageAutoResize(enabled);
@@ -4724,6 +4730,14 @@ export class InteractiveMode {
 					},
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
+					},
+					// SCRAMJET-DIVERGENCE: save globally but present the project-effective Markdown read mode.
+					onMarkdownToolDisplayChange: (mode) => {
+						this.settingsManager.setMarkdownToolDisplay(mode);
+						const effective = this.settingsManager.getMarkdownToolDisplay();
+						this.updateToolPresentation((component) => component.setMarkdownToolDisplay(effective));
+						void this.settleLayoutSettings(selector);
+						return effective;
 					},
 					onRetainTranscriptOnExitChange: (enabled) => {
 						this.settingsManager.setRetainTranscriptOnExit(enabled);
@@ -5726,6 +5740,9 @@ export class InteractiveMode {
 			this.showStatus("Reloaded keybindings, extensions, skills, prompts, themes");
 		} catch (error) {
 			dismissReloadBox(previousEditor as Component);
+			// SCRAMJET-DIVERGENCE: settings can refresh before a resource reload rejects.
+			const mode = this.settingsManager.getMarkdownToolDisplay();
+			this.updateToolPresentation((component) => component.setMarkdownToolDisplay(mode));
 			this.showError(`Reload failed: ${describeRuntimeError(error)}`);
 		}
 	}

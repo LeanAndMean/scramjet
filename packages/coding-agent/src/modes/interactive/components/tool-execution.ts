@@ -18,6 +18,8 @@ import { theme } from "../theme/theme.js";
 export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
+	// SCRAMJET-DIVERGENCE: omission retains Source until the interactive owner opts in.
+	markdownToolDisplay?: "rendered" | "source";
 }
 
 export class ToolExecutionComponent extends Container {
@@ -36,6 +38,7 @@ export class ToolExecutionComponent extends Container {
 	private expanded = false;
 	private showImages: boolean;
 	private imageWidthCells: number;
+	private markdownToolDisplay: "rendered" | "source";
 	private isPartial = true;
 	private toolDefinition?: ToolDefinition<any, any>;
 	private builtInToolDefinition?: ToolDefinition<any, any>;
@@ -76,6 +79,7 @@ export class ToolExecutionComponent extends Container {
 		this.builtInToolDefinition = createAllToolDefinitions(cwd)[toolName as ToolName];
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
+		this.markdownToolDisplay = options.markdownToolDisplay ?? "source";
 		this.ui = ui;
 		this.cwd = cwd;
 
@@ -151,6 +155,7 @@ export class ToolExecutionComponent extends Container {
 			isPartial: this.isPartial,
 			expanded: this.expanded,
 			showImages: this.showImages,
+			markdownToolDisplay: this.markdownToolDisplay,
 			isError: this.result?.isError ?? false,
 		};
 	}
@@ -289,6 +294,12 @@ export class ToolExecutionComponent extends Container {
 
 	setShowImages(show: boolean): void {
 		this.showImages = show;
+		this.updateDisplay();
+	}
+
+	setMarkdownToolDisplay(mode: "rendered" | "source"): void {
+		if (this.markdownToolDisplay === mode) return;
+		this.markdownToolDisplay = mode;
 		this.updateDisplay();
 	}
 

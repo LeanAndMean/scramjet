@@ -120,6 +120,8 @@ interface Usage {
 
 Tool-result `cost` is optional additive metadata: it excludes the requesting assistant's usage and is independent of `details` and error status. Valid amounts are finite and nonnegative; explicit zero is authoritative, while absence means no generic cost was recorded, not that execution was free. This addition does not change the session format version or rewrite older records. Closed-schema readers must allow the optional field.
 
+Built-in textual read results may include `details.sourceTextLength?: number`, the original text block's document-prefix length in UTF-16 code units before sanitization and appended guidance. It is optional additive metadata, preserved by normal session JSON/RPC message transport; old entries require no migration. Readers with strict detail schemas must tolerate it. Original `content[].text` is unchanged. Interactive Markdown reads use validated provenance to keep generated guidance outside the document; unproven historical/custom results remain labelled Source. The display preference itself is settings-owned, not stored in session history, so reconstructed cards use current settings. HTML export keeps Source presentation.
+
 ### Extended Message Types (from `@leanandmean/coding-agent`)
 
 ```typescript
