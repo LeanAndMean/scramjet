@@ -172,8 +172,7 @@ export function formatLiveOutputRate(rate: number): string | undefined {
 }
 
 export function formatCompletedOutputRate(rate: number): string | undefined {
-	const formatted = formatLiveOutputRate(rate);
-	return formatted ? `${formatted} effective` : undefined;
+	return formatLiveOutputRate(rate);
 }
 
 export function formatHistoricalOutputRate(rate: number): string | undefined {

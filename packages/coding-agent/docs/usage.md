@@ -15,7 +15,7 @@ The interface has four main areas:
 
 ### Effective output rate
 
-The footer shows the current model's recent median effective output rate (for example, `42tok/s effective`) beside a nonzero session output total when valid history exists. The `/model` and `/scoped-models` selectors annotate every model row that has valid history. Rates are the median of the latest 20 qualified successful responses per **requested provider/model**, not an average of chunk rates; a returned response-model alias does not change the history key.
+The footer shows the current model's recent median effective output rate (for example, `42tok/s`) beside a nonzero session output total when valid history exists. The `/model` and `/scoped-models` selectors annotate every model row that has valid history. Rates are the median of the latest 20 qualified successful responses per **requested provider/model**, not an average of chunk rates; a returned response-model alias does not change the history key.
 
 Each response rate divides final provider-reported normalized output tokens (which may include hidden reasoning) by client-observed elapsed time from provider-stream invocation through final-result consumption. This includes adapter setup, internal retries, request wait, prompt processing, reasoning, buffering, transport, earlier awaited stream listeners and trailing completion time. It excludes pre-invocation context preparation and credential resolution, prior/later tools, user wait, synthetic-start work after the final result, and final completion-listener/Session persistence work. It is **not pure generation speed**: prompt size, caching, reasoning effort and workload affect comparisons.
 

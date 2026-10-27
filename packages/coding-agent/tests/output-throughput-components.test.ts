@@ -71,8 +71,9 @@ describe("output throughput components", () => {
 		const narrow = new FooterComponent(footerSession(42, 30), footerData).render(8);
 
 		expect(active).not.toContain("42tok/s");
-		expect(active).toContain("↓10 (30tok/s effective)");
-		expect(completed).toContain("30tok/s effective");
+		expect(active).toContain("↓10 (30tok/s)");
+		expect(completed).toContain("30tok/s");
+		expect(`${active}\n${completed}`).not.toContain("effective");
 		expect(empty).not.toContain("tok/s");
 		expect(narrow.every((line) => stripAnsi(line).length <= 8)).toBe(true);
 	});
@@ -86,10 +87,11 @@ describe("output throughput components", () => {
 		);
 
 		expect(withoutHistory).not.toContain("tok/s");
-		expect(withHistory).toContain("test-model [test-provider] 42tok/s effective ✗");
+		expect(withHistory).toContain("test-model [test-provider] 42tok/s ✗");
+		expect(withHistory).not.toContain("effective");
 		const narrow = new ScopedModelsSelectorComponent(config, callbacks, historyWithSample()).render(35);
 		expect(narrow.every((line) => stripAnsi(line).length <= 35)).toBe(true);
-		expect(stripAnsi(narrow.join("\n"))).toContain("effective");
+		expect(stripAnsi(narrow.join("\n"))).toContain("tok/s");
 	});
 
 	it("adds requested-model history to the model selector only when supplied", async () => {
@@ -121,9 +123,10 @@ describe("output throughput components", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(stripAnsi(withoutHistory.render(80).join("\n"))).not.toContain("tok/s");
-		expect(stripAnsi(sampled.render(80).join("\n"))).toContain("test-model [test-provider] 42tok/s effective ✓");
+		expect(stripAnsi(sampled.render(80).join("\n"))).toContain("test-model [test-provider] 42tok/s ✓");
+		expect(stripAnsi(sampled.render(80).join("\n"))).not.toContain("effective");
 		const narrow = sampled.render(35);
 		expect(narrow.every((line) => stripAnsi(line).length <= 35)).toBe(true);
-		expect(stripAnsi(narrow.join("\n"))).toContain("effective");
+		expect(stripAnsi(narrow.join("\n"))).toContain("tok/s");
 	});
 });
