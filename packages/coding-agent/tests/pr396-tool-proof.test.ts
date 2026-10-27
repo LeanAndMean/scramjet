@@ -112,7 +112,11 @@ it("allows a committed tool renderer to settle details requested by expansion", 
 		pendingToolFinalizations: new Set(),
 		runtimeHost: {
 			session: {
-				settingsManager: { getShowImages: () => true, getImageWidthCells: () => 60 },
+				settingsManager: {
+					getShowImages: () => true,
+					getImageWidthCells: () => 60,
+					getMarkdownToolDisplay: () => "rendered",
+				},
 				sessionManager: { getCwd: () => process.cwd() },
 			},
 		},

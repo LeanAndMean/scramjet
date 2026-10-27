@@ -154,6 +154,8 @@ Home/End always retain editor line-start/end behavior. Ctrl+Home/Ctrl+End naviga
 
 By default, orderly exit restores the shell without printing a transcript. Enable **Retain transcript on exit** in `/settings` to leave the full current styled history, widgets, rendered editor and footer in terminal scrollback; collapsed content stays collapsed and images become labelled placeholders. Suspension and external-editor handoffs never dump history. Saved sessions and `/export` remain available. See [terminal setup](docs/terminal-setup.md#transcript-browsing-and-copying) for tested configurations, iTerm2's required right-click setting, clipboard limits and image behavior.
 
+Markdown file reads render as documents by default. Use **Markdown reads: Source** in `/settings` to inspect sanitized Markdown syntax and comments; the choice saves globally, with project settings taking precedence. Ctrl+O still only expands/collapses output. Writes keep their existing source presentation. See [Markdown settings](docs/settings.md#markdown).
+
 ### Editor
 
 | Feature | How |

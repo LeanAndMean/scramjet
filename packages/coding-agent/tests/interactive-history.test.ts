@@ -152,6 +152,7 @@ function createInteractiveHarness(): {
 					getShowImages: () => true,
 					setShowImages: () => {},
 					getImageWidthCells: () => 60,
+					getMarkdownToolDisplay: () => "rendered",
 					setImageWidthCells: () => {},
 					getImageAutoResize: () => true,
 					getBlockImages: () => false,

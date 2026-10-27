@@ -1336,7 +1336,7 @@ describe("retained interactive contracts", () => {
 		h.terminal.sendInput("\x1b[A");
 		const frame = await h.frame();
 		expect(h.internals.ui.getViewportState()!.offset).toBe(before);
-		expect(frame.find((line) => line.includes("Retain transcript on exit"))).toContain("→ Retain transcript on exit");
+		expect(frame.find((line) => line.includes("Markdown reads"))).toContain("→ Markdown reads");
 	});
 
 	it.each([
