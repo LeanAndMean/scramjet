@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.115.0 — Remember model selections by directory
+
+Recall deliberate model choices per exact working directory without creating repository-local state. Fixes [#627](https://github.com/LeanAndMean/scramjet/issues/627).
+
+### Added
+
+- Store directory model memory in a profile-global file, preserving explicit launch choices, authenticated restoration, project/programmatic defaults, scoped startup, live session inheritance and preference-persistence opt-out.
+- Warn and fall back when remembered models are unavailable without erasing their records; keep thinking preferences global.
+
+### Changed
+
+- Coordinate settings writes and independent atomic recall updates, preserve malformed state and original failure evidence, and settle pending preferences before runtime replacement and orderly exit without contaminating protocol stdout.
+- Document SDK backend ownership, independent persistence outcomes, metadata privacy and emergency-exit durability limits.
+
+### Tests
+
+- Cover recall storage, startup precedence, deliberate selection, concurrent settings coordination, error evidence, runtime replacement and mode settlement. Recorded offline session, RPC and Linux PTY checks do not establish separate-process contention, crash durability or broader native-terminal/platform behavior.
+
 ## 0.114.0 — Render Markdown file reads
 
 Render Markdown reads as documents with persistent Source access. Fixes [#629](https://github.com/LeanAndMean/scramjet/issues/629).
