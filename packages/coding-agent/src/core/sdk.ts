@@ -252,7 +252,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
 	const agentDir = options.agentDir ?? getDefaultAgentDir();
 	const outputThroughputHistoryPath =
-		options.outputThroughputHistoryPath ?? join(agentDir, "output-throughput-history.json");
+		options.outputThroughputHistoryPath ?? join(agentDir, "output-throughput-history-v2.json");
 	const cacheRetention = resolveCacheRetention(options.cacheRetention);
 	let resourceLoader = options.resourceLoader;
 

@@ -814,6 +814,10 @@ Emitted when a message begins and completes. The `message` field contains an `Ag
 {"type": "message_end", "message": {...}}
 ```
 
+Provider-stream assistant `message_end` events may additionally carry `responseDurationMs`, an optional number of client-observed monotonic milliseconds from provider-stream invocation through final-result consumption. It includes prompt processing, hidden reasoning, adapter/internal retries, buffering and earlier awaited stream listeners; it excludes pre-invocation preparation, synthetic-start work after the result, and final completion listeners/Session persistence. This is not pure generation time. Missing/invalid timing or failed responses must not produce a completed rate.
+
+The scalar belongs to the event, not the persisted assistant message, proxy wire message or separate extension `message_end` projection. Closed RPC event schemas must allow it. See [SDK contract and custom history-path migration](sdk.md#effective-output-rate-and-history) and [effective-rate semantics](usage.md#effective-output-rate).
+
 ### message_update (Streaming)
 
 Emitted during streaming of assistant messages. Contains both the partial message and a streaming delta event.

@@ -218,6 +218,13 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `markdown.codeBlockIndent` | string | `"  "` | Indentation for code blocks |
+| `markdown.toolDisplay` | string | `"rendered"` | Interactive Markdown reads: `"rendered"` documents or `"source"` sanitized syntax |
+
+**Markdown reads** in `/settings` changes current and future read cards, independently of Ctrl+O expansion. Changes save to the global `settings.json` in the effective agent/profile directory (`~/.scramjet/agent` by default, configurable with `SCRAMJET_CODING_AGENT_DIR`). A project `markdown.toolDisplay` overrides the global value; the selector identifies that exact leaf and continues showing the effective value after global edits. Setting only project `markdown.codeBlockIndent` does not override the display mode. Failed saves show an unsaved notice and warning; malformed files are preserved. Invalid explicit display values or Markdown containers produce scoped diagnostics and inherit a valid lower-priority value or the default without rewriting disk.
+
+Rendered mode uses headings, emphasis, lists and fenced code for proven textual `.md`/`.markdown` reads (case-insensitive). Collapsed cards select ten source lines before parsing; expansion shows all returned content, not unread file content. Compact resource/skill/documentation reads remain hidden until expanded. Offset/limited fragments render as supplied; generated continuation guidance stays outside the document. Historical or custom results without a provable document boundary fall back to labelled Source, so notice-looking file prose is never heuristically removed. Source exposes sanitized syntax and comments, not a byte-exact terminal dump; rendered HTML comments may be hidden. Copy captures displayed content, not original Markdown bytes or omitted content.
+
+Arguments still arriving retain the existing read header; no document is rendered until textual result content arrives. Writes retain their existing source presentation, including streaming previews. This preference does not change execution, model-visible text, print/RPC output or HTML export, and fully custom renderers may ignore it.
 
 ### Resources
 

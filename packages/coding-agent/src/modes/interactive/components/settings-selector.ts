@@ -63,6 +63,8 @@ export interface SettingsConfig {
 	editorMaxHeightPercent: number;
 	scrollWheelStep: number;
 	viewportProjectOverrides?: string[];
+	markdownToolDisplay?: "rendered" | "source";
+	markdownToolDisplayProjectOverride?: boolean;
 }
 
 export interface SettingsCallbacks {
@@ -90,6 +92,7 @@ export interface SettingsCallbacks {
 	onShowTerminalProgressChange: (enabled: boolean) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onRetainTranscriptOnExitChange?: (enabled: boolean) => boolean;
+	onMarkdownToolDisplayChange?: (mode: "rendered" | "source") => "rendered" | "source";
 	onDockEditorChange: (enabled: boolean) => boolean;
 	onEditorMaxHeightPercentChange: (percent: number) => number;
 	onScrollWheelStepChange: (step: number) => number;
@@ -516,6 +519,20 @@ export class SettingsSelectorComponent extends Container {
 						: "Committed rendering already retains native history.") + scopeHint("retainTranscriptOnExit"),
 			});
 
+		// SCRAMJET-DIVERGENCE: standalone callers opt into the Markdown read preference control.
+		if (callbacks.onMarkdownToolDisplayChange)
+			items.push({
+				id: "markdown-reads",
+				label: "Markdown reads",
+				currentValue: config.markdownToolDisplay === "source" ? "Source" : "Rendered",
+				values: ["Rendered", "Source"],
+				description:
+					"Display Markdown read results as documents or sanitized source. Expansion is independent." +
+					(config.markdownToolDisplayProjectOverride
+						? " Project settings override this value; edits save the global preference for other projects."
+						: ""),
+			});
+
 		// Add borders
 		this.addChild(new DynamicBorder());
 
@@ -525,6 +542,13 @@ export class SettingsSelectorComponent extends Container {
 			getSettingsListTheme(),
 			(id, newValue) => {
 				switch (id) {
+					case "markdown-reads": {
+						const effective = callbacks.onMarkdownToolDisplayChange!(
+							newValue === "Source" ? "source" : "rendered",
+						);
+						this.settingsList.updateValue(id, effective === "source" ? "Source" : "Rendered");
+						break;
+					}
 					case "retain-transcript-on-exit":
 						this.settingsList.updateValue(
 							id,

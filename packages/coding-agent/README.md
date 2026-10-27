@@ -134,7 +134,9 @@ The interface from top to bottom:
 - **Startup header** - Shows shortcuts (`/hotkeys` for all), loaded AGENTS.md files, prompt templates, skills, and extensions
 - **Messages** - Your messages, assistant responses, tool calls and results, notifications, errors, and extension UI
 - **Editor** - Where you type; border color indicates thinking level
-- **Footer** - Working directory, session name, total token/cache usage, cost, context usage, current model, and recent median output speed
+- **Footer** - Working directory, session name, total token/cache usage, cost, context usage, current model, and recent median effective output rate
+
+Rates such as `42tok/s` are the median of the latest 20 successful whole-response rates per requested provider/model: final provider-reported output tokens (possibly including hidden reasoning) divided by client-observed provider-stream duration, including prompt processing. This is not pure generation speed; prompt size, caching, effort and workload affect comparisons. Unsampled models omit the rate, and history cold-starts in the isolated v2 file without importing legacy estimates. See [effective output rate](docs/usage.md#effective-output-rate) for timing boundaries and migration.
 
 The default footer's existing dollar amount combines parent assistant costs across the whole journal with tool-reported costs, including nested subagents and failed/interrupted work. Cumulative tool updates replace earlier reports live; saved final costs survive resume. Recoverable legacy details are interpreted by the registered tool without rewriting history or enabling execution. Token/cache/context metrics remain parent-only; `/session`, RPC statistics, and custom footer examples retain their existing accounting.
 
@@ -151,6 +153,8 @@ Drag without modifiers to select displayed text, including across scrolling; dou
 Home/End always retain editor line-start/end behavior. Ctrl+Home/Ctrl+End navigate to the transcript beginning/bottom, with Ctrl+End resuming following. Submitting nonempty editor input resumes following immediately, including `!`/`!!` commands, slash commands and queued messages. A new user message appearing in the transcript also resumes following. While scrolled away, PageUp/PageDown browse and Escape returns to the live tail; Alt+PageUp/Alt+PageDown enter browsing from the tail. Docked editing and presentation toggles preserve the reading position; undocked editing reveals its cursor. At the tail, ordinary editor/list bindings apply. Hidden approval controls must first be revealed before a subsequent activation can approve.
 
 By default, orderly exit restores the shell without printing a transcript. Enable **Retain transcript on exit** in `/settings` to leave the full current styled history, widgets, rendered editor and footer in terminal scrollback; collapsed content stays collapsed and images become labelled placeholders. Suspension and external-editor handoffs never dump history. Saved sessions and `/export` remain available. See [terminal setup](docs/terminal-setup.md#transcript-browsing-and-copying) for tested configurations, iTerm2's required right-click setting, clipboard limits and image behavior.
+
+Markdown file reads render as documents by default. Use **Markdown reads: Source** in `/settings` to inspect sanitized Markdown syntax and comments; the choice saves globally, with project settings taking precedence. Ctrl+O still only expands/collapses output. Writes keep their existing source presentation. See [Markdown settings](docs/settings.md#markdown).
 
 ### Editor
 

@@ -41,12 +41,14 @@ type AgentEvent =
   // Message lifecycle
   | { type: "message_start"; message: AgentMessage }
   | { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
-  | { type: "message_end"; message: AgentMessage }
+  | { type: "message_end"; message: AgentMessage; responseDurationMs?: number }
   // Tool execution
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
   | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
   | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
 ```
+
+Provider-stream assistant `message_end` events may include `responseDurationMs`, the client-observed monotonic milliseconds from provider-stream invocation through final-result consumption (including prompt processing, hidden reasoning, buffering and earlier awaited stream listeners). Pre-invocation preparation and final completion-listener/persistence work are excluded. It is not pure generation time; missing/invalid timing and failed responses must not yield a completed rate. The field is event-only, not persisted in assistant messages or added to proxy messages or the separate extension event projection. Closed event schemas must allow this optional scalar. See [SDK contract and history migration](sdk.md#effective-output-rate-and-history) and [effective-rate semantics](usage.md#effective-output-rate).
 
 ## Message Types
 

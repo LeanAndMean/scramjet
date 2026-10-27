@@ -44,7 +44,7 @@ describe("output-throughput history construction", () => {
 		const agentDir = join(path, "profile");
 		const services = await createAgentSessionServices({ cwd: dirname(path), agentDir });
 
-		expect(services.outputThroughputHistoryPath).toBe(join(agentDir, "output-throughput-history.json"));
+		expect(services.outputThroughputHistoryPath).toBe(join(agentDir, "output-throughput-history-v2.json"));
 	});
 });
 
@@ -59,7 +59,7 @@ describe("OutputThroughputHistoryStore", () => {
 
 		const reloaded = new OutputThroughputHistoryStore(path);
 		expect((await reloaded.refresh()).samples("test-provider", "model")).toEqual([sample("model", 1)]);
-		expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ version: 1, samples: [sample("model", 1)] });
+		expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ version: 2, samples: [sample("model", 1)] });
 	});
 
 	it("flushes pending submissions and isolates them from caller mutation", async () => {
@@ -138,7 +138,7 @@ describe("OutputThroughputHistoryStore", () => {
 	it("keeps written documents within the global schema bound", async () => {
 		const path = await temporaryPath();
 		const samples = Array.from({ length: 20000 }, (_, index) => sample(`model-${index}`, index));
-		await writeFile(path, JSON.stringify({ version: 1, samples }));
+		await writeFile(path, JSON.stringify({ version: 2, samples }));
 		const store = new OutputThroughputHistoryStore(path);
 
 		store.submit(sample("newest", 20000));
@@ -159,7 +159,11 @@ describe("OutputThroughputHistoryStore", () => {
 		store.submit(sample("model", 1));
 		await store.refresh();
 
-		for (const invalid of ["not json", JSON.stringify({ version: 2, samples: [] })]) {
+		for (const invalid of [
+			"not json",
+			JSON.stringify({ version: 1, samples: [sample("legacy", 100)] }),
+			JSON.stringify({ version: 99, samples: [] }),
+		]) {
 			await writeFile(path, invalid);
 			expect((await store.refresh()).samples("test-provider", "model")).toEqual([sample("model", 1)]);
 			expect(await readFile(path, "utf8")).toBe(invalid);
@@ -170,9 +174,23 @@ describe("OutputThroughputHistoryStore", () => {
 		expect(diagnostics.every(({ message }) => message.includes("preserved"))).toBe(true);
 	});
 
+	it("rejects explicit v1 paths without importing or changing old bytes", async () => {
+		const path = await temporaryPath();
+		const legacy = JSON.stringify({ version: 1, samples: [sample("legacy", 1)] });
+		await writeFile(path, legacy);
+		const diagnostics: OutputThroughputHistoryDiagnostic[] = [];
+		const store = new OutputThroughputHistoryStore(path, (diagnostic) => diagnostics.push(diagnostic));
+		expect((await store.refresh()).allSamples()).toEqual([]);
+		store.submit(sample("new", 2));
+		await store.flush();
+		expect(store.snapshot().allSamples()).toEqual([]);
+		expect(await readFile(path, "utf8")).toBe(legacy);
+		expect(diagnostics[0]?.message).toContain("fresh");
+	});
+
 	it("normalizes accepted samples before re-persisting them", async () => {
 		const path = await temporaryPath();
-		await writeFile(path, JSON.stringify({ version: 1, samples: [{ ...sample("model", 1), unexpected: true }] }));
+		await writeFile(path, JSON.stringify({ version: 2, samples: [{ ...sample("model", 1), unexpected: true }] }));
 		const store = new OutputThroughputHistoryStore(path);
 
 		await store.refresh();
@@ -180,7 +198,7 @@ describe("OutputThroughputHistoryStore", () => {
 		await store.refresh();
 
 		expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-			version: 1,
+			version: 2,
 			samples: [sample("model", 1), sample("other", 2)],
 		});
 	});
@@ -206,7 +224,7 @@ describe("OutputThroughputHistoryStore", () => {
 	it("rejects invalid boundary values and deduplicates equivalent diagnostics", async () => {
 		const path = await temporaryPath();
 		const diagnostics: OutputThroughputHistoryDiagnostic[] = [];
-		await writeFile(path, JSON.stringify({ version: 1, samples: [{ ...sample("model", 1), provider: "" }] }));
+		await writeFile(path, JSON.stringify({ version: 2, samples: [{ ...sample("model", 1), provider: "" }] }));
 		const store = new OutputThroughputHistoryStore(path, (diagnostic) => diagnostics.push(diagnostic));
 
 		await store.refresh();
