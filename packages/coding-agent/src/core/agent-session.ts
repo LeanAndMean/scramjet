@@ -2313,7 +2313,7 @@ export class AgentSession {
 
 	/**
 	 * Set model directly.
-	 * Validates auth, journals selection, and optionally saves global defaults.
+	 * Validates auth, journals selection, and optionally saves global/directory preferences.
 	 * @throws Error if no auth is configured for the model
 	 */
 	async setModel(model: Model<any>): Promise<void> {
@@ -2325,7 +2325,9 @@ export class AgentSession {
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.state.model = model;
 		this.sessionManager.appendModelChange(model.provider, model.id);
-		if (this._persistModelPreferences) this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+		// SCRAMJET-DIVERGENCE: Accepted runtime selections teach the session's exact working directory.
+		if (this._persistModelPreferences)
+			this.settingsManager.setDefaultModelAndProvider(model.provider, model.id, this._cwd);
 
 		// Re-clamp thinking level for new model's capabilities
 		this.setThinkingLevel(thinkingLevel);
@@ -2363,7 +2365,7 @@ export class AgentSession {
 		this.agent.state.model = next.model;
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		if (this._persistModelPreferences) {
-			this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
+			this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id, this._cwd);
 		}
 
 		// Apply thinking level.
@@ -2393,7 +2395,7 @@ export class AgentSession {
 		this.agent.state.model = nextModel;
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		if (this._persistModelPreferences) {
-			this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
+			this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id, this._cwd);
 		}
 
 		// Re-clamp thinking level for new model's capabilities

@@ -160,6 +160,45 @@ describe("buildSessionOptions — inherited model/thinkingLevel precedence", () 
 	});
 });
 
+describe("buildSessionOptions — directory recall", () => {
+	it.each(["member", "outside", "missing", "unauthenticated", "omitted", "explicit", "cli", "invocation", "override"])(
+		"handles %s recall against the target CWD and scope",
+		async (route) => {
+			const cwd = "/target/not-process-cwd";
+			const settings = SettingsManager.inMemory();
+			await settings.setDefaultModelAndProvider("provider-a", "model-a", cwd);
+			await settings.flush();
+			settings.setDefaultModelAndProvider("provider-b", "model-b");
+			if (route === "override") settings.applyOverrides({ defaultModel: "model-b" });
+			const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+			registry.find = (provider, id) =>
+				provider === "provider-a" && id === "model-a" ? (route === "missing" ? undefined : modelA) : modelB;
+			registry.hasConfiguredAuth = () => route !== "unauthenticated";
+			registry.getAll = () => [modelA, modelB];
+			const first = { ...modelB, id: "first" };
+			const scope =
+				route === "member"
+					? [{ model: first }, { model: modelA, thinkingLevel: "high" as const }]
+					: [{ model: first }, { model: modelB }];
+			const { options, diagnostics } = buildSessionOptions(
+				minimalParsed(route === "cli" ? { provider: "provider-b", model: "model-b" } : {}),
+				scope,
+				false,
+				registry,
+				settings,
+				route === "explicit" ? { model: modelB, thinkingLevel: "low" } : undefined,
+				route === "invocation" ? modelB : undefined,
+				route === "omitted" ? undefined : cwd,
+			);
+			expect(options.model).toBe(route === "member" ? modelA : route === "outside" ? first : modelB);
+			if (route === "member") expect(options.thinkingLevel).toBe("high");
+			expect(diagnostics).toHaveLength(["missing", "unauthenticated"].includes(route) ? 1 : 0);
+			if (route === "missing") expect(diagnostics[0].message).toContain("not in the model registry");
+			if (route === "unauthenticated") expect(diagnostics[0].message).toContain("no configured authentication");
+		},
+	);
+});
+
 describe("AgentSessionRuntime.newSession — model inheritance", () => {
 	function assistantText(text: string): AssistantMessage {
 		return {

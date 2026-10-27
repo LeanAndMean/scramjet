@@ -425,9 +425,12 @@ const { session } = await createAgentSession({
 ```
 
 If no model is provided:
-1. Tries to restore from session (if continuing)
-2. Uses default from settings
-3. Falls back to first available model
+1. Tries authenticated restoration from session (if continuing)
+2. Uses the exact working directory's remembered model, unless project/programmatic model defaults suppress recall
+3. Uses the effective default from settings
+4. Falls back to an available model
+
+Recall checks exact registry identity and configured authentication only; unavailable choices warn without erasing their record. `modelFallbackMessage` composes restoration, recall and configured-default diagnostics, including when no model is available. Explicit `model` bypasses these defaults. Startup/restoration/fallback never teach preferences, and `/new` live inheritance retains priority.
 
 `cacheRetention` controls prompt-cache retention on providers that support it (Anthropic: `long` -> 1h cache TTL where the model supports it, `short` -> the default 5m TTL, `none` -> no caching). Precedence: the `cacheRetention` option (or the `--cache-retention` CLI flag), then the `PI_CACHE_RETENTION` environment variable, then the built-in default `long`. Short-lived sessions such as subagents should pass `short` since a 1h cache write costs more than a 5m one and rarely pays off for a single run.
 
@@ -443,7 +446,7 @@ For each built-in provider request, `createAgentSession()` binds the current ext
 
 ### Model preference persistence
 
-`createAgentSession()` and `createAgentSessionFromServices()` accept optional `persistModelPreferences` (default `true`); it is also available on `AgentSessionConfig`. Pass `false` to preserve saved default provider/model/thinking while allowing direct selection, both model-cycling paths and thinking changes to update live state, events and journal entries. Authentication and thinking clamping are unchanged. In an opt-out session, actual thinking-level changes on reasoning-capable models are remembered locally across non-reasoning detours, including an explicit `off` choice; the saved default remains unchanged. This local preference is not a new journal field or replacement-session inheritance value. With this opt-out, explicit startup selection also records changed branch-local model/thinking identity when opening an existing journal.
+`createAgentSession()` and `createAgentSessionFromServices()` accept optional `persistModelPreferences` (default `true`); it is also available on `AgentSessionConfig`. Pass `false` to preserve both the global saved default provider/model/thinking and directory recall while allowing direct selection, both model-cycling paths and thinking changes to update live state, events and journal entries. Authentication and thinking clamping are unchanged. In an opt-out session, actual thinking-level changes on reasoning-capable models are remembered locally across non-reasoning detours, including an explicit `off` choice; the saved default remains unchanged. This local preference is not a new journal field or replacement-session inheritance value. With this opt-out, explicit startup selection also records changed branch-local model/thinking identity when opening an existing journal.
 
 ```typescript
 const { session } = await createAgentSession({
@@ -451,6 +454,8 @@ const { session } = await createAgentSession({
   persistModelPreferences: false,
 });
 ```
+
+With persistence enabled, authenticated direct selection (including same-model selection) and successful scoped/available cycling teach the session's effective CWD in `<agentDir>/last-used-models.json` as well as the global default. Authentication refusal and no-op cycling do not teach; selection success does not guarantee disk success. No repository-local recall files are created. Thinking remains global; see [directory model state](settings.md#directory-model-state) for scoped CLI policy, exact lexical path/profile scope, metadata growth/privacy and independent write failures.
 
 This is not blanket settings suppression: unrelated settings writes remain possible. Runtime factories must forward the policy to every replacement session. The CLI's [invocation-definition selectors](models.md#invocation-scoped-headless-models) do this automatically, register the captured route through existing `ModelRegistry.registerProvider()`, and supply its credential through `AuthStorage.setRuntimeApiKey()`. Ingress helpers are not new package-root SDK exports; programmatic callers can continue using those existing registry/auth APIs. Journal identity alone cannot reconstruct an endpoint or credential in a fresh process.
 

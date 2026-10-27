@@ -9,6 +9,7 @@ import { minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
+import type { SettingsManager } from "./settings-manager.js";
 
 // SCRAMJET-DIVERGENCE: Default models updated to claude-opus-4-8 (upstream parity)
 /** Default model IDs for each known provider */
@@ -470,6 +471,26 @@ export function resolveCliModel(options: {
 		warning,
 		error: `Model "${display}" not found. Use --list-models to see available models.`,
 	};
+}
+
+// SCRAMJET-DIVERGENCE: Recall is exact and configured-auth-only; unavailable records remain untouched.
+export function resolveDirectoryModel(
+	cwd: string,
+	settingsManager: SettingsManager,
+	modelRegistry: ModelRegistry,
+): { model?: Model<Api>; warning?: string } {
+	const identity = settingsManager.getDirectoryDefaultModel(cwd);
+	if (!identity) return {};
+	const model = modelRegistry.find(identity.provider, identity.modelId);
+	const label = JSON.stringify(`${identity.provider}/${identity.modelId}`).replace(
+		/[\u007f-\u009f]/g,
+		(character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+	);
+	if (!model) return { warning: `Remembered directory model ${label} is not in the model registry.` };
+	if (!modelRegistry.hasConfiguredAuth(model)) {
+		return { warning: `Remembered directory model ${label} has no configured authentication.` };
+	}
+	return { model };
 }
 
 export interface InitialModelResult {
