@@ -351,6 +351,16 @@ session.subscribe((event) => {
 });
 ```
 
+Provider-stream assistant `message_end` events carry optional `responseDurationMs?: number`: monotonic elapsed milliseconds from immediately before stream invocation to immediately after its final result resolves. This includes prompt processing, hidden reasoning, buffering, adapter/internal retries and earlier awaited stream listeners, but excludes pre-invocation preparation/credential resolution, synthetic-start work after the result, and final completion listeners/Session persistence. It is client-observed whole-response time, not backend generation time. User, tool, harness and Agent-local failure endings omit it; failed provider responses may carry it but do not qualify for throughput history. Consumers must tolerate absence and validate positive finite timing before calculating rates.
+
+The scalar is on the event, not `AssistantMessage`: it is not persisted in assistant messages or added to proxy wire messages. The separate extension `message_end` projection is unchanged. Closed external SDK/JSON/RPC event schemas must permit the optional scalar; external consumers have not all been audited.
+
+### Effective output rate and history
+
+Session rate getters and selector constructor signatures are unchanged. Completed samples require the Agent duration; `OutputThroughputTracker.finalize(generation, message, responseDurationMs?)` still accepts two arguments but produces no completed sample without valid timing. There is no delta/wall-clock fallback. The separate live byte-based API and its formatter retain their prior semantics and do not feed built-in historical displays.
+
+Both SDK and service factories default to `<agentDir>/output-throughput-history-v2.json`, containing `{ version: 2, samples: OutputThroughputSample[] }`. If you supply `outputThroughputHistoryPath`, use a fresh path for whole-response samples. Version 1/unsupported files are diagnosed, left byte-identical and refuse writes; no backfill or automatic deletion occurs. Last-valid fallback contains only previously accepted v2 data. Persistence failure does not invalidate a current local sample. See [effective-rate semantics, qualification and comparisons](usage.md#effective-output-rate).
+
 ## Options Reference
 
 ### Directories

@@ -13,7 +13,15 @@ The interface has four main areas:
 - **Editor** - where you type; border color indicates the current thinking level
 - **Footer** - working directory, session name, token/cache usage, cost, context usage, current model, and output speed when valid data exists
 
-The footer shows the current model's recent median output-rate estimate beside a nonzero session output total when valid history exists. The `/model` and `/scoped-models` selectors annotate every model row that has valid history. Completed and historical estimates use normalized final output usage over the interval from the first to last generated output; they exclude time to first token and trailing completion latency.
+### Effective output rate
+
+The footer shows the current model's recent median effective output rate (for example, `42tok/s`) beside a nonzero session output total when valid history exists. The `/model` and `/scoped-models` selectors annotate every model row that has valid history. Rates are the median of the latest 20 qualified successful responses per **requested provider/model**, not an average of chunk rates; a returned response-model alias does not change the history key.
+
+Each response rate divides final provider-reported normalized output tokens (which may include hidden reasoning) by client-observed elapsed time from provider-stream invocation through final-result consumption. This includes adapter setup, internal retries, request wait, prompt processing, reasoning, buffering, transport, earlier awaited stream listeners and trailing completion time. It excludes pre-invocation context preparation and credential resolution, prior/later tools, user wait, synthetic-start work after the final result, and final completion-listener/Session persistence work. It is **not pure generation speed**: prompt size, caching, reasoning effort and workload affect comparisons.
+
+Single-chunk and no-visible-delta responses qualify with valid usage and duration. Failed/aborted responses or missing/invalid timing or usage add no sample; unsampled models show no rate. Existing valid history can still be shown after an unqualified response. The separate SDK live byte-based heuristic is unchanged and is not used by these displays.
+
+History now cold-starts in `<agentDir>/output-throughput-history-v2.json` (schema version 2). Legacy `output-throughput-history.json` files are neither imported nor rewritten because their timing cannot be converted. [SDK callers with an explicit history path](sdk.md#effective-output-rate-and-history) must select a fresh path; unsupported files are preserved, diagnosed and not written.
 
 The editor can be replaced temporarily by built-in UI such as `/settings` or by custom extension UI.
 

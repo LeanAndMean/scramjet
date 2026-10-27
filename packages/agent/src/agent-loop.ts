@@ -320,6 +320,8 @@ async function streamAssistantResponse(
 	const resolvedApiKey =
 		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
 
+	// SCRAMJET-DIVERGENCE: client-observed invocation-to-result timing includes awaited stream listeners.
+	const responseStartedAt = performance.now();
 	const response = await streamFunction(config.model, llmContext, {
 		...config,
 		apiKey: resolvedApiKey,
@@ -361,7 +363,9 @@ async function streamAssistantResponse(
 
 			case "done":
 			case "error": {
-				const finalMessage = { ...(await response.result()), origin: "provider" as const };
+				const result = await response.result();
+				const responseDurationMs = performance.now() - responseStartedAt;
+				const finalMessage = { ...result, origin: "provider" as const };
 				if (addedPartial) {
 					context.messages[context.messages.length - 1] = finalMessage;
 				} else {
@@ -370,20 +374,22 @@ async function streamAssistantResponse(
 				if (!addedPartial) {
 					await emit({ type: "message_start", message: { ...finalMessage } });
 				}
-				await emit({ type: "message_end", message: finalMessage });
+				await emit({ type: "message_end", message: finalMessage, responseDurationMs });
 				return finalMessage;
 			}
 		}
 	}
 
-	const finalMessage = { ...(await response.result()), origin: "provider" as const };
+	const result = await response.result();
+	const responseDurationMs = performance.now() - responseStartedAt;
+	const finalMessage = { ...result, origin: "provider" as const };
 	if (addedPartial) {
 		context.messages[context.messages.length - 1] = finalMessage;
 	} else {
 		context.messages.push(finalMessage);
 		await emit({ type: "message_start", message: { ...finalMessage } });
 	}
-	await emit({ type: "message_end", message: finalMessage });
+	await emit({ type: "message_end", message: finalMessage, responseDurationMs });
 	return finalMessage;
 }
 

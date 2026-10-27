@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.113.3 — Correct whole-response throughput rates
+
+Correct provider throughput measurements and label their timing semantics. Fixes [#625](https://github.com/LeanAndMean/scramjet/issues/625).
+
+### Fixed
+
+- Calculate completed response rates from final provider-reported output usage and Agent-owned stream-invocation-to-final-result duration, including prompt processing and earlier awaited stream listeners rather than depending on delta spacing.
+- Show recent median rates as `tok/s` in the footer and model selectors, with documented whole-response timing, workload and comparison limits; keep the separate live estimator unchanged.
+- Cold-start whole-response history in an isolated v2 file without importing or rewriting legacy estimates, preserving requested-model attribution and conservative sample qualification.
+
+### Tests
+
+- Cover timing boundaries, single-chunk and no-visible-delta responses, real Responses/Google adapter shapes, history isolation, invalid samples and narrow rendering with deterministic offline fixtures. These checks do not establish live-provider timing or calibrated cross-model performance.
+
 ## 0.113.2 — Fix spelling marks in Apple Terminal and XTerm
 
 Fix terminal-specific spelling underline rendering. Fixes [#615](https://github.com/LeanAndMean/scramjet/issues/615).

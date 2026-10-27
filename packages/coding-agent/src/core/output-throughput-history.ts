@@ -4,9 +4,9 @@ import { basename, dirname, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { OutputThroughputHistory, type OutputThroughputSample } from "./output-throughput.js";
 
-// SCRAMJET-DIVERGENCE: Persist bounded, profile-scoped provider throughput across concurrent processes (#476).
+// SCRAMJET-DIVERGENCE: Persist bounded whole-response v2 history without reinterpreting legacy samples (#476, #625).
 
-const HISTORY_VERSION = 1;
+const HISTORY_VERSION = 2;
 const MAX_SAMPLES_PER_MODEL = 20;
 const MAX_HISTORY_SAMPLES = 20000;
 const MAX_STRING_LENGTH = 512;
@@ -20,7 +20,7 @@ export interface OutputThroughputHistoryDiagnostic {
 }
 
 interface HistoryDocument {
-	version: 1;
+	version: 2;
 	samples: OutputThroughputSample[];
 }
 
@@ -133,7 +133,7 @@ export class OutputThroughputHistoryStore {
 		} catch (cause) {
 			this.report(
 				"validate",
-				"Output-throughput history is malformed or unsupported; original bytes and the last valid snapshot were preserved",
+				"Output-throughput history is malformed or unsupported; original bytes and the last valid snapshot were preserved. Use a fresh history path for whole-response samples",
 				cause,
 			);
 			return undefined;

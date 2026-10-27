@@ -165,7 +165,7 @@ export async function createAgentSessionServices(
 	return {
 		cwd,
 		agentDir,
-		outputThroughputHistoryPath: join(agentDir, "output-throughput-history.json"),
+		outputThroughputHistoryPath: join(agentDir, "output-throughput-history-v2.json"),
 		authStorage,
 		settingsManager,
 		modelRegistry,
