@@ -1,5 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import lockfile from "proper-lockfile";
+import { describe, expect, it, vi } from "vitest";
 import { InMemorySettingsStorage, SettingsManager } from "../src/core/settings-manager.js";
+
+describe("file settings reader coordination", () => {
+	it("loads the committed document after a cooperating in-progress writer", () => {
+		const dir = mkdtempSync(join(tmpdir(), "settings-reader-"));
+		const path = join(dir, "settings.json");
+		const committed = '{"defaultProvider":"p","defaultModel":"committed"}';
+		writeFileSync(path, committed);
+		const acquire = lockfile.lockSync.bind(lockfile);
+		let releaseWriter: (() => void) | undefined = acquire(path, { realpath: false });
+		writeFileSync(path, '{"defaultProvider":');
+		const finishWriter = () => {
+			if (!releaseWriter) return;
+			writeFileSync(path, committed);
+			releaseWriter();
+			releaseWriter = undefined;
+		};
+		const spy = vi.spyOn(lockfile, "lockSync").mockImplementation((...args) => {
+			finishWriter();
+			return acquire(...args);
+		});
+		try {
+			const manager = SettingsManager.create(join(dir, "project"), dir);
+			finishWriter();
+			expect(manager.getDefaultModel()).toBe("committed");
+			expect(manager.drainErrors()).toEqual([]);
+		} finally {
+			spy.mockRestore();
+			finishWriter();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("retry settings bounds", () => {
 	it("keeps old two-parameter storage compatible without replaying failed model fields", async () => {
