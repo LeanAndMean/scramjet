@@ -379,11 +379,46 @@ describe("AgentSessionRuntime — settings settlement", () => {
 			settings.setTheme("pi-light");
 			throw error;
 		});
-		const flush = vi.spyOn(settings, "flush");
-		await expect(fx.runtime.dispose()).rejects.toBe(error);
-		expect(flush).toHaveBeenCalledOnce();
-		expect(fx.beforeInvalidateCalls).toHaveLength(0);
-		fx.runtime.session.dispose();
+		let release!: () => void;
+		let entered!: () => void;
+		const started = new Promise<void>((done) => {
+			entered = done;
+		});
+		const gate = new Promise<void>((done) => {
+			release = done;
+		});
+		const originalFlush = settings.flush.bind(settings);
+		const flush = vi.spyOn(settings, "flush").mockImplementation(async () => {
+			entered();
+			await gate;
+			await originalFlush();
+		});
+		let settled = false;
+		const disposal = fx.runtime.dispose();
+		const observed = disposal.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		try {
+			await started;
+			await new Promise<void>((done) => setImmediate(done));
+			expect(settled).toBe(false);
+			expect(flush).toHaveBeenCalledOnce();
+			expect(fx.beforeInvalidateCalls).toHaveLength(0);
+			release();
+			await expect(disposal).rejects.toBe(error);
+			expect(fx.beforeInvalidateCalls).toHaveLength(0);
+		} finally {
+			release();
+			await observed;
+			await flush.mock.results[0]?.value;
+			flush.mockRestore();
+			fx.runtime.session.dispose();
+		}
 	});
 
 	it("retains errors without a handler and delivers them once when one is installed", async () => {

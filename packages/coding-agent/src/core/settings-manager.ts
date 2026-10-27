@@ -227,8 +227,31 @@ export class FileSettingsStorage implements SettingsStorage {
 				}
 				writeFileSync(path, next, "utf-8");
 			}
-		} catch {
-			failure = new Error(`Settings ${JSON.stringify(path)}: ${write ? "update" : "read"} failed`);
+		} catch (error) {
+			// SCRAMJET-DIVERGENCE: classify failures without exposing document excerpts or arbitrary causes.
+			const reasons: Record<string, string> = {
+				EACCES: "permission denied",
+				EPERM: "permission denied",
+				ELOCKED: "settings lock is held by another writer",
+				ENOENT: "file or directory not found",
+				ENOTDIR: "a path component is not a directory",
+				EISDIR: "expected a file, found a directory",
+				ENOSPC: "no space left on device",
+				EROFS: "read-only filesystem",
+				EIO: "filesystem I/O error",
+				EMFILE: "too many open files",
+				ENFILE: "too many open files",
+			};
+			const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+			const reason =
+				error instanceof SyntaxError
+					? "invalid JSON"
+					: typeof code === "string" && Object.hasOwn(reasons, code)
+						? `${reasons[code]} (${code})`
+						: undefined;
+			failure = new Error(
+				`Settings ${JSON.stringify(path)}: ${write ? "update" : "read"} failed${reason ? `: ${reason}` : ""}`,
+			);
 		} finally {
 			if (release) {
 				try {

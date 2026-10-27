@@ -184,39 +184,51 @@ describe("LastUsedModelsStore", () => {
 		const waiting = barrier();
 		const realLock = lockfile.lock.bind(lockfile);
 		let calls = 0;
-		vi.spyOn(lockfile, "lock").mockImplementation(async (target, options) => {
-			calls++;
-			if (calls === 1) {
-				const release = await realLock(target, options);
-				entered.release();
-				await held.promise;
-				return release;
-			}
-			waiting.release();
-			await held.promise;
-			await first.flush();
+		vi.spyOn(lockfile, "lock").mockImplementation((target, options) => {
+			if (++calls === 2) waiting.release();
 			return realLock(target, options);
+		});
+		const realRename = fs.rename;
+		vi.spyOn(fs, "rename").mockImplementationOnce(async (...args) => {
+			entered.release();
+			await held.promise;
+			await realRename(...args);
 		});
 		const first = new LastUsedModelsStore(new FileLastUsedModelsStorage(path));
 		const second = new LastUsedModelsStore(new FileLastUsedModelsStorage(path));
+		let unexpectedRelease: (() => Promise<void>) | undefined;
 		first.set("one", identity("first"));
-		await entered.promise;
-		second.set(sameKey ? "one" : "two", identity("second"));
-		await waiting.promise;
-		held.release();
-		await Promise.all([first.flush(), second.flush()]);
-		expect(first.drainErrors()).toEqual([]);
-		expect(second.drainErrors()).toEqual([]);
-		expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(
-			sameKey
-				? {
-						[resolve("one")]: identity("second"),
-					}
-				: {
-						[resolve("one")]: identity("first"),
-						[resolve("two")]: identity("second"),
-					},
-		);
+		try {
+			await entered.promise;
+			await expect(
+				realLock(path, { realpath: false, retries: 0 }).then((release) => {
+					unexpectedRelease = release;
+				}),
+			).rejects.toMatchObject({ code: "ELOCKED" });
+			second.set(sameKey ? "one" : "two", identity("second"));
+			await waiting.promise;
+			held.release();
+			await Promise.all([first.flush(), second.flush()]);
+			expect(first.drainErrors()).toEqual([]);
+			expect(second.drainErrors()).toEqual([]);
+			expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(
+				sameKey
+					? {
+							[resolve("one")]: identity("second"),
+						}
+					: {
+							[resolve("one")]: identity("first"),
+							[resolve("two")]: identity("second"),
+						},
+			);
+		} finally {
+			held.release();
+			try {
+				await unexpectedRelease?.();
+			} finally {
+				await Promise.all([first.flush(), second.flush()]);
+			}
+		}
 	});
 
 	it("captures queued updates and never regresses a newer pending lookup", async () => {
