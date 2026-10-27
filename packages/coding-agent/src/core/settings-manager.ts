@@ -50,6 +50,8 @@ export interface ThinkingBudgetsSettings {
 
 export interface MarkdownSettings {
 	codeBlockIndent?: string; // default: "  "
+	// SCRAMJET-DIVERGENCE: persistent file-tool presentation, independent of execution.
+	toolDisplay?: "rendered" | "source";
 }
 
 export interface WarningSettings {
@@ -279,6 +281,8 @@ export class SettingsManager {
 		this.normalizeRetrySettings(this.projectSettings, "project");
 		this.normalizeViewportSettings(this.globalSettings, "global");
 		this.normalizeViewportSettings(this.projectSettings, "project");
+		this.normalizeMarkdownSettings(this.globalSettings, "global");
+		this.normalizeMarkdownSettings(this.projectSettings, "project");
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 	}
 
@@ -450,6 +454,8 @@ export class SettingsManager {
 		this.normalizeRetrySettings(this.projectSettings, "project");
 		this.normalizeViewportSettings(this.globalSettings, "global");
 		this.normalizeViewportSettings(this.projectSettings, "project");
+		this.normalizeMarkdownSettings(this.globalSettings, "global");
+		this.normalizeMarkdownSettings(this.projectSettings, "project");
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 	}
 
@@ -457,6 +463,7 @@ export class SettingsManager {
 	applyOverrides(overrides: Partial<Settings>): void {
 		const normalized = structuredClone(overrides);
 		this.normalizeRetrySettings(normalized, "global");
+		this.normalizeMarkdownSettings(normalized, "global");
 		this.settings = deepMergeSettings(this.settings, normalized);
 		this.normalizeViewportSettings(this.settings, "global");
 	}
@@ -528,6 +535,16 @@ export class SettingsManager {
 			const currentFileSettings = current
 				? SettingsManager.migrateSettings(JSON.parse(current) as Record<string, unknown>)
 				: {};
+			// SCRAMJET-DIVERGENCE: a leaf update must not replace a malformed Markdown container.
+			if (
+				modifiedFields.has("markdown") &&
+				currentFileSettings.markdown !== undefined &&
+				(!currentFileSettings.markdown ||
+					typeof currentFileSettings.markdown !== "object" ||
+					Array.isArray(currentFileSettings.markdown))
+			) {
+				throw new Error("markdown must be an object; correct settings.json before saving Markdown preferences.");
+			}
 			const mergedSettings: Settings = { ...currentFileSettings };
 			for (const field of modifiedFields) {
 				const value = snapshotSettings[field];
@@ -1177,6 +1194,38 @@ export class SettingsManager {
 	setAutocompleteMaxVisible(maxVisible: number): void {
 		this.globalSettings.autocompleteMaxVisible = Math.max(3, Math.min(20, Math.floor(maxVisible)));
 		this.markModified("autocompleteMaxVisible");
+		this.save();
+	}
+
+	private normalizeMarkdownSettings(settings: Partial<Settings>, scope: SettingsScope): void {
+		const markdown = settings.markdown;
+		if (markdown === undefined) return;
+		if (!markdown || typeof markdown !== "object" || Array.isArray(markdown)) {
+			delete settings.markdown;
+			this.recordError(scope, new Error("markdown must be an object; ignoring this scope's value."));
+			return;
+		}
+		if (
+			markdown.toolDisplay !== undefined &&
+			markdown.toolDisplay !== "rendered" &&
+			markdown.toolDisplay !== "source"
+		) {
+			delete markdown.toolDisplay;
+			this.recordError(
+				scope,
+				new Error('markdown.toolDisplay must be "rendered" or "source"; ignoring this scope\'s value.'),
+			);
+		}
+	}
+
+	getMarkdownToolDisplay(): "rendered" | "source" {
+		return this.settings.markdown?.toolDisplay ?? "rendered";
+	}
+
+	setMarkdownToolDisplay(mode: "rendered" | "source"): void {
+		this.globalSettings.markdown ??= {};
+		this.globalSettings.markdown.toolDisplay = mode;
+		this.markModified("markdown", "toolDisplay");
 		this.save();
 	}
 

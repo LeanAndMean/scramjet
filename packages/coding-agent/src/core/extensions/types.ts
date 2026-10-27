@@ -473,6 +473,9 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	expanded: boolean;
 	/** Whether inline images are currently shown in the TUI. */
 	showImages: boolean;
+	// SCRAMJET-DIVERGENCE: optional presentation transport preserves standalone renderer defaults.
+	/** Markdown file presentation; omission means Source. Custom renderers may ignore it. */
+	markdownToolDisplay?: "rendered" | "source";
 	/** Whether the current result is an error. */
 	isError: boolean;
 }
