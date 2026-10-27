@@ -39,11 +39,17 @@ describe("file settings reader coordination", () => {
 });
 
 describe("file settings diagnostics", () => {
-	it("classifies malformed JSON at load and blocked save without exposing document contents", async () => {
+	it("retains the JSON.parse SyntaxError at load and blocked save", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "settings-diagnostics-"));
 		const path = join(dir, "settings.json");
 		const bytes = '{"PRIVATE_SETTINGS_SENTINEL": BROKEN}';
 		writeFileSync(path, bytes);
+		let parseFailure: unknown;
+		try {
+			JSON.parse(bytes);
+		} catch (error) {
+			parseFailure = error;
+		}
 		try {
 			const manager = SettingsManager.create(join(dir, "project"), dir);
 			const initial = manager.drainErrors();
@@ -54,8 +60,10 @@ describe("file settings diagnostics", () => {
 				expect(errors).toHaveLength(1);
 				expect(errors[0].scope).toBe("global");
 				expect(errors[0].error.message).toContain(path);
-				expect(errors[0].error.message).toContain("read failed: invalid JSON");
-				expect(inspect(errors)).not.toContain("PRIVATE_SETTINGS_SENTINEL");
+				expect(errors[0].error.message).toContain("read failed during update/validate");
+				expect(errors[0].error.cause).toBeInstanceOf(SyntaxError);
+				expect((errors[0].error.cause as SyntaxError).message).toBe((parseFailure as SyntaxError).message);
+				expect((errors[0].error.cause as SyntaxError).stack).toContain("JSON.parse");
 			}
 			expect(readFileSync(path, "utf8")).toBe(bytes);
 		} finally {
@@ -63,19 +71,20 @@ describe("file settings diagnostics", () => {
 		}
 	});
 
-	it("retains safe update classification alongside an unlock-outcome warning", async () => {
+	it("retains both parse and unlock failures alongside the outcome warning", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "settings-diagnostics-"));
 		const path = join(dir, "settings.json");
 		writeFileSync(path, "{}");
 		const manager = SettingsManager.create(join(dir, "project"), dir);
 		const bytes = '{"PRIVATE_SETTINGS_SENTINEL": BROKEN}';
 		writeFileSync(path, bytes);
+		const unlockFailure = Object.assign(new Error("unlock sentinel"), { code: "EUNLOCK" });
 		const acquire = lockfile.lockSync.bind(lockfile);
 		const spy = vi.spyOn(lockfile, "lockSync").mockImplementationOnce((...args) => {
 			const release = acquire(...args);
 			return () => {
 				release();
-				throw new Error("PRIVATE_SETTINGS_SENTINEL");
+				throw unlockFailure;
 			};
 		});
 		try {
@@ -84,9 +93,18 @@ describe("file settings diagnostics", () => {
 			const errors = manager.drainErrors();
 			expect(errors).toHaveLength(1);
 			expect(errors[0].error.message).toContain(path);
-			expect(errors[0].error.message).toContain("update failed: invalid JSON; unlock failed");
+			expect(errors[0].error.message).toContain("update failed during update/validate");
+			expect(errors[0].error.message).toContain("unlock failed");
 			expect(errors[0].error.message).toContain("write outcome may be committed");
-			expect(inspect(errors)).not.toContain("PRIVATE_SETTINGS_SENTINEL");
+			expect(errors[0].error).toBeInstanceOf(AggregateError);
+			const causes = (errors[0].error as AggregateError).errors;
+			expect(causes).toHaveLength(2);
+			expect(causes[0].cause).toBeInstanceOf(SyntaxError);
+			expect(causes[0].cause.stack).toContain("JSON.parse");
+			expect(causes[1].cause).toBe(unlockFailure);
+			expect(inspect(causes, { depth: null })).toContain("SyntaxError");
+			expect(inspect(causes, { depth: null })).toContain(unlockFailure.stack!.split("\n")[1].trim());
+			expect(inspect(causes, { depth: null })).toContain("EUNLOCK");
 			expect(readFileSync(path, "utf8")).toBe(bytes);
 		} finally {
 			spy.mockRestore();
@@ -95,27 +113,26 @@ describe("file settings diagnostics", () => {
 	});
 
 	it.each([
-		["EACCES", "permission denied"],
-		["EPERM", "permission denied"],
-		["ELOCKED", "settings lock is held by another writer"],
-		["ENOENT", "file or directory not found"],
-		["ENOTDIR", "a path component is not a directory"],
-		["EISDIR", "expected a file, found a directory"],
-		["ENOSPC", "no space left on device"],
-		["EROFS", "read-only filesystem"],
-		["EIO", "filesystem I/O error"],
-		["EMFILE", "too many open files"],
-		["ENFILE", "too many open files"],
-		["PRIVATE_SETTINGS_SENTINEL", undefined],
-	])("safely classifies %s at load and blocked save", async (code, reason) => {
+		"EACCES",
+		"EPERM",
+		"ELOCKED",
+		"ENOENT",
+		"ENOTDIR",
+		"EISDIR",
+		"ENOSPC",
+		"EROFS",
+		"EIO",
+		"EMFILE",
+		"ENFILE",
+		"PRIVATE_SETTINGS_SENTINEL",
+	])("retains the original %s lock failure at load and blocked save", async (code) => {
 		const dir = mkdtempSync(join(tmpdir(), "settings-diagnostics-"));
 		const path = join(dir, "settings.json");
 		writeFileSync(path, "{}");
+		const originalCause = new Error("nested failure");
+		const failure = Object.assign(new Error("original lock failure", { cause: originalCause }), { code });
 		const spy = vi.spyOn(lockfile, "lockSync").mockImplementation(() => {
-			throw Object.assign(new Error("PRIVATE_SETTINGS_SENTINEL"), {
-				code,
-				cause: new Error("PRIVATE_SETTINGS_SENTINEL"),
-			});
+			throw failure;
 		});
 		try {
 			const manager = SettingsManager.create(join(dir, "project"), dir);
@@ -124,10 +141,11 @@ describe("file settings diagnostics", () => {
 			await manager.flush();
 			for (const errors of [initial, manager.drainErrors()]) {
 				expect(errors).toHaveLength(1);
-				expect(errors[0].error.message).toBe(
-					`Settings ${JSON.stringify(path)}: read failed${reason ? `: ${reason} (${code})` : ""}`,
-				);
-				expect(inspect(errors)).not.toContain("PRIVATE_SETTINGS_SENTINEL");
+				expect(errors[0].error.message).toBe(`Settings ${JSON.stringify(path)}: read failed during lock`);
+				expect(errors[0].error.cause).toBe(failure);
+				expect(inspect(errors, { depth: null })).toContain(failure.stack!.split("\n")[1].trim());
+				expect(inspect(errors, { depth: null })).toContain(code);
+				expect(failure.cause).toBe(originalCause);
 			}
 			expect(readFileSync(path, "utf8")).toBe("{}");
 		} finally {
@@ -135,6 +153,33 @@ describe("file settings diagnostics", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it.each([undefined, null, false, 0, "lock refused", 17, { reason: "lock refused", code: "CUSTOM" }])(
+		"preserves an arbitrary thrown lock value: %j",
+		async (failure) => {
+			const dir = mkdtempSync(join(tmpdir(), "settings-diagnostics-"));
+			const path = join(dir, "settings.json");
+			writeFileSync(path, "{}");
+			const spy = vi.spyOn(lockfile, "lockSync").mockImplementation(() => {
+				throw failure;
+			});
+			try {
+				const manager = SettingsManager.create(join(dir, "project"), dir);
+				const initial = manager.drainErrors();
+				manager.setTheme("pi-light");
+				await manager.flush();
+				for (const errors of [initial, manager.drainErrors()]) {
+					expect(errors).toHaveLength(1);
+					expect(errors[0].error).toHaveProperty("cause", failure);
+					expect(errors[0].error.cause).toBe(failure);
+				}
+				expect(readFileSync(path, "utf8")).toBe("{}");
+			} finally {
+				spy.mockRestore();
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+	);
 });
 
 describe("retry settings bounds", () => {

@@ -21,14 +21,14 @@ const read = createReadToolDefinition("/tmp", {
 	operations: { access: async () => {}, readFile: async () => Buffer.from(document) },
 });
 
-function storage(project: object = {}) {
+function storage(project: object = {}, saveError = new Error("synthetic save failure\x1b[2J")) {
 	let durable = JSON.stringify({ theme: "pi-dark", quietStartup: true, dockEditor: false });
 	let failure = false;
 	const manager = SettingsManager.fromStorage({
 		withLock(scope, update) {
 			const next = update(scope === "global" ? durable : JSON.stringify(project));
 			if (scope === "global" && next !== undefined) {
-				if (failure) throw new Error("synthetic save failure\x1b[2J");
+				if (failure) throw saveError;
 				durable = next;
 			}
 		},
@@ -164,9 +164,11 @@ describe("interactive Markdown reads", () => {
 		},
 	);
 
-	it("shares latest save settlement with layout settings, shows failure, and clears it after recovery", async () => {
-		const store = storage();
+	it("shares latest save settlement, preserves long failure evidence, and clears it after recovery", async () => {
+		const reason = `${"long settings reason ".repeat(20)}END_OF_SETTINGS_REASON`;
+		const store = storage({}, new Error("synthetic save failure\x1b[2J\x07", { cause: { reason } }));
 		const h = await setup(store.manager);
+		const warnings = vi.spyOn(h.mode, "showWarning");
 		await store.manager.flush();
 		store.fail(true);
 		await settings(h);
@@ -174,6 +176,15 @@ describe("interactive Markdown reads", () => {
 		h.terminal.sendInput("\r");
 		await store.manager.flush();
 		await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain("Changes not saved"));
+		expect(warnings).toHaveBeenCalledWith(
+			"Display settings not saved. Changes may be lost on restart; project overrides still apply.",
+		);
+		const diagnostic = warnings.mock.calls
+			.map(([message]) => message)
+			.find((text) => text.includes("Settings persistence"));
+		expect(diagnostic).toContain("Settings persistence (global)");
+		expect(diagnostic).toContain(reason);
+		expect(diagnostic).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
 		expect(store.saved().markdown).toBeUndefined();
 		store.fail(false);
 		expect(await toggle(h)).not.toContain("Changes not saved");

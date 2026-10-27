@@ -215,57 +215,47 @@ export class FileSettingsStorage implements SettingsStorage {
 
 		let release: (() => void) | undefined;
 		let failure: Error | undefined;
+		let operation = "mkdir";
 		try {
 			// SCRAMJET-DIVERGENCE: first creation must read the latest content under the write lock.
 			if (write) mkdirSync(dir, { recursive: true });
+			operation = "lock";
 			if (write || existsSync(path)) release = this.acquireLockSyncWithRetry(path);
+			operation = "read";
 			const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
+			operation = "update/validate";
 			const next = fn(current);
 			if (next !== undefined) {
 				// Only create directory when we actually need to write
+				operation = "mkdir";
 				if (!existsSync(dir)) {
 					mkdirSync(dir, { recursive: true });
 				}
+				operation = "lock";
 				if (!release) {
 					release = this.acquireLockSyncWithRetry(path);
 				}
+				operation = "write";
 				writeFileSync(path, next, "utf-8");
 			}
 		} catch (error) {
-			// SCRAMJET-DIVERGENCE: classify failures without exposing document excerpts or arbitrary causes.
-			const reasons: Record<string, string> = {
-				EACCES: "permission denied",
-				EPERM: "permission denied",
-				ELOCKED: "settings lock is held by another writer",
-				ENOENT: "file or directory not found",
-				ENOTDIR: "a path component is not a directory",
-				EISDIR: "expected a file, found a directory",
-				ENOSPC: "no space left on device",
-				EROFS: "read-only filesystem",
-				EIO: "filesystem I/O error",
-				EMFILE: "too many open files",
-				ENFILE: "too many open files",
-			};
-			const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-			const reason =
-				error instanceof SettingsValidationError
-					? error.message
-					: error instanceof SyntaxError
-						? "invalid JSON"
-						: typeof code === "string" && Object.hasOwn(reasons, code)
-							? `${reasons[code]} (${code})`
-							: undefined;
+			// SCRAMJET-DIVERGENCE: add storage context without replacing original failure evidence.
 			failure = new Error(
-				`Settings ${JSON.stringify(path)}: ${write ? "update" : "read"} failed${reason ? `: ${reason}` : ""}`,
+				`Settings ${JSON.stringify(path)}: ${write ? "update" : "read"} failed during ${operation}${operation === "write" ? "; write outcome may be partially committed" : ""}`,
+				{ cause: error },
 			);
 		} finally {
 			if (release) {
 				try {
 					release();
-				} catch {
-					failure = new Error(
-						`${failure ? `${failure.message}; ` : `Settings ${JSON.stringify(path)}: `}unlock failed; write outcome may be committed`,
+				} catch (error) {
+					const unlockFailure = new Error(
+						`Settings ${JSON.stringify(path)}: unlock failed; write outcome may be committed`,
+						{ cause: error },
 					);
+					failure = failure
+						? new AggregateError([failure, unlockFailure], `${failure.message}; ${unlockFailure.message}`)
+						: unlockFailure;
 				}
 			}
 		}
@@ -396,7 +386,10 @@ export class SettingsManager {
 		try {
 			return { settings: SettingsManager.loadFromStorage(storage, scope), error: null };
 		} catch (error) {
-			return { settings: {}, error: error as Error };
+			return {
+				settings: {},
+				error: error instanceof Error ? error : new Error(`Settings (${scope}): load failed`, { cause: error }),
+			};
 		}
 	}
 
@@ -547,7 +540,8 @@ export class SettingsManager {
 	}
 
 	private recordError(scope: SettingsScope, error: unknown): void {
-		const normalizedError = error instanceof Error ? error : new Error(String(error));
+		const normalizedError =
+			error instanceof Error ? error : new Error(`Settings (${scope}): operation failed`, { cause: error });
 		this.errors.push({ scope, error: normalizedError });
 	}
 

@@ -31,7 +31,7 @@ import type { ExtensionAPI, ExtensionFactory } from "./core/extensions/types.js"
 import { KeybindingsManager } from "./core/keybindings.js";
 import { type ModelRegistry, validateInvocationModelDefinition } from "./core/model-registry.js";
 import { resolveCliModel, resolveDirectoryModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
-import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
+import { formatSettingsError, restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import { isRequiredBuiltinInitError, renderRequiredBuiltinInitCause } from "./core/resource-loader.js";
 import type { CreateAgentSessionOptions } from "./core/sdk.js";
 import {
@@ -79,7 +79,7 @@ function collectSettingsDiagnostics(
 ): AgentSessionRuntimeDiagnostic[] {
 	return settingsManager.drainErrors().map(({ scope, error }) => ({
 		type: "warning",
-		message: `(${context}, ${scope} settings) ${error.message}`,
+		message: `(${context}) ${formatSettingsError({ scope, error })}`,
 	}));
 }
 

@@ -4597,14 +4597,8 @@ export class InteractiveMode {
 		const errors = settings.drainErrors();
 		selector.setSaveError(errors.length ? "Changes not saved; see warning" : undefined);
 		if (errors.length) {
-			const details = stripVTControlCharacters(
-				errors.map(({ scope, error }) => `${scope}: ${error.message}`).join("; "),
-			)
-				.replace(/[\r\n\t]/g, " ")
-				.slice(0, 200);
-			this.showWarning(
-				`Display settings not saved (${details}). Changes may be lost on restart; project overrides still apply.`,
-			);
+			this.showWarning("Display settings not saved. Changes may be lost on restart; project overrides still apply.");
+			for (const error of errors) this.showWarning(formatSettingsError(error));
 		}
 		this.ui.requestRender();
 	}

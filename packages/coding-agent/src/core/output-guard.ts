@@ -1,11 +1,17 @@
-import { stripVTControlCharacters } from "node:util";
+import { inspect, stripVTControlCharacters } from "node:util";
 import type { SettingsError } from "./settings-manager.js";
 
 // SCRAMJET-DIVERGENCE: preference failures must not inject terminal controls or protocol output.
 export function formatSettingsError({ scope, error }: SettingsError): string {
-	return stripVTControlCharacters(`Settings persistence (${scope}): ${error.message}`)
-		.replace(/\p{Cc}/gu, " ")
-		.slice(0, 1000);
+	const details = inspect(error, {
+		colors: false,
+		depth: null,
+		customInspect: false,
+		getters: false,
+		maxStringLength: null,
+		maxArrayLength: null,
+	});
+	return stripVTControlCharacters(`Settings persistence (${scope}): ${details}`).replace(/\p{Cc}/gu, " ");
 }
 
 export async function flushStderr(): Promise<void> {

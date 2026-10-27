@@ -47,7 +47,7 @@ export class FileLastUsedModelsStorage implements LastUsedModelsStorage {
 			return readFileSync(this.path, "utf8");
 		} catch (error) {
 			if (isMissing(error)) return undefined;
-			throw new RecallFileError(`Last-used models ${JSON.stringify(this.path)}: read failed`);
+			throw new RecallFileError(`Last-used models ${JSON.stringify(this.path)}: read failed`, { cause: error });
 		}
 	}
 
@@ -56,7 +56,7 @@ export class FileLastUsedModelsStorage implements LastUsedModelsStorage {
 		let temporaryPath: string | undefined;
 		let committed = false;
 		let operation = "mkdir";
-		const failures: string[] = [];
+		const failures: Error[] = [];
 		try {
 			await mkdir(dirname(this.path), { recursive: true });
 			operation = "lock";
@@ -81,8 +81,8 @@ export class FileLastUsedModelsStorage implements LastUsedModelsStorage {
 			} finally {
 				try {
 					await handle.close();
-				} catch {
-					failures.push("close");
+				} catch (error) {
+					failures.push(new Error("close failed", { cause: error }));
 				}
 			}
 			if (failures.length === 0) {
@@ -91,25 +91,26 @@ export class FileLastUsedModelsStorage implements LastUsedModelsStorage {
 				temporaryPath = undefined;
 				committed = true;
 			}
-		} catch {
-			failures.push(operation);
+		} catch (error) {
+			failures.push(new Error(`${operation} failed`, { cause: error }));
 		} finally {
 			if (temporaryPath) {
 				try {
 					await unlink(temporaryPath);
-				} catch {
-					failures.push("temporary cleanup");
+				} catch (error) {
+					failures.push(new Error("temporary cleanup failed", { cause: error }));
 				}
 			}
 			try {
 				await release?.();
-			} catch {
-				failures.push("unlock");
+			} catch (error) {
+				failures.push(new Error("unlock failed", { cause: error }));
 			}
 		}
 		if (failures.length > 0) {
 			throw new RecallFileError(
-				`Last-used models ${JSON.stringify(this.path)}: ${failures.join(", ")} failed; ${committed ? "replacement committed" : "destination not replaced"}`,
+				`Last-used models ${JSON.stringify(this.path)}: ${failures.map((failure) => failure.message).join(", ")}; ${committed ? "replacement committed" : "destination not replaced"}`,
+				{ cause: failures.length === 1 ? failures[0] : new AggregateError(failures, "Storage operations failed") },
 			);
 		}
 	}
@@ -196,8 +197,8 @@ export class LastUsedModelsStore {
 		let value: unknown;
 		try {
 			value = JSON.parse(content);
-		} catch {
-			throw new Error("Invalid recall document");
+		} catch (error) {
+			throw new Error("Invalid recall document", { cause: error });
 		}
 		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid recall document");
 		const records = value as Record<string, unknown>;
@@ -220,7 +221,8 @@ export class LastUsedModelsStore {
 			error instanceof RecallFileError
 				? error
 				: new Error(
-						`${this.label()}: ${operation} failed; storage was not reset and the last valid state was retained`,
+						`${this.label()}: ${operation} failed; last valid local state retained; storage outcome unknown`,
+						{ cause: error },
 					),
 		);
 	}

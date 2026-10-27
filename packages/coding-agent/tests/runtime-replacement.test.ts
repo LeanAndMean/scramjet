@@ -424,8 +424,10 @@ describe("AgentSessionRuntime — settings settlement", () => {
 	it("retains errors without a handler and delivers them once when one is installed", async () => {
 		const fx = await buildFixture();
 		const settings = fx.runtime.services.settingsManager;
-		settings.applyOverrides({ retry: { maxRetries: -1 } });
-		const drain = vi.spyOn(settings, "drainErrors");
+		const reason = { code: "E_RUNTIME_SETTINGS", message: "original runtime settings reason\x1b[2J" };
+		const error = new Error("runtime settings failed", { cause: { reason } });
+		const errors = [{ scope: "global" as const, error }];
+		const drain = vi.spyOn(settings, "drainErrors").mockReturnValueOnce(errors);
 		await fx.runtime.settleSettings();
 		expect(drain).not.toHaveBeenCalled();
 		const handler = vi.fn();
@@ -433,7 +435,11 @@ describe("AgentSessionRuntime — settings settlement", () => {
 		await fx.runtime.settleSettings();
 		await fx.runtime.settleSettings();
 		expect(handler).toHaveBeenCalledOnce();
-		expect(handler.mock.calls[0][0][0].error.message).toContain("retry.maxRetries");
+		expect(handler).toHaveBeenCalledWith(errors);
+		expect(handler.mock.calls[0][0]).toBe(errors);
+		expect(handler.mock.calls[0][0][0].error).toBe(error);
+		expect(handler.mock.calls[0][0][0].error.cause.reason).toBe(reason);
+		expect(reason.message).toContain("\x1b[2J");
 		await fx.runtime.dispose();
 	});
 });

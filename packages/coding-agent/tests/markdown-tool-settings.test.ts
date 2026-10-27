@@ -155,8 +155,11 @@ describe("Markdown tool display settings", () => {
 				scope: "global",
 				error: expect.objectContaining({
 					message: expect.stringContaining(
-						"markdown must be an object; correct settings.json before saving Markdown preferences.",
+						`Settings ${JSON.stringify(path)}: update failed during update/validate`,
 					),
+					cause: expect.objectContaining({
+						message: "markdown must be an object; correct settings.json before saving Markdown preferences.",
+					}),
 				}),
 			},
 		]);

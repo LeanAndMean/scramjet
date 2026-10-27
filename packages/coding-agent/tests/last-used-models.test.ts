@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { inspect } from "node:util";
 import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -95,7 +96,12 @@ describe("LastUsedModelsStore", () => {
 			const path = await temporaryPath();
 			await seed(path, bytes);
 			const store = new LastUsedModelsStore(new FileLastUsedModelsStorage(path));
-			expect(store.drainErrors()).toHaveLength(1);
+			const initial = store.drainErrors();
+			expect(initial).toHaveLength(1);
+			if (bytes === "" || bytes.startsWith("{broken")) {
+				expect(inspect(initial, { depth: null })).toContain("SyntaxError");
+				expect(inspect(initial, { depth: null })).toContain("JSON.parse");
+			}
 			for (const model of ["one", "two"]) {
 				store.set("project", identity(model));
 				await store.flush();
@@ -103,7 +109,10 @@ describe("LastUsedModelsStore", () => {
 				const errors = store.drainErrors();
 				expect(errors).toHaveLength(1);
 				expect(errors[0]?.message).toContain("update");
-				expect(errors[0]?.message).not.toContain("SECRET");
+				if (bytes === "" || bytes.startsWith("{broken")) {
+					expect(inspect(errors, { depth: null })).toContain("SyntaxError");
+					expect(inspect(errors, { depth: null })).toContain("JSON.parse");
+				}
 			}
 		},
 	);
@@ -116,7 +125,10 @@ describe("LastUsedModelsStore", () => {
 		const store = new LastUsedModelsStore(new FileLastUsedModelsStorage(path));
 		expect(store.get("bad")).toBeUndefined();
 		expect(store.get("good")).toEqual(identity("good"));
-		expect(store.drainErrors()[0]?.message).not.toContain("SECRET");
+		const warnings = store.drainErrors();
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]?.message).toContain("ignored invalid entries");
+		expect(inspect(warnings, { depth: null })).not.toContain("SECRET");
 		store.set("new", identity("new"));
 		await store.flush();
 		expect(JSON.parse(readFileSync(path, "utf8"))[resolve("bad")]).toEqual(bad);
@@ -265,15 +277,18 @@ describe("LastUsedModelsStore", () => {
 		expect(JSON.parse(raw!)).toEqual({ [resolve("one")]: identity("new"), [resolve("two")]: identity("sibling") });
 	});
 
-	it("reports read failures safely and retains valid state", async () => {
+	it("retains original read and update failures without losing valid state", async () => {
 		let fail = false;
+		const cause = new Error("underlying failure");
+		const readFailure = Object.assign(new Error("read sentinel", { cause }), { code: "EREAD" });
+		const updateFailure = Object.assign(new Error("update sentinel", { cause }), { code: "EUPDATE" });
 		const store = new LastUsedModelsStore({
 			read: () => {
-				if (fail) throw new Error("SECRET");
+				if (fail) throw readFailure;
 				return JSON.stringify({ [resolve("one")]: identity("one") });
 			},
 			withLock: async () => {
-				throw new Error("SECRET");
+				throw updateFailure;
 			},
 		});
 		fail = true;
@@ -281,12 +296,15 @@ describe("LastUsedModelsStore", () => {
 		expect(store.get("one")).toEqual(identity("one"));
 		store.set("two", identity("two"));
 		await store.flush();
-		expect(
-			store
-				.drainErrors()
-				.map((error) => error.message)
-				.join("\n"),
-		).not.toContain("SECRET");
+		const errors = store.drainErrors();
+		expect(errors).toHaveLength(2);
+		expect(errors[0].cause).toBe(readFailure);
+		expect(errors[1].cause).toBe(updateFailure);
+		for (const failure of [readFailure, updateFailure]) {
+			expect(inspect(errors, { depth: null })).toContain(failure.stack!.split("\n")[1].trim());
+			expect(inspect(errors, { depth: null })).toContain(failure.code);
+		}
+		expect(readFailure.cause).toBe(cause);
 	});
 
 	it.each(["mkdir", "lock", "read", "open", "write", "close", "rename"])(
@@ -296,7 +314,9 @@ describe("LastUsedModelsStore", () => {
 			const bytes = JSON.stringify({ [resolve("one")]: identity("old") });
 			await seed(path, bytes);
 			const store = new LastUsedModelsStore(new FileLastUsedModelsStorage(path));
-			const failure = Object.assign(new Error("SECRET"), { code: "EACCES" });
+			const failure = Object.assign(new Error("operation sentinel", { cause: new Error("root cause") }), {
+				code: "EACCES",
+			});
 			if (operation === "lock") vi.spyOn(lockfile, "lock").mockRejectedValueOnce(failure);
 			else if (operation === "write" || operation === "close") {
 				const realOpen = fs.open;
@@ -323,7 +343,10 @@ describe("LastUsedModelsStore", () => {
 			const errors = store.drainErrors();
 			expect(errors).toHaveLength(1);
 			expect(errors[0]?.message).toContain(path);
-			expect(errors[0]?.message).not.toContain("SECRET");
+			expect((errors[0].cause as Error).cause).toBe(failure);
+			expect(inspect(errors, { depth: null })).toContain(failure.stack!.split("\n")[1].trim());
+			expect(inspect(errors, { depth: null })).toContain("EACCES");
+			expect(inspect(errors, { depth: null })).toContain("root cause");
 		},
 	);
 
@@ -331,17 +354,77 @@ describe("LastUsedModelsStore", () => {
 		const path = await temporaryPath();
 		await seed(path, "{}");
 		const store = new LastUsedModelsStore(new FileLastUsedModelsStorage(path));
-		vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error("SECRET"));
-		vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("SECRET"));
+		const renameFailure = Object.assign(new Error("rename sentinel"), { code: "ERENAME" });
+		const cleanupFailure = { code: "ECLEANUP", detail: "cleanup sentinel" };
+		vi.spyOn(fs, "rename").mockRejectedValueOnce(renameFailure);
+		vi.spyOn(fs, "unlink").mockRejectedValueOnce(cleanupFailure);
 		store.set("one", identity("new"));
 		await store.flush();
 		expect(readFileSync(path, "utf8")).toBe("{}");
 		const errors = store.drainErrors();
 		expect(errors).toHaveLength(1);
-		expect(errors[0]?.message).toContain("rename, temporary cleanup failed");
+		expect(errors[0]?.message).toContain("rename failed, temporary cleanup failed");
 		expect(errors[0]?.message).toContain("destination not replaced");
+		expect(errors[0]?.cause).toBeInstanceOf(AggregateError);
+		const causes = (errors[0].cause as AggregateError).errors;
+		expect(causes).toHaveLength(2);
+		expect(causes[0].cause).toBe(renameFailure);
+		expect(causes[1].cause).toBe(cleanupFailure);
+		expect(inspect(causes, { depth: null })).toContain(renameFailure.stack!.split("\n")[1].trim());
+		expect(inspect(causes, { depth: null })).toContain("ERENAME");
+		expect(inspect(causes, { depth: null })).toContain("cleanup sentinel");
 		expect(readdirSync(dirname(path)).filter((name) => name.endsWith(".tmp"))).toHaveLength(1);
 		expect(existsSync(`${path}.lock`)).toBe(false);
+	});
+
+	it("retains simultaneous write, close, cleanup, and unlock failures without replacing the destination", async () => {
+		const path = await temporaryPath();
+		await seed(path, "{}");
+		const store = new LastUsedModelsStore(new FileLastUsedModelsStorage(path));
+		const writeFailure = Object.assign(new Error("write sentinel"), { code: "EWRITE" });
+		const closeFailure = new Error("close sentinel");
+		const cleanupFailure = { detail: "cleanup sentinel" };
+		const unlockFailure = "unlock sentinel";
+		const realOpen = fs.open;
+		vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
+			const handle = await realOpen(...args);
+			vi.spyOn(handle, "writeFile").mockRejectedValueOnce(writeFailure);
+			const close = handle.close.bind(handle);
+			vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+				await close();
+				throw closeFailure;
+			});
+			return handle;
+		});
+		vi.spyOn(fs, "unlink").mockRejectedValueOnce(cleanupFailure);
+		const realLock = lockfile.lock.bind(lockfile);
+		vi.spyOn(lockfile, "lock").mockImplementationOnce(async (target, options) => {
+			const release = await realLock(target, options);
+			return async () => {
+				await release();
+				throw unlockFailure;
+			};
+		});
+		store.set("one", identity("new"));
+		await store.flush();
+		expect(readFileSync(path, "utf8")).toBe("{}");
+		expect(existsSync(`${path}.lock`)).toBe(false);
+		const errors = store.drainErrors();
+		expect(errors).toHaveLength(1);
+		expect(errors[0].message).toContain("destination not replaced");
+		expect(errors[0].cause).toBeInstanceOf(AggregateError);
+		const causes = (errors[0].cause as AggregateError).errors;
+		expect(causes).toHaveLength(4);
+		expect(causes[0].cause).toBe(closeFailure);
+		expect(causes[1].cause).toBe(writeFailure);
+		expect(causes[2].cause).toBe(cleanupFailure);
+		expect(causes[3].cause).toBe(unlockFailure);
+		const diagnostic = inspect(causes, { depth: null });
+		expect(diagnostic).toContain(writeFailure.stack!.split("\n")[1].trim());
+		expect(diagnostic).toContain("EWRITE");
+		expect(diagnostic).toContain(closeFailure.stack!.split("\n")[1].trim());
+		expect(diagnostic).toContain("cleanup sentinel");
+		expect(diagnostic).toContain(unlockFailure);
 	});
 
 	it("reports file read errors with safe path and operation information", async () => {
@@ -404,12 +487,13 @@ describe("LastUsedModelsStore", () => {
 
 	it("retains committed data and truthfully reports post-rename unlock failure without retry", async () => {
 		const path = await temporaryPath();
+		const failure = Object.assign(new Error("unlock sentinel"), { code: "EUNLOCK" });
 		const realLock = lockfile.lock.bind(lockfile);
 		const lock = vi.spyOn(lockfile, "lock").mockImplementationOnce(async (target, options) => {
 			const release = await realLock(target, options);
 			return async () => {
 				await release();
-				throw new Error("SECRET");
+				throw failure;
 			};
 		});
 		const store = new LastUsedModelsStore(new FileLastUsedModelsStorage(path));
@@ -421,8 +505,31 @@ describe("LastUsedModelsStore", () => {
 		const errors = store.drainErrors();
 		expect(errors).toHaveLength(1);
 		expect(errors[0]?.message).toContain("committed");
-		expect(errors[0]?.message).not.toContain("SECRET");
+		expect((errors[0].cause as Error).cause).toBe(failure);
 	});
+
+	it.each([undefined, null, false, 0, "storage refused", 17, { code: "CUSTOM", detail: "storage refused" }])(
+		"preserves non-Error storage failures: %j",
+		async (failure) => {
+			const store = new LastUsedModelsStore({
+				read: () => {
+					throw failure;
+				},
+				withLock: async () => {
+					throw failure;
+				},
+			});
+			const initial = store.drainErrors();
+			store.set("one", identity("new"));
+			await store.flush();
+			for (const errors of [initial, store.drainErrors()]) {
+				expect(errors).toHaveLength(1);
+				expect(errors[0]).toHaveProperty("cause", failure);
+				expect(errors[0].cause).toBe(failure);
+			}
+			expect(store.get("one")).toEqual(identity("new"));
+		},
+	);
 
 	it.each([
 		{ provider: "", modelId: "m" },

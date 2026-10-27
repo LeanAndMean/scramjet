@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { inspect, stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryLastUsedModelsStorage } from "../src/core/last-used-models.js";
 import { formatSettingsError } from "../src/core/output-guard.js";
@@ -30,15 +31,52 @@ function preferences() {
 }
 
 describe("mode-owned settings settlement", () => {
-	it("neutralizes terminal controls in bounded settings diagnostics", () => {
-		const text = formatSettingsError({
-			scope: "global",
-			error: new Error(`\u001b[31munsafe\u001b[0m\n\u0007\u009b${"x".repeat(2000)}`),
+	it("retains complete nested diagnostics while neutralizing terminal controls", () => {
+		const original = Object.assign(new Error("original failure", { cause: new SyntaxError("parse detail") }), {
+			code: "ECUSTOM",
 		});
+		const longValue = `${"x".repeat(12000)}STRING_END`;
+		const values = Array.from({ length: 150 }, (_, index) => `item-${index}`);
+		const nested = { one: { two: { three: { four: { five: { longValue, values } } } } } };
+		const error = new Error("context\u001b[31munsafe\u001b[0m\n\u0007\u009b", {
+			cause: new AggregateError([original, nested], "multiple failures"),
+		});
+		const text = formatSettingsError({ scope: "global", error });
+		const diagnostic = inspect(error, {
+			depth: null,
+			colors: false,
+			customInspect: false,
+			getters: false,
+			maxStringLength: null,
+			maxArrayLength: null,
+		});
+		expect(text).toContain(stripVTControlCharacters(diagnostic).replace(/\p{Cc}/gu, " "));
 		expect(text).toContain("unsafe");
+		expect(text).toContain("ECUSTOM");
+		expect(text).toContain("parse detail");
+		expect(text).toContain("STRING_END");
+		expect(text).toContain("item-149");
+		expect(text).toContain(original.stack!.split("\n")[1].trim());
 		expect(text).not.toMatch(/\p{Cc}/u);
-		expect(text.length).toBeLessThanOrEqual(1000);
+		expect(text.length).toBeGreaterThan(12000);
 	});
+
+	it("does not execute custom inspectors or getters while formatting arbitrary causes", () => {
+		const customInspect = vi.fn(() => "CUSTOM_INSPECTOR_OUTPUT");
+		const getter = vi.fn(() => "GETTER_OUTPUT");
+		const cause = Object.defineProperty({ detail: "original detail", [inspect.custom]: customInspect }, "value", {
+			enumerable: true,
+			get: getter,
+		});
+		const text = formatSettingsError({ scope: "project", error: new Error("context", { cause }) });
+		expect(text).toContain("original detail");
+		expect(text).toContain("[Getter]");
+		expect(text).not.toContain("CUSTOM_INSPECTOR_OUTPUT");
+		expect(text).not.toContain("GETTER_OUTPUT");
+		expect(customInspect).not.toHaveBeenCalled();
+		expect(getter).not.toHaveBeenCalled();
+	});
+
 	it.each(["text", "json"] as const)(
 		"print %s settles shutdown selections and reports only on stderr",
 		async (mode) => {
