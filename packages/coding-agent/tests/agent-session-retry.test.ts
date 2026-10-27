@@ -269,7 +269,11 @@ describe("compaction preparation accounting", () => {
 		async (kind) => {
 			let prepared: number | undefined;
 			let expected: number | undefined;
-			const large = { ...assistantText("large"), usage: { input: 95_000, output: 0, cacheRead: 0, cacheWrite: 0 } };
+			const large = {
+				...assistantText("large"),
+				model: kind === "threshold" ? "old-model" : testModel.id,
+				usage: { input: 95_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+			};
 			const { session } = await createFixture(
 				(i) =>
 					i === 0
@@ -283,13 +287,10 @@ describe("compaction preparation accounting", () => {
 					extensionFactory: (pi) => {
 						pi.on("session_before_compact", (event) => {
 							prepared = event.preparation.tokensBefore;
-							expected =
-								kind === "threshold"
-									? 95_000
-									: event.branchEntries.reduce(
-											(sum, entry) => sum + (entry.type === "message" ? estimateTokens(entry.message) : 0),
-											0,
-										);
+							expected = event.branchEntries.reduce(
+								(sum, entry) => sum + (entry.type === "message" ? estimateTokens(entry.message) : 0),
+								0,
+							);
 							return {
 								compaction: {
 									summary: "automatic checkpoint",
@@ -309,6 +310,7 @@ describe("compaction preparation accounting", () => {
 				await session.prompt("hello");
 				expect(prepared).toBeDefined();
 				expect(prepared).toBe(expected);
+				if (kind === "threshold") expect(prepared).not.toBe(large.usage.input);
 				expect(session.sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toMatchObject([
 					{ summary: "automatic checkpoint", tokensBefore: 73, details: { custom: true }, fromHook: true },
 				]);
