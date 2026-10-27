@@ -94,7 +94,7 @@ describe("OutputThroughputTracker", () => {
 		expect(tracker.finalize(stale, message())).toBeUndefined();
 	});
 
-	it("qualifies final samples from exact output usage over first-to-last delta time", () => {
+	it("qualifies final samples from exact output usage over supplied response duration", () => {
 		let now = 100;
 		const tracker = new OutputThroughputTracker({ monotonicNow: () => now, wallNow: () => 1234 });
 		const generation = tracker.start(identity);
@@ -103,12 +103,12 @@ describe("OutputThroughputTracker", () => {
 		tracker.observe(generation, delta("text_delta", "5678"));
 		now = 5000;
 
-		expect(tracker.finalize(generation, message({ responseModel: "routed-model" }))).toEqual({
+		expect(tracker.finalize(generation, message({ responseModel: "routed-model" }), 2000)).toEqual({
 			provider: identity.provider,
 			model: identity.model,
 			responseModel: "routed-model",
 			outputTokens: 40,
-			durationMs: 500,
+			durationMs: 2000,
 			observedAt: 1234,
 		});
 		expect(tracker.liveRate()).toBeUndefined();
@@ -123,7 +123,7 @@ describe("OutputThroughputTracker", () => {
 		tracker.observe(generation, delta("text_delta", "b"));
 		now = 6000;
 		expect(tracker.liveRate()).toBeUndefined();
-		expect(tracker.finalize(generation, message())?.durationMs).toBe(3000);
+		expect(tracker.finalize(generation, message(), 6000)?.durationMs).toBe(6000);
 	});
 
 	it.each(["stop", "length", "toolUse"] as const)("accepts the %s terminal reason", (stopReason) => {
@@ -133,7 +133,7 @@ describe("OutputThroughputTracker", () => {
 		tracker.observe(generation, delta("text_delta", "a"));
 		now = 1;
 		tracker.observe(generation, delta("text_delta", "b"));
-		expect(tracker.finalize(generation, message({ stopReason }))).toBeDefined();
+		expect(tracker.finalize(generation, message({ stopReason }), 2000)).toBeDefined();
 	});
 
 	it.each([
@@ -151,20 +151,56 @@ describe("OutputThroughputTracker", () => {
 		tracker.observe(generation, delta("text_delta", "a"));
 		now = 1;
 		tracker.observe(generation, delta("text_delta", "b"));
-		expect(tracker.finalize(generation, message(overrides as Partial<AssistantMessage>))).toBeUndefined();
+		expect(tracker.finalize(generation, message(overrides as Partial<AssistantMessage>), 2000)).toBeUndefined();
 	});
 
-	it("rejects fewer than two observations and zero-duration observations", () => {
-		const now = 0;
-		const tracker = new OutputThroughputTracker({ monotonicNow: () => now });
-		let generation = tracker.start(identity);
-		tracker.observe(generation, delta("text_delta", "ab"));
-		expect(tracker.finalize(generation, message())).toBeUndefined();
+	it.each([[], [2000], [1000, 2000], [1999, 2000]].map((times) => ({ times })))(
+		"uses whole-response duration independently of delta times $times",
+		({ times }) => {
+			let now = 0;
+			const tracker = new OutputThroughputTracker({ monotonicNow: () => now });
+			const generation = tracker.start(identity);
+			for (const time of times) {
+				now = time;
+				tracker.observe(generation, delta("text_delta", "abcd"));
+			}
+			const sample = tracker.finalize(generation, message({ usage: { ...message().usage, output: 84 } }), 2000);
+			expect(sample?.durationMs).toBe(2000);
+			const history = new OutputThroughputHistory();
+			if (sample) history.add(sample);
+			expect(history.median(identity.provider, identity.model)).toBe(42);
+		},
+	);
 
-		generation = tracker.start(identity);
-		tracker.observe(generation, delta("text_delta", "a"));
-		tracker.observe(generation, delta("text_delta", "b"));
-		expect(tracker.finalize(generation, message())).toBeUndefined();
+	it.each([undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+		"rejects invalid duration %s without falling back to deltas and clears the generation",
+		(duration) => {
+			let now = 0;
+			const tracker = new OutputThroughputTracker({ monotonicNow: () => now });
+			const generation = tracker.start(identity);
+			tracker.observe(generation, delta("text_delta", "a"));
+			now = 1000;
+			tracker.observe(generation, delta("text_delta", "b"));
+			expect(tracker.finalize(generation, message(), duration)).toBeUndefined();
+			expect(tracker.activeIdentity).toBeUndefined();
+			expect(tracker.finalize(generation, message(), 2000)).toBeUndefined();
+		},
+	);
+
+	it("does not let stale finalization clear a newer measurement", () => {
+		const tracker = new OutputThroughputTracker();
+		const stale = tracker.start(identity);
+		const current = tracker.start(identity);
+		expect(tracker.finalize(stale, message(), 2000)).toBeUndefined();
+		expect(tracker.activeIdentity).toEqual(identity);
+		expect(tracker.finalize(current, message(), 2000)).toBeDefined();
+	});
+
+	it("rejects a non-finite observation time", () => {
+		const tracker = new OutputThroughputTracker({ wallNow: () => Number.NaN });
+		const generation = tracker.start(identity);
+		expect(tracker.finalize(generation, message(), 2000)).toBeUndefined();
+		expect(tracker.activeIdentity).toBeUndefined();
 	});
 
 	it("increments generation on reset and superseding starts", () => {

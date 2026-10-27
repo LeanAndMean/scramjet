@@ -6,7 +6,7 @@ import { OutputThroughputHistory, type OutputThroughputSample } from "./output-t
 
 // SCRAMJET-DIVERGENCE: Persist bounded, profile-scoped provider throughput across concurrent processes (#476).
 
-const HISTORY_VERSION = 1;
+const HISTORY_VERSION = 2;
 const MAX_SAMPLES_PER_MODEL = 20;
 const MAX_HISTORY_SAMPLES = 20000;
 const MAX_STRING_LENGTH = 512;
@@ -20,7 +20,7 @@ export interface OutputThroughputHistoryDiagnostic {
 }
 
 interface HistoryDocument {
-	version: 1;
+	version: 2;
 	samples: OutputThroughputSample[];
 }
 
@@ -133,7 +133,7 @@ export class OutputThroughputHistoryStore {
 		} catch (cause) {
 			this.report(
 				"validate",
-				"Output-throughput history is malformed or unsupported; original bytes and the last valid snapshot were preserved",
+				"Output-throughput history is malformed or unsupported; original bytes and the last valid snapshot were preserved. Use a fresh history path for whole-response samples",
 				cause,
 			);
 			return undefined;

@@ -772,7 +772,7 @@ export class AgentSession {
 		if (event.type === "message_update" && event.message.role === "assistant") {
 			this._outputThroughputTracker.observe(generation, event.assistantMessageEvent);
 		} else if (event.type === "message_end" && event.message.role === "assistant") {
-			const sample = this._outputThroughputTracker.finalize(generation, event.message);
+			const sample = this._outputThroughputTracker.finalize(generation, event.message, event.responseDurationMs);
 			this._outputThroughputGeneration = undefined;
 			if (sample) {
 				this._latestOutputThroughputSample = sample;

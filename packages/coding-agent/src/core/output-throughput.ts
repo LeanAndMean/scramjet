@@ -90,12 +90,14 @@ export class OutputThroughputTracker {
 		return Number.isFinite(rate) && rate > 0 ? rate : undefined;
 	}
 
-	finalize(generation: number, message: AssistantMessage): OutputThroughputSample | undefined {
+	finalize(
+		generation: number,
+		message: AssistantMessage,
+		responseDurationMs?: number,
+	): OutputThroughputSample | undefined {
 		if (generation !== this.active?.generation) return undefined;
 		const active = this.active;
 		this.reset();
-		const first = active.observations[0];
-		const last = active.observations.at(-1);
 		const outputTokens = message.usage.output;
 		if (
 			message.origin !== "provider" ||
@@ -103,15 +105,12 @@ export class OutputThroughputTracker {
 			message.model !== active.model ||
 			!isSuccessfulStop(message.stopReason) ||
 			!Number.isFinite(outputTokens) ||
-			outputTokens <= 0 ||
-			active.observations.length < 2 ||
-			!first ||
-			!last
+			outputTokens <= 0
 		) {
 			return undefined;
 		}
-		const durationMs = last.time - first.time;
-		if (!Number.isFinite(durationMs) || durationMs <= 0) return undefined;
+		const durationMs = responseDurationMs;
+		if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs <= 0) return undefined;
 		const observedAt = this.wallNow();
 		if (!Number.isFinite(observedAt)) return undefined;
 		return {
