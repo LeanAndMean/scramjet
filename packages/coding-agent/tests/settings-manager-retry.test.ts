@@ -2,6 +2,36 @@ import { describe, expect, it } from "vitest";
 import { InMemorySettingsStorage, SettingsManager } from "../src/core/settings-manager.js";
 
 describe("retry settings bounds", () => {
+	it("keeps old two-parameter storage compatible without replaying failed model fields", async () => {
+		let content: string | undefined;
+		let fail = true;
+		const manager = SettingsManager.fromStorage({
+			withLock(scope, update) {
+				if (scope === "project") {
+					update(undefined);
+					return;
+				}
+				const next = update(content);
+				if (next !== undefined) {
+					if (fail) throw new Error("write refused");
+					content = next;
+				}
+			},
+		});
+		manager.setDefaultModelAndProvider("p", "stale", "/a");
+		await manager.flush();
+		expect(manager.drainErrors()).toHaveLength(1);
+		content = '{"defaultProvider":"other","defaultModel":"fresh"}';
+		fail = false;
+		manager.setDefaultThinkingLevel("high");
+		await manager.flush();
+		expect(JSON.parse(content)).toEqual({
+			defaultProvider: "other",
+			defaultModel: "fresh",
+			defaultThinkingLevel: "high",
+		});
+		expect(manager.getDirectoryDefaultModel("/a")?.modelId).toBe("stale");
+	});
 	it.each([-1, 0.5, "3", Infinity, NaN, Number.MAX_SAFE_INTEGER + 1])(
 		"ignores invalid count %s without losing inherited provider settings",
 		(value) => {

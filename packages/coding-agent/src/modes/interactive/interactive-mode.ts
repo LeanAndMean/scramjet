@@ -73,6 +73,7 @@ import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.js";
 import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.js";
+import { flushStderr, formatSettingsError } from "../../core/output-guard.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.js";
 import { describeRuntimeError, type ResourceDiagnostic } from "../../core/resource-loader.js";
@@ -385,6 +386,14 @@ export class InteractiveMode {
 		this.runtimeHost = runtimeHost;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
 			this.resetExtensionUI();
+		});
+		// SCRAMJET-DIVERGENCE: final-exit warnings must survive terminal/UI teardown.
+		this.runtimeHost.setSettingsErrorHandler((errors) => {
+			for (const error of errors) {
+				const message = formatSettingsError(error);
+				if (this.isShuttingDown) console.error(message);
+				else this.showWarning(message);
+			}
 		});
 		this.runtimeHost.setRebindSession(async () => {
 			await this.rebindCurrentSession();
@@ -3998,7 +4007,11 @@ export class InteractiveMode {
 			exitCode = 1;
 			console.error(`Could not stop terminal safely: ${error instanceof Error ? error.message : String(error)}`);
 		}
-		await this.runtimeHost.dispose();
+		try {
+			await this.runtimeHost.dispose();
+		} finally {
+			await flushStderr();
+		}
 		this.unregisterSignalHandlers();
 		process.exit(exitCode);
 	}
@@ -5727,6 +5740,8 @@ export class InteractiveMode {
 		} catch (error) {
 			dismissReloadBox(previousEditor as Component);
 			this.showError(`Reload failed: ${describeRuntimeError(error)}`);
+		} finally {
+			await this.runtimeHost.settleSettings();
 		}
 	}
 

@@ -903,7 +903,25 @@ const { session } = await createAgentSession({
 
 **Static factories:**
 - `SettingsManager.create(cwd?, agentDir?)` - Load from files
-- `SettingsManager.inMemory(settings?)` - No file I/O
+- `SettingsManager.inMemory(settings?, recallStorage?)` - Private memory recall unless a backend is explicitly supplied
+- `SettingsManager.fromStorage(storage, recallStorage?)` - Custom settings backend; omitted recall backend means private memory, not inferred disk access
+
+`create(cwd, agentDir)` composes file recall at `<agentDir>/last-used-models.json`. Passing an injected manager to SDK/services does not opt it into additional recall filesystem access based on `agentDir`. Explicit opt-in is available from the package root:
+
+```typescript
+import { FileLastUsedModelsStorage, SettingsManager } from "@leanandmean/coding-agent";
+
+const settings = SettingsManager.fromStorage(
+  mySettingsStorage,
+  new FileLastUsedModelsStorage("/custom/profile/last-used-models.json"),
+);
+settings.setDefaultModelAndProvider("provider", "model-id", "/exact/working/directory");
+const identity = settings.getDirectoryDefaultModel("/exact/working/directory");
+```
+
+`LastUsedModelsStorage` exposes synchronous `read(): string | undefined` and asynchronous `withLock(update): Promise<void>`; the backend must lock before reading current bytes and updating. `LastUsedModelIdentity`, `InMemoryLastUsedModelsStorage`, `SettingsStorage` and `SettingsError` are also root exports. `SettingsStorage.withLock(scope, update, write?)` accepts optional write intent; existing two-argument implementations remain compatible. Built-in manager loads are read-only; writes lock before reading, including first creation. Global settings retain direct-write crash characteristics, while recall uses same-directory atomic replacement.
+
+The optional CWD in `setDefaultModelAndProvider(provider, modelId, cwd?)` teaches one lexical resolved directory; two arguments only update the global default. `getDirectoryDefaultModel(cwd)` returns a defensive identity copy, or `undefined` if either model-default field is defined by project settings or programmatic overrides. Those defined model overrides survive saves/reload; default getter meanings are unchanged. See [directory state](settings.md#directory-model-state) for metadata/privacy and independent-file failure semantics.
 
 **Project-specific settings:**
 
@@ -918,7 +936,11 @@ Project overrides global. Nested objects merge keys. Setters modify global setti
 - Settings getters/setters are synchronous for in-memory state.
 - Setters enqueue persistence writes asynchronously.
 - Call `await settingsManager.flush()` when you need a durability boundary (for example, before process exit or before asserting file contents in tests).
-- `SettingsManager` does not print settings I/O errors. Use `settingsManager.drainErrors()` and report them in your app layer.
+- `SettingsManager` does not print settings I/O errors. Use `settingsManager.drainErrors()` and report them in your app layer. Recall failures use the existing `scope: "global"`, with file/operation-specific diagnostics. A drained load error does not suppress later blocked-write errors.
+- Global and recall writes are attempted independently; `flush()` waits for both attempts but does not imply success. `reload()` settles first, then reloads both stores. No cross-file rollback or blind automatic retry is performed.
+- `AgentSession.dispose()` remains synchronous. Direct SDK owners should `await settingsManager.flush()`, inspect/drain errors, then `session.dispose()` for orderly cleanup.
+- Alternatively, `await runtime.dispose()` settles settings after shutdown handlers. `runtime.setSettingsErrorHandler(errors => { ... })` installs optional synchronous delivery at settlement; `await runtime.settleSettings()` is available after an in-place `session.reload()`. Without a handler, errors stay buffered and caller-owned. Built-in modes install their own warning/stderr handlers.
+- Runtime replacement settles the retiring manager before constructing the candidate, without sacrificing candidate-failure safety, and again after shutdown handlers before invalidation. Shutdown-handler errors still settle pending settings and preserve the original error. Emergency terminal loss, crashes, repeated forced exit and SIGKILL cannot guarantee async persistence.
 
 > See [examples/sdk/10-settings.ts](../examples/sdk/10-settings.ts)
 

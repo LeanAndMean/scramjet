@@ -152,6 +152,12 @@ export {
 } from "./core/extensions/index.js";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.js";
+export {
+	FileLastUsedModelsStorage,
+	InMemoryLastUsedModelsStorage,
+	type LastUsedModelIdentity,
+	type LastUsedModelsStorage,
+} from "./core/last-used-models.js";
 export { convertToLlm } from "./core/messages.js";
 export { ModelRegistry } from "./core/model-registry.js";
 export type {
@@ -221,7 +227,9 @@ export {
 	type ImageSettings,
 	type PackageSource,
 	type RetrySettings,
+	type SettingsError,
 	SettingsManager,
+	type SettingsStorage,
 } from "./core/settings-manager.js";
 // Skills
 export {

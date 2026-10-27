@@ -131,7 +131,7 @@ export class LastUsedModelsStore {
 		return isIdentity(value) ? { provider: value.provider, modelId: value.modelId } : undefined;
 	}
 
-	set(cwd: string, identity: LastUsedModelIdentity): void {
+	set(cwd: string, identity: LastUsedModelIdentity, after: Promise<void> = Promise.resolve()): void {
 		if (!isIdentity(identity)) {
 			this.errors.push(new Error(`${this.label()}: update rejected an invalid model identity`));
 			return;
@@ -140,6 +140,7 @@ export class LastUsedModelsStore {
 		const captured = { provider: identity.provider, modelId: identity.modelId };
 		this.selections.set(key, captured);
 		this.pending = this.pending.then(async () => {
+			await after;
 			let updated: Record<string, unknown> | undefined;
 			try {
 				await this.storage.withLock((current) => {

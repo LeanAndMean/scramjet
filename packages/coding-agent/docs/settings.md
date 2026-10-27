@@ -9,6 +9,18 @@ Scramjet uses JSON settings files with project settings overriding global settin
 
 Edit directly or use `/settings` for common options.
 
+## Directory model state
+
+`SettingsManager.create(cwd, agentDir)` also reads `<agentDir>/last-used-models.json` (normally `~/.scramjet/agent/last-used-models.json`). This is automatically managed state, not a setting or project override. It maps exact lexical `path.resolve(cwd)` paths to `{ "provider": "…", "modelId": "…" }`; symlinks, parent/child directories and Git roots are not merged. Reads do not create files, and recall never creates files or `.scramjet` directories in working directories.
+
+The settings API's CWD-bearing model setter updates this memory separately from the existing global default. Two-argument calls remain global-only. Directory lookup is suppressed when either model-default field is defined in project settings or programmatic overrides; existing default getters retain their global/project field-wise merge. Programmatic model-default overrides survive saves and reloads. Thinking preferences remain global. Launch routing and session selection integration are separate consumers of this API.
+
+Global settings and recall writes commit independently, in that order per selection. Either may succeed while the other fails; there is no rollback or two-file atomic transaction. Malformed recall documents are preserved and block recall writes, not global settings writes; invalid individual entries are ignored for lookup and preserved unless their own directory is deliberately updated. A failed reload retains the last valid recall state. Errors distinguish failed updates from recall replacements committed before unlock failure; do not blindly retry uncertain writes.
+
+The state file contains visited directory paths and model identities, not credentials. Its metadata grows without eviction; separating it from settings does not hide it from local filesystem access or backups. Custom/in-memory settings factories use private memory recall unless explicitly given a backend; see [SDK settings management](sdk.md#settings-management).
+
+`flush()` settles queued attempts, not guaranteed successful persistence: inspect `drainErrors()`. Built-in modes report settings failures through active interactive warnings or terminal-safe stderr at orderly exit; print/JSON/RPC never put these diagnostics on protocol stdout. Runtime replacement settles settings before candidate construction and again after shutdown handlers, before invalidation. Crashes, terminal-loss emergency exits, repeated forced exits and SIGKILL cannot guarantee asynchronous settlement.
+
 ## All Settings
 
 ### Model & Thinking

@@ -10,6 +10,7 @@ import { restoreScramjetCommandInvocation } from "./scramjet-command-parser.js";
 import type { CreateAgentSessionResult } from "./sdk.js";
 import { assertSessionCwdExists } from "./session-cwd.js";
 import { SessionManager } from "./session-manager.js";
+import type { SettingsError } from "./settings-manager.js";
 
 /**
  * Result returned by runtime creation.
@@ -63,6 +64,7 @@ export class SessionImportFileNotFoundError extends Error {
 export class AgentSessionRuntime {
 	private rebindSession?: (session: AgentSession) => Promise<void>;
 	private beforeSessionInvalidate?: () => void;
+	private settingsErrorHandler?: (errors: SettingsError[]) => void;
 
 	constructor(
 		private _session: AgentSession,
@@ -108,6 +110,20 @@ export class AgentSessionRuntime {
 		this.beforeSessionInvalidate = beforeSessionInvalidate;
 	}
 
+	// SCRAMJET-DIVERGENCE: persistence errors remain caller-owned unless presentation is installed.
+	setSettingsErrorHandler(handler?: (errors: SettingsError[]) => void): void {
+		this.settingsErrorHandler = handler;
+	}
+
+	async settleSettings(): Promise<void> {
+		const settings = this.services.settingsManager;
+		await settings.flush();
+		if (this.settingsErrorHandler) {
+			const errors = settings.drainErrors();
+			if (errors.length) this.settingsErrorHandler(errors);
+		}
+	}
+
 	private async emitBeforeSwitch(
 		reason: "new" | "resume",
 		targetSessionFile?: string,
@@ -143,11 +159,17 @@ export class AgentSessionRuntime {
 	}
 
 	private async teardownCurrent(reason: SessionShutdownEvent["reason"], targetSessionFile?: string): Promise<void> {
-		await emitSessionShutdownEvent(this.session.extensionRunner, {
-			type: "session_shutdown",
-			reason,
-			targetSessionFile,
-		});
+		try {
+			await emitSessionShutdownEvent(this.session.extensionRunner, {
+				type: "session_shutdown",
+				reason,
+				targetSessionFile,
+			});
+		} catch (error) {
+			await this.settleSettings().catch(() => {});
+			throw error;
+		}
+		await this.settleSettings();
 		await this.session.flushOutputThroughputHistory();
 		this.beforeSessionInvalidate?.();
 		this.session.dispose();
@@ -172,6 +194,8 @@ export class AgentSessionRuntime {
 		if (options.sessionManager === this.session.sessionManager) {
 			throw new Error("swapRuntime requires a sessionManager independent of the live session's");
 		}
+		// SCRAMJET-DIVERGENCE: candidates must observe pending preferences before retiring the live runtime.
+		await this.settleSettings();
 		const candidate = await this.createRuntime(options);
 		try {
 			await this.teardownCurrent(options.sessionStartEvent.reason, options.sessionManager.getSessionFile());
