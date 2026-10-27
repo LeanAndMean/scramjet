@@ -100,7 +100,11 @@ What the LLM sees:
     prompt   from cmp          messages from firstKeptEntryId
 ```
 
-On repeated compactions, the summarized span starts at the previous compaction's kept boundary (`firstKeptEntryId`), not at the compaction entry itself, falling back to the entry after the previous compaction if that kept entry cannot be found in the path. This preserves messages that survived the earlier compaction by including them in the next summarization pass as well. Scramjet also recalculates `tokensBefore` from the rebuilt session context before writing the new `CompactionEntry`, so the token count reflects the actual pre-compaction context being replaced.
+On repeated compactions, the summarized span starts at the previous compaction's kept boundary (`firstKeptEntryId`), not at the compaction entry itself, falling back to the entry after the previous compaction if that kept entry cannot be found in the path. This preserves messages that survived the earlier compaction by including them in the next summarization pass as well. Scramjet also recalculates `tokensBefore` from the rebuilt active session context before writing the new `CompactionEntry`.
+
+This is an approximate pre-compaction context estimate, not exact request tokenization or the size of the summarization request. A successful, non-harness assistant with valid positive usage can anchor the estimate only when its entry follows both the latest compaction and explicit model-change boundaries and its provider/model matches the selected model. Boundary checks use branch entry order, not timestamps. Later active messages, including harness and invalid-usage messages, contribute content estimates. Without an eligible anchor, all rebuilt active messages are estimated, including the previous summary and retained messages; this fallback omits independent system-prompt and tool-definition overhead. Neither method is a guaranteed upper bound.
+
+`prepareCompaction(entries, settings, currentModel?)` accepts an optional `{ provider, id }` identity. Manual and automatic Session compaction supply the current model. Two-argument callers use reconstructable branch routing when available, otherwise complete message estimation. Numeric result and journal shapes are unchanged, and historical stored counts are not repaired.
 
 ### Split Turns
 
@@ -164,7 +168,7 @@ interface CompactionDetails {
 }
 ```
 
-Extensions can store any JSON-serializable data in `details`. The default compaction tracks file operations, but custom extension implementations can use their own structure.
+Extensions can store any JSON-serializable data in `details`. The default compaction tracks file operations, but custom extension implementations can use their own structure. An extension that returns a compaction result owns its supplied `tokensBefore`: that numeric override is persisted unchanged rather than replaced with the built-in preparation estimate.
 
 See [`prepareCompaction()`](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) and [`compact()`](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) for the implementation.
 

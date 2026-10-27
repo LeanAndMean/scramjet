@@ -138,13 +138,25 @@ export function calculateContextTokens(usage: Usage): number {
 
 /**
  * Get usage from an assistant message if available.
- * Skips aborted and error messages as they don't have valid usage data.
+ * Skips synthetic responses and unusable token measurements.
  */
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
 	if (msg.role === "assistant" && "usage" in msg) {
 		const assistantMsg = msg as AssistantMessage;
-		if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
-			return assistantMsg.usage;
+		// SCRAMJET-DIVERGENCE: Synthetic and invalid usage cannot anchor context estimates.
+		const usage = assistantMsg.usage;
+		if (
+			assistantMsg.origin !== "harness" &&
+			assistantMsg.stopReason !== "aborted" &&
+			assistantMsg.stopReason !== "error" &&
+			usage &&
+			[usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens ?? 0].every(
+				(value) => Number.isFinite(value) && value >= 0,
+			) &&
+			Number.isFinite(calculateContextTokens(usage)) &&
+			calculateContextTokens(usage) > 0
+		) {
+			return usage;
 		}
 	}
 	return undefined;
@@ -661,6 +673,7 @@ export interface CompactionPreparation {
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
+	currentModel?: { provider: string; id: string },
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
@@ -684,7 +697,35 @@ export function prepareCompaction(
 	}
 	const boundaryEnd = pathEntries.length;
 
-	const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
+	// SCRAMJET-DIVERGENCE: Qualify usage by entry order and routing without discarding retained content.
+	const { messages } = buildSessionContext(pathEntries);
+	let usageBoundary = prevCompactionIndex;
+	let selectedModel = currentModel;
+	for (let i = 0; i < pathEntries.length; i++) {
+		const entry = pathEntries[i];
+		if (entry.type === "model_change") {
+			usageBoundary = Math.max(usageBoundary, i);
+			if (!currentModel) selectedModel = { provider: entry.provider, id: entry.modelId };
+		} else if (entry.type === "message" && entry.message.role === "assistant" && !currentModel) {
+			if (entry.message.origin !== "harness") {
+				selectedModel = { provider: entry.message.provider, id: entry.message.model };
+			}
+		}
+	}
+	let tokensBefore = messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+	for (let i = pathEntries.length - 1; selectedModel && i > usageBoundary; i--) {
+		const entry = pathEntries[i];
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		const message = entry.message;
+		const usage = getAssistantUsage(message);
+		if (!usage || message.provider !== selectedModel.provider || message.model !== selectedModel.id) continue;
+		const activeIndex = messages.indexOf(message);
+		if (activeIndex < 0) continue;
+		tokensBefore =
+			calculateContextTokens(usage) +
+			messages.slice(activeIndex + 1).reduce((sum, trailing) => sum + estimateTokens(trailing), 0);
+		break;
+	}
 
 	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
 
