@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.113.1 — Make review and fix explanations easier to understand
+
+Improve review, assessment, and fix communication. Fixes [#622](https://github.com/LeanAndMean/scramjet/issues/622).
+
+### Changed
+
+- Explain review findings through problematic behavior, triggering conditions, practical consequences, and reasons for correction, with technical references supporting the explanation.
+- Restate assessed concerns and connect decisive evidence to independent dispositions while preserving uncertainty and preliminary validation status.
+- Carry finding-linked before/after explanations through fix summaries and durable progress comments, distinguishing substantial repairs from tests and supporting work.
+
+### Tests
+
+- Retain existing structural command checks and wiring coverage. Illustrative communication evaluation does not establish real-use comprehension or general effectiveness.
+
 ## 0.113.0 — Publish to explicit repositories without a local origin
 
 Allow guarded forge publication outside Git checkouts or without a usable origin. Fixes [#619](https://github.com/LeanAndMean/scramjet/issues/619).

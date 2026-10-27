@@ -13,6 +13,11 @@ describe("applySpellcheckDecoration", () => {
 		expect(result).toBe("hello \x1b[4:3m\x1b[31mwrold\x1b[39m\x1b[24m");
 	});
 
+	it("uses explicit single underline without decorating the correct suffix", () => {
+		const result = applySpellcheckDecoration("teh correct text", 0, 16, [{ start: 0, end: 3 }], colorize, "single");
+		expect(result).toBe("\x1b[4m\x1b[31mteh\x1b[39m\x1b[24m correct text");
+	});
+
 	it("decorates multiple separate ranges independently", () => {
 		const result = applySpellcheckDecoration(
 			"teh wrold tset",
