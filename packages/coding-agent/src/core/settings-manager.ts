@@ -214,7 +214,7 @@ export class FileSettingsStorage implements SettingsStorage {
 		try {
 			// SCRAMJET-DIVERGENCE: first creation must read the latest content under the write lock.
 			if (write) mkdirSync(dir, { recursive: true });
-			if (write || (write === undefined && existsSync(path))) release = this.acquireLockSyncWithRetry(path);
+			if (write || existsSync(path)) release = this.acquireLockSyncWithRetry(path);
 			const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
 			const next = fn(current);
 			if (next !== undefined) {
