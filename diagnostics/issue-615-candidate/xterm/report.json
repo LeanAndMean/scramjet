@@ -1,0 +1,67 @@
+{
+  "revision": "4a104cd0ade4cd7b3ab95de9ac636ca5c59b406e",
+  "run": "40426711419",
+  "screenshots": [
+    {
+      "phase": "01-raw-comparison",
+      "bytes": 53916
+    },
+    {
+      "phase": "02-editor-end",
+      "bytes": 16350
+    },
+    {
+      "phase": "03-editor-start",
+      "bytes": 16504
+    },
+    {
+      "phase": "04-editor-inside-typo",
+      "bytes": 16649
+    },
+    {
+      "phase": "05-editor-wrapped",
+      "bytes": 21680
+    },
+    {
+      "phase": "06-editor-hard-newline",
+      "bytes": 16601
+    },
+    {
+      "phase": "07-editor-replacement",
+      "bytes": 16306
+    },
+    {
+      "phase": "02-editor-end-colored",
+      "bytes": 16931
+    },
+    {
+      "phase": "03-editor-start-colored",
+      "bytes": 16904
+    },
+    {
+      "phase": "04-editor-inside-typo-colored",
+      "bytes": 16939
+    },
+    {
+      "phase": "05-editor-wrapped-colored",
+      "bytes": 22233
+    },
+    {
+      "phase": "06-editor-hard-newline-colored",
+      "bytes": 17012
+    },
+    {
+      "phase": "07-editor-replacement-colored",
+      "bytes": 16306
+    }
+  ],
+  "terminal": "xterm",
+  "terminalVersion": "XTerm(390)",
+  "packages": "xterm\t390-1ubuntu3\nxvfb\t2:21.1.12-1ubuntu1.9",
+  "profile": {
+    "background": "white",
+    "foreground": "black",
+    "font": "DejaVu Sans Mono 14"
+  },
+  "exitCode": "0"
+}

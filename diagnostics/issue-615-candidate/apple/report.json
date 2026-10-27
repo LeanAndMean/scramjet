@@ -1,0 +1,69 @@
+{
+  "revision": "4a104cd0ade4cd7b3ab95de9ac636ca5c59b406e",
+  "run": "40426711419",
+  "screenshots": [
+    {
+      "phase": "01-raw-comparison",
+      "bytes": 108801
+    },
+    {
+      "phase": "02-editor-end",
+      "bytes": 89659
+    },
+    {
+      "phase": "03-editor-start",
+      "bytes": 89632
+    },
+    {
+      "phase": "04-editor-inside-typo",
+      "bytes": 89770
+    },
+    {
+      "phase": "05-editor-wrapped",
+      "bytes": 94885
+    },
+    {
+      "phase": "06-editor-hard-newline",
+      "bytes": 89983
+    },
+    {
+      "phase": "07-editor-replacement",
+      "bytes": 89604
+    },
+    {
+      "phase": "02-editor-end-colored",
+      "bytes": 89960
+    },
+    {
+      "phase": "03-editor-start-colored",
+      "bytes": 89911
+    },
+    {
+      "phase": "04-editor-inside-typo-colored",
+      "bytes": 89971
+    },
+    {
+      "phase": "05-editor-wrapped-colored",
+      "bytes": 95163
+    },
+    {
+      "phase": "06-editor-hard-newline-colored",
+      "bytes": 90162
+    },
+    {
+      "phase": "07-editor-replacement-colored",
+      "bytes": 89592
+    }
+  ],
+  "macOS": "ProductName:\t\tmacOS\nProductVersion:\t\t15.7.9\nBuildVersion:\t\t24G830",
+  "terminalVersion": "2.14",
+  "profile": "{\n    \"Default Window Settings\" = Basic;\n    \"Startup Window Settings\" = Basic;\n}",
+  "capabilities": {
+    "accessibility": true,
+    "listenEvents": true,
+    "postEvents": true,
+    "screenCapture": true
+  },
+  "terminalPid": 9308,
+  "exitCode": "0"
+}
