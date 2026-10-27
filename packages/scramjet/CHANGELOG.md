@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.113.2 — Fix spelling marks in Apple Terminal and XTerm
+
+Fix terminal-specific spelling underline rendering. Fixes [#615](https://github.com/LeanAndMean/scramjet/issues/615).
+
+### Fixed
+
+- Use single spelling underlines for recognized direct Apple Terminal and native XTerm identities, avoiding yellow spill or missing marks while preserving theme foregrounds and word boundaries.
+- Retain curly underlines for other identities and unverified multiplexer paths, with unchanged default formatter output.
+
+### Tests
+
+- Cover terminal identity selection, cursor composition, clipping and undecorated suffix/padding boundaries. Recorded native evidence qualifies tested Apple Terminal, XTerm and Kitty configurations, not every terminal version or SSH/multiplexer path.
+
 ## 0.113.1 — Make review and fix explanations easier to understand
 
 Improve review, assessment, and fix communication. Fixes [#622](https://github.com/LeanAndMean/scramjet/issues/622).
