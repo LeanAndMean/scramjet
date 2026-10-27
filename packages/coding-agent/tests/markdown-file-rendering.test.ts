@@ -93,12 +93,22 @@ describe("read Markdown provenance and presentation", () => {
 		).toContain("Heading");
 	});
 	it("selects ten source lines before parsing and reuses unchanged document components", async () => {
-		const source = Array.from({ length: 15 }, (_, i) => `**line${i + 1}**`).join("\n");
+		const source = [
+			"**line1**",
+			"",
+			"<!-- hidden preview comment -->",
+			"",
+			...Array.from({ length: 6 }, (_, i) => `**line${i + 5}**`),
+			"**expanded-only-sentinel**",
+			...Array.from({ length: 4 }, (_, i) => `**line${i + 12}**`),
+		].join("\n");
 		const { definition, result } = await read(source);
 		const ctx = context({ expanded: false });
 		const card = readCard(definition, result, ctx);
 		expect(plain(card)).toContain("5 more source lines");
-		expect(plain(card)).not.toContain("line11");
+		expect(plain(card)).toContain("line10");
+		expect(plain(card)).not.toContain("hidden preview comment");
+		expect(plain(card)).not.toContain("expanded-only-sentinel");
 		const md = documents(card)[0];
 		const setText = vi.spyOn(md, "setText");
 		ctx.lastComponent = card;
@@ -106,7 +116,9 @@ describe("read Markdown provenance and presentation", () => {
 		expect(documents(card)[0]).toBe(md);
 		expect(setText).not.toHaveBeenCalled();
 		ctx.expanded = true;
-		expect(plain(readCard(definition, result, ctx))).toContain("line15");
+		const expanded = plain(readCard(definition, result, ctx));
+		expect(expanded).toContain("expanded-only-sentinel");
+		expect(expanded).toContain("line15");
 	});
 	it.each(["```md", "<!-- unfinished"])("keeps limit guidance outside unfinished %s", async (prefix) => {
 		const source = `${prefix}\n😀\r\u001b[31mtext\nlast`;
@@ -116,7 +128,15 @@ describe("read Markdown provenance and presentation", () => {
 			type: "text",
 			text: `${prefix}\n😀\r\u001b[31mtext\n\n[1 more lines in file. Use offset=3 to continue.]`,
 		});
-		expect(plain(readCard(definition, result))).toContain("Use offset=3 to continue.");
+		const rendered = plain(readCard(definition, result));
+		expect(rendered).toContain("Use offset=3 to continue.");
+		expect(rendered).toContain("[1 more lines in file. Use offset=3 to continue.]");
+		if (prefix === "```md") {
+			expect(rendered).toContain("😀text");
+		} else {
+			expect(rendered).not.toContain("😀");
+			expect(rendered).not.toContain("text");
+		}
 	});
 	it("renders offset fragments as supplied and preserves literal notice-like file prose", async () => {
 		const source = "ignored\n**fragment**\n[Showing lines 1-2. Use offset=3 to continue.]";
