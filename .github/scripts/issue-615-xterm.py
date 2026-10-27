@@ -66,7 +66,7 @@ try:
         time.sleep(.1)
     else:
         raise RuntimeError('Native xterm diagnostic timed out')
-    if len(seen) != 7 or not (out/'done').exists():
+    if len(seen) != 13 or not (out/'done').exists():
         raise RuntimeError('Incomplete diagnostic evidence')
 finally:
     (out/'report.json').write_text(json.dumps(report,indent=2))

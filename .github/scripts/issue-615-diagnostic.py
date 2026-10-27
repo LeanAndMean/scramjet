@@ -47,7 +47,8 @@ async function phase(name, extra={}) {
 }
 const line='teh correct text after the spelling error';
 const raw=applySpellcheckDecoration(line,0,line.length,[{start:0,end:3}],s=>theme.fg('spellcheckError',s));
-const cases=[['A actual light-theme bytes',raw],['B ordinary underline',raw.replace('\x1b[4:3m','\x1b[4m')],['C actual plus background reset',raw.replace('\x1b[24m','\x1b[24m\x1b[49m')],['D actual plus full reset',raw.replace('\x1b[24m','\x1b[0m')],['E curly opener only','\x1b[4:3mteh\x1b[24m correct text'],['F plain control','teh correct text']];
+const single=applySpellcheckDecoration(line,0,line.length,[{start:0,end:3}],s=>theme.fg('spellcheckError',s),'single');
+const cases=[['A explicit legacy curly',raw],['B explicit single',single],['C actual plus background reset',raw.replace('\x1b[24m','\x1b[24m\x1b[49m')],['D actual plus full reset',raw.replace('\x1b[24m','\x1b[0m')],['E curly opener only','\x1b[4:3mteh\x1b[24m correct text'],['F plain control','teh correct text']];
 process.stdout.write('\x1b[0m\x1b[2J\x1b[H');
 for(const [name,bytes] of cases){record({name,bytes});process.stdout.write(name+'\r\n'+bytes+' '.repeat(25)+'END\x1b[0m\r\n\r\n');}
 await phase('01-raw-comparison');
@@ -58,20 +59,26 @@ const terminal=new ProcessTerminal();
 const write=terminal.write.bind(terminal);
 terminal.write=data=>{fs.appendFileSync(path.join(out,'terminal-writes.jsonl'),JSON.stringify(data)+'\n');write(data);};
 const tui=new TUI(terminal);
-const editor=new Editor(tui,getEditorTheme());editor.setSpellcheckProvider(provider);
+let colored=false;
+const editorTheme=getEditorTheme();
+const editor=new Editor(tui,{...editorTheme,spellcheckError:s=>colored?'\x1b[31m'+s+'\x1b[39m':editorTheme.spellcheckError(s)});editor.setSpellcheckProvider(provider);
 tui.configureViewport({getBlocks:()=>[{component:editor,dock:true}]});tui.setFocus(editor);tui.start();
 try {
- for(const [name,text,cursor] of [
+ for(const style of ['light','colored']) {
+ colored=style==='colored';
+ for(const [baseName,text,cursor] of [
  ['02-editor-end',line,'end'],
  ['03-editor-start',line,'start'],
  ['04-editor-inside-typo',line,'inside'],
  ['05-editor-wrapped','teh '+('correct text after the spelling error ').repeat(5),'end'],
  ['06-editor-hard-newline','teh correct text\ncorrect text on the next line','end'],
  ['07-editor-replacement','the correct text after the spelling error','end']]){
+ const name=colored?baseName+'-colored':baseName;
  editor.setText(text);
  if(cursor!=='end'){editor.handleInput('\x01');if(cursor==='inside')editor.handleInput('\x1b[C');}
  await pause(300);await tui.renderNow({requireFlush:true});
- await phase(name,{text,rendered:editor.render(terminal.columns),ranges:text.split('\n').map((_,i)=>provider.getMisspelledRanges(i))});
+ await phase(name,{style,text,rendered:editor.render(terminal.columns),ranges:text.split('\n').map((_,i)=>provider.getMisspelledRanges(i))});
+ }
  }
 } finally {tui.stop();process.stdout.write('\x1b[0m');}
 fs.writeFileSync(path.join(out,'done'),'ok');
@@ -134,7 +141,7 @@ try:
         time.sleep(.1)
     else:
         raise RuntimeError('Native diagnostic timed out')
-    if len(seen)!=7 or not (out/'done').exists():
+    if len(seen)!=13 or not (out/'done').exists():
         raise RuntimeError('Incomplete diagnostic phase evidence')
 finally:
     (out/'report.json').write_text(json.dumps(report,indent=2))
