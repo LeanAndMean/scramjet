@@ -260,6 +260,10 @@ Editor border colors indicating thinking level (visual hierarchy from subtle to 
 |-------|---------|
 | `spellcheckError` | Misspelled-word foreground in the editor; the underline is applied independently |
 
+Spelling marks use curly underlines by default. Direct Apple Terminal (`TERM_PROGRAM=Apple_Terminal`) and native XTerm (`XTERM_VERSION=XTerm(<digits>)`, `TERM=xterm` or `xterm-256color`, and no nonempty `TERM_PROGRAM`) use single underlines to avoid yellow spill or missing marks. Theme foregrounds and word boundaries are unchanged.
+
+Nonempty `TMUX`/`STY` or a `TERM` starting with `tmux`/`screen` retain curls. Generic TERM values alone do not identify an emulator; unknown or mediated identities, including forwarded SSH environments, are not negotiated capability evidence. This narrow heuristic does not guarantee compatibility for those sessions or every future terminal version.
+
 ### HTML Export (optional)
 
 The `export` section controls colors for `/export` HTML output only. If omitted, colors are derived from `userMessageBg`.
