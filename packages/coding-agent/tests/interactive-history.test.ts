@@ -52,6 +52,7 @@ import snakeExample from "../examples/extensions/snake.js";
 import invadersExample from "../examples/extensions/space-invaders.js";
 import { createToolHtmlRenderer } from "../src/core/export-html/tool-renderer.js";
 import { defineTool } from "../src/core/extensions/index.js";
+import { createCompactionSummaryMessage } from "../src/core/messages.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { ArminComponent } from "../src/modes/interactive/components/armin.js";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.js";
@@ -1424,12 +1425,13 @@ describe("interactive assistant history", () => {
 		expect(output).toContain("TREE-SESSION");
 		expect(terminal.bufferLines().join("\n")).not.toContain("OLD-SESSION");
 
-		setSessionMessages([assistant("COMPACTED-SESSION")]);
+		const checkpoint = createCompactionSummaryMessage("BEGIN persisted summary", 250000, "2026-10-27");
+		setSessionMessages([checkpoint, assistant("COMPACTED-SESSION")]);
 		mark = terminal.markWrites();
 		await emit({
 			type: "compaction_end",
 			reason: "manual",
-			result: { summary: "summary", tokensBefore: 100 },
+			result: { summary: checkpoint.summary, tokensBefore: checkpoint.tokensBefore },
 			willRetry: false,
 		});
 		await render(terminal);
@@ -1437,6 +1439,8 @@ describe("interactive assistant history", () => {
 		output = terminal.writesSince(mark);
 		expect(output).toContain("\x1b[3J");
 		expect(output).toContain("COMPACTED-SESSION");
+		expect(output).toContain("BEGIN persisted summary");
+		expect(output).toContain("~250,000 tokens");
 		expect(terminal.bufferLines().join("\n")).not.toContain("TREE-SESSION");
 	});
 
@@ -2431,6 +2435,54 @@ describe("production retained viewport", () => {
 	});
 	afterEach(async () => {
 		await h.dispose();
+	});
+
+	it("renders a persisted offline compaction in live and reconstructed production history", async () => {
+		await h.dispose();
+		const summary = `BEGIN checkpoint\n\n${"generated content ".repeat(400)}\n\nEND checkpoint`;
+		h = await createProductionInteractiveHarness(
+			100,
+			40,
+			(pi) => {
+				pi.on("session_before_compact", (event) => ({
+					compaction: { summary, tokensBefore: 250000, firstKeptEntryId: event.preparation.firstKeptEntryId },
+				}));
+			},
+			true,
+			undefined,
+			undefined,
+			{
+				agent: {
+					initialState: { model: getModel("openai", "gpt-4o") },
+					streamFn: () => {
+						throw new Error("Offline compaction must not call a provider");
+					},
+				},
+			},
+		);
+		h.session.sessionManager.appendMessage({ role: "user", content: "old context", timestamp: 1 });
+		h.session.sessionManager.appendMessage(assistant("old answer"));
+		await h.session.compact();
+		const live = (await h.frame()).join("\n");
+		expect(live).toContain("~250,000 tokens");
+		expect(live).toContain("BEGIN checkpoint");
+		expect(live).toContain("…");
+		expect(live).not.toContain("END checkpoint");
+		h.internals.setToolsExpanded(true);
+		expect((await h.frame()).join("\n")).toContain("END checkpoint");
+		h.internals.setToolsExpanded(false);
+		h.terminal.resize(60, 40);
+		expect((await h.frame()).join("\n")).toContain("BEGIN checkpoint");
+		h.session.sessionManager.appendMessage({ role: "user", content: "new context", timestamp: 2 });
+		h.internals.renderCurrentSessionState();
+		const restored = (await h.frame()).join("\n");
+		expect(restored).toContain("~250,000 tokens");
+		expect(restored).toContain("BEGIN checkpoint");
+		expect(restored).not.toContain("END checkpoint");
+		expect(h.session.sessionManager.getEntries().find((entry) => entry.type === "compaction")).toMatchObject({
+			summary,
+			tokensBefore: 250000,
+		});
 	});
 
 	it("keeps exact assistant, tool, queue and widget rows through individual and coalesced updates", async () => {

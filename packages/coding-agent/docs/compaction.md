@@ -106,6 +106,12 @@ This is an approximate pre-compaction context estimate, not exact request tokeni
 
 `prepareCompaction(entries, settings, currentModel?)` accepts an optional `{ provider, id }` identity. Manual and automatic Session compaction supply the current model. Two-argument callers use reconstructable branch routing when available, otherwise complete message estimation. Numeric result and journal shapes are unchanged, and historical stored counts are not repaired.
 
+### Interactive summary pane
+
+The collapsed pane shows `Estimated pre-compaction context: ~… tokens` using the stored historical `tokensBefore`, plus the beginning of the generated checkpoint summary—not the prompt used to request it. The preview renders at most ten content rows from at most 4,096 UTF-16 code units, without splitting a surrogate pair, and shows `…` when either limit hides content. It reflows with terminal width.
+
+Use the displayed expansion shortcut (Ctrl+O by default) to read the complete original summary and the estimate explanation; collapse returns to the beginning preview. Preview clipping does not change saved content or recover hidden text when copying displayed rows. Reconstructed/resumed history uses the same stored count and preview, not the current context size. Existing historical counts and extension-supplied values remain unchanged.
+
 ### Split Turns
 
 A "turn" starts with a user message and includes all assistant responses and tool calls until the next user message. Normally, compaction cuts at turn boundaries.

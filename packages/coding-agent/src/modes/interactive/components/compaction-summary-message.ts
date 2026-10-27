@@ -1,4 +1,4 @@
-import { Box, Markdown, type MarkdownTheme, Spacer, Text } from "@leanandmean/tui";
+import { Box, getRenderedCopy, Markdown, type MarkdownTheme, Spacer, setRenderedCopy, Text } from "@leanandmean/tui";
 import type { CompactionSummaryMessage } from "../../../core/messages.js";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
 import { keyText } from "./keybinding-hints.js";
@@ -37,8 +37,13 @@ export class CompactionSummaryMessageComponent extends Box {
 		this.addChild(new Text(label, 0, 0));
 		this.addChild(new Spacer(1));
 
+		// SCRAMJET-DIVERGENCE: qualify historical estimates and preview bounded generated content.
+		const count = `Estimated pre-compaction context: ~${tokenStr} tokens`;
 		if (this.expanded) {
-			const header = `**Compacted from ${tokenStr} tokens**\n\n`;
+			const header =
+				`**${count}** (${keyText("app.tools.expand")} to collapse)\n\n` +
+				"Estimate uses available provider usage plus later-message estimates, otherwise conversation messages only; " +
+				"not the summarization request size.\n\n";
 			this.addChild(
 				new Markdown(header + this.message.summary, 0, 0, this.markdownTheme, {
 					color: (text: string) => theme.fg("customMessageText", text),
@@ -47,13 +52,34 @@ export class CompactionSummaryMessageComponent extends Box {
 		} else {
 			this.addChild(
 				new Text(
-					theme.fg("customMessageText", `Compacted from ${tokenStr} tokens (`) +
+					theme.fg("customMessageText", `${count} (`) +
 						theme.fg("dim", keyText("app.tools.expand")) +
 						theme.fg("customMessageText", " to expand)"),
 					0,
 					0,
 				),
 			);
+			this.addChild(new Spacer(1));
+			let end = Math.min(4096, this.message.summary.length);
+			if (end < this.message.summary.length && /[\uD800-\uDBFF]/.test(this.message.summary[end - 1])) end--;
+			const sourceClipped = end < this.message.summary.length;
+			const preview = new Markdown(this.message.summary.slice(0, end), 0, 0, this.markdownTheme, {
+				color: (text: string) => theme.fg("customMessageText", text),
+			});
+			this.addChild({
+				invalidate: () => preview.invalidate(),
+				render: (width) => {
+					const lines = preview.render(width);
+					const result = lines.slice(0, 10);
+					const copy = getRenderedCopy(lines).slice(0, 10);
+					if (sourceClipped || lines.length > 10) {
+						const omission = new Text(theme.fg("dim", "…"), 0, 0).render(width);
+						result.push(...omission);
+						copy.push(...getRenderedCopy(omission));
+					}
+					return setRenderedCopy(result, copy);
+				},
+			});
 		}
 	}
 }
