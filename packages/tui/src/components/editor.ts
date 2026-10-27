@@ -211,6 +211,7 @@ export function applySpellcheckDecoration(
 	chunkEnd: number,
 	ranges: SpellcheckRange[],
 	colorize: (s: string) => string,
+	underlineStyle: "curly" | "single" = "curly",
 ): string {
 	if (ranges.length === 0 || text.length === 0) return text;
 
@@ -232,7 +233,7 @@ export function applySpellcheckDecoration(
 		if (pos < localStart) {
 			result += text.slice(pos, localStart);
 		}
-		result += `\x1b[4:3m${colorize(text.slice(localStart, localEnd))}\x1b[24m`;
+		result += `\x1b[${underlineStyle === "single" ? "4" : "4:3"}m${colorize(text.slice(localStart, localEnd))}\x1b[24m`;
 		pos = localEnd;
 	}
 	if (pos < text.length) {
@@ -543,6 +544,17 @@ export class Editor implements Component, Focusable {
 		// Emit hardware cursor marker only when focused and not showing autocomplete
 		const emitCursorMarker = this.focused && !this.autocompleteState;
 
+		// SCRAMJET-DIVERGENCE: direct Apple Terminal and XTerm cannot render curly spelling marks correctly.
+		const { TERM, TERM_PROGRAM, XTERM_VERSION, TMUX, STY } = process.env;
+		const mediated = !!TMUX || !!STY || /^(tmux|screen)/.test(TERM ?? "");
+		const useSingleUnderline =
+			!mediated &&
+			(TERM_PROGRAM === "Apple_Terminal" ||
+				(!TERM_PROGRAM &&
+					/^XTerm\(\d+\)$/.test(XTERM_VERSION ?? "") &&
+					(TERM === "xterm" || TERM === "xterm-256color")));
+		const spellUnderlineStyle = useSingleUnderline ? "single" : "curly";
+
 		// SCRAMJET-DIVERGENCE: distinguish draft wraps from editor decoration when copying.
 		const copyRows: RenderedCopyRow[] = result.map(() => null);
 		for (const [index, layoutLine] of visibleLines.entries()) {
@@ -585,6 +597,7 @@ export class Editor implements Component, Focusable {
 								layoutLine.chunkStart + layoutLine.cursorPos,
 								spellRanges,
 								spellColorize!,
+								spellUnderlineStyle,
 							)
 						: before;
 					const restAfterStart = layoutLine.chunkStart + layoutLine.cursorPos + firstGrapheme.length;
@@ -595,6 +608,7 @@ export class Editor implements Component, Focusable {
 								layoutLine.chunkEnd,
 								spellRanges,
 								spellColorize!,
+								spellUnderlineStyle,
 							)
 						: restAfter;
 
@@ -609,6 +623,7 @@ export class Editor implements Component, Focusable {
 								layoutLine.chunkEnd,
 								spellRanges,
 								spellColorize!,
+								spellUnderlineStyle,
 							)
 						: before;
 					const cursor = "\x1b[7m \x1b[0m";
@@ -626,6 +641,7 @@ export class Editor implements Component, Focusable {
 					layoutLine.chunkEnd,
 					spellRanges,
 					spellColorize!,
+					spellUnderlineStyle,
 				);
 			}
 
