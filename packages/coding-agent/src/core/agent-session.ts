@@ -2810,6 +2810,13 @@ export class AgentSession {
 			// have stale usage reflecting the old (larger) context and would falsely
 			// trigger compaction right after one just finished.
 			const usageMsg = messages[estimate.lastUsageIndex];
+			// SCRAMJET-DIVERGENCE: Historical usage must match the live model before threshold admission.
+			if (
+				usageMsg.role === "assistant" &&
+				(usageMsg.provider !== this.model?.provider || usageMsg.model !== this.model?.id)
+			) {
+				return;
+			}
 			if (
 				compactionEntry &&
 				usageMsg.role === "assistant" &&
