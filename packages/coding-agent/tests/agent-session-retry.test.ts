@@ -264,6 +264,52 @@ function retryRecords(session: AgentSession) {
 }
 
 describe("compaction preparation accounting", () => {
+	it("does not threshold-compact from old-model usage after a harness notice and current-model error", async () => {
+		let calls = 0;
+		const old = {
+			...assistantText("short old-model answer"),
+			model: "old-model",
+			usage: { input: 250_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+		};
+		const { session, events } = await createFixture(
+			() => {
+				calls++;
+				return providerFailure("transient", "rate_limit");
+			},
+			{
+				model: { ...testModel, id: "old-model", contextWindow: 1_050_000 },
+				retryEnabled: false,
+				reserveTokens: 10_000,
+				customTools: [makeHarnessNoticeTool()],
+				extensionFactory: (pi) => {
+					pi.on("session_before_compact", (event) => ({
+						compaction: {
+							summary: "offline checkpoint",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+						},
+					}));
+				},
+			},
+		);
+		try {
+			session.sessionManager.appendMessage(old);
+			session.agent.state.messages = [old];
+			await session.setModel({ ...testModel, contextWindow: 100_000 });
+			await session.invokeHarnessTool("harness_notice", {});
+			expect(events.filter((event) => event.type === "compaction_start")).toEqual([]);
+			expect(session.messages.reduce((sum, message) => sum + estimateTokens(message), 0)).toBeLessThan(1000);
+			await session.prompt("short current-model prompt");
+			expect(calls).toBe(1);
+			expect({
+				starts: events.filter((event) => event.type === "compaction_start"),
+				compactions: session.sessionManager.getBranch().filter((entry) => entry.type === "compaction"),
+			}).toEqual({ starts: [], compactions: [] });
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it.each(["overflow", "threshold"] as const)(
 		"qualifies automatic %s preparation and preserves hook results",
 		async (kind) => {
