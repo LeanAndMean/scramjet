@@ -4,11 +4,11 @@ This file owns priority order, selection and selection rationale. Each linked ta
 
 ## Selection
 
-[S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md), for its eligible offline completion/replay contract investigation. Independent advisers converge on resolving material completion and complete next-turn context together before another compatibility sample; direct source inspection confirms both uncertainties. Whole-task/live acceptance remains blocked, and dependent b/c work remains ineligible. The task record owns the bounded next action.
+[S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md), for bounded offline planning of prospective accounting evidence independent of executable-envelope acceptance. Both independent advisers identified the coupling, and direct source inspection confirms it. The previous completion/replay selection is exhausted by independent acceptance; do not reopen it without a concrete finding. This investigation may prevent future unsupported-content failures from unnecessarily losing qualified accounting facts; it cannot reconcile existing obligations or unlock live dispatch or dependent b/c. The task record owns the bounded next action.
 
 ## Ordered work
 
-1. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Establish a consumer-ready completion/replay boundary before building its tool consumer; this advances the selected journey more directly than further diagnostic-only work.
+1. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Investigate the evidenced accounting/envelope coupling without replaying accepted corrections or changing live exposure limits; preserve the still-required deployed compatibility outcome.
 2. [S4.14b — headless Markdown/read/Python/Bash journey](tasks/S4.14b.md). Demonstrate useful coding effects and actual execution through that boundary.
 3. [S4.14c — retained terminal application and final QA](tasks/S4.14c.md). Consume the same headless journey in the terminal instead of building another execution loop.
 
