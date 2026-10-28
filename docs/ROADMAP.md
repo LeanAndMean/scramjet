@@ -77,7 +77,9 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 - Repeat native copy/paste, focus, resize, hidden-control approval, external-editor, suspend/resume, and exit journeys against the integrated application. Include failure/negative controls that catch no-op Copy and intercepted-but-not-inserted Paste.
 - Select initial real providers/auth routes with the user, and use explicit authority for live calls and publication. Exercise normal daily work before expanding catalogs.
 
-**Exit evidence:** daily-use journeys pass; native acceptance is tied to the exact candidate and tested matrix, not inherited from the probe. Known gaps are visible; no platform is described as first-class merely because it compiles.
+**Selected offline milestone (2026-10-26):** S4.13 now contains the authorized retained project request → parallel readers → exact-approved edit → explicit read-only verification journey, with useful history and cancellation/restoration. Its historical coding→companion outcome remains required, but is no longer a separate tiny prerequisite. Deliver two substantial batches: headless retained-project execution/history/continuation, then the consuming retained application and integrated journeys. Plan material project/runtime/evidence ownership uncertainty before the first batch; independently accept each material candidate. The application batch depends on accepted headless contracts; both are necessary for the parent outcome. Bounded offline fixtures establish harness behavior, not general model intelligence. No live/paid providers, publication, arbitrary shell, shared-endpoint load or new desktop/clipboard automation belongs to this authorization.
+
+**Exit evidence:** daily-use journeys pass; native acceptance is tied to the exact candidate and tested matrix, not inherited from the probe. Completion of the selected offline milestone does not complete all S4. Known gaps are visible; no platform is described as first-class merely because it compiles.
 
 ## S5 — Capacity and admission hardening
 

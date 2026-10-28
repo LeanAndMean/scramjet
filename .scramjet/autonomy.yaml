@@ -1,0 +1,17 @@
+edges:
+  rs:triage:
+    rs:work: chain
+    rs:plan: chain
+    rs:review: chain
+  rs:work:
+    rs:review: chain
+    rs:work: chain
+    rs:plan: chain
+    rs:triage: chain
+  rs:plan:
+    rs:work: chain
+    rs:triage: chain
+  rs:review:
+    rs:work: chain
+    rs:plan: chain
+    rs:triage: chain

@@ -39,4 +39,10 @@ Own task selection and cross-task ordering. Update the short priority queue in `
 
 Route the selected task by evidence: `rs:review <task-id>` for a current candidate awaiting review; `rs:work <task-id>` for ready work or concrete corrections; `rs:plan <task-id>` for material unresolved design or sizing. Do not implement the task, run a full review, or overwrite its acceptance without authority. Ask for user-owned decisions only with the necessary context and consequences.
 
-Persist queue decisions, blockers, and the handoff; deliver the result before reporting command status. A reconciled triage may report `completed` even when some tasks remain blocked. Follow `CLAUDE.md`'s reporting contract and emit one recommended fresh-session route only when independently eligible work exists; otherwise stop. Do not chain triage to itself.
+## Complete the handoff
+
+Persist queue decisions, blockers and the handoff, and release ownership in progress. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when reconciliation is established, even if some tasks remain blocked.
+
+Include one eligible `next_steps` entry: `message` is the evidence-selected `/rs:work <task-id>`, `/rs:plan <task-id>`, or `/rs:review <task-id>`, with `fresh_session: true` and a concrete `reason`. Set `recommended_next_step` to that entry's actual array index. The harness applies the user's chain/pause settings; no handoff confirmation is needed for already-authorized work. Do not chain triage to itself.
+
+For necessary user alignment, use `get_scramjet_user_input` with informed context. For no eligible work or another stop, report the truthful status under `CLAUDE.md` and omit `next_steps`. Stopping the chain does not mean omitting the report.

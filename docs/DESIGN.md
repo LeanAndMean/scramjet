@@ -15,6 +15,24 @@ Established 2026-10-08 from the founding discussion. This file owns product dire
 - Preserve extensible boundaries, but defer a general extension system. No Python, TypeScript, Pi extension API, or Pi ecosystem compatibility is required.
 - PromptSwarm is a reference for scale ambition, not a workflow model to port or a runtime dependency.
 
+## Currently authorized offline daily-use milestone
+
+The user authorized one outcome-level milestone on 2026-10-26: a retained project session accepts a coding request, uses parallel readers, performs an exact-approved edit, and explicitly continues to read-only verification, with useful history and reliable cancellation/restoration. Triage may select substantial implementation batches within this outcome without repeated per-slice authorization; genuine uncertainty needs planning and material safety contracts need independent review.
+
+This authorizes bounded local development and offline fixture-backed journeys, not live/paid providers, publication, arbitrary shell execution, shared-endpoint load tests, or new desktop/clipboard automation. Offline request interpretation and supported project access must be stated and tested honestly; a scripted replacement-text demo is not general coding intelligence. Retention must preserve the project across the journey, not delete user project contents as disposable cleanup. Useful recovered history does not authorize automatic re-execution of effects or continuation.
+
+This selected milestone is narrower than full S4 or platform/provider replacement readiness. [Progress](PROGRESS.md) owns its batches and acceptance evidence.
+
+## Selected first real-provider journey (2026-10-27)
+
+The user selected `openai/gpt-6-luna` through the existing authenticated Proxy route: create/read a trivial haiku Markdown file, create a small Python reader, and execute it through Bash. Deliver headless first, then the same runtime through simulated-input retained-TUI checks; final user QA follows agent-owned checks, not instead of them. Literary quality/general coding intelligence is not acceptance. [Progress](PROGRESS.md) owns the bounded batches, live-call ledger and exact check limits.
+
+Use Proxy's local Responses endpoint; Proxy retains authentication, upstream TLS/routing and any internal auth retry. Rust remains independent of the Scramjet runtime and does not read/export OAuth credentials, alter Proxy state, or treat proxy-local completion/cancellation as upstream billing settlement. Missing usage remains unknown. Transport/provider support cannot become tool, approval, continuation or history authority.
+
+For this journey, the user explicitly chooses to retain the first two unacknowledged live attempts as unresolved remote demand/unknown usage while permitting known new attempts within the original shared32-POST and four-obligation caps. Retention is not reconciliation or billing attestation. Runtime admission freezes an explicitly selected retained ordinal boundary; any new uncertainty beyond it stops further dispatch until separately aligned, and recovery never silently advances that boundary.
+
+This first execution capability is deliberately narrower than arbitrary Bash/Python: two named files in an explicitly owned test project, exact-approved creation, and a fixed Bash invocation of a reviewed read-and-print Python script over read-only captured files. The child has no home/credentials/network access and bounded execution/output; unsupported isolation fails closed. This does not authorize unrestricted shell, valuable-project execution or a portable sandbox claim. Existing offline replacement/project behavior remains separate and unchanged. User authorization covers local implementation/review, bounded synthetic live requests, and automated owned-terminal checks; publication, shared load tests and desktop/clipboard automation remain excluded.
+
 ## Essential responsibilities and invariants
 
 ### Execution and authority
@@ -26,6 +44,12 @@ The runtime must operate without a TUI or optional plugins. Do not introduce a c
 Isolate each agent's context, route, working directory, capabilities, and cancellation. Do not change process-global cwd, environment, or credentials to switch agents. Failed/incomplete model responses must not execute partial tool calls. Correlate results with actual invocations and reject stale results after session replacement.
 
 Default specialist children to genuinely read-only capabilities. An unrestricted shell is not read-only. Parallel writers need explicit workspace ownership or separate worktrees; conversation isolation does not prevent file conflicts. Readers of a changing checkout are not automatically consistent snapshots. Tool allowlists are not an OS sandbox.
+
+### Boundary robustness
+
+Accept valid opaque data and legal protocol representations within explicit aggregate byte, storage and work budgets. Provider identifiers are data, not paths, tool capabilities or assumed short names. Preserve required values exactly; reject ambiguity rather than silently repairing contradictions. Execution approval, provenance, complete-response authority and uncertain-effect no-retry rules remain strict.
+
+Separate documented protocol constraints, user/safety policy, client resource budgets and unverified hypotheses. Samples do not establish maxima. Capacities must preserve the selected useful consumer and account for framing/serialization overhead; saving trivial bytes is not a reason to reject valid data through unsupported field-size assumptions. Refuse actual budget exhaustion as a resource limitation, unsupported execution semantics as unsupported, and malformed or incomplete protocol as such. Fixtures and review must challenge—not canonize—representation assumptions.
 
 ### Resource bounds and admission
 

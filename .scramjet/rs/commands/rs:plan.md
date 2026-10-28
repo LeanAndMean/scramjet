@@ -37,4 +37,10 @@ Record the outcome, scope/non-goals, acceptance demonstration, necessary design 
 
 If subdivision is necessary, preserve the original task's acceptance and assign stable child IDs/dependencies; accepting one child does not complete its parent. Triage owns unrelated ordering. Return to triage when decomposition or evidence changes cross-task priorities; otherwise hand the actionable slice directly to work. Unresolved required decisions leave the task blocked, not ready.
 
-Persist the plan and handoff, then deliver the result. Follow `CLAUDE.md`'s reporting contract: completed actionable planning recommends `/rs:work <task-id>` in a fresh session; completed priority-changing analysis recommends `/rs:triage`. Missing required decisions or unfinished planning do not automatically advance.
+## Complete the handoff
+
+Persist the plan/handoff and release ownership in progress. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when this planning outcome is established.
+
+Include one eligible `next_steps` entry: `message` is `/rs:work <task-id>` for actionable planning or `/rs:triage` for completed priority-changing analysis, with `fresh_session: true` and a concrete `reason`. Set `recommended_next_step` to that entry's actual array index. The harness applies the user's chain/pause settings; no handoff confirmation is needed for already-authorized work.
+
+For necessary user alignment, use `get_scramjet_user_input` with informed context. Missing required decisions or unfinished planning do not automatically advance: report the truthful stop status under `CLAUDE.md` and omit `next_steps`. Stopping the chain does not mean omitting the report.
