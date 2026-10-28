@@ -16,6 +16,13 @@ function plain(lines: string[]) {
 describe("compaction summary pane", () => {
 	beforeEach(() => initTheme("pi-dark"));
 
+	it("does not emit summary-supplied screen-erasure controls in the collapsed preview", () => {
+		const pane = component("BEGIN checkpoint \x1b[2J AFTER");
+		const output = pane.render(100).join("\n");
+		expect(output).toContain("[compaction]");
+		expect(output).not.toContain("\x1b[2J");
+	});
+
 	it("shows the persisted approximate count and a complete short beginning without implying omission", () => {
 		const pane = component("BEGIN **generated summary** END");
 		const output = plain(pane.render(100));
