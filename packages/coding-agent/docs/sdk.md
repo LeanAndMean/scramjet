@@ -435,9 +435,12 @@ const { session } = await createAgentSession({
 ```
 
 If no model is provided:
-1. Tries to restore from session (if continuing)
-2. Uses default from settings
-3. Falls back to first available model
+1. Tries authenticated restoration from session (if continuing)
+2. Uses the exact working directory's remembered model, unless `startupModel: "global"` or project/programmatic model defaults suppress recall
+3. Uses the effective default from settings
+4. Falls back to an available model
+
+Recall checks exact registry identity and configured authentication only; unavailable choices warn without erasing their record. `modelFallbackMessage` composes restoration, recall and configured-default diagnostics, including when no model is available. Explicit `model` bypasses these defaults. Startup/restoration/fallback never teach preferences, and `/new` live inheritance retains priority.
 
 `cacheRetention` controls prompt-cache retention on providers that support it (Anthropic: `long` -> 1h cache TTL where the model supports it, `short` -> the default 5m TTL, `none` -> no caching). Precedence: the `cacheRetention` option (or the `--cache-retention` CLI flag), then the `PI_CACHE_RETENTION` environment variable, then the built-in default `long`. Short-lived sessions such as subagents should pass `short` since a 1h cache write costs more than a 5m one and rarely pays off for a single run.
 
@@ -453,7 +456,7 @@ For each built-in provider request, `createAgentSession()` binds the current ext
 
 ### Model preference persistence
 
-`createAgentSession()` and `createAgentSessionFromServices()` accept optional `persistModelPreferences` (default `true`); it is also available on `AgentSessionConfig`. Pass `false` to preserve saved default provider/model/thinking while allowing direct selection, both model-cycling paths and thinking changes to update live state, events and journal entries. Authentication and thinking clamping are unchanged. In an opt-out session, actual thinking-level changes on reasoning-capable models are remembered locally across non-reasoning detours, including an explicit `off` choice; the saved default remains unchanged. This local preference is not a new journal field or replacement-session inheritance value. With this opt-out, explicit startup selection also records changed branch-local model/thinking identity when opening an existing journal.
+`createAgentSession()` and `createAgentSessionFromServices()` accept optional `persistModelPreferences` (default `true`); it is also available on `AgentSessionConfig`. Pass `false` to preserve both the global saved default provider/model/thinking and directory recall while allowing direct selection, both model-cycling paths and thinking changes to update live state, events and journal entries. Authentication and thinking clamping are unchanged. In an opt-out session, actual thinking-level changes on reasoning-capable models are remembered locally across non-reasoning detours, including an explicit `off` choice; the saved default remains unchanged. This local preference is not a new journal field or replacement-session inheritance value. With this opt-out, explicit startup selection also records changed branch-local model/thinking identity when opening an existing journal.
 
 ```typescript
 const { session } = await createAgentSession({
@@ -461,6 +464,10 @@ const { session } = await createAgentSession({
   persistModelPreferences: false,
 });
 ```
+
+`startupModel: "global"` is a separate startup-selection policy, available through settings or `SettingsManager.setStartupModel("global")`; it bypasses recall without disabling recording. `getStartupModel()` defaults to `"per-directory"`. Changing it does not switch the live model or teach/delete directory records. Global setters retain project-effective values, and defined programmatic `startupModel` overrides survive saves/reload.
+
+With persistence enabled, authenticated direct selection (including same-model selection) and successful scoped/available cycling teach the session's effective CWD in `<agentDir>/last-used-models.json` as well as the global default. Authentication refusal and no-op cycling do not teach; selection success does not guarantee disk success. No repository-local recall files are created. Thinking remains global; see [directory model state](settings.md#directory-model-state) for scoped CLI policy, exact lexical path/profile scope, metadata growth/privacy and independent write failures.
 
 This is not blanket settings suppression: unrelated settings writes remain possible. Runtime factories must forward the policy to every replacement session. The CLI's [invocation-definition selectors](models.md#invocation-scoped-headless-models) do this automatically, register the captured route through existing `ModelRegistry.registerProvider()`, and supply its credential through `AuthStorage.setRuntimeApiKey()`. Ingress helpers are not new package-root SDK exports; programmatic callers can continue using those existing registry/auth APIs. Journal identity alone cannot reconstruct an endpoint or credential in a fresh process.
 
@@ -913,7 +920,25 @@ const { session } = await createAgentSession({
 
 **Static factories:**
 - `SettingsManager.create(cwd?, agentDir?)` - Load from files
-- `SettingsManager.inMemory(settings?)` - No file I/O
+- `SettingsManager.inMemory(settings?, recallStorage?)` - Private memory recall unless a backend is explicitly supplied
+- `SettingsManager.fromStorage(storage, recallStorage?)` - Custom settings backend; omitted recall backend means private memory, not inferred disk access
+
+`create(cwd, agentDir)` composes file recall at `<agentDir>/last-used-models.json`. Passing an injected manager to SDK/services does not opt it into additional recall filesystem access based on `agentDir`. Explicit opt-in is available from the package root:
+
+```typescript
+import { FileLastUsedModelsStorage, SettingsManager } from "@leanandmean/coding-agent";
+
+const settings = SettingsManager.fromStorage(
+  mySettingsStorage,
+  new FileLastUsedModelsStorage("/custom/profile/last-used-models.json"),
+);
+settings.setDefaultModelAndProvider("provider", "model-id", "/exact/working/directory");
+const identity = settings.getDirectoryDefaultModel("/exact/working/directory");
+```
+
+`LastUsedModelsStorage` exposes synchronous `read(): string | undefined` and asynchronous `withLock(update): Promise<void>`; the backend must lock before reading current bytes and updating. `LastUsedModelIdentity`, `InMemoryLastUsedModelsStorage`, `SettingsStorage` and `SettingsError` are also root exports. `SettingsStorage.withLock(scope, update, write?)` accepts optional write intent; existing two-argument implementations remain compatible. Built-in manager loads are read-only; writes lock before reading, including first creation. Global settings retain direct-write crash characteristics, while recall uses same-directory atomic replacement.
+
+The optional CWD in `setDefaultModelAndProvider(provider, modelId, cwd?)` teaches one lexical resolved directory; two arguments only update the global default. `getDirectoryDefaultModel(cwd)` returns a defensive identity copy, or `undefined` in Global startup mode or if either model-default field is defined by project settings or programmatic overrides. `startupModel` affects lookup only: supplying a CWD still records the choice in either mode. Those defined model overrides survive saves/reload; default getter meanings are unchanged. See [directory state](settings.md#directory-model-state) for metadata/privacy and independent-file failure semantics.
 
 **Project-specific settings:**
 
@@ -928,7 +953,13 @@ Project overrides global. Nested objects merge keys. Setters modify global setti
 - Settings getters/setters are synchronous for in-memory state.
 - Setters enqueue persistence writes asynchronously.
 - Call `await settingsManager.flush()` when you need a durability boundary (for example, before process exit or before asserting file contents in tests).
-- `SettingsManager` does not print settings I/O errors. Use `settingsManager.drainErrors()` and report them in your app layer.
+- `SettingsManager` does not print settings I/O errors. Use `settingsManager.drainErrors()` and report them in your app layer. Recall failures use the existing `scope: "global"`, with file/operation-specific diagnostics. A drained load error does not suppress later blocked-write errors.
+- Contextual native `Error` wrappers retain original failures as `cause`, including error type, message, code, stack, nested causes and arbitrary thrown values. Multiple failures retain their original errors in `AggregateError`. `drainErrors()` retains this original evidence rather than the terminal-sanitized display text.
+- Ordinary CLI/mode diagnostics expose causal evidence with VT sequences and control characters stripped, without changing JSON/RPC stdout. This is not debug-only reporting or secret redaction: parser messages may include document excerpts, though no document is appended. Buffered persistence errors do not become tool results or session-journal entries. A custom backend failure does not prove durable storage was unchanged.
+- Global and recall writes are attempted independently; `flush()` waits for both attempts but does not imply success. `reload()` settles first, then reloads both stores. No cross-file rollback or blind automatic retry is performed.
+- `AgentSession.dispose()` remains synchronous. Direct SDK owners should `await settingsManager.flush()`, inspect/drain errors, then `session.dispose()` for orderly cleanup.
+- Alternatively, `await runtime.dispose()` settles settings after shutdown handlers. `runtime.setSettingsErrorHandler(errors => { ... })` installs optional synchronous delivery at settlement; `await runtime.settleSettings()` is available after an in-place `session.reload()`. Without a handler, errors stay buffered and caller-owned. Built-in modes install their own warning/stderr handlers.
+- Runtime replacement settles the retiring manager before constructing the candidate, without sacrificing candidate-failure safety, and again after shutdown handlers before invalidation. Shutdown-handler errors still settle pending settings and preserve the original error. Emergency terminal loss, crashes, repeated forced exit and SIGKILL cannot guarantee async persistence.
 
 > See [examples/sdk/10-settings.ts](../examples/sdk/10-settings.ts)
 

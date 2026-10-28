@@ -1,7 +1,218 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { inspect } from "node:util";
+import lockfile from "proper-lockfile";
+import { describe, expect, it, vi } from "vitest";
 import { InMemorySettingsStorage, SettingsManager } from "../src/core/settings-manager.js";
 
+describe("file settings reader coordination", () => {
+	it("loads the committed document after a cooperating in-progress writer", () => {
+		const dir = mkdtempSync(join(tmpdir(), "settings-reader-"));
+		const path = join(dir, "settings.json");
+		const committed = '{"defaultProvider":"p","defaultModel":"committed"}';
+		writeFileSync(path, committed);
+		const acquire = lockfile.lockSync.bind(lockfile);
+		let releaseWriter: (() => void) | undefined = acquire(path, { realpath: false });
+		writeFileSync(path, '{"defaultProvider":');
+		const finishWriter = () => {
+			if (!releaseWriter) return;
+			writeFileSync(path, committed);
+			releaseWriter();
+			releaseWriter = undefined;
+		};
+		const spy = vi.spyOn(lockfile, "lockSync").mockImplementation((...args) => {
+			finishWriter();
+			return acquire(...args);
+		});
+		try {
+			const manager = SettingsManager.create(join(dir, "project"), dir);
+			finishWriter();
+			expect(manager.getDefaultModel()).toBe("committed");
+			expect(manager.drainErrors()).toEqual([]);
+		} finally {
+			spy.mockRestore();
+			finishWriter();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("file settings diagnostics", () => {
+	it("retains the JSON.parse SyntaxError at load and blocked save", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "settings-diagnostics-"));
+		const path = join(dir, "settings.json");
+		const bytes = '{"PRIVATE_SETTINGS_SENTINEL": BROKEN}';
+		writeFileSync(path, bytes);
+		let parseFailure: unknown;
+		try {
+			JSON.parse(bytes);
+		} catch (error) {
+			parseFailure = error;
+		}
+		try {
+			const manager = SettingsManager.create(join(dir, "project"), dir);
+			const initial = manager.drainErrors();
+			manager.setTheme("pi-light");
+			await manager.flush();
+			const blocked = manager.drainErrors();
+			for (const errors of [initial, blocked]) {
+				expect(errors).toHaveLength(1);
+				expect(errors[0].scope).toBe("global");
+				expect(errors[0].error.message).toContain(path);
+				expect(errors[0].error.message).toContain("read failed during update/validate");
+				expect(errors[0].error.cause).toBeInstanceOf(SyntaxError);
+				expect((errors[0].error.cause as SyntaxError).message).toBe((parseFailure as SyntaxError).message);
+				expect((errors[0].error.cause as SyntaxError).stack).toContain("JSON.parse");
+			}
+			expect(readFileSync(path, "utf8")).toBe(bytes);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("retains both parse and unlock failures alongside the outcome warning", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "settings-diagnostics-"));
+		const path = join(dir, "settings.json");
+		writeFileSync(path, "{}");
+		const manager = SettingsManager.create(join(dir, "project"), dir);
+		const bytes = '{"PRIVATE_SETTINGS_SENTINEL": BROKEN}';
+		writeFileSync(path, bytes);
+		const unlockFailure = Object.assign(new Error("unlock sentinel"), { code: "EUNLOCK" });
+		const acquire = lockfile.lockSync.bind(lockfile);
+		const spy = vi.spyOn(lockfile, "lockSync").mockImplementationOnce((...args) => {
+			const release = acquire(...args);
+			return () => {
+				release();
+				throw unlockFailure;
+			};
+		});
+		try {
+			manager.setTheme("pi-light");
+			await manager.flush();
+			const errors = manager.drainErrors();
+			expect(errors).toHaveLength(1);
+			expect(errors[0].error.message).toContain(path);
+			expect(errors[0].error.message).toContain("update failed during update/validate");
+			expect(errors[0].error.message).toContain("unlock failed");
+			expect(errors[0].error.message).toContain("write outcome may be committed");
+			expect(errors[0].error).toBeInstanceOf(AggregateError);
+			const causes = (errors[0].error as AggregateError).errors;
+			expect(causes).toHaveLength(2);
+			expect(causes[0].cause).toBeInstanceOf(SyntaxError);
+			expect(causes[0].cause.stack).toContain("JSON.parse");
+			expect(causes[1].cause).toBe(unlockFailure);
+			expect(inspect(causes, { depth: null })).toContain("SyntaxError");
+			expect(inspect(causes, { depth: null })).toContain(unlockFailure.stack!.split("\n")[1].trim());
+			expect(inspect(causes, { depth: null })).toContain("EUNLOCK");
+			expect(readFileSync(path, "utf8")).toBe(bytes);
+		} finally {
+			spy.mockRestore();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it.each([
+		"EACCES",
+		"EPERM",
+		"ELOCKED",
+		"ENOENT",
+		"ENOTDIR",
+		"EISDIR",
+		"ENOSPC",
+		"EROFS",
+		"EIO",
+		"EMFILE",
+		"ENFILE",
+		"PRIVATE_SETTINGS_SENTINEL",
+	])("retains the original %s lock failure at load and blocked save", async (code) => {
+		const dir = mkdtempSync(join(tmpdir(), "settings-diagnostics-"));
+		const path = join(dir, "settings.json");
+		writeFileSync(path, "{}");
+		const originalCause = new Error("nested failure");
+		const failure = Object.assign(new Error("original lock failure", { cause: originalCause }), { code });
+		const spy = vi.spyOn(lockfile, "lockSync").mockImplementation(() => {
+			throw failure;
+		});
+		try {
+			const manager = SettingsManager.create(join(dir, "project"), dir);
+			const initial = manager.drainErrors();
+			manager.setTheme("pi-light");
+			await manager.flush();
+			for (const errors of [initial, manager.drainErrors()]) {
+				expect(errors).toHaveLength(1);
+				expect(errors[0].error.message).toBe(`Settings ${JSON.stringify(path)}: read failed during lock`);
+				expect(errors[0].error.cause).toBe(failure);
+				expect(inspect(errors, { depth: null })).toContain(failure.stack!.split("\n")[1].trim());
+				expect(inspect(errors, { depth: null })).toContain(code);
+				expect(failure.cause).toBe(originalCause);
+			}
+			expect(readFileSync(path, "utf8")).toBe("{}");
+		} finally {
+			spy.mockRestore();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it.each([undefined, null, false, 0, "lock refused", 17, { reason: "lock refused", code: "CUSTOM" }])(
+		"preserves an arbitrary thrown lock value: %j",
+		async (failure) => {
+			const dir = mkdtempSync(join(tmpdir(), "settings-diagnostics-"));
+			const path = join(dir, "settings.json");
+			writeFileSync(path, "{}");
+			const spy = vi.spyOn(lockfile, "lockSync").mockImplementation(() => {
+				throw failure;
+			});
+			try {
+				const manager = SettingsManager.create(join(dir, "project"), dir);
+				const initial = manager.drainErrors();
+				manager.setTheme("pi-light");
+				await manager.flush();
+				for (const errors of [initial, manager.drainErrors()]) {
+					expect(errors).toHaveLength(1);
+					expect(errors[0].error).toHaveProperty("cause", failure);
+					expect(errors[0].error.cause).toBe(failure);
+				}
+				expect(readFileSync(path, "utf8")).toBe("{}");
+			} finally {
+				spy.mockRestore();
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+	);
+});
+
 describe("retry settings bounds", () => {
+	it("keeps old two-parameter storage compatible without replaying failed model fields", async () => {
+		let content: string | undefined;
+		let fail = true;
+		const manager = SettingsManager.fromStorage({
+			withLock(scope, update) {
+				if (scope === "project") {
+					update(undefined);
+					return;
+				}
+				const next = update(content);
+				if (next !== undefined) {
+					if (fail) throw new Error("write refused");
+					content = next;
+				}
+			},
+		});
+		manager.setDefaultModelAndProvider("p", "stale", "/a");
+		await manager.flush();
+		expect(manager.drainErrors()).toHaveLength(1);
+		content = '{"defaultProvider":"other","defaultModel":"fresh"}';
+		fail = false;
+		manager.setDefaultThinkingLevel("high");
+		await manager.flush();
+		expect(JSON.parse(content)).toEqual({
+			defaultProvider: "other",
+			defaultModel: "fresh",
+			defaultThinkingLevel: "high",
+		});
+		expect(manager.getDirectoryDefaultModel("/a")?.modelId).toBe("stale");
+	});
 	it.each([-1, 0.5, "3", Infinity, NaN, Number.MAX_SAFE_INTEGER + 1])(
 		"ignores invalid count %s without losing inherited provider settings",
 		(value) => {

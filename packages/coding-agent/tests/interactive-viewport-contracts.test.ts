@@ -1336,7 +1336,11 @@ describe("retained interactive contracts", () => {
 		h.terminal.sendInput("\x1b[A");
 		const frame = await h.frame();
 		expect(h.internals.ui.getViewportState()!.offset).toBe(before);
-		expect(frame.find((line) => line.includes("Markdown reads"))).toContain("→ Markdown reads");
+		const selected = frame.find((line) => line.trimStart().startsWith("→ "));
+		expect(selected).toBeDefined();
+		expect(selected).not.toContain("Auto-compact");
+		h.terminal.sendInput("\x1b[B");
+		expect((await h.frame()).join("\n")).toContain("→ Auto-compact");
 	});
 
 	it.each([

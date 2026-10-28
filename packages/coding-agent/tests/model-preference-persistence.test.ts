@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.js";
+import { createAgentSessionRuntime } from "../src/core/agent-session-runtime.js";
 import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
@@ -112,10 +113,244 @@ async function fixture(
 	await session.bindExtensions({});
 	const events: string[] = [];
 	session.subscribe((event) => events.push(event.type));
-	return { session, settingsManager, settingsPath, sessionManager, modelRegistry, models, selections, events };
+	return {
+		root,
+		agentDir,
+		authStorage,
+		resourceLoaderOptions,
+		session,
+		settingsManager,
+		settingsPath,
+		sessionManager,
+		modelRegistry,
+		models,
+		selections,
+		events,
+	};
 }
 
+describe("directory recall acceptance", () => {
+	it("remembers A/B independently, leaves unseen directories global, and preserves live inheritance after replacement", async () => {
+		const f = await fixture(true, false, false);
+		f.session.dispose();
+		const a = join(f.root, "a");
+		const b = join(f.root, "b");
+		const unseen = join(f.root, "unseen");
+		for (const cwd of [a, b, unseen]) mkdirSync(cwd);
+		const createRuntime = async (cwd: string) =>
+			createAgentSessionRuntime(
+				async ({ cwd, sessionManager, inherited }) => {
+					const services = await createAgentSessionServices({
+						cwd,
+						agentDir: f.agentDir,
+						authStorage: f.authStorage,
+						modelRegistry: f.modelRegistry,
+						resourceLoaderOptions: f.resourceLoaderOptions,
+					});
+					return {
+						...(await createAgentSessionFromServices({
+							services,
+							sessionManager,
+							model: inherited?.model,
+							thinkingLevel: inherited?.thinkingLevel,
+							tools: [],
+						})),
+						services,
+						diagnostics: services.diagnostics,
+					};
+				},
+				{ cwd, agentDir: f.agentDir, sessionManager: SessionManager.inMemory(cwd) },
+			);
+		for (const [cwd, model] of [
+			[a, f.models[0]],
+			[b, f.models[1]],
+		] as const) {
+			const runtime = await createRuntime(cwd);
+			await runtime.session.setModel(model);
+			await runtime.dispose();
+		}
+		const recallPath = join(f.agentDir, "last-used-models.json");
+		const before = [readFileSync(f.settingsPath, "utf8"), readFileSync(recallPath, "utf8")];
+		for (const [cwd, model] of [
+			[a, f.models[0]],
+			[b, f.models[1]],
+			[unseen, f.models[1]],
+		] as const) {
+			const runtime = await createRuntime(cwd);
+			expect(runtime.session.model).toBe(model);
+			await runtime.dispose();
+			expect([readFileSync(f.settingsPath, "utf8"), readFileSync(recallPath, "utf8")]).toEqual(before);
+			expect(existsSync(join(cwd, ".scramjet"))).toBe(false);
+		}
+		const runtime = await createRuntime(a);
+		try {
+			await runtime.session.setModel(f.models[1]);
+			await runtime.newSession();
+			expect(runtime.session.model).toBe(f.models[1]);
+			await runtime.session.setModel(f.models[0]);
+			await runtime.settleSettings();
+			expect(runtime.services.settingsManager.getDirectoryDefaultModel(a)).toEqual({
+				provider: f.models[0].provider,
+				modelId: "a",
+			});
+		} finally {
+			await runtime.dispose();
+		}
+	});
+
+	it.each([
+		"recall",
+		"global",
+		"global-missing",
+		"explicit",
+		"restored",
+		"override",
+		"project",
+		"missing",
+		"unauthenticated",
+		"no-model",
+	])("SDK priority and warning composition: %s", async (route) => {
+		const f = await fixture(true, false, false);
+		try {
+			f.settingsManager.setDefaultModelAndProvider(f.models[0].provider, "a", f.root);
+			await f.settingsManager.flush();
+			f.settingsManager.setDefaultModelAndProvider(f.models[1].provider, "b");
+			await f.settingsManager.flush();
+			if (["missing", "no-model"].includes(route)) {
+				f.settingsManager.setDefaultModelAndProvider("missing", "id/with:punctuation", f.root);
+				await f.settingsManager.flush();
+				f.settingsManager.setDefaultModelAndProvider("missing-global", "missing-id");
+				await f.settingsManager.flush();
+			}
+			if (route === "global-missing") {
+				f.settingsManager.setDefaultModelAndProvider("missing", "remembered", f.root);
+				f.settingsManager.setDefaultModelAndProvider(f.models[1].provider, "b");
+			}
+			if (route.startsWith("global")) f.settingsManager.setStartupModel("global");
+			if (route === "override") f.settingsManager.applyOverrides({ defaultModel: "b" });
+			if (route === "project") {
+				mkdirSync(join(f.root, ".scramjet"));
+				writeFileSync(join(f.root, ".scramjet/settings.json"), JSON.stringify({ defaultModel: "b" }));
+				await f.settingsManager.reload();
+			}
+			if (route === "unauthenticated")
+				vi.spyOn(f.modelRegistry, "hasConfiguredAuth").mockImplementation((model) => model !== f.models[0]);
+			if (route === "no-model") vi.spyOn(f.modelRegistry, "getAvailable").mockResolvedValue([]);
+			const sm = SessionManager.inMemory(f.root);
+			if (["restored", "missing", "no-model"].includes(route)) {
+				sm.appendModelChange(route === "restored" ? f.models[1].provider : "missing-session", "b");
+				sm.appendMessage({ role: "user", content: "resume", timestamp: Date.now() });
+			}
+			await f.settingsManager.flush();
+			const before = readFileSync(join(f.agentDir, "last-used-models.json"), "utf8");
+			const result = await createAgentSession({
+				cwd: f.root,
+				agentDir: f.agentDir,
+				authStorage: f.authStorage,
+				modelRegistry: f.modelRegistry,
+				settingsManager: f.settingsManager,
+				resourceLoader: f.session.resourceLoader,
+				sessionManager: sm,
+				model: route === "explicit" ? f.models[1] : undefined,
+				tools: [],
+			});
+			try {
+				if (route === "no-model") expect(result.session.model?.provider).toBe("unknown");
+				else expect(result.session.model).toBe(["recall", "missing"].includes(route) ? f.models[0] : f.models[1]);
+				if (["missing", "no-model"].includes(route)) {
+					expect(result.modelFallbackMessage).toContain("Could not restore model missing-session/b");
+					expect(result.modelFallbackMessage).toContain("missing/id/with:punctuation");
+					expect(result.modelFallbackMessage).toContain("Configured default model missing-global/missing-id");
+					if (route === "no-model") expect(result.modelFallbackMessage).toContain("No models available");
+				} else if (route === "unauthenticated")
+					expect(result.modelFallbackMessage).toContain("no configured authentication");
+				else expect(result.modelFallbackMessage).toBeUndefined();
+				await f.settingsManager.flush();
+				expect(readFileSync(join(f.agentDir, "last-used-models.json"), "utf8")).toBe(before);
+			} finally {
+				result.session.dispose();
+			}
+		} finally {
+			f.session.dispose();
+		}
+	});
+});
+
 describe("model preference persistence policy", () => {
+	it.each(["direct", "scoped", "available"])(
+		"Global startup mode still records %s choices and preserves live state on toggling",
+		async (path) => {
+			const f = await fixture(true, false, path === "scoped");
+			try {
+				f.settingsManager.setStartupModel("global");
+				if (path === "direct") await f.session.setModel(f.models[1]);
+				else await f.session.cycleModel();
+				await f.settingsManager.flush();
+				expect(f.session.model).toBe(f.models[1]);
+				expect(f.settingsManager.getDefaultModel()).toBe("b");
+				expect(f.settingsManager.getDirectoryDefaultModel(f.root)).toBeUndefined();
+				const recallPath = join(f.agentDir, "last-used-models.json");
+				const recorded = readFileSync(recallPath, "utf8");
+				expect(JSON.parse(recorded)[f.root]).toEqual({ provider: f.models[1].provider, modelId: "b" });
+				f.settingsManager.setDefaultModelAndProvider(f.models[0].provider, "a");
+				const entries = structuredClone(f.sessionManager.getEntries());
+				f.settingsManager.setStartupModel("per-directory");
+				await f.settingsManager.flush();
+				expect(f.session.model).toBe(f.models[1]);
+				expect(f.sessionManager.getEntries()).toEqual(entries);
+				expect(readFileSync(recallPath, "utf8")).toBe(recorded);
+				expect(f.settingsManager.getDirectoryDefaultModel(f.root)).toEqual({
+					provider: f.models[1].provider,
+					modelId: "b",
+				});
+			} finally {
+				f.session.dispose();
+			}
+		},
+	);
+
+	it("opt-out preserves both existing files through selection and cycling", async () => {
+		const f = await fixture(false, true, true);
+		try {
+			f.settingsManager.setDefaultModelAndProvider("remembered", "unchanged", f.root);
+			f.settingsManager.setStartupModel("global");
+			await f.settingsManager.flush();
+			const recallPath = join(f.agentDir, "last-used-models.json");
+			const before = [readFileSync(f.settingsPath, "utf8"), readFileSync(recallPath, "utf8")];
+			await f.session.setModel(f.models[1]);
+			await f.session.cycleModel();
+			f.session.setThinkingLevel("high");
+			await f.settingsManager.flush();
+			expect([readFileSync(f.settingsPath, "utf8"), readFileSync(recallPath, "utf8")]).toEqual(before);
+		} finally {
+			f.session.dispose();
+		}
+	});
+
+	it("same-model direct selection teaches but no-op cycling and authentication refusal do not", async () => {
+		const f = await fixture(true, false, false);
+		try {
+			vi.spyOn(f.modelRegistry, "getAvailable").mockResolvedValue([f.models[0]]);
+			expect(await f.session.cycleModel()).toBeUndefined();
+			f.session.setScopedModels([{ model: f.models[0] }]);
+			expect(await f.session.cycleModel()).toBeUndefined();
+			await f.settingsManager.flush();
+			expect(existsSync(join(f.agentDir, "last-used-models.json"))).toBe(false);
+			const auth = vi.spyOn(f.modelRegistry, "hasConfiguredAuth").mockReturnValue(false);
+			await expect(f.session.setModel(f.models[1])).rejects.toThrow("No API key");
+			await f.settingsManager.flush();
+			expect(existsSync(join(f.agentDir, "last-used-models.json"))).toBe(false);
+			auth.mockReturnValue(true);
+			await f.session.setModel(f.models[0]);
+			await f.settingsManager.flush();
+			expect(f.settingsManager.getDirectoryDefaultModel(f.root)).toEqual({
+				provider: f.models[0].provider,
+				modelId: "a",
+			});
+		} finally {
+			f.session.dispose();
+		}
+	});
 	it.each(
 		[false, true, undefined].flatMap((policy) =>
 			["direct", "scoped", "available"].flatMap((path) =>
@@ -147,6 +382,10 @@ describe("model preference persistence policy", () => {
 			).toEqual(level === "high" ? ["low", "high", "off", "high"] : ["low", "off"]);
 			expect(f.selections).toEqual(["b", "a"]);
 			await f.settingsManager.flush();
+			expect(f.settingsManager.getDirectoryDefaultModel(f.root)).toEqual(
+				policy === false ? undefined : { provider: f.models[0].provider, modelId: "a" },
+			);
+			expect(existsSync(join(f.agentDir, "last-used-models.json"))).toBe(policy !== false);
 			expect(f.settingsManager.drainErrors()).toEqual([]);
 			expect(JSON.parse(readFileSync(f.settingsPath, "utf8"))).toEqual(
 				policy === false
@@ -248,6 +487,8 @@ describe("model preference persistence policy", () => {
 			const thinkingBefore = f.session.thinkingLevel;
 			const entriesBefore = structuredClone(f.sessionManager.getEntries());
 			const diskBefore = readFileSync(f.settingsPath, "utf8");
+			const recallBefore = f.settingsManager.getDirectoryDefaultModel(f.root);
+			expect(recallBefore).toEqual(policy === false ? undefined : { provider: f.models[1].provider, modelId: "b" });
 			selection = undefined;
 			requestRender.mockClear();
 
@@ -273,6 +514,7 @@ describe("model preference persistence policy", () => {
 			expect(f.session.thinkingLevel).toBe(thinkingBefore);
 			expect(f.sessionManager.getEntries()).toEqual(entriesBefore);
 			expect(readFileSync(f.settingsPath, "utf8")).toBe(diskBefore);
+			expect(f.settingsManager.getDirectoryDefaultModel(f.root)).toEqual(recallBefore);
 			expect(f.selections).toEqual(["b"]);
 		} finally {
 			f.session.dispose();
@@ -298,6 +540,10 @@ describe("model preference persistence policy", () => {
 			expect(f.selections).toEqual(["b"]);
 			await f.settingsManager.flush();
 			expect(f.settingsManager.drainErrors()).toEqual([]);
+			expect(f.settingsManager.getDirectoryDefaultModel(f.root)).toEqual(
+				policy === false ? undefined : { provider: f.models[1].provider, modelId: "b" },
+			);
+			expect(existsSync(join(f.agentDir, "last-used-models.json"))).toBe(policy !== false);
 			const disk = JSON.parse(readFileSync(f.settingsPath, "utf8"));
 			expect(disk).toEqual(
 				policy === false
@@ -312,6 +558,9 @@ describe("model preference persistence policy", () => {
 			expect(f.sessionManager.buildSessionContext().model).toEqual({ provider: f.models[0].provider, modelId: "a" });
 			await f.settingsManager.flush();
 			expect(f.settingsManager.drainErrors()).toEqual([]);
+			expect(f.settingsManager.getDirectoryDefaultModel(f.root)).toEqual(
+				policy === false ? undefined : { provider: f.models[0].provider, modelId: "a" },
+			);
 			expect(JSON.parse(readFileSync(f.settingsPath, "utf8"))).toEqual(
 				policy === false
 					? defaults

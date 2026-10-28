@@ -4,6 +4,7 @@
  * Override settings using SettingsManager.
  */
 
+import { inspect, stripVTControlCharacters } from "node:util";
 import { createAgentSession, SessionManager, SettingsManager } from "@leanandmean/coding-agent";
 
 const cwd = process.cwd();
@@ -35,7 +36,8 @@ await settingsManager.flush();
 const settingsErrors = settingsManager.drainErrors();
 if (settingsErrors.length > 0) {
 	for (const { scope, error } of settingsErrors) {
-		console.warn(`Warning (${scope} settings): ${error.message}`);
+		const details = inspect(error, { depth: null, colors: false, customInspect: false, getters: false });
+		console.warn(stripVTControlCharacters(`Warning (${scope} settings): ${details}`).replace(/\p{Cc}/gu, " "));
 	}
 }
 

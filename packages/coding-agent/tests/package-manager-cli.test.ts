@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SettingsError } from "../src/core/settings-manager.js";
 
 const PACKAGE_NAME = "@leanandmean/scramjet";
 const CURRENT_VERSION = "0.77.1";
@@ -10,6 +11,7 @@ const RELEASE_VERSION = "0.78.1";
 
 interface RunOptions {
 	args?: string[];
+	settingsErrors?: SettingsError[];
 	manifest?: unknown;
 	missingManifest?: boolean;
 	releaseVersion?: string;
@@ -66,7 +68,10 @@ async function runSelfUpdate(options: RunOptions = {}) {
 	vi.doMock("../src/core/settings-manager.js", () => ({
 		SettingsManager: {
 			create: () => ({
-				drainErrors: () => [],
+				drainErrors: vi
+					.fn()
+					.mockReturnValueOnce(options.settingsErrors ?? [])
+					.mockReturnValue([]),
 				getGlobalSettings: () => ({ npmCommand: options.npmCommand }),
 			}),
 		},
@@ -110,6 +115,25 @@ afterEach(() => {
 });
 
 describe("managed self-update verification", () => {
+	it("reports full nested settings evidence only on stderr", async () => {
+		const reason = Object.assign(new Error("nested package settings reason"), { code: "E_PACKAGE_SETTINGS" });
+		reason.stack = "Error: nested package settings reason\n    at package-settings-evidence";
+		const result = await runSelfUpdate({
+			releaseVersion: CURRENT_VERSION,
+			settingsErrors: [
+				{ scope: "project", error: new Error("package settings failed\x1b[2J\x07", { cause: { reason } }) },
+			],
+		});
+
+		expect(result.stderr).toContain("Warning (package command): Settings persistence (project)");
+		for (const detail of ["nested package settings reason", "E_PACKAGE_SETTINGS", "package-settings-evidence"]) {
+			expect(result.stderr).toContain(detail);
+			expect(result.stdout).not.toContain(detail);
+		}
+		expect(result.stderr).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+		expect(process.exitCode).toBeUndefined();
+	});
+
 	it("fails when the package manager exits successfully but leaves the old release installed", async () => {
 		const result = await runSelfUpdate();
 

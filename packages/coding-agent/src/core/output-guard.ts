@@ -1,3 +1,25 @@
+import { inspect, stripVTControlCharacters } from "node:util";
+import type { SettingsError } from "./settings-manager.js";
+
+// SCRAMJET-DIVERGENCE: preference failures must not inject terminal controls or protocol output.
+export function formatSettingsError({ scope, error }: SettingsError): string {
+	const details = inspect(error, {
+		colors: false,
+		depth: null,
+		customInspect: false,
+		getters: false,
+		maxStringLength: null,
+		maxArrayLength: null,
+	});
+	return stripVTControlCharacters(`Settings persistence (${scope}): ${details}`).replace(/\p{Cc}/gu, " ");
+}
+
+export async function flushStderr(): Promise<void> {
+	await new Promise<void>((resolve, reject) => {
+		process.stderr.write("", (error) => (error ? reject(error) : resolve()));
+	});
+}
+
 interface StdoutTakeoverState {
 	rawStdoutWrite: (chunk: string, callback?: (error?: Error | null) => void) => boolean;
 	rawStderrWrite: (chunk: string, callback?: (error?: Error | null) => void) => boolean;

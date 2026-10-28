@@ -18,7 +18,7 @@ import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
-import { findInitialModel } from "./model-resolver.js";
+import { findInitialModel, resolveDirectoryModel } from "./model-resolver.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, getLatestCompactionEntry, SessionManager } from "./session-manager.js";
@@ -290,7 +290,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
-	// If still no model, use findInitialModel (checks settings default, then provider defaults)
+	// SCRAMJET-DIVERGENCE: Explicit/restored choices precede eligible directory recall; startup never teaches.
+	if (!model) {
+		const recalled = resolveDirectoryModel(cwd, settingsManager, modelRegistry);
+		model = recalled.model;
+		modelFallbackMessage = [modelFallbackMessage, recalled.warning].filter(Boolean).join(". ") || undefined;
+		if (model && modelFallbackMessage) modelFallbackMessage += `. Using ${model.provider}/${model.id}`;
+	}
+
 	if (!model) {
 		const result = await findInitialModel({
 			scopedModels: [],
@@ -307,6 +314,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				.filter(Boolean)
 				.join(" ");
 		} else if (modelFallbackMessage) {
+			modelFallbackMessage = modelFallbackMessage.replace(/\.$/, "");
 			modelFallbackMessage += result.fallbackMessage
 				? `. ${result.fallbackMessage}`
 				: `. Using ${model.provider}/${model.id}`;

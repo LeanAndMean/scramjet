@@ -11,6 +11,7 @@ import {
 	type SelfUpdateCommand,
 	VERSION,
 } from "./config.js";
+import { formatSettingsError } from "./core/output-guard.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { shouldUseWindowsShell } from "./utils/child-process.js";
@@ -35,11 +36,8 @@ interface PackageCommandOptions {
 
 function reportSettingsErrors(settingsManager: SettingsManager, context: string): void {
 	const errors = settingsManager.drainErrors();
-	for (const { scope, error } of errors) {
-		console.error(chalk.yellow(`Warning (${context}, ${scope} settings): ${error.message}`));
-		if (error.stack) {
-			console.error(chalk.dim(error.stack));
-		}
+	for (const error of errors) {
+		console.error(chalk.yellow(`Warning (${context}): ${formatSettingsError(error)}`));
 	}
 }
 

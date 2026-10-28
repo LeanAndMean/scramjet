@@ -9,7 +9,7 @@
 import type { ImageContent } from "@leanandmean/ai";
 import type { RunSettlement } from "../core/agent-session.js";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.js";
-import { flushRawStdout, writeRawStdout } from "../core/output-guard.js";
+import { flushRawStdout, flushStderr, formatSettingsError, writeRawStdout } from "../core/output-guard.js";
 import { killTrackedDetachedChildren } from "../utils/shell.js";
 
 /**
@@ -43,7 +43,11 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		if (disposed) return;
 		disposed = true;
 		unsubscribe?.();
-		await runtimeHost.dispose();
+		try {
+			await runtimeHost.dispose();
+		} finally {
+			await flushStderr();
+		}
 	};
 
 	const registerSignalHandlers = (): void => {
@@ -66,6 +70,10 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 	registerSignalHandlers();
 
+	// SCRAMJET-DIVERGENCE: preference diagnostics never enter machine-readable stdout.
+	runtimeHost.setSettingsErrorHandler((errors) => {
+		for (const error of errors) console.error(formatSettingsError(error));
+	});
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
 	});
@@ -93,7 +101,11 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 					return runtimeHost.switchSession(sessionPath, switchOptions);
 				},
 				reload: async () => {
-					await session.reload();
+					try {
+						await session.reload();
+					} finally {
+						await runtimeHost.settleSettings();
+					}
 				},
 			},
 			onError: (err) => {
