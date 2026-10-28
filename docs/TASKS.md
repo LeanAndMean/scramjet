@@ -4,11 +4,11 @@ This file owns priority order, selection and selection rationale. Each linked ta
 
 ## Selection
 
-None. Main-session document maintenance is not a selected product task. After resource reload, triage compares the relevant records and independent proposals before selecting work; no product implementation or live dispatch is selected by this migration.
+[S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md), for its eligible offline completion/replay contract investigation. Independent advisers converge on resolving material completion and complete next-turn context together before another compatibility sample; direct source inspection confirms both uncertainties. Whole-task/live acceptance remains blocked, and dependent b/c work remains ineligible. The task record owns the bounded next action.
 
 ## Ordered work
 
-1. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Establish a trustworthy provider boundary before building its tool consumer; compare useful offline investigation directions rather than replaying completed capture corrections.
+1. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Establish a consumer-ready completion/replay boundary before building its tool consumer; this advances the selected journey more directly than further diagnostic-only work.
 2. [S4.14b — headless Markdown/read/Python/Bash journey](tasks/S4.14b.md). Demonstrate useful coding effects and actual execution through that boundary.
 3. [S4.14c — retained terminal application and final QA](tasks/S4.14c.md). Consume the same headless journey in the terminal instead of building another execution loop.
 
