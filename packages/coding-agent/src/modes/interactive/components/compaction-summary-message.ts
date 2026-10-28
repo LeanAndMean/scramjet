@@ -1,4 +1,13 @@
-import { Box, getRenderedCopy, Markdown, type MarkdownTheme, Spacer, setRenderedCopy, Text } from "@leanandmean/tui";
+import {
+	Box,
+	getRenderedCopy,
+	Markdown,
+	type MarkdownTheme,
+	Spacer,
+	sanitizeUntrustedText,
+	setRenderedCopy,
+	Text,
+} from "@leanandmean/tui";
 import type { CompactionSummaryMessage } from "../../../core/messages.js";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
 import { keyText } from "./keybinding-hints.js";
@@ -37,7 +46,7 @@ export class CompactionSummaryMessageComponent extends Box {
 		this.addChild(new Text(label, 0, 0));
 		this.addChild(new Spacer(1));
 
-		// SCRAMJET-DIVERGENCE: qualify historical estimates and preview bounded generated content.
+		// SCRAMJET-DIVERGENCE: qualify historical estimates and preview bounded, control-safe generated content.
 		const count = `Estimated pre-compaction context: ~${tokenStr} tokens`;
 		if (this.expanded) {
 			const header =
@@ -63,9 +72,15 @@ export class CompactionSummaryMessageComponent extends Box {
 			let end = Math.min(4096, this.message.summary.length);
 			if (end < this.message.summary.length && /[\uD800-\uDBFF]/.test(this.message.summary[end - 1])) end--;
 			const sourceClipped = end < this.message.summary.length;
-			const preview = new Markdown(this.message.summary.slice(0, end), 0, 0, this.markdownTheme, {
-				color: (text: string) => theme.fg("customMessageText", text),
-			});
+			const preview = new Markdown(
+				sanitizeUntrustedText(this.message.summary.slice(0, end)),
+				0,
+				0,
+				this.markdownTheme,
+				{
+					color: (text: string) => theme.fg("customMessageText", text),
+				},
+			);
 			this.addChild({
 				invalidate: () => preview.invalidate(),
 				render: (width) => {
