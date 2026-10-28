@@ -46,11 +46,23 @@ Use `docs/tasks/<task-id>.md` for current outcome/authority, scope/non-goals, ac
 
 Independent review is proportional: material shared contracts, safety/concurrency/persistence/native interaction, or an explicit requirement need a concrete review rationale; mechanical slices may finish with their own checks. Triage/plan/work may establish review need, but work cannot waive an existing requirement. Review corrections always return for affected independent acceptance. Optional improvements are not blockers by default.
 
-A candidate record identifies the selected paths (including additions/deletions/untracked files) and revision/content boundary. Committed-only work can use base/head; dirty or unborn work needs explicit path membership and content identity. Exclude coordination-only bookkeeping from its own content fingerprint; if a queue/task/log record is itself the reviewed change, identify that content separately. Historical checks and partial review remain bound to their actual candidate and scope; changed content invalidates only affected coverage, not all recorded evidence. Do not blindly accept a historical review or require a commit just to make a candidate identifiable.
+A candidate record identifies the selected paths (including additions/deletions/untracked files) and revision/content boundary. Committed-only work can use base/head; dirty or unborn work needs explicit path membership and content identity. Exclude coordination-only bookkeeping from its own content fingerprint; if a queue/task/log record is itself the reviewed change, identify that content separately. Historical checks and partial review remain bound to their actual candidate and scope; changed content invalidates only affected coverage, not all recorded evidence. Do not blindly accept a historical review. Candidates may be identified before checkpointing; the Git handoff requirement does not confer acceptance.
 
 Direct edges stay within an actionable task: plan → work, work → review, review → work for concrete corrections or plan for same-scope redesign. After acceptance, work/review may advance only to a ready next task from the still-valid queue. Review-pending tasks are not accepted dependencies. At milestone completion, queue exhaustion, changed priorities, or evidenced non-progressing corrections, return to triage instead. Do not add mandatory triage/planning/review turns for every small edit.
 
 All commands preserve the project's authorization boundaries. A completed triage may select independent authorized work while another task is blocked; a blocked/incomplete task command does not automatically route around its blocker. User-directed stops and exhausted useful scope end the chain.
+
+## Git checkpoints
+
+Commit small, coherent changes frequently and before handoff. The user authorizes scoped local commits for rs parents and explicitly authorized repository maintenance, including missed checkpoints and bookkeeping follow-ups; advisers remain read-only.
+
+At every rs command's entry, inspect branch/HEAD, `git status` and staged/unstaged/untracked changes. Checkpoint identifiable prior agent-owned work separately before mixing in new changes, preserving its check/acceptance qualifications and role boundaries. Preserve unrelated work/index; continue when safely isolated, otherwise align before committing.
+
+Use applicable checks, inspect staged membership and verify committed content against the inspected/checked scope. A checkpoint is not acceptance; record failed checks and unfinished work honestly. Commit owned outcomes and safe partial work before terminal reporting, including orderly stops; no empty commit is needed without owned changes. Resolve checkpoint failures before continuing, or report a truthful stop without `next_steps`. This grant does not permit bypassing hooks, publication, or destructive/history-rewriting operations.
+
+After the main commit, record its hash in the owning task record and dated log as applicable, then make a small bookkeeping-only follow-up commit; those follow-ups need not be logged. Review remains anchored to the candidate, not later bookkeeping `HEAD`. Disclose remaining unrelated dirt at handoff.
+
+Maintain a sensible `.gitignore` as development introduces generated artifacts and local/private files, without hiding source, tests or required project assets.
 
 ## Durable handoffs
 
@@ -78,8 +90,6 @@ Keep runtime execution independent of TUI and optional plugins. Enforce bounded 
 Do not claim node-wide quotas from per-process limits, backend capacity from client concurrency, or remote cancellation/billing completion from local cancellation. Do not silently truncate context or change evidenced context/output maxima as an admission optimization.
 
 The parent owns mutation and task/queue/log updates; use read-only subagents unless isolated writes have explicit non-overlapping ownership. An unrestricted shell is not read-only. Preserve unrelated dirty changes; do not reset, stash, or overwrite them to make checks pass.
-
-Maintain a sensible `.gitignore` as development introduces generated artifacts and local/private files, without hiding source, tests or required project assets.
 
 ## Evidence-backed bounded robustness
 
@@ -119,7 +129,7 @@ Before ending, including on interruption or blockers, update owned task facts an
 
 ### Active `/rs` completion contract
 
-Complete the handoff in the same work turn: persist owned task/queue facts and activity, present the complete concise result in assistant text, then call `report_scramjet_command_status`. The text must precede the terminal tool call, but must not end the turn by itself. The tool call completes the command and supplies its executable continuation; a prose next-command recommendation does neither. Do not defer reporting to the fallback status probe.
+Complete the handoff in the same work turn: persist owned task/queue facts and activity, make the required Git checkpoints, present the complete concise result in assistant text, then call `report_scramjet_command_status`. The text must precede the terminal tool call, but must not end the turn by itself. The tool call completes the command and supplies its executable continuation; a prose next-command recommendation does neither. Do not defer reporting to the fallback status probe.
 
 In the report, write the performed-work `summary` first, then the truthful `status`. `completed` means this role's outcome is established, not that the whole task is accepted: work can leave `awaiting-review`, and review can leave actionable `corrections`. For completed work with an eligible continuation, include one `next_steps` entry from the invoked command's closed candidates: the full `/rs:<role> <task-id>` message (triage needs no ID), `fresh_session: true`, and a concrete `reason`. Choose the evidence-supported route and derive `recommended_next_step` from that entry's actual array index. Do not ask the user to approve an already-authorized role handoff; use user input only for an unresolved user-owned decision.
 

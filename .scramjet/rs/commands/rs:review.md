@@ -25,13 +25,15 @@ next:
 ## Goals
 
 - Independently assess the current candidate against the selected task's acceptance and controlling invariants, using focused executable evidence where useful.
-- Record acceptance, required corrections, or critical evidence gaps with enough detail for the next session, without fixing the implementation or widening scope.
+- Record and locally checkpoint acceptance, required corrections, or critical evidence gaps with enough detail for the next session, without fixing the implementation or widening scope.
 
 ## Task
 
 <user-context>
 $ARGUMENTS
 </user-context>
+
+Apply the shared Git entry-recovery policy in `CLAUDE.md` before beginning this role.
 
 Follow `CLAUDE.md`, `docs/TASKS.md` selection context and `docs/tasks/<task-id>.md` requirements/plan, parent/dependency authority and linked candidate/work evidence. Consult log/archive only for necessary history. Identify the exact candidate, including relevant uncommitted/untracked changes; confirm it is reviewable rather than reviewing a claimed result or unrelated dirty tree. Changed candidate contents cannot inherit an earlier acceptance.
 
@@ -43,7 +45,7 @@ Required findings need concrete evidence, consequence, and correction acceptance
 
 ## Complete the handoff
 
-Persist task review/disposition/next action and a dated activity entry; release task ownership. Advance queue selection only to already-eligible queued work after acceptance, without changing priorities. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when this independent review outcome is established, including actionable corrections rather than task acceptance.
+Persist task review/disposition/next action and a dated activity entry; release task ownership. Advance queue selection only to already-eligible queued work after acceptance, without changing priorities. Apply the shared Git checkpoint policy in `CLAUDE.md` before terminal reporting, including orderly stops. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when this independent review outcome is established, including actionable corrections rather than task acceptance.
 
 Include one eligible `next_steps` entry: `message` is `/rs:work <task-id>` for bounded corrections, `/rs:plan <task-id>` for same-scope redesign, or `/rs:work <next-task-id>` from the still-valid ready queue after acceptance. Use `/rs:triage` when priorities change, a milestone finishes, the queue is exhausted, or repeated corrections show no progress. Set `fresh_session: true`, give the concrete `reason`, and set `recommended_next_step` to the selected entry's actual array index. The harness applies the user's chain/pause settings; no handoff confirmation is needed for already-authorized work.
 

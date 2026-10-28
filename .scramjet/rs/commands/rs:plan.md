@@ -23,13 +23,15 @@ next:
 ## Goals
 
 - Resolve only the selected task's material uncertainty and establish the smallest useful implementation slice with checkable acceptance.
-- Persist enough direction for work to begin in a fresh session without implementing the feature or planning the whole harness.
+- Persist and locally checkpoint enough direction for work to begin in a fresh session without implementing the feature or planning the whole harness.
 
 ## Task
 
 <user-context>
 $ARGUMENTS
 </user-context>
+
+Apply the shared Git entry-recovery policy in `CLAUDE.md` before beginning this role.
 
 Follow `CLAUDE.md`, `docs/TASKS.md` selection context and `docs/tasks/<task-id>.md` authority, including relevant parent/dependency records and linked evidence. Read log/archive only when supporting history is needed. Verify actual structure before a nontrivial file-level plan. Use small safe probes when they can settle uncertainty; prefer evidence to further theory. Essential responsibilities and invariants govern component choices. User-owned scope or architecture decisions require informed alignment; ordinary implementation choices do not.
 
@@ -39,7 +41,7 @@ If subdivision is necessary, preserve parent acceptance and create stable substa
 
 ## Complete the handoff
 
-Persist the task's plan/readiness/review need and next action, append a dated activity entry and release task ownership. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when this planning outcome is established.
+Persist the task's plan/readiness/review need and next action, append a dated activity entry and release task ownership. Apply the shared Git checkpoint policy in `CLAUDE.md` before terminal reporting, including orderly stops. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when this planning outcome is established.
 
 Include one eligible `next_steps` entry: `message` is `/rs:work <task-id>` for actionable planning or `/rs:triage` for completed priority-changing analysis, with `fresh_session: true` and a concrete `reason`. Set `recommended_next_step` to that entry's actual array index. The harness applies the user's chain/pause settings; no handoff confirmation is needed for already-authorized work.
 

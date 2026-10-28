@@ -25,13 +25,15 @@ next:
 ## Goals
 
 - Compare worthwhile existing work with independently proposed directions, then prioritize and maintain a lean queue that makes meaningful progress toward the Rust product goal.
-- Leave one eligible next action, or an explicit stop/blocker, without implementing tasks or generating an exhaustive plan.
+- Leave accurate, locally checkpointed records and one eligible next action, or an explicit stop/blocker, without implementing tasks or generating an exhaustive plan.
 
 ## Context
 
 <user-context>
 $ARGUMENTS
 </user-context>
+
+Apply the shared Git entry-recovery policy in `CLAUDE.md` before beginning this role.
 
 Follow the development workflow in `CLAUDE.md`. Read `docs/TASKS.md`, relevant task records and their dependency/authorization evidence, design and the relevant roadmap stages; inspect current files and Git evidence. Consult the activity log/archive only for supporting history, not current selection or status. Honor explicit user priorities within authorized scope. Reconcile completed, interrupted, review-pending, and blocked work rather than trusting the cursor blindly.
 
@@ -55,7 +57,7 @@ Route the selected task by evidence: `rs:review <task-id>` for a current candida
 
 ## Complete the handoff
 
-Persist queue selection/rationale, relevant task facts/blockers/next action and a dated activity entry; release any task ownership. If nothing is selected, record the queue decision/log without inventing a task. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when reconciliation is established, even if some tasks remain blocked.
+Persist queue selection/rationale, relevant task facts/blockers/next action and a dated activity entry; release any task ownership. If nothing is selected, record the queue decision/log without inventing a task. Apply the shared Git checkpoint policy in `CLAUDE.md` before terminal reporting, including orderly stops. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when reconciliation is established, even if some tasks remain blocked.
 
 Include one eligible `next_steps` entry: `message` is the evidence-selected `/rs:work <task-id>`, `/rs:plan <task-id>`, or `/rs:review <task-id>`, with `fresh_session: true` and a concrete `reason`. Set `recommended_next_step` to that entry's actual array index. The harness applies the user's chain/pause settings; no handoff confirmation is needed for already-authorized work. Do not chain triage to itself.
 
