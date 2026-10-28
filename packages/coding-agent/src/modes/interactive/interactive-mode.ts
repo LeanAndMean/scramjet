@@ -972,7 +972,32 @@ export class InteractiveMode {
 			}
 		}
 
-		// Build themed header content (after theme detection so colors are correct)
+		this.buildStartupHeader(startupDiagnostics);
+
+		// Initialize extensions first so resources are shown before messages
+		await this.rebindCurrentSession();
+
+		// SCRAMJET-DIVERGENCE: bundled themes arrive after the header must exist for session_start.
+		this.buildStartupHeader(startupDiagnostics);
+		this.ui.rebuild();
+
+		// Render initial messages AFTER showing loaded resources
+		this.renderInitialMessages();
+
+		// Set up theme file watcher
+		this.bindThemeChangeHandler();
+
+		// Set up git branch watcher (uses provider instead of footer)
+		this.footerDataProvider.onBranchChange(() => {
+			this.ui.requestRender();
+		});
+
+		// Initialize available provider count for footer display
+		await this.updateAvailableProviderCount();
+	}
+
+	private buildStartupHeader(startupDiagnostics: string[]): void {
+		this.headerContainer.clear();
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
 			if (this.session.scopedModels.length > 0) {
 				const modelList = this.session.scopedModels
@@ -1033,31 +1058,14 @@ export class InteractiveMode {
 			);
 
 			this.headerContainer.addChild(new Spacer(1));
-			this.headerContainer.addChild(this.builtInHeader);
+			this.headerContainer.addChild(this.customHeader ?? this.builtInHeader);
 			this.headerContainer.addChild(new Spacer(1));
 		} else {
 			this.builtInHeader = new Text("", 0, 0);
-			this.headerContainer.addChild(this.builtInHeader);
+			this.headerContainer.addChild(this.customHeader ?? this.builtInHeader);
 		}
 
 		for (const diagnostic of startupDiagnostics) this.headerContainer.addChild(new Text(diagnostic, 1, 0));
-
-		// Initialize extensions first so resources are shown before messages
-		await this.rebindCurrentSession();
-
-		// Render initial messages AFTER showing loaded resources
-		this.renderInitialMessages();
-
-		// Set up theme file watcher
-		this.bindThemeChangeHandler();
-
-		// Set up git branch watcher (uses provider instead of footer)
-		this.footerDataProvider.onBranchChange(() => {
-			this.ui.requestRender();
-		});
-
-		// Initialize available provider count for footer display
-		await this.updateAvailableProviderCount();
 	}
 
 	/**

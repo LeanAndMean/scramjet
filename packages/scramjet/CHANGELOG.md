@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.116.1 — Refresh startup header theme colors
+
+### Fixed
+
+- Rebuild the startup header after bundled theme discovery so settled startup uses the selected palette without requiring reload. Preserve custom headers, expansion state, quiet/verbose behavior and provisioning diagnostics. Fixes [#634](https://github.com/LeanAndMean/scramjet/issues/634).
+
+### Tests
+
+- Cover rendered colors and repaint in retained and committed modes, custom-header ownership and restoration, startup shape, and explicit/automatic theme selection.
+
 ## 0.116.0 — Preview compaction summaries and qualify estimates
 
 Make generated checkpoints useful while collapsed and improve approximate pre-compaction accounting. Fixes [#632](https://github.com/LeanAndMean/scramjet/issues/632).

@@ -50,6 +50,7 @@ export async function createProductionInteractiveHarness(
 	settings?: SettingsManager,
 	scopedModels?: AgentSession["scopedModels"],
 	execution?: { agent: AgentOptions; initialMessage?: string },
+	verbose?: boolean,
 ) {
 	const directory = mkdtempSync(join(tmpdir(), "scramjet-interactive-test-"));
 	const terminal = new HeadlessTerminal(columns, rows);
@@ -121,7 +122,7 @@ export async function createProductionInteractiveHarness(
 		: vi.spyOn(clipboard, "createWslClipboardReader").mockReturnValue(undefined);
 	let mode: InteractiveMode;
 	try {
-		mode = new InteractiveMode(runtime, { terminal, initialMessage: execution?.initialMessage });
+		mode = new InteractiveMode(runtime, { terminal, initialMessage: execution?.initialMessage, verbose });
 	} finally {
 		keybindings.mockRestore();
 		clipboardFactory?.mockRestore();
