@@ -32,9 +32,25 @@ describe("compaction summary pane", () => {
 		expect(output).not.toContain("…");
 	});
 
+	it.each([
+		{ name: "complete", summary: "BEGIN checkpoint END", tail: "END" },
+		{
+			name: "clipped",
+			summary: `BEGIN checkpoint\n\n${"checkpoint detail\n\n".repeat(12)}END checkpoint`,
+			tail: "…",
+		},
+	])("places the expansion shortcut below the $name preview", ({ summary, tail }) => {
+		const output = plain(component(summary).render(100));
+		expect(output).toContain(tail);
+		const hint = output.indexOf("to expand");
+		expect(hint).toBeGreaterThan(-1);
+		expect(hint).toBeGreaterThan(output.lastIndexOf(tail));
+		expect(output.trimEnd().split("\n").at(-1)).toContain("to expand");
+	});
+
 	it.each([12, 40, 100])("keeps the beginning and at most ten content rows at width %i", (width) => {
 		const pane = component(`BEGIN ${"word ".repeat(1000)} END`);
-		const preview = pane.children.at(-1)!.render(width - 2);
+		const preview = pane.children.at(-3)!.render(width - 2);
 		expect(preview).toHaveLength(11);
 		expect(plain(preview)).toContain("BEGIN");
 		expect(plain(preview)).not.toContain("END");
@@ -44,7 +60,7 @@ describe("compaction summary pane", () => {
 
 	it("clips by rendered rows even for a source shorter than the prefix limit", () => {
 		const pane = component(Array.from({ length: 30 }, (_, i) => `ROW-${i}`).join("\n\n"));
-		const preview = pane.children.at(-1)!.render(80);
+		const preview = pane.children.at(-3)!.render(80);
 		expect(preview).toHaveLength(11);
 		expect(plain(preview)).toContain("ROW-0");
 		expect(plain(preview)).not.toContain("ROW-29");
@@ -54,7 +70,7 @@ describe("compaction summary pane", () => {
 	it("bounds source work to 4096 code units without cutting a surrogate pair", () => {
 		const source = `${"a".repeat(4095)}😀TAIL`;
 		const pane = component(source);
-		const output = plain(pane.children.at(-1)!.render(5000));
+		const output = plain(pane.children.at(-3)!.render(5000));
 		expect(output).toContain("a".repeat(4095));
 		expect(output).not.toContain("😀");
 		expect(output).not.toMatch(/[\uD800-\uDFFF�]/u);
@@ -83,7 +99,7 @@ describe("compaction summary pane", () => {
 		expect(expanded).toContain("~250,000 tokens");
 		expect(expanded).toContain("otherwise conversation messages only");
 		expect(expanded).toContain("not the summarization request size");
-		expect(expanded).toContain("to collapse");
+		expect(expanded.trimEnd().split("\n").at(-1)).toContain("to collapse");
 		pane.setExpanded(false);
 		expect(plain(pane.render(20))).toBe(narrow);
 	});
@@ -91,7 +107,7 @@ describe("compaction summary pane", () => {
 	it("preserves displayed-copy spans and soft-wrap separators when slicing and boxing Markdown", () => {
 		const summary = `BEGIN ${"word ".repeat(150)} END`;
 		const pane = component(summary);
-		const preview = pane.children.at(-1)!.render(28);
+		const preview = pane.children.at(-3)!.render(28);
 		const original = new Markdown(summary, 0, 0, getMarkdownTheme()).render(28);
 		expect(preview.slice(0, 10).map(stripVTControlCharacters)).toEqual(
 			original.slice(0, 10).map(stripVTControlCharacters),

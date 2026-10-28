@@ -110,7 +110,9 @@ This is an approximate pre-compaction context estimate, not exact request tokeni
 
 The collapsed pane shows `Estimated pre-compaction context: ~… tokens` using the stored historical `tokensBefore`, plus the beginning of the generated checkpoint summary—not the prompt used to request it. The preview renders at most ten content rows from at most 4,096 UTF-16 code units, without splitting a surrogate pair, and shows `…` when either limit hides content. It reflows with terminal width.
 
-Use the displayed expansion shortcut (Ctrl+O by default) to read the complete original summary and the estimate explanation; collapse returns to the beginning preview. Preview clipping does not change saved content or recover hidden text when copying displayed rows. Reconstructed/resumed history uses the same stored count and preview, not the current context size. Existing historical counts and extension-supplied values remain unchanged.
+The expansion/collapse shortcut appears at the bottom of the pane, after the preview or complete summary. Use it (Ctrl+O by default) to read the complete original summary and the estimate explanation; collapse returns to the beginning preview. Preview clipping does not change saved content or recover hidden text when copying displayed rows. Reconstructed/resumed history uses the same stored count and preview, not the current context size. Existing historical counts and extension-supplied values remain unchanged.
+
+The interactive transcript shows the latest compaction on the selected branch once, after its retained pre-compaction messages and before subsequent messages. Initial display, compaction completion and reconstruction use the same chronological placement, based on branch-entry order rather than timestamps or summary text. Earlier discarded messages and superseded compaction panes are not restored. This UI ordering does not change LLM context: the model still receives the latest summary first, followed by retained and subsequent messages. Ctrl+O changes presentation only; it does not append another compaction entry or pane.
 
 ### Split Turns
 

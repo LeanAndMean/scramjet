@@ -71,7 +71,6 @@ import type {
 } from "../../core/extensions/index.js";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.js";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.js";
-import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.js";
 import { flushStderr, formatSettingsError } from "../../core/output-guard.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
@@ -3545,13 +3544,6 @@ export class InteractiveMode {
 					}
 				} else if (event.result) {
 					this.rebuildChatFromMessages();
-					this.addMessageToChat(
-						createCompactionSummaryMessage(
-							event.result.summary,
-							event.result.tokensBefore,
-							new Date().toISOString(),
-						),
-					);
 					this.footer.invalidate();
 				} else if (event.errorMessage) {
 					if (event.reason === "manual") {
@@ -3818,6 +3810,28 @@ export class InteractiveMode {
 		this.promoteFinalizedChatPrefix();
 	}
 
+	// SCRAMJET-DIVERGENCE: position the summary chronologically without changing provider context.
+	private getChatMessages(sessionContext: SessionContext): AgentMessage[] {
+		const summary = sessionContext.messages[0];
+		if (summary?.role !== "compactionSummary") return sessionContext.messages;
+		const messages = sessionContext.messages.slice(1);
+
+		let followingMessages = 0;
+		for (const entry of this.sessionManager.getBranch().reverse()) {
+			if (entry.type === "compaction") break;
+			if (
+				entry.type === "message" ||
+				entry.type === "custom_message" ||
+				(entry.type === "branch_summary" && entry.summary)
+			) {
+				followingMessages++;
+			}
+		}
+		const boundary = messages.length - followingMessages;
+		messages.splice(boundary, 0, summary);
+		return messages;
+	}
+
 	/**
 	 * Render session context to chat. Used for initial load and rebuild after compaction.
 	 * @param sessionContext Session context to render
@@ -3843,7 +3857,7 @@ export class InteractiveMode {
 			this.updateEditorBorderColor();
 		}
 
-		for (const message of sessionContext.messages) {
+		for (const message of this.getChatMessages(sessionContext)) {
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
 				this.addMessageToChat(message);

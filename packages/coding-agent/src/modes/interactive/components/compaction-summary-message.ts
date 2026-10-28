@@ -50,7 +50,7 @@ export class CompactionSummaryMessageComponent extends Box {
 		const count = `Estimated pre-compaction context: ~${tokenStr} tokens`;
 		if (this.expanded) {
 			const header =
-				`**${count}** (${keyText("app.tools.expand")} to collapse)\n\n` +
+				`**${count}**\n\n` +
 				"Estimate uses available provider usage plus later-message estimates, otherwise conversation messages only; " +
 				"not the summarization request size.\n\n";
 			this.addChild(
@@ -59,15 +59,7 @@ export class CompactionSummaryMessageComponent extends Box {
 				}),
 			);
 		} else {
-			this.addChild(
-				new Text(
-					theme.fg("customMessageText", `${count} (`) +
-						theme.fg("dim", keyText("app.tools.expand")) +
-						theme.fg("customMessageText", " to expand)"),
-					0,
-					0,
-				),
-			);
+			this.addChild(new Text(theme.fg("customMessageText", count), 0, 0));
 			this.addChild(new Spacer(1));
 			let end = Math.min(4096, this.message.summary.length);
 			if (end < this.message.summary.length && /[\uD800-\uDBFF]/.test(this.message.summary[end - 1])) end--;
@@ -96,5 +88,13 @@ export class CompactionSummaryMessageComponent extends Box {
 				},
 			});
 		}
+		this.addChild(new Spacer(1));
+		this.addChild(
+			new Text(
+				theme.fg("dim", `(${keyText("app.tools.expand")} to ${this.expanded ? "collapse" : "expand"})`),
+				0,
+				0,
+			),
+		);
 	}
 }
