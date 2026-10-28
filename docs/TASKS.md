@@ -4,12 +4,12 @@ This file owns priority order, selection and selection rationale. Each linked ta
 
 ## Selection
 
-[S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md), for bounded offline planning of prospective accounting evidence independent of executable-envelope acceptance. Both independent advisers identified the coupling, and direct source inspection confirms it. The previous completion/replay selection is exhausted by independent acceptance; do not reopen it without a concrete finding. This investigation may prevent future unsupported-content failures from unnecessarily losing qualified accounting facts; it cannot reconcile existing obligations or unlock live dispatch or dependent b/c. The task record owns the bounded next action.
+[S4.14b — headless Markdown/read/Python/Bash journey](tasks/S4.14b.md), for planning its complete fixture-backed implementation using the independently accepted offline provider contracts. Both advisers identified this missing useful capability; direct source inspection confirms current effects support replacement, not exclusive creation or isolated process execution. Triage explicitly separates offline implementation readiness from deployed acceptance rather than treating partial a acceptance as whole-task completion. No provider call is eligible; whole-a acceptance remains required for b's live journey and whole acceptance, and c still requires accepted b. Accepted a corrections are exhausted, not another priority.
 
 ## Ordered work
 
-1. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Investigate the evidenced accounting/envelope coupling without replaying accepted corrections or changing live exposure limits; preserve the still-required deployed compatibility outcome.
-2. [S4.14b — headless Markdown/read/Python/Bash journey](tasks/S4.14b.md). Demonstrate useful coding effects and actual execution through that boundary.
+1. [S4.14b — headless Markdown/read/Python/Bash journey](tasks/S4.14b.md). Prepare the complete offline coding/effect journey without weakening deployed acceptance or live exposure limits.
+2. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Preserve the required deployed compatibility outcome; accepted offline corrections need no further work absent a concrete finding.
 3. [S4.14c — retained terminal application and final QA](tasks/S4.14c.md). Consume the same headless journey in the terminal instead of building another execution loop.
 
 Milestone context: [S4.14 — first real-provider coding journey](tasks/S4.14.md). Its record owns shared authorization and parent acceptance, not another queue.
