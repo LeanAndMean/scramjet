@@ -61,4 +61,4 @@ Persist queue selection/rationale, relevant task facts/blockers/next action and 
 
 Include one eligible `next_steps` entry: `message` is the evidence-selected `/rs:work <task-id>`, `/rs:plan <task-id>`, or `/rs:review <task-id>`, with `fresh_session: true` and a concrete `reason`. Set `recommended_next_step` to that entry's actual array index. The harness applies the user's chain/pause settings; no handoff confirmation is needed for already-authorized work. Do not chain triage to itself.
 
-For necessary user alignment, use `get_scramjet_user_input` with informed context. For no eligible work or another stop, report the truthful status under `CLAUDE.md` and omit `next_steps`. Stopping the chain does not mean omitting the report.
+For necessary user alignment, use `get_scramjet_user_input` with informed context. Apply the shared [completion, reconciliation and stop rules](../../../CLAUDE.md#active-rs-completion-contract); a stop still requires a truthful status report.
