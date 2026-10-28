@@ -26,7 +26,12 @@ afterEach(() => {
 
 function preferences() {
 	const recall = new InMemoryLastUsedModelsStorage();
-	vi.spyOn(recall, "withLock").mockRejectedValue(new Error("write refused"));
+	vi.spyOn(recall, "withLock").mockRejectedValue(
+		Object.assign(
+			new Error("delivery reason\u001b[31m\u0007", { cause: new Error("delivery root\u001b[0m\u009b") }),
+			{ code: "EDELIVERY" },
+		),
+	);
 	return SettingsManager.inMemory({ theme: "pi-dark", quietStartup: true, compaction: { enabled: false } }, recall);
 }
 
@@ -95,8 +100,13 @@ describe("mode-owned settings settlement", () => {
 			const error = vi.spyOn(console, "error").mockImplementation(() => {});
 			try {
 				expect(await runPrintMode(h.runtime, { mode })).toBe(0);
-				expect(error.mock.calls.flat().join(" ")).toContain("Last-used models");
-				expect(output.write.mock.calls.flat().join(" ")).not.toContain("Last-used models");
+				const stderr = error.mock.calls.flat().join(" ");
+				const stdout = output.write.mock.calls.flat().join(" ");
+				for (const marker of ["Last-used models", "delivery reason", "EDELIVERY", "delivery root"]) {
+					expect(stderr).toContain(marker);
+					expect(stdout).not.toContain(marker);
+				}
+				expect(stderr).not.toMatch(/\p{Cc}/u);
 				expect(output.stderrFlush).toHaveBeenCalledOnce();
 				expect(settings.drainErrors()).toEqual([]);
 				expect(existsSync(join(h.runtime.services.agentDir, "last-used-models.json"))).toBe(false);
@@ -129,7 +139,11 @@ describe("mode-owned settings settlement", () => {
 			expect(error).not.toHaveBeenCalled();
 			const stop = vi.spyOn(h.mode, "stop");
 			await (h.mode as unknown as { shutdown(): Promise<void> }).shutdown();
-			expect(error.mock.calls.flat().join(" ")).toContain("Last-used models");
+			const stderr = error.mock.calls.flat().join(" ");
+			for (const marker of ["Last-used models", "delivery reason", "EDELIVERY", "delivery root"]) {
+				expect(stderr).toContain(marker);
+			}
+			expect(stderr).not.toMatch(/\p{Cc}/u);
 			expect(stop.mock.invocationCallOrder[0]).toBeLessThan(error.mock.invocationCallOrder[0]);
 			expect(output.stderrFlush.mock.invocationCallOrder[0]).toBeLessThan(exit.mock.invocationCallOrder[0]);
 			expect(exit).toHaveBeenCalledWith(0);
@@ -169,8 +183,13 @@ describe("mode-owned settings settlement", () => {
 			});
 			input.end();
 			await exited;
-			expect(error.mock.calls.flat().join(" ")).toContain("Last-used models");
-			expect(output.write.mock.calls.flat().join(" ")).not.toContain("Last-used models");
+			const stderr = error.mock.calls.flat().join(" ");
+			const stdout = output.write.mock.calls.flat().join(" ");
+			for (const marker of ["Last-used models", "delivery reason", "EDELIVERY", "delivery root"]) {
+				expect(stderr).toContain(marker);
+				expect(stdout).not.toContain(marker);
+			}
+			expect(stderr).not.toMatch(/\p{Cc}/u);
 			expect(output.stderrFlush.mock.invocationCallOrder[0]).toBeLessThan(exit.mock.invocationCallOrder[0]);
 			expect(exit).toHaveBeenCalledWith(0);
 		} finally {
