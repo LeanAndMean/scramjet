@@ -1,6 +1,6 @@
 # Developing scramjet-rs
 
-Build a dependable independent Rust coding harness, using the existing Scramjet harness to develop it. This is not a Pi compatibility project. The user authorized staged development and durable fresh-session orientation; one task is not permission to implement the entire roadmap or publish remotely.
+Build a dependable, effective independent Rust coding harness, using the existing Scramjet harness to develop it. This is a rewrite, not a port or Pi compatibility project: learn from useful behavior without inheriting another project's implementation structure. The user authorized staged development and durable fresh-session orientation; one task is not permission to implement the entire roadmap or publish remotely.
 
 ## Document authority
 
@@ -10,7 +10,7 @@ Build a dependable independent Rust coding harness, using the existing Scramjet 
 - `README.md`: short entry point and truthful runnable status.
 - `.scramjet/rs/commands/`: `rs:triage`, `rs:plan`, `rs:work`, and `rs:review` for the existing harness; development tooling, not Rust-product features or dependencies.
 
-Source/tests and current repository state govern what is implemented. Current user decisions govern scope and authorization. Linked issue/PR plans, when available, govern their task boundaries unless superseded by current authority. Historical artifacts and session journals are evidence, not instructions to resume blindly. Keep decisions in their owning file rather than copying a full plan into every document.
+Source/tests and current repository state govern what is implemented. Current user decisions govern scope and authorization. Linked issue/PR plans, when available, govern their task boundaries unless superseded by current authority. Historical artifacts and session journals are evidence, not instructions to resume blindly. Keep decisions in their owning file rather than copying a full plan into every document. Essential safety and authority invariants govern; parsers, validation rules, budget values and task subdivisions are revisable mechanisms, not permanent policy merely because a historical plan or fixture asserts them. Revisions still need an evidenced basis and may not silently change user-owned limits.
 
 ## Starting a fresh session
 
@@ -24,12 +24,12 @@ Resolve architecture responsibilities/invariants before choosing components. Use
 
 ## Development command loop
 
-- `rs:triage [context]` owns big-picture reconciliation and a short ordered queue of bounded tasks within authorized scope. It routes to work, plan, or review; it does not implement, perform full reviews, or grant missing authorization.
+- `rs:triage [context]` owns big-picture reconciliation and selection among competing directions. Two independent read-only advisers identify worthwhile existing work and propose useful alternatives; triage compares their evidence, selects a short ordered queue, aligns only on user-owned decisions, persists rationale and routes. It does not implement, perform full reviews, or grant missing authorization.
 - `rs:plan <task-id> [context]` resolves material uncertainty/sizing for one selected task, with small probes and minimal acceptance/design direction. It records an actionable slice and review need, not feature implementation or a full roadmap plan.
 - `rs:work [task-id] [context]` owns one slice's implementation, debugging, tests/demonstration, and affected docs. It produces a candidate, not independent acceptance when review is required.
 - `rs:review <task-id> [context]` independently evaluates that candidate and records acceptance/corrections/evidence gaps. It may run checks and temporary probes but does not edit candidate implementation or tracked tests.
 
-Triage owns cross-task selection/order; task commands may refine within the selected scope and update facts. Plan subdivision preserves parent acceptance and stable child IDs/dependencies; a child passing does not finish its parent. Return cross-task priority changes to triage. Explicitly requested tasks may bypass queue order only when dependencies, scope, and authority permit.
+Triage owns cross-task selection/order and queue housekeeping: remove evidenced obsolete, superseded or irrelevant entries from the active queue, retaining a concise reason in their task records. Removal is not completion; preserve still-relevant blockers, unresolved obligations and dependency/acceptance evidence, and align before abandoning a still-authoritative user outcome. Task commands may refine within the selected scope and update facts. Plan owns sound design for the selected outcome; work owns sensible code organization and ordinary debugging; review challenges important assumptions as well as conformance to the plan. Each role must recognize ineffective work and revise unsupported mechanisms within authorized scope, or return strategic changes to triage—not defend a poor design or transfer ordinary engineering decisions to the user. Plan subdivision preserves parent acceptance and stable child IDs/dependencies; a child passing does not finish its parent. Return cross-task priority changes to triage. Explicitly requested tasks may bypass queue order only when dependencies, scope, and authority permit.
 
 Use progress's existing task records for outcome, scope/non-goals, acceptance, review need/rationale, candidate, checks, disposition, and blockers. Link authoritative issue/plan/review artifacts instead of duplicating them. Readiness and eligibility differ: dependency acceptance and required authorization must hold before execution. `needs-plan`, `ready`, `active`, `awaiting-review`, `corrections`, `blocked`, `done`, and `pending` describe task facts, not harness command status. Starting work records its active owner; ending releases it with a truthful disposition.
 
@@ -47,7 +47,7 @@ Complete one bounded outcome for the invoked role, verify it, and leave a runnab
 
 Prefer concrete evidence to prolonged theorycrafting. When a small safe test can resolve uncertainty, run the test before extending the discussion, design, or investigation. Time-box probes, record what they actually establish, and use the result to choose the next action. Do not substitute more subagent analysis for a straightforward executable check; safety and authorization boundaries still apply.
 
-Prefer the smallest useful vertical slice and established libraries. Add no abstraction, configuration, public extension protocol, or crate hierarchy without a current consumer. Rust-native extensibility is welcome later; Python/TypeScript and Pi APIs are not requirements. Use installed stable Rust unless evidence requires otherwise; select only the dependencies/features the task needs.
+Prefer small, complete working features and established Rust libraries. Judge progress by useful behavior and interoperability, not task counts, check volume or preservation of earlier mechanisms. Keep the codebase sensible for agreed current and anticipated development needs; a structural improvement needs an evidenced consumer or obstacle, not a speculative framework. Add no abstraction, configuration, public extension protocol, or crate hierarchy without a current consumer. Rust-native extensibility is welcome later; Python/TypeScript and Pi APIs are not requirements. Use installed stable Rust unless evidence requires otherwise; select only the dependencies/features the task needs.
 
 Keep runtime execution independent of TUI and optional plugins. Enforce bounded bytes/work, per-agent state isolation, tree cancellation, truthful execution/persistence settlement, exact approval, and ambiguous-write no-retry behavior as the affected slice grows. Fixed resource limits precede adaptive control. Adaptive admission is an essential direction, not permission to invent provider rate limits or universal vLLM queue thresholds.
 

@@ -353,13 +353,15 @@ Development uses the existing Scramjet harness through four project-local comman
 
 | Command | Responsibility |
 |---|---|
-| [`/rs:triage [context]`](.scramjet/rs/commands/rs:triage.md) | Reconcile the big picture and prioritize a short task queue. |
+| [`/rs:triage [context]`](.scramjet/rs/commands/rs:triage.md) | Compare existing work and independently proposed directions; select useful priorities and remove obsolete queue entries. |
 | [`/rs:plan <task-id> [context]`](.scramjet/rs/commands/rs:plan.md) | Make one materially uncertain slice actionable. |
 | [`/rs:work [task-id] [context]`](.scramjet/rs/commands/rs:work.md) | Implement/test one slice or correction and update its docs. |
 | [`/rs:review <task-id> [context]`](.scramjet/rs/commands/rs:review.md) | Independently accept a candidate or identify concrete corrections. |
 
 Start with `/rs:triage`, or jump to an already-ready `/rs:work <task-id>`. Planning and review are proportional, not mandatory ceremony. Task-local transitions use fresh sessions; return to triage when priorities change, a milestone finishes, or the queue runs out. Recommended transitions follow `/autopilot on|off` and existing user edge settings; no forced chain or new authorization follows from autopilot.
 
-An already-running harness must `/reload` after command-set changes; verify the commands appear in its live catalog. These are development instructions, not an implemented Rust workflow engine.
+Triage runs two read-only advisers in parallel: [`rs:existing-work-assessor`](.scramjet/rs/agents/rs:existing-work-assessor.md) checks unfinished work and structural needs against the code; [`rs:new-direction-proposer`](.scramjet/rs/agents/rs:new-direction-proposer.md) independently proposes useful alternatives. They return comparable short proposals; the parent owns selection, necessary user alignment, persistent decisions and command handoff.
+
+An already-running harness must `/reload` after command-set changes; verify the four commands and both advisers appear in its live catalog. These are development instructions, not an implemented Rust workflow engine.
 
 The Rust product does not depend on Pi, Node, Python, or TypeScript extension compatibility. Licensed under [Apache-2.0](LICENSE).
