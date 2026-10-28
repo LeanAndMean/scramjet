@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentMessage } from "@leanandmean/agent";
 import { type AssistantMessage, getModel } from "@leanandmean/ai";
 import {
@@ -58,7 +61,12 @@ import { AssistantMessageComponent } from "../src/modes/interactive/components/a
 import { DaxnutsComponent } from "../src/modes/interactive/components/daxnuts.js";
 import type { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
-import { initTheme, onThemeChange } from "../src/modes/interactive/theme/theme.js";
+import {
+	initTheme,
+	loadThemeFromPath,
+	onThemeChange,
+	setRegisteredThemes,
+} from "../src/modes/interactive/theme/theme.js";
 import * as clipboard from "../src/utils/clipboard.js";
 import { ensureTool } from "../src/utils/tools-manager.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
@@ -2909,6 +2917,206 @@ describe("production interactive composition", () => {
 			const removed = await frame();
 			expect(removed.join("\n")).not.toMatch(/ABOVE|BELOW|GROW/);
 		} finally {
+			await h.dispose();
+		}
+	});
+});
+
+describe("post-discovery startup header", () => {
+	let directory: string;
+	let themePath: string;
+	beforeEach(() => {
+		vi.stubEnv("COLORTERM", "truecolor");
+		vi.stubEnv("COLORFGBG", "15;0");
+		vi.stubEnv("TERM_PROGRAM", "");
+		setRegisteredThemes([]);
+		directory = mkdtempSync(join(tmpdir(), "startup-theme-"));
+		themePath = join(directory, "scramjet-dark.json");
+		const palette = JSON.parse(
+			readFileSync(new URL("../../scramjet/themes/scramjet-dark.json", import.meta.url), "utf8"),
+		);
+		Object.assign(palette.colors, { accent: "#123456", dim: "#234567", muted: "#345678" });
+		writeFileSync(themePath, JSON.stringify(palette));
+	});
+	afterEach(() => {
+		setRegisteredThemes([]);
+		initTheme("pi-dark");
+		vi.unstubAllEnvs();
+		rmSync(directory, { recursive: true, force: true });
+	});
+
+	it.each([true, false])("repaints discovery-only colors, retained=%s", async (retained) => {
+		let startupUI: TUI;
+		const start = TUI.prototype.start;
+		const startSpy = vi.spyOn(TUI.prototype, "start").mockImplementation(function (this: TUI) {
+			startupUI = this;
+			start.call(this);
+		});
+		const h = await createProductionInteractiveHarness(
+			160,
+			45,
+			(pi) => {
+				pi.on("resources_discover", async () => {
+					await startupUI.renderNow({ requireFlush: true });
+					return { themePaths: [themePath] };
+				});
+			},
+			retained,
+			SettingsManager.inMemory({
+				theme: "scramjet-dark",
+				quietStartup: false,
+				tuiMode: retained ? "retained" : "committed",
+			}),
+			[{ model: getModel("openai", "gpt-4o") }],
+		);
+		try {
+			startSpy.mockRestore();
+			const compact = h.internals.headerContainer.render(159).join("\n");
+			expect(compact).toContain("\x1b[38;2;35;69;103mModel scope: gpt-4o");
+			expect(compact).toContain("\x1b[38;2;18;52;86mscramjet");
+			expect(compact).toContain("\x1b[38;2;35;69;103m v");
+			expect(compact).toContain("\x1b[38;2;52;86;120m · ");
+			expect(compact).toContain("\x1b[38;2;35;69;103mPress ");
+			expect(compact).toContain("\x1b[38;2;35;69;103mscramjet can explain");
+			const mark = h.terminal.markWrites();
+			await h.frame();
+			expect(h.terminal.writesSince(mark)).toContain("\x1b[38;2;18;52;86mscramjet");
+			expect(
+				h.terminal
+					.bufferLines()
+					.join("\n")
+					.match(/Model scope:/g),
+			).toHaveLength(1);
+			h.internals.setToolsExpanded(true);
+			const expanded = h.internals.headerContainer.render(159).join("\n");
+			expect(expanded).toContain("\x1b[38;2;52;86;120m to interrupt");
+			await h.frame();
+			expect(h.terminal.bufferLines().join("\n")).toContain("to interrupt");
+		} finally {
+			await h.dispose();
+		}
+	});
+
+	it("keeps the session_start custom header and refreshes the hidden built-in header", async () => {
+		const dispose = vi.fn();
+		const custom = Object.assign(new Text("CUSTOM-HEADER", 0, 0), { dispose });
+		const factory = vi.fn((_ui: TUI, _theme: unknown) => custom);
+		let originalContainer: Container | undefined;
+		const h = await createProductionInteractiveHarness(
+			160,
+			45,
+			(pi) => {
+				pi.on("session_start", (_event, ctx) => {
+					ctx.ui.setHeader((ui, thm) => {
+						originalContainer = ui.children[0] as Container;
+						return factory(ui, thm);
+					});
+					ctx.ui.setToolsExpanded(true);
+				});
+				pi.on("resources_discover", () => ({ themePaths: [themePath] }));
+			},
+			true,
+			SettingsManager.inMemory({ theme: "scramjet-dark", quietStartup: false }),
+		);
+		try {
+			expect(h.internals.headerContainer).toBe(originalContainer);
+			expect(h.internals.headerContainer.children.filter((child) => child === custom)).toHaveLength(1);
+			expect(factory).toHaveBeenCalledOnce();
+			expect(dispose).not.toHaveBeenCalled();
+			await h.frame();
+			expect(
+				h.terminal
+					.bufferLines()
+					.join("\n")
+					.match(/CUSTOM-HEADER/g),
+			).toHaveLength(1);
+			h.extensionUI.setHeader(undefined);
+			expect(dispose).toHaveBeenCalledOnce();
+			const restored = h.internals.headerContainer.render(159).join("\n");
+			expect(restored).toContain("\x1b[38;2;18;52;86mscramjet");
+			expect(restored).toContain("to interrupt");
+			expect(restored).not.toContain("Press ctrl+o");
+		} finally {
+			await h.dispose();
+		}
+	});
+
+	it.each([
+		{ quiet: true, verbose: false, expanded: false },
+		{ quiet: true, verbose: true, expanded: false },
+		{ quiet: false, verbose: false, expanded: true },
+	])("preserves startup shape: %j", async ({ quiet, verbose, expanded }) => {
+		vi.mocked(ensureTool).mockImplementationOnce(async (_tool, _silent, report) => {
+			report?.("ONE-PROVISIONING-DIAGNOSTIC");
+			return undefined;
+		});
+		const h = await createProductionInteractiveHarness(
+			160,
+			45,
+			(pi) => {
+				pi.on("session_start", (_event, ctx) => {
+					ctx.ui.setToolsExpanded(expanded);
+				});
+				pi.on("resources_discover", () => ({ themePaths: [themePath] }));
+			},
+			true,
+			SettingsManager.inMemory({ theme: "scramjet-dark", quietStartup: quiet }),
+			[{ model: getModel("openai", "gpt-4o") }],
+			undefined,
+			verbose,
+		);
+		try {
+			await h.frame();
+			const rendered = h.internals.headerContainer.render(159).join("\n");
+			expect(rendered.match(/ONE-PROVISIONING-DIAGNOSTIC/g)).toHaveLength(1);
+			const visible = verbose || !quiet;
+			expect(rendered.includes("Model scope:")).toBe(visible);
+			expect(rendered.includes("scramjet can explain")).toBe(visible);
+			expect(rendered.includes("to interrupt")).toBe(visible && (verbose || expanded));
+			expect(h.internals.headerContainer.children.filter((child) => child instanceof Spacer)).toHaveLength(
+				visible ? 2 : 0,
+			);
+			if (visible) {
+				expect(rendered.match(/Model scope:/g)).toHaveLength(1);
+				expect(rendered.match(/scramjet can explain/g)).toHaveLength(1);
+			}
+		} finally {
+			await h.dispose();
+		}
+	});
+
+	it.each([
+		{ explicit: "pi-light", environment: "15;0", osc: false, contribute: true, expected: "pi-light" },
+		{ explicit: undefined, environment: "0;15", osc: false, contribute: true, expected: "pi-light" },
+		{ explicit: undefined, environment: "", osc: true, contribute: true, expected: "scramjet-dark" },
+		{ explicit: undefined, environment: "15;0", osc: false, contribute: false, expected: "pi-dark" },
+	])("preserves selection: %j", async ({ explicit, environment, osc, contribute, expected }) => {
+		vi.stubEnv("COLORFGBG", environment);
+		const query = vi.spyOn(TUI.prototype, "queryTerminalBackgroundColor").mockResolvedValue({ r: 0, g: 0, b: 0 });
+		const h = await createProductionInteractiveHarness(
+			160,
+			45,
+			(pi) => {
+				if (contribute) pi.on("resources_discover", () => ({ themePaths: [themePath] }));
+			},
+			true,
+			SettingsManager.inMemory({ theme: explicit, quietStartup: false }),
+		);
+		try {
+			expect(query).toHaveBeenCalledTimes(osc ? 1 : 0);
+			const expectedAccent =
+				expected === "scramjet-dark"
+					? "\x1b[38;2;18;52;86mscramjet"
+					: loadThemeFromPath(
+							new URL(`../src/modes/interactive/theme/${expected}.json`, import.meta.url).pathname,
+							"truecolor",
+						).fg("accent", "scramjet");
+			expect(h.internals.headerContainer.render(159).join("\n")).toContain(expectedAccent);
+			const mark = h.terminal.markWrites();
+			await h.frame();
+			expect(h.terminal.writesSince(mark)).toContain(expectedAccent);
+		} finally {
+			query.mockRestore();
 			await h.dispose();
 		}
 	});
