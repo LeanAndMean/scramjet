@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.116.0 — Preview compaction summaries and qualify estimates
+
+Make generated checkpoints useful while collapsed and improve approximate pre-compaction accounting. Fixes [#632](https://github.com/LeanAndMean/scramjet/issues/632).
+
+### Added
+
+- Show a width-aware beginning preview of generated compaction summaries, bounded to ten content rows and 4,096 source code units, with terminal-control neutralization, displayed-copy provenance and lossless full expansion.
+
+### Fixed
+
+- Reject synthetic, failed and invalid usage anchors; qualify pre-compaction estimates by compaction/model-change boundaries and the selected provider/model, otherwise estimate every rebuilt active message.
+- Forward live model identity through manual and automatic compaction, reject stale-model usage for error-path threshold admission, and label stored historical counts as approximate without rewriting them or extension overrides.
+
+### Tests
+
+- Cover accounting boundaries, model forwarding, threshold admission, bounded Unicode previews, terminal controls, displayed copying and reconstructed history. Offline checks do not establish exact tokenization, provider acceptance or the cause of the original reported count.
+
 ## 0.115.0 — Remember model selections by directory
 
 Recall deliberate model choices per exact working directory without creating repository-local state. Fixes [#627](https://github.com/LeanAndMean/scramjet/issues/627).

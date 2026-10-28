@@ -2557,7 +2557,8 @@ export class AgentSession {
 			const pathEntries = this.sessionManager.getBranch();
 			const settings = this.settingsManager.getCompactionSettings();
 
-			const preparation = prepareCompaction(pathEntries, settings);
+			// SCRAMJET-DIVERGENCE: Historical usage must match the selected model.
+			const preparation = prepareCompaction(pathEntries, settings, this.model);
 			if (!preparation) {
 				// Check why we can't compact
 				const lastEntry = pathEntries[pathEntries.length - 1];
@@ -2811,6 +2812,13 @@ export class AgentSession {
 			// have stale usage reflecting the old (larger) context and would falsely
 			// trigger compaction right after one just finished.
 			const usageMsg = messages[estimate.lastUsageIndex];
+			// SCRAMJET-DIVERGENCE: Historical usage must match the live model before threshold admission.
+			if (
+				usageMsg.role === "assistant" &&
+				(usageMsg.provider !== this.model?.provider || usageMsg.model !== this.model?.id)
+			) {
+				return;
+			}
 			if (
 				compactionEntry &&
 				usageMsg.role === "assistant" &&
@@ -2876,7 +2884,8 @@ export class AgentSession {
 
 			const pathEntries = this.sessionManager.getBranch();
 
-			const preparation = prepareCompaction(pathEntries, settings);
+			// SCRAMJET-DIVERGENCE: Use the same usage qualification as manual compaction.
+			const preparation = prepareCompaction(pathEntries, settings, this.model);
 			if (!preparation) {
 				this._emit({
 					type: "compaction_end",
