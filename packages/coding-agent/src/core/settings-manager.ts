@@ -85,6 +85,8 @@ export interface Settings {
 	lastChangelogVersion?: string;
 	defaultProvider?: string;
 	defaultModel?: string;
+	// SCRAMJET-DIVERGENCE: startup selection policy does not disable directory recording.
+	startupModel?: "global" | "per-directory";
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	transport?: TransportSetting; // default: "auto"
 	steeringMode?: "all" | "one-at-a-time";
@@ -283,7 +285,7 @@ export class InMemorySettingsStorage implements SettingsStorage {
 export class SettingsManager {
 	private storage: SettingsStorage;
 	private readonly recall: LastUsedModelsStore;
-	private modelOverrides: Pick<Settings, "defaultProvider" | "defaultModel"> = {};
+	private modelOverrides: Pick<Settings, "defaultProvider" | "defaultModel" | "startupModel"> = {};
 	private globalSettings: Settings;
 	private projectSettings: Settings;
 	private settings: Settings;
@@ -312,6 +314,8 @@ export class SettingsManager {
 		this.globalSettingsLoadError = globalLoadError;
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
+		this.normalizeStartupModel(this.globalSettings, "global");
+		this.normalizeStartupModel(this.projectSettings, "project");
 		this.normalizeRetrySettings(this.globalSettings, "global");
 		this.normalizeRetrySettings(this.projectSettings, "project");
 		this.normalizeViewportSettings(this.globalSettings, "global");
@@ -497,6 +501,8 @@ export class SettingsManager {
 			this.recordError("project", projectLoad.error);
 		}
 
+		this.normalizeStartupModel(this.globalSettings, "global");
+		this.normalizeStartupModel(this.projectSettings, "project");
 		this.normalizeRetrySettings(this.globalSettings, "global");
 		this.normalizeRetrySettings(this.projectSettings, "project");
 		this.normalizeViewportSettings(this.globalSettings, "global");
@@ -509,6 +515,8 @@ export class SettingsManager {
 	/** Apply additional overrides on top of current settings */
 	applyOverrides(overrides: Partial<Settings>): void {
 		const normalized = structuredClone(overrides);
+		this.normalizeStartupModel(normalized, "global");
+		if (normalized.startupModel !== undefined) this.modelOverrides.startupModel = normalized.startupModel;
 		this.normalizeRetrySettings(normalized, "global");
 		if (normalized.defaultProvider !== undefined) this.modelOverrides.defaultProvider = normalized.defaultProvider;
 		if (normalized.defaultModel !== undefined) this.modelOverrides.defaultModel = normalized.defaultModel;
@@ -718,8 +726,33 @@ export class SettingsManager {
 		this.save();
 	}
 
+	private normalizeStartupModel(settings: Partial<Settings>, scope: SettingsScope): void {
+		if (
+			settings.startupModel !== undefined &&
+			settings.startupModel !== "global" &&
+			settings.startupModel !== "per-directory"
+		) {
+			delete settings.startupModel;
+			this.recordError(
+				scope,
+				new Error('startupModel must be "global" or "per-directory"; ignoring this scope\'s value.'),
+			);
+		}
+	}
+
+	getStartupModel(): "global" | "per-directory" {
+		return this.settings.startupModel ?? "per-directory";
+	}
+
+	setStartupModel(mode: "global" | "per-directory"): void {
+		this.globalSettings.startupModel = mode;
+		this.markModified("startupModel");
+		this.save();
+	}
+
 	getDirectoryDefaultModel(cwd: string): LastUsedModelIdentity | undefined {
 		if (
+			this.getStartupModel() === "global" ||
 			this.projectSettings.defaultProvider !== undefined ||
 			this.projectSettings.defaultModel !== undefined ||
 			this.modelOverrides.defaultProvider !== undefined ||

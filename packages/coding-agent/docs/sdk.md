@@ -436,7 +436,7 @@ const { session } = await createAgentSession({
 
 If no model is provided:
 1. Tries authenticated restoration from session (if continuing)
-2. Uses the exact working directory's remembered model, unless project/programmatic model defaults suppress recall
+2. Uses the exact working directory's remembered model, unless `startupModel: "global"` or project/programmatic model defaults suppress recall
 3. Uses the effective default from settings
 4. Falls back to an available model
 
@@ -464,6 +464,8 @@ const { session } = await createAgentSession({
   persistModelPreferences: false,
 });
 ```
+
+`startupModel: "global"` is a separate startup-selection policy, available through settings or `SettingsManager.setStartupModel("global")`; it bypasses recall without disabling recording. `getStartupModel()` defaults to `"per-directory"`. Changing it does not switch the live model or teach/delete directory records. Global setters retain project-effective values, and defined programmatic `startupModel` overrides survive saves/reload.
 
 With persistence enabled, authenticated direct selection (including same-model selection) and successful scoped/available cycling teach the session's effective CWD in `<agentDir>/last-used-models.json` as well as the global default. Authentication refusal and no-op cycling do not teach; selection success does not guarantee disk success. No repository-local recall files are created. Thinking remains global; see [directory model state](settings.md#directory-model-state) for scoped CLI policy, exact lexical path/profile scope, metadata growth/privacy and independent write failures.
 
@@ -936,7 +938,7 @@ const identity = settings.getDirectoryDefaultModel("/exact/working/directory");
 
 `LastUsedModelsStorage` exposes synchronous `read(): string | undefined` and asynchronous `withLock(update): Promise<void>`; the backend must lock before reading current bytes and updating. `LastUsedModelIdentity`, `InMemoryLastUsedModelsStorage`, `SettingsStorage` and `SettingsError` are also root exports. `SettingsStorage.withLock(scope, update, write?)` accepts optional write intent; existing two-argument implementations remain compatible. Built-in manager loads are read-only; writes lock before reading, including first creation. Global settings retain direct-write crash characteristics, while recall uses same-directory atomic replacement.
 
-The optional CWD in `setDefaultModelAndProvider(provider, modelId, cwd?)` teaches one lexical resolved directory; two arguments only update the global default. `getDirectoryDefaultModel(cwd)` returns a defensive identity copy, or `undefined` if either model-default field is defined by project settings or programmatic overrides. Those defined model overrides survive saves/reload; default getter meanings are unchanged. See [directory state](settings.md#directory-model-state) for metadata/privacy and independent-file failure semantics.
+The optional CWD in `setDefaultModelAndProvider(provider, modelId, cwd?)` teaches one lexical resolved directory; two arguments only update the global default. `getDirectoryDefaultModel(cwd)` returns a defensive identity copy, or `undefined` in Global startup mode or if either model-default field is defined by project settings or programmatic overrides. `startupModel` affects lookup only: supplying a CWD still records the choice in either mode. Those defined model overrides survive saves/reload; default getter meanings are unchanged. See [directory state](settings.md#directory-model-state) for metadata/privacy and independent-file failure semantics.
 
 **Project-specific settings:**
 

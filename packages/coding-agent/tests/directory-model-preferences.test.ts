@@ -64,6 +64,82 @@ describe("directory model settings composition", () => {
 		expect(SettingsManager.create(cwd, profile).getDirectoryDefaultModel(cwd)?.modelId).toBe("m");
 	});
 
+	it("defaults to per-directory and changes lookup without changing recorded choices", async () => {
+		const storage = new InMemorySettingsStorage();
+		const recall = new InMemoryLastUsedModelsStorage();
+		const manager = SettingsManager.fromStorage(storage, recall);
+		expect(manager.getStartupModel()).toBe("per-directory");
+		manager.setDefaultModelAndProvider("p", "first", "/a");
+		await manager.flush();
+		const before = recall.read();
+		manager.setStartupModel("global");
+		await manager.flush();
+		expect(manager.getDirectoryDefaultModel("/a")).toBeUndefined();
+		expect(recall.read()).toBe(before);
+		manager.setDefaultModelAndProvider("p", "latest", "/a");
+		await manager.flush();
+		expect(manager.getDefaultModel()).toBe("latest");
+		expect(manager.getDirectoryDefaultModel("/a")).toBeUndefined();
+		expect(SettingsManager.fromStorage(storage, recall).getStartupModel()).toBe("global");
+		const recorded = recall.read();
+		manager.setStartupModel("per-directory");
+		await manager.reload();
+		expect(recall.read()).toBe(recorded);
+		expect(manager.getDirectoryDefaultModel("/a")).toEqual({ provider: "p", modelId: "latest" });
+	});
+
+	it("keeps project startup policy effective while editing the global preference", async () => {
+		const storage = new InMemorySettingsStorage();
+		storage.withLock("project", () => JSON.stringify({ startupModel: "global" }));
+		const manager = SettingsManager.fromStorage(storage);
+		manager.setStartupModel("per-directory");
+		await manager.flush();
+		expect(manager.getStartupModel()).toBe("global");
+		expect(readSettings(storage)).toMatchObject({ startupModel: "per-directory" });
+		expect(manager.getProjectSettings()).toEqual({ startupModel: "global" });
+		storage.withLock("project", () => "{}");
+		await manager.reload();
+		expect(manager.getStartupModel()).toBe("per-directory");
+	});
+
+	it("retains programmatic startup policy through selection, saves and reload", async () => {
+		const manager = SettingsManager.inMemory();
+		manager.applyOverrides({ startupModel: "global" });
+		manager.setDefaultModelAndProvider("p", "m", "/a");
+		manager.setStartupModel("per-directory");
+		await manager.reload();
+		expect(manager.getStartupModel()).toBe("global");
+		expect(manager.getDirectoryDefaultModel("/a")).toBeUndefined();
+		expect(manager.getGlobalSettings().startupModel).toBe("per-directory");
+	});
+
+	it.each([null, true, "directory", {}, []])(
+		"diagnoses invalid startup policy %j without rewriting it",
+		async (invalid) => {
+			const storage = new InMemorySettingsStorage();
+			storage.withLock("global", () => JSON.stringify({ startupModel: "global" }));
+			storage.withLock("project", () => JSON.stringify({ startupModel: invalid }));
+			const manager = SettingsManager.fromStorage(storage);
+			expect(manager.getStartupModel()).toBe("global");
+			expect(manager.drainErrors()).toMatchObject([{ scope: "project", error: expect.any(Error) }]);
+			manager.applyOverrides({ startupModel: invalid } as never);
+			expect(manager.getStartupModel()).toBe("global");
+			expect(manager.drainErrors()[0].error.message).toContain("startupModel must be");
+			await manager.reload();
+			expect(manager.getStartupModel()).toBe("global");
+			expect(manager.drainErrors()).toHaveLength(1);
+			storage.withLock("project", (current) => {
+				expect(JSON.parse(current!).startupModel).toEqual(invalid);
+				return undefined;
+			});
+			storage.withLock("global", () => JSON.stringify({ startupModel: invalid }));
+			storage.withLock("project", () => "{}");
+			await manager.reload();
+			expect(manager.getStartupModel()).toBe("per-directory");
+			expect(manager.drainErrors()[0].scope).toBe("global");
+		},
+	);
+
 	it.each(["defaultProvider", "defaultModel"] as const)(
 		"suppresses the whole recall identity for defined project %s",
 		async (field) => {

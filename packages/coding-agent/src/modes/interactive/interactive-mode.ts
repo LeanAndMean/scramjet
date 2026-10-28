@@ -4597,7 +4597,7 @@ export class InteractiveMode {
 		const errors = settings.drainErrors();
 		selector.setSaveError(errors.length ? "Changes not saved; see warning" : undefined);
 		if (errors.length) {
-			this.showWarning("Display settings not saved. Changes may be lost on restart; project overrides still apply.");
+			this.showWarning("Settings not saved. Changes may be lost on restart; project overrides still apply.");
 			for (const error of errors) this.showWarning(formatSettingsError(error));
 		}
 		this.ui.requestRender();
@@ -4641,6 +4641,8 @@ export class InteractiveMode {
 					markdownToolDisplay: this.settingsManager.getMarkdownToolDisplay(),
 					markdownToolDisplayProjectOverride:
 						this.settingsManager.getProjectSettings().markdown?.toolDisplay !== undefined,
+					startupModel: this.settingsManager.getStartupModel(),
+					startupModelProjectOverride: this.settingsManager.getProjectSettings().startupModel !== undefined,
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4737,6 +4739,11 @@ export class InteractiveMode {
 					},
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
+					},
+					onStartupModelChange: (mode) => {
+						this.settingsManager.setStartupModel(mode);
+						void this.settleLayoutSettings(selector);
+						return this.settingsManager.getStartupModel();
 					},
 					// SCRAMJET-DIVERGENCE: save globally but present the project-effective Markdown read mode.
 					onMarkdownToolDisplayChange: (mode) => {

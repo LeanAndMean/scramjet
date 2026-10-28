@@ -177,7 +177,7 @@ describe("interactive Markdown reads", () => {
 		await store.manager.flush();
 		await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain("Changes not saved"));
 		expect(warnings).toHaveBeenCalledWith(
-			"Display settings not saved. Changes may be lost on restart; project overrides still apply.",
+			"Settings not saved. Changes may be lost on restart; project overrides still apply.",
 		);
 		const diagnostic = warnings.mock.calls
 			.map(([message]) => message)

@@ -198,76 +198,122 @@ describe("directory recall acceptance", () => {
 		}
 	});
 
-	it.each(["recall", "explicit", "restored", "override", "project", "missing", "unauthenticated", "no-model"])(
-		"SDK priority and warning composition: %s",
-		async (route) => {
-			const f = await fixture(true, false, false);
-			try {
-				f.settingsManager.setDefaultModelAndProvider(f.models[0].provider, "a", f.root);
+	it.each([
+		"recall",
+		"global",
+		"global-missing",
+		"explicit",
+		"restored",
+		"override",
+		"project",
+		"missing",
+		"unauthenticated",
+		"no-model",
+	])("SDK priority and warning composition: %s", async (route) => {
+		const f = await fixture(true, false, false);
+		try {
+			f.settingsManager.setDefaultModelAndProvider(f.models[0].provider, "a", f.root);
+			await f.settingsManager.flush();
+			f.settingsManager.setDefaultModelAndProvider(f.models[1].provider, "b");
+			await f.settingsManager.flush();
+			if (["missing", "no-model"].includes(route)) {
+				f.settingsManager.setDefaultModelAndProvider("missing", "id/with:punctuation", f.root);
 				await f.settingsManager.flush();
+				f.settingsManager.setDefaultModelAndProvider("missing-global", "missing-id");
+				await f.settingsManager.flush();
+			}
+			if (route === "global-missing") {
+				f.settingsManager.setDefaultModelAndProvider("missing", "remembered", f.root);
 				f.settingsManager.setDefaultModelAndProvider(f.models[1].provider, "b");
-				await f.settingsManager.flush();
+			}
+			if (route.startsWith("global")) f.settingsManager.setStartupModel("global");
+			if (route === "override") f.settingsManager.applyOverrides({ defaultModel: "b" });
+			if (route === "project") {
+				mkdirSync(join(f.root, ".scramjet"));
+				writeFileSync(join(f.root, ".scramjet/settings.json"), JSON.stringify({ defaultModel: "b" }));
+				await f.settingsManager.reload();
+			}
+			if (route === "unauthenticated")
+				vi.spyOn(f.modelRegistry, "hasConfiguredAuth").mockImplementation((model) => model !== f.models[0]);
+			if (route === "no-model") vi.spyOn(f.modelRegistry, "getAvailable").mockResolvedValue([]);
+			const sm = SessionManager.inMemory(f.root);
+			if (["restored", "missing", "no-model"].includes(route)) {
+				sm.appendModelChange(route === "restored" ? f.models[1].provider : "missing-session", "b");
+				sm.appendMessage({ role: "user", content: "resume", timestamp: Date.now() });
+			}
+			await f.settingsManager.flush();
+			const before = readFileSync(join(f.agentDir, "last-used-models.json"), "utf8");
+			const result = await createAgentSession({
+				cwd: f.root,
+				agentDir: f.agentDir,
+				authStorage: f.authStorage,
+				modelRegistry: f.modelRegistry,
+				settingsManager: f.settingsManager,
+				resourceLoader: f.session.resourceLoader,
+				sessionManager: sm,
+				model: route === "explicit" ? f.models[1] : undefined,
+				tools: [],
+			});
+			try {
+				if (route === "no-model") expect(result.session.model?.provider).toBe("unknown");
+				else expect(result.session.model).toBe(["recall", "missing"].includes(route) ? f.models[0] : f.models[1]);
 				if (["missing", "no-model"].includes(route)) {
-					f.settingsManager.setDefaultModelAndProvider("missing", "id/with:punctuation", f.root);
-					await f.settingsManager.flush();
-					f.settingsManager.setDefaultModelAndProvider("missing-global", "missing-id");
-					await f.settingsManager.flush();
-				}
-				if (route === "override") f.settingsManager.applyOverrides({ defaultModel: "b" });
-				if (route === "project") {
-					mkdirSync(join(f.root, ".scramjet"));
-					writeFileSync(join(f.root, ".scramjet/settings.json"), JSON.stringify({ defaultModel: "b" }));
-					await f.settingsManager.reload();
-				}
-				if (route === "unauthenticated")
-					vi.spyOn(f.modelRegistry, "hasConfiguredAuth").mockImplementation((model) => model !== f.models[0]);
-				if (route === "no-model") vi.spyOn(f.modelRegistry, "getAvailable").mockResolvedValue([]);
-				const sm = SessionManager.inMemory(f.root);
-				if (["restored", "missing", "no-model"].includes(route)) {
-					sm.appendModelChange(route === "restored" ? f.models[1].provider : "missing-session", "b");
-					sm.appendMessage({ role: "user", content: "resume", timestamp: Date.now() });
-				}
-				const before = readFileSync(join(f.agentDir, "last-used-models.json"), "utf8");
-				const result = await createAgentSession({
-					cwd: f.root,
-					agentDir: f.agentDir,
-					authStorage: f.authStorage,
-					modelRegistry: f.modelRegistry,
-					settingsManager: f.settingsManager,
-					resourceLoader: f.session.resourceLoader,
-					sessionManager: sm,
-					model: route === "explicit" ? f.models[1] : undefined,
-					tools: [],
+					expect(result.modelFallbackMessage).toContain("Could not restore model missing-session/b");
+					expect(result.modelFallbackMessage).toContain("missing/id/with:punctuation");
+					expect(result.modelFallbackMessage).toContain("Configured default model missing-global/missing-id");
+					if (route === "no-model") expect(result.modelFallbackMessage).toContain("No models available");
+				} else if (route === "unauthenticated")
+					expect(result.modelFallbackMessage).toContain("no configured authentication");
+				else expect(result.modelFallbackMessage).toBeUndefined();
+				await f.settingsManager.flush();
+				expect(readFileSync(join(f.agentDir, "last-used-models.json"), "utf8")).toBe(before);
+			} finally {
+				result.session.dispose();
+			}
+		} finally {
+			f.session.dispose();
+		}
+	});
+});
+
+describe("model preference persistence policy", () => {
+	it.each(["direct", "scoped", "available"])(
+		"Global startup mode still records %s choices and preserves live state on toggling",
+		async (path) => {
+			const f = await fixture(true, false, path === "scoped");
+			try {
+				f.settingsManager.setStartupModel("global");
+				if (path === "direct") await f.session.setModel(f.models[1]);
+				else await f.session.cycleModel();
+				await f.settingsManager.flush();
+				expect(f.session.model).toBe(f.models[1]);
+				expect(f.settingsManager.getDefaultModel()).toBe("b");
+				expect(f.settingsManager.getDirectoryDefaultModel(f.root)).toBeUndefined();
+				const recallPath = join(f.agentDir, "last-used-models.json");
+				const recorded = readFileSync(recallPath, "utf8");
+				expect(JSON.parse(recorded)[f.root]).toEqual({ provider: f.models[1].provider, modelId: "b" });
+				f.settingsManager.setDefaultModelAndProvider(f.models[0].provider, "a");
+				const entries = structuredClone(f.sessionManager.getEntries());
+				f.settingsManager.setStartupModel("per-directory");
+				await f.settingsManager.flush();
+				expect(f.session.model).toBe(f.models[1]);
+				expect(f.sessionManager.getEntries()).toEqual(entries);
+				expect(readFileSync(recallPath, "utf8")).toBe(recorded);
+				expect(f.settingsManager.getDirectoryDefaultModel(f.root)).toEqual({
+					provider: f.models[1].provider,
+					modelId: "b",
 				});
-				try {
-					if (route === "no-model") expect(result.session.model?.provider).toBe("unknown");
-					else
-						expect(result.session.model).toBe(["recall", "missing"].includes(route) ? f.models[0] : f.models[1]);
-					if (["missing", "no-model"].includes(route)) {
-						expect(result.modelFallbackMessage).toContain("Could not restore model missing-session/b");
-						expect(result.modelFallbackMessage).toContain("missing/id/with:punctuation");
-						expect(result.modelFallbackMessage).toContain("Configured default model missing-global/missing-id");
-						if (route === "no-model") expect(result.modelFallbackMessage).toContain("No models available");
-					} else if (route === "unauthenticated")
-						expect(result.modelFallbackMessage).toContain("no configured authentication");
-					else expect(result.modelFallbackMessage).toBeUndefined();
-					await f.settingsManager.flush();
-					expect(readFileSync(join(f.agentDir, "last-used-models.json"), "utf8")).toBe(before);
-				} finally {
-					result.session.dispose();
-				}
 			} finally {
 				f.session.dispose();
 			}
 		},
 	);
-});
 
-describe("model preference persistence policy", () => {
 	it("opt-out preserves both existing files through selection and cycling", async () => {
 		const f = await fixture(false, true, true);
 		try {
 			f.settingsManager.setDefaultModelAndProvider("remembered", "unchanged", f.root);
+			f.settingsManager.setStartupModel("global");
 			await f.settingsManager.flush();
 			const recallPath = join(f.agentDir, "last-used-models.json");
 			const before = [readFileSync(f.settingsPath, "utf8"), readFileSync(recallPath, "utf8")];
