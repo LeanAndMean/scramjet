@@ -5,7 +5,7 @@ Root license texts and embedded notices are reproduced below.
 This inventory is not a legal clearance guarantee. libc 0.2.190 identifies
 standard ioctl ABI helpers adapted from a GPL-2.0-tagged Linux Rust file;
 the equivalent UAPI header has Linux-syscall-note. Upstream publishes the crate
-under MIT OR Apache-2.0. See docs/PROGRESS.md for the qualified provenance review.
+under MIT OR Apache-2.0. See docs/PROGRESS-ARCHIVE.md for the qualified provenance review.
 The application itself incorporates no copied kernel implementation.
 
 
@@ -17062,7 +17062,7 @@ Resolved features (all targets): Wdk, Wdk_Foundation, Wdk_Storage, Wdk_Storage_F
     SOFTWARE
 
 --- Audit qualification ---
-Unicode segmentation/width tables identify Unicode 17 data. The exact upstream Unicode data notice is verified separately in progress; cached crate COPYRIGHT/MIT alternatives and all source copyright years are retained.
+Unicode segmentation/width tables identify Unicode 17 data. The exact upstream Unicode data notice is verified separately in docs/PROGRESS-ARCHIVE.md; cached crate COPYRIGHT/MIT alternatives and all source copyright years are retained.
 Winapi architecture packages have no standalone license files; their embedded dual-license headers and the related winapi 0.3.9 full MIT text are supplied above. This is not exhaustive binary-archive provenance clearance.
 Compact_str Rust-derived helpers use a pinned formatting link and an unpinned nightly Unicode link; a conservative Rust contributor notice is retained, not a claim of exact upstream source identity.
 

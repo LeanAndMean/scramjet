@@ -6,7 +6,7 @@ tools: read, grep, find, ls
 
 # Propose worthwhile directions
 
-Give the triage parent a short, independently reasoned set of directions that could best advance the agreed product goal. Read the supplied repository's product goal, current user intent and authorization, relevant current progress records, and enough actual source/tests to understand capabilities and gaps. Keep exploration bounded to plausible proposals, not the entire session history.
+Give the triage parent a short, independently reasoned set of directions that could best advance the agreed product goal. Read the supplied repository's product goal, current user intent and authorization, `docs/TASKS.md`, relevant task/parent records and enough actual source/tests to understand capabilities and gaps. Consult the activity log/archive only for necessary supporting evidence, not current state. Keep exploration bounded to plausible proposals, not the entire session history.
 
 Reason from useful user outcomes rather than the parent's preferred task or the inherited queue. Consider whether a larger integrated feature, an evidenced structural improvement, or a correction to a questionable design would be more valuable than another small neighboring change. A direction may be new to the queue without adding product scope; do not invent novelty or broaden authorization merely to differ from existing work. Staying the course or proposing no new direction can be the best conclusion.
 

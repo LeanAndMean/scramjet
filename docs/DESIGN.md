@@ -21,11 +21,11 @@ The user authorized one outcome-level milestone on 2026-10-26: a retained projec
 
 This authorizes bounded local development and offline fixture-backed journeys, not live/paid providers, publication, arbitrary shell execution, shared-endpoint load tests, or new desktop/clipboard automation. Offline request interpretation and supported project access must be stated and tested honestly; a scripted replacement-text demo is not general coding intelligence. Retention must preserve the project across the journey, not delete user project contents as disposable cleanup. Useful recovered history does not authorize automatic re-execution of effects or continuation.
 
-This selected milestone is narrower than full S4 or platform/provider replacement readiness. [Progress](PROGRESS.md) owns its batches and acceptance evidence.
+This selected milestone is narrower than full S4 or platform/provider replacement readiness. [The task queue](TASKS.md) selects current work; [archived S4.13 acceptance](PROGRESS-ARCHIVE.md#s413b-independent-acceptance-and-parent-milestone-disposition-2026-10-27) preserves the completed milestone's evidence.
 
 ## Selected first real-provider journey (2026-10-27)
 
-The user selected `openai/gpt-6-luna` through the existing authenticated Proxy route: create/read a trivial haiku Markdown file, create a small Python reader, and execute it through Bash. Deliver headless first, then the same runtime through simulated-input retained-TUI checks; final user QA follows agent-owned checks, not instead of them. Literary quality/general coding intelligence is not acceptance. [Progress](PROGRESS.md) owns the bounded batches, live-call ledger and exact check limits.
+The user selected `openai/gpt-6-luna` through the existing authenticated Proxy route: create/read a trivial haiku Markdown file, create a small Python reader, and execute it through Bash. Deliver headless first, then the same runtime through simulated-input retained-TUI checks; final user QA follows agent-owned checks, not instead of them. Literary quality/general coding intelligence is not acceptance. [S4.14's task record](tasks/S4.14.md) owns the bounded batches, shared authorization and exact check limits; its private runtime ledger owns actual live-call accounting.
 
 Use Proxy's local Responses endpoint; Proxy retains authentication, upstream TLS/routing and any internal auth retry. Rust remains independent of the Scramjet runtime and does not read/export OAuth credentials, alter Proxy state, or treat proxy-local completion/cancellation as upstream billing settlement. Missing usage remains unknown. Transport/provider support cannot become tool, approval, continuation or history authority.
 

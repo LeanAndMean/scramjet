@@ -6,7 +6,7 @@ tools: read, grep, find, ls
 
 # Assess existing work
 
-Give the triage parent a short, evidence-backed set of existing directions worth considering next. Read the supplied repository's product goal, current user intent and authorization, relevant progress records, and actual source/tests. Start with the current snapshot and queue; follow only the records and code needed to assess plausible candidates, not the entire session history.
+Give the triage parent a short, evidence-backed set of existing directions worth considering next. Read the supplied repository's product goal, current user intent and authorization, `docs/TASKS.md` and relevant `docs/tasks/<task-id>.md` records, and actual source/tests. Follow parent authority/dependency evidence and the activity log/archive only when needed to assess plausible candidates; historical snapshots are not current state. Do not read the entire session history.
 
 Identify unfinished useful features, integration gaps, pending reviews/corrections, blockers, and structural improvements needed by already-agreed development directions. Flag queue entries that evidence shows are obsolete, superseded or irrelevant to the current goal; distinguish them from still-relevant blocked work. Check recorded claims against implementation: a historical task, passing fixture or long list of checks does not establish current usefulness, completion or protocol correctness. Distinguish accepted work from outstanding work without replaying it.
 

@@ -1,6 +1,6 @@
 # Staged roadmap
 
-The strategy is working vertical slices plus early risk probes, not an exhaustive framework followed by a late integration. [Design](DESIGN.md) owns direction; [progress](PROGRESS.md) owns current task state and evidence. Milestones below describe outcomes, not a fixed future file structure or an authorization to implement the entire stage.
+The strategy is small, complete working features plus early risk probes, not an exhaustive framework followed by a late integration. [Design](DESIGN.md) owns direction; [the queue](TASKS.md) owns selection/order, task records own current state, and [progress](PROGRESS.md) records dated activity/evidence. Milestones below describe outcomes, not a fixed future file structure or an authorization to implement the entire stage.
 
 ## Delivery rhythm
 
@@ -14,7 +14,7 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 
 - Establish the minimum Cargo structure, selected Apache-2.0 license file, ignore rules, and local Git history. Remote repository setup/publication needs separate authorization.
 - Use the installed stable toolchain where suitable; do not impose nightly or heavy dependencies without a concrete requirement.
-- Add only an initial CLI smoke and a small behavioral test. Record actual build/test commands and toolchain in progress.
+- Add only an initial CLI smoke and a small behavioral test. Record actual build/test commands and toolchain as dated progress evidence; the selected task record owns current acceptance.
 - Establish dependency/license checking proportionally; do not build a plugin SDK or speculative crate hierarchy.
 
 **Exit evidence:** CLI smoke, formatting, build, and tests succeed on the available host; unsupported/untested hosts remain explicit. Documentation reflects actual commands and layout.
@@ -106,4 +106,4 @@ Potential work includes additional providers/auth routes, optional Rust extensio
 
 Local fixture tests establish client behavior, not backend entitlement or real server capacity. Headless TUI tests establish cells/input dispatch, not desktop gestures or clipboard contents. Native journeys establish only their declared platform/profile/revision. A queued task count establishes neither in-flight requests nor useful throughput.
 
-Store concise evidence and the next task in progress. Once substantive work uses issues/PRs, link those artifacts instead of duplicating their full plans. Keep raw traces and benchmark outputs outside normal orientation documents; create focused permanent evidence files only when their size/reuse earns it. Release versioning and changelog preparation happen at the end of the release/PR lifecycle, not in feature tasks.
+Keep priority order/selection in `TASKS.md`, current requirements/state/handoff in the selected task record, and dated activity/evidence in `PROGRESS.md`. Once substantive work uses issues/PRs, link those artifacts instead of duplicating their full plans. Keep raw traces and benchmark outputs outside normal orientation documents; create focused permanent evidence files only when their size/reuse earns it. Release versioning and changelog preparation happen at the end of the release/PR lifecycle, not in feature tasks.

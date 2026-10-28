@@ -31,15 +31,15 @@ next:
 $ARGUMENTS
 </user-context>
 
-Follow `CLAUDE.md` and the selected progress task's authority. Verify actual structure before a nontrivial file-level plan. Use small safe probes when they can settle uncertainty; prefer evidence to further theory. Essential responsibilities and invariants govern component choices. User-owned scope or architecture decisions require informed alignment; ordinary implementation choices do not.
+Follow `CLAUDE.md`, `docs/TASKS.md` selection context and `docs/tasks/<task-id>.md` authority, including relevant parent/dependency records and linked evidence. Read log/archive only when supporting history is needed. Verify actual structure before a nontrivial file-level plan. Use small safe probes when they can settle uncertainty; prefer evidence to further theory. Essential responsibilities and invariants govern component choices. User-owned scope or architecture decisions require informed alignment; ordinary implementation choices do not.
 
-Record the outcome, scope/non-goals, acceptance demonstration, necessary design decisions, and independent-review need in the existing task record or linked authoritative plan. Keep simple plans in `docs/PROGRESS.md`; do not create another document by default. Design owns durable product decisions, not detailed task tactics. Planning may edit those records and disposable probes, not feature implementation.
+Own the selected task's plan: update its outcome, scope/non-goals, acceptance demonstration, necessary design decisions, readiness and review need. Simple plans remain in the task record; link a separate authoritative plan only when size or external authority warrants it. Design owns durable product decisions, not detailed task tactics. Append dated planning evidence to `docs/PROGRESS.md`, not another mutable plan/status there. Planning may edit those records and disposable probes, not feature implementation.
 
-If subdivision is necessary, preserve the original task's acceptance and assign stable child IDs/dependencies; accepting one child does not complete its parent. Triage owns unrelated ordering. Return to triage when decomposition or evidence changes cross-task priorities; otherwise hand the actionable slice directly to work. Unresolved required decisions leave the task blocked, not ready.
+If subdivision is necessary, preserve parent acceptance and create stable substantial child records/IDs/dependencies; accepting one child does not finish its parent. Triage owns cross-task queue membership/order. Return to triage when decomposition or evidence changes those priorities; otherwise hand actionable work directly to work. Unresolved required decisions leave the task blocked, not ready.
 
 ## Complete the handoff
 
-Persist the plan/handoff and release ownership in progress. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when this planning outcome is established.
+Persist the task's plan/readiness/review need and next action, append a dated activity entry and release task ownership. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when this planning outcome is established.
 
 Include one eligible `next_steps` entry: `message` is `/rs:work <task-id>` for actionable planning or `/rs:triage` for completed priority-changing analysis, with `fresh_session: true` and a concrete `reason`. Set `recommended_next_step` to that entry's actual array index. The harness applies the user's chain/pause settings; no handoff confirmation is needed for already-authorized work.
 
