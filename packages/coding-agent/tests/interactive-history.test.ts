@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { AgentMessage } from "@leanandmean/agent";
 import { type AssistantMessage, getModel } from "@leanandmean/ai";
 import {
@@ -52,9 +53,12 @@ import snakeExample from "../examples/extensions/snake.js";
 import invadersExample from "../examples/extensions/space-invaders.js";
 import { createToolHtmlRenderer } from "../src/core/export-html/tool-renderer.js";
 import { defineTool } from "../src/core/extensions/index.js";
+import { createCompactionSummaryMessage } from "../src/core/messages.js";
+import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { ArminComponent } from "../src/modes/interactive/components/armin.js";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.js";
+import { CompactionSummaryMessageComponent } from "../src/modes/interactive/components/compaction-summary-message.js";
 import { DaxnutsComponent } from "../src/modes/interactive/components/daxnuts.js";
 import type { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
@@ -181,6 +185,7 @@ function createInteractiveHarness(): {
 					getCwd: () => process.cwd(),
 					buildSessionContext: () => ({ messages: sessionMessages }),
 					getEntries: () => sessionEntries,
+					getBranch: () => sessionEntries,
 				},
 				autoCompactionEnabled: true,
 				steeringMode: "one-at-a-time",
@@ -1409,37 +1414,51 @@ describe("interactive assistant history", () => {
 		expect(output).toContain("THEME-HISTORY");
 	});
 
-	it("reconstructs replaced sessions and successful compactions through deliberate rebuilds", async () => {
-		const { terminal, ui, mode, emit, committedChatContainer, setSessionMessages } = createInteractiveHarness();
-		committedChatContainer.addChild(new Text("OLD-SESSION", 0, 0));
-		ui.commit();
-		await render(terminal);
-		setSessionMessages([assistant("TREE-SESSION")]);
-		let mark = terminal.markWrites();
+	it.each(["manual", "threshold", "overflow"])(
+		"reconstructs replaced sessions and %s compaction once",
+		async (reason) => {
+			const { terminal, ui, mode, emit, committedChatContainer, setSessionMessages, setSessionEntries } =
+				createInteractiveHarness();
+			committedChatContainer.addChild(new Text("OLD-SESSION", 0, 0));
+			ui.commit();
+			await render(terminal);
+			setSessionMessages([assistant("TREE-SESSION")]);
+			let mark = terminal.markWrites();
 
-		(mode.renderCurrentSessionState as () => void).call(mode);
-		await render(terminal);
+			(mode.renderCurrentSessionState as () => void).call(mode);
+			await render(terminal);
 
-		let output = terminal.writesSince(mark);
-		expect(output).toContain("\x1b[3J");
-		expect(output).toContain("TREE-SESSION");
-		expect(terminal.bufferLines().join("\n")).not.toContain("OLD-SESSION");
+			let output = terminal.writesSince(mark);
+			expect(output).toContain("\x1b[3J");
+			expect(output).toContain("TREE-SESSION");
+			expect(terminal.bufferLines().join("\n")).not.toContain("OLD-SESSION");
 
-		setSessionMessages([assistant("COMPACTED-SESSION")]);
-		mark = terminal.markWrites();
-		await emit({
-			type: "compaction_end",
-			reason: "manual",
-			result: { summary: "summary", tokensBefore: 100 },
-			willRetry: false,
-		});
-		await render(terminal);
+			const checkpoint = createCompactionSummaryMessage("BEGIN persisted summary", 250000, "2026-10-27");
+			const compacted = assistant("COMPACTED-SESSION");
+			const manager = SessionManager.inMemory();
+			const firstKeptEntryId = manager.appendMessage(compacted);
+			manager.appendCompaction(checkpoint.summary, firstKeptEntryId, checkpoint.tokensBefore);
+			setSessionEntries(manager.getBranch());
+			setSessionMessages([checkpoint, compacted]);
+			mark = terminal.markWrites();
+			await emit({
+				type: "compaction_end",
+				reason,
+				result: { summary: checkpoint.summary, tokensBefore: checkpoint.tokensBefore, firstKeptEntryId },
+				willRetry: false,
+			});
+			await render(terminal);
 
-		output = terminal.writesSince(mark);
-		expect(output).toContain("\x1b[3J");
-		expect(output).toContain("COMPACTED-SESSION");
-		expect(terminal.bufferLines().join("\n")).not.toContain("TREE-SESSION");
-	});
+			output = terminal.writesSince(mark);
+			expect(output).toContain("\x1b[3J");
+			expect(output).toContain("COMPACTED-SESSION");
+			expect(output).toContain("BEGIN persisted summary");
+			expect(output).toContain("~250,000 tokens");
+			expect(output.match(/\[compaction\]/g)).toHaveLength(1);
+			expect(output.indexOf("[compaction]")).toBeGreaterThan(output.indexOf("COMPACTED-SESSION"));
+			expect(terminal.bufferLines().join("\n")).not.toContain("TREE-SESSION");
+		},
+	);
 
 	it("shows the same provider error in live and restored local history with failed partial tool calls", async () => {
 		const { terminal, emit, mode } = createInteractiveHarness();
@@ -2432,6 +2451,237 @@ describe("production retained viewport", () => {
 	});
 	afterEach(async () => {
 		await h.dispose();
+	});
+
+	it("renders a persisted offline compaction in live and reconstructed production history", async () => {
+		await h.dispose();
+		const summary = `BEGIN checkpoint\n\n${"generated content ".repeat(400)}\n\nEND checkpoint`;
+		h = await createProductionInteractiveHarness(
+			100,
+			40,
+			(pi) => {
+				pi.on("session_before_compact", (event) => ({
+					compaction: { summary, tokensBefore: 250000, firstKeptEntryId: event.preparation.firstKeptEntryId },
+				}));
+			},
+			true,
+			undefined,
+			undefined,
+			{
+				agent: {
+					initialState: { model: getModel("openai", "gpt-4o") },
+					streamFn: () => {
+						throw new Error("Offline compaction must not call a provider");
+					},
+				},
+			},
+		);
+		h.session.sessionManager.appendMessage({ role: "user", content: "old context", timestamp: 1 });
+		h.session.sessionManager.appendMessage(assistant("old answer"));
+		await h.session.compact();
+		const live = (await h.frame()).join("\n");
+		expect(live).toContain("~250,000 tokens");
+		expect(live).toContain("BEGIN checkpoint");
+		expect(live).toContain("…");
+		expect(live).not.toContain("END checkpoint");
+		h.internals.setToolsExpanded(true);
+		expect((await h.frame()).join("\n")).toContain("END checkpoint");
+		h.internals.setToolsExpanded(false);
+		h.terminal.resize(60, 40);
+		expect((await h.frame()).join("\n")).toContain("BEGIN checkpoint");
+		h.session.sessionManager.appendMessage({ role: "user", content: "new context", timestamp: 2 });
+		h.internals.renderCurrentSessionState();
+		const restored = (await h.frame()).join("\n");
+		expect(restored).toContain("~250,000 tokens");
+		expect(restored).toContain("BEGIN checkpoint");
+		expect(restored).not.toContain("END checkpoint");
+		expect(h.session.sessionManager.getEntries().find((entry) => entry.type === "compaction")).toMatchObject({
+			summary,
+			tokensBefore: 250000,
+		});
+	});
+
+	it.each(["live", "reconstructed"] as const)(
+		"renders one chronological compaction pane in %s history before and after Ctrl+O",
+		async (history) => {
+			await h.dispose();
+			const summary = `CHECKPOINT-BEGIN\n\n${"checkpoint detail\n\n".repeat(6)}CHECKPOINT-END`;
+			let firstKeptEntryId = "";
+			const streamFn = vi.fn(() => {
+				throw new Error("Compaction transcript tests must not call a provider");
+			});
+			h = await createProductionInteractiveHarness(
+				100,
+				80,
+				(pi) => {
+					pi.on("session_before_compact", (event) => ({
+						compaction: { summary, tokensBefore: event.preparation.tokensBefore, firstKeptEntryId },
+					}));
+				},
+				true,
+				undefined,
+				undefined,
+				{ agent: { initialState: { model: getModel("openai", "gpt-4o") }, streamFn } },
+			);
+			const manager = h.session.sessionManager;
+			manager.appendMessage({ role: "user", content: "SUMMARIZED-USER", timestamp: 1 });
+			manager.appendMessage(assistant("SUMMARIZED-ANSWER"));
+			firstKeptEntryId = manager.appendMessage({ role: "user", content: "RETAINED-USER", timestamp: 2 });
+			manager.appendMessage(assistant("RETAINED-ANSWER"));
+			h.internals.renderCurrentSessionState();
+			await h.frame();
+			await h.session.compact();
+
+			const sessionFile = manager.getSessionFile()!;
+			const saved = SessionManager.open(sessionFile);
+			expect(saved.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+			expect(saved.buildSessionContext().messages.map((message) => message.role)).toEqual([
+				"compactionSummary",
+				"user",
+				"assistant",
+			]);
+			expect(saved.buildSessionContext().messages[0]).toMatchObject({ role: "compactionSummary", summary });
+
+			const expectedOrder = ["RETAINED-USER", "RETAINED-ANSWER", "[compaction]"];
+			if (history === "reconstructed") {
+				manager.appendMessage({ role: "user", content: "AFTER-COMPACTION", timestamp: 3 });
+				expect(await h.runtime.switchSession(sessionFile)).toEqual({ cancelled: false });
+				h.internals.renderCurrentSessionState();
+				expectedOrder.push("AFTER-COMPACTION");
+			}
+			const panes = () =>
+				[...h.internals.committedChatContainer.children, ...h.internals.chatContainer.children].filter(
+					(child) => child instanceof CompactionSummaryMessageComponent,
+				);
+			const initialPanes = panes();
+			const activeManager = h.runtime.session.sessionManager;
+			const entriesBeforeToggle = structuredClone(activeManager.getEntries());
+			const journalBeforeToggle = readFileSync(sessionFile);
+			for (const state of ["collapsed", "expanded", "recollapsed", "resized"]) {
+				if (state === "resized") h.terminal.resize(60, 80);
+				else if (state !== "collapsed") h.terminal.sendInput("\x0f");
+				const frame = await h.frame();
+				const text = frame.join("\n");
+				expect(text).toContain(state === "expanded" ? "to collapse" : "to expand");
+				if (state === "expanded") expect(text).toContain("CHECKPOINT-END");
+				else expect(text).not.toContain("CHECKPOINT-END");
+				const currentPanes = panes();
+				expect(currentPanes).toHaveLength(initialPanes.length);
+				for (const [index, pane] of currentPanes.entries()) expect(pane).toBe(initialPanes[index]);
+				expect.soft(currentPanes.length, `${history} ${state}: logical pane count`).toBe(1);
+				expect
+					.soft(
+						frame.map((row) => row.trim()).filter((row) => expectedOrder.includes(row)),
+						`${history} ${state}: painted transcript order`,
+					)
+					.toEqual(expectedOrder);
+			}
+			expect(streamFn).not.toHaveBeenCalled();
+			expect(activeManager.getEntries()).toEqual(entriesBeforeToggle);
+			expect(readFileSync(sessionFile)).toEqual(journalBeforeToggle);
+		},
+	);
+
+	it("orders repeated identical compactions by the selected branch rather than message timestamps", async () => {
+		h.terminal.resize(100, 80);
+		const manager = h.session.sessionManager;
+		manager.appendMessage({ role: "user", content: "DROPPED-TURN", timestamp: 0 });
+		const firstKept = manager.appendMessage({ role: "user", content: "FIRST-RETAINED", timestamp: 9000 });
+		manager.appendMessage(assistant("FIRST-ANSWER"));
+		manager.appendCompaction("IDENTICAL-SUMMARY", firstKept, 100);
+		const secondKept = manager.appendMessage({ role: "user", content: "SECOND-RETAINED", timestamp: 1 });
+		const forkPoint = manager.appendMessage(assistant("SECOND-ANSWER"));
+		manager.appendCompaction("IDENTICAL-SUMMARY", firstKept, 200);
+		manager.appendCustomEntry("metadata-only", { ignored: true });
+		const mainLeaf = manager.appendMessage({ role: "user", content: "AFTER-MAIN", timestamp: 2 });
+		manager.branch(forkPoint);
+		manager.appendCompaction("SIBLING-SUMMARY", secondKept, 300);
+		const siblingLeaf = manager.appendMessage({ role: "user", content: "AFTER-SIBLING", timestamp: 3 });
+		const mainOrder = [
+			"FIRST-RETAINED",
+			"FIRST-ANSWER",
+			"SECOND-RETAINED",
+			"SECOND-ANSWER",
+			"[compaction]",
+			"IDENTICAL-SUMMARY",
+			"AFTER-MAIN",
+		];
+		const siblingOrder = ["SECOND-RETAINED", "SECOND-ANSWER", "[compaction]", "SIBLING-SUMMARY", "AFTER-SIBLING"];
+		const markers = ["DROPPED-TURN", ...mainOrder, ...siblingOrder];
+		for (const [leaf, expectedOrder] of [
+			[mainLeaf, mainOrder],
+			[siblingLeaf, siblingOrder],
+		] as const) {
+			manager.branch(leaf);
+			const context = structuredClone(manager.buildSessionContext());
+			expect(context.messages[0].role).toBe("compactionSummary");
+			h.internals.renderCurrentSessionState();
+			const frame = await h.frame();
+			expect(frame.map((row) => row.trim()).filter((row) => markers.includes(row))).toEqual(expectedOrder);
+			expect(manager.buildSessionContext()).toEqual(context);
+		}
+	});
+
+	it("keeps hidden/custom and branch messages on their side of compaction without splitting tool cards", async () => {
+		h.terminal.resize(100, 100);
+		const manager = h.session.sessionManager;
+		const firstKept = manager.appendMessage({ role: "user", content: "RETAINED-USER", timestamp: 1 });
+		const call = assistant("");
+		call.content = [{ type: "toolCall", id: "retained-read", name: "read", arguments: { path: "checkpoint.txt" } }];
+		manager.appendMessage(call);
+		const toolResult = manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "retained-read",
+			toolName: "read",
+			content: [{ type: "text", text: "TOOL-OUTPUT" }],
+			isError: false,
+			timestamp: 2,
+		});
+		manager.branchWithSummary(toolResult, "BRANCH-BEFORE");
+		manager.appendCustomMessageEntry("visible", "VISIBLE-BEFORE", true);
+		manager.appendCompaction("CHECKPOINT", firstKept, 100);
+		const subsequentCall = assistant("");
+		subsequentCall.content = [
+			{ type: "toolCall", id: "subsequent-read", name: "read", arguments: { path: "after-checkpoint.txt" } },
+		];
+		manager.appendMessage(subsequentCall);
+		manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "subsequent-read",
+			toolName: "read",
+			content: [{ type: "text", text: "POST-TOOL-OUTPUT" }],
+			isError: false,
+			timestamp: 3,
+		});
+		manager.appendCustomMessageEntry("hidden", "HIDDEN-AFTER", false);
+		manager.appendCustomMessageEntry("visible", "VISIBLE-AFTER", true);
+		manager.branchWithSummary(manager.getLeafId(), "");
+		manager.branchWithSummary(manager.getLeafId(), "BRANCH-AFTER");
+		manager.appendCustomEntry("metadata-only", { ignored: true });
+		manager.appendMessage({ role: "user", content: "SUBSEQUENT-USER", timestamp: 3 });
+		const context = structuredClone(manager.buildSessionContext());
+		h.internals.setToolsExpanded(true);
+		h.internals.renderCurrentSessionState();
+		const frame = await h.frame();
+		const expectedOrder = [
+			"RETAINED-USER",
+			"TOOL-OUTPUT",
+			"BRANCH-BEFORE",
+			"VISIBLE-BEFORE",
+			"[compaction]",
+			"CHECKPOINT",
+			"POST-TOOL-OUTPUT",
+			"VISIBLE-AFTER",
+			"BRANCH-AFTER",
+			"SUBSEQUENT-USER",
+		];
+		expect(frame.map((row) => row.trim()).filter((row) => expectedOrder.includes(row))).toEqual(expectedOrder);
+		expect(frame.join("\n")).not.toContain("HIDDEN-AFTER");
+		for (const output of ["TOOL-OUTPUT", "POST-TOOL-OUTPUT"]) {
+			expect(frame.filter((row) => row.trim() === output)).toHaveLength(1);
+		}
+		expect(context.messages[0].role).toBe("compactionSummary");
+		expect(manager.buildSessionContext()).toEqual(context);
 	});
 
 	it("keeps exact assistant, tool, queue and widget rows through individual and coalesced updates", async () => {

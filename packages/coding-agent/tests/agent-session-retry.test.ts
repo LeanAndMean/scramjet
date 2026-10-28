@@ -10,6 +10,7 @@ import { streamOpenAICodexResponses } from "../../ai/src/providers/openai-codex-
 import type { AgentSessionEvent, PromptOptions, RunSettlement } from "../src/core/agent-session.js";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
+import { estimateTokens } from "../src/core/compaction/compaction.js";
 import {
 	defineTool,
 	type ExtensionAPI,
@@ -261,6 +262,110 @@ function retryRecords(session: AgentSession) {
 		.filter((entry) => entry.type === "custom" && entry.customType === "coding-agent:auto-retry")
 		.map((entry) => entry.data);
 }
+
+describe("compaction preparation accounting", () => {
+	it("does not threshold-compact from old-model usage after a harness notice and current-model error", async () => {
+		let calls = 0;
+		const old = {
+			...assistantText("short old-model answer"),
+			model: "old-model",
+			usage: { input: 250_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+		};
+		const { session, events } = await createFixture(
+			() => {
+				calls++;
+				return providerFailure("transient", "rate_limit");
+			},
+			{
+				model: { ...testModel, id: "old-model", contextWindow: 1_050_000 },
+				retryEnabled: false,
+				reserveTokens: 10_000,
+				customTools: [makeHarnessNoticeTool()],
+				extensionFactory: (pi) => {
+					pi.on("session_before_compact", (event) => ({
+						compaction: {
+							summary: "offline checkpoint",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+						},
+					}));
+				},
+			},
+		);
+		try {
+			session.sessionManager.appendMessage(old);
+			session.agent.state.messages = [old];
+			await session.setModel({ ...testModel, contextWindow: 100_000 });
+			await session.invokeHarnessTool("harness_notice", {});
+			expect(events.filter((event) => event.type === "compaction_start")).toEqual([]);
+			expect(session.messages.reduce((sum, message) => sum + estimateTokens(message), 0)).toBeLessThan(1000);
+			await session.prompt("short current-model prompt");
+			expect(calls).toBe(1);
+			expect({
+				starts: events.filter((event) => event.type === "compaction_start"),
+				compactions: session.sessionManager.getBranch().filter((entry) => entry.type === "compaction"),
+			}).toEqual({ starts: [], compactions: [] });
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it.each(["overflow", "threshold"] as const)(
+		"qualifies automatic %s preparation and preserves hook results",
+		async (kind) => {
+			let prepared: number | undefined;
+			let expected: number | undefined;
+			const large = {
+				...assistantText("large"),
+				model: kind === "threshold" ? "old-model" : testModel.id,
+				usage: { input: 95_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+			};
+			const { session } = await createFixture(
+				(i) =>
+					i === 0
+						? kind === "overflow"
+							? assistantError("maximum context length exceeded")
+							: large
+						: assistantText("done"),
+				{
+					model: { ...testModel, contextWindow: 100_000 },
+					reserveTokens: 10_000,
+					extensionFactory: (pi) => {
+						pi.on("session_before_compact", (event) => {
+							prepared = event.preparation.tokensBefore;
+							expected = event.branchEntries.reduce(
+								(sum, entry) => sum + (entry.type === "message" ? estimateTokens(entry.message) : 0),
+								0,
+							);
+							return {
+								compaction: {
+									summary: "automatic checkpoint",
+									firstKeptEntryId: event.preparation.firstKeptEntryId,
+									tokensBefore: 73,
+									details: { custom: true },
+								},
+							};
+						});
+					},
+				},
+			);
+			const old = { ...large, model: "old-model", usage: { ...large.usage, input: 250_000 } };
+			session.sessionManager.appendMessage(old);
+			session.agent.state.messages = [old];
+			try {
+				await session.prompt("hello");
+				expect(prepared).toBeDefined();
+				expect(prepared).toBe(expected);
+				if (kind === "threshold") expect(prepared).not.toBe(large.usage.input);
+				expect(session.sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toMatchObject([
+					{ summary: "automatic checkpoint", tokensBefore: 73, details: { custom: true }, fromHook: true },
+				]);
+			} finally {
+				session.dispose();
+			}
+		},
+	);
+});
 
 describe("Provider failure recovery policy", () => {
 	const failure = (details: Record<string, unknown>): AssistantMessage => ({

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { registerSubagentTool } from "../../scramjet/src/subagent/index.js";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
+import { estimateTokens } from "../src/core/compaction/compaction.js";
 import { defineTool, type ExtensionFactory, type ToolDefinition } from "../src/core/extensions/index.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader } from "../src/core/resource-loader.js";
@@ -167,6 +168,39 @@ function offlineCompaction(pi: Parameters<ExtensionFactory>[0]) {
 }
 
 describe("manual compaction accounting boundary", () => {
+	it("qualifies preparation against the live model and persists extension overrides unchanged", async () => {
+		let prepared: number | undefined;
+		const { session, manager } = await fixture({
+			builtin: (pi) => {
+				pi.on("session_before_compact", (event) => {
+					prepared = event.preparation.tokensBefore;
+					return {
+						compaction: {
+							summary: "custom checkpoint",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: 73,
+							details: { custom: true },
+						},
+					};
+				});
+			},
+		});
+		const old = { ...parent(0), model: "old-model", usage: { ...parent(0).usage, totalTokens: 250_000 } };
+		manager.appendMessage(old);
+		try {
+			await session.compact();
+			expect(prepared).toBe(estimateTokens(old));
+			expect(manager.getBranch().at(-1)).toMatchObject({
+				type: "compaction",
+				summary: "custom checkpoint",
+				tokensBefore: 73,
+				details: { custom: true },
+				fromHook: true,
+			});
+		} finally {
+			session.dispose();
+		}
+	});
 	it("refuses reentrant manual compaction from automatic compaction start", async () => {
 		const ownerStarted = gate();
 		const ownerFinished = gate();
@@ -886,7 +920,12 @@ describe("session tool costs", () => {
 			expect(lines.join("\n").match(/\$/g)).toHaveLength(1);
 			expect(lines[1]).toContain("$0.586 (sub)");
 			expect(lines[1]).toContain("↑10 ↓5 R2 W1");
-			expect(session.getContextUsage()).toEqual(contextBefore);
+			const contentTokens = session.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+			expect(session.getContextUsage()).toEqual({
+				...contextBefore,
+				tokens: contentTokens,
+				percent: (contentTokens / model.contextWindow) * 100,
+			});
 			finish.release();
 			await running;
 			expect(footer(session)[1]).toContain("$0.586 (sub)");
