@@ -320,6 +320,130 @@ describe("AgentSessionRuntime — prompt composition isolation", () => {
 	});
 });
 
+describe("AgentSessionRuntime — settings settlement", () => {
+	it("settles before candidate construction and again after shutdown before invalidation", async () => {
+		const fx = await buildFixture();
+		const settings = fx.runtime.services.settingsManager;
+		let release!: () => void;
+		let entered!: () => void;
+		const started = new Promise<void>((done) => {
+			entered = done;
+		});
+		const gate = new Promise<void>((done) => {
+			release = done;
+		});
+		let releaseFinal!: () => void;
+		let enteredFinal!: () => void;
+		const finalStarted = new Promise<void>((done) => {
+			enteredFinal = done;
+		});
+		const finalGate = new Promise<void>((done) => {
+			releaseFinal = done;
+		});
+		const order: string[] = [];
+		vi.spyOn(settings, "flush")
+			.mockImplementationOnce(async () => {
+				order.push("initial flush");
+				entered();
+				await gate;
+			})
+			.mockImplementation(async () => {
+				order.push("final flush");
+				expect(fx.events).toContain("session_shutdown");
+				enteredFinal();
+				await finalGate;
+			});
+		fx.runtime.setBeforeSessionInvalidate(() => {
+			order.push("invalidate");
+		});
+		await fx.runtime.session.bindExtensions({});
+		const replacement = fx.runtime.newSession();
+		await started;
+		expect(fx.createdSessions).toHaveLength(1);
+		release();
+		await finalStarted;
+		expect(fx.createdSessions).toHaveLength(2);
+		expect(order).not.toContain("invalidate");
+		releaseFinal();
+		await replacement;
+		expect(fx.createdSessions).toHaveLength(2);
+		expect(order).toEqual(["initial flush", "final flush", "invalidate"]);
+		await fx.runtime.dispose();
+	});
+
+	it("settles shutdown writes even when a shutdown handler throws, without masking its error", async () => {
+		const fx = await buildFixture();
+		const settings = fx.runtime.services.settingsManager;
+		const error = new Error("shutdown failed");
+		vi.spyOn(fx.runtime.session.extensionRunner, "emit").mockImplementation(async () => {
+			settings.setTheme("pi-light");
+			throw error;
+		});
+		let release!: () => void;
+		let entered!: () => void;
+		const started = new Promise<void>((done) => {
+			entered = done;
+		});
+		const gate = new Promise<void>((done) => {
+			release = done;
+		});
+		const originalFlush = settings.flush.bind(settings);
+		const flush = vi.spyOn(settings, "flush").mockImplementation(async () => {
+			entered();
+			await gate;
+			await originalFlush();
+		});
+		let settled = false;
+		const disposal = fx.runtime.dispose();
+		const observed = disposal.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		try {
+			await started;
+			await new Promise<void>((done) => setImmediate(done));
+			expect(settled).toBe(false);
+			expect(flush).toHaveBeenCalledOnce();
+			expect(fx.beforeInvalidateCalls).toHaveLength(0);
+			release();
+			await expect(disposal).rejects.toBe(error);
+			expect(fx.beforeInvalidateCalls).toHaveLength(0);
+		} finally {
+			release();
+			await observed;
+			await flush.mock.results[0]?.value;
+			flush.mockRestore();
+			fx.runtime.session.dispose();
+		}
+	});
+
+	it("retains errors without a handler and delivers them once when one is installed", async () => {
+		const fx = await buildFixture();
+		const settings = fx.runtime.services.settingsManager;
+		const reason = { code: "E_RUNTIME_SETTINGS", message: "original runtime settings reason\x1b[2J" };
+		const error = new Error("runtime settings failed", { cause: { reason } });
+		const errors = [{ scope: "global" as const, error }];
+		const drain = vi.spyOn(settings, "drainErrors").mockReturnValueOnce(errors);
+		await fx.runtime.settleSettings();
+		expect(drain).not.toHaveBeenCalled();
+		const handler = vi.fn();
+		fx.runtime.setSettingsErrorHandler(handler);
+		await fx.runtime.settleSettings();
+		await fx.runtime.settleSettings();
+		expect(handler).toHaveBeenCalledOnce();
+		expect(handler).toHaveBeenCalledWith(errors);
+		expect(handler.mock.calls[0][0]).toBe(errors);
+		expect(handler.mock.calls[0][0][0].error).toBe(error);
+		expect(handler.mock.calls[0][0][0].error.cause.reason).toBe(reason);
+		expect(reason.message).toContain("\x1b[2J");
+		await fx.runtime.dispose();
+	});
+});
+
 describe("AgentSessionRuntime — atomic replacement (Stage 3)", () => {
 	describe("failed candidate preparation preserves the live runtime", () => {
 		for (const { name, invoke } of replacementCases) {

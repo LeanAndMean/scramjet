@@ -65,6 +65,8 @@ export interface SettingsConfig {
 	viewportProjectOverrides?: string[];
 	markdownToolDisplay?: "rendered" | "source";
 	markdownToolDisplayProjectOverride?: boolean;
+	startupModel?: "global" | "per-directory";
+	startupModelProjectOverride?: boolean;
 }
 
 export interface SettingsCallbacks {
@@ -93,6 +95,7 @@ export interface SettingsCallbacks {
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onRetainTranscriptOnExitChange?: (enabled: boolean) => boolean;
 	onMarkdownToolDisplayChange?: (mode: "rendered" | "source") => "rendered" | "source";
+	onStartupModelChange?: (mode: "global" | "per-directory") => "global" | "per-directory";
 	onDockEditorChange: (enabled: boolean) => boolean;
 	onEditorMaxHeightPercentChange: (percent: number) => number;
 	onScrollWheelStepChange: (step: number) => number;
@@ -533,6 +536,20 @@ export class SettingsSelectorComponent extends Container {
 						: ""),
 			});
 
+		// SCRAMJET-DIVERGENCE: standalone callers opt into startup preference editing.
+		if (callbacks.onStartupModelChange)
+			items.push({
+				id: "startup-model",
+				label: "Startup model",
+				currentValue: config.startupModel === "global" ? "Global" : "Per-directory",
+				values: ["Per-directory", "Global"],
+				description:
+					"Fresh launches prefer the global default or this directory's last model. Both modes still record deliberate choices and directory paths. Does not switch the current model." +
+					(config.startupModelProjectOverride
+						? " Project settings override this value; edits save the global preference for other projects."
+						: ""),
+			});
+
 		// Add borders
 		this.addChild(new DynamicBorder());
 
@@ -542,6 +559,11 @@ export class SettingsSelectorComponent extends Container {
 			getSettingsListTheme(),
 			(id, newValue) => {
 				switch (id) {
+					case "startup-model": {
+						const effective = callbacks.onStartupModelChange!(newValue === "Global" ? "global" : "per-directory");
+						this.settingsList.updateValue(id, effective === "global" ? "Global" : "Per-directory");
+						break;
+					}
 					case "markdown-reads": {
 						const effective = callbacks.onMarkdownToolDisplayChange!(
 							newValue === "Source" ? "source" : "rendered",

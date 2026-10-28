@@ -139,6 +139,32 @@ describe("Markdown tool display settings", () => {
 		for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
 	});
 
+	it("preserves malformed file bytes and actionable validation diagnostics", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "markdown-settings-"));
+		directories.push(dir);
+		const path = join(dir, "settings.json");
+		const original = '{"markdown":false}';
+		writeFileSync(path, original);
+		const manager = SettingsManager.create(join(dir, "project"), dir);
+		manager.drainErrors();
+		manager.setMarkdownToolDisplay("source");
+		await manager.flush();
+		expect(readFileSync(path, "utf8")).toBe(original);
+		expect(manager.drainErrors()).toEqual([
+			{
+				scope: "global",
+				error: expect.objectContaining({
+					message: expect.stringContaining(
+						`Settings ${JSON.stringify(path)}: update failed during update/validate`,
+					),
+					cause: expect.objectContaining({
+						message: "markdown must be an object; correct settings.json before saving Markdown preferences.",
+					}),
+				}),
+			},
+		]);
+	});
+
 	it("reopens the preference from the effective profile directory", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "markdown-settings-"));
 		directories.push(dir);

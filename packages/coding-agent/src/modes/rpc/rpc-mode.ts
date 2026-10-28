@@ -19,7 +19,7 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.js";
-import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
+import { flushStderr, formatSettingsError, takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import { describeRuntimeError } from "../../core/resource-loader.js";
 import { killTrackedDetachedChildren } from "../../utils/shell.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
@@ -309,6 +309,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		},
 	});
 
+	// SCRAMJET-DIVERGENCE: preference diagnostics are stderr-only, not RPC events.
+	runtimeHost.setSettingsErrorHandler((errors) => {
+		for (const error of errors) console.error(formatSettingsError(error));
+	});
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
 	});
@@ -337,7 +341,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					return runtimeHost.switchSession(sessionPath, options);
 				},
 				reload: async () => {
-					await session.reload();
+					try {
+						await session.reload();
+					} finally {
+						await runtimeHost.settleSettings();
+					}
 				},
 			},
 			shutdownHandler: () => {
@@ -680,7 +688,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			cleanup();
 		}
 		unsubscribe?.();
-		await runtimeHost.dispose();
+		try {
+			await runtimeHost.dispose();
+		} finally {
+			await flushStderr();
+		}
 		detachInput();
 		process.stdin.pause();
 		process.exit(exitCode);

@@ -5,7 +5,12 @@ import { getModel, getSupportedThinkingLevels } from "@leanandmean/ai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
-import { defaultModelPerProvider, findInitialModel, resolveCliModel } from "../src/core/model-resolver.js";
+import {
+	defaultModelPerProvider,
+	findInitialModel,
+	resolveCliModel,
+	resolveDirectoryModel,
+} from "../src/core/model-resolver.js";
 import { createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
@@ -271,6 +276,50 @@ describe("startup configured default fallback", () => {
 			}
 		} finally {
 			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("exact directory recall resolution", () => {
+	it("preserves exact slash/colon identities and checks only configured authentication", async () => {
+		const settings = SettingsManager.inMemory();
+		settings.setDefaultModelAndProvider("provider/route", "model/id:variant", "/target");
+		await settings.flush();
+		const registry = createRegistry([]);
+		const model = { ...getModel("anthropic", "claude-opus-4-8"), provider: "provider/route", id: "model/id:variant" };
+		const find = vi.spyOn(registry, "find").mockReturnValue(model);
+		const auth = vi.spyOn(registry, "hasConfiguredAuth").mockReturnValue(true);
+		const available = vi.spyOn(registry, "getAvailable");
+		expect(resolveDirectoryModel("/target", settings, registry)).toEqual({ model });
+		expect(find).toHaveBeenCalledWith("provider/route", "model/id:variant");
+		expect(auth).toHaveBeenCalledWith(model);
+		expect(available).not.toHaveBeenCalled();
+	});
+
+	it("escapes terminal controls in unavailable identity warnings without changing lookup bytes", async () => {
+		const settings = SettingsManager.inMemory();
+		const id = "missing\u001b[31m\u009b31m\n";
+		settings.setDefaultModelAndProvider("missing", id, "/target");
+		await settings.flush();
+		const registry = createRegistry([]);
+		const find = vi.spyOn(registry, "find");
+		const { warning } = resolveDirectoryModel("/target", settings, registry);
+		expect(find).toHaveBeenCalledWith("missing", id);
+		expect(warning).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+		expect(warning).toContain("\\u009b");
+		expect(settings.getDirectoryDefaultModel("/target")?.modelId).toBe(id);
+	});
+
+	it("suppresses unavailable-record warnings under either explicit model override", async () => {
+		for (const override of [{ defaultProvider: "explicit" }, { defaultModel: "explicit" }]) {
+			const settings = SettingsManager.inMemory();
+			settings.setDefaultModelAndProvider("missing", "missing", "/target");
+			await settings.flush();
+			settings.applyOverrides(override);
+			const registry = createRegistry([]);
+			const find = vi.spyOn(registry, "find");
+			expect(resolveDirectoryModel("/target", settings, registry)).toEqual({});
+			expect(find).not.toHaveBeenCalled();
 		}
 	});
 });

@@ -4,6 +4,12 @@ import { homedir } from "os";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
+import {
+	FileLastUsedModelsStorage,
+	type LastUsedModelIdentity,
+	type LastUsedModelsStorage,
+	LastUsedModelsStore,
+} from "./last-used-models.js";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -79,6 +85,8 @@ export interface Settings {
 	lastChangelogVersion?: string;
 	defaultProvider?: string;
 	defaultModel?: string;
+	// SCRAMJET-DIVERGENCE: startup selection policy does not disable directory recording.
+	startupModel?: "global" | "per-directory";
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	transport?: TransportSetting; // default: "auto"
 	steeringMode?: "all" | "one-at-a-time";
@@ -157,8 +165,10 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 export type SettingsScope = "global" | "project";
 
 export interface SettingsStorage {
-	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
+	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined, write?: boolean): void;
 }
+
+class SettingsValidationError extends Error {}
 
 export interface SettingsError {
 	scope: SettingsScope;
@@ -201,34 +211,57 @@ export class FileSettingsStorage implements SettingsStorage {
 		throw (lastError as Error) ?? new Error("Failed to acquire settings lock");
 	}
 
-	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
+	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined, write?: boolean): void {
 		const path = scope === "global" ? this.globalSettingsPath : this.projectSettingsPath;
 		const dir = dirname(path);
 
 		let release: (() => void) | undefined;
+		let failure: Error | undefined;
+		let operation = "mkdir";
 		try {
-			// Only create directory and lock if file exists or we need to write
-			const fileExists = existsSync(path);
-			if (fileExists) {
-				release = this.acquireLockSyncWithRetry(path);
-			}
-			const current = fileExists ? readFileSync(path, "utf-8") : undefined;
+			// SCRAMJET-DIVERGENCE: first creation must read the latest content under the write lock.
+			if (write) mkdirSync(dir, { recursive: true });
+			operation = "lock";
+			if (write || existsSync(path)) release = this.acquireLockSyncWithRetry(path);
+			operation = "read";
+			const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
+			operation = "update/validate";
 			const next = fn(current);
 			if (next !== undefined) {
 				// Only create directory when we actually need to write
+				operation = "mkdir";
 				if (!existsSync(dir)) {
 					mkdirSync(dir, { recursive: true });
 				}
+				operation = "lock";
 				if (!release) {
 					release = this.acquireLockSyncWithRetry(path);
 				}
+				operation = "write";
 				writeFileSync(path, next, "utf-8");
 			}
+		} catch (error) {
+			// SCRAMJET-DIVERGENCE: add storage context without replacing original failure evidence.
+			failure = new Error(
+				`Settings ${JSON.stringify(path)}: ${write ? "update" : "read"} failed during ${operation}${operation === "write" ? "; write outcome may be partially committed" : ""}`,
+				{ cause: error },
+			);
 		} finally {
 			if (release) {
-				release();
+				try {
+					release();
+				} catch (error) {
+					const unlockFailure = new Error(
+						`Settings ${JSON.stringify(path)}: unlock failed; write outcome may be committed`,
+						{ cause: error },
+					);
+					failure = failure
+						? new AggregateError([failure, unlockFailure], `${failure.message}; ${unlockFailure.message}`)
+						: unlockFailure;
+				}
 			}
 		}
+		if (failure) throw failure;
 	}
 }
 
@@ -251,6 +284,8 @@ export class InMemorySettingsStorage implements SettingsStorage {
 
 export class SettingsManager {
 	private storage: SettingsStorage;
+	private readonly recall: LastUsedModelsStore;
+	private modelOverrides: Pick<Settings, "defaultProvider" | "defaultModel" | "startupModel"> = {};
 	private globalSettings: Settings;
 	private projectSettings: Settings;
 	private settings: Settings;
@@ -270,30 +305,42 @@ export class SettingsManager {
 		globalLoadError: Error | null = null,
 		projectLoadError: Error | null = null,
 		initialErrors: SettingsError[] = [],
+		recallStorage?: LastUsedModelsStorage,
 	) {
 		this.storage = storage;
+		this.recall = new LastUsedModelsStore(recallStorage);
 		this.globalSettings = initialGlobal;
 		this.projectSettings = initialProject;
 		this.globalSettingsLoadError = globalLoadError;
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
+		this.normalizeStartupModel(this.globalSettings, "global");
+		this.normalizeStartupModel(this.projectSettings, "project");
 		this.normalizeRetrySettings(this.globalSettings, "global");
 		this.normalizeRetrySettings(this.projectSettings, "project");
 		this.normalizeViewportSettings(this.globalSettings, "global");
 		this.normalizeViewportSettings(this.projectSettings, "project");
 		this.normalizeMarkdownSettings(this.globalSettings, "global");
 		this.normalizeMarkdownSettings(this.projectSettings, "project");
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.effectiveSettings();
+	}
+
+	private effectiveSettings(): Settings {
+		return deepMergeSettings(deepMergeSettings(this.globalSettings, this.projectSettings), this.modelOverrides);
 	}
 
 	/** Create a SettingsManager that loads from files */
 	static create(cwd: string, agentDir: string = getAgentDir()): SettingsManager {
 		const storage = new FileSettingsStorage(cwd, agentDir);
-		return SettingsManager.fromStorage(storage);
+		// SCRAMJET-DIVERGENCE: custom factories never infer profile disk access.
+		return SettingsManager.fromStorage(
+			storage,
+			new FileLastUsedModelsStorage(join(agentDir, "last-used-models.json")),
+		);
 	}
 
 	/** Create a SettingsManager from an arbitrary storage backend */
-	static fromStorage(storage: SettingsStorage): SettingsManager {
+	static fromStorage(storage: SettingsStorage, recallStorage?: LastUsedModelsStorage): SettingsManager {
 		const globalLoad = SettingsManager.tryLoadFromStorage(storage, "global");
 		const projectLoad = SettingsManager.tryLoadFromStorage(storage, "project");
 		const initialErrors: SettingsError[] = [];
@@ -311,29 +358,29 @@ export class SettingsManager {
 			globalLoad.error,
 			projectLoad.error,
 			initialErrors,
+			recallStorage,
 		);
 	}
 
 	/** Create an in-memory SettingsManager (no file I/O) */
-	static inMemory(settings: Partial<Settings> = {}): SettingsManager {
+	static inMemory(settings: Partial<Settings> = {}, recallStorage?: LastUsedModelsStorage): SettingsManager {
 		const storage = new InMemorySettingsStorage();
 		const initialSettings = SettingsManager.migrateSettings(structuredClone(settings) as Record<string, unknown>);
 		storage.withLock("global", () => JSON.stringify(initialSettings, null, 2));
-		return SettingsManager.fromStorage(storage);
+		return SettingsManager.fromStorage(storage, recallStorage);
 	}
 
 	private static loadFromStorage(storage: SettingsStorage, scope: SettingsScope): Settings {
-		let content: string | undefined;
-		storage.withLock(scope, (current) => {
-			content = current;
-			return undefined;
-		});
-
-		if (!content) {
-			return {};
-		}
-		const settings = JSON.parse(content);
-		return SettingsManager.migrateSettings(settings);
+		let settings: Settings = {};
+		storage.withLock(
+			scope,
+			(current) => {
+				if (current) settings = SettingsManager.migrateSettings(JSON.parse(current));
+				return undefined;
+			},
+			false,
+		);
+		return settings;
 	}
 
 	private static tryLoadFromStorage(
@@ -343,7 +390,10 @@ export class SettingsManager {
 		try {
 			return { settings: SettingsManager.loadFromStorage(storage, scope), error: null };
 		} catch (error) {
-			return { settings: {}, error: error as Error };
+			return {
+				settings: {},
+				error: error instanceof Error ? error : new Error(`Settings (${scope}): load failed`, { cause: error }),
+			};
 		}
 	}
 
@@ -426,7 +476,8 @@ export class SettingsManager {
 	}
 
 	async reload(): Promise<void> {
-		await this.writeQueue;
+		await this.flush();
+		await this.recall.reload();
 		const globalLoad = SettingsManager.tryLoadFromStorage(this.storage, "global");
 		if (!globalLoad.error) {
 			this.globalSettings = globalLoad.settings;
@@ -450,19 +501,25 @@ export class SettingsManager {
 			this.recordError("project", projectLoad.error);
 		}
 
+		this.normalizeStartupModel(this.globalSettings, "global");
+		this.normalizeStartupModel(this.projectSettings, "project");
 		this.normalizeRetrySettings(this.globalSettings, "global");
 		this.normalizeRetrySettings(this.projectSettings, "project");
 		this.normalizeViewportSettings(this.globalSettings, "global");
 		this.normalizeViewportSettings(this.projectSettings, "project");
 		this.normalizeMarkdownSettings(this.globalSettings, "global");
 		this.normalizeMarkdownSettings(this.projectSettings, "project");
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.effectiveSettings();
 	}
 
 	/** Apply additional overrides on top of current settings */
 	applyOverrides(overrides: Partial<Settings>): void {
 		const normalized = structuredClone(overrides);
+		this.normalizeStartupModel(normalized, "global");
+		if (normalized.startupModel !== undefined) this.modelOverrides.startupModel = normalized.startupModel;
 		this.normalizeRetrySettings(normalized, "global");
+		if (normalized.defaultProvider !== undefined) this.modelOverrides.defaultProvider = normalized.defaultProvider;
+		if (normalized.defaultModel !== undefined) this.modelOverrides.defaultModel = normalized.defaultModel;
 		this.normalizeMarkdownSettings(normalized, "global");
 		this.settings = deepMergeSettings(this.settings, normalized);
 		this.normalizeViewportSettings(this.settings, "global");
@@ -491,7 +548,8 @@ export class SettingsManager {
 	}
 
 	private recordError(scope: SettingsScope, error: unknown): void {
-		const normalizedError = error instanceof Error ? error : new Error(String(error));
+		const normalizedError =
+			error instanceof Error ? error : new Error(`Settings (${scope}): operation failed`, { cause: error });
 		this.errors.push({ scope, error: normalizedError });
 	}
 
@@ -531,45 +589,53 @@ export class SettingsManager {
 		modifiedFields: Set<keyof Settings>,
 		modifiedNestedFields: Map<keyof Settings, Set<string>>,
 	): void {
-		this.storage.withLock(scope, (current) => {
-			const currentFileSettings = current
-				? SettingsManager.migrateSettings(JSON.parse(current) as Record<string, unknown>)
-				: {};
-			// SCRAMJET-DIVERGENCE: a leaf update must not replace a malformed Markdown container.
-			if (
-				modifiedFields.has("markdown") &&
-				currentFileSettings.markdown !== undefined &&
-				(!currentFileSettings.markdown ||
-					typeof currentFileSettings.markdown !== "object" ||
-					Array.isArray(currentFileSettings.markdown))
-			) {
-				throw new Error("markdown must be an object; correct settings.json before saving Markdown preferences.");
-			}
-			const mergedSettings: Settings = { ...currentFileSettings };
-			for (const field of modifiedFields) {
-				const value = snapshotSettings[field];
-				if (modifiedNestedFields.has(field) && typeof value === "object" && value !== null) {
-					const nestedModified = modifiedNestedFields.get(field)!;
-					const baseNested = (currentFileSettings[field] as Record<string, unknown>) ?? {};
-					const inMemoryNested = value as Record<string, unknown>;
-					const mergedNested = { ...baseNested };
-					for (const nestedKey of nestedModified) {
-						mergedNested[nestedKey] = inMemoryNested[nestedKey];
-					}
-					(mergedSettings as Record<string, unknown>)[field] = mergedNested;
-				} else {
-					(mergedSettings as Record<string, unknown>)[field] = value;
+		this.storage.withLock(
+			scope,
+			(current) => {
+				const currentFileSettings = current
+					? SettingsManager.migrateSettings(JSON.parse(current) as Record<string, unknown>)
+					: {};
+				// SCRAMJET-DIVERGENCE: a leaf update must not replace a malformed Markdown container.
+				if (
+					modifiedFields.has("markdown") &&
+					currentFileSettings.markdown !== undefined &&
+					(!currentFileSettings.markdown ||
+						typeof currentFileSettings.markdown !== "object" ||
+						Array.isArray(currentFileSettings.markdown))
+				) {
+					throw new SettingsValidationError(
+						"markdown must be an object; correct settings.json before saving Markdown preferences.",
+					);
 				}
-			}
+				const mergedSettings: Settings = { ...currentFileSettings };
+				for (const field of modifiedFields) {
+					const value = snapshotSettings[field];
+					if (modifiedNestedFields.has(field) && typeof value === "object" && value !== null) {
+						const nestedModified = modifiedNestedFields.get(field)!;
+						const baseNested = (currentFileSettings[field] as Record<string, unknown>) ?? {};
+						const inMemoryNested = value as Record<string, unknown>;
+						const mergedNested = { ...baseNested };
+						for (const nestedKey of nestedModified) {
+							mergedNested[nestedKey] = inMemoryNested[nestedKey];
+						}
+						(mergedSettings as Record<string, unknown>)[field] = mergedNested;
+					} else {
+						(mergedSettings as Record<string, unknown>)[field] = value;
+					}
+				}
 
-			return JSON.stringify(mergedSettings, null, 2);
-		});
+				return JSON.stringify(mergedSettings, null, 2);
+			},
+			true,
+		);
 	}
 
 	private save(): void {
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.effectiveSettings();
 
+		const modelFields = ["defaultProvider", "defaultModel"] as const;
 		if (this.globalSettingsLoadError) {
+			for (const field of modelFields) this.modifiedFields.delete(field);
 			// SCRAMJET-DIVERGENCE: startup drains load errors, so every blocked save needs its own diagnostic.
 			this.recordError("global", this.globalSettingsLoadError);
 			return;
@@ -578,6 +644,8 @@ export class SettingsManager {
 		const snapshotGlobalSettings = structuredClone(this.globalSettings);
 		const modifiedFields = new Set(this.modifiedFields);
 		const modifiedNestedFields = this.cloneModifiedNestedFields(this.modifiedNestedFields);
+		// SCRAMJET-DIVERGENCE: model selections are operation-local, never replayed by unrelated saves.
+		for (const field of modelFields) this.modifiedFields.delete(field);
 
 		this.enqueueWrite("global", () => {
 			this.persistScopedSettings("global", snapshotGlobalSettings, modifiedFields, modifiedNestedFields);
@@ -586,7 +654,7 @@ export class SettingsManager {
 
 	private saveProjectSettings(settings: Settings): void {
 		this.projectSettings = structuredClone(settings);
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.effectiveSettings();
 
 		if (this.projectSettingsLoadError) {
 			return;
@@ -602,10 +670,14 @@ export class SettingsManager {
 
 	async flush(): Promise<void> {
 		await this.writeQueue;
+		await this.recall.flush();
 	}
 
 	drainErrors(): SettingsError[] {
-		const drained = [...this.errors];
+		const drained = [
+			...this.errors,
+			...this.recall.drainErrors().map((error) => ({ scope: "global" as const, error })),
+		];
 		this.errors = [];
 		return drained;
 	}
@@ -654,12 +726,54 @@ export class SettingsManager {
 		this.save();
 	}
 
-	setDefaultModelAndProvider(provider: string, modelId: string): void {
+	private normalizeStartupModel(settings: Partial<Settings>, scope: SettingsScope): void {
+		if (
+			settings.startupModel !== undefined &&
+			settings.startupModel !== "global" &&
+			settings.startupModel !== "per-directory"
+		) {
+			delete settings.startupModel;
+			this.recordError(
+				scope,
+				new Error('startupModel must be "global" or "per-directory"; ignoring this scope\'s value.'),
+			);
+		}
+	}
+
+	getStartupModel(): "global" | "per-directory" {
+		return this.settings.startupModel ?? "per-directory";
+	}
+
+	setStartupModel(mode: "global" | "per-directory"): void {
+		this.globalSettings.startupModel = mode;
+		this.markModified("startupModel");
+		this.save();
+	}
+
+	getDirectoryDefaultModel(cwd: string): LastUsedModelIdentity | undefined {
+		if (
+			this.getStartupModel() === "global" ||
+			this.projectSettings.defaultProvider !== undefined ||
+			this.projectSettings.defaultModel !== undefined ||
+			this.modelOverrides.defaultProvider !== undefined ||
+			this.modelOverrides.defaultModel !== undefined
+		)
+			return undefined;
+		return this.recall.get(cwd);
+	}
+
+	setDefaultModelAndProvider(provider: string, modelId: string, cwd?: string): void {
 		this.globalSettings.defaultProvider = provider;
 		this.globalSettings.defaultModel = modelId;
 		this.markModified("defaultProvider");
 		this.markModified("defaultModel");
 		this.save();
+		if (cwd !== undefined) {
+			const globalAttempt = this.writeQueue;
+			this.recall.set(cwd, { provider, modelId }, globalAttempt);
+			const recallAttempt = this.recall.flush();
+			this.writeQueue = globalAttempt.then(() => recallAttempt);
+		}
 	}
 
 	getSteeringMode(): "all" | "one-at-a-time" {

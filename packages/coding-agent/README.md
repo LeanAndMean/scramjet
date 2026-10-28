@@ -289,7 +289,9 @@ Use `/settings` to modify common options, or edit JSON files directly:
 | `~/.scramjet/agent/settings.json` | Global (all projects) |
 | `.scramjet/settings.json` | Project (overrides global) |
 
-See [docs/settings.md](docs/settings.md) for all options.
+Deliberate model selections remember the exact working directory in one profile-global `~/.scramjet/agent/last-used-models.json`, separate from configuration; no recall files are created in repositories. Fresh launches recall that directory's model, while unseen directories use the global default. Choose **Startup model: Global** in `/settings` to use global defaults instead; **Per-directory** is the default. Both modes continue recording deliberate directory choices, so switching back uses the latest choices; this is not a recording/privacy opt-out and does not switch the live model. Explicit models, authenticated restoration and project/programmatic defaults take priority; `/new` inherits the live model. Unavailable remembered choices warn and fall back without being erased. Startup never teaches memory, and thinking preferences remain global.
+
+See [docs/settings.md](docs/settings.md) for all options, scoped-model policy, metadata privacy/growth and independent-write/error limits; SDK callers can [opt out of preference persistence](docs/sdk.md#model-preference-persistence).
 
 ### Telemetry and update checks
 

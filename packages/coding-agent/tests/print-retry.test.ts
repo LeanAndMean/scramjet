@@ -7,7 +7,11 @@ import { runPrintMode } from "../src/modes/print-mode.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
 
 const output = vi.hoisted(() => ({ write: vi.fn(), flush: vi.fn(async () => {}) }));
-vi.mock("../src/core/output-guard.js", () => ({ writeRawStdout: output.write, flushRawStdout: output.flush }));
+vi.mock("../src/core/output-guard.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/core/output-guard.js")>()),
+	writeRawStdout: output.write,
+	flushRawStdout: output.flush,
+}));
 vi.mock("../src/utils/tools-manager.js", () => ({ ensureTool: vi.fn(async () => undefined) }));
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -39,6 +43,7 @@ function fixture(outcomes: (RunSettlement | undefined | Error)[]) {
 	const runtime = {
 		session,
 		setRebindSession: vi.fn(),
+		setSettingsErrorHandler: vi.fn(),
 		dispose: vi.fn(async () => {}),
 	} as unknown as AgentSessionRuntime;
 	return { runtime, session };

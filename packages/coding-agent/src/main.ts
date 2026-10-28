@@ -30,8 +30,8 @@ import { exportFromFile } from "./core/export-html/index.js";
 import type { ExtensionAPI, ExtensionFactory } from "./core/extensions/types.js";
 import { KeybindingsManager } from "./core/keybindings.js";
 import { type ModelRegistry, validateInvocationModelDefinition } from "./core/model-registry.js";
-import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
-import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
+import { resolveCliModel, resolveDirectoryModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
+import { formatSettingsError, restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import { isRequiredBuiltinInitError, renderRequiredBuiltinInitCause } from "./core/resource-loader.js";
 import type { CreateAgentSessionOptions } from "./core/sdk.js";
 import {
@@ -79,7 +79,7 @@ function collectSettingsDiagnostics(
 ): AgentSessionRuntimeDiagnostic[] {
 	return settingsManager.drainErrors().map(({ scope, error }) => ({
 		type: "warning",
-		message: `(${context}, ${scope} settings) ${error.message}`,
+		message: `(${context}) ${formatSettingsError({ scope, error })}`,
 	}));
 }
 
@@ -357,6 +357,7 @@ export function buildSessionOptions(
 	settingsManager: SettingsManager,
 	inherited?: { model: Model<any>; thinkingLevel: ThinkingLevel },
 	invocationModel?: Model<any>,
+	cwd?: string,
 ): {
 	options: CreateAgentSessionOptions;
 	cliThinkingFromModel: boolean;
@@ -406,10 +407,14 @@ export function buildSessionOptions(
 	}
 
 	if (!options.model && scopedModels.length > 0 && !hasExistingSession) {
-		// Check if saved default is in scoped models - use it if so, otherwise first scoped model
+		// SCRAMJET-DIVERGENCE: Valid out-of-scope recall selects the first scope member, not the global default.
+		const recalled = cwd === undefined ? {} : resolveDirectoryModel(cwd, settingsManager, modelRegistry);
+		if (recalled.warning) diagnostics.push({ type: "warning", message: recalled.warning });
 		const savedProvider = settingsManager.getDefaultProvider();
 		const savedModelId = settingsManager.getDefaultModel();
-		const savedModel = savedProvider && savedModelId ? modelRegistry.find(savedProvider, savedModelId) : undefined;
+		const savedModel =
+			recalled.model ??
+			(savedProvider && savedModelId ? modelRegistry.find(savedProvider, savedModelId) : undefined);
 		const savedInScope = savedModel ? scopedModels.find((sm) => modelsAreEqual(sm.model, savedModel)) : undefined;
 
 		if (savedInScope) {
@@ -677,6 +682,7 @@ export async function main(args: string[], options?: MainOptions) {
 			settingsManager,
 			inherited, // SCRAMJET-DIVERGENCE: pass inherited model/thinkingLevel (issue 186)
 			invocationModel,
+			cwd,
 		);
 		diagnostics.push(...sessionOptionDiagnostics);
 
