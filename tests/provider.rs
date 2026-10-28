@@ -150,12 +150,12 @@ fn provider_capture_read() {
     assert_eq!(report["version"], 1);
     assert_eq!(report["outcome"], "Unsupported");
     assert_eq!(report["durable"], true);
-    assert_eq!(report["terminal_observed"], false);
-    assert!(report["usage"].is_null());
+    assert_eq!(report["terminal_observed"], true);
+    assert_eq!(report["usage"]["total_tokens"], 15);
     assert_eq!(report["diagnostics_complete"], true);
     assert_eq!(report["consumed"], 1);
-    assert_eq!(report["unresolved_remote"], 1);
-    assert_eq!(report["unknown_usage"], 1);
+    assert_eq!(report["unresolved_remote"], 0);
+    assert_eq!(report["unknown_usage"], 0);
     assert_eq!(report["local_active"], 0);
     assert_eq!(report["failure"]["field"], "response.output.item");
     let item = &report["failure"]["final_difference"]["items"][0];
@@ -339,7 +339,7 @@ fn provider_case() {
                 "trailing"|"missing-terminal"|"bad-identity" => {assert_ne!(response.outcome,Outcome::Success);assert!(response.envelope.is_none());assert!(response.remote_terminal.is_none());},
                 "wire-limit"|"frame-limit"|"output-limit" => {assert_eq!(response.outcome,Outcome::ResourceLimit);assert!(response.envelope.is_none());},
                 "unsupported" => {assert_eq!(response.outcome,Outcome::Unsupported);assert!(response.envelope.is_none());},
-                "diagnostic" => {assert_eq!(response.outcome,Outcome::Unsupported);assert!(response.envelope.is_none());assert!(response.remote_terminal.is_none());assert!(response.usage.is_none());let difference=response.failure.unwrap().final_difference.unwrap();assert!(difference.items[0].unwrap().other_fields);assert_eq!(difference.items[0].unwrap().content.unwrap().first_part.unwrap().fields,8);},
+                "diagnostic" => {assert_eq!(response.outcome,Outcome::Unsupported);assert!(response.envelope.is_none());assert_eq!(response.remote_terminal.as_ref().unwrap().response_id,"resp_1");assert!(response.usage.as_ref().unwrap().complete());let difference=response.failure.unwrap().final_difference.unwrap();assert!(difference.items[0].unwrap().other_fields);assert_eq!(difference.items[0].unwrap().content.unwrap().first_part.unwrap().fields,8);},
                 status => {assert_eq!(response.outcome,Outcome::HttpRejected(status.parse().unwrap()));assert!(response.envelope.is_none());assert!(response.remote_terminal.is_none());}
             }
             drop(handle);
@@ -354,7 +354,7 @@ fn provider_case() {
             } else if case=="missing-terminal" {assert!(capture.body_eof);assert!(!capture.parser_accepted);}
             else if matches!(case.as_str(),"cancel"|"deadline") {assert!(!capture.body_eof);assert!(capture.bytes.is_empty());}
             else if matches!(case.as_str(),"diagnostic"|"trailing"|"bad-identity"|"frame-limit") {
-                assert_eq!(capture.body_eof,case=="trailing");assert!(!capture.parser_accepted);assert_ne!(scramjet_rs::replay_provider_data(&capture.bytes).outcome,Outcome::Success);
+                assert_eq!(capture.body_eof,matches!(case.as_str(),"trailing"|"diagnostic"));assert!(!capture.parser_accepted);assert_ne!(scramjet_rs::replay_provider_data(&capture.bytes).outcome,Outcome::Success);
             }
         }
         let history=runtime.provider_history().unwrap();

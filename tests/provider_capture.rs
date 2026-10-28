@@ -94,7 +94,7 @@ fn private_raw_capture_and_fresh_process_replay() {
         assert_eq!(report["execution_authority"], false);
         assert_eq!(report["settlement_authority"], false);
         assert_eq!(report["parser_accepted"], case != "disagreement");
-        assert_eq!(report["full_stream"], case != "disagreement");
+        assert_eq!(report["full_stream"], true);
         assert!(!String::from_utf8_lossy(&replay.stdout).contains("synthetic-private"));
         assert!(!String::from_utf8_lossy(&replay.stdout).contains("resp_1"));
         assert_eq!(
@@ -208,7 +208,9 @@ fn raw_capture_child() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(ledger["terminal"].is_null(), case == "disagreement");
+    assert_eq!(ledger["terminal"]["response_id"], "resp_1");
+    assert_eq!(ledger["terminal"]["status"], "completed");
+    assert_eq!(ledger["usage"]["total_tokens"], 15);
 }
 #[test]
 fn preopen_refuses_before_reservation_and_replay_refuses_unsafe_files() {

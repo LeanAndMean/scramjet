@@ -170,10 +170,11 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         runtime.shutdown().await;
         task.await.unwrap();
 
-        for (encrypted_bytes, id_bytes, expected) in [(14000,1000,Outcome::Success),(15000,1500,Outcome::ResourceLimit)] {
+        for (encrypted_bytes, id_bytes, refused, expected) in [(14000,1000,false,Outcome::Success),(15000,1500,false,Outcome::ResourceLimit),(14000,1000,true,Outcome::Unsupported),(15000,1500,true,Outcome::ResourceLimit)] {
             let id = "r".repeat(id_bytes);
             let done = serde_json::json!({"type":"reasoning","id":"rs","summary":[],"encrypted_content":"x".repeat(encrypted_bytes)});
-            let terminal = serde_json::json!({"type":"reasoning","id":"rs","summary":[]});
+            let mut terminal = serde_json::json!({"type":"reasoning","id":"rs","summary":[]});
+            if refused {terminal["opaque"]=serde_json::json!(true);}
             let events = vec![
                 serde_json::json!({"type":"response.created","response":{"id":id,"status":"in_progress","output":[]}}),
                 serde_json::json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs","summary":[]}}),
@@ -184,7 +185,7 @@ fn bounded_maximum_request_frame_and_history_allocations() {
             let base = reset();
             let replay = scramjet_rs::replay_provider_data(&body);
             assert_eq!(replay.outcome,expected);
-            measure("canonical-done-enrichment-success-or-refusal",base,1048576);
+            measure(if refused {"canonical-done-with-replay-refusal"}else{"canonical-done-enrichment-success-or-refusal"},base,1048576);
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let path = storage("provider-replay-meter");
@@ -249,13 +250,13 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         assert_eq!(std::str::from_utf8(&body).unwrap().rsplit("\r\n\r\n").nth(1).unwrap().len()+4,scramjet_rs::PROVIDER_FRAME_BYTES);
         assert!(body.len() < 131072);
         let mut padded = Vec::with_capacity(130000);
+        padded.extend_from_slice(&body);
         let mut remaining = 130000 - body.len();
         while remaining > 0 {
             let size = remaining.min(scramjet_rs::PROVIDER_FRAME_BYTES);
             let size = if remaining > size && remaining - size < 3 { size - 3 } else { size };
             padded.push(b':'); padded.extend(std::iter::repeat_n(b'x',size-3)); padded.extend_from_slice(b"\n\n"); remaining -= size;
         }
-        padded.extend_from_slice(&body);
         let prepared = demo::capture::prepare(&path.join("capture"),false).unwrap();
         let (endpoint, task) = server::start(padded).await;
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -265,9 +266,12 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         let (mut handle, capture_receiver) = runtime.submit_provider_captured(ProviderRequest::new(&[ProviderInput::User("synthetic".into())], &[]).unwrap()).unwrap();
         let mut response = handle.result().await.unwrap();
         assert_eq!(response.outcome, Outcome::Unsupported);
-        assert!(response.envelope.is_none() && response.remote_terminal.is_none() && response.usage.is_none());
+        assert!(response.envelope.is_none());
+        assert_eq!(response.remote_terminal.as_ref().unwrap().response_id,"resp_1");
+        assert!(response.usage.as_ref().unwrap().complete());
         let history = runtime.provider_history().unwrap();
-        assert_eq!(history.unknown_usage(), 1);
+        assert_eq!(history.unknown_usage(), 0);
+        assert_eq!(history.unresolved_remote(), 0);
         for item in response.failure.as_ref().unwrap().final_difference.as_ref().unwrap().items.iter().flatten() {
             let part = item.content.unwrap().first_part.unwrap();
             assert_eq!(part.fields, 2);
@@ -282,13 +286,13 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         assert_eq!(capture.bytes.len(),130000);
         assert_eq!(capture.bytes.capacity(),scramjet_rs::PROVIDER_CAPTURE_BYTES);
         let pointer = capture.bytes.as_ptr() as usize;
-        assert!(!capture.body_eof); assert!(!capture.parser_accepted);
+        assert!(capture.body_eof); assert!(!capture.parser_accepted);
         tokio::task::spawn_blocking(move || {assert_eq!(capture.bytes.as_ptr() as usize,pointer);demo::capture::persist(prepared,capture,report).unwrap();}).await.unwrap();
         println!("capture-storage: raw={} report={} provenance={}",std::fs::metadata(path.join("capture/response.data")).unwrap().len(),std::fs::metadata(path.join("capture/diagnostic.json")).unwrap().len(),std::fs::metadata(path.join("capture/provenance.json")).unwrap().len());
         measure("maximum-layout-diagnostic-transport", base, 1048576);
         let replay_base = reset();
         let replay = tokio::task::spawn_blocking({let artifact=path.join("capture");move || demo::capture::replay(&artifact).unwrap()}).await.unwrap();
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&replay).unwrap()["full_stream"],false);
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&replay).unwrap()["full_stream"],true);
         measure("maximum-capture-read-replay",replay_base,1048576);
         drop(replay);
         let failure = response.failure.as_mut().unwrap();

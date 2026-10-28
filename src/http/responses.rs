@@ -481,12 +481,13 @@ fn validate_item(item: &Value, complete: bool) -> Result<(), Outcome> {
     Ok(())
 }
 
-fn compare_parts(done: &Value, terminal: &Value, text: bool) -> Result<(), Outcome> {
+fn compare_parts(done: &Value, terminal: &Value, text: bool) -> Result<bool, Outcome> {
     let done = done.as_array().ok_or(Outcome::Framing)?;
     let terminal = terminal.as_array().ok_or(Outcome::Framing)?;
     if done.len() != terminal.len() {
         return Err(Outcome::Framing);
     }
+    let mut replay_refused = false;
     for (done, terminal) in done.iter().zip(terminal) {
         for key in ["type", "text"] {
             if done[key] != terminal[key] {
@@ -505,14 +506,14 @@ fn compare_parts(done: &Value, terminal: &Value, text: bool) -> Result<(), Outco
                 continue;
             }
             if done.get(key) != terminal.get(key) {
-                return Err(Outcome::Unsupported);
+                replay_refused = true;
             }
         }
     }
-    Ok(())
+    Ok(replay_refused)
 }
 
-fn select_replay(done: &Value, terminal: &Value) -> Result<bool, Outcome> {
+fn select_replay(done: &Value, terminal: &Value) -> Result<(bool, bool), Outcome> {
     validate_item(done, true)?;
     validate_item(terminal, true)?;
     let kind = string(done, "type")?;
@@ -527,13 +528,14 @@ fn select_replay(done: &Value, terminal: &Value) -> Result<bool, Outcome> {
             return Err(Outcome::Framing);
         }
     }
+    let mut replay_refused = false;
     let continuation = match kind {
         "message" => {
-            compare_parts(&done["content"], &terminal["content"], true)?;
+            replay_refused |= compare_parts(&done["content"], &terminal["content"], true)?;
             Some("phase")
         }
         "reasoning" => {
-            compare_parts(&done["summary"], &terminal["summary"], false)?;
+            replay_refused |= compare_parts(&done["summary"], &terminal["summary"], false)?;
             Some("encrypted_content")
         }
         "function_call" => None,
@@ -554,7 +556,7 @@ fn select_replay(done: &Value, terminal: &Value) -> Result<bool, Outcome> {
             continue;
         }
         if done.get(key) != terminal.get(key) {
-            return Err(Outcome::Unsupported);
+            replay_refused = true;
         }
     }
     let mut use_terminal = false;
@@ -563,15 +565,15 @@ fn select_replay(done: &Value, terminal: &Value) -> Result<bool, Outcome> {
         let terminal_value = terminal.get(key).filter(|v| !v.is_null());
         match (done_value, terminal_value) {
             (Some(a), Some(b)) if a != b => return Err(Outcome::Framing),
-            (None, Some(_)) if kind == "reasoning" => return Err(Outcome::Unsupported),
+            (None, Some(_)) if kind == "reasoning" => replay_refused = true,
             (None, Some(_)) => use_terminal = true,
             _ => {}
         }
         if kind == "reasoning" && done_value.is_none() {
-            return Err(Outcome::Unsupported);
+            replay_refused = true;
         }
     }
-    Ok(use_terminal)
+    Ok((use_terminal, replay_refused))
 }
 
 struct Part {
@@ -588,6 +590,7 @@ struct ItemState {
     arguments_done: bool,
 }
 pub(crate) struct ParsedResponse {
+    pub(crate) refusal: Option<ProviderFailure>,
     pub(crate) envelope: Option<ProviderEnvelope>,
     pub(crate) usage: Option<ProviderUsage>,
     pub(crate) response_id: String,
@@ -602,6 +605,7 @@ pub(crate) struct ResponsesParser {
     sequence: Option<usize>,
     items: Vec<ItemState>,
     terminal: Option<Value>,
+    replay_refusal: Option<ProviderFailure>,
     done_marker: bool,
     output_bytes: usize,
     provisional_bytes: usize,
@@ -617,6 +621,7 @@ impl ResponsesParser {
             sequence: None,
             items: Vec::with_capacity(PROVIDER_OUTPUT_ITEMS),
             terminal: None,
+            replay_refusal: None,
             done_marker: false,
             output_bytes: 0,
             provisional_bytes: 0,
@@ -1061,7 +1066,7 @@ impl ResponsesParser {
                         .iter()
                         .zip(output)
                         .zip(&selection)
-                        .map(|((state, item), terminal)| {
+                        .map(|((state, item), (terminal, _))| {
                             if *terminal {
                                 item
                             } else {
@@ -1073,7 +1078,14 @@ impl ResponsesParser {
                         &json!({"response_id":self.response_id,"items":selected}),
                         PROVIDER_ENVELOPE_BYTES,
                     )?;
-                    for (state, terminal) in self.items.iter_mut().zip(selection) {
+                    if selection.iter().any(|(_, refused)| *refused) {
+                        for (i, (state, item)) in self.items.iter().zip(output).enumerate() {
+                            difference.item(i, state.done.as_ref(), Some(item));
+                        }
+                        self.failure.final_difference = Some(Box::new(difference));
+                        self.replay_refusal = Some(self.failure.clone());
+                    }
+                    for (state, (terminal, _)) in self.items.iter_mut().zip(selection) {
                         state.replay_terminal = terminal;
                     }
                 }
@@ -1127,22 +1139,24 @@ impl ResponsesParser {
         let status = string(&response, "status")?.to_owned();
         let response_id = self.response_id.unwrap();
         let usage = usage(&response)?;
-        let envelope = (status == "completed").then(|| ProviderEnvelope {
-            response_id: response_id.clone(),
-            items: self
-                .items
-                .into_iter()
-                .enumerate()
-                .map(|(index, state)| ProviderItem {
-                    wire: if state.replay_terminal {
-                        response["output"][index].clone()
-                    } else {
-                        state.done.unwrap()
-                    },
-                })
-                .collect(),
-        });
+        let envelope =
+            (status == "completed" && self.replay_refusal.is_none()).then(|| ProviderEnvelope {
+                response_id: response_id.clone(),
+                items: self
+                    .items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, state)| ProviderItem {
+                        wire: if state.replay_terminal {
+                            response["output"][index].clone()
+                        } else {
+                            state.done.unwrap()
+                        },
+                    })
+                    .collect(),
+            });
         Ok(ParsedResponse {
+            refusal: self.replay_refusal,
             envelope,
             usage,
             response_id,

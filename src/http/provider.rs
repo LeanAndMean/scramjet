@@ -238,10 +238,14 @@ pub(crate) async fn attempt(
         parsed = Some(parser.complete().inspect_err(|_| {
             failure.stage = ProviderFailureStage::MissingTerminal;
         })?);
+        let completed = parsed.as_ref().unwrap();
         if let Some(capture) = &mut capture {
-            capture.parser_accepted = true;
+            capture.parser_accepted = completed.refusal.is_none();
         }
-        Ok(if parsed.as_ref().unwrap().envelope.is_some() {
+        Ok(if let Some(refusal) = &completed.refusal {
+            failure = refusal.clone();
+            Outcome::Unsupported
+        } else if completed.envelope.is_some() {
             Outcome::Success
         } else {
             Outcome::Incomplete

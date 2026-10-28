@@ -4,15 +4,20 @@ use crate::{PROVIDER_ITEM_FIELDS, PROVIDER_PART_FIELDS, ProviderJsonKind};
 
 fn rejection(events: &[Value], crlf: bool) -> ProviderFailure {
     let mut parser = ResponsesParser::new();
-    assert!(matches!(
-        fixture::wire(events, crlf)
-            .into_iter()
-            .find_map(|b| parser.byte(b).err()),
-        Some(Outcome::Framing | Outcome::Unsupported)
-    ));
-    assert!(parser.terminal.is_none());
-    let failure = parser.failure.clone();
-    assert!(parser.complete().is_err());
+    let error = fixture::wire(events, crlf)
+        .into_iter()
+        .find_map(|b| parser.byte(b).err());
+    let failure = if let Some(error) = error {
+        assert!(matches!(error, Outcome::Framing | Outcome::Unsupported));
+        assert!(parser.terminal.is_none());
+        let failure = parser.failure.clone();
+        assert!(parser.complete().is_err());
+        failure
+    } else {
+        let parsed = parser.complete().unwrap();
+        assert!(parsed.envelope.is_none());
+        parsed.refusal.unwrap()
+    };
     let report = serde_json::to_string(&failure).unwrap();
     assert!(!report.contains("synthetic-private"));
     assert!(!report.contains("msg_1"));
@@ -155,12 +160,274 @@ fn fixed_differences_bound_nested_and_many_part_evidence_without_raw_payloads() 
     assert!(std::mem::size_of::<ProviderFailure>() < 4096);
 }
 
-fn parse(bytes: &[u8]) -> Result<ParsedResponse, Outcome> {
+fn qualified(bytes: &[u8]) -> Result<ParsedResponse, Outcome> {
     let mut parser = ResponsesParser::new();
     for byte in bytes {
         parser.byte(*byte)?;
     }
     parser.complete()
+}
+
+#[test]
+fn replay_refusal_qualifies_all_material_before_retaining_facts() {
+    let mut good = fixture::continuation_events("hé🙂\\\"\n", "{\"x\":1}", "opaque");
+    good.last_mut().unwrap()["response"]["output"][0]["unknown"] = json!({"nested":true});
+    for crlf in [false, true] {
+        let wire = fixture::wire(&good, crlf);
+        for split in 0..=wire.len() {
+            let mut parser = ResponsesParser::new();
+            for chunk in [&wire[..split], &wire[split..]] {
+                for byte in chunk {
+                    parser.byte(*byte).unwrap();
+                }
+            }
+            let parsed = parser.complete().unwrap();
+            assert!(parsed.envelope.is_none());
+            assert!(parsed.refusal.is_some());
+            assert_eq!(parsed.response_id, "resp_1");
+            assert!(parsed.usage.unwrap().complete());
+        }
+    }
+    for (index, key, value) in [
+        (0, "encrypted_content", json!("conflict")),
+        (
+            0,
+            "summary",
+            json!([{ "type":"summary_text","text":"changed" }]),
+        ),
+        (
+            1,
+            "summary",
+            json!([{ "type":"summary_text","text":"changed" }]),
+        ),
+        (1, "id", json!("foreign")),
+        (2, "arguments", json!("{\"x\": 1}")),
+        (2, "call_id", json!("foreign")),
+        (2, "name", json!("foreign")),
+        (2, "status", json!("in_progress")),
+        (
+            3,
+            "content",
+            json!([{ "type":"output_text","text":"changed" }]),
+        ),
+        (3, "role", json!("user")),
+        (3, "status", json!("incomplete")),
+    ] {
+        let mut events = good.clone();
+        events.last_mut().unwrap()["response"]["output"][index][key] = value;
+        assert!(
+            matches!(
+                qualified(&fixture::wire(&events, false)),
+                Err(Outcome::Framing)
+            ),
+            "{index}/{key}"
+        );
+    }
+    let mut events = good.clone();
+    events
+        .iter_mut()
+        .find(|e| e["type"] == "response.output_item.done" && e["output_index"] == 3)
+        .unwrap()["item"]["phase"] = json!("commentary");
+    assert!(matches!(
+        qualified(&fixture::wire(&events, false)),
+        Err(Outcome::Framing)
+    ));
+    for (key, value) in [
+        ("id", json!("foreign")),
+        ("status", json!("failed")),
+        ("output", json!([])),
+        ("error", json!({"message":"no"})),
+        (
+            "usage",
+            json!({"input_tokens":10,"output_tokens":5,"total_tokens":14}),
+        ),
+        (
+            "usage",
+            json!({"input_tokens":u64::MAX,"output_tokens":1,"total_tokens":u64::MAX}),
+        ),
+        (
+            "usage",
+            json!({"input_tokens":10,"input_tokens_details":{"cached_tokens":11}}),
+        ),
+        (
+            "usage",
+            json!({"output_tokens":5,"output_tokens_details":{"reasoning_tokens":6}}),
+        ),
+        ("usage", json!({"input_tokens":"10"})),
+    ] {
+        let mut events = good.clone();
+        events.last_mut().unwrap()["response"][key] = value;
+        assert!(
+            matches!(
+                qualified(&fixture::wire(&events, false)),
+                Err(Outcome::Framing)
+            ),
+            "{key}"
+        );
+    }
+    let mut events = good.clone();
+    events[0]["response"]["model"] = json!("one");
+    events.last_mut().unwrap()["response"]["model"] = json!("two");
+    assert!(matches!(
+        qualified(&fixture::wire(&events, false)),
+        Err(Outcome::Framing)
+    ));
+    let mut events = good.clone();
+    events.retain(|e| !(e["type"] == "response.output_item.done" && e["output_index"] == 3));
+    assert!(matches!(
+        qualified(&fixture::wire(&events, false)),
+        Err(Outcome::Framing)
+    ));
+    let mut events = good.clone();
+    events.last_mut().unwrap()["response"]["output"]
+        .as_array_mut()
+        .unwrap()
+        .swap(2, 3);
+    assert!(matches!(
+        qualified(&fixture::wire(&events, false)),
+        Err(Outcome::Framing)
+    ));
+    for usage in [
+        Value::Null,
+        json!({"input_tokens":10}),
+        json!({"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2}}),
+    ] {
+        let mut events = good.clone();
+        events.last_mut().unwrap()["response"]["usage"] = usage.clone();
+        let parsed = qualified(&fixture::wire(&events, false)).unwrap();
+        assert!(parsed.refusal.is_some() && parsed.envelope.is_none());
+        assert_eq!(parsed.usage, super::usage(&json!({"usage":usage})).unwrap());
+    }
+}
+
+#[test]
+fn provisional_refusal_requires_clean_framing_and_keeps_original_diagnostic() {
+    let events = fixture::disagreement_events();
+    for crlf in [false, true] {
+        let mut wire = fixture::wire(&events, crlf);
+        let refusal = qualified(&wire).unwrap().refusal.unwrap();
+        wire.extend_from_slice(if crlf {
+            b": legal\r\n\r\ndata: [DONE]\r\n\r\n"
+        } else {
+            b": legal\n\ndata: [DONE]\n\n"
+        });
+        let parsed = qualified(&wire).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed.refusal.unwrap()).unwrap(),
+            serde_json::to_value(&refusal).unwrap()
+        );
+        for trailing in [b"x".as_slice(), b"data: [DONE]\n\n", b": comment\n\n"] {
+            let mut invalid = wire.clone();
+            invalid.extend_from_slice(trailing);
+            assert!(matches!(qualified(&invalid), Err(Outcome::Framing)));
+        }
+    }
+    for trailing in [
+        b"x".as_slice(),
+        b"data: {}\n\n",
+        b"data: [DONE]",
+        b": unfinished",
+    ] {
+        let mut wire = fixture::wire(&events, false);
+        wire.extend_from_slice(trailing);
+        assert!(matches!(
+            qualified(&wire),
+            Err(Outcome::Framing | Outcome::Incomplete)
+        ));
+    }
+    let mut duplicate = events.clone();
+    duplicate.push(events.last().unwrap().clone());
+    assert!(matches!(
+        qualified(&fixture::wire(&duplicate, false)),
+        Err(Outcome::Framing)
+    ));
+    let mut wire = fixture::wire(&events, false);
+    wire.extend_from_slice(&vec![b':'; PROVIDER_FRAME_BYTES + 1]);
+    assert!(matches!(qualified(&wire), Err(Outcome::ResourceLimit)));
+}
+
+#[test]
+fn replay_refusal_cannot_mask_whole_source_budget_or_later_part_contradiction() {
+    let mut events = fixture::text_events("x", fixture::known_usage());
+    events[7]["item"]["content"][0]["unknown"] = json!(true);
+    events.last_mut().unwrap()["response"]["output"][0]["content"][0]["text"] = json!("changed");
+    assert!(matches!(
+        qualified(&fixture::wire(&events, false)),
+        Err(Outcome::Framing)
+    ));
+    assert_eq!(
+        compare_parts(
+            &json!([{ "type":"output_text","text":"a","unknown":true},{"type":"output_text","text":"b"}]),
+            &json!([{ "type":"output_text","text":"a"},{"type":"output_text","text":"changed"}]),
+            true
+        ),
+        Err(Outcome::Framing)
+    );
+    let id = "r".repeat(1500);
+    let events = vec![
+        json!({"type":"response.created","response":{"id":id,"status":"in_progress","output":[]}}),
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"rs","type":"reasoning","summary":[]}}),
+        json!({"type":"response.output_item.done","output_index":0,"item":{"id":"rs","type":"reasoning","summary":[],"encrypted_content":"x".repeat(15000)}}),
+        json!({"type":"response.completed","response":{"id":id,"status":"completed","output":[{"id":"rs","type":"reasoning","summary":[],"unknown":true}],"usage":fixture::known_usage()}}),
+    ];
+    assert!(matches!(
+        qualified(&fixture::wire(&events, false)),
+        Err(Outcome::ResourceLimit)
+    ));
+    let mut mixed = fixture::continuation_events(&"t".repeat(1000), "{}", &"x".repeat(7000));
+    let response_id = "r".repeat(2000);
+    mixed[0]["response"]["id"] = json!(response_id);
+    let response = &mut mixed.last_mut().unwrap()["response"];
+    response["id"] = json!(response_id);
+    for index in [0, 1] {
+        response["output"][index]
+            .as_object_mut()
+            .unwrap()
+            .remove("encrypted_content");
+    }
+    response["output"][0]["unknown"] = json!(true);
+    assert!(matches!(
+        qualified(&fixture::wire(&mixed, false)),
+        Err(Outcome::ResourceLimit)
+    ));
+    for encryption in [None, Some(Value::Null)] {
+        let mut events = fixture::continuation_events("text", "{}", "opaque");
+        let done = events
+            .iter_mut()
+            .find(|e| e["type"] == "response.output_item.done" && e["output_index"] == 0)
+            .unwrap();
+        if let Some(value) = encryption {
+            done["item"]["encrypted_content"] = value;
+        } else {
+            done["item"]
+                .as_object_mut()
+                .unwrap()
+                .remove("encrypted_content");
+        }
+        let parsed = qualified(&fixture::wire(&events, false)).unwrap();
+        assert!(parsed.refusal.is_some() && parsed.envelope.is_none());
+        assert!(parsed.usage.unwrap().complete());
+        events.last_mut().unwrap()["response"]["output"][0]["encrypted_content"] = Value::Null;
+        assert!(
+            qualified(&fixture::wire(&events, false))
+                .unwrap()
+                .refusal
+                .is_some()
+        );
+    }
+}
+
+fn parse(bytes: &[u8]) -> Result<ParsedResponse, Outcome> {
+    let mut parser = ResponsesParser::new();
+    for byte in bytes {
+        parser.byte(*byte)?;
+    }
+    let parsed = parser.complete()?;
+    if parsed.refusal.is_some() {
+        Err(Outcome::Unsupported)
+    } else {
+        Ok(parsed)
+    }
 }
 #[test]
 fn text_and_call_roundtrip_every_split_and_newline() {

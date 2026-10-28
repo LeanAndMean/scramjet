@@ -17,6 +17,11 @@ fn provider_authority_boundaries() {
         "freeze-unknown",
         "retained-unknown",
         "retained-known",
+        "refused-cancel-settlement",
+        "refused-fail-joined",
+        "refused-freeze-unknown",
+        "partial-refused-freeze-unknown",
+        "refused-post-rate",
     ] {
         let output = Command::new(std::env::current_exe().unwrap())
             .args([
@@ -33,6 +38,39 @@ fn provider_authority_boundaries() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        if case.contains("refused-") {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let fields: Vec<_> = stdout
+                .lines()
+                .find(|line| line.starts_with("REFUSED_RECOVERY|"))
+                .unwrap()
+                .split('|')
+                .collect();
+            let path = std::path::Path::new(fields[1]);
+            let before = std::fs::read(path.join("provider-attempts.jsonl")).unwrap();
+            let recovery = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "runtime::provider_tests::refused_boundary_recovery",
+                    "--nocapture",
+                ])
+                .env("S414_REFUSED_RECOVERY_PATH", path)
+                .env("S414_REFUSED_RECOVERY_ENDPOINT", fields[2])
+                .env("S414_REFUSED_RECOVERY_CASE", fields[3])
+                .env("S414_REFUSED_RECOVERY_PARTIAL", fields[4])
+                .output()
+                .unwrap();
+            assert!(
+                recovery.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&recovery.stdout),
+                String::from_utf8_lossy(&recovery.stderr)
+            );
+            assert_eq!(
+                before,
+                std::fs::read(path.join("provider-attempts.jsonl")).unwrap()
+            );
+        }
     }
 }
 #[test]
@@ -151,15 +189,65 @@ fn frame_deadline_child() {
 }
 
 #[test]
+fn refused_boundary_recovery() {
+    let Ok(path) = std::env::var("S414_REFUSED_RECOVERY_PATH") else {
+        return;
+    };
+    let endpoint = std::env::var("S414_REFUSED_RECOVERY_ENDPOINT")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let case = std::env::var("S414_REFUSED_RECOVERY_CASE").unwrap();
+    let history =
+        crate::reconstruct_provider_history(std::path::Path::new(&path), endpoint).unwrap();
+    assert_eq!(history.consumed(), if case == "post-rate" { 2 } else { 1 });
+    assert_eq!(
+        history.unresolved_remote(),
+        usize::from(case == "fail-joined")
+    );
+    assert_eq!(
+        history.unknown_usage(),
+        usize::from(matches!(case.as_str(), "fail-joined" | "freeze-unknown"))
+    );
+    for (index, attempt) in history.attempts.iter().enumerate() {
+        assert_eq!(attempt.ordinal, index + 1);
+        if case == "fail-joined" {
+            assert!(attempt.terminal.is_none());
+            assert!(attempt.usage.is_none());
+        } else {
+            let terminal = attempt.terminal.as_ref().unwrap();
+            assert_eq!(terminal.response_id, "resp_1");
+            assert_eq!(terminal.reported_model.as_deref(), Some("gpt-6-luna"));
+            assert_eq!(terminal.status, "completed");
+            if case == "freeze-unknown" {
+                if std::env::var("S414_REFUSED_RECOVERY_PARTIAL").unwrap() == "yes" {
+                    assert_eq!(attempt.usage.as_ref().unwrap().input_tokens, Some(10));
+                    assert!(!attempt.usage.as_ref().unwrap().complete());
+                } else {
+                    assert!(attempt.usage.is_none());
+                }
+            } else {
+                assert_eq!(attempt.usage.as_ref().unwrap().total_tokens, Some(15));
+            }
+        }
+    }
+}
+
+#[test]
 fn provider_boundary_child() {
     let Ok(case) = std::env::var("SCRAMJET_PROVIDER_BOUNDARY") else {
         return;
     };
+    let partial = case.starts_with("partial-");
+    let case = case.strip_prefix("partial-").unwrap_or(&case);
+    let refused = case.starts_with("refused-");
+    let case = case.strip_prefix("refused-").unwrap_or(case).to_owned();
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         let path=std::env::temp_dir().join(format!("scramjet-provider-boundary-{}",std::process::id()));
         std::fs::create_dir(&path).unwrap();std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o700)).unwrap();
-        let usage=if matches!(case.as_str(),"freeze-unknown"|"retained-unknown") {serde_json::Value::Null}else{fixture::known_usage()};
-        let events=if case=="accepted-control" {fixture::call_events("{}",usage)}else{fixture::text_events("synthetic",usage)};
+        let usage=if partial {serde_json::json!({"input_tokens":10})}else if matches!(case.as_str(),"freeze-unknown"|"retained-unknown") {serde_json::Value::Null}else{fixture::known_usage()};
+        let mut events=if case=="accepted-control" {fixture::call_events("{}",usage)}else{fixture::text_events("synthetic",usage)};
+        if refused {events.last_mut().unwrap()["response"]["output"][0]["opaque"]=serde_json::json!(true);}
         let body=fixture::wire(&events,false);
         let (endpoint, fixture_task)=if matches!(case.as_str(),"post-rate"|"retained-known") {
             use tokio::io::{AsyncReadExt,AsyncWriteExt};
@@ -218,7 +306,7 @@ fn provider_boundary_child() {
             "fail-joined"=>{assert_eq!(response.outcome,Outcome::ResourceLimit);assert!(response.envelope.is_none());assert!(!response.durable);assert!(response.remote_terminal.is_some());assert_eq!(runtime.provider_history().unwrap().unresolved_remote(),1);},
             "accepted-control"|"pending-cap"=>{assert_eq!(response.outcome,Outcome::Success);assert!(response.envelope.is_some());},
             "freeze-unknown"|"retained-unknown"=>{
-                assert_eq!(response.outcome,Outcome::Success);assert!(response.usage.is_none());
+                assert_eq!(response.outcome,if refused {Outcome::Unsupported}else{Outcome::Success});if partial {assert_eq!(response.usage.as_ref().unwrap().input_tokens,Some(10));assert!(!response.usage.as_ref().unwrap().complete());}else{assert!(response.usage.is_none());}
                 let mut pending=runtime.submit_provider(make_request()).unwrap();
                 tokio::time::sleep(Duration::from_millis(1200)).await;
                 assert_eq!(runtime.snapshot().attempts,1);assert_eq!(runtime.snapshot().pending,1);
@@ -226,10 +314,10 @@ fn provider_boundary_child() {
                 assert_eq!(runtime.provider_history().unwrap().consumed(),if case=="freeze-unknown" {1}else{2});
             },
             "post-rate"|"retained-known"=>{
-                assert_eq!(response.outcome,Outcome::Success);
+                assert_eq!(response.outcome,if refused {Outcome::Unsupported}else{Outcome::Success});
                 let first=shared.state.lock().unwrap().provider_dispatch.unwrap();
                 let mut handle=runtime.submit_provider(make_request()).unwrap();
-                assert_eq!(handle.result().await.unwrap().outcome,Outcome::Success);drop(handle);
+                assert_eq!(handle.result().await.unwrap().outcome,if refused {Outcome::Unsupported}else{Outcome::Success});drop(handle);
                 let second=shared.state.lock().unwrap().provider_dispatch.unwrap();
                 assert!(second.saturating_duration_since(first)>=Duration::from_secs(1));
                 assert_eq!(runtime.snapshot().active_peak,1);
@@ -247,6 +335,13 @@ fn provider_boundary_child() {
             assert_eq!(runtime.snapshot().attempts,attempts);
         }
         runtime.shutdown().await;
+        drop(shared);
+        drop(ledger);
+        if refused {
+            assert!(response.envelope.is_none());
+            assert_eq!(response.remote_terminal.as_ref().unwrap().response_id,"resp_1");
+            println!("REFUSED_RECOVERY|{}|{}|{}|{}",path.display(),endpoint,case,if partial {"yes"}else{"no"});
+        }
         if case=="fail-reserve" {fixture_task.abort();let _=fixture_task.await;}else{fixture_task.await.unwrap();}
     });
 }
