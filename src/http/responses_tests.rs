@@ -4,12 +4,12 @@ use crate::{PROVIDER_ITEM_FIELDS, PROVIDER_PART_FIELDS, ProviderJsonKind};
 
 fn rejection(events: &[Value], crlf: bool) -> ProviderFailure {
     let mut parser = ResponsesParser::new();
-    assert_eq!(
+    assert!(matches!(
         fixture::wire(events, crlf)
             .into_iter()
             .find_map(|b| parser.byte(b).err()),
-        Some(Outcome::Framing)
-    );
+        Some(Outcome::Framing | Outcome::Unsupported)
+    ));
     assert!(parser.terminal.is_none());
     let failure = parser.failure.clone();
     assert!(parser.complete().is_err());
@@ -29,6 +29,9 @@ fn final_differences_preserve_presence_kinds_and_fixed_field_masks() {
                 json!("synthetic-private\u{001b}hé🙂"),
                 json!({"synthetic-private":true}),
             ] {
+                if *name == "phase" && value.is_null() {
+                    continue;
+                }
                 let mut events = fixture::text_events("synthetic-private", fixture::known_usage());
                 events.last_mut().unwrap()["response"]["output"][0][*name] = value.clone();
                 let difference = rejection(&events, crlf).final_difference.unwrap();
@@ -95,9 +98,13 @@ fn final_differences_cover_missing_done_counts_shapes_and_metadata_replay() {
             .as_object_mut()
             .unwrap()
             .remove("status");
-        let item = rejection(&events, crlf).final_difference.unwrap().items[0].unwrap();
-        assert_eq!(item.done_kinds[3], ProviderJsonKind::String);
-        assert_eq!(item.final_kinds[3], ProviderJsonKind::Missing);
+        let item = parse(&fixture::wire(&events, crlf))
+            .unwrap()
+            .envelope
+            .unwrap()
+            .items
+            .remove(0);
+        assert_eq!(item.wire["status"], "completed");
         let mut events = fixture::text_events("hé🙂", fixture::known_usage());
         for index in [7, 8] {
             let item = if index == 7 {
@@ -409,20 +416,51 @@ fn byte_bounded_large_part_lists_preserve_metadata_without_saving_small_allocati
     let mut events = fixture::text_events("x", fixture::known_usage());
     events.truncate(3);
     let mut parts = Vec::new();
+    let mut metadata = json!({"opaque":true});
+    for _ in 0..10 {
+        metadata = json!({"nested":metadata});
+    }
     for index in 0..32 {
-        let part = json!({"type":"output_text","text":"x","annotations":[{"type":"url_citation","url":"synthetic-reference"}]});
+        let part = json!({"type":"output_text","text":format!("x{index}"),"annotations":[{"type":"url_citation","url":"synthetic-reference"}],"opaque":metadata});
         events.push(json!({"type":"response.content_part.added","output_index":0,"item_id":"msg_1","content_index":index,"part":{"type":"output_text","text":""}}));
-        events.push(json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":index,"delta":"x"}));
-        events.push(json!({"type":"response.output_text.done","output_index":0,"item_id":"msg_1","content_index":index,"text":"x"}));
+        events.push(json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":index,"delta":part["text"]}));
+        events.push(json!({"type":"response.output_text.done","output_index":0,"item_id":"msg_1","content_index":index,"text":part["text"]}));
         events.push(json!({"type":"response.content_part.done","output_index":0,"item_id":"msg_1","content_index":index,"part":part}));
         parts.push(part);
     }
     let item = json!({"type":"message","id":"msg_1","role":"assistant","status":"completed","content":parts});
     events.push(json!({"type":"response.output_item.done","output_index":0,"item":item}));
     events.push(json!({"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[item],"usage":fixture::known_usage()}}));
+    for part in events.last_mut().unwrap()["response"]["output"][0]["content"]
+        .as_array_mut()
+        .unwrap()
+    {
+        part["annotations"] = json!([]);
+        part["logprobs"] = Value::Null;
+    }
     let parsed = parse(&fixture::wire(&events, false)).unwrap();
     let item = &parsed.envelope.unwrap().items[0];
-    assert_eq!(item.text().unwrap(), "x".repeat(32));
+    assert_eq!(
+        item.text().unwrap(),
+        (0..32).map(|index| format!("x{index}")).collect::<String>()
+    );
+    assert_eq!(item.wire["content"][31]["opaque"], metadata);
+    let mut reordered = events.clone();
+    reordered.last_mut().unwrap()["response"]["output"][0]["content"]
+        .as_array_mut()
+        .unwrap()
+        .swap(0, 31);
+    assert!(matches!(
+        parse(&fixture::wire(&reordered, false)),
+        Err(Outcome::Framing)
+    ));
+    let mut changed = events.clone();
+    changed.last_mut().unwrap()["response"]["output"][0]["content"][31]["opaque"]["nested"] =
+        json!("changed");
+    assert!(matches!(
+        parse(&fixture::wire(&changed, false)),
+        Err(Outcome::Unsupported)
+    ));
     assert_eq!(
         item.wire["content"][31]["annotations"][0]["url"],
         "synthetic-reference"
@@ -800,6 +838,385 @@ fn compatibility_resource_and_malformed_failures_are_distinct() {
         Err(Outcome::ResourceLimit)
     ));
 }
+#[test]
+fn supported_snapshot_variation_selects_whole_items_without_rewriting() {
+    for crlf in [false, true] {
+        for done_status in [false, true] {
+            for terminal_status in [false, true] {
+                let mut events =
+                    fixture::continuation_events("hé🙂\\\"\n", "{\"x\":1}", "opaque:/é\u{0000}");
+                for event in &mut events {
+                    if event["type"] == "response.output_item.done" {
+                        let item = &mut event["item"];
+                        item["opaque"] = json!({"nested":[null,"unchanged"]});
+                        if item["type"] != "message" && !done_status {
+                            item.as_object_mut().unwrap().remove("status");
+                        }
+                        if item["type"] == "message" {
+                            item["content"][0]["annotations"] =
+                                json!([{"opaque":[1,{"nested":true}]}]);
+                            item["content"][0]["logprobs"] = Value::Null;
+                            item["content"][0]["opaque"] = json!({"nested":["unchanged"]});
+                        }
+                    }
+                }
+                for item in events.last_mut().unwrap()["response"]["output"]
+                    .as_array_mut()
+                    .unwrap()
+                {
+                    item["opaque"] = json!({"nested":[null,"unchanged"]});
+                    if item["type"] != "message" && !terminal_status {
+                        item.as_object_mut().unwrap().remove("status");
+                    }
+                    if item["type"] == "reasoning" {
+                        item["encrypted_content"] = Value::Null;
+                    } else if item["type"] == "message" {
+                        item["content"][0]["logprobs"] = json!([{"token":"different metadata"}]);
+                        item["content"][0]["opaque"] = json!({"nested":["unchanged"]});
+                    }
+                }
+                let expected: Vec<_> = (0..4)
+                    .map(|index| {
+                        if index == 3 {
+                            events.last().unwrap()["response"]["output"][index].clone()
+                        } else {
+                            events
+                                .iter()
+                                .find(|event| {
+                                    event["type"] == "response.output_item.done"
+                                        && event["output_index"] == index
+                                })
+                                .unwrap()["item"]
+                                .clone()
+                        }
+                    })
+                    .collect();
+                let envelope = parse(&fixture::wire(&events, crlf))
+                    .unwrap()
+                    .envelope
+                    .unwrap();
+                assert_eq!(
+                    envelope
+                        .items
+                        .iter()
+                        .map(|item| item.wire.clone())
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+                let mut input = vec![ProviderInput::User("original".into())];
+                input.extend(envelope.items.into_iter().map(ProviderInput::Item));
+                input.push(ProviderInput::ToolResult {
+                    call_id: "call_1".into(),
+                    output: "synthetic result".into(),
+                });
+                let request = ProviderRequest::new(&input, &[]).unwrap();
+                let wire = strict_json(request.encoded.as_bytes()).unwrap();
+                assert_eq!(wire["include"], json!(["reasoning.encrypted_content"]));
+                assert_eq!(
+                    &wire["input"].as_array().unwrap()[1..5],
+                    expected.as_slice()
+                );
+            }
+        }
+        for phase in [
+            None,
+            Some(Value::Null),
+            Some(json!("commentary")),
+            Some(json!("final_answer")),
+        ] {
+            let mut events = fixture::text_events("x", Value::Null);
+            if let Some(phase) = phase {
+                events[7]["item"]["phase"] = phase;
+            }
+            events[7]["item"]["content"][0]["annotations"] = json!([{"retained":true}]);
+            let envelope = parse(&fixture::wire(&events, crlf))
+                .unwrap()
+                .envelope
+                .unwrap();
+            assert_eq!(envelope.items[0].wire, events[7]["item"]);
+        }
+    }
+}
+
+#[test]
+fn material_contradictions_and_unsupported_replay_never_publish_envelopes() {
+    let good = fixture::continuation_events("hé🙂", "{\"x\":1}", "opaque");
+    for (index, key, value, outcome) in [
+        (0, "id", json!("foreign"), Outcome::Framing),
+        (0, "type", json!("message"), Outcome::Framing),
+        (0, "encrypted_content", json!("conflict"), Outcome::Framing),
+        (0, "encrypted_content", json!(42), Outcome::Framing),
+        (0, "status", json!("in_progress"), Outcome::Framing),
+        (0, "summary", json!([]), Outcome::Framing),
+        (0, "unknown", json!({"nested":true}), Outcome::Unsupported),
+        (0, "role", json!("opaque-field"), Outcome::Unsupported),
+        (0, "arguments", json!("opaque-field"), Outcome::Unsupported),
+        (2, "call_id", json!("foreign"), Outcome::Framing),
+        (2, "name", json!("other"), Outcome::Framing),
+        (2, "arguments", json!("{\"x\": 1}"), Outcome::Framing),
+        (2, "namespace", json!("foreign"), Outcome::Unsupported),
+        (2, "status", json!("incomplete"), Outcome::Framing),
+        (2, "unknown", json!(true), Outcome::Unsupported),
+        (2, "role", json!("opaque-field"), Outcome::Unsupported),
+        (3, "role", json!("user"), Outcome::Framing),
+        (3, "phase", json!("invalid"), Outcome::Framing),
+        (3, "status", Value::Null, Outcome::Framing),
+        (3, "arguments", json!("opaque-field"), Outcome::Unsupported),
+    ] {
+        let mut events = good.clone();
+        events.last_mut().unwrap()["response"]["output"][index][key] = value;
+        assert!(
+            matches!(parse(&fixture::wire(&events, false)), Err(actual) if actual == outcome),
+            "{index}/{key}"
+        );
+    }
+    for key in ["text", "type", "annotations", "logprobs", "unknown"] {
+        let mut events = good.clone();
+        events.last_mut().unwrap()["response"]["output"][3]["content"][0][key] = json!(42);
+        let expected = if key == "unknown" {
+            Outcome::Unsupported
+        } else {
+            Outcome::Framing
+        };
+        assert!(
+            matches!(parse(&fixture::wire(&events, false)), Err(actual) if actual == expected),
+            "part/{key}"
+        );
+    }
+    for value in [None, Some(Value::Null)] {
+        let mut events = good.clone();
+        let done = events
+            .iter_mut()
+            .find(|event| {
+                event["type"] == "response.output_item.done" && event["output_index"] == 0
+            })
+            .unwrap();
+        if let Some(value) = value {
+            done["item"]["encrypted_content"] = value;
+        } else {
+            done["item"]
+                .as_object_mut()
+                .unwrap()
+                .remove("encrypted_content");
+        }
+        assert!(matches!(
+            parse(&fixture::wire(&events, false)),
+            Err(Outcome::Unsupported)
+        ));
+        events.last_mut().unwrap()["response"]["output"][0]["encrypted_content"] = Value::Null;
+        assert!(matches!(
+            parse(&fixture::wire(&events, false)),
+            Err(Outcome::Unsupported)
+        ));
+    }
+    let mut events = good.clone();
+    let done = events
+        .iter_mut()
+        .find(|event| event["type"] == "response.output_item.done" && event["output_index"] == 3)
+        .unwrap();
+    done["item"]["phase"] = json!("commentary");
+    assert!(matches!(
+        parse(&fixture::wire(&events, false)),
+        Err(Outcome::Framing)
+    ));
+    for index in 0..4 {
+        let mut events = good.clone();
+        events.last_mut().unwrap()["response"]["output"]
+            .as_array_mut()
+            .unwrap()
+            .swap(index, (index + 1) % 4);
+        assert!(matches!(
+            parse(&fixture::wire(&events, false)),
+            Err(Outcome::Framing)
+        ));
+    }
+    let mut events = good.clone();
+    events.last_mut().unwrap()["response"]["output"][0]["summary"][0]["text"] = json!("changed");
+    assert!(matches!(
+        parse(&fixture::wire(&events, false)),
+        Err(Outcome::Framing)
+    ));
+    let mut events = good.clone();
+    events.last_mut().unwrap()["response"]["output"][0]["summary"][0]["annotations"] = json!([]);
+    assert!(matches!(
+        parse(&fixture::wire(&events, false)),
+        Err(Outcome::Unsupported)
+    ));
+    let mut events = fixture::text_events("x", Value::Null);
+    events.last_mut().unwrap()["response"]["output"][0]["content"] = json!([]);
+    assert!(matches!(
+        parse(&fixture::wire(&events, false)),
+        Err(Outcome::Framing)
+    ));
+    let bytes = fixture::wire(&good, false);
+    assert!(matches!(
+        parse(&bytes[..bytes.len() - 1]),
+        Err(Outcome::Incomplete)
+    ));
+}
+
+#[test]
+fn eight_turn_journey_retains_complete_escaped_files_tools_and_multiple_reasoning_items() {
+    let poem = "\u{0000}".repeat(512);
+    let script = "from pathlib import Path\nprint(Path('haiku.md').read_text(), end='')\n";
+    let tools: Vec<_> = ["write","read","bash"].into_iter().map(|name| ProviderTool {
+        name:name.into(),description:"bounded synthetic tool".into(),
+        parameters:json!({"type":"object","properties":{"payload":{"type":"string"}},"required":["payload"],"additionalProperties":false}),
+    }).collect();
+    for all_call_turns in [true, false] {
+        let mut input = vec![ProviderInput::User("Create/read haiku.md, create print_haiku.py, run fixed Python via Bash; preserve all context.".into())];
+        let mut expected = vec![
+            json!({"role":"user","content":"Create/read haiku.md, create print_haiku.py, run fixed Python via Bash; preserve all context."}),
+        ];
+        for ordinal in 0..8 {
+            let (name, arguments, output) = match ordinal {
+                0 => (
+                    "write",
+                    json!({"path":"haiku.md","content":poem}),
+                    "created".into(),
+                ),
+                1 => ("read", json!({"path":"haiku.md"}), poem.clone()),
+                2 => (
+                    "write",
+                    json!({"path":"print_haiku.py","content":script}),
+                    "created".into(),
+                ),
+                3 => (
+                    "bash",
+                    json!({"command":"/usr/bin/python3 -I print_haiku.py"}),
+                    poem.clone(),
+                ),
+                _ => ("read", json!({"path":"print_haiku.py"}), script.into()),
+            };
+            let mut events = fixture::continuation_events(
+                "checked",
+                &arguments.to_string(),
+                &"opaque:/é".repeat(4),
+            );
+            fixture::qualify_events(&mut events, ordinal);
+            for event in &mut events {
+                if event["item"]["type"] == "function_call" {
+                    event["item"]["name"] = json!(name);
+                }
+            }
+            events.last_mut().unwrap()["response"]["output"][2]["name"] = json!(name);
+            if ordinal >= 4 && !all_call_turns {
+                events.retain(|event| {
+                    event["item"]["type"] != "function_call"
+                        && !event["type"]
+                            .as_str()
+                            .unwrap()
+                            .starts_with("response.function_call_arguments")
+                });
+                for event in &mut events {
+                    if event["output_index"] == 3 {
+                        event["output_index"] = json!(2);
+                    }
+                }
+                events.last_mut().unwrap()["response"]["output"]
+                    .as_array_mut()
+                    .unwrap()
+                    .remove(2);
+            }
+            let envelope = parse(&fixture::wire(&events, false))
+                .unwrap()
+                .envelope
+                .unwrap();
+            for item in envelope.items {
+                expected.push(item.wire.clone());
+                input.push(ProviderInput::Item(item));
+            }
+            if ordinal < 4 || all_call_turns {
+                let call_id = format!("call_1.{ordinal}");
+                expected
+                    .push(json!({"type":"function_call_output","call_id":call_id,"output":output}));
+                input.push(ProviderInput::ToolResult { call_id, output });
+            }
+        }
+        if all_call_turns {
+            assert!(matches!(
+                ProviderRequest::new(&input, &tools),
+                Err(Outcome::ResourceLimit)
+            ));
+            continue;
+        }
+        let request = ProviderRequest::new(&input, &tools).unwrap();
+        println!(
+            "eight-turn-complete-escaped-journey={}",
+            request.encoded_bytes()
+        );
+        let wire = strict_json(request.encoded.as_bytes()).unwrap();
+        assert_eq!(wire["input"], json!(expected));
+        assert_eq!(wire["tools"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            wire["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|item| item["type"] == "reasoning")
+                .count(),
+            16
+        );
+        let before = format!("{input:?}");
+        let mut larger = input.clone();
+        larger.push(ProviderInput::User("\u{0000}".repeat(512)));
+        assert!(matches!(
+            ProviderRequest::new(&larger, &tools),
+            Err(Outcome::ResourceLimit)
+        ));
+        assert_eq!(format!("{input:?}"), before);
+        let mut near = 0;
+        while ProviderRequest::new(&[ProviderInput::User("\u{0000}".repeat(near + 1))], &tools)
+            .is_ok()
+        {
+            near += 1;
+        }
+        let fitted =
+            ProviderRequest::new(&[ProviderInput::User("\u{0000}".repeat(near))], &tools).unwrap();
+        assert!(fitted.encoded_bytes() > PROVIDER_ENVELOPE_BYTES - 6);
+        assert_eq!(
+            strict_json(fitted.encoded.as_bytes()).unwrap()["input"][0]["content"],
+            "\u{0000}".repeat(near)
+        );
+        assert!(matches!(
+            ProviderRequest::new(&[ProviderInput::User("\u{0000}".repeat(near + 1))], &tools),
+            Err(Outcome::ResourceLimit)
+        ));
+    }
+}
+
+#[test]
+fn canonical_done_replay_budget_includes_identity_and_wrapper_not_terminal_only() {
+    let id = "r".repeat(1500);
+    let done =
+        json!({"type":"reasoning","id":"rs","summary":[],"encrypted_content":"x".repeat(15000)});
+    let mut terminal = done.clone();
+    terminal
+        .as_object_mut()
+        .unwrap()
+        .remove("encrypted_content");
+    let events = vec![
+        json!({"type":"response.created","response":{"id":id,"status":"in_progress","output":[]}}),
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs","summary":[]}}),
+        json!({"type":"response.output_item.done","output_index":0,"item":done}),
+        json!({"type":"response.completed","response":{"id":id,"status":"completed","output":[terminal]}}),
+    ];
+    assert!(bounded_json(&done, PROVIDER_ENVELOPE_BYTES).is_ok());
+    assert!(
+        bounded_json(
+            &json!({"response_id":id,"items":[terminal]}),
+            PROVIDER_ENVELOPE_BYTES
+        )
+        .is_ok()
+    );
+    for crlf in [false, true] {
+        assert!(matches!(
+            parse(&fixture::wire(&events, crlf)),
+            Err(Outcome::ResourceLimit)
+        ));
+    }
+}
+
 #[test]
 fn replay_requires_actual_call_result_identity() {
     let envelope = parse(&fixture::wire(

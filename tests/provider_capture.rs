@@ -260,7 +260,7 @@ fn replay_preserves_strict_failure_and_valid_representations() {
         }
         let body = demo::fixture::wire(&demo::fixture::disagreement_events(), crlf);
         let replay = replay_provider_data(&body);
-        assert_eq!(replay.outcome, Outcome::Framing);
+        assert_eq!(replay.outcome, Outcome::Unsupported);
         assert!(replay.failure.unwrap().final_difference.is_some());
     }
     assert_eq!(

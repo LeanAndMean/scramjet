@@ -199,7 +199,8 @@ impl ProviderRequest {
             );
         }
         let wire = json!({"model":PROVIDER_MODEL,"input":wire_input,"tools":wire_tools,
-            "stream":true,"store":false,"max_output_tokens":1024,"parallel_tool_calls":false});
+            "stream":true,"store":false,"include":["reasoning.encrypted_content"],
+            "max_output_tokens":1024,"parallel_tool_calls":false});
         let encoded = bounded_json(&wire, PROVIDER_ENVELOPE_BYTES)?;
         Ok(Self { encoded })
     }
@@ -406,6 +407,11 @@ fn validate_item(item: &Value, complete: bool) -> Result<(), Outcome> {
             {
                 return Err(Outcome::Framing);
             }
+            if item.get("phase").is_some_and(|phase| {
+                !phase.is_null() && !matches!(phase.as_str(), Some("commentary" | "final_answer"))
+            }) {
+                return Err(Outcome::Framing);
+            }
             let content = item["content"].as_array().ok_or(Outcome::Framing)?;
             if !complete && !content.is_empty() {
                 return Err(Outcome::Unsupported);
@@ -415,22 +421,16 @@ fn validate_item(item: &Value, complete: bool) -> Result<(), Outcome> {
                     return Err(Outcome::Unsupported);
                 }
                 string(part, "text")?;
-                if part.get("annotations").is_some_and(|a| !a.is_array()) {
+                if part.get("annotations").is_some_and(|a| !a.is_array())
+                    || part
+                        .get("logprobs")
+                        .is_some_and(|v| !v.is_null() && !v.is_array())
+                {
                     return Err(Outcome::Framing);
                 }
             }
         }
         "function_call" => {
-            if item.as_object().is_none_or(|fields| {
-                fields.keys().any(|key| {
-                    !matches!(
-                        key.as_str(),
-                        "type" | "id" | "call_id" | "name" | "arguments" | "status" | "namespace"
-                    )
-                })
-            }) {
-                return Err(Outcome::Unsupported);
-            }
             if let Some(namespace) = item
                 .get("namespace")
                 .filter(|namespace| !namespace.is_null())
@@ -481,6 +481,99 @@ fn validate_item(item: &Value, complete: bool) -> Result<(), Outcome> {
     Ok(())
 }
 
+fn compare_parts(done: &Value, terminal: &Value, text: bool) -> Result<(), Outcome> {
+    let done = done.as_array().ok_or(Outcome::Framing)?;
+    let terminal = terminal.as_array().ok_or(Outcome::Framing)?;
+    if done.len() != terminal.len() {
+        return Err(Outcome::Framing);
+    }
+    for (done, terminal) in done.iter().zip(terminal) {
+        for key in ["type", "text"] {
+            if done[key] != terminal[key] {
+                return Err(Outcome::Framing);
+            }
+        }
+        for key in done
+            .as_object()
+            .unwrap()
+            .keys()
+            .chain(terminal.as_object().unwrap().keys())
+        {
+            if matches!(key.as_str(), "type" | "text")
+                || (text && matches!(key.as_str(), "annotations" | "logprobs"))
+            {
+                continue;
+            }
+            if done.get(key) != terminal.get(key) {
+                return Err(Outcome::Unsupported);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn select_replay(done: &Value, terminal: &Value) -> Result<bool, Outcome> {
+    validate_item(done, true)?;
+    validate_item(terminal, true)?;
+    let kind = string(done, "type")?;
+    let material: &[&str] = match kind {
+        "message" => &["id", "type", "role"],
+        "function_call" => &["id", "type", "name", "call_id", "arguments"],
+        "reasoning" => &["id", "type"],
+        _ => unreachable!(),
+    };
+    for key in material {
+        if done.get(*key) != terminal.get(*key) {
+            return Err(Outcome::Framing);
+        }
+    }
+    let continuation = match kind {
+        "message" => {
+            compare_parts(&done["content"], &terminal["content"], true)?;
+            Some("phase")
+        }
+        "reasoning" => {
+            compare_parts(&done["summary"], &terminal["summary"], false)?;
+            Some("encrypted_content")
+        }
+        "function_call" => None,
+        _ => unreachable!(),
+    };
+    for key in done
+        .as_object()
+        .unwrap()
+        .keys()
+        .chain(terminal.as_object().unwrap().keys())
+    {
+        if material.contains(&key.as_str())
+            || Some(key.as_str()) == continuation
+            || (key == "status" && matches!(kind, "function_call" | "reasoning"))
+            || (key == "content" && kind == "message")
+            || (key == "summary" && kind == "reasoning")
+        {
+            continue;
+        }
+        if done.get(key) != terminal.get(key) {
+            return Err(Outcome::Unsupported);
+        }
+    }
+    let mut use_terminal = false;
+    if let Some(key) = continuation {
+        let done_value = done.get(key).filter(|v| !v.is_null());
+        let terminal_value = terminal.get(key).filter(|v| !v.is_null());
+        match (done_value, terminal_value) {
+            (Some(a), Some(b)) if a != b => return Err(Outcome::Framing),
+            (None, Some(_)) if kind == "reasoning" => return Err(Outcome::Unsupported),
+            (None, Some(_)) => use_terminal = true,
+            _ => {}
+        }
+        if kind == "reasoning" && done_value.is_none() {
+            return Err(Outcome::Unsupported);
+        }
+    }
+    Ok(use_terminal)
+}
+
 struct Part {
     text: String,
     done: bool,
@@ -489,6 +582,7 @@ struct Part {
 struct ItemState {
     added: Value,
     done: Option<Value>,
+    replay_terminal: bool,
     parts: Vec<Part>,
     arguments: String,
     arguments_done: bool,
@@ -722,6 +816,7 @@ impl ResponsesParser {
                 self.items.push(ItemState {
                     added: item,
                     done: None,
+                    replay_terminal: false,
                     parts: Vec::new(),
                     arguments,
                     arguments_done: false,
@@ -942,22 +1037,45 @@ impl ResponsesParser {
                         return Err(Outcome::Framing);
                     }
                     self.failure.field = Some("response.output.item");
-                    if self
+                    let selection = self
                         .items
                         .iter()
                         .zip(output)
-                        .any(|(state, item)| state.done.as_ref() != Some(item))
-                    {
-                        for (i, (state, item)) in self.items.iter().zip(output).enumerate() {
-                            difference.item(i, state.done.as_ref(), Some(item));
+                        .map(|(state, item)| {
+                            let done = state.done.as_ref().ok_or(Outcome::Framing)?;
+                            select_replay(done, item)
+                        })
+                        .collect::<Result<Vec<_>, _>>();
+                    let selection = match selection {
+                        Ok(selection) => selection,
+                        Err(outcome) => {
+                            for (i, (state, item)) in self.items.iter().zip(output).enumerate() {
+                                difference.item(i, state.done.as_ref(), Some(item));
+                            }
+                            self.failure.final_difference = Some(Box::new(difference));
+                            return Err(outcome);
                         }
-                        self.failure.final_difference = Some(Box::new(difference));
-                        return Err(Outcome::Framing);
-                    }
-                    bounded_json(
-                        &json!({"response_id":self.response_id,"items":output}),
+                    };
+                    let selected: Vec<_> = self
+                        .items
+                        .iter()
+                        .zip(output)
+                        .zip(&selection)
+                        .map(|((state, item), terminal)| {
+                            if *terminal {
+                                item
+                            } else {
+                                state.done.as_ref().unwrap()
+                            }
+                        })
+                        .collect();
+                    bounded_json_bytes(
+                        &json!({"response_id":self.response_id,"items":selected}),
                         PROVIDER_ENVELOPE_BYTES,
                     )?;
+                    for (state, terminal) in self.items.iter_mut().zip(selection) {
+                        state.replay_terminal = terminal;
+                    }
                 }
                 self.terminal = Some(response.clone());
             }
@@ -1014,8 +1132,13 @@ impl ResponsesParser {
             items: self
                 .items
                 .into_iter()
-                .map(|state| ProviderItem {
-                    wire: state.done.unwrap(),
+                .enumerate()
+                .map(|(index, state)| ProviderItem {
+                    wire: if state.replay_terminal {
+                        response["output"][index].clone()
+                    } else {
+                        state.done.unwrap()
+                    },
                 })
                 .collect(),
         });

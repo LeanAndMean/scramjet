@@ -148,7 +148,7 @@ fn provider_capture_read() {
     assert!(line.len() <= scramjet_rs::PROVIDER_DIAGNOSTIC_BYTES);
     let report: serde_json::Value = serde_json::from_str(line).unwrap();
     assert_eq!(report["version"], 1);
-    assert_eq!(report["outcome"], "Framing");
+    assert_eq!(report["outcome"], "Unsupported");
     assert_eq!(report["durable"], true);
     assert_eq!(report["terminal_observed"], false);
     assert!(report["usage"].is_null());
@@ -339,7 +339,7 @@ fn provider_case() {
                 "trailing"|"missing-terminal"|"bad-identity" => {assert_ne!(response.outcome,Outcome::Success);assert!(response.envelope.is_none());assert!(response.remote_terminal.is_none());},
                 "wire-limit"|"frame-limit"|"output-limit" => {assert_eq!(response.outcome,Outcome::ResourceLimit);assert!(response.envelope.is_none());},
                 "unsupported" => {assert_eq!(response.outcome,Outcome::Unsupported);assert!(response.envelope.is_none());},
-                "diagnostic" => {assert_eq!(response.outcome,Outcome::Framing);assert!(response.envelope.is_none());assert!(response.remote_terminal.is_none());assert!(response.usage.is_none());let difference=response.failure.unwrap().final_difference.unwrap();assert!(difference.items[0].unwrap().other_fields);assert_eq!(difference.items[0].unwrap().content.unwrap().first_part.unwrap().fields,8);},
+                "diagnostic" => {assert_eq!(response.outcome,Outcome::Unsupported);assert!(response.envelope.is_none());assert!(response.remote_terminal.is_none());assert!(response.usage.is_none());let difference=response.failure.unwrap().final_difference.unwrap();assert!(difference.items[0].unwrap().other_fields);assert_eq!(difference.items[0].unwrap().content.unwrap().first_part.unwrap().fields,8);},
                 status => {assert_eq!(response.outcome,Outcome::HttpRejected(status.parse().unwrap()));assert!(response.envelope.is_none());assert!(response.remote_terminal.is_none());}
             }
             drop(handle);
@@ -367,6 +367,95 @@ fn provider_case() {
         println!("RECOVERY|{}|{}",directory.display(),endpoint);
     });
 }
+#[test]
+fn correlated_two_post_continuation_and_pre_admission_refusal() {
+    for crlf in ["lf", "crlf"] {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "provider_continuation_case", "--nocapture"])
+            .env("SCRAMJET_CONTINUATION_NEWLINE", crlf)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{crlf}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn provider_continuation_case() {
+    let Ok(newline) = std::env::var("SCRAMJET_CONTINUATION_NEWLINE") else {
+        return;
+    };
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    executor.block_on(async {
+        use scramjet_rs::{ProviderTool, PROVIDER_ENVELOPE_BYTES};
+        use serde_json::json;
+        let directory = storage();
+        let user = "synthetic original context: hé🙂\\\"\n";
+        let result = "synthetic result only, no effect executed: hé🙂\\\"\n";
+        let tool = ProviderTool { name:"inert".into(), description:"synthetic data only".into(), parameters:json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}) };
+        let tools = vec![tool];
+        let mut events = fixture::continuation_events("assistant hé🙂\\\"\n", "{\"text\":\"hé🙂\\n\"}", "opaque:/hé🙂\\\"\u{0000}");
+        for item in events.last_mut().unwrap()["response"]["output"].as_array_mut().unwrap() {
+            if item["type"] == "reasoning" { item["encrypted_content"] = serde_json::Value::Null; }
+            if item["type"] == "function_call" { item.as_object_mut().unwrap().remove("status"); }
+        }
+        let canonical: Vec<_> = (0..4).map(|index| {
+            if index == 3 { events.last().unwrap()["response"]["output"][index].clone() }
+            else { events.iter().find(|event| event["type"] == "response.output_item.done" && event["output_index"] == index).unwrap()["item"].clone() }
+        }).collect();
+        let wire_tools = json!([{"type":"function","name":"inert","description":"synthetic data only","parameters":tools[0].parameters,"strict":true}]);
+        let first = json!({"model":"gpt-6-luna","input":[{"role":"user","content":user}],"tools":wire_tools,"stream":true,"store":false,"include":["reasoning.encrypted_content"],"max_output_tokens":1024,"parallel_tool_calls":false});
+        let mut second = first.clone();
+        let input = second["input"].as_array_mut().unwrap();
+        input.extend(canonical.clone());
+        input.push(json!({"type":"function_call_output","call_id":"call_1","output":result}));
+        let mut body = fixture::wire(&events, newline == "crlf");
+        if newline == "crlf" { body.extend_from_slice(b"data: [DONE]\r\n\r\n"); }
+        let final_body = fixture::wire(&fixture::text_events("final hé🙂", fixture::known_usage()), newline == "crlf");
+        let (endpoint, server) = demo::server::start_sequence(vec![(Some(first),body),(Some(second),final_body)]).await;
+        let runtime = Runtime::new_provider(endpoint, &directory).unwrap();
+        let mut context = vec![ProviderInput::User(user.into())];
+        let mut handle = runtime.submit_provider(ProviderRequest::new(&context, &tools).unwrap()).unwrap();
+        let response = handle.result().await.unwrap();
+        assert_eq!(response.outcome, Outcome::Success);
+        assert!(response.durable && response.usage.as_ref().unwrap().complete());
+        let envelope = response.envelope.unwrap();
+        assert_eq!(envelope.items.len(),4);
+        assert_eq!(envelope.items[2].function_call().unwrap().arguments,"{\"text\":\"hé🙂\\n\"}");
+        context.extend(envelope.items.into_iter().map(ProviderInput::Item));
+        context.push(ProviderInput::ToolResult{call_id:"call_1".into(),output:result.into()});
+        drop(handle);
+        let mut handle = runtime.submit_provider(ProviderRequest::new(&context, &tools).unwrap()).unwrap();
+        let response = handle.result().await.unwrap();
+        assert_eq!(response.outcome,Outcome::Success);
+        assert_eq!(response.envelope.unwrap().items[0].text().as_deref(),Some("final hé🙂"));
+        assert!(response.durable && response.usage.unwrap().complete());
+        drop(handle);
+        let before = std::fs::read(directory.join("provider-attempts.jsonl")).unwrap();
+        let attempts = runtime.snapshot().attempts;
+        let original = format!("{context:?}");
+        let mut oversized = context.clone();
+        oversized.push(ProviderInput::User("\u{0000}".repeat(PROVIDER_ENVELOPE_BYTES / 6)));
+        assert!(matches!(ProviderRequest::new(&oversized,&tools),Err(Outcome::ResourceLimit)));
+        assert_eq!(format!("{context:?}"),original);
+        assert_eq!(runtime.snapshot().attempts,attempts);
+        assert_eq!(std::fs::read(directory.join("provider-attempts.jsonl")).unwrap(),before);
+        assert_eq!(runtime.provider_history().unwrap().consumed(),2);
+        let stats = runtime.shutdown().await;
+        assert_eq!(stats.active,0);
+        assert_eq!(stats.unknown_usage,0);
+        assert_eq!(stats.unresolved,0);
+        server.await.unwrap();
+    });
+}
+
 #[test]
 fn provider_recover() {
     let Some(path) = std::env::var_os("SCRAMJET_PROVIDER_STORAGE") else {

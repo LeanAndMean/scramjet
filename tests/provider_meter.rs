@@ -170,6 +170,58 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         runtime.shutdown().await;
         task.await.unwrap();
 
+        for (encrypted_bytes, id_bytes, expected) in [(14000,1000,Outcome::Success),(15000,1500,Outcome::ResourceLimit)] {
+            let id = "r".repeat(id_bytes);
+            let done = serde_json::json!({"type":"reasoning","id":"rs","summary":[],"encrypted_content":"x".repeat(encrypted_bytes)});
+            let terminal = serde_json::json!({"type":"reasoning","id":"rs","summary":[]});
+            let events = vec![
+                serde_json::json!({"type":"response.created","response":{"id":id,"status":"in_progress","output":[]}}),
+                serde_json::json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs","summary":[]}}),
+                serde_json::json!({"type":"response.output_item.done","output_index":0,"item":done}),
+                serde_json::json!({"type":"response.completed","response":{"id":id,"status":"completed","output":[terminal]}}),
+            ];
+            let body = fixture::wire(&events,true);
+            let base = reset();
+            let replay = scramjet_rs::replay_provider_data(&body);
+            assert_eq!(replay.outcome,expected);
+            measure("canonical-done-enrichment-success-or-refusal",base,1048576);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let path = storage("provider-replay-meter");
+        let events = fixture::continuation_events("checked", "{}", &"opaque:/é".repeat(64));
+        let (endpoint, task) = server::start(fixture::wire(&events,true)).await;
+        let runtime = Runtime::new_provider(endpoint,&path).unwrap();
+        let base = reset();
+        let mut handle = runtime.submit_provider(ProviderRequest::new(&[ProviderInput::User("synthetic".into())],&[]).unwrap()).unwrap();
+        let response = handle.result().await.unwrap();
+        assert_eq!(response.outcome,Outcome::Success);
+        let mut context = vec![ProviderInput::User("\u{0000}".repeat(512))];
+        context.extend(response.envelope.unwrap().items.into_iter().map(ProviderInput::Item));
+        context.push(ProviderInput::ToolResult{call_id:"call_1".into(),output:"\u{0000}".repeat(512)});
+        measure("mixed-replay-transport",base,1048576);
+        let tools:Vec<_>=["inert","read","bash"].into_iter().map(|name|scramjet_rs::ProviderTool{name:name.into(),description:"synthetic data only".into(),parameters:serde_json::json!({"type":"object","properties":{"payload":{"type":"string"}},"required":["payload"],"additionalProperties":false})}).collect();
+        let mut low: usize = 0;
+        let mut high: usize = 16384;
+        while low < high {
+            let mid = (low+high).div_ceil(2);
+            let mut probe = context.clone();
+            probe.push(ProviderInput::User("x".repeat(mid)));
+            if ProviderRequest::new(&probe,&tools).is_ok() { low=mid; } else { high=mid-1; }
+        }
+        context.push(ProviderInput::User("x".repeat(low)));
+        let base = reset();
+        let request = ProviderRequest::new(&context,&tools).unwrap();
+        assert_eq!(request.encoded_bytes(),16384);
+        measure("maximum-complete-mixed-replay-request",base,262144);
+        if let ProviderInput::User(text) = context.last_mut().unwrap() { text.push('x'); }
+        let base = reset();
+        assert!(matches!(ProviderRequest::new(&context,&tools),Err(Outcome::ResourceLimit)));
+        measure("complete-mixed-replay-request-refusal",base,262144);
+        assert_eq!(runtime.provider_history().unwrap().consumed(),1);
+        drop(handle);
+        runtime.shutdown().await;
+        task.await.unwrap();
+
         let path = storage("provider-diagnostic-meter");
         let mut nested = serde_json::json!("synthetic-private");
         for _ in 0..100 { nested = serde_json::json!({"synthetic-private":nested}); }
@@ -178,7 +230,7 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         for index in 0..8 {
             let added = serde_json::json!({"type":"reasoning","id":format!("rs_{index}"),"summary":[]});
             let content = vec![serde_json::json!({"type":"reasoning_text","text":"hé🙂","annotations":[]}); 16];
-            let done = serde_json::json!({"type":"reasoning","id":format!("rs_{index}"),"summary":[],"content":content,"phase":null});
+            let done = serde_json::json!({"type":"reasoning","id":format!("rs_{index}"),"summary":[],"content":content,"phase":null,"encrypted_content":"opaque"});
             events.push(serde_json::json!({"type":"response.output_item.added","output_index":index,"item":added}));
             events.push(serde_json::json!({"type":"response.output_item.done","output_index":index,"item":done}));
             let mut final_item = done;
@@ -212,7 +264,7 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         let started = std::time::Instant::now();
         let (mut handle, capture_receiver) = runtime.submit_provider_captured(ProviderRequest::new(&[ProviderInput::User("synthetic".into())], &[]).unwrap()).unwrap();
         let mut response = handle.result().await.unwrap();
-        assert_eq!(response.outcome, Outcome::Framing);
+        assert_eq!(response.outcome, Outcome::Unsupported);
         assert!(response.envelope.is_none() && response.remote_terminal.is_none() && response.usage.is_none());
         let history = runtime.provider_history().unwrap();
         assert_eq!(history.unknown_usage(), 1);
