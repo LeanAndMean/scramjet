@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.116.2 — Synchronize VTE paste-consent verification
+
+### Fixed
+
+- Service owned VTE multiline-paste consent while exact editor insertion is pending, with a shared deadline, ownership/focus revalidation and no repeated paste or approval attempts. Preserve exact insertion, caret, no-submission and stability checks. Fixes [#636](https://github.com/LeanAndMean/scramjet/issues/636).
+- Preserve independent cleanup observations and the original deadline failure when controlled native journeys time out, with bounded termination and reaping.
+
+### Tests
+
+- Require a hosted VTE differential that masks one observation of a real warning: the pinned old driver must fail at the expected paste check and the candidate must pass complete native acceptance with verified cleanup. Add fail-closed driver, harness, cleanup and workflow coverage; this models a missed observation, not the unrecorded historical dialog-mapping timeline.
+
 ## 0.116.1 — Refresh startup header theme colors
 
 ### Fixed
