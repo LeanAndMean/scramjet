@@ -356,7 +356,7 @@ pub(crate) struct Workspace {
     lock: File,
 }
 impl Workspace {
-    fn validate(&self) -> Result<(), CodingError> {
+    pub(crate) fn validate(&self) -> Result<(), CodingError> {
         validate_directory(&self.root, false)?;
         if identity(&open_directory(&self.path)?)? != self.identity {
             return Err(CodingError::Stale);
@@ -506,6 +506,9 @@ impl ProjectWorkspace {
         });
         workspace.validate()?;
         Ok(Self(workspace))
+    }
+    pub(crate) fn workspace(&self) -> Arc<Workspace> {
+        self.0.clone()
     }
     pub fn root_identity(&self) -> RootIdentity {
         self.0.identity

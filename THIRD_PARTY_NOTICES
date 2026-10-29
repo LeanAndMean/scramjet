@@ -10100,7 +10100,7 @@ DEALINGS IN THE SOFTWARE.
 ========================================================================
 rustix 1.1.5
 Declared license: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
-Resolved features (all targets): alloc, fs, process, std, stdio, termios
+Resolved features (all targets): alloc, event, fs, process, std, stdio, termios
 
 --- COPYRIGHT; SHA-256 377c2e7c53250cc5905c0b0532d35973392af16ffb9596a41d99d202cf3617c9 ---
 Short version for non-lawyers:

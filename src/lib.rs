@@ -54,6 +54,10 @@ pub use readers::{
 };
 
 pub use coding::agent::{CodingAgent, CodingFollowUpAdmission, CodingRun};
+pub use coding::haiku::{
+    HAIKU_COMMAND, HAIKU_SCRIPT, HaikuCapture, HaikuEffect, HaikuIntent, HaikuProcessResult,
+    HaikuProposal, HaikuSession, HaikuStep, haiku_prompt, haiku_tools,
+};
 pub use coding::observation::{
     CodingAccounting, CodingAttempt, CodingControl, CodingDecision, CodingObservation,
     CodingObserver, CodingProposal,

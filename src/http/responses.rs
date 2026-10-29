@@ -54,6 +54,9 @@ pub struct ProviderItem {
     wire: Value,
 }
 impl ProviderItem {
+    pub(crate) fn raw(&self) -> &Value {
+        &self.wire
+    }
     pub fn id(&self) -> &str {
         self.wire["id"].as_str().expect("validated item identity")
     }
