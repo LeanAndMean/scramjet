@@ -2,7 +2,7 @@
 
 A ground-up Rust redesign of Scramjet: a dependable terminal coding harness with lightweight parallel agents and actively managed LLM concurrency.
 
-**Status:** the offline runtime, controlled coding, parallel readers, admission feedback, command journeys and retained-project application are independently accepted within their bounded WSL2 Ubuntu scopes; [historical acceptance](docs/PROGRESS-ARCHIVE.md) preserves exact candidates and qualifications. [S4.14a](docs/tasks/S4.14a.md) adds an opt-in Proxy Responses transport with accepted offline diagnostic/capture corrections, but whole-task live compatibility remains blocked. The current [S4.14b direction](docs/tasks/S4.14b.md) is a reusable headless prompt plus prior-conversation-record invocation, orchestrated externally for successive messages; that interface is not implemented yet. The existing haiku commands below are fixed fixture demonstrations, not general coding or continuation. Native desktop/platform readiness and backend capacity remain unverified; no remote or publication is authorized. Start development orientation at [the task queue](docs/TASKS.md), not the activity history.
+**Status:** the offline runtime, controlled coding, parallel readers, admission feedback, command journeys and retained-project application are independently accepted within their bounded WSL2 Ubuntu scopes; [historical acceptance](docs/PROGRESS-ARCHIVE.md) preserves exact candidates and qualifications. [S4.14a](docs/tasks/S4.14a.md) adds an opt-in Proxy Responses transport with accepted offline diagnostic/capture corrections, but whole-task live compatibility remains blocked. [S4.14b](docs/tasks/S4.14b.md) now supplies the reusable `coding` prompt/record invocation and externally orchestrated fresh-process fixture journeys; its new contracts require independent review, and deployed compatibility remains stopped. The existing haiku commands below are fixed fixture demonstrations, not general coding or continuation. Native desktop/platform readiness and backend capacity remain unverified; no remote or publication is authorized. Start development orientation at [the task queue](docs/TASKS.md), not the activity history.
 
 The initial experience is familiar: separate project tabs, a main coding agent, and parallel specialist subagents. The longer-term ambition is approximately 8,000 concurrent LLM requests from one node, subject to workload, host resources, provider limits, and inference capacity. This is a target to investigate, not demonstrated performance.
 
@@ -95,7 +95,46 @@ The client fixes one active attempt, eight pending requests, at most one POST di
 
 The exclusive0700 storage directory contains a descriptor-relative0600 locked journal, with32 durable possible-POST reservations across fresh processes and separate four-obligation remote/unknown-usage caps. Records accommodate an accepted16384-byte wire frame plus1024 bytes for fixed wrapping/scalar conversion; the file budget covers the header and both records for all32 reservations. Sizes are related storage policies, not provider identifier limits. Provider HTTP header-count capacity follows the4096-byte head budget rather than an assumed16 headers; fixture limits remain separate. Reservation precedes possible send; local transport join is separate from durable provider-terminal/usage acknowledgement and is never billing proof. Unknown usage does not become zero; fixture attestation cannot settle it. Recovery is read-only via `reconstruct_provider_history`, never retries, and refuses incomplete/contradictory history. Default live startup refuses prior uncertainty; an explicitly selected retained ordinal boundary permits known new attempts while keeping old obligations counted, and any new uncertainty stops further runtime dispatch. This is not a status lookup, retry or reconciliation API. This first slice supplies no reconciliation API, general provider registry, TLS/OAuth client, file creation, Bash/Python execution or provider TUI.
 
-## Headless haiku journey (S4.14b accepted offline)
+## Reusable headless coding invocation (S4.14b offline candidate)
+
+`coding` accepts a caller's UTF-8 prompt and, on a later invocation, the previous complete JSON result/record. Each process runs one message through the existing provider admission/turn driver, returns actual correlated tool results and exports complete ordered conversation material. Production has no poem names, supplied reader solution, two-message choreography or stdout-equality success predicate. A model's no-call final completes its message, not proof that the requested files/output are correct.
+
+This lane requires an **explicitly asserted owned loopback fixture**, existing absolute0700 disposable project/storage directories with disjoint trees, a stable run ID (UTF-8 basename up to64 bytes) and exactly two selected UTF-8 basename slots. Only those regular single-link0600 files, at most512 bytes each, may be read or exclusively created; existing captures are revalidated, never overwritten or silently recaptured. Proxy port18080, live mode, arbitrary host files and shell command strings are refused. The caller supplies and owns its HTTP fixture; the executable embeds no scenario server. An executable example that starts one owned request-aware server and passes a record between two independent CLI subprocesses is `tests/coding_invocation.rs`:
+
+```sh
+cargo test --offline --locked --test coding_invocation -- --nocapture
+cargo test --offline --locked --test coding_invocation_controls \
+  --test coding_invocation_budget --test coding_invocation_faults \
+  --test coding_invocation_meter
+```
+
+Ordinary scripting against your already-running owned fixture can use:
+
+```sh
+umask 077
+mkdir -m 700 owned-project owned-storage
+printf '%s\n' 'Create a short verse in notes.md, then finish this message.' > first.txt
+printf '%s\n' 'Write your own Python reader for notes.md and run it to print the file.' > second.txt
+cargo run --offline --locked -- coding --owned-fixture \
+  --endpoint "127.0.0.1:$FIXTURE_PORT" \
+  --project "$PWD/owned-project" --storage "$PWD/owned-storage" --run example \
+  --file notes.md --file reader.py --prompt-file first.txt > first.json
+cargo run --offline --locked -- coding --owned-fixture \
+  --endpoint "127.0.0.1:$FIXTURE_PORT" \
+  --project "$PWD/owned-project" --storage "$PWD/owned-storage" --run example \
+  --file notes.md --file reader.py --prompt-file second.txt \
+  --record-file first.json > second.json
+```
+
+Machine-readable stdout is separate from terminal-safe complete intent display on stderr. Normal approval reads one bounded JSON line of the form `{"approve":true,"intent":<the exact displayed intent>}`; a stale/foreign intent, bare yes, EOF, signal or deadline does not approve. `--prompt-file -` accepts one bounded stdin line; use a prompt file when stdin is also needed for approvals. `--approve-effects` is synthetic automatic approval **only in the explicitly selected owned fixture lane, after emitting each full current intent**.
+
+The tools are strict `write {path,content}`, `read {path}` and `python {path}`; the file slots have no predetermined roles/extensions/order. Python runs the actual approved captured script with fixed `/usr/bin/python3 -I /workspace/<selected-script>` argv, sealed read-only inputs, no home/credentials/network, no writable filesystem scratch and an arch-qualified syscall filter denying child/thread/socket/pipe/backing-storage creation and unselected facilities. Installed Linux-x86_64 Bubblewrap/Python3.8 is required; unsupported setup fails closed. Empty inherited environment is replaced by PATH and Bubblewrap's fixed in-sandbox `PWD=/workspace`, not host environment. CPU2s, wall5s, AS256MiB, FD32/core0 and combined output16384 bytes remain fixed. Native pre-exec tracing with inherited `EXITKILL` closes the parent-loss startup window and records the actual program wait status; unsupported job-control stops are terminated explicitly. Failed/nonzero Python ends this bounded one-process invocation with its intact result, rather than guessing resource causes from stderr. Valid UTF-8 output is text; other bytes use a reversible byte array. Namespace/launcher/worker/local transport reclamation is separate from remote billing.
+
+One locked run retains the same provider ledger, original boot-qualified300s deadline and aggregate two-create/three-read/one-process/eight-model-attempt budgets across fresh invocations. The project anchor and durable project-lock run marker prevent omitted-record or alternate-store allowance reset. A version1 record is a locally bound immutable conversation/result export, not approval, accounting settlement or a portable legacy-session importer. Only the latest clean generation may be consumed, once; complete material/tools/captures/receipts must match its authoritative export. Pending/uncertain effects, changed roots/captures, malformed/tampered/missing/orphan records and non-fitting complete context stop without replay, repair or truncation. Request/frame/canonical-envelope limits stay16384 bytes, wire/result-record131072, journal128 records and aggregate retained-run data2MiB, including exports/provider/ownership metadata; selected project files remain separately bounded. Valid oversized context/output is retained where it occurred and explicitly refused; final export producer acknowledgement stays unknown on read-only recovery. These are per-run/client budgets, not node-wide quotas.
+
+Owned fixtures establish the reusable path and bounded native controls, not deployed reasoning continuity/tool intelligence, physical desktop/macOS readiness or final user QA. [Required independent review and remaining live gates](docs/tasks/S4.14b.md) remain authoritative. The historical haiku APIs below are preserved separately.
+
+## Headless haiku journey (historically accepted offline)
 
 `HaikuAgent` uses the same concrete coding turn driver as replacement/follow-up, with one dedicated effect owner and immutable observation/exact-control handles. Its fixture-only CLI runs actual Responses HTTP requests, creates/reads two exclusive0600 files in an explicitly selected empty0700 project, and executes the fixed reviewed Python reader over sealed read-only snapshots. Installed Linux x86_64 Bubblewrap/Python3.8 isolation is required; unsupported setup fails closed. There is no general shell/Python capability, provider intelligence, TUI or portable sandbox claim. [Independent corrected offline acceptance](docs/tasks/S4.14b.md#independent-corrected-offline-acceptance-2026-10-28) establishes the complete fixture-backed candidate; deployed acceptance and the shared live stop remain unchanged.
 
@@ -114,7 +153,7 @@ History is strictly read-only and never constructs an executable envelope, appro
 
 ## Retained haiku terminal application (S4.14c unfinished offline candidate)
 
-This specialty application is preserved historical work, not a current implementation priority; the user redirected the short-term goal to reusable headless invocations rather than a fixed-request or special two-message interface. The fixture-only retained application consumes the earlier headless owner; it is **not independently accepted**. Its stopped continuation is checkpointed with a known formatting failure and only scoped fresh check/test evidence; earlier full checks below do not cover the recovered changes. In a real terminal, explicitly select an existing empty owned0700 project and disjoint owned0700 storage:
+This specialty application is preserved historical work, not a current implementation priority; the user redirected the short-term goal to reusable headless invocations rather than a fixed-request or special two-message interface. The fixture-only retained application consumes the earlier headless owner; it is **not independently accepted**. Its stopped continuation and historical check qualifications remain checkpointed; the inherited formatting failure has been mechanically repaired, without c acceptance. Current b regression checks do not replace c's required independent review. In a real terminal, explicitly select an existing empty owned0700 project and disjoint owned0700 storage:
 
 ```sh
 cargo run --offline --locked -- haiku-ui-demo --fixture \

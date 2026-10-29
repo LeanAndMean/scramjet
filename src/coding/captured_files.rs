@@ -18,22 +18,26 @@ pub(crate) struct FileSlots<'a> {
     names: [&'a str; 2],
 }
 
+pub(crate) fn validate_basename(name: &str) -> Result<(), CodingError> {
+    if name.is_empty()
+        || name.contains(['/', '\0'])
+        || [
+            ".",
+            "..",
+            crate::PROJECT_LOCK_NAME,
+            ".coding-stage",
+            RUN_ANCHOR,
+        ]
+        .contains(&name)
+    {
+        return Err(CodingError::Invalid("unsupported selected basename"));
+    }
+    Ok(())
+}
 impl<'a> FileSlots<'a> {
     pub(crate) fn new(names: [&'a str; 2]) -> Result<Self, CodingError> {
         for name in names {
-            if name.is_empty()
-                || name.contains(['/', '\0'])
-                || [
-                    ".",
-                    "..",
-                    crate::PROJECT_LOCK_NAME,
-                    ".coding-stage",
-                    RUN_ANCHOR,
-                ]
-                .contains(&name)
-            {
-                return Err(CodingError::Invalid("unsupported selected basename"));
-            }
+            validate_basename(name)?;
         }
         if names[0] == names[1] {
             return Err(CodingError::Invalid("duplicate selected basename"));

@@ -414,6 +414,36 @@ impl Runtime {
         .map_err(|_| std::io::Error::other("runtime owner busy"))
     }
 
+    pub(crate) fn coding_provider(
+        &self,
+        endpoint: SocketAddr,
+    ) -> std::io::Result<Arc<Mutex<ProviderLedger>>> {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| std::io::Error::other("runtime accounting poisoned"))?;
+        let ledger = state
+            .provider
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("provider runtime required"))?;
+        if state.retained_unknown_through.is_some()
+            || state.shutdown
+            || state.stopped
+            || !state.slots.is_empty()
+            || !state.pending.is_empty()
+            || ledger
+                .lock()
+                .map_err(|_| std::io::Error::other("provider accounting poisoned"))?
+                .binding()?
+                .endpoint
+                != endpoint
+        {
+            return Err(std::io::Error::other("current provider owner unavailable"));
+        }
+        Ok(ledger.clone())
+    }
+
     pub fn provider_history(&self) -> Option<ProviderHistory> {
         self.shared
             .state

@@ -86,9 +86,19 @@ enum Record {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProviderBinding {
+    pub directory: [u64; 2],
+    pub file: [u64; 2],
+    pub endpoint: SocketAddr,
+}
+
 pub(crate) struct ProviderLedger {
     file: File,
     directory: File,
+    path: std::path::PathBuf,
+    endpoint: SocketAddr,
     history: ProviderHistory,
     poisoned: bool,
 }
@@ -268,6 +278,8 @@ impl ProviderLedger {
         let mut ledger = Self {
             file,
             directory,
+            path: path.into(),
+            endpoint,
             history,
             poisoned: false,
         };
@@ -296,6 +308,35 @@ impl ProviderLedger {
         flock(&self.file, FlockOperation::NonBlockingLockExclusive).unwrap();
     }
 
+    pub(crate) fn binding(&self) -> io::Result<ProviderBinding> {
+        if self.poisoned {
+            return Err(invalid());
+        }
+        let named_directory = directory(&self.path)?;
+        crate::project::validate_directory(&self.directory, true).map_err(|_| invalid())?;
+        let named_file = File::from(openat(
+            &self.directory,
+            "provider-attempts.jsonl",
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        crate::project::validate_stage(&self.file, 0o600).map_err(|_| invalid())?;
+        crate::project::validate_stage(&named_file, 0o600).map_err(|_| invalid())?;
+        let id = |file: &File| -> io::Result<[u64; 2]> {
+            let metadata = file.metadata()?;
+            Ok([metadata.dev(), metadata.ino()])
+        };
+        let binding = ProviderBinding {
+            directory: id(&self.directory)?,
+            file: id(&self.file)?,
+            endpoint: self.endpoint,
+        };
+        if id(&named_directory)? != binding.directory || id(&named_file)? != binding.file {
+            return Err(invalid());
+        }
+        Ok(binding)
+    }
+
     pub(crate) fn history(&self) -> ProviderHistory {
         self.history.clone()
     }
@@ -309,6 +350,7 @@ impl ProviderLedger {
         if self.poisoned {
             return Err(invalid());
         }
+        self.binding()?;
         let mut bytes = bounded_json_bytes(record, RECORD_BYTES)
             .map_err(|_| io::Error::other("provider history record budget exhausted"))?;
         if self.file.metadata()?.len() + bytes.len() as u64 + 1 > HISTORY_BYTES {

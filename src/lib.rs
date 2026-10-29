@@ -61,6 +61,10 @@ pub use coding::haiku::{
     HaikuOutcome, HaikuPhase, HaikuProcessResult, HaikuProposal, HaikuRecord, HaikuSession,
     HaikuSnapshot, HaikuStep, haiku_prompt, haiku_tools, reconstruct_haiku_history,
 };
+pub use coding::invocation::{
+    CodingInvocation, CodingInvocationEffect, CodingInvocationIntent, CodingInvocationOptions,
+    CodingInvocationResult,
+};
 pub use coding::observation::{
     CodingAccounting, CodingAttempt, CodingControl, CodingDecision, CodingObservation,
     CodingObserver, CodingProposal,

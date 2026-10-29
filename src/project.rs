@@ -356,6 +356,34 @@ pub(crate) struct Workspace {
     lock: File,
 }
 impl Workspace {
+    pub(crate) fn coding_run_marker(&self) -> Result<Vec<u8>, CodingError> {
+        use std::os::unix::fs::FileExt;
+        let stat = fstat(&self.lock)?;
+        if stat.st_size < 0 || stat.st_size > 1024 {
+            return Err(CodingError::ResourceLimit(
+                "project run marker resource limit",
+            ));
+        }
+        let mut bytes = vec![0; stat.st_size as usize];
+        self.lock.read_exact_at(&mut bytes, 0)?;
+        Ok(bytes)
+    }
+    pub(crate) fn install_coding_run_marker(&self, bytes: &[u8]) -> Result<(), CodingError> {
+        use std::os::unix::fs::FileExt;
+        self.validate()?;
+        if bytes.len() > 1024 {
+            return Err(CodingError::ResourceLimit(
+                "project run marker resource limit",
+            ));
+        }
+        if !self.coding_run_marker()?.is_empty() {
+            return Err(CodingError::Stale);
+        }
+        self.lock.write_all_at(bytes, 0)?;
+        self.lock.sync_all()?;
+        self.root.sync_all()?;
+        Ok(())
+    }
     pub(crate) fn validate(&self) -> Result<(), CodingError> {
         validate_directory(&self.root, false)?;
         if identity(&open_directory(&self.path)?)? != self.identity {

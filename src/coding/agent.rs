@@ -35,7 +35,20 @@ pub(crate) async fn run_haiku(
     }
     match result? {
         DriverRun::Haiku(run) => Ok(run),
-        DriverRun::Fixture(_) => unreachable!(),
+        DriverRun::Fixture(_) | DriverRun::Invocation => unreachable!(),
+    }
+}
+pub(crate) async fn run_invocation(
+    agent: &mut super::invocation::CodingInvocation,
+    runtime: &Runtime,
+) -> Result<(), CodingError> {
+    let result = drive(DriverMode::Invocation(agent), runtime).await;
+    if let Err(error) = &result {
+        agent.stop(error).await?;
+    }
+    match result? {
+        DriverRun::Invocation => Ok(()),
+        _ => unreachable!(),
     }
 }
 
@@ -1567,7 +1580,7 @@ impl CodingAgent {
         }
         match drive(DriverMode::Fixture(self), runtime).await? {
             DriverRun::Fixture(run) => Ok(run),
-            DriverRun::Haiku(_) => unreachable!(),
+            DriverRun::Haiku(_) | DriverRun::Invocation => unreachable!(),
         }
     }
 

@@ -2,7 +2,9 @@ pub(crate) mod agent;
 mod captured_files;
 pub(crate) mod haiku;
 pub(crate) mod history;
+pub(crate) mod invocation;
 pub(crate) mod journal;
+mod process;
 pub use history::{
     CODING_HISTORY_PAYLOAD_BYTES, CodingHistory, CodingHistoryEnding, CodingHistoryEntry,
     CodingHistoryRecord, CodingMaterial, reconstruct_coding_history,

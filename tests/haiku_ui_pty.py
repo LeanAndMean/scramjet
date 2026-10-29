@@ -311,7 +311,8 @@ def journey(binary, mode):
                             for directory in (project, storage) for root, _, names in os.walk(directory) for name in names}
                 before_tree = owned_tree()
                 entries = [dict(sequence=i, acknowledged=i != len(records()) - 1, record=r) for i, r in enumerate(records())]
-                history_env = dict(os.environ, S414C_PROJECT=project, S414C_STORAGE=storage, S414C_APPLICATION_MODE='history')
+                canonical_path = os.path.join(base, 'canonical-history-documents.json')
+                history_env = dict(os.environ, S414C_PROJECT=project, S414C_STORAGE=storage, S414C_APPLICATION_MODE='history', S414C_CANONICAL_DOCUMENTS=canonical_path)
                 trace_path = os.path.join(base, 'history.trace')
                 child = subprocess.Popen([os.environ['S414C_TEST_BINARY'], '--exact', 'haiku_ui_demo::tests::application_child', '--ignored', '--nocapture'],
                                          stdin=slave, stdout=slave, stderr=slave, preexec_fn=own_terminal, env=history_env)
@@ -319,19 +320,35 @@ def journey(binary, mode):
                 deadline = time.monotonic() + 60
                 receive(lambda: screen.contains('read_only=true'))
                 send(b'\t'); pump(); send(b'\x1b[15~'); pump()
-                for entry in entries:
+                with open(canonical_path) as canonical_file:
+                    canonical_documents = json.load(canonical_file)
+                assert len(canonical_documents) == len(entries)
+                def ascii_document(text):
+                    return ''.join(character if ord(character) < 127 else ''.join(f'\\u{unit:04X}' for unit in struct.unpack('>'+'H'*(len(character.encode('utf-16-be'))//2), character.encode('utf-16-be'))) for character in text)
+                for entry, canonical in zip(entries, canonical_documents):
                     payload = ''
-                    expected = json.dumps(entry, ensure_ascii=True, separators=(',', ':'))
-                    receive(lambda: screen.contains('INERT HISTORY page 1/'))
+                    expected = ascii_document(canonical)
+                    def history_page(page, record, offset):
+                        headers = [re.search(r'INERT HISTORY page (\d+)/(\d+) record=(\d+)', ''.join(row)) for row in screen.cells]
+                        offsets = [int(chunk[1]) for row in screen.cells if (chunk := re.match(r'^(\d{6}):', ''.join(row)))]
+                        expected_offsets = list(range(offset, min(offset + 512, len(expected)), 64))
+                        chunks = [chunk for row in screen.cells if (chunk := re.match(r'^(\d{6}):(.*)$', ''.join(row)))]
+                        complete = all(chunk[2][:min(64, len(expected)-int(chunk[1]))] == expected[int(chunk[1]):int(chunk[1])+64] for chunk in chunks)
+                        return any(header and int(header[1]) == page and int(header[3]) == record for header in headers) and offsets == expected_offsets and complete
+                    receive(lambda: history_page(1, entry['sequence'], 0))
                     for _ in range(1024):
                         header = next(''.join(row) for row in screen.cells if 'INERT HISTORY page' in ''.join(row))
                         match = re.search(r'page (\d+)/(\d+) record=(\d+)', header)
                         assert match and int(match[3]) == entry['sequence'], header
                         for row in screen.cells:
                             chunk = re.match(r'^(\d{6}):(.*)$', ''.join(row))
-                            if chunk: payload += chunk[2][:min(64, len(expected) - int(chunk[1]))]
+                            if chunk:
+                                assert int(chunk[1]) == len(payload), ('stale or skipped history page', entry['sequence'], chunk[1], len(payload))
+                                payload += chunk[2][:min(64, len(expected) - int(chunk[1]))]
                         if match[1] == match[2]: break
-                        send(F9); pump(.06)
+                        next_page = int(match[1]) + 1
+                        send(F9)
+                        receive(lambda: history_page(next_page, entry['sequence'], len(payload)))
                     assert json.loads(payload) == entry, (entry['sequence'], payload)
                     send(b'\x1b[24~'); pump(.06)
                 receive(lambda: screen.contains('OBSERVED FACTS page'))

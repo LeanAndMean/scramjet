@@ -49,6 +49,30 @@ fn application_child() {
     let storage =
         PathBuf::from(std::env::var_os("S414C_STORAGE").expect("synthetic owned storage"));
     let mode = std::env::var("S414C_APPLICATION_MODE").unwrap();
+    if mode == "history"
+        && let Some(path) = std::env::var_os("S414C_CANONICAL_DOCUMENTS")
+    {
+        #[derive(serde::Serialize)]
+        struct Detail<'a> {
+            sequence: usize,
+            acknowledged: bool,
+            record: &'a scramjet_rs::HaikuRecord,
+        }
+        let history = scramjet_rs::reconstruct_haiku_history(&storage, "pty").unwrap();
+        let documents = history
+            .entries
+            .iter()
+            .map(|entry| {
+                serde_json::to_string(&Detail {
+                    sequence: entry.sequence,
+                    acknowledged: entry.acknowledged,
+                    record: &entry.record,
+                })
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        std::fs::write(path, serde_json::to_vec(&documents).unwrap()).unwrap();
+    }
     crate::ui::start_haiku_meter();
     let result = execute_options(Options {
         project: (!matches!(mode.as_str(), "history" | "history-trace")).then_some(project),

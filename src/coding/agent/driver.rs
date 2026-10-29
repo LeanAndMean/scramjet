@@ -4,10 +4,12 @@ use crate::coding::haiku::agent::{HaikuAgent, HaikuRun};
 pub(super) enum DriverMode<'a> {
     Fixture(&'a mut CodingAgent),
     Haiku(&'a mut HaikuAgent),
+    Invocation(&'a mut crate::coding::invocation::CodingInvocation),
 }
 pub(super) enum DriverRun {
     Fixture(CodingRun),
     Haiku(HaikuRun),
+    Invocation,
 }
 enum Prepared {
     Fixture(String),
@@ -33,10 +35,15 @@ impl DriverMode<'_> {
         match self {
             Self::Fixture(agent) => &agent.cancellation,
             Self::Haiku(agent) => &agent.cancellation,
+            Self::Invocation(agent) => &agent.cancellation,
         }
     }
     fn expired(&self) -> bool {
-        matches!(self, Self::Haiku(agent) if std::time::Instant::now() >= agent.deadline)
+        match self {
+            Self::Fixture(_) => false,
+            Self::Haiku(agent) => std::time::Instant::now() >= agent.deadline,
+            Self::Invocation(agent) => std::time::Instant::now() >= agent.deadline,
+        }
     }
     fn admitted(&self, turn: u64, id: RequestId) {
         match self {
@@ -44,6 +51,7 @@ impl DriverMode<'_> {
                 .shared
                 .update(|snapshot| snapshot.attempts[(turn - 1) as usize].request_id = Some(id)),
             Self::Haiku(agent) => agent.admitted(id),
+            Self::Invocation(_) => {}
         }
     }
 }
@@ -179,7 +187,7 @@ pub(super) async fn drive(
                 TURNS
             },
         ),
-        DriverMode::Haiku(_) => (1, 8),
+        DriverMode::Haiku(_) | DriverMode::Invocation(_) => (1, 8),
     };
     let mut previous = String::new();
     let mut ids = Vec::with_capacity((last - first + 1) as usize);
@@ -194,6 +202,7 @@ pub(super) async fn drive(
         let prepared = match &mut mode {
             DriverMode::Fixture(agent) => fixture_request(agent, turn, &previous).await?,
             DriverMode::Haiku(agent) => Prepared::Provider(agent.request().await?),
+            DriverMode::Invocation(agent) => Prepared::Provider(agent.request().await?),
         };
         if mode.expired() {
             return Err(CodingError::Deadline);
@@ -203,6 +212,7 @@ pub(super) async fn drive(
         }
         let deadline = match &mode {
             DriverMode::Haiku(agent) => Some(tokio::time::Instant::from_std(agent.deadline)),
+            DriverMode::Invocation(agent) => Some(tokio::time::Instant::from_std(agent.deadline)),
             DriverMode::Fixture(_) => None,
         };
         let handle = submit(runtime, prepared, deadline)?;
@@ -273,6 +283,11 @@ pub(super) async fn drive(
                         request_ids: ids,
                         snapshot: agent.observer().snapshot(),
                     }));
+                }
+            }
+            (DriverMode::Invocation(agent), Completion::Provider(response)) => {
+                if agent.response(id, response).await? {
+                    return Ok(DriverRun::Invocation);
                 }
             }
             _ => unreachable!(),
