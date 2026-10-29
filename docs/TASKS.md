@@ -4,13 +4,15 @@ This file owns priority order, selection and selection rationale. Each linked ta
 
 ## Selection
 
-[S4.14b — headless Markdown/read/Python/Bash journey](tasks/S4.14b.md), for planning its complete fixture-backed implementation using the independently accepted offline provider contracts. Both advisers identified this missing useful capability; direct source inspection confirms current effects support replacement, not exclusive creation or isolated process execution. Triage explicitly separates offline implementation readiness from deployed acceptance rather than treating partial a acceptance as whole-task completion. No provider call is eligible; whole-a acceptance remains required for b's live journey and whole acceptance, and c still requires accepted b. Accepted a corrections are exhausted, not another priority.
+[S4.14c — retained terminal application and final QA](tasks/S4.14c.md), to resolve the consuming application's offline integration and settlement design against independently accepted headless contracts. Both independent advisers identified this as the largest remaining locally demonstrable part of the user-selected journey. Direct source inspection confirms immutable headless facts/exact controls and an explicit unjoined-run/finish seam, but also a synchronous drop join: terminal restoration and blocked-worker ownership need planning before implementation. Triage explicitly separates offline readiness from deployed acceptance, as previously done for b; this does not unlock live calls, whole-child acceptance or final user QA.
+
+Accepted offline b implementation and its R1 correction are exhausted, not another planning/work/review priority. The deployed a → b → c acceptance sequence and the parent's unresolved live exposure remain controlling. No speculative historical reconciliation service or further provider correction is selected without concrete evidence.
 
 ## Ordered work
 
-1. [S4.14b — headless Markdown/read/Python/Bash journey](tasks/S4.14b.md). Prepare the complete offline coding/effect journey without weakening deployed acceptance or live exposure limits.
+1. [S4.14c — retained terminal application and final QA](tasks/S4.14c.md). Prepare the complete fixture-backed retained application using the accepted headless owner, not another execution loop.
 2. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Preserve the required deployed compatibility outcome; accepted offline corrections need no further work absent a concrete finding.
-3. [S4.14c — retained terminal application and final QA](tasks/S4.14c.md). Consume the same headless journey in the terminal instead of building another execution loop.
+3. [S4.14b — headless Markdown/read/Python/Bash journey](tasks/S4.14b.md). Preserve the required deployed journey and whole-task acceptance; do not repeat accepted offline work.
 
 Milestone context: [S4.14 — first real-provider coding journey](tasks/S4.14.md). Its record owns shared authorization and parent acceptance, not another queue.
 
