@@ -1,4 +1,5 @@
 pub(crate) mod agent;
+mod captured_files;
 pub(crate) mod haiku;
 pub(crate) mod history;
 pub(crate) mod journal;

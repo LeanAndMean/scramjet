@@ -14,34 +14,24 @@ pub use history::{
 pub use journal::Record as HaikuRecord;
 pub use observation::{HaikuControl, HaikuObserver, HaikuPhase, HaikuSnapshot};
 
-use super::{CodingError, EditCancellation};
+pub use super::captured_files::CapturedFile as HaikuCapture;
+use super::{
+    CodingError, EditCancellation,
+    captured_files::{FILE_BYTES, FileSlots},
+};
 use crate::http::responses::bounded_json_bytes;
 use crate::{
     Outcome, ProjectWorkspace, ProviderInput, ProviderRequest, ProviderResponse, ProviderTool,
     RequestId,
 };
-use rustix::fs::{Mode, OFlags, fstat, openat};
+use rustix::fs::fstat;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{
-    fs::File,
-    io::{Read, Write},
-    path::Path,
-    sync::Arc,
-};
+use std::{fs::File, io::Write, path::Path, sync::Arc};
 
 pub const HAIKU_SCRIPT: &str = "from pathlib import Path\nimport sys\nsys.stdout.buffer.write(Path('haiku.md').read_bytes())\n";
 pub const HAIKU_COMMAND: &str = "exec /usr/bin/python3 -I print_haiku.py";
-const FILE_BYTES: usize = 512;
 const NAMES: [&str; 2] = ["haiku.md", "print_haiku.py"];
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HaikuCapture {
-    pub path: String,
-    pub identity: [u64; 2],
-    pub content: String,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
@@ -155,70 +145,11 @@ fn identity(file: &File) -> Result<[u64; 2], CodingError> {
 }
 fn read_capture(root: &File, path: &str) -> Result<HaikuCapture, CodingError> {
     name(path)?;
-    let mut file = File::from(openat(
-        root,
-        path,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?);
-    crate::project::validate_stage(&file, 0o600)?;
-    let before = fstat(&file)?;
-    if before.st_size < 0 || before.st_size > FILE_BYTES as i64 {
-        return Err(CodingError::ResourceLimit("haiku file resource limit"));
-    }
-    let mut bytes = [0; FILE_BYTES + 1];
-    let mut count = 0;
-    loop {
-        let n = file.read(&mut bytes[count..])?;
-        if n == 0 {
-            break;
-        }
-        count += n;
-        if count > FILE_BYTES {
-            return Err(CodingError::ResourceLimit("haiku file resource limit"));
-        }
-    }
-    let after = fstat(&file)?;
-    if (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mode,
-        before.st_nlink,
-        before.st_uid,
-        before.st_mtime,
-        before.st_mtime_nsec,
-        before.st_ctime,
-        before.st_ctime_nsec,
-    ) != (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mode,
-        after.st_nlink,
-        after.st_uid,
-        after.st_mtime,
-        after.st_mtime_nsec,
-        after.st_ctime,
-        after.st_ctime_nsec,
-    ) {
-        return Err(CodingError::TargetMismatch);
-    }
-    crate::project::validate_stage(&file, 0o600)?;
-    Ok(HaikuCapture {
-        path: path.into(),
-        identity: identity(&file)?,
-        content: String::from_utf8(bytes[..count].to_vec())
-            .map_err(|_| CodingError::Invalid("haiku file is not UTF-8"))?,
-    })
+    FileSlots::new(NAMES)?.capture(root, path)
 }
 fn absent(root: &File, path: &str) -> Result<(), CodingError> {
     name(path)?;
-    match rustix::fs::statat(root, path, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
-        Err(rustix::io::Errno::NOENT) => Ok(()),
-        Err(error) => Err(error.into()),
-        Ok(_) => Err(CodingError::TargetMismatch),
-    }
+    FileSlots::new(NAMES)?.absent(root, path)
 }
 
 pub fn haiku_tools() -> Vec<ProviderTool> {
@@ -665,17 +596,7 @@ impl HaikuSession {
         self.validate_workspace()?;
         let execution = (|| match &proposal.intent.effect {
             HaikuEffect::Create { path, content, .. } => {
-                let mut file = File::from(openat(
-                    &self.workspace.root,
-                    path.as_str(),
-                    OFlags::WRONLY
-                        | OFlags::CREATE
-                        | OFlags::EXCL
-                        | OFlags::NOFOLLOW
-                        | OFlags::CLOEXEC,
-                    Mode::RUSR | Mode::WUSR,
-                )?);
-                crate::project::validate_stage(&file, 0o600)?;
+                let mut file = FileSlots::new(NAMES)?.create(&self.workspace.root, path)?;
                 #[cfg(test)]
                 {
                     self.checkpoint(fault::Point::CreateOpen)?;

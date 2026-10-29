@@ -1,4 +1,5 @@
 use super::*;
+use rustix::fs::{Mode, OFlags};
 #[path = "tests_faults.rs"]
 mod faults;
 use std::{

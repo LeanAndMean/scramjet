@@ -139,7 +139,11 @@ fn real_host_owners_wait_for_return_fence_on_stop_and_caught_panic() {
             )
         });
         let bridge = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-        if panic_after_ready { bridge.stop(); } else { bridge.cancellation().unwrap().cancel(); }
+        if panic_after_ready {
+            bridge.stop();
+        } else {
+            bridge.cancellation().unwrap().cancel();
+        }
         assert!(!bridge.snapshot().offered);
         std::thread::sleep(Duration::from_millis(60));
         assert!(!worker.is_finished());

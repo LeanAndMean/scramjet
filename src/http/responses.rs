@@ -54,6 +54,14 @@ pub struct ProviderItem {
     wire: Value,
 }
 impl ProviderItem {
+    pub(crate) fn from_context(wire: Value) -> Result<Self, Outcome> {
+        bounded_json(&wire, PROVIDER_ENVELOPE_BYTES)?;
+        let (_, refused) = select_replay(&wire, &wire)?;
+        if refused {
+            return Err(Outcome::Unsupported);
+        }
+        Ok(Self { wire })
+    }
     pub(crate) fn raw(&self) -> &Value {
         &self.wire
     }
@@ -1142,22 +1150,25 @@ impl ResponsesParser {
         let status = string(&response, "status")?.to_owned();
         let response_id = self.response_id.unwrap();
         let usage = usage(&response)?;
-        let envelope =
-            (status == "completed" && self.replay_refusal.is_none()).then(|| ProviderEnvelope {
+        let envelope = if status == "completed" && self.replay_refusal.is_none() {
+            Some(ProviderEnvelope {
                 response_id: response_id.clone(),
                 items: self
                     .items
                     .into_iter()
                     .enumerate()
-                    .map(|(index, state)| ProviderItem {
-                        wire: if state.replay_terminal {
+                    .map(|(index, state)| {
+                        ProviderItem::from_context(if state.replay_terminal {
                             response["output"][index].clone()
                         } else {
                             state.done.unwrap()
-                        },
+                        })
                     })
-                    .collect(),
-            });
+                    .collect::<Result<Vec<_>, _>>()?,
+            })
+        } else {
+            None
+        };
         Ok(ParsedResponse {
             refusal: self.replay_refusal,
             envelope,
@@ -1169,6 +1180,9 @@ impl ResponsesParser {
     }
 }
 
+#[cfg(test)]
+#[path = "responses_context_tests.rs"]
+mod responses_context_tests;
 #[cfg(test)]
 #[path = "responses_tests.rs"]
 mod responses_tests;
