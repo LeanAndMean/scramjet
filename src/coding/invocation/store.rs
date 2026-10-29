@@ -624,6 +624,17 @@ impl Store {
         if anchor.is_none() && !workspace.coding_run_marker()?.is_empty() {
             return Err(CodingError::Stale);
         }
+        let initial = if anchor.is_none() {
+            let slots = FileSlots::new([&names[0], &names[1]])?;
+            let capture = |name: &str| match slots.capture(&workspace.root, name) {
+                Ok(c) => Ok(Some(c)),
+                Err(CodingError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e),
+            };
+            Some([capture(&names[0])?, capture(&names[1])?])
+        } else {
+            None
+        };
         let directory = match openat(
             &workspace.storage,
             run,
@@ -717,16 +728,14 @@ impl Store {
             mkdirat(&directory, PROVIDER, Mode::from_raw_mode(0o700))?;
             let runtime = crate::Runtime::new_provider(endpoint, &provider_path)?;
             let ledger = runtime.coding_provider(endpoint)?;
-            let initial = [0, 1].map(|i| {
-                let slots = FileSlots::new([&names[0], &names[1]])?;
-                match slots.capture(&workspace.root, &names[i]) {
-                    Ok(c) => Ok(Some(c)),
-                    Err(CodingError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                    Err(e) => Err(e),
+            let initial = initial.ok_or_else(invalid)?;
+            let slots = FileSlots::new([&names[0], &names[1]])?;
+            for (name, capture) in names.iter().zip(&initial) {
+                match capture {
+                    Some(c) => require(slots.capture(&workspace.root, name)? == *c)?,
+                    None => slots.absent(&workspace.root, name)?,
                 }
-            });
-            let [a, b] = initial;
-            let initial = [a?, b?];
+            }
             let started_ns = entry_ns;
             let header = Header {
                 version: 1,
@@ -1071,22 +1080,42 @@ impl Store {
         self.reserved = self.reserved.max(1);
         self.append(Record::Stopped { reason })
     }
+    pub fn publication_guard(&self, cancellation: &EditCancellation) -> Result<(), CodingError> {
+        if cancellation.is_cancelled() {
+            return Err(CodingError::Cancelled);
+        }
+        self.guard()
+    }
     pub fn publish(
         &mut self,
         worker_joined: bool,
         transports_joined: bool,
         cancellation: &EditCancellation,
     ) -> Result<Vec<u8>, CodingError> {
-        self.guard()?;
-        if cancellation.is_cancelled() {
-            return Err(CodingError::Cancelled);
+        let result = self.publish_inner(worker_joined, transports_joined, cancellation);
+        if let Err(error) = &result {
+            self.stop(error.to_string()).map_err(|stop| {
+                CodingError::Io(std::io::Error::other(format!(
+                    "publication stop persistence incomplete; no retry: {stop}"
+                )))
+            })?;
         }
+        result
+    }
+    fn publish_inner(
+        &mut self,
+        worker_joined: bool,
+        transports_joined: bool,
+        cancellation: &EditCancellation,
+    ) -> Result<Vec<u8>, CodingError> {
+        self.publication_guard(cancellation)?;
         self.reserved = self.reserved.max(2);
         self.append(Record::Final {
             generation: self.state.generation,
             worker_joined,
             transports_joined,
         })?;
+        self.publication_guard(cancellation)?;
         let export = self.state.export();
         let bytes = encode(&export)?;
         if self
@@ -1110,16 +1139,16 @@ impl Store {
         file.sync_all()?;
         self.directory.sync_all()?;
         self.retained += bytes.len();
-        if cancellation.is_cancelled() {
-            return Err(CodingError::Cancelled);
-        }
+        self.publication_guard(cancellation)?;
         self.append(Record::Export {
             generation: self.state.generation,
             path: path.clone(),
         })?;
+        self.publication_guard(cancellation)?;
         let artifact = open_file(&self.directory, &path, false)?;
         let acquired = read_bytes(&artifact, RECORD_BYTES)?;
         require(acquired == bytes)?;
+        self.publication_guard(cancellation)?;
         Ok(acquired)
     }
 }

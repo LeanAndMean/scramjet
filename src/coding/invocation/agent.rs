@@ -21,6 +21,70 @@ pub struct CodingInvocationResult {
     pub record: Vec<u8>,
     pub success: bool,
     pub failure: Option<String>,
+    pub(super) publication: Option<PublicationOwner>,
+}
+pub(super) struct PublicationOwner {
+    pub store: store::Store,
+    pub cancellation: EditCancellation,
+}
+impl Drop for PublicationOwner {
+    fn drop(&mut self) {
+        if self.cancellation.is_cancelled()
+            && let Err(error) = self.store.stop(CodingError::Cancelled.to_string())
+        {
+            eprintln!("publication stop persistence incomplete; no retry: {error}");
+        }
+    }
+}
+struct PublicationTask {
+    handle: tokio::task::JoinHandle<Result<(Vec<u8>, PublicationOwner), CodingError>>,
+    cancellation: EditCancellation,
+    armed: bool,
+}
+impl Drop for PublicationTask {
+    fn drop(&mut self) {
+        // Cancel before the handle discards a completed, unconsumed publication owner.
+        if self.armed {
+            self.cancellation.cancel();
+        }
+    }
+}
+impl CodingInvocationResult {
+    pub fn deliver(mut self, writer: &mut impl std::io::Write) -> Result<(), CodingError> {
+        let result: Result<(), CodingError> = (|| {
+            if let Some(owner) = &self.publication {
+                owner.store.publication_guard(&owner.cancellation)?;
+            }
+            writer.write_all(&self.record)?;
+            if let Some(owner) = &self.publication {
+                owner.store.publication_guard(&owner.cancellation)?;
+            }
+            writer.write_all(b"\n")?;
+            if let Some(owner) = &self.publication {
+                owner.store.publication_guard(&owner.cancellation)?;
+            }
+            writer.flush()?;
+            if let Some(owner) = &self.publication {
+                owner.store.publication_guard(&owner.cancellation)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = &result
+            && let Some(owner) = &mut self.publication
+        {
+            owner.store.stop(error.to_string()).map_err(|stop| {
+                CodingError::Io(std::io::Error::other(format!(
+                    "publication stop persistence incomplete; no retry: {stop}"
+                )))
+            })?;
+        }
+        result?;
+        if self.success {
+            Ok(())
+        } else {
+            Err(CodingError::History("invocation stopped"))
+        }
+    }
 }
 enum Work {
     Request(oneshot::Sender<Result<ProviderRequest, CodingError>>),
@@ -39,7 +103,7 @@ pub struct CodingInvocation {
     worker: Option<JoinHandle<Session>>,
     pub(crate) cancellation: EditCancellation,
     pub(crate) deadline: Instant,
-    ran: bool,
+    publication_transferred: bool,
     runtime_owner: std::sync::Weak<crate::runtime::Shared>,
     endpoint: SocketAddr,
 }
@@ -161,7 +225,7 @@ impl CodingInvocation {
                 worker: Some(worker),
                 cancellation,
                 deadline,
-                ran: false,
+                publication_transferred: false,
                 runtime_owner,
                 endpoint: options.endpoint,
             },
@@ -233,10 +297,6 @@ impl CodingInvocation {
         mut self,
         runtime: crate::Runtime,
     ) -> Result<CodingInvocationResult, CodingError> {
-        if self.ran {
-            return Err(CodingError::Stale);
-        }
-        self.ran = true;
         let result = if !self
             .runtime_owner
             .ptr_eq(&Arc::downgrade(&runtime.ownership()))
@@ -261,16 +321,31 @@ impl CodingInvocation {
             session.store.stop(CodingError::Cancelled.to_string())?;
         }
         if failure.is_none() && session.store.complete() && transports_joined {
-            let record = tokio::task::spawn_blocking({
-                let cancellation = self.cancellation.clone();
-                move || session.store.publish(true, true, &cancellation)
-            })
-            .await
-            .map_err(|_| CodingError::History("export owner failed"))??;
+            let mut task = PublicationTask {
+                handle: tokio::task::spawn_blocking({
+                    let cancellation = self.cancellation.clone();
+                    move || {
+                        let mut owner = PublicationOwner {
+                            store: session.store,
+                            cancellation,
+                        };
+                        let record = owner.store.publish(true, true, &owner.cancellation)?;
+                        Ok((record, owner))
+                    }
+                }),
+                cancellation: self.cancellation.clone(),
+                armed: true,
+            };
+            let record = (&mut task.handle)
+                .await
+                .map_err(|_| CodingError::History("export owner failed"))??;
+            task.armed = false;
+            self.publication_transferred = true;
             Ok(CodingInvocationResult {
-                record,
+                record: record.0,
                 success: true,
                 failure: None,
+                publication: Some(record.1),
             })
         } else {
             let failure = failure.unwrap_or_else(|| "local execution settlement incomplete".into());
@@ -282,13 +357,16 @@ impl CodingInvocation {
                 record,
                 success: false,
                 failure: Some(failure),
+                publication: None,
             })
         }
     }
 }
 impl Drop for CodingInvocation {
     fn drop(&mut self) {
-        self.cancellation.cancel();
+        if !self.publication_transferred {
+            self.cancellation.cancel();
+        }
         self.sender.take();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();

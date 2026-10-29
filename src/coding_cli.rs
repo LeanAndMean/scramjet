@@ -260,25 +260,23 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             })
         }
         .map_err(|_| "signal owner unavailable")?;
-        let result = invocation.run(runtime).await;
+        let reported = match invocation.run(runtime).await {
+            Ok(result) => tokio::task::spawn_blocking(move || {
+                let mut stdout = std::io::stdout().lock();
+                let failure = result.failure.clone();
+                result.deliver(&mut stdout).map_err(|error| {
+                    failure
+                        .unwrap_or_else(|| format!("result publication failed; no retry: {error}"))
+                })
+            })
+            .await
+            .map_err(|_| "stdout owner failed; no retry".to_owned())
+            .and_then(|result| result),
+            Err(error) => Err(error.to_string()),
+        };
         signal_hook::low_level::unregister(int);
         signal_hook::low_level::unregister(term);
-        let result = result.map_err(|e| e.to_string())?;
-        let reported = tokio::task::spawn_blocking(move || {
-            let mut stdout = std::io::stdout().lock();
-            stdout.write_all(&result.record)?;
-            stdout.write_all(b"\n")?;
-            stdout.flush()?;
-            Ok::<_, std::io::Error>((result.success, result.failure))
-        })
-        .await
-        .map_err(|_| "stdout owner failed; no retry")?
-        .map_err(|_| "stdout publication failed; no retry")?;
-        if reported.0 {
-            Ok(())
-        } else {
-            Err(reported.1.unwrap_or_else(|| "invocation stopped".into()))
-        }
+        reported
     })
 }
 #[cfg(test)]
