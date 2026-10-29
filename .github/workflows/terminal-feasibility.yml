@@ -204,6 +204,13 @@ jobs:
             if [[ "$PROBE_TMUX" == true ]]; then args+=(--tmux); fi
             python3 .github/scripts/terminal-probe.py "$RUNNER_TEMP/terminal-evidence" --terminal="$PROBE_TERMINAL" "${args[@]}"
           '
+      - name: Challenge VTE missed consent observation
+        if: matrix.os == 'ubuntu-24.04' && matrix.terminal == 'vte' && !matrix.tmux
+        run: |
+          xvfb-run -a -s '-screen 0 1280x900x24' dbus-run-session -- bash -e -c '
+            openbox > "$RUNNER_TEMP/vte-ordering-openbox.log" 2>&1 &
+            python3 .github/scripts/test-vte-paste-ordering.py "$RUNNER_TEMP/vte-paste-ordering"
+          '
       - name: Preserve feasibility evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -213,5 +220,7 @@ jobs:
             ${{ runner.temp }}/terminal-evidence
             ${{ runner.temp }}/native-pack/*.json
             ${{ runner.temp }}/native-driver/*.json
+            ${{ runner.temp }}/vte-paste-ordering
+            ${{ runner.temp }}/vte-ordering-openbox.log
           if-no-files-found: error
           retention-days: 7
