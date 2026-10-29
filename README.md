@@ -112,6 +112,25 @@ cargo test --offline --locked --test haiku --test haiku_cli
 
 History is strictly read-only and never constructs an executable envelope, approval or continuation. Complete selected items/raw arguments, actual receipts/results, effect uncertainty and correlated transitions remain bounded and unchanged on refusal. A recovered final record is acknowledgement-unknown: `ending_seen` is not a producer receipt or successful `finished` claim. Causally later validated records can establish prior journal acknowledgements; interrupted completion without such evidence remains uncertain. Actual provider accounting remains owned by its separate runtime ledger. Offline acceptance does not establish whole-task or deployed acceptance, and no live flag is eligible.
 
+## Retained haiku terminal application (S4.14c unfinished offline candidate)
+
+The fixture-only retained application now consumes the accepted headless owner; it is **not independently accepted**. In a real terminal, explicitly select an existing empty owned0700 project and disjoint owned0700 storage:
+
+```sh
+cargo run --offline --locked -- haiku-ui-demo --fixture \
+  --project /absolute/project --storage /absolute/storage --session haiku-ui
+cargo run --offline --locked -- haiku-ui-demo --history \
+  --storage /absolute/storage --session haiku-ui
+cargo test --offline --locked --test ui_terminal haiku
+bash tests/haiku_ui_native.sh target/debug/scramjet-rs
+```
+
+The editor prefills **one supported fixed synthetic natural-language request**, also shown completely as an ASCII JSON string before submission can arm. F1 submits once; Enter inserts a newline and paste only edits. Other wording is explicitly unsupported and the draft is retained. This is not variable request interpretation or general coding intelligence. Tab switches editor/transcript; F7 approves the original current proposal only after all complete JSON pages were painted, F8 denies, and F9/F10 navigate pages. F5 opens inert complete-record details, F12/F6 select next/previous records. F4 Stop, Ctrl-Q and sticky signals restore/exit; F11 after run end explicitly restores and settles, then reenters retained read-only history only after successful restoration/settlement with no sticky cancellation. No live flag, automatic approval or arbitrary shell capability is enabled.
+
+The terminal owns presentation/input only. A separate host owns the existing agent/effect worker, runtime and request-aware loopback fixture. Its return fence precedes join-capable owner Drop on normal/error/panic paths. The plain terminal reports the restoration result with settlement pending before waiting for actual joins; failure is not successful restoration or accounting settlement. Project, lock, journal and provider-accounting storage remain retained, including uncertain outcomes. `--history` creates no runtime, submission offer or executable proposal; ending bytes do not prove producer acknowledgement. Documents have512-byte reversible ASCII JSON pages and a524288-byte client presentation budget; excess is visibly refused without clipped approval. These are presentation budgets, not provider identifier or model limits.
+
+Current checks demonstrate the actual five-response fixture, three approvals, denied creation/process, stale/blurred/pasted/tiny submission, blocked journal acknowledgement/final close, actual termios restoration, and one isolated tmux3.0a/WSL2 simulated-input journey with all31 recovered records. The public-record UI-only allocation probe remains separate from whole-host composition. [S4.14c](docs/tasks/S4.14c.md) retains unfinished fault/authority/combined-allocation/no-replay checks and required independent review; no deployed, physical-gesture/clipboard, macOS/native-Ubuntu or final-user-QA acceptance follows.
+
 ## Offline retained-project journey (S4.13a accepted)
 
 `project-demo` and the headless `ProjectSession` run a caller-selected project through actual parallel readers, exact-approved coding, a separate source report, and paused explicitly admitted read-only verification. The headless contracts and consuming S4.13b project TUI below are independently accepted within the offline milestone. `ProjectRequest::parse` accepts only strict `replace_once` objects, for example:

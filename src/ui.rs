@@ -3,6 +3,8 @@ mod coding_history;
 mod command_projection;
 mod command_reader_projection;
 mod diagnostic;
+mod haiku_document;
+mod haiku_projection;
 mod input;
 mod project_projection;
 mod reader_projection;
@@ -869,16 +871,28 @@ fn dispatch(
     result
 }
 
+#[derive(Default)]
+struct Overlays<'a> {
+    approval: Option<&'a mut coding_approval::Approval>,
+    history: Option<&'a coding_history::History>,
+    project_history: Option<&'a project_projection::History>,
+    haiku: Option<&'a mut haiku_projection::Presentation>,
+}
 fn draw(
     terminal: &mut Terminal<CrosstermBackend<impl Write>>,
     model: &mut Model,
     diagnostic: &mut Option<diagnostic::Diagnostic>,
     display: Display,
-    mut approval: Option<&mut coding_approval::Approval>,
-    history: Option<&coding_history::History>,
-    project_history: Option<&project_projection::History>,
+    overlays: Overlays<'_>,
 ) -> io::Result<bool> {
+    let Overlays {
+        mut approval,
+        history,
+        project_history,
+        mut haiku,
+    } = overlays;
     let mut complete_approval = false;
+    let mut complete_submission = false;
     terminal.draw(|frame| {
         model.paint(&display, frame.buffer_mut());
         if let Some(approval) = &approval {
@@ -889,6 +903,10 @@ fn draw(
         }
         if let Some(history) = project_history {
             history.paint(model, frame.buffer_mut());
+        }
+        if let Some(haiku) = &haiku {
+            complete_submission = haiku.paint_submission(model, frame.buffer_mut());
+            complete_approval = haiku.paint(model, frame.buffer_mut());
         }
         if let Some(observer) = &diagnostic {
             observer.paint_footer(model, &display, frame.buffer_mut());
@@ -901,9 +919,14 @@ fn draw(
     if let Some(observer) = diagnostic {
         observer.displayed(model);
     }
-    Ok(approval
-        .as_mut()
-        .is_some_and(|approval| approval.painted(complete_approval)))
+    if let Some(haiku) = &mut haiku {
+        haiku.submission_painted(complete_submission);
+        Ok(haiku.painted(complete_approval))
+    } else {
+        Ok(approval
+            .as_mut()
+            .is_some_and(|approval| approval.painted(complete_approval)))
+    }
 }
 
 pub fn run(diagnostic: bool) -> io::Result<()> {
@@ -942,6 +965,7 @@ pub(crate) struct CodingUi {
     returned: CodingReturn,
     settled: bool,
     project_history: Option<project_projection::History>,
+    haiku: Option<haiku_projection::Presentation>,
 }
 impl CodingUi {
     pub(crate) fn new() -> io::Result<Self> {
@@ -953,6 +977,7 @@ impl CodingUi {
             returned: CodingReturn::Exit,
             settled: false,
             project_history: None,
+            haiku: None,
         };
         for signal in [
             signal_hook::consts::SIGINT,
@@ -1022,8 +1047,18 @@ pub(crate) fn run_project(
     Ok(state.returned)
 }
 
+pub(crate) fn run_haiku(
+    bridge: &crate::haiku_ui_demo::Bridge,
+    state: &mut CodingUi,
+) -> io::Result<CodingReturn> {
+    state.returned = CodingReturn::Exit;
+    run_interval(false, || {}, Some(DemoBridge::Haiku(bridge)), Some(state))?;
+    Ok(state.returned)
+}
+
 #[derive(Clone, Copy)]
 enum DemoBridge<'a> {
+    Haiku(&'a crate::haiku_ui_demo::Bridge),
     Project(&'a crate::project_ui_demo::Bridge),
     Runtime(&'a crate::runtime_ui_demo::Bridge),
     Reader(&'a crate::reader_ui_demo::Bridge),
@@ -1037,6 +1072,10 @@ impl DemoBridge<'_> {
     }
     fn command_error(self) -> bool {
         match self {
+            Self::Haiku(b) => {
+                let p = b.snapshot();
+                p.error.is_some() || p.snapshot.failure.is_some()
+            }
             Self::Project(b) => {
                 let p = b.snapshot();
                 p.error.is_some() || p.snapshot.error.is_some()
@@ -1066,6 +1105,7 @@ impl DemoBridge<'_> {
     }
     fn stop(self) {
         match self {
+            Self::Haiku(bridge) => bridge.stop(),
             Self::Project(bridge) => bridge.stop(),
             Self::Runtime(bridge) => bridge.stop(),
             Self::Reader(bridge) => bridge.stop(),
@@ -1115,6 +1155,10 @@ fn run_interval(
     if matches!(bridge, Some(DemoBridge::Coding(_) | DemoBridge::Project(_))) && !reentry {
         model.editor.clear();
         model.caret = 0;
+    }
+    if matches!(bridge, Some(DemoBridge::Haiku(_))) && !reentry {
+        model.editor = scramjet_rs::haiku_prompt();
+        model.caret = model.editor.len();
     }
     let output = if bridge.is_some() {
         Output::tty()?
@@ -1173,6 +1217,14 @@ fn run_interval(
         .as_mut()
         .and_then(|s| s.project_history.take())
         .unwrap_or_default();
+    let mut haiku = coding
+        .as_mut()
+        .and_then(|s| s.haiku.take())
+        .unwrap_or_default();
+    let mut haiku_displayed = None;
+    let mut haiku_ingress = None;
+    let mut haiku_approval_ingress = None;
+    let mut haiku_geometry_ingress = (0, 0);
     let mut selected_child = 0u8;
     let mut child_cancel_mask = 0u8;
     let mut history = coding_history::History::default();
@@ -1249,6 +1301,9 @@ fn run_interval(
                     command_ingress = command_displayed;
                     coding_ingress = coding_displayed;
                     project_ingress = project_displayed;
+                    haiku_ingress = haiku_displayed;
+                    haiku_approval_ingress = haiku.ingress();
+                    haiku_geometry_ingress = (model.display.width, model.display.height);
                 }
                 let event = decoder
                     .feed(staging[offset], now)
@@ -1256,6 +1311,74 @@ fn run_interval(
                 offset += 1;
                 if let Some(event) = event {
                     events += 1;
+                    if let Some(DemoBridge::Haiku(bridge)) = bridge {
+                        if event == Event::CancelAll {
+                            stopped.store(true, Ordering::Relaxed);
+                            bridge.stop();
+                            return Ok(());
+                        }
+                        let (w, h) = crossterm::terminal::size()?;
+                        let geometry = clamp(w, h) == (model.display.width, model.display.height)
+                            && clamp(w, h) == haiku_geometry_ingress;
+                        if event == Event::HistoryPrevious
+                            && !haiku.active()
+                            && !haiku.pending()
+                            && !settled
+                            && bridge.snapshot().snapshot.run_ended
+                            && model.focused
+                            && offset == length
+                            && decoder.idle()
+                        {
+                            intermission = true;
+                            return Ok(());
+                        }
+                        if geometry {
+                            if let Some((proposal, approve)) =
+                                haiku.event(&event, &model, haiku_approval_ingress, w, h)
+                            {
+                                bridge.decide(&proposal, approve);
+                            }
+                        } else {
+                            haiku.disarm();
+                        }
+                        if event == Event::Submit {
+                            if model.editor != scramjet_rs::haiku_prompt() {
+                                bridge.unsupported();
+                                continue;
+                            }
+                            if !settled
+                                && model.focused
+                                && model.focus == Focus::Editor
+                                && model.anchor.is_none()
+                                && !haiku.pending()
+                                && !haiku.active()
+                                && w >= 80
+                                && h >= 24
+                                && geometry
+                                && !model.display.exhausted
+                            {
+                                bridge.submit(haiku_ingress, model.revision, &model.editor);
+                            } else {
+                                bridge.reject();
+                            }
+                            continue;
+                        }
+                        if matches!(
+                            event,
+                            Event::Focus(_)
+                                | Event::Tab
+                                | Event::PageUp
+                                | Event::PageDown
+                                | Event::Mouse { .. }
+                        ) {
+                            haiku_displayed = None;
+                            bridge.painted(None);
+                            haiku.disarm();
+                        }
+                        if haiku.suppresses(&event) {
+                            continue;
+                        }
+                    }
                     if let Some(DemoBridge::Project(bridge)) = bridge {
                         project_history.observe(&bridge.snapshot());
                         if !approval.pending() && project_history.event(&event, &mut model) {
@@ -1502,6 +1625,11 @@ fn run_interval(
                 let geometry_changed =
                     (width, height) != (model.display.width, model.display.height);
                 if geometry_changed {
+                    haiku.disarm();
+                    if let Some(DemoBridge::Haiku(bridge)) = bridge {
+                        bridge.painted(None);
+                        haiku_displayed = None;
+                    }
                     let record = diagnostic
                         .as_mut()
                         .map(|observer| observer.resize(&model, width, height));
@@ -1520,7 +1648,28 @@ fn run_interval(
                 let mut command_offer = None;
                 let mut coding_offer = None;
                 let mut project_offer = None;
+                let mut haiku_offer = None;
                 match bridge {
+                    Some(DemoBridge::Haiku(bridge)) => {
+                        let projection = bridge.snapshot();
+                        haiku.observe(&projection, settled);
+                        haiku.project(&projection, &mut model, settled);
+                        if haiku.pending() {
+                            model.clear_selection();
+                        }
+                        if !settled
+                            && projection.offered
+                            && model.focused
+                            && model.focus == Focus::Editor
+                            && model.anchor.is_none()
+                            && !haiku.pending()
+                            && !haiku.active()
+                        {
+                            haiku_offer = Some(crate::haiku_ui_demo::Offer {
+                                revision: model.revision,
+                            });
+                        }
+                    }
                     Some(DemoBridge::Project(bridge)) => {
                         let projection = bridge.snapshot();
                         #[cfg(test)]
@@ -1615,6 +1764,12 @@ fn run_interval(
                     command_offer = None;
                     coding_offer = None;
                     project_offer = None;
+                    haiku_offer = None;
+                    haiku.disarm();
+                }
+                if !decoder.idle() && (haiku_offer != haiku_displayed || geometry_changed) {
+                    haiku_offer = None;
+                    haiku.disarm();
                 }
                 if !decoder.idle() && (project_offer != project_displayed || geometry_changed) {
                     project_offer = None;
@@ -1629,21 +1784,30 @@ fn run_interval(
                     &mut model,
                     &mut diagnostic,
                     display,
-                    Some(&mut approval),
-                    if history_overlay {
-                        Some(&history)
-                    } else {
-                        None
-                    },
-                    if history_overlay {
-                        Some(&project_history)
-                    } else {
-                        None
+                    Overlays {
+                        approval: Some(&mut approval),
+                        history: history_overlay.then_some(&history),
+                        project_history: history_overlay.then_some(&project_history),
+                        haiku: if matches!(bridge, Some(DemoBridge::Haiku(_))) {
+                            Some(&mut haiku)
+                        } else {
+                            None
+                        },
                     },
                 )? {
                     rustix::termios::tcflush(&guard.tty, QueueSelector::IFlush)?;
                     decoder = Decoder::default();
                     approval_ingress = None;
+                }
+                if let Some(DemoBridge::Haiku(bridge)) = bridge {
+                    haiku_offer = haiku_offer.filter(|o| haiku.submission_visible(o.revision));
+                    if haiku_offer.is_some() && haiku_offer != haiku_displayed {
+                        rustix::termios::tcflush(&guard.tty, QueueSelector::IFlush)?;
+                        decoder = Decoder::default();
+                        haiku_ingress = None;
+                    }
+                    haiku_displayed = haiku_offer;
+                    bridge.painted(haiku_offer);
                 }
                 if let Some(DemoBridge::Project(bridge)) = bridge {
                     if project_offer.is_some() && project_displayed.is_none() {
@@ -1684,9 +1848,14 @@ fn run_interval(
     if let Some(bridge) = bridge
         && !(intermission
             && (checkpoint
-                || matches!(bridge, DemoBridge::Project(_))
+                || matches!(bridge, DemoBridge::Project(_) | DemoBridge::Haiku(_))
                 || matches!(bridge, DemoBridge::Coding(b) if b.command_mode()))
             && matches!(&result, Ok(Ok(()))))
+    {
+        bridge.stop();
+    }
+    if let Some(DemoBridge::Haiku(bridge)) = bridge
+        && !matches!(&result, Ok(Ok(())))
     {
         bridge.stop();
     }
@@ -1742,6 +1911,7 @@ fn run_interval(
         model.clear_selection();
         state.model = Some(model);
         state.project_history = Some(project_history);
+        state.haiku = Some(haiku);
     }
     let execution = match result {
         Ok(result) => result,
@@ -1830,6 +2000,7 @@ pub(crate) fn check_reentry_boundaries(p: &crate::coding_ui_demo::Projection) {
         returned: CodingReturn::Settlement,
         settled: false,
         project_history: None,
+        haiku: None,
     };
     let mut eligible = state();
     assert!(eligible.live() && p.settled());

@@ -1,6 +1,8 @@
 use super::*;
 #[path = "command_resources.rs"]
 mod command;
+#[path = "haiku_resources.rs"]
+mod haiku;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,

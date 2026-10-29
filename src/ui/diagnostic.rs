@@ -822,9 +822,7 @@ mod tests {
                 &mut model,
                 &mut observer,
                 display,
-                None,
-                None,
-                None
+                super::super::Overlays::default()
             )
             .is_err()
         );

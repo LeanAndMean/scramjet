@@ -1,6 +1,47 @@
 use std::process::Command;
 
 #[test]
+fn non_tty_haiku_ui_starts_no_provider_project_or_storage_work() {
+    let output = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
+        .args([
+            "haiku-ui-demo",
+            "--fixture",
+            "--project",
+            "/synthetic-missing-project",
+            "--storage",
+            "/synthetic-missing-storage",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        b"haiku-ui-demo: requires TTY stdin and stdout\n"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn retained_haiku_owned_pty_exact_approvals_denial_and_gated_settlement() {
+    let output = Command::new("timeout")
+        .args([
+            "150",
+            "python3",
+            "tests/haiku_ui_pty.py",
+            env!("CARGO_BIN_EXE_scramjet-rs"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn non_tty_project_ui_starts_no_project_or_runtime_work() {
     let output = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
         .args([

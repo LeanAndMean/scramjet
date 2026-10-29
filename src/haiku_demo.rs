@@ -1,7 +1,7 @@
 use scramjet_rs::{HaikuAgent, HaikuSession, Runtime, reconstruct_haiku_history};
 use std::{ffi::OsString, io::Write, path::PathBuf};
 #[path = "../tests/support/haiku_fixture.rs"]
-mod fixture;
+pub(crate) mod fixture;
 use crate::provider_demo::{fixture as responses, server};
 
 async fn report(text: String) -> Result<(), String> {

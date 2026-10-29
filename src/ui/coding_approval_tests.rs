@@ -257,9 +257,10 @@ fn failed_output_cannot_acknowledge_page_or_arm_decision() {
             &mut model,
             &mut None,
             display,
-            Some(&mut approval),
-            None,
-            None
+            super::super::Overlays {
+                approval: Some(&mut approval),
+                ..Default::default()
+            }
         )
         .is_err()
     );
