@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     CodingError,
-    http::responses::{bounded_json_bytes, bounded_json_value},
+    http::responses::{bounded_json_bytes, bounded_json_value, validate_item},
 };
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, openat};
 use serde::Deserialize;
@@ -227,6 +227,7 @@ impl Check {
                 .map_err(|_| invalid())?;
                 require(items.len() <= 8)?;
                 for item in items {
+                    validate_item(item, true).map_err(|_| invalid())?;
                     let id = item["id"]
                         .as_str()
                         .filter(|id| !id.is_empty())

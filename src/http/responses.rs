@@ -399,7 +399,7 @@ fn usage(response: &Value) -> Result<Option<ProviderUsage>, Outcome> {
     usage.validate()?;
     Ok(Some(usage))
 }
-fn validate_item(item: &Value, complete: bool) -> Result<(), Outcome> {
+pub(crate) fn validate_item(item: &Value, complete: bool) -> Result<(), Outcome> {
     if !identity(string(item, "id")?) {
         return Err(Outcome::Framing);
     }

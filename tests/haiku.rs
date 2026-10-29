@@ -267,6 +267,85 @@ fn bounded_and_refused_journeys_run_in_independent_owners() {
         print!("{}", String::from_utf8_lossy(&output.stdout));
     }
 }
+fn measure_selected_recovery(
+    storage: &std::path::Path,
+    journal: &std::path::Path,
+    original: &[u8],
+) {
+    let mut records: Vec<Value> = std::str::from_utf8(original)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let result = records
+        .iter()
+        .position(|entry| entry["record"]["kind"] == "Result")
+        .unwrap();
+    records.truncate(result + 1);
+    records.push(json!({"sequence":records.len(),"record":{"kind":"Stopped","turn":1,"reason":"synthetic resource probe"}}));
+    let selected = records
+        .iter()
+        .position(|entry| entry["record"]["kind"] == "Selected")
+        .unwrap();
+    for (index, item) in records[selected]["record"]["items"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        let kind = item["type"].as_str().unwrap().to_owned();
+        let map = item.as_object_mut().unwrap();
+        map.insert("id".into(), json!(format!("opaque é🙂 /\u{0}\r\n {index}")));
+        if kind == "function_call" || kind == "reasoning" {
+            map.remove("status");
+        }
+        if kind == "function_call" {
+            map.insert("namespace".into(), Value::Null);
+        }
+    }
+    for (kind, field, value) in [
+        ("", "", Value::Null),
+        ("function_call", "status", json!("in_progress")),
+        ("function_call", "namespace", json!("foreign")),
+        ("message", "content", json!({})),
+        ("reasoning", "summary", json!({})),
+    ] {
+        let mut changed = records.clone();
+        if !kind.is_empty() {
+            let item = changed[selected]["record"]["items"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|item| item["type"] == kind)
+                .unwrap();
+            item[field] = value;
+        }
+        let bytes: Vec<u8> = changed
+            .iter()
+            .flat_map(|entry| format!("{entry}\n").into_bytes())
+            .collect();
+        std::fs::write(journal, &bytes).unwrap();
+        let base = LIVE.load(Ordering::Relaxed);
+        PEAK.store(base, Ordering::Relaxed);
+        let history = scramjet_rs::reconstruct_haiku_history(storage, "bounded");
+        let peak = PEAK.load(Ordering::Relaxed).saturating_sub(base);
+        println!("selected {kind}/{field} recovery incremental_peak={peak}");
+        assert!(peak <= 4_194_304);
+        if kind.is_empty() {
+            let history = history.unwrap();
+            assert_eq!(
+                history.effects()[0].state,
+                scramjet_rs::HaikuCertainty::Completed
+            );
+            assert!(!history.finished() && !history.ending_seen());
+            assert!(!history.entries.last().unwrap().acknowledged);
+        } else {
+            assert!(matches!(history, Err(scramjet_rs::CodingError::History(_))));
+        }
+        assert_eq!(bytes, std::fs::read(journal).unwrap());
+    }
+    std::fs::write(journal, original).unwrap();
+}
 #[test]
 fn bounded_journey_child() {
     let Ok(case) = std::env::var("HAIKU_BOUNDED_CASE") else {
@@ -536,6 +615,9 @@ fn bounded_journey_child() {
     let recovery_peak = PEAK.load(Ordering::Relaxed).saturating_sub(base);
     println!("{case} recovery incremental_peak={recovery_peak}");
     assert!(recovery_peak <= 4_194_304);
+    if case == "nodes" {
+        measure_selected_recovery(&storage, &journal, &original);
+    }
     executor.block_on(async {
         runtime.shutdown().await;
         server.await.unwrap();
