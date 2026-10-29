@@ -6,7 +6,7 @@ use ratatui_core::{
     buffer::Buffer,
     style::{Color, Style},
 };
-use scramjet_rs::{HaikuHistory, HaikuProposal, HaikuRecord};
+use scramjet_rs::{HaikuHistory, HaikuProposal, HaikuRecord, HaikuSnapshot, ProviderHistory};
 use std::{collections::VecDeque, sync::Arc};
 
 #[derive(Default)]
@@ -23,6 +23,75 @@ pub(super) struct Presentation {
     armed: bool,
     submission: Option<(u64, Document)>,
     submission_displayed: Option<u64>,
+    facts: bool,
+    snapshot: Option<Arc<HaikuSnapshot>>,
+    accounting: Option<Arc<ProviderHistory>>,
+    host_error: Option<String>,
+    rejection: Option<&'static str>,
+    runtime_joined: bool,
+    recovered: bool,
+}
+pub(super) fn facts_document(
+    projection: &crate::haiku_ui_demo::Projection,
+) -> Result<Document, &'static str> {
+    #[derive(serde::Serialize)]
+    struct Facts<'a> {
+        kind: &'static str,
+        accounting_source: &'static str,
+        phase: String,
+        request_id: Option<u64>,
+        observed_attempt: Option<&'a scramjet_rs::HaikuAttempt>,
+        attempt_acknowledged: bool,
+        observed_process: Option<&'a scramjet_rs::HaikuProcessResult>,
+        process_acknowledged: bool,
+        failure: Option<&'a str>,
+        host_error: Option<&'a str>,
+        rejection: Option<&'a str>,
+        run_ended: bool,
+        worker_terminated: bool,
+        worker_joined: bool,
+        runtime_joined: bool,
+        provider_accounting: Option<&'a [scramjet_rs::ProviderAttemptFact]>,
+        consumed: Option<usize>,
+        unknown_usage: Option<usize>,
+        unresolved_remote: Option<usize>,
+    }
+    let snapshot = &projection.snapshot;
+    Document::new(&Facts {
+        kind: "observed_facts_not_approval",
+        accounting_source: if projection.recovered {
+            "inert_recorded_route_validation_not_producer_ack_or_billing"
+        } else {
+            "last_sampled_acknowledged_runtime_history_not_billing"
+        },
+        phase: if projection.recovered {
+            "UnobservedRecovered".into()
+        } else {
+            format!("{:?}", snapshot.phase)
+        },
+        request_id: snapshot.request_id.map(|id| id.0),
+        observed_attempt: snapshot.observed_attempt.as_deref(),
+        attempt_acknowledged: snapshot.attempt_acknowledged,
+        observed_process: snapshot.observed_process.as_deref(),
+        process_acknowledged: snapshot.process_acknowledged,
+        failure: snapshot.failure.as_deref(),
+        host_error: projection.error.as_deref(),
+        rejection: projection.rejection,
+        run_ended: snapshot.run_ended,
+        worker_terminated: snapshot.worker_terminated,
+        worker_joined: snapshot.worker_joined,
+        runtime_joined: projection.runtime_joined,
+        provider_accounting: projection
+            .accounting
+            .as_ref()
+            .map(|h| h.attempts.as_slice()),
+        consumed: projection.accounting.as_ref().map(|h| h.consumed()),
+        unknown_usage: projection.accounting.as_ref().map(|h| h.unknown_usage()),
+        unresolved_remote: projection
+            .accounting
+            .as_ref()
+            .map(|h| h.unresolved_remote()),
+    })
 }
 fn kind(record: &HaikuRecord) -> &'static str {
     match record {
@@ -58,12 +127,47 @@ impl Presentation {
     }
     pub fn observe(&mut self, projection: &crate::haiku_ui_demo::Projection, read_only: bool) {
         let snapshot = &projection.snapshot;
+        let facts_changed = self
+            .snapshot
+            .as_ref()
+            .is_none_or(|s| !Arc::ptr_eq(s, snapshot))
+            || match (&self.accounting, &projection.accounting) {
+                (None, None) => false,
+                (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+                _ => true,
+            }
+            || self.host_error != projection.error
+            || self.rejection != projection.rejection
+            || self.runtime_joined != projection.runtime_joined;
+        if facts_changed {
+            self.snapshot = Some(snapshot.clone());
+            self.accounting = projection.accounting.clone();
+            self.host_error = projection.error.clone();
+            self.rejection = projection.rejection;
+            self.runtime_joined = projection.runtime_joined;
+            self.recovered = projection.recovered;
+            if self.facts {
+                self.detail = None;
+            }
+        }
         if self
             .history
             .as_ref()
             .is_none_or(|h| !Arc::ptr_eq(h, &snapshot.history))
         {
-            self.detail = None;
+            let retained = !self.facts
+                && self
+                    .history
+                    .as_ref()
+                    .and_then(|h| h.entries.get(self.selected))
+                    .zip(snapshot.history.entries.get(self.selected))
+                    .is_some_and(|(old, new)| {
+                        Arc::ptr_eq(&old.record, &new.record)
+                            && old.acknowledged == new.acknowledged
+                    });
+            if !retained {
+                self.detail = None;
+            }
             self.lines.clear();
             for entry in snapshot.history.entries.iter().take(128) {
                 let extra = match entry.record.as_ref() {
@@ -122,8 +226,27 @@ impl Presentation {
             self.disarm();
             self.active = false;
         }
+        if self.active {
+            self.load_detail();
+        }
     }
     fn load_detail(&mut self) {
+        if self.facts {
+            if self.detail.is_none()
+                && let Some(snapshot) = &self.snapshot
+            {
+                self.detail = Some(facts_document(&crate::haiku_ui_demo::Projection {
+                    snapshot: snapshot.clone(),
+                    accounting: self.accounting.clone(),
+                    offered: false,
+                    error: self.host_error.clone(),
+                    rejection: self.rejection,
+                    runtime_joined: self.runtime_joined,
+                    recovered: self.recovered,
+                }));
+            }
+            return;
+        }
         if self.detail.is_none()
             && let Some(entry) = self
                 .history
@@ -194,13 +317,30 @@ impl Presentation {
                 }
                 Event::HistoryJourney if self.active => {
                     if let Some(history) = &self.history {
-                        self.selected = (self.selected + 1) % history.entries.len().max(1);
+                        if self.facts {
+                            self.facts = false;
+                            self.selected = 0;
+                        } else if self.selected + 1 < history.entries.len() {
+                            self.selected += 1;
+                        } else {
+                            self.facts = true;
+                        }
                     }
                     self.detail = None;
                     self.load_detail();
                 }
                 Event::CancelChild if self.active => {
-                    self.selected = self.selected.saturating_sub(1);
+                    if self.facts {
+                        self.facts = false;
+                        self.selected = self
+                            .history
+                            .as_ref()
+                            .map_or(0, |h| h.entries.len().saturating_sub(1));
+                    } else if self.selected == 0 {
+                        self.facts = true;
+                    } else {
+                        self.selected -= 1;
+                    }
                     self.detail = None;
                     self.load_detail();
                 }
@@ -219,21 +359,22 @@ impl Presentation {
         None
     }
     pub fn suppresses(&self, event: &Event) -> bool {
-        (self.active || self.pending())
-            && matches!(
-                event,
-                Event::Submit
-                    | Event::Follow
-                    | Event::Copy
-                    | Event::Mouse { .. }
-                    | Event::NextChild
-                    | Event::CancelChild
-                    | Event::HistoryJourney
-                    | Event::ApprovalNext
-                    | Event::ApprovalPrevious
-                    | Event::Approve
-                    | Event::Deny
-            )
+        (self.submission_displayed.is_some() && matches!(event, Event::Copy | Event::Mouse { .. }))
+            || ((self.active || self.pending())
+                && matches!(
+                    event,
+                    Event::Submit
+                        | Event::Follow
+                        | Event::Copy
+                        | Event::Mouse { .. }
+                        | Event::NextChild
+                        | Event::CancelChild
+                        | Event::HistoryJourney
+                        | Event::ApprovalNext
+                        | Event::ApprovalPrevious
+                        | Event::Approve
+                        | Event::Deny
+                ))
     }
     pub fn project(
         &mut self,
@@ -265,8 +406,12 @@ impl Presentation {
                 "ONE FIXED SYNTHETIC REQUEST; submission is NOT effect approval; read_only={read_only}"
             ),
             format!(
-                "phase={:?} request={:?} offered={} attempt_observed={} attempt_acknowledged={}",
-                snapshot.phase,
+                "phase={} request={:?} offered={} attempt_observed={} attempt_acknowledged={}",
+                if projection.recovered {
+                    "UnobservedRecovered".into()
+                } else {
+                    format!("{:?}", snapshot.phase)
+                },
                 snapshot.request_id,
                 projection.offered,
                 snapshot.observed_attempt.is_some(),
@@ -287,6 +432,15 @@ impl Presentation {
                 snapshot.process_acknowledged,
                 snapshot.history.entries.len()
             ),
+            format!(
+                "Last observed/validated provider accounting consumed={:?} unknown_usage={:?} unresolved_remote={:?}; F6 before first record: OBSERVED FACTS (not approval/billing)",
+                projection.accounting.as_ref().map(|h| h.consumed()),
+                projection.accounting.as_ref().map(|h| h.unknown_usage()),
+                projection
+                    .accounting
+                    .as_ref()
+                    .map(|h| h.unresolved_remote())
+            ),
         ];
         for (i, text) in facts.into_iter().enumerate() {
             model.lines.push_back(Line {
@@ -304,20 +458,24 @@ impl Presentation {
         .flatten()
         .enumerate()
         {
+            model.lines.push_back(Line { id: 270 + (i * 9) as u64, hard: true, text: "Failure/rejection EXCERPT; complete text in OBSERVED FACTS; not success or approval".into() });
             for (j, text) in super::runtime_projection::excerpt(error)
                 .pieces
                 .into_iter()
                 .enumerate()
             {
                 model.lines.push_back(Line {
-                    id: 270 + (i * 8 + j) as u64,
+                    id: 271 + (i * 9 + j) as u64,
                     text,
                     hard: true,
                 });
             }
         }
-        while model.lines.len() > 80 {
-            model.lines.pop_front();
+        let mut summary_bytes: usize = model.lines.iter().map(|line| line.text.len()).sum();
+        while model.lines.len() > 80 || summary_bytes > 40960 {
+            if let Some(line) = model.lines.pop_front() {
+                summary_bytes -= line.text.len();
+            }
         }
         model.runtime_summary = Some(
             if read_only {
@@ -350,6 +508,8 @@ impl Presentation {
             || buffer.area.width < 80
             || buffer.area.height < 24
             || model.display.exhausted
+            || model.selection.is_some()
+            || model.anchor.is_some()
             || document.pages() != 1
         {
             return false;
@@ -426,6 +586,8 @@ impl Presentation {
                 "{} page {}/{} record={} ALL-pages-painted={}",
                 if self.pending() {
                     "EXACT APPROVAL"
+                } else if self.facts {
+                    "OBSERVED FACTS"
                 } else {
                     "INERT HISTORY"
                 },
@@ -456,6 +618,14 @@ impl Presentation {
                 Style::default(),
             );
         }
+        if self.recovered {
+            buffer.set_string(
+                0,
+                14,
+                "Recovered: observation flags are unavailable, NOT producer join receipts.",
+                Style::default(),
+            );
+        }
         buffer.set_string(
             0,
             15,
@@ -472,6 +642,7 @@ impl Presentation {
     }
     pub fn painted(&mut self, complete: bool) -> bool {
         let old = self.armed;
+        let previously_displayed = self.displayed;
         if !complete {
             self.disarm();
             return false;
@@ -481,6 +652,10 @@ impl Presentation {
             document.painted();
             self.armed = document.covered();
         }
-        !old && self.armed
+        previously_displayed.is_none() || (!old && self.armed)
     }
 }
+
+#[cfg(test)]
+#[path = "haiku_projection_tests.rs"]
+mod tests;

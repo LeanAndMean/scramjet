@@ -124,6 +124,9 @@ impl HaikuObserver {
     }
 }
 impl HaikuControl {
+    pub fn cancellation(&self) -> EditCancellation {
+        self.0.cancellation.clone()
+    }
     pub fn cancel(&self) {
         self.0.cancellation.cancel();
         self.0.update(|snapshot| {

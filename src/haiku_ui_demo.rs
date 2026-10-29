@@ -2,7 +2,7 @@ use crate::haiku_demo::fixture;
 use crate::provider_demo::server;
 use scramjet_rs::{
     HaikuAgent, HaikuControl, HaikuHistory, HaikuObserver, HaikuProposal, HaikuSession,
-    HaikuSnapshot, Runtime, haiku_prompt, reconstruct_haiku_history,
+    HaikuSnapshot, ProviderHistory, Runtime, haiku_prompt, reconstruct_haiku_history,
 };
 use std::{
     ffi::OsString,
@@ -27,6 +27,16 @@ struct State {
     rejection: Option<&'static str>,
     error: Option<String>,
     runtime_joined: bool,
+    accounting: Option<Arc<ProviderHistory>>,
+}
+impl State {
+    fn cancelled(&self) -> bool {
+        self.stopped
+            || self
+                .control
+                .as_ref()
+                .is_some_and(|control| control.cancellation().is_cancelled())
+    }
 }
 pub(crate) struct Bridge {
     state: Mutex<State>,
@@ -38,6 +48,8 @@ pub(crate) struct Projection {
     pub rejection: Option<&'static str>,
     pub error: Option<String>,
     pub runtime_joined: bool,
+    pub accounting: Option<Arc<ProviderHistory>>,
+    pub recovered: bool,
 }
 impl Bridge {
     pub fn snapshot(&self) -> Projection {
@@ -47,20 +59,30 @@ impl Bridge {
                 || s.recovered.as_ref().unwrap().clone(),
                 HaikuObserver::snapshot,
             ),
-            offered: s.offered && !s.stopped && Instant::now() < self.deadline,
+            offered: s.offered && !s.cancelled() && Instant::now() < self.deadline,
             rejection: s.rejection,
             error: s.error.clone(),
             runtime_joined: s.runtime_joined,
+            accounting: s.accounting.clone(),
+            recovered: s.recovered.is_some(),
         }
+    }
+    pub fn cancellation(&self) -> Option<scramjet_rs::EditCancellation> {
+        self.state
+            .lock()
+            .unwrap()
+            .control
+            .as_ref()
+            .map(HaikuControl::cancellation)
     }
     pub fn painted(&self, offer: Option<Offer>) {
         let mut s = self.state.lock().unwrap();
-        s.painted = offer.filter(|_| s.offered && !s.stopped && Instant::now() < self.deadline);
+        s.painted = offer.filter(|_| s.offered && !s.cancelled() && Instant::now() < self.deadline);
     }
     pub fn submit(&self, offer: Option<Offer>, revision: u64, request: &str) {
         let mut s = self.state.lock().unwrap();
         if !s.offered
-            || s.stopped
+            || s.cancelled()
             || Instant::now() >= self.deadline
             || offer.is_none()
             || s.painted != offer
@@ -93,7 +115,7 @@ impl Bridge {
     }
     pub fn decide(&self, proposal: &HaikuProposal, approve: bool) {
         let mut s = self.state.lock().unwrap();
-        if !s.stopped
+        if !s.cancelled()
             && Instant::now() < self.deadline
             && let Some(control) = &s.control
             && let Err(error) = control.decide(proposal, approve)
@@ -138,6 +160,17 @@ impl Drop for HostFence {
         self.0.wait();
     }
 }
+struct PanicNotice<'a> {
+    bridge: &'a Bridge,
+    message: &'static str,
+}
+impl Drop for PanicNotice<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.bridge.fail(self.message);
+        }
+    }
+}
 struct TerminalReturn {
     fence: Arc<ReturnFence>,
     bridge: Option<Arc<Bridge>>,
@@ -157,6 +190,10 @@ struct Options {
     history: bool,
     #[cfg(test)]
     panic_after_ready: bool,
+    #[cfg(test)]
+    large_approval: bool,
+    #[cfg(test)]
+    model_delay: bool,
 }
 fn options(arguments: impl Iterator<Item = OsString>) -> Result<Options, String> {
     let mut arguments = arguments;
@@ -189,9 +226,13 @@ fn options(arguments: impl Iterator<Item = OsString>) -> Result<Options, String>
         history,
         #[cfg(test)]
         panic_after_ready: false,
+        #[cfg(test)]
+        large_approval: false,
+        #[cfg(test)]
+        model_delay: false,
     })
 }
-fn recovered(history: Arc<HaikuHistory>) -> Arc<Bridge> {
+fn recovered(history: Arc<HaikuHistory>, accounting: Option<Arc<ProviderHistory>>) -> Arc<Bridge> {
     Arc::new(Bridge {
         deadline: Instant::now() + Duration::from_secs(300),
         state: Mutex::new(State {
@@ -204,6 +245,7 @@ fn recovered(history: Arc<HaikuHistory>) -> Arc<Bridge> {
             rejection: None,
             error: None,
             runtime_joined: false,
+            accounting,
             recovered: Some(Arc::new(HaikuSnapshot {
                 phase: scramjet_rs::HaikuPhase::Ready,
                 proposal: None,
@@ -249,11 +291,27 @@ fn host(
     let mut agent = HaikuAgent::start(session).map_err(|e| e.to_string())?;
     let poem =
         "# Haiku\nRust unfolds softly\nStreams answer in quiet files\nA small verse returns\n";
-    let (endpoint, server) = executor.block_on(server::start_sequence(fixture::sequence(
-        poem,
-        0,
-        "opaque fixture reasoning",
-    )));
+    let sequence = fixture::sequence(poem, 0, "opaque fixture reasoning");
+    #[cfg(test)]
+    let sequence = if options.large_approval {
+        tests::large_sequence()
+    } else {
+        sequence
+    };
+    let delay_reached = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    #[cfg(test)]
+    let delay = if options.model_delay {
+        Duration::from_secs(60)
+    } else {
+        Duration::ZERO
+    };
+    #[cfg(not(test))]
+    let delay = Duration::ZERO;
+    let (endpoint, server) = executor.block_on(server::start_sequence_delayed(
+        sequence,
+        delay,
+        Some(delay_reached.clone()),
+    ));
     let runtime = executor
         .block_on(async { Runtime::new_provider(endpoint, &provider_path) })
         .map_err(|e| e.to_string())?;
@@ -271,41 +329,100 @@ fn host(
             rejection: None,
             error: None,
             runtime_joined: false,
+            accounting: runtime.provider_history().map(Arc::new),
         }),
     });
-    let gate = HostFence(fence.clone());
+    let sampling_stopped = std::sync::atomic::AtomicBool::new(false);
     let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if ready.send(bridge.clone()).is_err() {
-            bridge.stop();
-            return Err("terminal readiness abandoned".to_owned());
-        }
-        #[cfg(test)]
-        if options.panic_after_ready {
-            panic!("synthetic borrowed host interval panic");
-        }
-        loop {
-            if bridge.state.lock().unwrap().stopped || Instant::now() >= deadline {
-                return Err("stopped before submission".to_owned());
+        std::thread::scope(|scope| {
+            let sampler = std::thread::Builder::new()
+                .name("haiku-accounting".into())
+                .spawn_scoped(scope, || {
+                    let _notice = PanicNotice {
+                        bridge: &bridge,
+                        message: "provider accounting observer panicked; accounting incomplete",
+                    };
+                    while !sampling_stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                        let history = match runtime.try_provider_history() {
+                            Ok(history) => history,
+                            Err(error) => {
+                                bridge.fail(error);
+                                break;
+                            }
+                        };
+                        if let Some(history) = history {
+                            let mut state = bridge.state.lock().unwrap();
+                            if state
+                                .accounting
+                                .as_ref()
+                                .is_none_or(|current| **current != history)
+                            {
+                                state.accounting = Some(Arc::new(history));
+                            }
+                        }
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                })
+                .map_err(|error| error.to_string())?;
+            struct StopSampling<'a>(&'a std::sync::atomic::AtomicBool);
+            impl Drop for StopSampling<'_> {
+                fn drop(&mut self) {
+                    self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
             }
-            match actions.try_recv() {
-                Ok(()) => break,
-                Err(mpsc::TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(5)),
-                Err(mpsc::TryRecvError::Disconnected) => return Err("input owner lost".to_owned()),
+            let stop_sampling = StopSampling(&sampling_stopped);
+            // This inner fence also precedes the scope's implicit sampler join on unwind.
+            let sampler_fence = HostFence(fence.clone());
+            let _notice = PanicNotice {
+                bridge: &bridge,
+                message: "haiku host owner panicked; acknowledgement uncertain",
+            };
+            let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if ready.send(bridge.clone()).is_err() {
+                    bridge.stop();
+                    return Err("terminal readiness abandoned".to_owned());
+                }
+                #[cfg(test)]
+                if options.panic_after_ready {
+                    panic!("synthetic borrowed host interval panic");
+                }
+                loop {
+                    if bridge.state.lock().unwrap().cancelled() || Instant::now() >= deadline {
+                        return Err("stopped before submission".to_owned());
+                    }
+                    match actions.try_recv() {
+                        Ok(()) => break,
+                        Err(mpsc::TryRecvError::Empty) => {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            return Err("input owner lost".to_owned());
+                        }
+                    }
+                }
+                executor
+                    .block_on(agent.run_unjoined(&runtime))
+                    .map_err(|e| e.to_string())
+            }));
+            let execution = match execution {
+                Ok(result) => result.map(Some),
+                Err(_) => Err("haiku host execution panic; acknowledgement uncertain".into()),
+            };
+            if let Err(error) = &execution {
+                bridge.fail(error);
             }
-        }
-        executor
-            .block_on(agent.run_unjoined(&runtime))
-            .map_err(|e| e.to_string())
-    }));
-    let execution = match execution {
-        Ok(result) => result.map(Some),
-        Err(_) => Err("haiku host execution panic; acknowledgement uncertain".into()),
-    };
-    if let Err(error) = &execution {
-        bridge.fail(error);
-    }
-    fence.wait();
-    drop(gate);
+            fence.wait();
+            drop(sampler_fence);
+            drop(stop_sampling);
+            if sampler.join().is_err() {
+                return Err("provider accounting observer panicked".to_owned());
+            }
+            execution
+        })
+    }))
+    .unwrap_or_else(|_| {
+        Err("haiku host owner panic after restoration gate; acknowledgement uncertain".into())
+    });
     let snapshot = agent.finish().map_err(|e| e.to_string());
     let accounting = runtime.provider_history();
     let local = executor.block_on(runtime.shutdown());
@@ -316,11 +433,15 @@ fn host(
         let _ = executor.block_on(server);
         true
     };
-    bridge.state.lock().unwrap().runtime_joined = local.active == 0;
+    {
+        let mut state = bridge.state.lock().unwrap();
+        state.runtime_joined = local.active == 0;
+        state.accounting = accounting.clone().map(Arc::new);
+    }
     let snapshot = snapshot?;
     let accounting = accounting.ok_or("provider accounting unavailable")?;
     let receipt = format!(
-        "haiku-ui settlement: worker_terminated={} worker_joined={} runtime_joined={} fixture_joined={} ending_seen={} ending_acknowledged={} local_active={} consumed={} unknown_usage={} unresolved_remote={} process_acknowledged={} namespace_dead={:?} project_retained=true storage_retained=true",
+        "haiku-ui settlement: worker_terminated={} worker_joined={} runtime_joined={} fixture_joined={} ending_seen={} ending_acknowledged={} local_active={} consumed={} unknown_usage={} unresolved_remote={} process_acknowledged={} namespace_dead={:?} project_retained=true storage_retained=true fixture_delay_entered={}",
         snapshot.worker_terminated,
         snapshot.worker_joined,
         local.active == 0,
@@ -332,7 +453,8 @@ fn host(
         accounting.unknown_usage(),
         accounting.unresolved_remote(),
         snapshot.process_acknowledged,
-        snapshot.observed_process.as_ref().map(|p| p.namespace_dead)
+        snapshot.observed_process.as_ref().map(|p| p.namespace_dead),
+        delay_reached.load(std::sync::atomic::Ordering::Relaxed)
     );
     execution.map_err(|error| format!("{receipt}; {error}"))?;
     if !snapshot.worker_joined
@@ -345,16 +467,122 @@ fn host(
     }
     Ok(receipt)
 }
+fn recovered_accounting(path: &std::path::Path) -> Result<Option<Arc<ProviderHistory>>, String> {
+    use rustix::fs::{FileType, Mode, OFlags};
+    use std::{io::Read, path::Component};
+    if !path.is_absolute() {
+        return Err("accounting path must be absolute".into());
+    }
+    let mut directory = rustix::fs::open(
+        "/",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| e.to_string())?;
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => {
+                directory = match rustix::fs::openat(
+                    &directory,
+                    name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                ) {
+                    Ok(fd) => fd,
+                    Err(rustix::io::Errno::NOENT) => return Ok(None),
+                    Err(error) => return Err(error.to_string()),
+                };
+            }
+            _ => return Err("unsupported accounting path component".into()),
+        }
+    }
+    let directory_stat = rustix::fs::fstat(&directory).map_err(|e| e.to_string())?;
+    if directory_stat.st_uid != rustix::process::getuid().as_raw()
+        || directory_stat.st_mode & 0o777 != 0o700
+    {
+        return Err("unsupported owned accounting directory".into());
+    }
+    let descriptor = match rustix::fs::openat(
+        &directory,
+        "provider-attempts.jsonl",
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let stat = rustix::fs::fstat(&descriptor).map_err(|e| e.to_string())?;
+    let record_budget = scramjet_rs::PROVIDER_FRAME_BYTES + 1024;
+    let history_budget = (1 + 2 * scramjet_rs::PROVIDER_POST_BUDGET) * (record_budget + 1);
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+        || stat.st_uid != rustix::process::getuid().as_raw()
+        || stat.st_mode & 0o777 != 0o600
+        || stat.st_nlink != 1
+        || stat.st_size < 0
+        || stat.st_size as u64 > history_budget as u64
+    {
+        return Err("unsupported accounting header metadata or ledger budget".into());
+    }
+    rustix::fs::flock(
+        &descriptor,
+        rustix::fs::FlockOperation::NonBlockingLockShared,
+    )
+    .map_err(|e| e.to_string())?;
+    let mut bytes = Vec::with_capacity(record_budget + 1);
+    std::fs::File::from(descriptor)
+        .take((record_budget + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let end = bytes
+        .iter()
+        .position(|b| *b == b'\n')
+        .ok_or("accounting header exceeds record budget or is incomplete")?;
+    let header: serde_json::Value =
+        serde_json::from_slice(&bytes[..end]).map_err(|_| "invalid accounting header")?;
+    let endpoint = header["endpoint"]
+        .as_str()
+        .ok_or("accounting header lacks route")?
+        .parse()
+        .map_err(|_| "invalid recorded accounting route")?;
+    // The recorded endpoint is data for the existing inert validator, never dispatch authority.
+    scramjet_rs::reconstruct_provider_history(path, endpoint)
+        .map(Arc::new)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
 pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err("requires TTY stdin and stdout".into());
     }
-    let options = options(arguments)?;
+    execute_options(options(arguments)?)
+}
+fn execute_options(options: Options) -> Result<(), String> {
     if options.history {
-        let bridge = recovered(
-            reconstruct_haiku_history(&options.storage, &options.session)
-                .map_err(|e| e.to_string())?,
-        );
+        let history = reconstruct_haiku_history(&options.storage, &options.session)
+            .map_err(|e| e.to_string())?;
+        let accounting = recovered_accounting(
+            &options
+                .storage
+                .join(format!("{}-provider", options.session)),
+        )?;
+        if let Some(accounting) = &accounting {
+            for entry in &history.entries {
+                if let scramjet_rs::HaikuRecord::Receipt { attempt } = entry.record.as_ref()
+                    && let Some(ordinal) = attempt.ordinal
+                    && accounting
+                        .attempts
+                        .iter()
+                        .find(|fact| fact.ordinal == ordinal)
+                        .is_none_or(|fact| fact.request_id != attempt.request_id)
+                {
+                    return Err("haiku/provider history request identity mismatch".into());
+                }
+            }
+        }
+        let bridge = recovered(history, accounting);
         let mut state = crate::ui::project_state(bridge.deadline).map_err(|e| e.to_string())?;
         state.mode(true);
         return crate::ui::run_haiku(&bridge, &mut state)
@@ -387,6 +615,10 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         .as_mut()
         .map_err(|e| io::Error::other(e.to_string()))
         .and_then(|state| crate::ui::run_haiku(&bridge, state));
+    let terminal_facts = state.as_ref().map_or_else(
+        |_| crate::ui::TerminalFacts::default(),
+        |state| state.terminal,
+    );
     let browse = matches!(terminal, Ok(crate::ui::CodingReturn::Settlement));
     if !browse {
         bridge.stop();
@@ -395,8 +627,12 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         let mut output = crate::ui::runtime_output()?;
         writeln!(
             output,
-            "haiku-ui: terminal_returned=true terminal_result_ok={} settlement_pending=true{}",
+            "haiku-ui: terminal_returned=true terminal_result_ok={} settlement_pending=true terminal_entered={} restoration_attempted={} restoration_ok={:?} cursor_restoration_ok={:?}{}",
             terminal.is_ok(),
+            terminal_facts.entered,
+            terminal_facts.restoration_attempted,
+            terminal_facts.restoration_ok,
+            terminal_facts.cursor_restoration_ok,
             terminal
                 .as_ref()
                 .err()
@@ -423,6 +659,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         result.as_ref().map_or_else(|e| e.as_str(), |r| r.as_str())
     )
     .map_err(|e| e.to_string())?;
+    crate::ui::write_haiku_facts(&bridge, &mut output)
+        .map_err(|e| format!("complete observed fact report failed; no retry: {e}"))?;
     output.flush().map_err(|e| e.to_string())?;
     pending.map_err(|e| format!("restoration pending receipt write failed; no retry: {e}"))?;
     result?;

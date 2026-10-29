@@ -100,6 +100,9 @@ impl Document {
             coverage: [0; 128],
         })
     }
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
     pub fn pages(&self) -> usize {
         self.bytes.len().div_ceil(PAGE_BYTES)
     }

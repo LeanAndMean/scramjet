@@ -13,7 +13,7 @@ project, storage = [os.path.join(base, name) for name in ('project', 'storage')]
 
 
 def tmux(*args):
-    return subprocess.check_output(['tmux', '-L', socket, *args]).decode()
+    return subprocess.check_output(['tmux', '-S', socket, '-f', '/dev/null', *args]).decode()
 
 
 def capture(): return tmux('capture-pane', '-p', '-t', 'journey')
@@ -130,5 +130,16 @@ with open(journal, 'rb') as file: assert file.read() == journal_before
 for name, content in file_before.items(): assert open(os.path.join(project, name), 'rb').read() == content
 assert len(named('Selected')) == 5
 assert owned_tree() == owned_before, 'project/journal/synthetic provider accounting mutated by history'
+tmux('kill-session', '-t', 'journey')
+stop_project, stop_storage = [os.path.join(base, name) for name in ('stop-project', 'stop-storage')]
+for directory in (stop_project, stop_storage): os.mkdir(directory, 0o700)
+launch(['--fixture', '--project', stop_project, '--storage', stop_storage, '--session', 'stop'])
+wait(lambda: 'COMPLETE FIXED REQUEST' in capture(), 'native Stop offer')
+key('F4')
+wait(lambda: 'S414C_EXIT=1' in capture(), 'native Stop restored exit')
+stop_receipt = tmux('capture-pane', '-p', '-S', '-100', '-t', 'journey')
+assert 'settlement_pending=true' in stop_receipt and 'restoration_ok=Some(true)' in stop_receipt and 'worker_joined=true runtime_joined=true' in stop_receipt
+with open(os.path.join(stop_storage, 'stop', 'haiku.jsonl')) as file: assert all(json.loads(line)['record']['kind'] == 'Header' for line in file)
+with open(os.path.join(base, 'stop-terminal.txt'), 'w') as file: file.write(stop_receipt)
 print('haiku-ui supported terminal PASS:', tmux('-V').strip(), subprocess.check_output(['uname', '-sr']).decode().strip(), 'terminal profile', tmux('show-options', '-g', 'default-terminal').strip())
-print('Injected focus/F1/Tab/three full approvals/page reversal/80x24->180x30/F11 restoration+reentry/C-q; fresh-process complete JSON for', len(entries), 'inert records; project/journal/synthetic provider-accounting tree unchanged. Not physical gestures, clipboard, macOS or native Ubuntu acceptance.')
+print('Isolated server with /dev/null config; injected focus/F1/Tab/three full approvals/page reversal/80x24->180x30/F11 restoration+reentry/C-q and separate F4 Stop/restoration; fresh-process complete JSON for', len(entries), 'inert records; project/journal/synthetic provider-accounting tree unchanged. Not physical gestures, clipboard, macOS or native Ubuntu acceptance.')

@@ -8,11 +8,19 @@ pub async fn start(body: Vec<u8>) -> (SocketAddr, tokio::task::JoinHandle<()>) {
 pub async fn start_sequence(
     responses: Vec<(Option<serde_json::Value>, Vec<u8>)>,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    start_sequence_delayed(responses, std::time::Duration::ZERO, None).await
+}
+
+pub async fn start_sequence_delayed(
+    responses: Vec<(Option<serde_json::Value>, Vec<u8>)>,
+    delay: std::time::Duration,
+    reached: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
         let continuation = responses.len() > 1;
-        for (expected, body) in responses {
+        for (index, (expected, body)) in responses.into_iter().enumerate() {
             let chunk_bytes = if expected.is_some() { 1 } else { 127 };
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut head = Vec::new();
@@ -43,6 +51,12 @@ pub async fn start_sequence(
             );
             if let Some(expected) = expected {
                 assert_eq!(request, expected);
+            }
+            if index == 0 && !delay.is_zero() {
+                if let Some(reached) = &reached {
+                    reached.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                tokio::time::sleep(delay).await;
             }
             let head = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

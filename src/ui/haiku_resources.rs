@@ -47,6 +47,28 @@ fn haiku_public_record_documents_navigation_and_maximum_paint_are_bounded() {
                 worker_joined: false,
             }),
             offered: false,
+            accounting: Some(Arc::new(scramjet_rs::ProviderHistory {
+                attempts: (1..=8)
+                    .map(|ordinal| scramjet_rs::ProviderAttemptFact {
+                        ordinal,
+                        request_id: ordinal as u64,
+                        terminal: Some(scramjet_rs::ProviderTerminalEvidence {
+                            response_id: format!("{ordinal}:{}", "界😀\u{7f}\\\"".repeat(1024)),
+                            reported_model: Some("synthetic opaque model".into()),
+                            status: "completed".into(),
+                        }),
+                        usage: Some(scramjet_rs::ProviderUsage {
+                            input_tokens: Some(10),
+                            output_tokens: Some(5),
+                            total_tokens: Some(15),
+                            cached_input_tokens: None,
+                            reasoning_tokens: None,
+                        }),
+                        locally_joined: true,
+                    })
+                    .collect(),
+            })),
+            recovered: false,
             rejection: None,
             error: None,
             runtime_joined: false,
@@ -65,6 +87,7 @@ fn haiku_public_record_documents_navigation_and_maximum_paint_are_bounded() {
         let concurrent = haiku_document::Document::new(large.as_ref()).unwrap();
         assert!(concurrent.pages() > 64);
         for cycle in 0..200 {
+            let painted_snapshot = projection.snapshot.clone();
             Arc::make_mut(&mut projection.snapshot).worker_terminated = cycle % 2 == 0;
             presentation.observe(&projection, true);
             presentation.project(&projection, &mut model, true);
@@ -92,6 +115,7 @@ fn haiku_public_record_documents_navigation_and_maximum_paint_are_bounded() {
                 assert!(presentation.event(&event, &model, None, 200, 60).is_none());
             }
             assert!(presentation.ingress().is_none());
+            assert_eq!(painted_snapshot.history.entries.len(), 128);
         }
     }
     let stats = STATS.with(|s| s.replace(None).unwrap());
@@ -104,7 +128,7 @@ fn haiku_public_record_documents_navigation_and_maximum_paint_are_bounded() {
     );
     assert!(stats.current.abs() <= 8192, "residual={}", stats.current);
     println!(
-        "haiku public-record UI-thread probe: records=128 cycles=200 geometry=200x60 peak={} largest={} residual={} frame={}; requested heap, synthetic representation not admitted recovery or whole-host composition",
+        "haiku public-record UI-thread probe: records=128 accounting=8x10242-byte-opaque-IDs current+painted-snapshots cycles=200 geometry=200x60 peak={} largest={} residual={} frame={}; requested heap, synthetic representation not admitted recovery or whole-host composition",
         stats.peak, stats.largest, stats.current, maximum_frame
     );
 }

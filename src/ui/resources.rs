@@ -89,6 +89,37 @@ unsafe impl GlobalAlloc for Allocator {
 #[global_allocator]
 static ALLOCATOR: Allocator = Allocator;
 
+pub(super) fn start_haiku_meter() {
+    assert!(!PROCESS_ON.load(Ordering::Relaxed));
+    PROCESS_CURRENT.store(0, Ordering::Relaxed);
+    PROCESS_PEAK.store(0, Ordering::Relaxed);
+    PROCESS_LARGEST.store(0, Ordering::Relaxed);
+    PROCESS_TOTAL.store(0, Ordering::Relaxed);
+    STATS.with(|s| s.set(Some(Stats::default())));
+    PROCESS_ON.store(true, Ordering::Relaxed);
+}
+pub(super) fn finish_haiku_meter() {
+    PROCESS_ON.store(false, Ordering::Relaxed);
+    let ui = STATS.with(|s| s.replace(None).unwrap());
+    let peak = PROCESS_PEAK.load(Ordering::Relaxed);
+    let largest = PROCESS_LARGEST.load(Ordering::Relaxed);
+    let residual = PROCESS_CURRENT.load(Ordering::Relaxed);
+    assert!(peak <= 24 * 1024 * 1024, "composed peak={peak}");
+    assert!(
+        peak <= 16 * 1024 * 1024,
+        "whole workload no longer supplies the UI peak upper bound={peak}"
+    );
+    assert!(ui.largest <= 2 * 1024 * 1024, "UI largest={}", ui.largest);
+    assert!(
+        residual.abs() <= 2 * 1024 * 1024,
+        "retained runtime accounting exceeds the accepted running-headless budget: {residual}"
+    );
+    println!(
+        "HAIKU_APPLICATION_METER peak={peak} largest={largest} residual={residual} ui_largest={} ui_requested_peak={}; all threads, requested incremental heap, not RSS; whole peak bounds UI for this workload",
+        ui.largest, ui.peak
+    );
+}
+
 pub(super) fn project_presentation_probe(p: &crate::project_ui_demo::Projection) {
     let mut maximum = crate::project_ui_demo::Projection {
         snapshot: p.snapshot.clone(),

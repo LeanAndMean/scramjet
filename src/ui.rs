@@ -13,6 +13,14 @@ mod writer;
 use writer::Output;
 #[cfg(test)]
 mod resources;
+#[cfg(test)]
+pub(crate) fn start_haiku_meter() {
+    resources::start_haiku_meter();
+}
+#[cfg(test)]
+pub(crate) fn finish_haiku_meter() {
+    resources::finish_haiku_meter();
+}
 
 use input::{Decoder, Event};
 use ratatui_core::{
@@ -957,7 +965,15 @@ pub(crate) enum CodingReturn {
     Settlement,
     Exit,
 }
+#[derive(Clone, Copy, Default, Debug)]
+pub(crate) struct TerminalFacts {
+    pub entered: bool,
+    pub restoration_attempted: bool,
+    pub restoration_ok: Option<bool>,
+    pub cursor_restoration_ok: Option<bool>,
+}
 pub(crate) struct CodingUi {
+    pub terminal: TerminalFacts,
     model: Option<Model>,
     stopped: Arc<AtomicBool>,
     signals: Vec<signal_hook::SigId>,
@@ -970,6 +986,7 @@ pub(crate) struct CodingUi {
 impl CodingUi {
     pub(crate) fn new() -> io::Result<Self> {
         let mut state = Self {
+            terminal: TerminalFacts::default(),
             model: None,
             stopped: Arc::new(AtomicBool::new(false)),
             signals: Vec::with_capacity(4),
@@ -1052,8 +1069,47 @@ pub(crate) fn run_haiku(
     state: &mut CodingUi,
 ) -> io::Result<CodingReturn> {
     state.returned = CodingReturn::Exit;
+    state.terminal = TerminalFacts::default();
+    if let Some(cancellation) = bridge.cancellation() {
+        if !state.live() {
+            cancellation.cancel();
+        }
+        for signal in [
+            signal_hook::consts::SIGINT,
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGHUP,
+            signal_hook::consts::SIGTSTP,
+        ] {
+            let token = cancellation.clone();
+            // The captured token performs only an atomic store, without locks or allocation.
+            state
+                .signals
+                .push(unsafe { signal_hook::low_level::register(signal, move || token.cancel()) }?);
+        }
+    }
     run_interval(false, || {}, Some(DemoBridge::Haiku(bridge)), Some(state))?;
     Ok(state.returned)
+}
+
+pub(crate) fn write_haiku_facts(
+    bridge: &crate::haiku_ui_demo::Bridge,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    match haiku_projection::facts_document(&bridge.snapshot()) {
+        Ok(document) => {
+            writeln!(
+                output,
+                "haiku-ui complete observed facts (not approval): {}",
+                haiku_document::LEGEND
+            )?;
+            output.write_all(document.bytes())?;
+            output.write_all(b"\n")
+        }
+        Err(reason) => writeln!(
+            output,
+            "haiku-ui observed facts presentation refused: {reason}; original facts intact"
+        ),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1157,7 +1213,11 @@ fn run_interval(
         model.caret = 0;
     }
     if matches!(bridge, Some(DemoBridge::Haiku(_))) && !reentry {
-        model.editor = scramjet_rs::haiku_prompt();
+        model.editor = if coding.as_ref().is_some_and(|s| s.read_only()) {
+            String::new()
+        } else {
+            scramjet_rs::haiku_prompt()
+        };
         model.caret = model.editor.len();
     }
     let output = if bridge.is_some() {
@@ -1243,6 +1303,9 @@ fn run_interval(
         raw.make_raw();
         guard.raw = true;
         rustix::termios::tcsetattr(&guard.tty, OptionalActions::Now, &raw)?;
+        if let Some(state) = &mut coding {
+            state.terminal.entered = true;
+        }
         guard.modes = true;
         guard.output.begin();
         guard.output.write_all(ENABLE)?;
@@ -1859,6 +1922,9 @@ fn run_interval(
     {
         bridge.stop();
     }
+    if let Some(state) = &mut coding {
+        state.terminal.restoration_attempted = true;
+    }
     let restoration = guard.restore();
     let cursor_restoration = terminal.as_mut().map_or(Ok(()), |terminal| {
         guard.output.begin();
@@ -1912,6 +1978,8 @@ fn run_interval(
         state.model = Some(model);
         state.project_history = Some(project_history);
         state.haiku = Some(haiku);
+        state.terminal.restoration_ok = Some(restoration.is_ok());
+        state.terminal.cursor_restoration_ok = Some(cursor_restoration.is_ok());
     }
     let execution = match result {
         Ok(result) => result,
@@ -1993,6 +2061,7 @@ pub(crate) fn check_project_history(
 #[cfg(test)]
 pub(crate) fn check_reentry_boundaries(p: &crate::coding_ui_demo::Projection) {
     let state = || CodingUi {
+        terminal: TerminalFacts::default(),
         model: Some(Model::runtime()),
         stopped: Arc::new(AtomicBool::new(false)),
         signals: Vec::new(),

@@ -424,6 +424,24 @@ impl Runtime {
             .map(|ledger| ledger.lock().unwrap().history())
     }
 
+    pub fn try_provider_history(&self) -> Result<Option<ProviderHistory>, &'static str> {
+        use std::sync::TryLockError;
+        let state = match self.shared.state.try_lock() {
+            Ok(state) => state,
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Poisoned(_)) => return Err("runtime accounting state poisoned"),
+        };
+        let Some(provider) = &state.provider else {
+            return Ok(None);
+        };
+        let ledger = match provider.try_lock() {
+            Ok(ledger) => ledger,
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Poisoned(_)) => return Err("provider accounting ledger poisoned"),
+        };
+        Ok(Some(ledger.history()))
+    }
+
     fn construct(
         endpoint: SocketAddr,
         active_limit: usize,
@@ -1349,6 +1367,8 @@ mod adaptive_tests;
 mod cooldown_tests;
 #[cfg(test)]
 mod pacing_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod provider_observation_tests;
 #[cfg(test)]
 mod provider_tests;
 #[cfg(test)]

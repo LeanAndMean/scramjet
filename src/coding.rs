@@ -102,6 +102,7 @@ pub enum CodingCapability {
 pub struct EditCancellation(Arc<AtomicBool>);
 
 impl EditCancellation {
+    /// Performs only an atomic store and is safe to call from a signal handler.
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }
