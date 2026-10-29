@@ -82,14 +82,65 @@ mod linux {
         init: Option<OwnedFd>,
         reaped: bool,
     }
+    impl OwnedChild {
+        fn settle(&mut self, kill: bool) -> Result<std::process::ExitStatus, CodingError> {
+            if kill {
+                if let Some(init) = &self.init {
+                    if !dead(init)? {
+                        match pidfd_send_signal(init, Signal::KILL) {
+                            Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
+                } else if self.child.try_wait()?.is_none() {
+                    self.child.kill()?;
+                }
+            }
+            let status = self.child.wait()?;
+            let init = self.init.as_ref().ok_or(CodingError::Invalid(
+                "sandbox namespace ownership unavailable; settlement unverified",
+            ))?;
+            let mut fds = [PollFd::new(init, PollFlags::IN)];
+            poll(
+                &mut fds,
+                Some(&rustix::event::Timespec {
+                    tv_sec: 1,
+                    tv_nsec: 0,
+                }),
+            )?;
+            if !fds[0].revents().contains(PollFlags::IN) {
+                return Err(CodingError::Invalid(
+                    "sandbox namespace death not established",
+                ));
+            }
+            self.reaped = true;
+            Ok(status)
+        }
+    }
     impl Drop for OwnedChild {
         fn drop(&mut self) {
             if !self.reaped {
-                if let Some(init) = &self.init {
-                    let _ = pidfd_send_signal(init, Signal::KILL);
-                }
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+                let _ = self.settle(true);
+            }
+        }
+    }
+    enum Event {
+        Started {
+            launcher: u32,
+            namespace_init: u32,
+            acknowledged: std::sync::mpsc::SyncSender<bool>,
+        },
+        Finished(Result<HaikuProcessResult, CodingError>),
+    }
+    struct Supervisor {
+        worker: Option<std::thread::JoinHandle<()>>,
+        cancellation: EditCancellation,
+    }
+    impl Drop for Supervisor {
+        fn drop(&mut self) {
+            if let Some(worker) = self.worker.take() {
+                self.cancellation.cancel();
+                let _ = worker.join();
             }
         }
     }
@@ -116,7 +167,7 @@ mod linux {
             }
         }
     }
-    fn init_handle(info: &[u8], launcher: u32) -> Result<Option<OwnedFd>, CodingError> {
+    fn init_handle(info: &[u8], launcher: u32) -> Result<Option<(OwnedFd, u32)>, CodingError> {
         let Ok(info) = serde_json::from_slice::<serde_json::Value>(info) else {
             return Ok(None);
         };
@@ -152,7 +203,7 @@ mod linux {
                 "sandbox PID namespace was not isolated",
             ));
         }
-        Ok(Some(fd))
+        Ok(Some((fd, raw)))
     }
     fn dead(fd: &OwnedFd) -> Result<bool, CodingError> {
         let mut fds = [PollFd::new(fd, PollFlags::IN)];
@@ -165,11 +216,12 @@ mod linux {
         )? == 1
             && fds[0].revents().contains(PollFlags::IN))
     }
-    pub(super) fn run(
+    fn run(
         captures: &[HaikuCapture; 2],
         cancellation: &EditCancellation,
         script: &str,
         startup_delay: Duration,
+        events: &std::sync::mpsc::SyncSender<Event>,
     ) -> Result<HaikuProcessResult, CodingError> {
         check_host()?;
         if captures[0].path != "haiku.md"
@@ -179,6 +231,8 @@ mod linux {
         {
             return Err(CodingError::Invalid("unsupported isolated capture"));
         }
+        #[cfg(test)]
+        let fork_gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let started = Instant::now();
         let captures = [
             sealed(captures[0].content.as_bytes())?,
@@ -293,114 +347,224 @@ mod linux {
             init: None,
             reaped: false,
         };
-        drop(command);
-        std::thread::sleep(startup_delay);
-        let mut stdout = owned.child.stdout.take().unwrap();
-        let mut stderr = owned.child.stderr.take().unwrap();
-        fcntl_setfl(&stdout, fcntl_getfl(&stdout)? | OFlags::NONBLOCK)?;
-        fcntl_setfl(&stderr, fcntl_getfl(&stderr)? | OFlags::NONBLOCK)?;
-        let (mut out, mut err, mut info) = (Vec::new(), Vec::new(), Vec::new());
-        let (mut total, mut info_total) = (0, 0);
-        let (mut out_eof, mut err_eof) = (false, false);
-        let mut stopped = None;
-        let mut status = None;
-        loop {
-            let _ = drain(&mut info_reader, &mut info, &mut info_total, INFO_BYTES)?;
-            if owned.init.is_none() {
-                match init_handle(&info, owned.child.id()) {
-                    Ok(Some(fd)) => {
-                        owned.init = Some(fd);
-                        gate_writer.write_all(b"1")?;
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        stopped.get_or_insert_with(|| error.to_string());
-                    }
-                }
-            }
-            if !out_eof {
-                match drain(&mut stdout, &mut out, &mut total, OUTPUT_BYTES) {
-                    Ok(eof) => out_eof = eof,
-                    Err(error) => {
-                        stopped.get_or_insert_with(|| error.to_string());
-                    }
-                }
-            }
-            if !err_eof {
-                match drain(&mut stderr, &mut err, &mut total, OUTPUT_BYTES) {
-                    Ok(eof) => err_eof = eof,
-                    Err(error) => {
-                        stopped.get_or_insert_with(|| error.to_string());
-                    }
-                }
-            }
-            if cancellation.is_cancelled() {
-                stopped.get_or_insert_with(|| "cancelled".into());
-            }
-            if started.elapsed() >= Duration::from_secs(5) {
-                stopped.get_or_insert_with(|| "isolated wall-time resource limit".into());
-            }
-            if stopped.is_some() {
-                if let Some(init) = &owned.init {
-                    if !dead(init)? {
-                        match pidfd_send_signal(init, Signal::KILL) {
-                            Ok(()) | Err(rustix::io::Errno::SRCH) => {}
-                            Err(error) => return Err(error.into()),
+        #[cfg(test)]
+        drop(fork_gate);
+        let result = (|| {
+            drop(command);
+            std::thread::sleep(startup_delay);
+            let mut stdout = owned.child.stdout.take().unwrap();
+            let mut stderr = owned.child.stderr.take().unwrap();
+            fcntl_setfl(&stdout, fcntl_getfl(&stdout)? | OFlags::NONBLOCK)?;
+            fcntl_setfl(&stderr, fcntl_getfl(&stderr)? | OFlags::NONBLOCK)?;
+            let (mut out, mut err, mut info) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut total, mut info_total) = (0, 0);
+            let (mut out_eof, mut err_eof) = (false, false);
+            let mut stopped = None;
+            let mut status = None;
+            loop {
+                let _ = drain(&mut info_reader, &mut info, &mut info_total, INFO_BYTES)?;
+                if owned.init.is_none() {
+                    match init_handle(&info, owned.child.id()) {
+                        Ok(Some((fd, namespace_init))) => {
+                            owned.init = Some(fd);
+                            let (acknowledged, receive) = std::sync::mpsc::sync_channel(1);
+                            events
+                                .send(Event::Started {
+                                    launcher: owned.child.id(),
+                                    namespace_init,
+                                    acknowledged,
+                                })
+                                .map_err(|_| CodingError::Cancelled)?;
+                            loop {
+                                if cancellation.is_cancelled() {
+                                    stopped = Some("cancelled before command release".into());
+                                    break;
+                                }
+                                if started.elapsed() >= Duration::from_secs(5) {
+                                    stopped = Some("isolated wall-time resource limit".into());
+                                    break;
+                                }
+                                match receive.recv_timeout(Duration::from_millis(1)) {
+                                    Ok(true) => {
+                                        if cancellation.is_cancelled() {
+                                            stopped =
+                                                Some("cancelled before command release".into());
+                                        } else if started.elapsed() >= Duration::from_secs(5) {
+                                            stopped =
+                                                Some("isolated wall-time resource limit".into());
+                                        } else {
+                                            gate_writer.write_all(b"1")?;
+                                        }
+                                        break;
+                                    }
+                                    Ok(false)
+                                    | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                        stopped = Some("start acknowledgement refused".into());
+                                        break;
+                                    }
+                                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                                }
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            stopped.get_or_insert_with(|| error.to_string());
                         }
                     }
-                } else if status.is_none() {
-                    owned.child.kill()?;
                 }
+                if !out_eof {
+                    match drain(&mut stdout, &mut out, &mut total, OUTPUT_BYTES) {
+                        Ok(eof) => out_eof = eof,
+                        Err(error) => {
+                            stopped.get_or_insert_with(|| error.to_string());
+                        }
+                    }
+                }
+                if !err_eof {
+                    match drain(&mut stderr, &mut err, &mut total, OUTPUT_BYTES) {
+                        Ok(eof) => err_eof = eof,
+                        Err(error) => {
+                            stopped.get_or_insert_with(|| error.to_string());
+                        }
+                    }
+                }
+                if cancellation.is_cancelled() {
+                    stopped.get_or_insert_with(|| "cancelled".into());
+                }
+                if started.elapsed() >= Duration::from_secs(5) {
+                    stopped.get_or_insert_with(|| "isolated wall-time resource limit".into());
+                }
+                if stopped.is_some() {
+                    if let Some(init) = &owned.init {
+                        if !dead(init)? {
+                            match pidfd_send_signal(init, Signal::KILL) {
+                                Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                                Err(error) => return Err(error.into()),
+                            }
+                        }
+                    } else if status.is_none() {
+                        owned.child.kill()?;
+                    }
+                }
+                if status.is_none() {
+                    status = owned.child.try_wait()?;
+                }
+                if status.is_some() && out_eof && err_eof {
+                    break;
+                }
+                if stopped.is_some() && started.elapsed() > Duration::from_secs(6) {
+                    return Err(CodingError::Invalid(
+                        "isolated tree/pipe settlement unestablished",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(1));
             }
-            if status.is_none() {
-                status = owned.child.try_wait()?;
+            let status = owned.settle(false)?;
+            let namespace_dead = true;
+            Ok(HaikuProcessResult {
+                exit_code: status.code(),
+                signal: std::os::unix::process::ExitStatusExt::signal(&status),
+                stdout: String::from_utf8(out)
+                    .map_err(|_| CodingError::Invalid("isolated stdout is not UTF-8"))?,
+                stderr: String::from_utf8(err)
+                    .map_err(|_| CodingError::Invalid("isolated stderr is not UTF-8"))?,
+                stopped,
+                launcher_reaped: true,
+                namespace_dead,
+            })
+        })();
+        match result {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                owned.settle(true)?;
+                Err(error)
             }
-            if status.is_some() && out_eof && err_eof {
-                break;
-            }
-            if stopped.is_some() && started.elapsed() > Duration::from_secs(6) {
-                return Err(CodingError::Invalid(
-                    "isolated tree/pipe settlement unestablished",
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(1));
         }
-        let status = owned.child.wait().or_else(|error| status.ok_or(error))?;
-        let namespace_dead = if let Some(init) = &owned.init {
-            let mut fds = [PollFd::new(init, PollFlags::IN)];
-            poll(
-                &mut fds,
-                Some(&rustix::event::Timespec {
-                    tv_sec: 1,
-                    tv_nsec: 0,
-                }),
-            )?;
-            fds[0].revents().contains(PollFlags::IN)
-        } else {
-            false
-        };
-        if !namespace_dead {
-            return Err(CodingError::Invalid(
-                "sandbox init death not established; process remains uncertain",
-            ));
-        }
-        owned.reaped = true;
-        Ok(HaikuProcessResult {
-            exit_code: status.code(),
-            stdout: String::from_utf8(out)
-                .map_err(|_| CodingError::Invalid("isolated stdout is not UTF-8"))?,
-            stderr: String::from_utf8(err)
-                .map_err(|_| CodingError::Invalid("isolated stderr is not UTF-8"))?,
-            stopped,
-            launcher_reaped: true,
-            namespace_dead,
-        })
     }
     pub(super) fn execute(
         captures: &[HaikuCapture; 2],
         cancellation: &EditCancellation,
+        start: &mut impl FnMut(u32, u32) -> Result<(), CodingError>,
+        observed: &mut impl FnMut(&HaikuProcessResult),
     ) -> Result<HaikuProcessResult, CodingError> {
-        run(captures, cancellation, HAIKU_SCRIPT, Duration::ZERO)
+        supervised(
+            captures,
+            cancellation,
+            HAIKU_SCRIPT,
+            Duration::ZERO,
+            start,
+            observed,
+        )
+    }
+    fn supervised(
+        captures: &[HaikuCapture; 2],
+        cancellation: &EditCancellation,
+        script: &str,
+        delay: Duration,
+        start: &mut impl FnMut(u32, u32) -> Result<(), CodingError>,
+        observed: &mut impl FnMut(&HaikuProcessResult),
+    ) -> Result<HaikuProcessResult, CodingError> {
+        let captures = captures.clone();
+        let script = script.to_owned();
+        let cancel = cancellation.clone();
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::Builder::new()
+            .name("haiku-process".into())
+            .spawn(move || {
+                let result = run(&captures, &cancel, &script, delay, &send);
+                let _ = send.send(Event::Finished(result));
+            })?;
+        let mut supervisor = Supervisor {
+            worker: Some(worker),
+            cancellation: cancellation.clone(),
+        };
+        let mut acknowledgement_error = None;
+        loop {
+            match receive
+                .recv()
+                .map_err(|_| CodingError::Invalid("process supervisor acknowledgement lost"))?
+            {
+                Event::Started {
+                    launcher,
+                    namespace_init,
+                    acknowledged,
+                } => {
+                    let result = start(launcher, namespace_init);
+                    let _ = acknowledged.send(result.is_ok());
+                    acknowledgement_error = result.err();
+                }
+                Event::Finished(result) => {
+                    supervisor
+                        .worker
+                        .take()
+                        .unwrap()
+                        .join()
+                        .map_err(|_| CodingError::Invalid("process supervisor panicked"))?;
+                    let result = result?;
+                    observed(&result);
+                    if let Some(error) = acknowledgement_error {
+                        return Err(error);
+                    }
+                    return Ok(result);
+                }
+            }
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn control_started(
+        captures: &[HaikuCapture; 2],
+        cancellation: &EditCancellation,
+        script: &str,
+        start: &mut impl FnMut(u32, u32) -> Result<(), CodingError>,
+    ) -> Result<HaikuProcessResult, CodingError> {
+        supervised(
+            captures,
+            cancellation,
+            script,
+            Duration::from_millis(100),
+            start,
+            &mut |_| {},
+        )
     }
     #[cfg(test)]
     pub(super) fn control(
@@ -408,23 +572,41 @@ mod linux {
         cancellation: &EditCancellation,
         script: &str,
     ) -> Result<HaikuProcessResult, CodingError> {
-        run(captures, cancellation, script, Duration::from_millis(100))
+        supervised(
+            captures,
+            cancellation,
+            script,
+            Duration::from_millis(100),
+            &mut |_, _| Ok(()),
+            &mut |_| {},
+        )
     }
 }
 
 pub(super) fn execute(
     captures: &[HaikuCapture; 2],
     cancellation: &EditCancellation,
+    mut start: impl FnMut(u32, u32) -> Result<(), CodingError>,
+    mut observed: impl FnMut(&HaikuProcessResult),
 ) -> Result<HaikuProcessResult, CodingError> {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        linux::execute(captures, cancellation)
+        linux::execute(captures, cancellation, &mut start, &mut observed)
     }
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     {
-        let _ = (captures, cancellation);
+        let _ = (captures, cancellation, start, observed);
         Err(CodingError::Invalid("isolation unsupported"))
     }
+}
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(super) fn control_started(
+    captures: &[HaikuCapture; 2],
+    cancellation: &EditCancellation,
+    script: &str,
+    mut start: impl FnMut(u32, u32) -> Result<(), CodingError>,
+) -> Result<HaikuProcessResult, CodingError> {
+    linux::control_started(captures, cancellation, script, &mut start)
 }
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 pub(super) fn control(

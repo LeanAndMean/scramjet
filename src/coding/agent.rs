@@ -23,6 +23,22 @@ use tokio::sync::oneshot;
 const TURNS: u64 = 8;
 const RESPONSE_BYTES: usize = 16_384;
 
+mod driver;
+use driver::{DriverMode, DriverRun, drive};
+pub(crate) async fn run_haiku(
+    agent: &mut super::haiku::agent::HaikuAgent,
+    runtime: &Runtime,
+) -> Result<super::haiku::agent::HaikuRun, CodingError> {
+    let result = drive(DriverMode::Haiku(agent), runtime).await;
+    if let Err(error) = &result {
+        agent.stop(error).await?;
+    }
+    match result? {
+        DriverRun::Haiku(run) => Ok(run),
+        DriverRun::Fixture(_) => unreachable!(),
+    }
+}
+
 pub(super) use super::CodingMaterial as Material;
 
 #[derive(Default)]
@@ -1549,150 +1565,10 @@ impl CodingAgent {
             }
             self.runtime_owner = Some(owner);
         }
-        let mut previous = String::new();
-        let mut ids = Vec::with_capacity(if self.exact_replacement {
-            4
-        } else {
-            TURNS as usize
-        });
-        let mut usage = Some(0);
-        let first = if self.invocation == 2 { 5 } else { 1 };
-        let last = if self.exact_replacement || (self.follow_up && self.invocation == 1) {
-            4
-        } else {
-            TURNS
-        };
-        for turn in first..=last {
-            if self.cancellation.is_cancelled() {
-                return Err(CodingError::Cancelled);
-            }
-            let text = if let Some(project) = &self.project {
-                serialize_project_context(&self.session, turn, &project.evidence, &previous)?
-            } else if self.invocation == 2 {
-                serialize_follow_context(
-                    &self.session,
-                    turn,
-                    self.prior.as_ref().unwrap(),
-                    &self.prompt,
-                    &previous,
-                )?
-            } else {
-                serialize_context(&self.session, turn, &self.prompt, &previous)?
-            };
-            let (reply, receive) = oneshot::channel();
-            self.sender
-                .as_ref()
-                .unwrap()
-                .try_send(Work::Request {
-                    turn,
-                    text: text.clone(),
-                    reply,
-                })
-                .map_err(|_| CodingError::Invalid("serialized worker unavailable"))?;
-            receive
-                .await
-                .map_err(|_| CodingError::Invalid("worker lost request acknowledgement"))??;
-            if self.cancellation.is_cancelled() {
-                return Err(CodingError::Cancelled);
-            }
-            let mut handle = runtime
-                .submit(&text, crate::SyntheticCost::new(1, 1).unwrap())
-                .map_err(|_| CodingError::Invalid("model admission refused"))?;
-            let id = handle.id();
-            ids.push(id);
-            self.shared
-                .update(|o| o.attempts[(turn - 1) as usize].request_id = Some(id));
-            let mut assembled = String::with_capacity(RESPONSE_BYTES);
-            let mut rejected = false;
-            loop {
-                let delta = tokio::select! {
-                    delta = handle.next_delta() => delta,
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
-                        if self.cancellation.is_cancelled() { rejected = true; handle.cancel(); }
-                        continue;
-                    }
-                };
-                let Some(delta) = delta else { break };
-                if self.cancellation.is_cancelled() {
-                    rejected = true;
-                    handle.cancel();
-                }
-                if delta.len() > RESPONSE_BYTES - assembled.len() {
-                    rejected = true;
-                    handle.cancel();
-                } else if !rejected {
-                    assembled.push_str(&delta);
-                }
-            }
-            let terminal = handle.terminal().await;
-            let duplicate = handle.terminal().await.is_some();
-            usage = terminal
-                .as_ref()
-                .filter(|t| t.id == id && !duplicate)
-                .and_then(|t| t.synthetic_usage.add_to(usage));
-            let success = !rejected
-                && !self.cancellation.is_cancelled()
-                && !duplicate
-                && terminal
-                    .as_ref()
-                    .is_some_and(|t| t.id == id && t.outcome == Outcome::Success);
-            let accounting = if terminal.as_ref().is_some_and(|t| t.id == id && !duplicate) {
-                handle
-                    .accounting_receipt()
-                    .ok()
-                    .map(|(unknown_usage, unresolved_exposure)| CodingAccounting {
-                        request_id: id,
-                        unknown_usage,
-                        unresolved_exposure,
-                    })
-            } else {
-                None
-            };
-            self.shared.update(|o| {
-                let slot = &mut o.attempts[(turn - 1) as usize];
-                slot.outcome = terminal
-                    .as_ref()
-                    .filter(|t| t.id == id && !duplicate)
-                    .map(|t| t.outcome.clone());
-                slot.accounting = accounting;
-            });
-            if !success && !self.cancellation.is_cancelled() {
-                self.shared
-                    .failure("model response failed; material acknowledgement pending");
-            }
-            drop(handle);
-            let (reply, receive) = oneshot::channel();
-            self.sender
-                .as_ref()
-                .unwrap()
-                .try_send(Work::Response {
-                    turn,
-                    id,
-                    text: assembled,
-                    success,
-                    reply,
-                })
-                .map_err(|_| CodingError::Invalid("serialized worker unavailable"))?;
-            let step = receive
-                .await
-                .map_err(|_| CodingError::Invalid("worker lost tool acknowledgement"))??;
-            if let Some(edit_operation) = step.final_edit {
-                if self.invocation == 1 {
-                    self.prior = step.prior;
-                }
-                return Ok(CodingRun {
-                    summary: step.output,
-                    turns: turn,
-                    request_ids: ids,
-                    edit_operation,
-                    usage_tokens: usage,
-                });
-            }
-            previous = step.output;
+        match drive(DriverMode::Fixture(self), runtime).await? {
+            DriverRun::Fixture(run) => Ok(run),
+            DriverRun::Haiku(_) => unreachable!(),
         }
-        Err(CodingError::Invalid(
-            "model turn ceiling without final result",
-        ))
     }
 
     fn join(&mut self) -> Result<(), CodingError> {

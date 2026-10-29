@@ -1,7 +1,7 @@
 use super::{HaikuCapture, HaikuIntent, HaikuProcessResult};
 use crate::{CodingError, ProviderUsage};
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, mkdirat, openat};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     fs::File,
@@ -14,9 +14,9 @@ const HISTORY_BYTES: usize = 2_097_152;
 const RECORDS: usize = 128;
 const TURN_RECORDS: usize = 9;
 
-#[derive(Serialize)]
-#[serde(tag = "kind")]
-pub(super) enum Record {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+pub enum Record {
     Header {
         version: u8,
         session: String,
@@ -31,8 +31,17 @@ pub(super) enum Record {
         request_id: u64,
         ordinal: usize,
         response_id: String,
+        #[serde(deserialize_with = "super::json::items")]
         items: Vec<Value>,
         usage: ProviderUsage,
+    },
+    Receipt {
+        attempt: super::history::HaikuAttempt,
+    },
+    Started {
+        operation: usize,
+        launcher: u32,
+        namespace_init: u32,
     },
     Denied {
         intent: HaikuIntent,
@@ -75,6 +84,11 @@ pub(super) struct Journal {
     records: usize,
     remaining: usize,
     poisoned: bool,
+    root: [u64; 2],
+    entries: Vec<super::history::HaikuHistoryEntry>,
+    observer: Option<std::sync::Arc<super::observation::Shared>>,
+    #[cfg(test)]
+    pub(super) fault: Option<super::fault::Fault>,
 }
 
 impl Journal {
@@ -110,9 +124,14 @@ impl Journal {
             records: 0,
             remaining: 1,
             poisoned: false,
+            root,
+            entries: Vec::with_capacity(RECORDS),
+            observer: None,
+            #[cfg(test)]
+            fault: None,
         };
         journal.append(Record::Header {
-            version: 1,
+            version: 3,
             session: session.into(),
             root,
         })?;
@@ -120,6 +139,16 @@ impl Journal {
         storage.sync_all()?;
         journal.validate()?;
         Ok(journal)
+    }
+    pub(super) fn observe(&mut self, shared: std::sync::Arc<super::observation::Shared>) {
+        self.observer = Some(shared);
+    }
+    pub(super) fn history(&self) -> std::sync::Arc<super::history::HaikuHistory> {
+        std::sync::Arc::new(super::history::HaikuHistory {
+            session: self.session.clone(),
+            root: self.root,
+            entries: self.entries.clone(),
+        })
     }
     pub(super) fn validate(&self) -> Result<(), CodingError> {
         if self.poisoned {
@@ -157,10 +186,14 @@ impl Journal {
     }
     pub(super) fn reserve_turn(&mut self) -> Result<(), CodingError> {
         self.check()?;
+        #[cfg(test)]
+        if let Some(fault) = self.fault {
+            fault.hit(super::fault::Point::Reserve)?;
+        }
         if self.records + TURN_RECORDS > RECORDS
             || self.bytes + TURN_RECORDS * RECORD_BYTES > HISTORY_BYTES
         {
-            return Err(CodingError::History(
+            return Err(CodingError::ResourceLimit(
                 "haiku attempt/effect/ending history resource limit",
             ));
         }
@@ -169,11 +202,18 @@ impl Journal {
     }
     pub(super) fn append(&mut self, record: Record) -> Result<(), CodingError> {
         self.check()?;
+        #[cfg(test)]
+        if let Some(fault) = self.fault
+            && let Err(error) = fault.hit(super::fault::Point::Append)
+        {
+            self.poisoned = true;
+            return Err(error);
+        }
         if self.remaining == 0 {
             return Err(CodingError::History("unreserved haiku record"));
         }
         let mut bytes = super::bounded_json_bytes(
-            &serde_json::json!({"sequence":self.records,"record":record}),
+            &serde_json::json!({"sequence":self.records,"record":&record}),
             RECORD_BYTES - 1,
         )
         .map_err(|_| CodingError::History("haiku record resource limit"))?;
@@ -181,18 +221,38 @@ impl Journal {
         if self.records >= RECORDS || bytes.len() > HISTORY_BYTES - self.bytes {
             return Err(CodingError::History("haiku history resource limit"));
         }
-        if let Err(error) = self
-            .file
-            .write_all(&bytes)
-            .and_then(|()| self.file.sync_all())
+        #[cfg(test)]
+        if let Some(fault) = self.fault
+            && fault.point == super::fault::Point::ShortAppend
         {
+            self.file.write_all(&bytes[..bytes.len() / 2])?;
             self.poisoned = true;
-            return Err(error.into());
+            return fault.hit(super::fault::Point::ShortAppend);
+        }
+        let persisted = (|| {
+            self.file.write_all(&bytes)?;
+            #[cfg(test)]
+            if let Some(fault) = self.fault {
+                fault.hit(super::fault::Point::Sync)?;
+            }
+            self.file.sync_all().map_err(CodingError::from)
+        })();
+        if let Err(error) = persisted {
+            self.poisoned = true;
+            return Err(error);
         }
         self.check()?;
+        self.entries.push(super::history::HaikuHistoryEntry {
+            sequence: self.records,
+            record: std::sync::Arc::new(record),
+            acknowledged: true,
+        });
         self.records += 1;
         self.remaining -= 1;
         self.bytes += bytes.len();
+        if let Some(observer) = &self.observer {
+            observer.history(self.history());
+        }
         Ok(())
     }
 }

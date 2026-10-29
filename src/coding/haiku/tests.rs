@@ -1,4 +1,6 @@
 use super::*;
+#[path = "tests_faults.rs"]
+mod faults;
 use std::{
     os::unix::fs::{DirBuilderExt, PermissionsExt},
     path::PathBuf,
@@ -126,9 +128,188 @@ fn create(session: &mut HaikuSession, turn: usize, path: &str, content: &str) {
 }
 
 #[test]
+fn failed_or_blocked_start_ack_never_releases_command_and_still_reaps() {
+    let input = captures("poem");
+    let mut observed = None;
+    let mut identities = Vec::new();
+    let result = process::execute(
+        &input,
+        &EditCancellation::default(),
+        |launcher, init| {
+            identities = [launcher, init]
+                .into_iter()
+                .map(|id| {
+                    rustix::process::pidfd_open(
+                        rustix::process::Pid::from_raw(id as i32).unwrap(),
+                        rustix::process::PidfdFlags::empty(),
+                    )
+                    .unwrap()
+                })
+                .collect();
+            Err(std::io::Error::other("injected start acknowledgement failure").into())
+        },
+        |result| observed = Some(result.clone()),
+    );
+    assert!(result.is_err());
+    let observed = observed.unwrap();
+    assert!(observed.launcher_reaped && observed.namespace_dead);
+    assert!(observed.stdout.is_empty());
+    for identity in &identities {
+        let mut poll = [rustix::event::PollFd::new(
+            identity,
+            rustix::event::PollFlags::IN,
+        )];
+        rustix::event::poll(
+            &mut poll,
+            Some(&rustix::event::Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            }),
+        )
+        .unwrap();
+        assert!(poll[0].revents().contains(rustix::event::PollFlags::IN));
+    }
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    let proof = std::thread::spawn(move || {
+        let identities: Vec<std::os::fd::OwnedFd> = receive.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5250));
+        for identity in &identities {
+            let mut poll = [rustix::event::PollFd::new(
+                identity,
+                rustix::event::PollFlags::IN,
+            )];
+            rustix::event::poll(
+                &mut poll,
+                Some(&rustix::event::Timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                }),
+            )
+            .unwrap();
+            assert!(
+                poll[0].revents().contains(rustix::event::PollFlags::IN),
+                "sandbox outlived blocked journal acknowledgement"
+            );
+        }
+    });
+    let result = process::execute(
+        &input,
+        &EditCancellation::default(),
+        |launcher, init| {
+            let identities: Vec<std::os::fd::OwnedFd> = [launcher, init]
+                .into_iter()
+                .map(|id| {
+                    rustix::process::pidfd_open(
+                        rustix::process::Pid::from_raw(id as i32).unwrap(),
+                        rustix::process::PidfdFlags::empty(),
+                    )
+                    .unwrap()
+                })
+                .collect();
+            send.send(identities).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(5500));
+            Ok(())
+        },
+        |_| {},
+    )
+    .unwrap();
+    proof.join().unwrap();
+    assert!(result.stdout.is_empty());
+    assert_eq!(
+        result.stopped.as_deref(),
+        Some("isolated wall-time resource limit")
+    );
+    assert!(result.launcher_reaped && result.namespace_dead);
+}
+
+#[test]
+fn cancelled_or_expired_dispatch_ack_cannot_create_late_targets() {
+    for expire in [false, true] {
+        let dirs = Dirs::new();
+        let mut session = HaikuSession::create(&dirs.root, &dirs.storage, "late-dispatch").unwrap();
+        let HaikuStep::Approval(proposal) = select(
+            &mut session,
+            1,
+            "write",
+            json!({"path":"haiku.md","content":"poem"}),
+        ) else {
+            panic!()
+        };
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        session.pause = Some(fault::Pause {
+            point: fault::Point::Dispatched,
+            entered: entered.clone(),
+            gate: gate.clone(),
+        });
+        if expire {
+            session.started = std::time::Instant::now() - std::time::Duration::from_secs(299);
+        }
+        let cancel = EditCancellation::default();
+        let worker_cancel = cancel.clone();
+        let worker = std::thread::spawn(move || {
+            let result = session.decide(proposal, true, &worker_cancel);
+            (session, result)
+        });
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !entered.load(Ordering::Acquire) {
+            assert!(
+                std::time::Instant::now() < until,
+                "dispatch boundary not reached"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        if expire {
+            std::thread::sleep(std::time::Duration::from_millis(1050));
+        } else {
+            cancel.cancel();
+        }
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        let (session, result) = worker.join().unwrap();
+        assert!(if expire {
+            matches!(result, Err(CodingError::Deadline))
+        } else {
+            matches!(result, Err(CodingError::Cancelled))
+        });
+        assert!(!dirs.root.join("haiku.md").exists());
+        assert_eq!(
+            session.history().effects()[0].state,
+            HaikuCertainty::Uncertain
+        );
+    }
+}
+
+#[test]
+fn expired_response_retains_accounting_and_cannot_select_effects() {
+    let dirs = Dirs::new();
+    let mut session = HaikuSession::create(&dirs.root, &dirs.storage, "deadline").unwrap();
+    session.prepare_request().unwrap();
+    session.started = std::time::Instant::now() - std::time::Duration::from_secs(301);
+    let result = session.select_response(
+        RequestId(1),
+        selected(1, "write", "{\"path\":\"haiku.md\",\"content\":\"poem\"}"),
+    );
+    assert!(matches!(result, Err(CodingError::Deadline)));
+    assert!(!dirs.root.join("haiku.md").exists());
+    let receipts = session.history().attempts();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].request_id, 1);
+    assert_eq!(receipts[0].ordinal, Some(1));
+    assert!(receipts[0].durable);
+    assert!(receipts[0].usage.as_ref().unwrap().complete());
+}
+
+#[test]
 fn fixed_reader_preserves_all_admitted_bytes_and_reaps_namespace() {
     let captures = captures("# Haiku\r\nRust folds\rstreams answer\nNUL\0é🙂\n");
-    let result = process::execute(&captures, &EditCancellation::default()).unwrap();
+    let result = process::execute(
+        &captures,
+        &EditCancellation::default(),
+        |_, _| Ok(()),
+        |_| {},
+    )
+    .unwrap();
     assert_eq!(result.exit_code, Some(0));
     assert_eq!(result.stdout, captures[0].content);
     assert!(result.stderr.is_empty(), "{result:?}");
@@ -215,6 +396,110 @@ fn exact_approved_effect_owner_completes_five_response_journey() {
     )
     .unwrap();
     assert_eq!(encoded["stdout"], poem);
+}
+
+#[test]
+fn foreign_owner_changed_root_lock_and_file_metadata_cannot_authorize() {
+    for case in 0..5 {
+        let dirs = Dirs::new();
+        let mut session = HaikuSession::create(&dirs.root, &dirs.storage, "binding").unwrap();
+        let HaikuStep::Approval(proposal) = select(
+            &mut session,
+            1,
+            "write",
+            json!({"path":"haiku.md","content":"poem"}),
+        ) else {
+            panic!()
+        };
+        if case == 0 {
+            let other = Dirs::new();
+            let mut foreign = HaikuSession::create(&other.root, &other.storage, "binding").unwrap();
+            let _ = select(
+                &mut foreign,
+                1,
+                "write",
+                json!({"path":"haiku.md","content":"poem"}),
+            );
+            assert!(matches!(
+                foreign.decide(proposal, true, &EditCancellation::default()),
+                Err(CodingError::Stale)
+            ));
+            assert!(!other.root.join("haiku.md").exists());
+            continue;
+        }
+        if case == 1 {
+            std::fs::rename(&dirs.root, dirs.root.with_file_name("old-root")).unwrap();
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&dirs.root)
+                .unwrap();
+        }
+        if case == 2 {
+            std::fs::rename(
+                dirs.root.join(crate::PROJECT_LOCK_NAME),
+                dirs.root.join("old-lock"),
+            )
+            .unwrap();
+            std::fs::write(dirs.root.join(crate::PROJECT_LOCK_NAME), b"").unwrap();
+            std::fs::set_permissions(
+                dirs.root.join(crate::PROJECT_LOCK_NAME),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        if case == 3 {
+            std::os::unix::fs::symlink("absent", dirs.root.join("haiku.md")).unwrap();
+        }
+        if case == 4 {
+            std::fs::set_permissions(&dirs.root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(
+            session
+                .decide(proposal, true, &EditCancellation::default())
+                .is_err()
+        );
+        assert!(std::fs::read(dirs.root.join("haiku.md")).is_err());
+    }
+    for mode in [0o644, 0o600] {
+        let dirs = Dirs::new();
+        let mut session = HaikuSession::create(&dirs.root, &dirs.storage, "metadata").unwrap();
+        create(&mut session, 1, "haiku.md", "poem");
+        if mode == 0o600 {
+            std::fs::hard_link(dirs.root.join("haiku.md"), dirs.root.join("other.md")).unwrap();
+        } else {
+            std::fs::set_permissions(
+                dirs.root.join("haiku.md"),
+                std::fs::Permissions::from_mode(mode),
+            )
+            .unwrap();
+        }
+        session.prepare_request().unwrap();
+        assert!(
+            session
+                .select_response(RequestId(2), selected(2, "read", "{\"path\":\"haiku.md\"}"))
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read_to_string(dirs.root.join("haiku.md")).unwrap(),
+            "poem"
+        );
+    }
+}
+
+#[test]
+fn complete_public_envelope_limits_refuse_before_proposal_or_effect() {
+    let dirs = Dirs::new();
+    let mut session = HaikuSession::create(&dirs.root, &dirs.storage, "envelope").unwrap();
+    session.prepare_request().unwrap();
+    let mut response = selected(1, "write", "{\"path\":\"haiku.md\",\"content\":\"poem\"}");
+    let id = "opaque/\"\0é".repeat(3000);
+    response.envelope.as_mut().unwrap().response_id = id.clone();
+    response.remote_terminal.as_mut().unwrap().response_id = id;
+    assert!(matches!(
+        session.select_response(RequestId(1), response),
+        Err(CodingError::ResourceLimit(_))
+    ));
+    assert!(!dirs.root.join("haiku.md").exists());
 }
 
 #[test]
@@ -325,6 +610,33 @@ fn changed_process_capture_stops_before_dispatch() {
 }
 
 #[test]
+fn installed_cpu_address_and_descriptor_refusals_reclaim_namespace() {
+    for (script, expected) in [
+        ("x = bytearray(400*1024*1024)\n", "MemoryError"),
+        (
+            "import os\nx=[os.open('/dev/null',os.O_RDONLY) for _ in range(100)]\n",
+            "Too many open files",
+        ),
+    ] {
+        let result =
+            process::control(&captures("poem"), &EditCancellation::default(), script).unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(result.stderr.contains(expected), "{result:?}");
+        assert!(result.launcher_reaped && result.namespace_dead);
+    }
+    let result = process::control(
+        &captures("poem"),
+        &EditCancellation::default(),
+        "while True: pass\n",
+    )
+    .unwrap();
+    assert_eq!(result.exit_code, Some(137), "{result:?}");
+    assert!(result.signal.is_none());
+    assert!(result.stopped.is_none());
+    assert!(result.launcher_reaped && result.namespace_dead);
+}
+
+#[test]
 fn owned_namespace_bounds_output_time_and_cancellation() {
     for (script, cancel) in [
         ("import sys\nsys.stdout.write('x'*20000)\n", false),
@@ -333,13 +645,19 @@ fn owned_namespace_bounds_output_time_and_cancellation() {
     ] {
         let cancellation = EditCancellation::default();
         let child_cancel = cancellation.clone();
+        let (started, receive) = std::sync::mpsc::sync_channel(1);
         let signal = std::thread::spawn(move || {
+            receive.recv().unwrap();
             if cancel {
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 child_cancel.cancel();
             }
         });
-        let result = process::control(&captures("poem"), &cancellation, script).unwrap();
+        let result = process::control_started(&captures("poem"), &cancellation, script, |_, _| {
+            started.send(()).unwrap();
+            Ok(())
+        })
+        .unwrap();
         signal.join().unwrap();
         assert!(result.stopped.is_some(), "{result:?}");
         assert!(result.launcher_reaped && result.namespace_dead);
@@ -392,20 +710,22 @@ fn detached_journal_chain_cannot_authorize_effects() {
 fn installed_isolation_has_read_only_files_no_host_paths_or_leaked_descriptors() {
     let _unrelated_inheritable =
         rustix::fs::open("/dev/null", OFlags::RDONLY, Mode::empty()).unwrap();
-    let script = r#"import os, resource, json
+    let script = r#"import os, resource, json, sys
 from pathlib import Path
 try:
     Path('haiku.md').write_bytes(b'changed')
     writable = True
 except OSError:
     writable = False
-print(json.dumps({'writable':writable,'paths':[Path(p).exists() for p in ['/home','/etc','/root','/workspace/storage']], 'fds':[int(p) for p in os.listdir('/proc/self/fd')], 'environment':dict(os.environ), 'limits':[resource.getrlimit(r) for r in [resource.RLIMIT_CPU,resource.RLIMIT_AS,resource.RLIMIT_NOFILE,resource.RLIMIT_CORE]], 'net':os.readlink('/proc/self/ns/net')}))
+print(json.dumps({'writable':writable,'paths':[Path(p).exists() for p in ['/home','/etc','/root','/workspace/storage']], 'fds':[int(p) for p in os.listdir('/proc/self/fd')], 'environment':dict(os.environ), 'limits':[resource.getrlimit(r) for r in [resource.RLIMIT_CPU,resource.RLIMIT_AS,resource.RLIMIT_NOFILE,resource.RLIMIT_CORE]], 'net':os.readlink('/proc/self/ns/net'), 'isolated':sys.flags.isolated, 'customized':any(n in sys.modules for n in ['sitecustomize','usercustomize'])}))
 "#;
     let result = process::control(&captures("poem"), &EditCancellation::default(), script).unwrap();
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.stderr.is_empty());
     let observed: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
     assert_eq!(observed["writable"], false);
+    assert_eq!(observed["isolated"], 1);
+    assert_eq!(observed["customized"], false);
     assert_eq!(observed["paths"], json!([false, false, false, false]));
     assert!(
         observed["fds"]
@@ -437,7 +757,6 @@ print(json.dumps({'writable':writable,'paths':[Path(p).exists() for p in ['/home
 
 #[test]
 fn short_process_waits_for_supervision_and_descendants_die_with_namespace() {
-    let started = std::time::Instant::now();
     let result = process::control(
         &captures("poem"),
         &EditCancellation::default(),
@@ -446,5 +765,5 @@ fn short_process_waits_for_supervision_and_descendants_die_with_namespace() {
     .unwrap();
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert!(result.launcher_reaped && result.namespace_dead);
-    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert!(result.stopped.is_none());
 }

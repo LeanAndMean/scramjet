@@ -74,6 +74,92 @@ fn provider_authority_boundaries() {
     }
 }
 #[test]
+fn consumer_deadline_reaches_transport_without_changing_default_attempt_limit() {
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "runtime::provider_tests::consumer_deadline_child",
+            "--nocapture",
+        ])
+        .env("HAIKU_CONSUMER_DEADLINE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+#[test]
+fn consumer_deadline_child() {
+    if std::env::var_os("HAIKU_CONSUMER_DEADLINE").is_none() {
+        return;
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            use tokio::io::AsyncReadExt;
+            let path = std::env::temp_dir().join(format!(
+                "scramjet-consumer-deadline-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                if let Ok(Ok((mut socket, _))) =
+                    tokio::time::timeout(Duration::from_millis(200), listener.accept()).await
+                {
+                    let mut byte = [0];
+                    let result = socket.read(&mut byte).await;
+                    assert!(
+                        matches!(result, Ok(0))
+                            || result.as_ref().is_err_and(
+                                |error| error.kind() == std::io::ErrorKind::ConnectionReset
+                            ),
+                        "expired request wrote a POST byte: {result:?}"
+                    );
+                }
+            });
+            let runtime = Runtime::new_provider(endpoint, &path).unwrap();
+            let shared = runtime.ownership();
+            let (reached, mut reached_rx) = mpsc::channel(1);
+            let release = Arc::new(Notify::new());
+            *shared.probe.lock().unwrap() = Some(Probe {
+                checkpoint: Checkpoint::BeforeTransport,
+                reached,
+                release: release.clone(),
+            });
+            let request =
+                ProviderRequest::new(&[ProviderInput::User("synthetic".into())], &[]).unwrap();
+            let mut handle = runtime
+                .submit_provider_until(
+                    request,
+                    tokio::time::Instant::now() + Duration::from_millis(50),
+                )
+                .unwrap();
+            reached_rx.recv().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            release.notify_waiters();
+            let response = handle.result().await.unwrap();
+            assert_eq!(response.outcome, Outcome::Deadline);
+            assert!(response.envelope.is_none());
+            drop(handle);
+            let local = runtime.shutdown().await;
+            assert_eq!(local.active, 0);
+            server.await.unwrap();
+        });
+}
+
+#[test]
 fn obtained_data_survives_elapsed_deadline_without_parser_or_settlement_authority() {
     for case in ["captured", "uncaptured"] {
         let output = Command::new(std::env::current_exe().unwrap())
@@ -102,7 +188,7 @@ fn frame_deadline_child() {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         use crate::http::provider::{FRAME_PROBE, FrameProbe};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let path = std::env::temp_dir().join(format!("scramjet-frame-deadline-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("scramjet-frame-deadline-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         let body = fixture::wire(&fixture::text_events("hé🙂", fixture::known_usage()), true);
@@ -243,7 +329,7 @@ fn provider_boundary_child() {
     let refused = case.starts_with("refused-");
     let case = case.strip_prefix("refused-").unwrap_or(case).to_owned();
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-        let path=std::env::temp_dir().join(format!("scramjet-provider-boundary-{}",std::process::id()));
+        let path=std::env::temp_dir().join(format!("scramjet-provider-boundary-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir(&path).unwrap();std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o700)).unwrap();
         let usage=if partial {serde_json::json!({"input_tokens":10})}else if matches!(case.as_str(),"freeze-unknown"|"retained-unknown") {serde_json::Value::Null}else{fixture::known_usage()};
         let mut events=if case=="accepted-control" {fixture::call_events("{}",usage)}else{fixture::text_events("synthetic",usage)};

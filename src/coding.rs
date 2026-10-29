@@ -25,6 +25,9 @@ const STAGE_NAME: &str = ".coding-stage";
 #[derive(Debug)]
 pub enum CodingError {
     Invalid(&'static str),
+    Unsupported(&'static str),
+    ResourceLimit(&'static str),
+    Deadline,
     Denied,
     Stale,
     TargetMismatch,
@@ -37,7 +40,11 @@ pub enum CodingError {
 impl std::fmt::Display for CodingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Invalid(message) | Self::History(message) => write!(f, "{message}"),
+            Self::Invalid(message)
+            | Self::History(message)
+            | Self::Unsupported(message)
+            | Self::ResourceLimit(message) => write!(f, "{message}"),
+            Self::Deadline => f.write_str("coding invocation deadline exceeded"),
             Self::Denied => f.write_str("mutation capability denied"),
             Self::Stale => f.write_str("approval/intent is not the current exact invocation"),
             Self::TargetMismatch => f.write_str("target differs from exact expected bytes"),

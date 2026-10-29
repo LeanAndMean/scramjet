@@ -275,6 +275,7 @@ struct Slot {
     output: Option<mpsc::Sender<String>>,
     terminal: Option<mpsc::Sender<Terminal>>,
     admitted: Option<tokio::time::Instant>,
+    consumer_deadline: Option<tokio::time::Instant>,
     commitment_order: Option<usize>,
     witness: Option<Witness>,
     head_observed: bool,
@@ -508,7 +509,7 @@ impl Runtime {
         if self.shared.state.lock().unwrap().provider.is_some() {
             return Err(SubmitError::WrongRoute);
         }
-        self.submit_input(input, AdmissionCost::Fixture(cost), MAX_INPUT, None)
+        self.submit_input(input, AdmissionCost::Fixture(cost), MAX_INPUT, None, None)
     }
 
     pub fn submit_provider(&self, request: ProviderRequest) -> Result<ProviderHandle, SubmitError> {
@@ -519,6 +520,7 @@ impl Runtime {
             &request.encoded,
             AdmissionCost::Provider,
             PROVIDER_ENVELOPE_BYTES,
+            None,
             None,
         )
         .map(|handle| ProviderHandle { handle })
@@ -537,11 +539,30 @@ impl Runtime {
             AdmissionCost::Provider,
             PROVIDER_ENVELOPE_BYTES,
             Some(sender),
+            None,
         )?;
         Ok((
             ProviderHandle { handle },
             crate::ProviderCaptureReceiver(receiver),
         ))
+    }
+
+    pub(crate) fn submit_provider_until(
+        &self,
+        request: ProviderRequest,
+        deadline: tokio::time::Instant,
+    ) -> Result<ProviderHandle, SubmitError> {
+        if self.shared.state.lock().unwrap().provider.is_none() {
+            return Err(SubmitError::WrongRoute);
+        }
+        self.submit_input(
+            &request.encoded,
+            AdmissionCost::Provider,
+            PROVIDER_ENVELOPE_BYTES,
+            None,
+            Some(deadline),
+        )
+        .map(|handle| ProviderHandle { handle })
     }
 
     fn submit_input(
@@ -550,6 +571,7 @@ impl Runtime {
         cost: AdmissionCost,
         max_input: usize,
         capture: Option<tokio::sync::oneshot::Sender<crate::ProviderCapture>>,
+        consumer_deadline: Option<tokio::time::Instant>,
     ) -> Result<RequestHandle, SubmitError> {
         if input.len() > max_input {
             return Err(SubmitError::InputTooLarge);
@@ -596,6 +618,7 @@ impl Runtime {
             output: Some(output),
             terminal: Some(terminal_tx),
             admitted: commitment.map(|(_, time)| time),
+            consumer_deadline,
             commitment_order: commitment.map(|(order, _)| order),
             witness: commitment.map(|(_, time)| Witness {
                 generation,
@@ -1255,8 +1278,11 @@ async fn schedule(shared: Arc<Shared>, endpoint: SocketAddr, _active_limit: usiz
                 let input = slot.input.take().unwrap();
                 let id = slot.id;
                 let output = slot.output.as_ref().unwrap().clone();
-                let deadline = slot.admitted.unwrap()
+                let attempt_deadline = slot.admitted.unwrap()
                     + Duration::from_secs(if provider.is_some() { 30 } else { 5 });
+                let deadline = slot
+                    .consumer_deadline
+                    .map_or(attempt_deadline, |deadline| deadline.min(attempt_deadline));
                 let cancel = slot.cancel.subscribe();
                 let shared = shared.clone();
                 let provider = provider.clone();
