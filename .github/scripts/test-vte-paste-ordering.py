@@ -166,26 +166,46 @@ def journey(driver, output, wrapper, revision, source, baseline):
     env = {**os.environ, "PATH": str(wrapper) + os.pathsep + os.environ["PATH"], "VTE_CONTROL": str(output / "control.json")}
     started = time.monotonic()
     control = {}
-    evidence = {}
+    evidence = {"terminalGone": False, "fixtureGone": False, "windowsGone": False}
+    timed_out = False
+    termination_errors = []
     try:
         with (output / "driver.log").open("w") as log:
             child = subprocess.Popen([sys.executable, str(driver), str(output), "--terminal=vte"], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             try:
                 status = child.wait(timeout=600)
             except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGTERM)
-                child.wait(timeout=10)
-                raise RuntimeError("Controlled driver exceeded journey deadline")
-        control = json.loads((output / "control.json").read_text())
-        evidence = cleanup_evidence(control)
-        report = json.loads((output / "report.json").read_text())
-        result = verdict(report, control, evidence, status, revision, source, baseline)
-        require((output / "controlled-warning.png").is_file(), "Missing real warning screenshot")
-        require(all((output / f"{name}.png").is_file() for name in report["screenshots"]), "Missing journey screenshot files")
-        return result
+                timed_out = True
+                for action in (signal.SIGTERM, signal.SIGKILL):
+                    try:
+                        os.killpg(child.pid, action)
+                    except ProcessLookupError:
+                        pass
+                    except OSError as error:
+                        termination_errors.append(f"{action.name}: {error}")
+                    try:
+                        child.wait(timeout=10)
+                        break
+                    except (subprocess.TimeoutExpired, OSError) as error:
+                        termination_errors.append(f"{action.name} reap: {error}")
     finally:
+        try:
+            control = json.loads((output / "control.json").read_text())
+            evidence = cleanup_evidence(control)
+        except Exception as error:
+            evidence["error"] = str(error)
+        if termination_errors:
+            evidence["terminationErrors"] = termination_errors
         (output / "cleanup.json").write_text(json.dumps(evidence, indent=2))
         (output / "timing.json").write_text(json.dumps({"durationSeconds": time.monotonic() - started}))
+    if timed_out:
+        raise RuntimeError("Controlled driver exceeded journey deadline")
+    require("error" not in evidence, "Independent cleanup verification failed: " + evidence.get("error", ""))
+    report = json.loads((output / "report.json").read_text())
+    result = verdict(report, control, evidence, status, revision, source, baseline)
+    require((output / "controlled-warning.png").is_file(), "Missing real warning screenshot")
+    require(all((output / f"{name}.png").is_file() for name in report["screenshots"]), "Missing journey screenshot files")
+    return result
 
 
 def main(output):

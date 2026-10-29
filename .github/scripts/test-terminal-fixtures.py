@@ -2435,6 +2435,87 @@ class VteOrderingHarnessTests(unittest.TestCase):
     def evaluate(self, baseline, pair=None):
         return self.module["verdict"](*(pair or self.pair(baseline)), 1 if baseline else 0, "a" * 40, self.source, baseline)
 
+    def test_cleanup_observer_distinguishes_live_missing_and_reused_identities(self):
+        original = {"pid": 100, "start": "1"}
+        for current, gone in ((original, False), (None, True), ({"pid": 100, "start": "2"}, True)):
+            for windows, windows_gone in ((subprocess.CompletedProcess([], 1, "", ""), True),
+                                           (subprocess.CompletedProcess([], 0, "200\n", ""), False),
+                                           (subprocess.CompletedProcess([], 1, "", "error"), False)):
+                with self.subTest(current=current, windows=windows):
+                    clock = [0.0]
+                    def sleep(seconds): clock[0] += seconds
+                    control = {"pid": 100, "terminalProcess": original, "fixtureProcess": original}
+                    with patch.dict(self.module, {"process_identity": lambda pid: current}), \
+                         patch.object(time, "monotonic", side_effect=lambda: clock[0]), \
+                         patch.object(time, "sleep", side_effect=sleep), \
+                         patch.dict(self.module, {"real_command": (real := Mock(return_value=windows))}):
+                        result = self.module["cleanup_evidence"](control)
+                    self.assertEqual(result, {"terminalGone": gone, "fixtureGone": gone, "windowsGone": windows_gone})
+                    self.assertLessEqual(clock[0], 5.05)
+                    self.assertEqual(clock[0] == 0, gone)
+                    real.assert_called_once_with("search", "--pid", "100")
+        clock = [0.0]
+        with patch.object(time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(time, "sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+             patch.dict(self.module, {"real_command": (real := Mock()),
+                                      "process_identity": (identity := Mock())}):
+            self.assertEqual(self.module["cleanup_evidence"]({}),
+                             {"terminalGone": False, "fixtureGone": False, "windowsGone": False})
+        real.assert_not_called()
+        identity.assert_not_called()
+        self.assertLessEqual(clock[0], 5.05)
+
+    def test_journey_timeout_preserves_deadline_and_records_cleanup(self):
+        expired = subprocess.TimeoutExpired("driver", 600)
+        cases = (([expired, 0], None, None, [signal.SIGTERM]),
+                 ([expired, expired, 0], None, None, [signal.SIGTERM, signal.SIGKILL]),
+                 ([expired, expired, expired], None, None, [signal.SIGTERM, signal.SIGKILL]),
+                 ([expired, 0], OSError("signal denied"), None, [signal.SIGTERM]),
+                 ([expired, 0], ProcessLookupError("already gone"), None, [signal.SIGTERM]),
+                 ([expired, 0], None, RuntimeError("observer failed"), [signal.SIGTERM]))
+        for waits, signal_error, observation_error, signals in cases:
+            with self.subTest(waits=waits, signal_error=signal_error, observation_error=observation_error), \
+                 tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / "journey"
+                control = {"pid": 100}
+                def launch(*args, **kwargs):
+                    (output / "control.json").write_text(json.dumps(control))
+                    return child
+                child = unittest.mock.Mock(pid=500)
+                child.wait.side_effect = waits
+                cleanup = {"terminalGone": True, "fixtureGone": False, "windowsGone": False}
+                observer = unittest.mock.Mock(return_value=cleanup, side_effect=observation_error)
+                with patch.object(subprocess, "Popen", side_effect=launch), \
+                     patch.object(os, "killpg", side_effect=signal_error) as kill, \
+                     patch.dict(self.module, {"cleanup_evidence": observer}):
+                    with self.assertRaisesRegex(RuntimeError, "^Controlled driver exceeded journey deadline$"):
+                        self.module["journey"](Path("driver"), output, Path("wrapper"), "a" * 40, self.source, False)
+                self.assertEqual(kill.call_args_list, [unittest.mock.call(500, action) for action in signals])
+                self.assertEqual(child.wait.call_args_list, [unittest.mock.call(timeout=600)] +
+                                 [unittest.mock.call(timeout=10)] * len(signals))
+                observer.assert_called_once_with(control)
+                evidence = json.loads((output / "cleanup.json").read_text())
+                if observation_error:
+                    self.assertEqual(evidence["error"], "observer failed")
+                    self.assertFalse(evidence["terminalGone"])
+                else:
+                    self.assertEqual({key: evidence[key] for key in cleanup}, cleanup)
+                if len(waits) > 2 or isinstance(signal_error, OSError) and not isinstance(signal_error, ProcessLookupError):
+                    self.assertTrue(evidence["terminationErrors"])
+                self.assertIn("durationSeconds", json.loads((output / "timing.json").read_text()))
+
+    def test_journey_timeout_records_unavailable_control_without_masking_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "journey"
+            child = unittest.mock.Mock(pid=500)
+            child.wait.side_effect = [subprocess.TimeoutExpired("driver", 600), 0]
+            with patch.object(subprocess, "Popen", return_value=child), patch.object(os, "killpg"):
+                with self.assertRaisesRegex(RuntimeError, "^Controlled driver exceeded journey deadline$"):
+                    self.module["journey"](Path("driver"), output, Path("wrapper"), "a" * 40, self.source, False)
+            evidence = json.loads((output / "cleanup.json").read_text())
+            self.assertIn("control.json", evidence["error"])
+            self.assertEqual([evidence[key] for key in ("terminalGone", "fixtureGone", "windowsGone")], [False] * 3)
+
     def test_valid_differential_requires_both_distinct_verdicts(self):
         self.assertEqual(self.evaluate(True)["classification"], "expected-missed-observation")
         self.assertEqual(self.evaluate(False)["classification"], "complete-native-acceptance")
