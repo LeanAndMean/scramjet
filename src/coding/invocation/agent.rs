@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
     sync::mpsc::{SyncSender, sync_channel},
     thread::JoinHandle,
+    time::Duration,
 };
 use tokio::sync::oneshot;
 
@@ -32,7 +33,9 @@ impl Drop for PublicationOwner {
         if self.cancellation.is_cancelled()
             && let Err(error) = self.store.stop(CodingError::Cancelled.to_string())
         {
-            eprintln!("publication stop persistence incomplete; no retry: {error}");
+            CodingInvocationResult::report_failure(&format!(
+                "publication stop persistence incomplete; no retry: {error}"
+            ));
         }
     }
 }
@@ -50,7 +53,39 @@ impl Drop for PublicationTask {
     }
 }
 impl CodingInvocationResult {
-    pub fn deliver(mut self, writer: &mut impl std::io::Write) -> Result<(), CodingError> {
+    /// Best-effort terminal-safe diagnostics never wait for a pipe, socket or terminal reader.
+    pub fn report_failure(message: &str) {
+        use rustix::fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat};
+        let stderr = std::io::stderr();
+        let Ok(stat) = fstat(&stderr) else { return };
+        if !matches!(
+            FileType::from_raw_mode(stat.st_mode),
+            FileType::Fifo | FileType::Socket
+        ) && !rustix::termios::isatty(&stderr)
+        {
+            return;
+        }
+        let Ok(flags) = fcntl_getfl(&stderr) else {
+            return;
+        };
+        if fcntl_setfl(&stderr, flags | OFlags::NONBLOCK).is_err() {
+            return;
+        }
+        let mut text = String::from("coding: ");
+        for c in serde_json::to_string(message).unwrap().chars() {
+            if c.is_ascii() && !c.is_ascii_control() {
+                text.push(c);
+            } else {
+                text.extend(c.escape_unicode());
+            }
+        }
+        text.push('\n');
+        let _ = rustix::io::write(&stderr, text.as_bytes());
+        let _ = fcntl_setfl(&stderr, flags);
+    }
+
+    /// Synchronous writers must return before cancellation or deadline checks can run.
+    pub fn deliver(self, writer: &mut impl std::io::Write) -> Result<(), CodingError> {
         let result: Result<(), CodingError> = (|| {
             if let Some(owner) = &self.publication {
                 owner.store.publication_guard(&owner.cancellation)?;
@@ -69,6 +104,84 @@ impl CodingInvocationResult {
             }
             Ok(())
         })();
+        self.finish_delivery(result)
+    }
+
+    /// Requires exclusive ownership of the descriptor's output and shared status flags.
+    pub fn deliver_fd(self, fd: impl std::os::fd::AsFd) -> Result<(), CodingError> {
+        use rustix::{
+            event::{PollFd, PollFlags, Timespec, poll},
+            fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat},
+            io::Errno,
+        };
+        let result = (|| {
+            let kind = FileType::from_raw_mode(fstat(&fd)?.st_mode);
+            if !matches!(kind, FileType::Fifo | FileType::Socket) && !rustix::termios::isatty(&fd) {
+                return Err(CodingError::History(
+                    "stdout requires a pipe, socket or terminal",
+                ));
+            }
+            let mut output = std::fs::File::from(fd.as_fd().try_clone_to_owned()?);
+            let flags = fcntl_getfl(&fd)?;
+            fcntl_setfl(&fd, flags | OFlags::NONBLOCK)?;
+            let delivered = (|| {
+                let diagnostic_deadline = Instant::now() + Duration::from_secs(5);
+                for bytes in [self.record.as_slice(), b"\n"] {
+                    let mut remaining = bytes;
+                    while !remaining.is_empty() {
+                        if let Some(owner) = &self.publication {
+                            owner.store.publication_guard(&owner.cancellation)?;
+                        } else if Instant::now() >= diagnostic_deadline {
+                            return Err(CodingError::Deadline);
+                        }
+                        match std::io::Write::write(
+                            &mut output,
+                            &remaining[..remaining.len().min(4096)],
+                        ) {
+                            Ok(0) => {
+                                return Err(
+                                    std::io::Error::from(std::io::ErrorKind::WriteZero).into()
+                                );
+                            }
+                            Ok(count) => remaining = &remaining[count..],
+                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                                continue;
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                let mut descriptors = [PollFd::new(&fd, PollFlags::OUT)];
+                                match poll(
+                                    &mut descriptors,
+                                    Some(&Timespec {
+                                        tv_sec: 0,
+                                        tv_nsec: 10_000_000,
+                                    }),
+                                ) {
+                                    Ok(_) | Err(Errno::INTR) => {}
+                                    Err(error) => return Err(error.into()),
+                                }
+                            }
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
+                }
+                if let Some(owner) = &self.publication {
+                    owner.store.publication_guard(&owner.cancellation)?;
+                }
+                Ok(())
+            })();
+            let restored = fcntl_setfl(&fd, flags).map_err(CodingError::from);
+            delivered.and(restored)
+        })();
+        self.finish_delivery(result)
+    }
+
+    fn finish_delivery(mut self, result: Result<(), CodingError>) -> Result<(), CodingError> {
+        let result = result.and_then(|()| {
+            if let Some(owner) = &self.publication {
+                owner.store.publication_guard(&owner.cancellation)?;
+            }
+            Ok(())
+        });
         if let Err(error) = &result
             && let Some(owner) = &mut self.publication
         {

@@ -154,17 +154,29 @@ fn meter_child() {
             assert!(import_peak <= 4_194_304, "{case} import: {import_peak}");
             PEAK.store(LIVE.load(Ordering::Relaxed), Ordering::Relaxed);
             let result = invocation.run(runtime).await.unwrap();
-            let running_peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
-            assert!(running_peak <= 2_097_152, "{case} running: {running_peak}");
-            println!("{case} import_peak={import_peak} running_peak={running_peak}");
             assert!(result.success, "{:?}", result.failure);
+            let (mut reader, output) = std::os::unix::net::UnixStream::pair().unwrap();
+            let collector = std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut reader, &mut bytes).unwrap();
+                bytes
+            });
+            result.deliver_fd(&output).unwrap();
+            drop(output);
+            let record = collector.join().unwrap();
+            let running_peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
+            assert!(
+                running_peak <= 2_097_152,
+                "{case} running/delivery: {running_peak}"
+            );
+            println!("{case} import_peak={import_peak} running_delivery_peak={running_peak}");
             fs::write(
                 base.join(if case == "first" {
                     "record-1"
                 } else {
                     "record-2"
                 }),
-                result.record,
+                record,
             )
             .unwrap();
         }

@@ -269,6 +269,57 @@ fn clean_export_producer_loss_keeps_unknown_acknowledgement_and_inert_continuati
     assert_eq!(worker.join().unwrap().len(), 2);
 }
 #[test]
+fn supported_terminal_delivers_complete_record() {
+    let dirs = Dirs::new();
+    let names = ["input.md", "reader.py"];
+    let prompt = dirs.input("prompt", b"Finish this message without tools.");
+    let (endpoint, worker) = server(
+        vec![None],
+        ["Finish this message without tools.".into(), "".into()],
+        usize::MAX,
+        "".into(),
+        dirs.project.clone(),
+        names.map(str::to_owned),
+    );
+    let invocation = command(&dirs, endpoint, &names, &prompt, None);
+    let output = Command::new("python3")
+        .args(["-c", r#"import errno, os, pty, subprocess, sys
+master, slave = pty.openpty()
+child = subprocess.Popen(sys.argv[1:], stdin=subprocess.DEVNULL, stdout=slave, stderr=subprocess.PIPE)
+os.close(slave)
+while True:
+ try:
+  data = os.read(master, 4096)
+ except OSError as error:
+  if error.errno == errno.EIO: break
+  raise
+ if not data: break
+ sys.stdout.buffer.write(data)
+os.close(master)
+_, errors = child.communicate(timeout=5)
+sys.stderr.buffer.write(errors)
+sys.exit(child.returncode)
+"#])
+        .arg(invocation.get_program())
+        .args(invocation.get_args())
+        .output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        record,
+        serde_json::from_slice::<Value>(
+            &fs::read(dirs.storage.join("ordinary-run/export-1.json")).unwrap()
+        )
+        .unwrap()
+    );
+    assert_eq!(worker.join().unwrap().len(), 1);
+}
+
+#[test]
 fn initialization_loss_and_eio_preserve_torn_store_without_reset() {
     for (path, kind) in [
         ("provider/provider-attempts.jsonl", "Header"),
@@ -307,5 +358,132 @@ fn initialization_loss_and_eio_preserve_torn_store_without_reset() {
             );
             println!("initialization {path}/{mode}: torn facts retained, no dispatch/reset");
         }
+    }
+}
+
+#[test]
+fn saturated_stdout_cancellation_stops_without_reader_drain_and_refuses_successor() {
+    use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+    use std::{
+        os::unix::fs::OpenOptionsExt,
+        time::{Duration, Instant},
+    };
+    for (kind, shared_stderr) in [
+        ("pipe", false),
+        ("socket", false),
+        ("pipe", true),
+        ("socket", true),
+    ] {
+        let dirs = Dirs::new();
+        let names = ["input.md", "reader.py"];
+        let prompt = dirs.input("prompt", b"Finish this message without tools.");
+        let (endpoint, worker) = server(
+            vec![None],
+            ["Finish this message without tools.".into(), "".into()],
+            usize::MAX,
+            "".into(),
+            dirs.project.clone(),
+            names.map(str::to_owned),
+        );
+        let (reader, output): (fs::File, fs::File) = if kind == "pipe" {
+            let path = dirs.base.join("output-pipe");
+            rustix::fs::mkfifoat(
+                rustix::fs::CWD,
+                &path,
+                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            )
+            .unwrap();
+            let reader = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(OFlags::NONBLOCK.bits() as i32)
+                .open(&path)
+                .unwrap();
+            let output = fs::OpenOptions::new().write(true).open(path).unwrap();
+            (reader, output)
+        } else {
+            let (reader, output) = std::os::unix::net::UnixStream::pair().unwrap();
+            (
+                std::os::fd::OwnedFd::from(reader).into(),
+                std::os::fd::OwnedFd::from(output).into(),
+            )
+        };
+        let flags = fcntl_getfl(&output).unwrap();
+        fcntl_setfl(&output, flags | OFlags::NONBLOCK).unwrap();
+        loop {
+            match rustix::io::write(&output, &[b'x'; 4096]) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::AGAIN) => break,
+                Err(error) => panic!("{error}"),
+            }
+        }
+        fcntl_setfl(&output, flags).unwrap();
+        let mut child = command(&dirs, endpoint, &names, &prompt, None)
+            .stdout(Stdio::from(output.try_clone().unwrap()))
+            .stderr(if shared_stderr {
+                Stdio::from(output.try_clone().unwrap())
+            } else {
+                Stdio::piped()
+            })
+            .spawn()
+            .unwrap();
+        let artifact = dirs.storage.join("ordinary-run/export-1.json");
+        let journal = dirs.storage.join("ordinary-run/invocation.jsonl");
+        let started = Instant::now();
+        while !fs::read_to_string(&journal).is_ok_and(|text| {
+            text.lines().last().is_some_and(|row| {
+                serde_json::from_str::<Value>(row).unwrap()["record"]["kind"] == "Export"
+            })
+        }) {
+            if started.elapsed() > Duration::from_secs(5) {
+                child.kill().unwrap();
+                panic!("export timeout");
+            }
+            assert!(child.try_wait().unwrap().is_none());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(child.try_wait().unwrap().is_none());
+        assert!(fcntl_getfl(&output).unwrap().contains(OFlags::NONBLOCK));
+        assert!(
+            Command::new("kill")
+                .args(["-TERM", &child.id().to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let stopped = Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            if stopped.elapsed() > Duration::from_secs(2) {
+                child.kill().unwrap();
+                panic!("blocked cancellation required drainage");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let result = child.wait_with_output().unwrap();
+        assert!(!result.status.success());
+        if !shared_stderr {
+            assert!(String::from_utf8_lossy(&result.stderr).contains("publication failed"));
+        }
+        assert_eq!(fcntl_getfl(&output).unwrap(), flags);
+        assert_eq!(worker.join().unwrap().len(), 1);
+        let rows = fs::read_to_string(&journal)
+            .unwrap()
+            .lines()
+            .map(|row| serde_json::from_str::<Value>(row).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(rows.last().unwrap()["record"]["kind"], "Stopped");
+        let prior = dirs.input("copied", &fs::read(&artifact).unwrap());
+        let before = (tree(&dirs.project), tree(&dirs.storage));
+        let retry = command(&dirs, endpoint, &names, &prompt, Some(&prior))
+            .output()
+            .unwrap();
+        assert!(!retry.status.success());
+        assert!(retry.stdout.is_empty());
+        assert_eq!((tree(&dirs.project), tree(&dirs.storage)), before);
+        drop(reader);
+        println!(
+            "saturated {kind}, shared stderr={shared_stderr}: SIGTERM stopped in {:?} without drainage; copied export refused without new reservation/replay",
+            stopped.elapsed()
+        );
     }
 }

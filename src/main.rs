@@ -55,7 +55,7 @@ fn main() -> ExitCode {
         return match coding_cli::execute(arguments) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("coding: {}", serde_json::to_string(&error).unwrap());
+                scramjet_rs::CodingInvocationResult::report_failure(&error);
                 ExitCode::FAILURE
             }
         };

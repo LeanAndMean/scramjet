@@ -262,9 +262,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         .map_err(|_| "signal owner unavailable")?;
         let reported = match invocation.run(runtime).await {
             Ok(result) => tokio::task::spawn_blocking(move || {
-                let mut stdout = std::io::stdout().lock();
+                let stdout = std::io::stdout();
                 let failure = result.failure.clone();
-                result.deliver(&mut stdout).map_err(|error| {
+                result.deliver_fd(&stdout).map_err(|error| {
                     failure
                         .unwrap_or_else(|| format!("result publication failed; no retry: {error}"))
                 })

@@ -38,6 +38,10 @@ fn cancellation_and_runtime_affinity_run_in_independent_owners() {
         "delivery-cancel",
         "delivery-flush-cancel",
         "delivery-deadline",
+        "delivery-fd-pipe-deadline",
+        "delivery-fd-socket-deadline",
+        "delivery-fd-pipe-cancel",
+        "delivery-fd-socket-cancel",
         "cancel-read",
         "cancel-final",
         "publish-cancel",
@@ -234,7 +238,7 @@ fn selection_control_child() {
                     ));
                 } else {
                     let record = session.store.publish(true, true, &cancel).unwrap();
-                    if case == "delivery-deadline" {
+                    if case.ends_with("deadline") {
                         session.store.state.header.deadline_ns = short_deadline();
                     }
                     let mut writer = FailingWriter {
@@ -252,7 +256,68 @@ fn selection_control_child() {
                             cancellation: cancel,
                         }),
                     };
-                    assert!(result.deliver(&mut writer).is_err());
+                    if case.starts_with("delivery-fd-") {
+                        use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+                        use std::os::unix::fs::OpenOptionsExt;
+                        let (reader, output): (std::fs::File, std::fs::File) = if case
+                            .contains("pipe")
+                        {
+                            let path = base.join("output-pipe");
+                            rustix::fs::mkfifoat(
+                                rustix::fs::CWD,
+                                &path,
+                                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                            )
+                            .unwrap();
+                            let reader = std::fs::OpenOptions::new()
+                                .read(true)
+                                .custom_flags(OFlags::NONBLOCK.bits() as i32)
+                                .open(&path)
+                                .unwrap();
+                            let output =
+                                std::fs::OpenOptions::new().write(true).open(path).unwrap();
+                            (reader, output)
+                        } else {
+                            let (reader, output) = std::os::unix::net::UnixStream::pair().unwrap();
+                            (
+                                std::os::fd::OwnedFd::from(reader).into(),
+                                std::os::fd::OwnedFd::from(output).into(),
+                            )
+                        };
+                        let flags = fcntl_getfl(&output).unwrap();
+                        fcntl_setfl(&output, flags | OFlags::NONBLOCK).unwrap();
+                        loop {
+                            match rustix::io::write(&output, &[b'x'; 4096]) {
+                                Ok(_) => {}
+                                Err(rustix::io::Errno::AGAIN) => break,
+                                Err(error) => panic!("{error}"),
+                            }
+                        }
+                        fcntl_setfl(&output, flags).unwrap();
+                        let trigger = case.ends_with("cancel").then(|| {
+                            let cancellation = writer.cancellation.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(Duration::from_millis(100));
+                                cancellation.cancel();
+                            })
+                        });
+                        let started = Instant::now();
+                        let error = result.deliver_fd(&output).unwrap_err();
+                        assert!(started.elapsed() < Duration::from_secs(2));
+                        assert!(
+                            matches!(error, CodingError::Cancelled) == case.ends_with("cancel")
+                        );
+                        assert!(
+                            matches!(error, CodingError::Deadline) == case.ends_with("deadline")
+                        );
+                        assert_eq!(fcntl_getfl(&output).unwrap(), flags);
+                        if let Some(trigger) = trigger {
+                            trigger.join().unwrap();
+                        }
+                        drop(reader);
+                    } else {
+                        assert!(result.deliver(&mut writer).is_err());
+                    }
                     if case == "delivery-partial" {
                         assert_eq!(writer.bytes.len(), 11);
                     }
@@ -279,6 +344,18 @@ fn selection_control_child() {
                     )
                     .is_err()
                 );
+                if case.starts_with("delivery-fd-")
+                    && let Ok(executable) = std::env::var("SCRAMJET_CONTROL_CLI")
+                {
+                    let paths = [input.clone(), project.join(crate::PROJECT_LOCK_NAME), project.join(".coding-run"), storage.join("control/invocation.jsonl"), storage.join("control/export-1.json"), storage.join("control/provider/provider-attempts.jsonl")];
+                    let before = paths.each_ref().map(|path| std::fs::read(path).unwrap());
+                    let output = Command::new(executable).args(["coding", "--owned-fixture", "--endpoint", &endpoint.to_string(), "--run", "control", "--file", "input.md", "--file", "reader.py", "--project"]).arg(&project).arg("--storage").arg(&storage).arg("--prompt-file").arg(&input).arg("--record-file").arg(storage.join("control/export-1.json")).output().unwrap();
+                    assert!(!output.status.success());
+                    assert!(output.stdout.is_empty());
+                    assert_eq!(paths.each_ref().map(|path| std::fs::read(path).unwrap()), before);
+                    assert!(matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock));
+                    println!("{case}: fresh CLI refused copied export with byte-unchanged captures/journal/artifact/provider accounting");
+                }
                 return;
             } else if case == "publish-cancel" {
                 assert!(matches!(
