@@ -2,7 +2,7 @@
 
 A ground-up Rust redesign of Scramjet: a dependable terminal coding harness with lightweight parallel agents and actively managed LLM concurrency.
 
-**Status:** the offline runtime, controlled coding, parallel readers, admission feedback, command journeys and retained-project application are independently accepted within their bounded WSL2 Ubuntu scopes; [historical acceptance](docs/PROGRESS-ARCHIVE.md) preserves exact candidates and qualifications. [S4.14a](docs/tasks/S4.14a.md) adds an opt-in Proxy Responses transport with accepted offline diagnostic/capture corrections, but whole-task live compatibility and the later tool/TUI journey remain blocked or pending. Native desktop/platform readiness and backend capacity remain unverified; no remote or publication is authorized. Start development orientation at [the task queue](docs/TASKS.md), not the activity history.
+**Status:** the offline runtime, controlled coding, parallel readers, admission feedback, command journeys and retained-project application are independently accepted within their bounded WSL2 Ubuntu scopes; [historical acceptance](docs/PROGRESS-ARCHIVE.md) preserves exact candidates and qualifications. [S4.14a](docs/tasks/S4.14a.md) adds an opt-in Proxy Responses transport with accepted offline diagnostic/capture corrections, but whole-task live compatibility remains blocked. The current [S4.14b direction](docs/tasks/S4.14b.md) is a reusable headless prompt plus prior-conversation-record invocation, orchestrated externally for successive messages; that interface is not implemented yet. The existing haiku commands below are fixed fixture demonstrations, not general coding or continuation. Native desktop/platform readiness and backend capacity remain unverified; no remote or publication is authorized. Start development orientation at [the task queue](docs/TASKS.md), not the activity history.
 
 The initial experience is familiar: separate project tabs, a main coding agent, and parallel specialist subagents. The longer-term ambition is approximately 8,000 concurrent LLM requests from one node, subject to workload, host resources, provider limits, and inference capacity. This is a target to investigate, not demonstrated performance.
 
@@ -114,7 +114,7 @@ History is strictly read-only and never constructs an executable envelope, appro
 
 ## Retained haiku terminal application (S4.14c unfinished offline candidate)
 
-The fixture-only retained application now consumes the accepted headless owner; it is **not independently accepted**. In a real terminal, explicitly select an existing empty owned0700 project and disjoint owned0700 storage:
+This specialty application is preserved historical work, not a current implementation priority; the user redirected the short-term goal to reusable headless invocations rather than a fixed-request or special two-message interface. The fixture-only retained application consumes the earlier headless owner; it is **not independently accepted**. Its stopped continuation is checkpointed with a known formatting failure and only scoped fresh check/test evidence; earlier full checks below do not cover the recovered changes. In a real terminal, explicitly select an existing empty owned0700 project and disjoint owned0700 storage:
 
 ```sh
 cargo run --offline --locked -- haiku-ui-demo --fixture \

@@ -4,20 +4,19 @@ This file owns priority order, selection and selection rationale. Each linked ta
 
 ## Selection
 
-[S4.14c — retained terminal application and final QA](tasks/S4.14c.md), to resolve the consuming application's offline integration and settlement design against independently accepted headless contracts. Both independent advisers identified this as the largest remaining locally demonstrable part of the user-selected journey. Direct source inspection confirms immutable headless facts/exact controls and an explicit unjoined-run/finish seam, but also a synchronous drop join: terminal restoration and blocked-worker ownership need planning before implementation. Triage explicitly separates offline readiness from deployed acceptance, as previously done for b; this does not unlock live calls, whole-child acceptance or final user QA.
+[S4.14b — reusable headless coding invocation and conversation continuity](tasks/S4.14b.md), following the user's 2026-10-29 clarification: supply a natural-language prompt and optional prior conversation record to the executable, then use ordinary external scripting for successive fresh invocations. Avoid throwaway consumers, production haiku choreography and a specialty two-message or retained-process interface. Both independent advisers recommended this reusable path; direct source evidence confirms ordered provider context already exists but fresh-process record import, ordinary per-message completion and reusable effect authority require a coherent same-task redesign, not CLI flags alone. Accepted offline provider/effect evidence supports planning; the revised task record owns its boundaries and confirmed isolated generated-Python scope. No new task ID or new runtime/framework is selected.
 
-Accepted offline b implementation and its R1 correction are exhausted, not another planning/work/review priority. The deployed a → b → c acceptance sequence and the parent's unresolved live exposure remain controlling. No speculative historical reconciliation service or further provider correction is selected without concrete evidence.
+The previous specialty haiku-TUI selection is superseded, with code, checkpoints and incomplete evidence retained in [S4.14c](tasks/S4.14c.md). General retained/native interaction remains a wider product goal, not a prerequisite for this short-term headless demonstration or an abandoned outcome. Actual deployed compatibility remains required and separately stopped; restarting or passing a record cannot renew call allowances or settle uncertainty. No speculative reconciliation service or repeated accepted provider correction is selected.
 
 ## Ordered work
 
-1. [S4.14c — retained terminal application and final QA](tasks/S4.14c.md). Prepare the complete fixture-backed retained application using the accepted headless owner, not another execution loop.
-2. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Preserve the required deployed compatibility outcome; accepted offline corrections need no further work absent a concrete finding.
-3. [S4.14b — headless Markdown/read/Python/Bash journey](tasks/S4.14b.md). Preserve the required deployed journey and whole-task acceptance; do not repeat accepted offline work.
+1. [S4.14b — reusable headless coding invocation and conversation continuity](tasks/S4.14b.md). Make the user's reusable prompt/record outcome actionable while preserving exact approvals, isolation, bounded work and uncertain-effect no retry.
+2. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Preserve required deployed compatibility; accepted offline contracts need no further work absent concrete findings, and live evidence needs separately eligible authority.
 
-Milestone context: [S4.14 — first real-provider coding journey](tasks/S4.14.md). Its record owns shared authorization and parent acceptance, not another queue.
+Milestone context: [S4.14 — first real-provider coding journey](tasks/S4.14.md). Its record owns shared authorization and revised parent acceptance, not another queue.
 
 ## Housekeeping
 
 Triage alone creates, reorders or removes priorities. Other roles may advance the selection to an already-eligible queued task after acceptance without changing order. Check eligibility in the task and dependency records, not from queue membership. A deliberate explicit task request may bypass order only under the existing authority rules.
 
-Remove obsolete or completed work from this queue, retaining its disposition/reason in its task record or historical evidence. Still-relevant blocked work remains discoverable; removal never settles an effect, erases an obligation or grants acceptance. Completed pre-migration tasks and retired cursors are preserved in [the archive](PROGRESS-ARCHIVE.md), not copied into this queue.
+Remove obsolete or completed work from this queue, retaining its disposition/reason in the owning task record or historical evidence. Still-relevant blocked work remains discoverable; removal never settles an effect, erases an obligation or grants acceptance. Completed pre-migration tasks and retired cursors are preserved in [the archive](PROGRESS-ARCHIVE.md), not copied into this queue.
