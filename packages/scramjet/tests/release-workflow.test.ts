@@ -311,6 +311,24 @@ describe("release workflow", () => {
 		expect(JSON.stringify(native.jobs["native-safety"])).not.toContain("--desktop-driver");
 	});
 
+	it("requires the controlled VTE differential alongside the ordinary non-tmux journey and retains evidence", () => {
+		const job = native.jobs["native-terminal"];
+		const control = step("Challenge VTE missed consent observation", job.steps);
+		expect(control.if).toBe("matrix.os == 'ubuntu-24.04' && matrix.terminal == 'vte' && !matrix.tmux");
+		expect(control.run).toContain("dbus-run-session -- bash -e -c");
+		expect(control.run).toContain('test-vte-paste-ordering.py "$RUNNER_TEMP/vte-paste-ordering"');
+		expect(control.run).not.toMatch(/\|\|\s*true|continue-on-error|set \+e/);
+		expect(job.steps.indexOf(control)).toBeGreaterThan(
+			job.steps.indexOf(step("Probe Linux VTE terminal", job.steps)),
+		);
+		expect(job["timeout-minutes"]).toBe(30);
+		const artifacts = step("Preserve feasibility evidence", job.steps);
+		expect(artifacts.if).toBe("always()");
+		expect(artifacts.with.path).toContain("vte-paste-ordering");
+		expect(artifacts.with.path).toContain("vte-ordering-openbox.log");
+		expect(artifacts.with["retention-days"]).toBe(7);
+	});
+
 	it("executes the native aggregate fail-closed for every non-success dependency result", () => {
 		const gate = native.jobs["native-terminal-result"];
 		expect(gate.if).toBe(expression("always()"));

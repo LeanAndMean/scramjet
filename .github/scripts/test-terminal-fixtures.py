@@ -2404,5 +2404,127 @@ process.kill = (pid, signal) => {
                     os.close(master); os.close(slave)
 
 
+class VteOrderingHarnessTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = {"__name__": "vte_ordering_tests", "__file__": str(ROOT / ".github/scripts/test-vte-paste-ordering.py")}
+        exec(compile(Path(cls.module["__file__"]).read_text(), cls.module["__file__"], "exec"), cls.module)
+        cls.source = (ROOT / ".github/scripts/terminal-probe.py").read_text()
+
+    def pair(self, baseline):
+        api = self.module["contract"](self.source)
+        before = {"editor": "PREFIXSUFFIX", "editorCursor": {"line": 0, "col": 6}, "submissions": 0, "pasteMatches": 0, "pasteMismatches": 0}
+        names = self.module["PRE_PASTE"] | {"desktopPasteRoundTrip"} if baseline else api["required_checks"]()
+        checks = {name: {"passed": True, "fixture": {}} for name in names}
+        checks["checkoutProvenanceMatches"]["fixture"] = {"sourceRevision": "a" * 40, "sourceDirty": False, "runtimeOrigin": {"kind": "checkout"}}
+        after = dict(before) if baseline else {**before, "editor": "PREFIX" + self.module["PAYLOAD"] + "SUFFIX", "editorCursor": {"line": 1, "col": 11}, "pasteMatches": 1, "frameFlushed": True}
+        checks["desktopPasteRoundTrip"] = {"passed": not baseline, "fixture": after}
+        images = self.module["SCREENSHOTS"] | ({"failure"} if baseline else {"native-caret-paste"})
+        report = {"commit": "a" * 40, "terminal": "vte", "tmux": False, "terminalStartup": {"pid": 100}, "checks": checks,
+                  "screenshots": {name: {"exit": 0} for name in images}, "passed": not baseline}
+        if baseline:
+            report["error"] = "desktopPasteRoundTrip"
+        else:
+            report["multilinePasteConsent"] = {"window": "200"}
+            report["nativePasteTransaction"] = {"outcome": "stable-insertion", "approvalAttempts": 1}
+        control = {"masked": True, "pasteAttempts": 1, "approvalAttempts": 0 if baseline else 1,
+                   "searches": 1 if baseline else 4, "pid": 100, "window": 200, "before": before}
+        cleanup = {"terminalGone": True, "fixtureGone": True, "windowsGone": True}
+        return report, control, cleanup
+
+    def evaluate(self, baseline, pair=None):
+        return self.module["verdict"](*(pair or self.pair(baseline)), 1 if baseline else 0, "a" * 40, self.source, baseline)
+
+    def test_valid_differential_requires_both_distinct_verdicts(self):
+        self.assertEqual(self.evaluate(True)["classification"], "expected-missed-observation")
+        self.assertEqual(self.evaluate(False)["classification"], "complete-native-acceptance")
+
+    def test_setup_control_and_cleanup_failures_never_count_as_reproduction(self):
+        for baseline in (True, False):
+            for target, key, value in ((0, "cleanupError", "failed"), (0, "commit", "b" * 40), (1, "error", "wrapper failed"),
+                                       (1, "masked", False), (1, "pid", 999), (1, "pasteAttempts", 2),
+                                       (1, "pasteAttempts", True), (1, "approvalAttempts", 2), (1, "searches", 0),
+                                       (2, "terminalGone", False), (2, "fixtureGone", False), (2, "windowsGone", False)):
+                with self.subTest(baseline=baseline, key=key, value=value):
+                    pair = self.pair(baseline)
+                    pair[target][key] = value
+                    with self.assertRaises(RuntimeError): self.evaluate(baseline, pair)
+
+    def test_wrong_or_incomplete_report_is_rejected(self):
+        for baseline in (True, False):
+            for mutation in (lambda r: r["checks"].pop("productionCompositionConfigured"),
+                             lambda r: r["checks"].update({"unexpected": {"passed": True}}),
+                             lambda r: r["checks"]["checkoutProvenanceMatches"]["fixture"].update(sourceDirty=True),
+                             lambda r: r["checks"]["productConfirmFramed"].update(passed=1),
+                             lambda r: r["screenshots"].pop("startup"),
+                             lambda r: r["screenshots"]["startup"].update(exit=1),
+                             lambda r: r.update(passed=baseline),
+                             lambda r: r.update(error="Terminal did not start")):
+                with self.subTest(baseline=baseline, mutation=mutation):
+                    pair = self.pair(baseline)
+                    mutation(pair[0])
+                    with self.assertRaises(RuntimeError): self.evaluate(baseline, pair)
+
+    def test_baseline_requires_unchanged_undelivered_paste(self):
+        for key, value in (("editor", "inserted"), ("editorCursor", {"line": 0, "col": 7}), ("submissions", 1), ("pasteMatches", 1), ("pasteMismatches", 1)):
+            pair = self.pair(True)
+            pair[0]["checks"]["desktopPasteRoundTrip"]["fixture"][key] = value
+            with self.subTest(key=key), self.assertRaises(RuntimeError): self.evaluate(True, pair)
+        pair = self.pair(True)
+        pair[0]["multilinePasteConsent"] = {"window": "200"}
+        with self.assertRaises(RuntimeError): self.evaluate(True, pair)
+
+    def test_candidate_requires_exact_native_oracle_not_receipt(self):
+        for key, value in (("editor", "PREFIXSUFFIX"), ("editorCursor", {"line": 1, "col": 10}),
+                           ("pasteMatches", 2), ("pasteMismatches", 1), ("submissions", 1), ("frameFlushed", False)):
+            pair = self.pair(False)
+            pair[0]["checks"]["desktopPasteRoundTrip"]["fixture"][key] = value
+            with self.subTest(key=key), self.assertRaises(RuntimeError): self.evaluate(False, pair)
+        pair = self.pair(False)
+        pair[0]["nativePasteTransaction"]["approvalAttempts"] = 2
+        with self.assertRaises(RuntimeError): self.evaluate(False, pair)
+
+    def test_actual_wrapper_masks_once_and_delegates_without_repeating_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "control.json"
+            fixture = {"pid": 300, "pgid": 300, **self.pair(False)[1]["before"]}
+            (path.parent / "fixture.json").write_text(json.dumps(fixture))
+            active = ["200"]
+            calls = []
+            def real(*args, **kwargs):
+                calls.append(args)
+                stdout = active[0] if args[0] == "getactivewindow" else "100" if args[0] == "getwindowpid" else "200" if args[0] == "search" else ""
+                return subprocess.CompletedProcess(args, 0, stdout, "")
+            original_read = Path.read_text
+            def read(path, *args, **kwargs):
+                return "xfce4-terminal\n" if str(path) == "/proc/100/comm" else original_read(path, *args, **kwargs)
+            identity = lambda pid: {"pid": pid, "parent": 500, "start": "1", "state": "S"}
+            with patch.dict(os.environ, {"VTE_CONTROL": str(path)}), patch.dict(self.module, {"real_command": real, "process_identity": identity}), \
+                 patch.object(os, "getppid", return_value=500), patch.object(Path, "read_text", read), \
+                 patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), patch("sys.stdout"):
+                wrapper = self.module["xdotool"]
+                self.assertEqual(wrapper(["key", "--clearmodifiers", "ctrl+shift+v"]), 0)
+                search = ["search", "--onlyvisible", "--name", "^Warning: Potentially Unsafe Paste$"]
+                self.assertEqual(wrapper(search), 1)
+                self.assertEqual(wrapper(search), 0)
+                self.assertEqual(wrapper(["key", "--clearmodifiers", "Return"]), 0)
+                active[0] = "201"
+                self.assertEqual(wrapper(["key", "--clearmodifiers", "Return"]), 0)
+            record = json.loads(path.read_text())
+            self.assertTrue(record["masked"])
+            self.assertEqual(record["pasteAttempts"], 1)
+            self.assertEqual(record["approvalAttempts"], 1)
+            self.assertEqual(record["searches"], 2)
+            self.assertEqual(sum(args[-1] == "ctrl+shift+v" for args in calls), 1)
+
+    def test_wrapper_error_persists_and_cannot_be_reported_as_absence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "control.json"
+            with patch.dict(os.environ, {"VTE_CONTROL": str(path)}), \
+                 patch.dict(self.module, {"real_command": Mock(return_value=subprocess.CompletedProcess([], 2, "", "failure"))}), patch("sys.stderr"):
+                self.assertEqual(self.module["xdotool"](["search", "--onlyvisible", "--name", "^Warning: Potentially Unsafe Paste$"]), 2)
+            self.assertIn("error", json.loads(path.read_text()))
+
+
 if __name__ == "__main__":
     unittest.main()
