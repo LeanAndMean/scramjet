@@ -370,6 +370,245 @@ class NativeProfileEvidenceTests(unittest.TestCase):
                 self.assertEqual(context["report"]["viewportKeys"]["profile"], expected)
 
 
+class VtePasteConsentTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 0
+        self.searches = 0
+        self.approvals = 0
+        self.pastes = 0
+        self.visible_after = 2
+        self.windows = "42\n"
+        self.pid = "123\n"
+        self.active = "42\n"
+        self.search_status = None
+        self.failure = None
+        self.command_cost = 0
+        self.statuses = {}
+        self.hook = None
+        self.calls = []
+        self.deliver = True
+        self.direct = False
+        self.before = {"editor": "PREFIXSUFFIX", "editorCursor": {"line": 0, "col": 6},
+                       "submissions": 0, "pasteMatches": 0, "pasteMismatches": 0, "frameFlushed": True}
+        self.current = dict(self.before)
+        self.payload = "NATIVE café 界 e\u0301\nsecond line"
+        self.report = {"checks": {}}
+        names = {"editor_paste_outcome", "native_paste_outcome", "wait_for", "check", "stable_check", "check_vte_paste"}
+        source = interaction_source()
+        functions = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        self.context = {"time": Mock(monotonic=lambda: self.now, sleep=self.sleep), "re": re,
+                        "subprocess": Mock(run=self.command, TimeoutExpired=subprocess.TimeoutExpired),
+                        "report": self.report, "terminal_process": Mock(pid=123),
+                        "state": lambda: dict(self.current), "key": self.key,
+                        "run": lambda *args: self.command(args, timeout=30).stdout.strip(),
+                        "is_mac": False, "terminal_kind": "vte", "paste_before_native": self.before,
+                        "native_payload": self.payload, "required_checks": lambda: {"desktopPasteRoundTrip"}}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "terminal-probe.py", "exec"), self.context)
+        for node in ast.walk(source):
+            if not isinstance(node, ast.If):
+                continue
+            for body in (node.body, node.orelse):
+                start = next((i for i, part in enumerate(body) if isinstance(part, ast.Assign)
+                              and isinstance(part.targets[0], ast.Tuple)
+                              and any(isinstance(target, ast.Name) and target.id == "paste_before_native"
+                                      for target in part.targets[0].elts)), None)
+                if start is not None:
+                    end = next(i for i in range(start + 1, len(body)) if isinstance(body[i], ast.Expr)
+                               and isinstance(body[i].value, ast.Call) and isinstance(body[i].value.func, ast.Name)
+                               and body[i].value.func.id == "screenshot")
+                    self.journey = compile(ast.Module(body=body[start + 1:end], type_ignores=[]), "terminal-probe.py", "exec")
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+    def insert(self):
+        self.current.update(editor="PREFIX" + self.payload + "SUFFIX", editorCursor={"line": 1, "col": 11}, pasteMatches=1)
+
+    def key(self, name):
+        if name == "paste":
+            self.pastes += 1
+            if self.direct:
+                self.insert()
+        elif name == "enter":
+            self.approvals += 1
+            if self.deliver:
+                self.insert()
+
+    def command(self, args, **kwargs):
+        action = args[1]
+        self.calls.append((list(args), kwargs["timeout"], self.now))
+        if self.command_cost >= kwargs["timeout"]:
+            self.sleep(kwargs["timeout"])
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        self.sleep(self.command_cost)
+        if action == "key":
+            self.approvals += 1
+        if self.failure == action:
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        if self.hook:
+            self.hook(action)
+        if action in self.statuses:
+            return Mock(returncode=self.statuses[action], stdout="", stderr="")
+        if action == "search":
+            self.searches += 1
+            visible = self.searches >= self.visible_after
+            return Mock(returncode=self.search_status if self.search_status is not None else (0 if visible else 1),
+                        stdout=self.windows if visible else "", stderr="")
+        if action == "getwindowpid":
+            return Mock(returncode=0, stdout=self.pid)
+        if action == "getactivewindow":
+            return Mock(returncode=0, stdout=self.active)
+        if action == "key" and self.deliver:
+            self.insert()
+        return Mock(returncode=0, stdout="")
+
+    def execute(self):
+        exec(self.journey, self.context)
+
+    def test_delayed_owned_dialog_is_serviced_during_insertion_wait(self):
+        self.execute()
+        self.assertGreaterEqual(self.searches, 2)
+        self.assertEqual((self.pastes, self.approvals), (1, 1))
+        self.assertTrue(self.report["checks"]["desktopPasteRoundTrip"]["passed"])
+        self.assertEqual(self.report["multilinePasteConsent"]["window"], "42")
+        self.assertEqual(self.current["editor"], "PREFIX" + self.payload + "SUFFIX")
+        self.assertEqual(self.current["submissions"], 0)
+
+    def test_immediate_dialog_is_approved_once_in_both_vte_paths(self):
+        for tmux in (False, True):
+            with self.subTest(tmux=tmux):
+                self.setUp()
+                self.context["with_tmux"] = tmux
+                self.visible_after = 1
+                self.execute()
+                self.assertEqual((self.pastes, self.approvals), (1, 1))
+                self.assertEqual(self.report["nativePasteTransaction"]["outcome"], "stable-insertion")
+                self.assertGreaterEqual(self.now, 0.35)
+
+    def test_direct_insertion_needs_no_dialog_action(self):
+        self.direct = True
+        self.execute()
+        self.assertEqual((self.pastes, self.approvals, self.searches), (1, 0, 0))
+        self.assertNotIn("multilinePasteConsent", self.report)
+
+    def test_missing_dialog_and_insertion_fail_with_bounded_diagnostics(self):
+        self.visible_after = 1000
+        with self.assertRaisesRegex(RuntimeError, "desktopPasteRoundTrip"):
+            self.execute()
+        transaction = self.report["nativePasteTransaction"]
+        self.assertEqual(transaction["outcome"], "insertion-timeout")
+        self.assertEqual(len(transaction["events"]), 32)
+        self.assertGreater(transaction["droppedEvents"], 0)
+        self.assertEqual((self.pastes, self.approvals), (1, 0))
+        self.assertAlmostEqual(self.now, 4)
+        self.assertFalse(self.report["checks"]["desktopPasteRoundTrip"]["passed"])
+        self.assertNotIn(self.payload, json.dumps(transaction, ensure_ascii=False))
+
+    def test_unowned_ambiguous_or_malformed_matches_cannot_approve(self):
+        for field, value in (("windows", "42\n43\n"), ("windows", "42\n42\n"),
+                             ("windows", "not-a-window"), ("windows", "0"),
+                             ("windows", ""), ("pid", "124"), ("pid", "bad"), ("active", "43")):
+            with self.subTest(field=field, value=value):
+                self.setUp()
+                self.visible_after = 1
+                setattr(self, field, value)
+                with self.assertRaises(RuntimeError):
+                    self.execute()
+                self.assertEqual(self.approvals, 0)
+                self.assertFalse(self.report["checks"]["desktopPasteRoundTrip"]["passed"])
+
+    def test_search_errors_are_not_treated_as_absence(self):
+        for status in (0, 2):
+            with self.subTest(status=status):
+                self.setUp()
+                self.search_status = status
+                with self.assertRaises(RuntimeError):
+                    self.execute()
+                self.assertEqual(self.searches, 1)
+                self.assertEqual(self.approvals, 0)
+
+    def test_target_is_revalidated_before_and_after_activation(self):
+        for changed_at in (2, 3):
+            with self.subTest(changed_at=changed_at):
+                self.setUp()
+                self.visible_after = 1
+                def change(action):
+                    if action == "search" and self.searches == changed_at - 1:
+                        self.windows = "43"
+                self.hook = change
+                with self.assertRaises(RuntimeError):
+                    self.execute()
+                self.assertEqual(self.approvals, 0)
+                self.assertEqual(self.report["nativePasteTransaction"]["activationAttempts"], 0 if changed_at == 2 else 1)
+
+    def test_desktop_errors_fail_without_retry(self):
+        for action in ("search", "getwindowpid", "windowactivate", "getactivewindow", "key"):
+            for failure in ("timeout", "status"):
+                with self.subTest(action=action, failure=failure):
+                    self.setUp()
+                    self.visible_after = 1
+                    if failure == "timeout":
+                        self.failure = action
+                    else:
+                        self.statuses[action] = 2
+                    with self.assertRaises((RuntimeError, subprocess.TimeoutExpired)):
+                        self.execute()
+                    self.assertEqual(self.pastes, 1)
+                    self.assertEqual(self.approvals, 1 if action == "key" else 0)
+                    self.assertEqual(self.report["nativePasteTransaction"]["approvalAttempts"], self.approvals)
+                    self.assertFalse(self.report["checks"]["desktopPasteRoundTrip"]["passed"])
+
+    def test_approval_receipt_without_delivery_is_not_success_or_retried(self):
+        self.visible_after = 1
+        self.deliver = False
+        with self.assertRaisesRegex(RuntimeError, "desktopPasteRoundTrip"):
+            self.execute()
+        self.assertIn("multilinePasteConsent", self.report)
+        self.assertEqual((self.pastes, self.approvals), (1, 1))
+        self.assertEqual(self.current, self.before)
+        self.assertAlmostEqual(self.now, 4)
+
+    def test_subprocesses_share_the_remaining_acceptance_budget(self):
+        self.visible_after = 1
+        self.command_cost = 0.65
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.execute()
+        self.assertAlmostEqual(self.now, 4)
+        for _, timeout, started in self.calls:
+            self.assertAlmostEqual(timeout, 4 - started)
+        self.assertEqual(self.approvals, 0)
+
+    def test_no_activation_or_approval_after_insertion_during_search(self):
+        self.visible_after = 1
+        self.hook = lambda action: self.insert() if action == "search" else None
+        self.execute()
+        self.assertEqual((self.pastes, self.approvals), (1, 0))
+        self.assertFalse(any(args[1] == "windowactivate" for args, _, _ in self.calls))
+
+    def test_stability_observation_rejects_later_duplicate_insertion(self):
+        self.visible_after = 1
+        original_sleep = self.context["time"].sleep
+        def duplicate(seconds):
+            original_sleep(seconds)
+            if self.approvals and self.now >= 0.2:
+                self.current["pasteMatches"] = 2
+        self.context["time"].sleep = duplicate
+        with self.assertRaisesRegex(RuntimeError, "desktopPasteRoundTrip"):
+            self.execute()
+        self.assertEqual(self.report["nativePasteTransaction"]["outcome"], "unstable-insertion")
+        self.assertEqual(self.approvals, 1)
+
+    def test_other_terminal_paths_do_not_service_vte_dialogs(self):
+        for mac, terminal in ((True, "apple"), (True, "iterm2"), (False, "kitty"), (False, "xterm")):
+            with self.subTest(mac=mac, terminal=terminal):
+                self.setUp()
+                self.context.update(is_mac=mac, terminal_kind=terminal)
+                self.direct = True
+                self.execute()
+                self.assertNotIn("nativePasteTransaction", self.report)
+                self.assertEqual(self.searches, 0)
+
+
 class NativeClipboardOracleTests(unittest.TestCase):
     def setUp(self):
         names = {"right_copy_outcome", "editor_paste_outcome", "native_paste_outcome", "termios_configuration_equal"}

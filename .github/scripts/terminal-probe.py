@@ -486,6 +486,120 @@ def prepare_paste(action):
     return state(), payload
 
 
+def check_vte_paste(before, payload):
+    name = "desktopPasteRoundTrip"
+    if name not in required_checks() or name in report["checks"]:
+        raise RuntimeError(f"Unexpected or duplicate native check: {name}")
+    started = time.monotonic()
+    deadline = started + 4
+    transaction = {"events": [], "droppedEvents": 0, "searches": 0,
+                   "activationAttempts": 0, "approvalAttempts": 0, "outcome": "pending"}
+    report["nativePasteTransaction"] = transaction
+    current = before
+    phase = "insertion"
+    passed = False
+
+    def observe(kind, **fields):
+        event = {"atSeconds": time.monotonic() - started, "kind": kind, **fields}
+        if len(transaction["events"]) < 32:
+            transaction["events"].append(event)
+        else:
+            transaction["droppedEvents"] += 1
+
+    def command(action, *args):
+        nonlocal phase
+        phase = action
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Native paste acceptance deadline exhausted")
+        result = subprocess.run(["xdotool", action, *args], capture_output=True, text=True, timeout=remaining)
+        observe(action, status=result.returncode)
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Native paste acceptance deadline exhausted")
+        if action != "search" and result.returncode != 0:
+            raise RuntimeError(f"Native paste desktop action failed: {action}")
+        return result
+
+    def identity(action, *args):
+        value = command(action, *args).stdout.strip()
+        if not re.fullmatch(r"[0-9]{1,20}", value) or int(value) <= 0:
+            raise RuntimeError(f"Malformed native paste identity: {action}")
+        return value
+
+    def owned_dialog():
+        transaction["searches"] += 1
+        result = command("search", "--onlyvisible", "--name", "^Warning: Potentially Unsafe Paste$")
+        windows = result.stdout.split()
+        observe("candidates", count=len(windows))
+        if result.returncode == 1 and not windows and not result.stderr:
+            return None
+        if result.returncode != 0 or result.stderr or len(windows) != 1 or not re.fullmatch(r"[0-9]{1,20}", windows[0]) or int(windows[0]) <= 0:
+            raise RuntimeError("Multiline-paste consent search failed or was ambiguous")
+        window = windows[0]
+        pid = identity("getwindowpid", window)
+        if int(pid) != terminal_process.pid:
+            raise RuntimeError("Multiline-paste consent window is not uniquely owned")
+        observe("owned", window=window, pid=int(pid))
+        return window
+
+    def inserted():
+        nonlocal current, phase
+        phase = "insertion"
+        current = state()
+        return native_paste_outcome(before, current, payload)
+
+    try:
+        while time.monotonic() < deadline:
+            if inserted():
+                passed = True
+                break
+            if not transaction["approvalAttempts"]:
+                window = owned_dialog()
+                if inserted():
+                    passed = True
+                    break
+                if window is not None:
+                    report["multilinePasteConsent"] = {"window": window, "payload": "allowlisted synthetic multiline text"}
+                    if owned_dialog() != window:
+                        raise RuntimeError("Multiline-paste consent target changed before activation")
+                    if inserted():
+                        passed = True
+                        break
+                    transaction["activationAttempts"] += 1
+                    command("windowactivate", "--sync", window)
+                    if inserted():
+                        passed = True
+                        break
+                    if owned_dialog() != window or identity("getactivewindow") != window:
+                        raise RuntimeError("Multiline-paste consent target is not active and owned")
+                    if inserted():
+                        passed = True
+                        break
+                    transaction["approvalAttempts"] += 1
+                    observe("approvalAttempt", window=window)
+                    command("key", "--clearmodifiers", "Return")
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+        transaction["outcome"] = "inserted" if passed else "insertion-timeout"
+        stable_until = time.monotonic() + 0.35
+        while passed and time.monotonic() < stable_until:
+            time.sleep(min(0.05, stable_until - time.monotonic()))
+            passed = inserted()
+        if transaction["outcome"] == "inserted":
+            transaction["outcome"] = "stable-insertion" if passed else "unstable-insertion"
+        if not passed:
+            raise RuntimeError(name)
+    except Exception as error:
+        transaction["error"] = {"phase": phase, "type": type(error).__name__}
+        if transaction["outcome"] == "pending":
+            transaction["outcome"] = "service-error"
+        raise
+    finally:
+        transaction["durationSeconds"] = time.monotonic() - started
+        report["checks"][name] = {"passed": passed and transaction["outcome"] == "stable-insertion",
+                                  "fixture": current, "stableSeconds": 0.35}
+        print(f"{name}: {'PASS' if report['checks'][name]['passed'] else 'FAIL'}", flush=True)
+
+
 def paste_excluded(before):
     current = state()
     return (current.get("rightWithoutSelection", 0) == before.get("rightWithoutSelection", 0) + 1
@@ -805,15 +919,9 @@ try:
         paste_before_native, native_payload = prepare_paste("native-paste")
         key("paste")
         if not is_mac and terminal_kind == "vte":
-            dialog = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^Warning: Potentially Unsafe Paste$"], capture_output=True, text=True, timeout=5)
-            if dialog.returncode == 0:
-                windows = dialog.stdout.split()
-                if len(windows) != 1 or int(run("xdotool", "getwindowpid", windows[0])) != terminal_process.pid:
-                    raise RuntimeError("Multiline-paste consent window is not uniquely owned")
-                report["multilinePasteConsent"] = {"window": windows[0], "payload": "allowlisted synthetic multiline text"}
-                run("xdotool", "windowactivate", "--sync", windows[0])
-                key("enter")
-        stable_check("desktopPasteRoundTrip", lambda: native_paste_outcome(paste_before_native, state(), native_payload))
+            check_vte_paste(paste_before_native, native_payload)
+        else:
+            stable_check("desktopPasteRoundTrip", lambda: native_paste_outcome(paste_before_native, state(), native_payload))
         screenshot("native-caret-paste")
         paste_before, paste_text = prepare_paste("right-paste")
         editor_row = next(i + 1 for i, line in enumerate(paste_before["painted"]) if "PREFIXSUFFIX" in line)
