@@ -5,7 +5,9 @@ use rustix::{
     io::Errno,
     termios::{self, LocalModes, OptionalActions, Termios},
 };
-use scramjet_rs::agent::{Agent, AgentConfig, AgentError, AgentUi, SessionChoice, StreamProgress};
+use scramjet_rs::agent::{
+    Agent, AgentConfig, AgentError, AgentUi, SessionChoice, StreamProgress, ToolDetail,
+};
 use std::{
     ffi::OsString,
     io::{BufRead, IsTerminal, Write},
@@ -453,22 +455,28 @@ impl AgentUi for Terminal {
         self.tool_started = Some(Instant::now());
         self.show("running".into(), false);
     }
-    fn tool_result(&mut self, name: &str, output: &str, diff: Option<&str>, failed: bool) {
+    fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
         self.clear();
         let width = editor::terminal_size().0.saturating_sub(2).max(20);
         let took = self.tool_started.take().map(|started| started.elapsed());
-        let text = diff.unwrap_or(output);
-        let lines = match (name, diff) {
-            (_, Some(_)) => preview(text, Shown::First(DIFF_LINES), width),
-            ("bash", _) => preview(text, Shown::Last(BASH_LINES), width),
-            _ => preview(text, Shown::First(RESULT_LINES), width),
+        let lines = match (name, detail) {
+            (_, Some(ToolDetail::Diff(diff))) => preview(diff, Shown::First(DIFF_LINES), width),
+            // As in Scramjet, trailing blank lines of a written file are not counted.
+            (_, Some(ToolDetail::Written(content))) => preview(
+                content.trim_end_matches(['\n', '\r']),
+                Shown::First(WRITE_LINES),
+                width,
+            ),
+            ("bash", None) => preview(output, Shown::Last(BASH_LINES), width),
+            _ => preview(output, Shown::First(RESULT_LINES), width),
         };
+        let diff = matches!(detail, Some(ToolDetail::Diff(_)));
         for line in lines {
             let style = match line.as_bytes().first() {
                 _ if !self.color => "",
                 _ if failed => "\x1b[31m",
-                Some(b'-') if diff.is_some() => "\x1b[31m",
-                Some(b'+') if diff.is_some() => "\x1b[32m",
+                Some(b'-') if diff => "\x1b[31m",
+                Some(b'+') if diff => "\x1b[32m",
                 _ => "\x1b[2m",
             };
             let reset = if style.is_empty() { "" } else { "\x1b[0m" };
@@ -526,6 +534,7 @@ impl AgentUi for Terminal {
 /// Scramjet shows the end of bash output, where errors and the exit code are.
 const BASH_LINES: usize = 5;
 const DIFF_LINES: usize = 40;
+const WRITE_LINES: usize = 10;
 const RESULT_LINES: usize = 6;
 
 enum Shown {
@@ -541,7 +550,11 @@ fn preview(text: &str, shown: Shown, width: usize) -> Vec<String> {
     match shown {
         Shown::First(n) if lines.len() > n => {
             let mut kept: Vec<String> = lines[..n].iter().map(fit).collect();
-            kept.push(format!("… ({} more lines)", lines.len() - n));
+            kept.push(format!(
+                "… ({} more lines, {} total)",
+                lines.len() - n,
+                lines.len()
+            ));
             kept
         }
         Shown::Last(n) if lines.len() > n => {
@@ -576,6 +589,14 @@ fn printable(line: &str) -> String {
                 Some(']') => {
                     while let Some(c) = chars.next() {
                         if c == '\x07' || (c == '\x1b' && chars.next().is_some()) {
+                            break;
+                        }
+                    }
+                }
+                // Intermediate bytes, then one final byte, such as `ESC ( B` from `tput sgr0`.
+                Some(' '..='/') => {
+                    for c in chars.by_ref() {
+                        if !(' '..='/').contains(&c) {
                             break;
                         }
                     }
@@ -644,10 +665,14 @@ mod tests {
             ]
         );
         let head = preview(&output, Shown::First(2), 80);
-        assert_eq!(head, ["line 1", "line 2", "… (18 more lines)"]);
+        assert_eq!(head, ["line 1", "line 2", "… (18 more lines, 20 total)"]);
         assert_eq!(
             printable("\x1b[31merror\x1b[0m:\tx\x1b]0;title\x07\x08 10%\r100%"),
             "100%"
+        );
+        assert_eq!(
+            printable("\x1b[1m+\x1b(B\x1b[m    )\x1b#8\x1b7."),
+            "+    )."
         );
         assert_eq!(
             printable("\x1b[1;31merror\x1b[0m:\tbad\x07"),

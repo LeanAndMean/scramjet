@@ -54,11 +54,20 @@ pub trait AgentUi {
     fn tool_call(&mut self, name: &str, summary: &str);
     /// The tool call announced last starts running, after any approval.
     fn tool_running(&mut self);
-    /// `output` is what the model receives; `diff` shows the lines an edit changed, each
-    /// marked ` ` (unchanged), `-` or `+` and numbered, with `...` for skipped lines.
-    fn tool_result(&mut self, name: &str, output: &str, diff: Option<&str>, failed: bool);
+    /// `output` is what the model receives; `detail`, if any, is better shown to the user.
+    fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
     /// Asks whether a tool call may run; returns false without an answer once `cancel` is set.
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> bool;
+}
+
+/// What the user sees of a successful tool call instead of the text the model receives.
+#[derive(Debug, PartialEq)]
+pub enum ToolDetail {
+    /// The lines an edit changed, each marked ` ` (unchanged), `-` or `+` and numbered, with
+    /// `...` for skipped lines.
+    Diff(String),
+    /// The content a write put in the file.
+    Written(String),
 }
 
 #[derive(Debug)]
@@ -309,7 +318,7 @@ impl Agent {
         ui.tool_running();
         match call.run(&self.config.root, cancel) {
             Ok(output) => {
-                ui.tool_result(call.name, &output.text, output.diff.as_deref(), false);
+                ui.tool_result(call.name, &output.text, output.detail.as_ref(), false);
                 output.text
             }
             Err(error) => {
@@ -414,7 +423,7 @@ mod tests {
             panic!("unexpected tool call {name}");
         }
         fn tool_running(&mut self) {}
-        fn tool_result(&mut self, _: &str, _: &str, _: Option<&str>, _: bool) {}
+        fn tool_result(&mut self, _: &str, _: &str, _: Option<&ToolDetail>, _: bool) {}
         fn approve(&mut self, _: &str, _: &AtomicBool) -> bool {
             false
         }

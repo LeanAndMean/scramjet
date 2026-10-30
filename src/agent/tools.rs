@@ -1,3 +1,4 @@
+use super::ToolDetail;
 use serde_json::{Value, json};
 use std::{
     io::Read,
@@ -100,12 +101,12 @@ impl<'a> Call<'a> {
     pub fn run(&self, root: &Path, cancel: &AtomicBool) -> Result<Output, String> {
         let text = match self.name {
             "read" => read(root, self)?,
-            "write" => write(root, self)?,
+            "write" => return write(root, self),
             "edit" => return edit(root, self),
             "bash" => bash(root, self, cancel)?,
             other => return Err(format!("unknown tool `{other}`")),
         };
-        Ok(Output { text, diff: None })
+        Ok(Output { text, detail: None })
     }
 }
 
@@ -113,8 +114,7 @@ impl<'a> Call<'a> {
 pub(super) struct Output {
     /// What the model receives.
     pub text: String,
-    /// For the user: the lines an edit changed, see [`diff`].
-    pub diff: Option<String>,
+    pub detail: Option<ToolDetail>,
 }
 
 /// Resolves `path` against the project root without following symlinks.
@@ -169,18 +169,17 @@ fn read(root: &Path, call: &Call) -> Result<String, String> {
     Ok(output)
 }
 
-fn write(root: &Path, call: &Call) -> Result<String, String> {
+fn write(root: &Path, call: &Call) -> Result<Output, String> {
     let path = resolve(root, call.str("path")?);
     let content = call.str("content")?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(format!(
-        "Wrote {} bytes to {}",
-        content.len(),
-        path.display()
-    ))
+    Ok(Output {
+        text: format!("Wrote {} bytes to {}", content.len(), path.display()),
+        detail: Some(ToolDetail::Written(content.to_owned())),
+    })
 }
 
 fn edit(root: &Path, call: &Call) -> Result<Output, String> {
@@ -230,7 +229,7 @@ fn edit(root: &Path, call: &Call) -> Result<Output, String> {
     std::fs::write(&path, &updated).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(Output {
         text: format!("Applied {} edit(s) to {}", spans.len(), path.display()),
-        diff: Some(diff(&original, &spans)),
+        detail: Some(ToolDetail::Diff(diff(&original, &spans))),
     })
 }
 
@@ -467,6 +466,18 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("f.txt")).unwrap(),
             "A beta G beta\n"
+        );
+        let written = call("write", json!({"path":"new/g.txt","content":"é\nx\n"}))
+            .run(&root, &cancel)
+            .unwrap();
+        assert_eq!(
+            written.text,
+            format!("Wrote 5 bytes to {}", root.join("new/g.txt").display())
+        );
+        assert_eq!(written.detail, Some(ToolDetail::Written("é\nx\n".into())));
+        assert_eq!(
+            std::fs::read_to_string(root.join("new/g.txt")).unwrap(),
+            "é\nx\n"
         );
         std::fs::remove_dir_all(&root).unwrap();
     }
