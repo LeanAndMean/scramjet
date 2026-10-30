@@ -112,6 +112,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         retries,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
+    let window = agent.context_window();
 
     let cancel = Arc::new(AtomicBool::new(false));
     let startup = termios::tcgetattr(std::io::stdin()).ok();
@@ -145,7 +146,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         let result = agent.turn(&prompt, &mut ui, &cancel);
         drop(echo);
         ui.clear();
-        ui.usage(&agent);
+        ui.usage(&agent, window);
         return result.map_err(|e| e.to_string());
     }
 
@@ -217,7 +218,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             Err(error) => eprintln!("error: {error}"),
         }
         cancel.store(false, Ordering::Relaxed);
-        ui.usage(&agent);
+        ui.usage(&agent, window);
     }
 }
 
@@ -494,6 +495,26 @@ impl Wrap {
     }
 }
 
+/// How full the context is, as Scramjet's footer shows it: `53k/1.1M (5.0%)`.
+fn context(tokens: u64, window: Option<u64>) -> String {
+    let count = |n: u64| match n {
+        0..1_000 => n.to_string(),
+        1_000..10_000 => format!("{:.1}k", n as f64 / 1e3),
+        10_000..1_000_000 => format!("{}k", (n as f64 / 1e3).round()),
+        1_000_000..10_000_000 => format!("{:.1}M", n as f64 / 1e6),
+        _ => format!("{}M", (n as f64 / 1e6).round()),
+    };
+    match window {
+        Some(window) if window > 0 => format!(
+            "{}/{} ({:.1}%)",
+            count(tokens),
+            count(window),
+            tokens as f64 * 100.0 / window as f64
+        ),
+        _ => count(tokens),
+    }
+}
+
 fn elapsed(seconds: u64) -> String {
     match seconds {
         0 => String::new(),
@@ -666,11 +687,18 @@ impl Terminal {
         self.printed_newlines = 0;
         self.streaming = Streaming::None;
     }
-    fn usage(&self, agent: &Agent) {
+    fn usage(&self, agent: &Agent, window: Option<u64>) {
         let usage = agent.usage;
         let line = format!(
-            "[{} requests · {} input tokens ({} cached) · {} output tokens]",
-            usage.requests, usage.input_tokens, usage.cached_input_tokens, usage.output_tokens
+            "[{} requests · {} input tokens ({} cached) · {} output tokens{}]",
+            usage.requests,
+            usage.input_tokens,
+            usage.cached_input_tokens,
+            usage.output_tokens,
+            usage
+                .context_tokens
+                .map(|tokens| format!(" · context {}", context(tokens, window)))
+                .unwrap_or_default()
         );
         eprintln!("{}", self.dim(&self.wrapped(&line)));
     }
@@ -1083,6 +1111,15 @@ mod tests {
             wrapped(11, &["\x1b[1mhel", "lo\x1b[0m world \x1b[36mfoo"]),
             "\x1b[1mhello\x1b[0m world\n\x1b[36mfoo"
         );
+    }
+
+    #[test]
+    fn context_is_shown_as_scramjet_formats_it() {
+        assert_eq!(context(52_500, Some(1_050_000)), "53k/1.1M (5.0%)");
+        assert_eq!(context(999, Some(2_000)), "999/2.0k (50.0%)");
+        assert_eq!(context(9_950, Some(200_000)), "9.9k/200k (5.0%)");
+        assert_eq!(context(12_000_000, Some(20_000_000)), "12M/20M (60.0%)");
+        assert_eq!(context(53_000, None), "53k");
     }
 
     #[test]

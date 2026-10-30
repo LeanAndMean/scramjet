@@ -20,6 +20,10 @@ pub(super) const LIMITS: ParserLimits = ParserLimits {
 };
 const WIRE_BYTES: usize = 256 << 20;
 const ERROR_BODY_BYTES: usize = 64 << 10;
+/// Proxy's model card document is about 73KB.
+const CARDS_BYTES: usize = 4 << 20;
+/// The lookup runs before the first prompt; Proxy answers in milliseconds.
+const CARDS_TIMEOUT: Duration = Duration::from_millis(500);
 /// Like Scramjet's provider timeout: reset by every received chunk, so long generations continue.
 const INACTIVITY: Duration = Duration::from_secs(600);
 /// Failure wording that another attempt cannot fix, checked before `TRANSIENT_WORDS`.
@@ -109,6 +113,43 @@ fn mentions(message: &str, words: &[&str]) -> bool {
 pub(super) async fn cancelled(flag: &AtomicBool) {
     while !flag.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// The model's context window (input and output tokens) from Proxy's model cards; `None` when
+/// the endpoint does not serve them in time or does not list the model.
+pub(super) async fn context_window(endpoint: SocketAddr, model: &str) -> Option<u64> {
+    let cards = tokio::time::timeout(CARDS_TIMEOUT, get(endpoint, "/api/model-cards"))
+        .await
+        .ok()??;
+    let cards: Value = serde_json::from_slice(&cards).ok()?;
+    cards["models"]
+        .as_array()?
+        .iter()
+        .find(|card| card["requestId"] == model)?["limits"]["context"]
+        .as_u64()
+}
+
+async fn get(endpoint: SocketAddr, path: &str) -> Option<Bytes> {
+    let socket = TcpStream::connect(endpoint).await.ok()?;
+    let (mut sender, connection) = http1::handshake(TokioIo::new(socket)).await.ok()?;
+    let request = Request::builder()
+        .uri(path)
+        .header("Host", endpoint.to_string())
+        .body(Full::new(Bytes::new()))
+        .ok()?;
+    let mut exchange = std::pin::pin!(async {
+        let response = sender.send_request(request).await.ok()?;
+        if response.status() != 200 {
+            return None;
+        }
+        let body = http_body_util::Limited::new(response.into_body(), CARDS_BYTES);
+        Some(body.collect().await.ok()?.to_bytes())
+    });
+    // A connection closed after the response may end first; the response is still complete.
+    tokio::select! {
+        body = &mut exchange => body,
+        _ = connection => exchange.await,
     }
 }
 

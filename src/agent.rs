@@ -110,6 +110,9 @@ pub struct Usage {
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
     pub output_tokens: u64,
+    /// The input and output tokens of the last response, when it reported them: how full the
+    /// context was, as Scramjet's footer shows it.
+    pub context_tokens: Option<u64>,
 }
 
 pub struct Agent {
@@ -174,6 +177,14 @@ impl Agent {
 
     pub fn conversation(&self) -> &[Value] {
         &self.conversation
+    }
+
+    /// Asks the endpoint for the model's context window (Proxy's model cards); `None` if unknown.
+    pub fn context_window(&self) -> Option<u64> {
+        self.executor.block_on(client::context_window(
+            self.config.endpoint,
+            &self.config.model,
+        ))
     }
 
     /// A tool call left without a result (the process stopped mid-call) is answered, never re-run.
@@ -242,6 +253,7 @@ impl Agent {
                 return Err(AgentError::Cancelled);
             }
             let reply = self.respond(ui, cancel)?;
+            self.usage.context_tokens = reply.usage.as_ref().and_then(|usage| usage.total_tokens);
             if let Some(usage) = &reply.usage {
                 self.usage.input_tokens += usage.input_tokens.unwrap_or(0);
                 self.usage.cached_input_tokens += usage.cached_input_tokens.unwrap_or(0);
@@ -576,12 +588,52 @@ response is incomplete; retry the request."});
         assert_eq!(ui.replies, ["done"]);
         assert!(ui.calls.is_empty());
         assert_eq!(agent.usage.requests, 2);
+        assert_eq!(agent.usage.context_tokens, Some(15));
         let kinds: Vec<_> = agent
             .conversation()
             .iter()
             .map(|item| item["type"].as_str().or(item["role"].as_str()).unwrap())
             .collect();
         assert_eq!(kinds, ["user", "message"]);
+    }
+
+    #[test]
+    fn the_context_window_comes_from_proxy_model_cards() {
+        let cards = json!({"models": [
+            {"requestId": "other", "limits": {"context": 1}},
+            {"requestId": "m", "limits": {"context": 1_050_000, "output": 128_000}},
+        ]})
+        .to_string();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in [("200 OK", cards.as_str()), ("404 Not Found", "no")] {
+                let (connection, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(connection);
+                let mut head = String::new();
+                while !head.ends_with("\r\n\r\n") {
+                    reader.read_line(&mut head).unwrap();
+                }
+                requests.push(head.lines().next().unwrap().to_owned());
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                reader.get_mut().write_all(response.as_bytes()).unwrap();
+            }
+            requests
+        });
+        let (cards, _scratch) = agent(endpoint, "cards");
+        assert_eq!(cards.context_window(), Some(1_050_000));
+        assert_eq!(cards.context_window(), None);
+        assert_eq!(server.join().unwrap(), ["GET /api/model-cards HTTP/1.1"; 2]);
+        assert_eq!(cards.context_window(), None);
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let (hung, _scratch) = agent(silent.local_addr().unwrap(), "cards-silent");
+        let started = std::time::Instant::now();
+        assert_eq!(hung.context_window(), None);
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
