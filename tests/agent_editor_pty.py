@@ -176,7 +176,7 @@ def exit_during_turn(read, until, send, output):
 def cancel_at_approval(read, until, send, output):
     mark = until(b'> ')
     send(b'go\r')
-    mark = until(b'Allow? [y/N] ', mark)
+    mark = until(b'Allow? [y/N, a = allow all until exit] ', mark)
     read(.3)
     send(b'\x03')
     mark = until(b'(cancelled)', mark)
@@ -222,7 +222,7 @@ def cancel_retry(read, until, send, output):
 def approval_shows_hidden_characters(read, until, send, output):
     mark = until(b'> ')
     send(b'go\r')
-    mark = until(b'Allow? [y/N] ', mark)
+    mark = until(b'Allow? [y/N, a = allow all until exit] ', mark)
     assert b'\x1b[2K' not in output[:mark], 'a command escape sequence reached the terminal'
     assert b'rm -rf scratch\\r\\u{1b}[2Kecho hello' in output[:mark], bytes(output[-600:])
     send(b'n\r')
