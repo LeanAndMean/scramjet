@@ -77,6 +77,19 @@ impl<'a> Call<'a> {
     pub fn summary(&self) -> String {
         match self.name {
             "bash" => self.arguments["command"].as_str().unwrap_or("").to_owned(),
+            "read" => {
+                let path = self.arguments["path"].as_str().unwrap_or("");
+                let (offset, limit) = (
+                    self.arguments["offset"].as_u64(),
+                    self.arguments["limit"].as_u64(),
+                );
+                let start = offset.unwrap_or(1).max(1);
+                match limit {
+                    _ if offset.is_none() && limit.is_none() => path.to_owned(),
+                    Some(limit) => format!("{path}:{start}-{}", (start + limit).saturating_sub(1)),
+                    None => format!("{path}:{start}"),
+                }
+            }
             _ => self.arguments["path"].as_str().unwrap_or("").to_owned(),
         }
     }
@@ -525,6 +538,14 @@ mod tests {
             .unwrap()
             .text;
         assert_eq!(page, "line 2999\nline 3000\n");
+        let summary = |arguments| call("read", arguments).summary();
+        assert_eq!(summary(json!({"path":"f"})), "f");
+        assert_eq!(summary(json!({"path":"f","offset":40})), "f:40");
+        assert_eq!(
+            summary(json!({"path":"f","offset":40,"limit":20})),
+            "f:40-59"
+        );
+        assert_eq!(summary(json!({"path":"f","limit":20})), "f:1-20");
         let bash = |command: &str| {
             let output = call("bash", json!({"command":command,"timeout":1}))
                 .run(&root, &cancel)
