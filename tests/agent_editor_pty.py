@@ -45,36 +45,43 @@ def answer_slowly():
 
 
 threading.Thread(target=answer_slowly, daemon=True).start()
-# Asks for a bash command whose output pipe outlives the killed process group, so a cancellation
-# stays pending for about two seconds.
-tools = socket.socket()
-tools.bind(('127.0.0.1', 0))
-tools.listen(8)
-calling = '127.0.0.1:%d' % tools.getsockname()[1]
-CALL = {'type': 'function_call', 'id': 'fc_1', 'call_id': 'call_1', 'name': 'bash', 'status': 'completed',
-        'arguments': json.dumps({'command': 'setsid sleep 5 & sleep 30'})}
-EVENTS = [
-    {'type': 'response.created', 'response': {'id': 'resp_1', 'status': 'in_progress', 'output': []}},
-    {'type': 'response.output_item.added', 'output_index': 0, 'item': dict(CALL, arguments='', status='in_progress')},
-    {'type': 'response.function_call_arguments.delta', 'output_index': 0, 'item_id': 'fc_1', 'delta': CALL['arguments']},
-    {'type': 'response.function_call_arguments.done', 'output_index': 0, 'item_id': 'fc_1',
-     'arguments': CALL['arguments']},
-    {'type': 'response.output_item.done', 'output_index': 0, 'item': CALL},
-    {'type': 'response.completed', 'response': {'id': 'resp_1', 'status': 'completed', 'output': [CALL]}},
-]
-STREAM = b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in EVENTS)
+def serve_call(command):
+    """Answers every request with a call to run `command` in bash; returns the address."""
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+    call = {'type': 'function_call', 'id': 'fc_1', 'call_id': 'call_1', 'name': 'bash', 'status': 'completed',
+            'arguments': json.dumps({'command': command})}
+    events = [
+        {'type': 'response.created', 'response': {'id': 'resp_1', 'status': 'in_progress', 'output': []}},
+        {'type': 'response.output_item.added', 'output_index': 0,
+         'item': dict(call, arguments='', status='in_progress')},
+        {'type': 'response.function_call_arguments.delta', 'output_index': 0, 'item_id': 'fc_1',
+         'delta': call['arguments']},
+        {'type': 'response.function_call_arguments.done', 'output_index': 0, 'item_id': 'fc_1',
+         'arguments': call['arguments']},
+        {'type': 'response.output_item.done', 'output_index': 0, 'item': call},
+        {'type': 'response.completed', 'response': {'id': 'resp_1', 'status': 'completed', 'output': [call]}},
+    ]
+    stream = b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events)
+
+    def answer():
+        while True:
+            connection, _ = listener.accept()
+            connection.recv(65536)
+            connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
+                               b'connection: close\r\n\r\n%s' % (len(stream), stream))
+            connection.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
-def answer_with_call():
-    while True:
-        connection, _ = tools.accept()
-        connection.recv(65536)
-        connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
-                           b'connection: close\r\n\r\n%s' % (len(STREAM), STREAM))
-        connection.close()
-
-
-threading.Thread(target=answer_with_call, daemon=True).start()
+# The command's output pipe outlives the killed process group, so a cancellation stays pending for
+# about two seconds.
+calling = serve_call('setsid sleep 5 & sleep 30')
+# A command whose raw text would show only `echo hello` on a terminal.
+disguised = serve_call('rm -rf scratch\r\x1b[2Kecho hello')
 env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'))
 
 
@@ -212,6 +219,20 @@ def cancel_retry(read, until, send, output):
     send(b'\x04')
 
 
+def approval_shows_hidden_characters(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'Allow? [y/N] ', mark)
+    assert b'\x1b[2K' not in output[:mark], 'a command escape sequence reached the terminal'
+    assert b'rm -rf scratch\\r\\u{1b}[2Kecho hello' in output[:mark], bytes(output[-600:])
+    send(b'n\r')
+    mark = until(b'The user denied this tool call.', mark)
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
 def session_files():
     return glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
 
@@ -226,6 +247,7 @@ run(['--retries', '0'], typed_during_turn, delayed)
 run([], cancel_retry)
 run([], thinking_counts_seconds, hanging)
 run(['--yes'], running_counts_seconds, calling)
+run([], approval_shows_hidden_characters, disguised)
 run(['--yes'], exit_during_turn, calling, 130)
 known = set(session_files())
 run([], cancel_at_approval, calling)

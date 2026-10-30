@@ -446,6 +446,7 @@ impl AgentUi for Terminal {
         let mut lines = summary.lines();
         let first = lines.next().unwrap_or("");
         let more = if lines.next().is_some() { " …" } else { "" };
+        let first = visible(first);
         eprintln!("{}", self.dim(&format!("● {name} {first}{more}")));
     }
     fn tool_running(&mut self) {
@@ -484,6 +485,7 @@ impl AgentUi for Terminal {
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> bool {
         self.clear();
+        let question = visible(question);
         let stdin = std::io::stdin();
         let yes = |answer: &str| matches!(answer.trim(), "y" | "Y" | "yes");
         if !stdin.is_terminal() {
@@ -587,6 +589,23 @@ fn printable(line: &str) -> String {
     text
 }
 
+/// Shows control and invisible formatting characters (other than newlines and tabs) as escapes,
+/// so that a command cannot make its approval question display something else.
+fn visible(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\n' | '\t' => c.to_string(),
+            '\u{061c}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2069}'
+            | '\u{feff}' => c.escape_default().to_string(),
+            c if c.is_control() => c.escape_default().to_string(),
+            c => c.to_string(),
+        })
+        .collect()
+}
+
 fn clip(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_owned();
@@ -637,6 +656,14 @@ mod tests {
         assert_eq!(clip("abcdefgh", 5), "abcd…");
         assert_eq!(clip("日本語です", 6), "日本…");
         assert_eq!(clip("short", 5), "short");
+    }
+
+    #[test]
+    fn approval_text_shows_hidden_characters() {
+        assert_eq!(
+            visible("rm -rf ~\r\x1b[2Kecho é\t\u{202e}txt.sh\nls"),
+            "rm -rf ~\\r\\u{1b}[2Kecho é\t\\u{202e}txt.sh\nls"
+        );
     }
 
     #[test]
