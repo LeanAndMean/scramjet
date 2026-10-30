@@ -1,6 +1,10 @@
 mod editor;
 
-use rustix::termios::{self, LocalModes, OptionalActions, Termios};
+use rustix::{
+    event::{PollFd, PollFlags, Timespec, poll},
+    io::Errno,
+    termios::{self, LocalModes, OptionalActions, Termios},
+};
 use scramjet_rs::agent::{Agent, AgentConfig, AgentError, AgentUi, SessionChoice, StreamProgress};
 use std::{
     ffi::OsString,
@@ -362,19 +366,41 @@ impl AgentUi for Terminal {
             eprint!("{}", self.dim(&text));
         }
     }
-    fn approve(&mut self, question: &str) -> bool {
+    fn approve(&mut self, question: &str, cancel: &AtomicBool) -> bool {
         self.clear();
-        // Only an answer typed after the question is shown may approve it.
-        if std::io::stdin().is_terminal() {
-            let _ =
-                rustix::termios::tcflush(std::io::stdin(), rustix::termios::QueueSelector::IFlush);
+        let stdin = std::io::stdin();
+        let yes = |answer: &str| matches!(answer.trim(), "y" | "Y" | "yes");
+        if !stdin.is_terminal() {
+            eprint!("{question}\nAllow? [y/N] ");
+            let mut answer = String::new();
+            return stdin.lock().read_line(&mut answer).is_ok() && yes(&answer);
         }
+        // Only an answer typed after the question is shown may approve it.
+        let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
         eprint!("{question}\nAllow? [y/N] ");
         let _echo = Echo::set(true);
-        let mut answer = String::new();
-        if std::io::stdin().lock().read_line(&mut answer).is_err() {
-            return false;
+        // SIGINT does not interrupt a blocking read, so wait in poll and watch for Ctrl-C.
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                eprintln!();
+                return false;
+            }
+            let mut fds = [PollFd::new(&stdin, PollFlags::IN)];
+            match poll(
+                &mut fds,
+                Some(&Timespec {
+                    tv_sec: 0,
+                    tv_nsec: 50_000_000,
+                }),
+            ) {
+                Ok(0) | Err(Errno::INTR) => {}
+                Ok(_) => break,
+                Err(_) => return false,
+            }
         }
-        matches!(answer.trim(), "y" | "Y" | "yes")
+        // In canonical mode one read returns one typed line.
+        let mut answer = [0; 4096];
+        rustix::io::read(&stdin, &mut answer)
+            .is_ok_and(|n| yes(&String::from_utf8_lossy(&answer[..n])))
     }
 }

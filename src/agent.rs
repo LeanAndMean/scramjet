@@ -43,7 +43,8 @@ pub trait AgentUi {
     fn assistant(&mut self, text: &str);
     fn tool_call(&mut self, name: &str, summary: &str);
     fn tool_result(&mut self, output: &str, failed: bool);
-    fn approve(&mut self, question: &str) -> bool;
+    /// Asks whether a tool call may run; returns false without an answer once `cancel` is set.
+    fn approve(&mut self, question: &str, cancel: &AtomicBool) -> bool;
 }
 
 #[derive(Debug)]
@@ -248,11 +249,15 @@ impl Agent {
         ui.tool_call(call.name, &call.summary());
         if let Approval::Ask(question) = call.approval(&self.config.root)
             && !self.config.approve_all
-            && !ui.approve(&question)
+            && !ui.approve(&question, cancel)
         {
-            let output = "The user denied this tool call.".to_owned();
-            ui.tool_result(&output, true);
-            return output;
+            let output = if cancel.load(Ordering::Relaxed) {
+                "The user cancelled the turn before this tool call ran."
+            } else {
+                "The user denied this tool call."
+            };
+            ui.tool_result(output, true);
+            return output.to_owned();
         }
         let (output, failed) = match call.run(&self.config.root, cancel) {
             Ok(output) => (output, false),

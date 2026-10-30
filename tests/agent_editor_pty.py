@@ -166,12 +166,32 @@ def exit_during_turn(read, until, send, output):
     send(b'\x03')
 
 
+def cancel_at_approval(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'Allow? [y/N] ', mark)
+    read(.3)
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+def session_files():
+    return glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
+
+
 run([], first)
-sessions = glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
+sessions = session_files()
 assert len(sessions) == 1, sessions
 prompts = [item['content'] for item in map(json.loads, open(sessions[0])) if item.get('role') == 'user']
 assert prompts == ['one\ntwo\nthree'], prompts
 run(['--continue'], resumed)
 run([], typed_during_turn, delayed)
 run(['--yes'], exit_during_turn, calling, 130)
+known = set(session_files())
+run([], cancel_at_approval, calling)
+(cancelled,) = set(session_files()) - known
+outputs = [item['output'] for item in map(json.loads, open(cancelled)) if item.get('type') == 'function_call_output']
+assert outputs == ['The user cancelled the turn before this tool call ran.'], outputs
 print('agent editor journeys passed')
