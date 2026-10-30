@@ -16,6 +16,8 @@ const MAX_BYTES: usize = 50 * 1024;
 const CAPTURE_BYTES: usize = 4 << 20;
 const DEFAULT_TIMEOUT: u64 = 120;
 const MAX_TIMEOUT: u64 = 3600;
+/// Unchanged lines shown around each change in an edit diff, as in Scramjet.
+const DIFF_CONTEXT: usize = 4;
 
 pub(super) fn definitions() -> Value {
     json!([
@@ -95,15 +97,24 @@ impl<'a> Call<'a> {
             _ => Approval::None,
         }
     }
-    pub fn run(&self, root: &Path, cancel: &AtomicBool) -> Result<String, String> {
-        match self.name {
-            "read" => read(root, self),
-            "write" => write(root, self),
-            "edit" => edit(root, self),
-            "bash" => bash(root, self, cancel),
-            other => Err(format!("unknown tool `{other}`")),
-        }
+    pub fn run(&self, root: &Path, cancel: &AtomicBool) -> Result<Output, String> {
+        let text = match self.name {
+            "read" => read(root, self)?,
+            "write" => write(root, self)?,
+            "edit" => return edit(root, self),
+            "bash" => bash(root, self, cancel)?,
+            other => return Err(format!("unknown tool `{other}`")),
+        };
+        Ok(Output { text, diff: None })
     }
+}
+
+#[derive(Debug)]
+pub(super) struct Output {
+    /// What the model receives.
+    pub text: String,
+    /// For the user: the lines an edit changed, see [`diff`].
+    pub diff: Option<String>,
 }
 
 /// Resolves `path` against the project root without following symlinks.
@@ -172,7 +183,7 @@ fn write(root: &Path, call: &Call) -> Result<String, String> {
     ))
 }
 
-fn edit(root: &Path, call: &Call) -> Result<String, String> {
+fn edit(root: &Path, call: &Call) -> Result<Output, String> {
     let path = resolve(root, call.str("path")?);
     let original =
         std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -217,11 +228,109 @@ fn edit(root: &Path, call: &Call) -> Result<String, String> {
     }
     updated.push_str(&original[cursor..]);
     std::fs::write(&path, &updated).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(format!(
-        "Applied {} edit(s) to {}",
-        spans.len(),
-        path.display()
-    ))
+    Ok(Output {
+        text: format!("Applied {} edit(s) to {}", spans.len(), path.display()),
+        diff: Some(diff(&original, &spans)),
+    })
+}
+
+/// Shows replacing the sorted, non-overlapping byte `spans` of `original` as numbered lines:
+/// ` ` unchanged (old numbering), `-` removed (old numbering), `+` added (new numbering), and
+/// `...` for skipped unchanged lines.
+fn diff(original: &str, spans: &[(usize, usize, &str)]) -> String {
+    struct Change {
+        old: usize,
+        new: usize,
+        removed: Vec<String>,
+        added: Vec<String>,
+    }
+    let line_of = |offset: usize| original[..offset].matches('\n').count();
+    let mut changes: Vec<Change> = Vec::new();
+    let mut shift = 0isize;
+    let mut index = 0;
+    while index < spans.len() {
+        // Edits touching the same lines are shown as one change of whole lines.
+        let start = original[..spans[index].0].rfind('\n').map_or(0, |i| i + 1);
+        let mut end = start;
+        let mut replaced = String::new();
+        let mut cursor = start;
+        while index < spans.len() && (spans[index].0 < end || cursor == start) {
+            let (from, to, new) = spans[index];
+            replaced.push_str(&original[cursor..from]);
+            replaced.push_str(new);
+            cursor = to;
+            end = match original[..to].ends_with('\n') {
+                true => to,
+                false => original[to..]
+                    .find('\n')
+                    .map_or(original.len(), |i| to + i + 1),
+            };
+            index += 1;
+        }
+        replaced.push_str(&original[cursor..end]);
+        let mut removed: Vec<String> = original[start..end].lines().map(str::to_owned).collect();
+        let mut added: Vec<String> = replaced.lines().map(str::to_owned).collect();
+        let same_start = removed
+            .iter()
+            .zip(&added)
+            .take_while(|(a, b)| a == b)
+            .count();
+        removed.drain(..same_start);
+        added.drain(..same_start);
+        let same_end = removed
+            .iter()
+            .rev()
+            .zip(added.iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        removed.truncate(removed.len() - same_end);
+        added.truncate(added.len() - same_end);
+        let old = line_of(start) + same_start;
+        let lines_shift = added.len() as isize - removed.len() as isize;
+        if !removed.is_empty() || !added.is_empty() {
+            changes.push(Change {
+                old,
+                new: old.saturating_add_signed(shift),
+                removed,
+                added,
+            });
+        }
+        shift += lines_shift;
+    }
+    let old_lines: Vec<&str> = original.lines().collect();
+    let width = (old_lines.len() as isize + shift.max(0)).to_string().len();
+    let mut out = String::new();
+    let mut shown = 0;
+    let mut line = |mark: char, number: Option<usize>, text: &str| {
+        let number = number.map_or(String::new(), |n| (n + 1).to_string());
+        out.push_str(&format!("{mark}{number:>width$} {text}\n"));
+    };
+    for (i, change) in changes.iter().enumerate() {
+        let from = change.old.saturating_sub(DIFF_CONTEXT).max(shown);
+        if from > shown {
+            line(' ', None, "...");
+        }
+        for (n, text) in (from..).zip(&old_lines[from..change.old]) {
+            line(' ', Some(n), text);
+        }
+        for (n, text) in change.removed.iter().enumerate() {
+            line('-', Some(change.old + n), text);
+        }
+        for (n, text) in change.added.iter().enumerate() {
+            line('+', Some(change.new + n), text);
+        }
+        shown = change.old + change.removed.len();
+        let next = changes.get(i + 1).map_or(old_lines.len(), |c| c.old);
+        let until = (shown + DIFF_CONTEXT).min(next).min(old_lines.len());
+        for (n, text) in (shown..).zip(&old_lines[shown..until]) {
+            line(' ', Some(n), text);
+        }
+        if i + 1 == changes.len() && until < old_lines.len() {
+            line(' ', None, "...");
+        }
+        shown = until;
+    }
+    out
 }
 
 fn bash(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String> {
@@ -372,23 +481,27 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let first = call("read", json!({"path":"long.txt"}))
             .run(&root, &cancel)
-            .unwrap();
+            .unwrap()
+            .text;
         assert!(first.starts_with("line 1\n") && first.contains("Use offset=2001 to continue"));
         let page = call("read", json!({"path":"long.txt","offset":2999}))
             .run(&root, &cancel)
-            .unwrap();
+            .unwrap()
+            .text;
         assert_eq!(page, "line 2999\nline 3000\n");
         let output = call(
             "bash",
             json!({"command":"seq 1 5000; echo err >&2; exit 3"}),
         )
         .run(&root, &cancel)
-        .unwrap();
+        .unwrap()
+        .text;
         assert!(output.contains("[Output truncated") && output.ends_with("err\nExit code 3."));
         assert!(!output.contains("\n1\n") && output.contains("\n5000\n"));
         let timed = call("bash", json!({"command":"sleep 30","timeout":1}))
             .run(&root, &cancel)
-            .unwrap();
+            .unwrap()
+            .text;
         assert!(timed.contains("timed out"));
         assert!(
             call("write", json!({"path":"a/b.txt","content":"hi"}))
@@ -401,6 +514,54 @@ mod tests {
                 .is_none()
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn edit_diffs_show_changed_lines_with_context_and_new_numbering() {
+        let original: String = (1..=20).map(|n| format!("line {n}.\n")).collect();
+        let span = |old: &str, new: &'static str| {
+            let start = original.find(old).unwrap();
+            (start, start + old.len(), new)
+        };
+        let spans = [
+            span("line 3.", "line 3!\nnew."),
+            span("line 15.", "line 15!"),
+        ];
+        let expected = [
+            "  1 line 1.",
+            "  2 line 2.",
+            "- 3 line 3.",
+            "+ 3 line 3!",
+            "+ 4 new.",
+            "  4 line 4.",
+            "  5 line 5.",
+            "  6 line 6.",
+            "  7 line 7.",
+            "    ...",
+            " 11 line 11.",
+            " 12 line 12.",
+            " 13 line 13.",
+            " 14 line 14.",
+            "-15 line 15.",
+            "+16 line 15!",
+            " 16 line 16.",
+            " 17 line 17.",
+            " 18 line 18.",
+            " 19 line 19.",
+            "    ...",
+        ];
+        assert_eq!(
+            diff(&original, &spans).lines().collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            diff("one\ntwo\nthree\n", &[(0, 13, "one\n2\nthree")]),
+            " 1 one\n-2 two\n+2 2\n 3 three\n"
+        );
+        assert_eq!(
+            diff("f(x, y)\nend\n", &[(2, 3, "left"), (5, 6, "right")]),
+            "-1 f(x, y)\n+1 f(left, right)\n 2 end\n"
+        );
     }
 
     impl Approval {

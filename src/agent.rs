@@ -52,7 +52,9 @@ pub trait AgentUi {
     /// The complete text of an assistant message, after any streamed progress for it.
     fn assistant(&mut self, text: &str);
     fn tool_call(&mut self, name: &str, summary: &str);
-    fn tool_result(&mut self, output: &str, failed: bool);
+    /// `output` is what the model receives; `diff` shows the lines an edit changed, each
+    /// marked ` ` (unchanged), `-` or `+` and numbered, with `...` for skipped lines.
+    fn tool_result(&mut self, name: &str, output: &str, diff: Option<&str>, failed: bool);
     /// Asks whether a tool call may run; returns false without an answer once `cancel` is set.
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> bool;
 }
@@ -285,7 +287,7 @@ impl Agent {
             Ok(call) => call,
             Err(error) => {
                 let output = format!("Error: {error}");
-                ui.tool_result(&output, true);
+                ui.tool_result(item["name"].as_str().unwrap_or(""), &output, None, true);
                 return output;
             }
         };
@@ -299,15 +301,20 @@ impl Agent {
             } else {
                 "The user denied this tool call."
             };
-            ui.tool_result(output, true);
+            ui.tool_result(call.name, output, None, true);
             return output.to_owned();
         }
-        let (output, failed) = match call.run(&self.config.root, cancel) {
-            Ok(output) => (output, false),
-            Err(error) => (format!("Error: {error}"), true),
-        };
-        ui.tool_result(&output, failed);
-        output
+        match call.run(&self.config.root, cancel) {
+            Ok(output) => {
+                ui.tool_result(call.name, &output.text, output.diff.as_deref(), false);
+                output.text
+            }
+            Err(error) => {
+                let output = format!("Error: {error}");
+                ui.tool_result(call.name, &output, None, true);
+                output
+            }
+        }
     }
 }
 
@@ -403,7 +410,7 @@ mod tests {
         fn tool_call(&mut self, name: &str, _: &str) {
             panic!("unexpected tool call {name}");
         }
-        fn tool_result(&mut self, _: &str, _: bool) {}
+        fn tool_result(&mut self, _: &str, _: &str, _: Option<&str>, _: bool) {}
         fn approve(&mut self, _: &str, _: &AtomicBool) -> bool {
             false
         }

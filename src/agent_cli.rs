@@ -16,8 +16,9 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const USAGE: &str = "Usage: scramjet-rs agent [--project DIR] [--endpoint ADDR] [--model ID] \
 [--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | --session FILE] [--yes]
@@ -262,6 +263,7 @@ struct Terminal {
     streaming: Streaming,
     /// Whether assistant text streamed during the current response.
     streamed_text: bool,
+    tool_started: Option<Instant>,
 }
 
 impl Terminal {
@@ -271,6 +273,7 @@ impl Terminal {
             status_shown: false,
             streaming: Streaming::None,
             streamed_text: false,
+            tool_started: None,
         }
     }
     fn dim(&self, text: &str) -> String {
@@ -366,22 +369,35 @@ impl AgentUi for Terminal {
         let first = lines.next().unwrap_or("");
         let more = if lines.next().is_some() { " …" } else { "" };
         eprintln!("{}", self.dim(&format!("● {name} {first}{more}")));
+        self.tool_started = Some(Instant::now());
     }
-    fn tool_result(&mut self, output: &str, failed: bool) {
-        const SHOWN: usize = 6;
-        let lines: Vec<_> = output.lines().collect();
-        let mut text: String = lines
-            .iter()
-            .take(SHOWN)
-            .map(|line| format!("  {line}\n"))
-            .collect();
-        if lines.len() > SHOWN {
-            text.push_str(&format!("  … ({} more lines)\n", lines.len() - SHOWN));
+    fn tool_result(&mut self, name: &str, output: &str, diff: Option<&str>, failed: bool) {
+        let width = editor::terminal_size().0.saturating_sub(2).max(20);
+        let took = self.tool_started.take().map(|started| started.elapsed());
+        let text = diff.unwrap_or(output);
+        let lines = match (name, diff) {
+            (_, Some(_)) => preview(text, Shown::First(DIFF_LINES), width),
+            ("bash", _) => preview(text, Shown::Last(BASH_LINES), width),
+            _ => preview(text, Shown::First(RESULT_LINES), width),
+        };
+        for line in lines {
+            let style = match line.as_bytes().first() {
+                _ if !self.color => "",
+                _ if failed => "\x1b[31m",
+                Some(b'-') if diff.is_some() => "\x1b[31m",
+                Some(b'+') if diff.is_some() => "\x1b[32m",
+                _ => "\x1b[2m",
+            };
+            let reset = if style.is_empty() { "" } else { "\x1b[0m" };
+            eprintln!("  {style}{line}{reset}");
         }
-        if failed && self.color {
-            eprint!("\x1b[31m{text}\x1b[0m");
-        } else {
-            eprint!("{}", self.dim(&text));
+        if let Some(took) =
+            took.filter(|took| name == "bash" && !failed && *took >= Duration::from_secs(1))
+        {
+            eprintln!(
+                "  {}",
+                self.dim(&format!("took {:.1}s", took.as_secs_f64()))
+            );
         }
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> bool {
@@ -420,5 +436,124 @@ impl AgentUi for Terminal {
         let mut answer = [0; 4096];
         rustix::io::read(&stdin, &mut answer)
             .is_ok_and(|n| yes(&String::from_utf8_lossy(&answer[..n])))
+    }
+}
+
+/// Scramjet shows the end of bash output, where errors and the exit code are.
+const BASH_LINES: usize = 5;
+const DIFF_LINES: usize = 40;
+const RESULT_LINES: usize = 6;
+
+enum Shown {
+    First(usize),
+    Last(usize),
+}
+
+/// The lines of a tool result to show, made safe for the terminal and cut to `width` cells,
+/// with a note for lines left out.
+fn preview(text: &str, shown: Shown, width: usize) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let fit = |line: &&str| clip(&printable(line), width);
+    match shown {
+        Shown::First(n) if lines.len() > n => {
+            let mut kept: Vec<String> = lines[..n].iter().map(fit).collect();
+            kept.push(format!("… ({} more lines)", lines.len() - n));
+            kept
+        }
+        Shown::Last(n) if lines.len() > n => {
+            let mut kept = vec![format!("… ({} earlier lines)", lines.len() - n)];
+            kept.extend(lines[lines.len() - n..].iter().map(fit));
+            kept
+        }
+        _ => lines.iter().map(fit).collect(),
+    }
+}
+
+/// Drops escape sequences and control characters, expands tabs, and keeps only the text after
+/// the last carriage return, as a terminal would show it.
+fn printable(line: &str) -> String {
+    let line = line
+        .split('\r')
+        .rfind(|part| !part.is_empty())
+        .unwrap_or("");
+    let mut text = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\t' => text.push_str("    "),
+            '\x1b' => match chars.next() {
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\x07' || (c == '\x1b' && chars.next().is_some()) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            c if c.is_control() => {}
+            c => text.push(c),
+        }
+    }
+    text
+}
+
+fn clip(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_owned();
+    }
+    let mut clipped = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let cells = c.width().unwrap_or(0);
+        if used + cells + 1 > width {
+            break;
+        }
+        used += cells;
+        clipped.push(c);
+    }
+    clipped.push('…');
+    clipped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn previews_keep_the_end_of_bash_output_and_are_safe_to_print() {
+        let output: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+        let bash = preview(&format!("{output}Exit code 1."), Shown::Last(5), 80);
+        assert_eq!(
+            bash,
+            [
+                "… (16 earlier lines)",
+                "line 17",
+                "line 18",
+                "line 19",
+                "line 20",
+                "Exit code 1."
+            ]
+        );
+        let head = preview(&output, Shown::First(2), 80);
+        assert_eq!(head, ["line 1", "line 2", "… (18 more lines)"]);
+        assert_eq!(
+            printable("\x1b[31merror\x1b[0m:\tx\x1b]0;title\x07\x08 10%\r100%"),
+            "100%"
+        );
+        assert_eq!(
+            printable("\x1b[1;31merror\x1b[0m:\tbad\x07"),
+            "error:    bad"
+        );
+        assert_eq!(clip("abcdefgh", 5), "abcd…");
+        assert_eq!(clip("日本語です", 6), "日本…");
+        assert_eq!(clip("short", 5), "short");
     }
 }

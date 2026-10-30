@@ -426,7 +426,7 @@ struct Screen {
     width: usize,
 }
 
-fn terminal_size() -> (usize, usize) {
+pub(super) fn terminal_size() -> (usize, usize) {
     termios::tcgetwinsize(io::stderr())
         .ok()
         .filter(|size| size.ws_col > 0 && size.ws_row > 0)

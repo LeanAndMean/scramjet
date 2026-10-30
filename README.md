@@ -18,6 +18,7 @@ scramjet-rs agent --help
 ```
 
 - **Tools:** `read` (paged at 2000 lines/50KB), `write`, `edit` (exact unique text replacement), `bash` (runs in the project directory; output tail at 2000 lines/50KB, default 120s timeout).
+- **Tool display:** each call shows a short preview: the last 5 lines of bash output (with its time when 1s or more), a numbered diff of each edit, and the first lines of other results. Escape sequences and control characters in output are dropped and long lines are cut to the terminal width.
 - **Approval:** each bash command, and any write/edit outside the project directory, asks `Allow? [y/N]`. `--yes` approves everything. Bash is not sandboxed.
 - **Context:** `AGENTS.md` and `CLAUDE.md` in the project directory and its ancestors are added to the instructions.
 - **Sessions:** saved as JSON lines under `$XDG_STATE_HOME/scramjet-rs/sessions/` (default `~/.local/state/...`). `--continue` resumes the newest session for the project; `--session FILE` a specific one. A tool call interrupted mid-run is reported to the model as unknown and never re-run.
