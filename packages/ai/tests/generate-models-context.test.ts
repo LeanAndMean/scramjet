@@ -1001,6 +1001,65 @@ describe("real generator context corrections", () => {
 		expect(models["azure-openai-responses"]["gpt-realtime-2.1"]).toBeUndefined();
 	});
 
+	it.each(["absent", "valid", "conflicting"] as const)("pins Terra direct metadata with %s feed", async (state) => {
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				data.openai.models["gpt-6.1-terra-neighbor"] = feedModel("gpt-6.1-terra-neighbor", 240000);
+				if (state !== "absent") {
+					data.openai.models["gpt-6.1-terra"] = feedModel(
+						"gpt-6.1-terra",
+						state === "valid" ? 1050000 : 240000,
+						state === "valid"
+							? {
+									name: "GPT-6.1 Terra",
+									reasoning: true,
+									modalities: { input: ["text", "image"] },
+									limit: { context: 1050000, output: 128000 },
+									cost: { input: 1, output: 5, cache_read: 0.05, cache_write: 1.25 },
+								}
+							: {
+									name: "Conflicting feed name",
+									reasoning: false,
+									modalities: { input: ["text"] },
+									limit: { context: 240000, input: 200000, output: 4000 },
+									cost: { input: 99, output: 99, cache_read: 99, cache_write: 99 },
+								},
+					);
+				}
+			},
+		}))!;
+		for (const provider of ["openai", "openai-codex"] as const) {
+			const model = models[provider]["gpt-6.1-terra"];
+			expect(model).toMatchObject({
+				id: "gpt-6.1-terra",
+				name: "GPT-6.1 Terra",
+				provider,
+				api: provider === "openai" ? "openai-responses" : "openai-codex-responses",
+				baseUrl: provider === "openai" ? "https://api.openai.com/v1" : "https://chatgpt.com/backend-api",
+				reasoning: true,
+				input: ["text", "image"],
+				contextWindow: provider === "openai" ? 1050000 : 872000,
+				maxTokens: 128000,
+				cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+				thinkingLevelMap: { off: provider === "openai" ? "none" : null, minimal: null, xhigh: "xhigh", max: "max" },
+			});
+			expect(model).not.toHaveProperty("maxInputTokens");
+			expect(model).not.toHaveProperty("requestLimits");
+			expect(Object.keys(models[provider]).filter((id) => id === "gpt-6.1-terra")).toHaveLength(1);
+		}
+		expect(models.openai["gpt-6.1-terra-neighbor"].contextWindow).toBe(240000);
+		expect(models.openai["gpt-6.1-terra-neighbor"].thinkingLevelMap).not.toEqual(
+			models.openai["gpt-6.1-terra"].thinkingLevelMap,
+		);
+		expect(models["openai-codex"]["gpt-6-sol"].thinkingLevelMap).toEqual({
+			off: null,
+			minimal: "low",
+			xhigh: "xhigh",
+			max: "max",
+		});
+		expect(models["azure-openai-responses"]["gpt-6.1-terra"]).toBeUndefined();
+	});
+
 	it.each([true, false])("pins GPT-6.1 Sol direct metadata with feed-present=%s", async (feedPresent) => {
 		const models = (await generate(true, {
 			modelsDevChange: (data) => {
@@ -1299,6 +1358,7 @@ describe("real generator context corrections", () => {
 			"gpt-6-sol": 872000,
 			"gpt-6-luna": 872000,
 			"gpt-6.1-sol": 872000,
+			"gpt-6.1-terra": 872000,
 		};
 		for (const model of Object.values(models["openai-codex"])) {
 			expect(model.contextWindow, model.id).toBe(codexContexts[model.id]);

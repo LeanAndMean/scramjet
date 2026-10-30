@@ -85,6 +85,19 @@ The curated snapshot adds only `gpt-6.1-sol` under `openai`, `openai-codex`, and
 
 Normal generation from mutable feeds would also alter unrelated reviewed entries, so these three records were inserted into the checked-in runtime catalog without replacing it from a live candidate. The exact provider/ID/field comparison with the preceding commit and offline verification are recorded in the issue's stage progress artifact.
 
+## GPT-6.1 Terra: direct OpenAI and Codex (S1, 2026-10-30)
+
+This selective snapshot change adds only `openai/gpt-6.1-terra` and `openai-codex/gpt-6.1-terra`, following the route evidence independently checked during planning on **2026-10-29** in [issue #639's plan](https://github.com/LeanAndMean/scramjet/issues/639#issuecomment-6524735554). Both advertise reasoning and text/image input. No independent input ceiling or joint endpoint constraint was established for either route, so neither is inferred by subtracting output from context.
+
+| Route | Applicable evidence and disposition |
+| --- | --- |
+| Direct OpenAI (`openai-responses`, `https://api.openai.com/v1`) | [Terra model card](https://developers.openai.com/api/docs/models/gpt-6.1-terra): exact ID, **1,050,000 total context / 128,000 output**, efforts none/low/medium/high/xhigh/max, and “Tool calling requires the Responses API.” Off maps to none; minimal is unsupported and clamps upward to low. The card did not independently establish a 922,000 input ceiling. |
+| Codex sign-in (`openai-codex-responses`, `https://chatgpt.com/backend-api`) | [Official Codex catalog](https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json): **872,000 maximum context**, distinct from its 500,000 client default, text/image, and low/medium/high/xhigh/max/ultra. The existing effort vocabulary exposes only low through max; ultra is not exposed or substituted for max. Off/minimal clamp to low. The source supplies no model-specific output maximum. **128,000 output is explicitly user-approved provisional reuse of the direct card, not a verified Codex backend maximum.** The adapter still omits `max_output_tokens` even with local output allocation. |
+
+[OpenAI pricing](https://developers.openai.com/api/docs/pricing), observed 2026-10-29, supplies the standard short-context per-million-token scalar estimates: **$1 input / $5 output / $0.05 cache read / $1.25 30-minute cache write**. Higher long-context and other cache-retention tiers are not represented by this scalar estimator and do not reduce context. Codex uses these API dollar values only as usage estimates, **not subscription billing**, credits, or allowance accounting.
+
+Offline catalog, mocked-generator, public-dispatch tool-continuation and synthetic-auth registry tests verify local recognition and serialization, not account entitlement, endpoint acceptance, backend maxima or charges. No inference, paid boundary test, authenticated listing or credential exchange was performed during S1. Normal builds remain offline; no full live regeneration was used. Copilot and gateway additions belong to S2/S3; Azure, Bedrock and Cloudflare remain unresolved under #639, not declared unavailable or outside its broader goal.
+
 ## Future refreshes
 
 This snapshot is curated, not the direct output of strict generation: reviewed retentions and scalar price estimates are reconciled outside the generator. The header in `src/models.generated.ts` therefore does not promise regeneration of these bytes from mutable feeds. Strict generation is a safety check, not historical replay or an approval mechanism for missing catalog identities. To accept a removal, establish route-applicable evidence and selection impact, record the provider/ID and disposition here, then reconcile the curated snapshot; do not disable or bypass the exact-loss guard to force a strict write. For estimates, document their applicable source and qualification before updating the snapshot.

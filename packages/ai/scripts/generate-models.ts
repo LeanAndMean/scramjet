@@ -364,6 +364,15 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	) {
 		mergeThinkingLevelMap(model, { off: null, minimal: null, xhigh: "xhigh", max: "max" });
 	}
+	// SCRAMJET-DIVERGENCE: Terra effort support differs between the direct API and Codex sign-in.
+	if (model.id === "gpt-6.1-terra") {
+		if (model.provider === "openai" && model.api === "openai-responses") {
+			mergeThinkingLevelMap(model, { off: "none", minimal: null, xhigh: "xhigh", max: "max" });
+		}
+		if (model.provider === "openai-codex" && model.api === "openai-codex-responses") {
+			mergeThinkingLevelMap(model, { off: null, minimal: null, xhigh: "xhigh", max: "max" });
+		}
+	}
 	if (model.provider === "openai" && model.api === "openai-responses" &&
 		["gpt-6-sol", "gpt-6-luna"].includes(model.id)) {
 		mergeThinkingLevelMap(model, { off: "none", minimal: null, xhigh: "xhigh", max: "max" });
@@ -1507,6 +1516,17 @@ async function generateModels() {
 			candidate.contextWindow = 1050000;
 			candidate.maxTokens = 128000;
 		}
+		// SCRAMJET-DIVERGENCE: Pin the direct Terra route independently of feed metadata.
+		if (candidate.provider === "openai" && candidate.id === "gpt-6.1-terra") {
+			candidate.name = "GPT-6.1 Terra";
+			candidate.api = "openai-responses";
+			candidate.baseUrl = "https://api.openai.com/v1";
+			candidate.reasoning = true;
+			candidate.input = ["text", "image"];
+			candidate.cost = { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 };
+			candidate.contextWindow = 1050000;
+			candidate.maxTokens = 128000;
+		}
 		// SCRAMJET-DIVERGENCE: Pin the direct GPT-6.1 Sol route independently of feed metadata.
 		if (candidate.provider === "openai" && candidate.id === "gpt-6.1-sol") {
 			candidate.name = "GPT-6.1 Sol";
@@ -1785,6 +1805,22 @@ async function generateModels() {
 			},
 			contextWindow: 128000,
 			maxTokens: 16384,
+		});
+	}
+
+	// SCRAMJET-DIVERGENCE: Retain the direct Terra route when the feed omits it.
+	if (!allModels.some((m) => m.provider === "openai" && m.id === "gpt-6.1-terra")) {
+		allModels.push({
+			id: "gpt-6.1-terra",
+			name: "GPT-6.1 Terra",
+			api: "openai-responses",
+			baseUrl: "https://api.openai.com/v1",
+			provider: "openai",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+			contextWindow: 1050000,
+			maxTokens: 128000,
 		});
 	}
 
@@ -2126,6 +2162,19 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+			contextWindow: CODEX_EXTENDED_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		// SCRAMJET-DIVERGENCE: Terra output provisionally borrows the direct allowance; Codex declares no maximum.
+		{
+			id: "gpt-6.1-terra",
+			name: "GPT-6.1 Terra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
 			contextWindow: CODEX_EXTENDED_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},

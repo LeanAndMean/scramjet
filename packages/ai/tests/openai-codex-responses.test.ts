@@ -5,6 +5,7 @@ import {
 	streamOpenAICodexResponses,
 	streamSimpleOpenAICodexResponses,
 } from "../src/providers/openai-codex-responses.js";
+import { streamSimple } from "../src/stream.js";
 import type { AssistantMessage, Context, Model, ModelThinkingLevel, ToolResultMessage } from "../src/types.js";
 import { isContextOverflow } from "../src/utils/overflow.js";
 
@@ -185,6 +186,66 @@ function continuationContext(assistant: AssistantMessage): Context {
 	};
 	return { messages: [...context.messages, assistant, result], tools: toolContext.tools };
 }
+
+describe("built-in GPT-6.1 Terra through public Codex dispatch", () => {
+	it.each([...efforts, "off", "minimal", undefined] as const)(
+		"serializes effort %s without output allocation",
+		async (reasoning) => {
+			const requests = stubCodexFetch([completedResponse()]);
+			const result = await streamSimple(getModel("openai-codex", "gpt-6.1-terra"), toolContext, {
+				apiKey,
+				reasoning,
+				transport: "sse",
+				maxTokens: 2048,
+			}).result();
+			expect(result.stopReason).toBe("stop");
+			expect(requests[0].url).toBe("https://chatgpt.com/backend-api/codex/responses");
+			expect(requests[0].headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+			expect(requests[0].headers.get("chatgpt-account-id")).toBe("test");
+			const body = requests[0].body;
+			expect(body.model).toBe("gpt-6.1-terra");
+			expect(body).not.toHaveProperty("max_output_tokens");
+			if (reasoning === undefined) expect(body).not.toHaveProperty("reasoning");
+			else
+				expect(body.reasoning).toEqual(
+					expect.objectContaining({ effort: reasoning === "off" || reasoning === "minimal" ? "low" : reasoning }),
+				);
+			expect(body.tools).toContainEqual(
+				expect.objectContaining({
+					type: "function",
+					name: "read",
+					parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+				}),
+			);
+		},
+	);
+
+	it("streams a tool call and continues using the catalog-selected adapter", async () => {
+		const requests = stubCodexFetch([toolCallResponse(), completedResponse("continued")]);
+		const model = getModel("openai-codex", "gpt-6.1-terra");
+		const first = await streamSimple(model, toolContext, { apiKey, transport: "sse" }).result();
+		expect(first.stopReason).toBe("toolUse");
+		expect(first.content).toContainEqual({
+			type: "toolCall",
+			id: "call_read_1|fc_read_1",
+			name: "read",
+			arguments: { path: "README.md" },
+		});
+		const second = await streamSimple(model, continuationContext(first), { apiKey, transport: "sse" }).result();
+		expect(second.stopReason).toBe("stop");
+		expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "continued" }));
+		for (const request of requests) {
+			expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+			expect(request.body.model).toBe("gpt-6.1-terra");
+		}
+		expect(requests[1].body.input).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ type: "function_call", id: "fc_read_1", call_id: "call_read_1" }),
+				expect.objectContaining({ type: "function_call_output", call_id: "call_read_1", output: "file contents" }),
+			]),
+		);
+	});
+});
 
 describe("GPT-6 Astra through OpenAI Codex Responses", () => {
 	it.each(efforts)("preserves %s at final HTTP serialization", async (effort) => {

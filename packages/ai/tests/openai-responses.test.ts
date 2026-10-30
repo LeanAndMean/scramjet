@@ -14,6 +14,7 @@ import {
 	createResponsesSdkRequestObserver,
 	normalizeResponsesFailure,
 } from "../src/providers/openai-responses-shared.js";
+import { streamSimple } from "../src/stream.js";
 import type { AssistantMessage, Context, Model, ModelThinkingLevel, ToolResultMessage } from "../src/types.js";
 import { isContextOverflow } from "../src/utils/overflow.js";
 
@@ -207,9 +208,9 @@ function continuationContext(assistant: AssistantMessage): Context {
 	return { messages: [...context.messages, assistant, result], tools: toolContext.tools };
 }
 
-async function assertToolContinuation(model: Model<"openai-responses">) {
+async function assertToolContinuation(model: Model<"openai-responses">, streamFn = streamSimpleOpenAIResponses) {
 	const requests = stubFetch([toolCallResponse(), completedResponse("continued")]);
-	const first = await streamSimpleOpenAIResponses(model, toolContext, { apiKey, reasoning: "low" }).result();
+	const first = await streamFn(model, toolContext, { apiKey, reasoning: "low" }).result();
 	expect(first.stopReason).toBe("toolUse");
 	expect(first.content).toContainEqual({
 		type: "toolCall",
@@ -218,14 +219,14 @@ async function assertToolContinuation(model: Model<"openai-responses">) {
 		arguments: { path: "README.md" },
 	});
 
-	const second = await streamSimpleOpenAIResponses(model, continuationContext(first), {
+	const second = await streamFn(model, continuationContext(first), {
 		apiKey,
 		reasoning: "low",
 	}).result();
 	expect(second.stopReason).toBe("stop");
 	expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "continued" }));
 
-	const continuation = await requestBody(requests[1]);
+	const continuation = await requestBody(requests[1].clone());
 	expect(continuation.input).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({
@@ -298,6 +299,42 @@ describe.each([
 
 	it("streams a tool call and continues after its result", async () => {
 		await assertToolContinuation(model);
+	});
+});
+
+describe("built-in GPT-6.1 Terra through public Responses dispatch", () => {
+	it.each([...efforts, "off", "minimal", undefined] as const)("serializes effort %s", async (reasoning) => {
+		const requests = stubFetch([completedResponse()]);
+		const result = await streamSimple(getModel("openai", "gpt-6.1-terra"), toolContext, {
+			apiKey,
+			reasoning,
+		}).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests[0].url).toBe("https://api.openai.com/v1/responses");
+		expect(requests[0].headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+		const body = await requestBody(requests[0]);
+		expect(body.model).toBe("gpt-6.1-terra");
+		expect(body.reasoning).toEqual(
+			expect.objectContaining({
+				effort:
+					reasoning === "minimal" ? "low" : reasoning === "off" || reasoning === undefined ? "none" : reasoning,
+			}),
+		);
+		expect(body.tools).toContainEqual(
+			expect.objectContaining({
+				type: "function",
+				name: "read",
+				parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+			}),
+		);
+	});
+
+	it("streams a tool call and continues using the catalog-selected adapter", async () => {
+		const requests = await assertToolContinuation(getModel("openai", "gpt-6.1-terra"), streamSimple);
+		for (const request of requests) {
+			expect(request.url).toBe("https://api.openai.com/v1/responses");
+			expect((await requestBody(request)).model).toBe("gpt-6.1-terra");
+		}
 	});
 });
 
