@@ -177,6 +177,31 @@ def cancel_at_approval(read, until, send, output):
     send(b'\x04')
 
 
+def thinking_counts_seconds(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'thinking 1s', mark)
+    until(b'thinking 2s', mark)
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+def running_counts_seconds(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'preparing bash', mark)
+    mark = until(b'bash setsid', mark)
+    shown = until(b'running 1s', mark)
+    assert b'running\x1b' not in output[mark:shown], 'running shown before a second passed'
+    until(b'running 2s', shown)
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
 def cancel_retry(read, until, send, output):
     mark = until(b'> ')
     send(b'go\r')
@@ -199,6 +224,8 @@ assert prompts == ['one\ntwo\nthree'], prompts
 run(['--continue'], resumed)
 run(['--retries', '0'], typed_during_turn, delayed)
 run([], cancel_retry)
+run([], thinking_counts_seconds, hanging)
+run(['--yes'], running_counts_seconds, calling)
 run(['--yes'], exit_during_turn, calling, 130)
 known = set(session_files())
 run([], cancel_at_approval, calling)

@@ -13,7 +13,7 @@ use std::{
     os::fd::BorrowedFd,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -257,9 +257,48 @@ enum Streaming {
     Text,
 }
 
+/// The dim line under the output saying what the agent waits for and for how long. A ticker
+/// thread redraws it while an activity is set; other output first clears it.
+#[derive(Default)]
+struct Status {
+    activity: Option<(String, Instant)>,
+    /// The elapsed seconds on the line, while it is shown.
+    drawn: Option<u64>,
+}
+
+impl Status {
+    fn draw(&mut self) {
+        let Some((activity, since)) = &self.activity else {
+            return;
+        };
+        let seconds = since.elapsed().as_secs();
+        if self.drawn == Some(seconds) {
+            return;
+        }
+        let width = editor::terminal_size().0.saturating_sub(1).max(10);
+        let text = clip(&format!("… {activity}{}", elapsed(seconds)), width);
+        eprint!("\r\x1b[2m{text}\x1b[0m\x1b[K");
+        self.drawn = Some(seconds);
+    }
+    fn clear(&mut self) {
+        if self.drawn.take().is_some() {
+            eprint!("\r\x1b[K");
+        }
+        self.activity = None;
+    }
+}
+
+fn elapsed(seconds: u64) -> String {
+    match seconds {
+        0 => String::new(),
+        1..60 => format!(" {seconds}s"),
+        _ => format!(" {}m {:02}s", seconds / 60, seconds % 60),
+    }
+}
+
 struct Terminal {
     color: bool,
-    status_shown: bool,
+    status: Arc<Mutex<Status>>,
     streaming: Streaming,
     /// Whether assistant text streamed during the current response.
     streamed_text: bool,
@@ -268,12 +307,41 @@ struct Terminal {
 
 impl Terminal {
     fn new() -> Self {
+        let color = std::io::stderr().is_terminal();
+        let status = Arc::new(Mutex::<Status>::default());
+        if color {
+            let status = status.clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_millis(200));
+                    let mut status = status.lock().unwrap();
+                    // An activity set without drawing appears once it has lasted a second.
+                    if status
+                        .activity
+                        .as_ref()
+                        .is_some_and(|(_, since)| since.elapsed() >= Duration::from_secs(1))
+                    {
+                        status.draw();
+                    }
+                }
+            });
+        }
         Self {
-            color: std::io::stderr().is_terminal(),
-            status_shown: false,
+            color,
+            status,
             streaming: Streaming::None,
             streamed_text: false,
             tool_started: None,
+        }
+    }
+    /// Shows `activity` on the status line now, or only once it lasts a second.
+    fn show(&mut self, activity: String, now: bool) {
+        if self.color {
+            let mut status = self.status.lock().unwrap();
+            status.activity = Some((activity, Instant::now()));
+            if now {
+                status.draw();
+            }
         }
     }
     fn dim(&self, text: &str) -> String {
@@ -285,10 +353,7 @@ impl Terminal {
     }
     /// Removes the status line and ends any streamed block before other output.
     fn clear(&mut self) {
-        if self.status_shown {
-            eprint!("\r\x1b[K");
-            self.status_shown = false;
-        }
+        self.status.lock().unwrap().clear();
         match self.streaming {
             Streaming::None => {}
             Streaming::Reasoning => eprint!("{}\n\n", if self.color { "\x1b[0m" } else { "" }),
@@ -315,10 +380,7 @@ impl AgentUi for Terminal {
     fn waiting(&mut self) {
         self.clear();
         self.streamed_text = false;
-        if self.color {
-            eprint!("{}", self.dim("… thinking"));
-            self.status_shown = true;
-        }
+        self.show("thinking".into(), true);
     }
     fn progress(&mut self, update: &StreamProgress) {
         match update {
@@ -340,6 +402,10 @@ impl AgentUi for Terminal {
                 self.streamed_text = true;
                 print!("{delta}");
                 let _ = std::io::stdout().flush();
+            }
+            StreamProgress::Call(name) => {
+                self.clear();
+                self.show(format!("preparing {name}"), true);
             }
         }
     }
@@ -369,9 +435,13 @@ impl AgentUi for Terminal {
         let first = lines.next().unwrap_or("");
         let more = if lines.next().is_some() { " …" } else { "" };
         eprintln!("{}", self.dim(&format!("● {name} {first}{more}")));
+    }
+    fn tool_running(&mut self) {
         self.tool_started = Some(Instant::now());
+        self.show("running".into(), false);
     }
     fn tool_result(&mut self, name: &str, output: &str, diff: Option<&str>, failed: bool) {
+        self.clear();
         let width = editor::terminal_size().0.saturating_sub(2).max(20);
         let took = self.tool_started.take().map(|started| started.elapsed());
         let text = diff.unwrap_or(output);
@@ -555,5 +625,11 @@ mod tests {
         assert_eq!(clip("abcdefgh", 5), "abcd…");
         assert_eq!(clip("日本語です", 6), "日本…");
         assert_eq!(clip("short", 5), "short");
+    }
+
+    #[test]
+    fn status_shows_whole_seconds_then_minutes() {
+        let shown: Vec<_> = [0, 1, 59, 60, 185].map(elapsed).into();
+        assert_eq!(shown, ["", " 1s", " 59s", " 1m 00s", " 3m 05s"]);
     }
 }

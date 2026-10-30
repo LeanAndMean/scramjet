@@ -52,6 +52,8 @@ pub trait AgentUi {
     /// The complete text of an assistant message, after any streamed progress for it.
     fn assistant(&mut self, text: &str);
     fn tool_call(&mut self, name: &str, summary: &str);
+    /// The tool call announced last starts running, after any approval.
+    fn tool_running(&mut self);
     /// `output` is what the model receives; `diff` shows the lines an edit changed, each
     /// marked ` ` (unchanged), `-` or `+` and numbered, with `...` for skipped lines.
     fn tool_result(&mut self, name: &str, output: &str, diff: Option<&str>, failed: bool);
@@ -304,6 +306,7 @@ impl Agent {
             ui.tool_result(call.name, output, None, true);
             return output.to_owned();
         }
+        ui.tool_running();
         match call.run(&self.config.root, cancel) {
             Ok(output) => {
                 ui.tool_result(call.name, &output.text, output.diff.as_deref(), false);
@@ -410,6 +413,7 @@ mod tests {
         fn tool_call(&mut self, name: &str, _: &str) {
             panic!("unexpected tool call {name}");
         }
+        fn tool_running(&mut self) {}
         fn tool_result(&mut self, _: &str, _: &str, _: Option<&str>, _: bool) {}
         fn approve(&mut self, _: &str, _: &AtomicBool) -> bool {
             false

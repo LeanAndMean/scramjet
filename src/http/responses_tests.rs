@@ -931,7 +931,7 @@ fn done_items_are_authoritative_when_the_terminal_copy_differs() {
     );
 }
 #[test]
-fn progress_reports_text_and_reasoning_deltas_only_when_enabled() {
+fn progress_reports_deltas_and_started_calls_only_when_enabled() {
     let bytes = fixture::wire(&fixture::continuation_events("hé🙂", "{}", "opaque"), false);
     let mut parser = ResponsesParser::new();
     parser.progress = Some(Vec::new());
@@ -958,6 +958,18 @@ fn progress_reports_text_and_reasoning_deltas_only_when_enabled() {
         .collect();
     assert_eq!(text, "hé🙂");
     assert_eq!(reasoning, "consider hé🙂consider hé🙂");
+    let calls: Vec<_> = collected
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| matches!(p, StreamProgress::Call(_)))
+        .collect();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1, &StreamProgress::Call("inert".into()));
+    assert!(matches!(
+        collected[calls[0].0 - 1],
+        StreamProgress::Reasoning(_)
+    ));
+    assert!(matches!(collected[calls[0].0 + 1], StreamProgress::Text(_)));
     assert!(parser.complete().unwrap().envelope.is_some());
 
     let mut quiet = ResponsesParser::new();

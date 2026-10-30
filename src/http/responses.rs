@@ -19,6 +19,8 @@ const INPUT_ITEMS: usize = 8 * (PROVIDER_OUTPUT_ITEMS + 2);
 pub enum StreamProgress {
     Text(String),
     Reasoning(String),
+    /// A function call with this name started streaming; its arguments follow.
+    Call(String),
 }
 
 /// Byte and item budgets for one streamed response.
@@ -736,6 +738,9 @@ impl ResponsesParser {
                     return Err(Outcome::Unsupported);
                 }
                 let arguments = if item["type"] == "function_call" {
+                    if let Some(progress) = &mut self.progress {
+                        progress.push(StreamProgress::Call(string(&item, "name")?.to_owned()));
+                    }
                     string(&item, "arguments")?.to_owned()
                 } else {
                     String::new()
