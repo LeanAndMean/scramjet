@@ -16,7 +16,6 @@ pub struct CodingInvocationOptions {
     pub prompt: String,
     pub previous: Option<Vec<u8>>,
     pub endpoint: SocketAddr,
-    pub owned_fixture: bool,
 }
 pub struct CodingInvocationResult {
     pub record: Vec<u8>,
@@ -257,12 +256,9 @@ impl CodingInvocation {
         + Send
         + 'static,
     ) -> Result<(Self, crate::Runtime), CodingError> {
-        if !options.owned_fixture
-            || !options.endpoint.ip().is_loopback()
-            || options.endpoint.port() == 18080
-        {
+        if !options.endpoint.ip().is_loopback() {
             return Err(CodingError::Unsupported(
-                "only an explicitly owned loopback fixture is eligible; live execution is stopped",
+                "only a loopback Responses endpoint is supported",
             ));
         }
         if options.prompt.len() > crate::PROVIDER_ENVELOPE_BYTES

@@ -140,7 +140,6 @@ fn meter_child() {
             prompt: String::from_utf8(fs::read(base.join(prompt)).unwrap()).unwrap(),
             previous: prior,
             endpoint,
-            owned_fixture: true,
         };
         let started = CodingInvocation::start(options, |intent, _, _| {
             eprintln!("proposal {}", serde_json::to_string(intent).unwrap());

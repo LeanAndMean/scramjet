@@ -58,13 +58,7 @@ pub(super) fn command(
 ) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"));
     command
-        .args([
-            "coding",
-            "--owned-fixture",
-            "--endpoint",
-            &endpoint.to_string(),
-            "--project",
-        ])
+        .args(["coding", "--endpoint", &endpoint.to_string(), "--project"])
         .arg(&dirs.project)
         .arg("--storage")
         .arg(&dirs.storage)

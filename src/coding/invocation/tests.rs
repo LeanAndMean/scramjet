@@ -120,7 +120,6 @@ fn selection_control_child() {
                 prompt: "Read the selected file.".into(),
                 previous: None,
                 endpoint,
-                owned_fixture: true,
             };
             let (invocation, original) = CodingInvocation::start(options, |intent, _, _| {
                 eprintln!("{}", serde_json::to_string(intent).unwrap());
@@ -349,7 +348,7 @@ fn selection_control_child() {
                 {
                     let paths = [input.clone(), project.join(crate::PROJECT_LOCK_NAME), project.join(".coding-run"), storage.join("control/invocation.jsonl"), storage.join("control/export-1.json"), storage.join("control/provider/provider-attempts.jsonl")];
                     let before = paths.each_ref().map(|path| std::fs::read(path).unwrap());
-                    let output = Command::new(executable).args(["coding", "--owned-fixture", "--endpoint", &endpoint.to_string(), "--run", "control", "--file", "input.md", "--file", "reader.py", "--project"]).arg(&project).arg("--storage").arg(&storage).arg("--prompt-file").arg(&input).arg("--record-file").arg(storage.join("control/export-1.json")).output().unwrap();
+                    let output = Command::new(executable).args(["coding", "--endpoint", &endpoint.to_string(), "--run", "control", "--file", "input.md", "--file", "reader.py", "--project"]).arg(&project).arg("--storage").arg(&storage).arg("--prompt-file").arg(&input).arg("--record-file").arg(storage.join("control/export-1.json")).output().unwrap();
                     assert!(!output.status.success());
                     assert!(output.stdout.is_empty());
                     assert_eq!(paths.each_ref().map(|path| std::fs::read(path).unwrap()), before);
@@ -437,7 +436,6 @@ async fn aborted_publication(project: &std::path::Path, storage: &std::path::Pat
             prompt: "Finish without tools.".into(),
             previous: None,
             endpoint,
-            owned_fixture: true,
         },
         |_, _, _| Ok(false),
     )

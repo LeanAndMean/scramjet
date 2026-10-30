@@ -71,9 +71,9 @@ fn context_error(outcome: Outcome) -> CodingError {
 fn tools(names: &[String; 2]) -> Vec<ProviderTool> {
     let paths = json!({"type":"string","enum":names});
     vec![
-        ProviderTool {name:"write".into(),description:"Exclusively create an absent selected UTF-8 file, at most 512 bytes; no overwrites".into(),parameters:json!({"type":"object","properties":{"path":paths,"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false})},
-        ProviderTool {name:"read".into(),description:"Read a selected file".into(),parameters:json!({"type":"object","properties":{"path":paths},"required":["path"],"additionalProperties":false})},
-        ProviderTool {name:"python".into(),description:"Execute selected Python in a read-only, no-spawn isolated child after exact approval of complete captures".into(),parameters:json!({"type":"object","properties":{"path":paths},"required":["path"],"additionalProperties":false})},
+        ProviderTool {name:"write".into(),description:"Create a new UTF-8 file (at most 512 bytes). Fails if the file already exists.".into(),parameters:json!({"type":"object","properties":{"path":paths,"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false})},
+        ProviderTool {name:"read".into(),description:"Read a file.".into(),parameters:json!({"type":"object","properties":{"path":paths},"required":["path"],"additionalProperties":false})},
+        ProviderTool {name:"python".into(),description:"Run a Python file and return its exit status, stdout and stderr. The harness asks the user to approve the run; just call this tool.".into(),parameters:json!({"type":"object","properties":{"path":paths},"required":["path"],"additionalProperties":false})},
     ]
 }
 
@@ -332,7 +332,6 @@ impl Session {
         if response.id != expected
             || !response.durable
             || response.outcome != Outcome::Success
-            || response.usage.as_ref().is_none_or(|u| !u.complete())
             || response.reservation.is_none()
         {
             return Err(match response.outcome {

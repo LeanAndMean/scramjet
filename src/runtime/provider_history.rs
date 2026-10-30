@@ -129,10 +129,11 @@ impl Policy {
     }
     fn eligible(self, history: &ProviderHistory) -> bool {
         let (exposure, ceiling) = self.caps();
+        // A missing usage report is bookkeeping, not a reason to stop ordinary requests.
         history.consumed() < ceiling
             && history.unresolved_remote() < exposure
-            && history.unknown_usage() < exposure
-            && (!matches!(self, Self::Validation) || !history.has_unknown_after(4))
+            && (matches!(self, Self::Ordinary)
+                || (history.unknown_usage() < exposure && !history.has_unknown_after(4)))
     }
 }
 

@@ -121,16 +121,20 @@ fn reservations_and_unknown_facts_are_separate_and_bounded() {
                     .unwrap();
             }
         }
-        assert!(!ledger.lock().unwrap().eligible());
-        assert!(ledger.lock().unwrap().reserve(5).is_err());
+        // Unknown usage alone does not stop ordinary requests; unresolved remote demand does.
+        assert_eq!(ledger.lock().unwrap().eligible(), !unknown_remote);
+        assert_eq!(ledger.lock().unwrap().reserve(5).is_err(), unknown_remote);
         let expected = ledger.lock().unwrap().history();
         release(ledger);
         let recovered = reconstruct_provider_history(&path, endpoint()).unwrap();
         assert_eq!(recovered, expected);
-        assert_eq!(recovered.unknown_usage(), 4);
+        assert_eq!(
+            recovered.unknown_usage(),
+            if unknown_remote { 4 } else { 5 }
+        );
         assert_eq!(
             recovered.unresolved_remote(),
-            if unknown_remote { 4 } else { 0 }
+            if unknown_remote { 4 } else { 1 }
         );
     }
 }

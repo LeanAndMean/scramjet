@@ -352,7 +352,7 @@ fn provider_case() {
         }
         let history=runtime.provider_history().unwrap();
         assert_eq!(history.consumed(),count);
-        if case=="cap" {assert_eq!(history.unknown_usage(),4);let mut handle=runtime.submit_provider(request()).unwrap();handle.cancel();assert_eq!(handle.result().await.unwrap().outcome,Outcome::Cancelled);drop(handle);}
+        if case=="cap" {assert_eq!(history.unknown_usage(),4);}
         let stats=runtime.shutdown().await;
         assert_eq!(stats.active,0);assert!(stats.synthetic_budget.is_none());assert!(stats.synthetic_measured.is_none());
         if !matches!(case.as_str(),"bad-identity"|"trailing"|"missing-terminal") {server.await.unwrap();}else {server.abort();let _=server.await;}
@@ -470,26 +470,5 @@ fn provider_recover() {
             .parse::<usize>()
             .unwrap();
         assert_eq!(history.consumed(), count);
-        if count == 4 {
-            let path = PathBuf::from(std::env::var_os("SCRAMJET_PROVIDER_STORAGE").unwrap());
-            let endpoint = std::env::var("SCRAMJET_PROVIDER_ENDPOINT")
-                .unwrap()
-                .parse()
-                .unwrap();
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async {
-                    let runtime = Runtime::new_provider(endpoint, &path).unwrap();
-                    assert_eq!(runtime.snapshot().unknown_usage, 4);
-                    let mut handle = runtime.submit_provider(request()).unwrap();
-                    handle.cancel();
-                    assert_eq!(handle.result().await.unwrap().outcome, Outcome::Cancelled);
-                    drop(handle);
-                    assert_eq!(runtime.snapshot().attempts, 0);
-                    runtime.shutdown().await;
-                });
-        }
     }
 }

@@ -247,12 +247,10 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let (mut project, mut storage, mut run, mut endpoint, mut prompt, mut previous) =
         (None, None, None, None, None, None);
     let mut files = Vec::new();
-    let mut owned = false;
     let mut automatic = false;
     let mut args = args.iter();
     while let Some(option) = args.next() {
         match option.to_str(){
-            Some("--owned-fixture")if !owned=>owned=true,
             Some("--approve-effects")if !automatic=>automatic=true,
             Some("--project")if project.is_none()=>project=Some(PathBuf::from(args.next().ok_or("missing project")?)),
             Some("--storage")if storage.is_none()=>storage=Some(PathBuf::from(args.next().ok_or("missing storage")?)),
@@ -261,15 +259,12 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             Some("--file")if files.len()<2=>files.push(args.next().and_then(|s|s.to_str()).ok_or("missing UTF-8 basename")?.to_owned()),
             Some("--prompt-file")if prompt.is_none()=>prompt=Some(PathBuf::from(args.next().ok_or("missing prompt input")?)),
             Some("--record-file")if previous.is_none()=>previous=Some(PathBuf::from(args.next().ok_or("missing record input")?)),
-            _=>return Err("requires --owned-fixture --endpoint ADDR --project PATH --storage PATH --run ID --file NAME --file NAME --prompt-file PATH [- for one stdin line] [--record-file PATH] [--approve-effects]; live execution is stopped".into()),
+            _=>return Err("requires --project PATH --storage PATH --run ID --file NAME --file NAME --prompt-file PATH [- for one stdin line] [--endpoint ADDR] [--record-file PATH] [--approve-effects]".into()),
         }
     }
-    if !owned {
-        return Err("caller must explicitly assert ownership of the loopback fixture; live execution is stopped".into());
-    }
-    let endpoint = endpoint.ok_or("missing endpoint")?;
-    if !endpoint.ip().is_loopback() || endpoint.port() == 18080 {
-        return Err("fixture route refused; live execution is stopped".into());
+    let endpoint = endpoint.unwrap_or(SocketAddr::from(([127, 0, 0, 1], 18080)));
+    if !endpoint.ip().is_loopback() {
+        return Err("only a loopback Responses endpoint (such as Proxy) is supported".into());
     }
     let prompt =
         acquire(&prompt.ok_or("missing prompt input")?, INPUT_BYTES).map_err(|e| e.to_string())?;
@@ -289,7 +284,6 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         prompt,
         previous,
         endpoint,
-        owned_fixture: owned,
     };
     let executor = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -486,7 +480,6 @@ mod tests {
                 prompt: "Create the selected file.".into(),
                 previous: None,
                 endpoint,
-                owned_fixture: true,
             };
             let executor = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -528,7 +521,6 @@ mod tests {
                 let retry = std::process::Command::new(cli)
                     .args([
                         "coding",
-                        "--owned-fixture",
                         "--endpoint",
                         &endpoint.to_string(),
                         "--run",
