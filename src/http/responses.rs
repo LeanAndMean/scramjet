@@ -14,6 +14,21 @@ pub const PROVIDER_MODEL: &str = "gpt-6-luna";
 // Eight selected journey turns can each retain eight items, a result and user input.
 const INPUT_ITEMS: usize = 8 * (PROVIDER_OUTPUT_ITEMS + 2);
 
+/// Byte and item budgets for one streamed response.
+#[derive(Clone, Copy, Debug)]
+pub struct ParserLimits {
+    pub frame: usize,
+    pub envelope: usize,
+    pub items: usize,
+}
+impl ParserLimits {
+    pub const DEFAULT: Self = Self {
+        frame: PROVIDER_FRAME_BYTES,
+        envelope: PROVIDER_ENVELOPE_BYTES,
+        items: PROVIDER_OUTPUT_ITEMS,
+    };
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderUsage {
@@ -53,7 +68,10 @@ pub struct ProviderItem {
 }
 impl ProviderItem {
     pub(crate) fn from_context(wire: Value) -> Result<Self, Outcome> {
-        bounded_json(&wire, PROVIDER_ENVELOPE_BYTES)?;
+        Self::checked(wire, PROVIDER_ENVELOPE_BYTES)
+    }
+    fn checked(wire: Value, limit: usize) -> Result<Self, Outcome> {
+        bounded_json(&wire, limit)?;
         validate_item(&wire, true)?;
         Ok(Self { wire })
     }
@@ -236,7 +254,7 @@ pub(crate) fn bounded_json_bytes(
     limit: usize,
 ) -> Result<Vec<u8>, Outcome> {
     let mut writer = BoundedWriter {
-        bytes: Vec::with_capacity(limit),
+        bytes: Vec::with_capacity(limit.min(PROVIDER_ENVELOPE_BYTES)),
         limit,
     };
     serde_json::to_writer(&mut writer, value).map_err(|_| Outcome::ResourceLimit)?;
@@ -455,7 +473,7 @@ pub(crate) fn validate_item(item: &Value, complete: bool) -> Result<(), Outcome>
                 return Err(Outcome::Framing);
             }
             let arguments = string(item, "arguments")?;
-            if complete && !strict_json(arguments.as_bytes())?.is_object() {
+            if complete && !bounded_json_value(arguments.as_bytes(), arguments.len())?.is_object() {
                 return Err(Outcome::Framing);
             }
         }
@@ -500,6 +518,8 @@ struct ItemState {
     arguments_done: bool,
 }
 pub(crate) struct ParsedResponse {
+    /// Provider explanation for a failed or incomplete response, when it gave one.
+    pub(crate) error: Option<String>,
     pub(crate) envelope: Option<ProviderEnvelope>,
     pub(crate) usage: Option<ProviderUsage>,
     pub(crate) response_id: String,
@@ -516,19 +536,24 @@ pub(crate) struct ResponsesParser {
     output_bytes: usize,
     provisional_bytes: usize,
     in_progress: bool,
+    limits: ParserLimits,
 }
 impl ResponsesParser {
     pub(crate) fn new() -> Self {
+        Self::with_limits(ParserLimits::DEFAULT)
+    }
+    pub(crate) fn with_limits(limits: ParserLimits) -> Self {
         Self {
             failure: ProviderFailure::at(ProviderFailureStage::SseFrame),
-            frame: Vec::with_capacity(PROVIDER_FRAME_BYTES),
+            frame: Vec::with_capacity(limits.frame.min(PROVIDER_FRAME_BYTES)),
             response_id: None,
             reported_model: None,
-            items: Vec::with_capacity(PROVIDER_OUTPUT_ITEMS),
+            items: Vec::with_capacity(limits.items.min(PROVIDER_OUTPUT_ITEMS)),
             terminal: None,
             output_bytes: 0,
             provisional_bytes: 0,
             in_progress: false,
+            limits,
         }
     }
     pub(crate) fn byte(&mut self, byte: u8) -> Result<(), Outcome> {
@@ -539,7 +564,7 @@ impl ResponsesParser {
         if self.frame.is_empty() {
             self.failure = ProviderFailure::at(ProviderFailureStage::SseFrame);
         }
-        if self.frame.len() == PROVIDER_FRAME_BYTES {
+        if self.frame.len() == self.limits.frame {
             return Err(Outcome::ResourceLimit);
         }
         self.frame.push(byte);
@@ -587,7 +612,7 @@ impl ResponsesParser {
             return Err(Outcome::Incomplete);
         }
         self.failure.stage = ProviderFailureStage::Json;
-        let value = strict_json(data.as_bytes())?;
+        let value = bounded_json_value(data.as_bytes(), self.limits.frame)?;
         if event.is_some_and(|event| value["type"].as_str() != Some(event)) {
             return Err(Outcome::Framing);
         }
@@ -652,7 +677,7 @@ impl ResponsesParser {
                 .provisional_bytes
                 .checked_add(bytes)
                 .ok_or(Outcome::ResourceLimit)?;
-            if self.provisional_bytes > PROVIDER_ENVELOPE_BYTES {
+            if self.provisional_bytes > self.limits.envelope {
                 return Err(Outcome::ResourceLimit);
             }
         }
@@ -676,7 +701,7 @@ impl ResponsesParser {
                 if index(&event, "output_index")? != self.items.len() {
                     return Err(Outcome::Framing);
                 }
-                if self.items.len() == PROVIDER_OUTPUT_ITEMS {
+                if self.items.len() == self.limits.items {
                     return Err(Outcome::ResourceLimit);
                 }
                 let item = event["item"].clone();
@@ -701,7 +726,7 @@ impl ResponsesParser {
                     .provisional_bytes
                     .checked_add(arguments.len())
                     .ok_or(Outcome::ResourceLimit)?;
-                if self.provisional_bytes > PROVIDER_ENVELOPE_BYTES {
+                if self.provisional_bytes > self.limits.envelope {
                     return Err(Outcome::ResourceLimit);
                 }
                 self.items.push(ItemState {
@@ -752,12 +777,12 @@ impl ResponsesParser {
                     }
                     _ => unreachable!(),
                 }
-                let encoded = bounded_json(item, PROVIDER_ENVELOPE_BYTES)?;
+                let encoded = bounded_json(item, self.limits.envelope)?;
                 self.output_bytes = self
                     .output_bytes
                     .checked_add(encoded.len())
                     .ok_or(Outcome::ResourceLimit)?;
-                if self.output_bytes > PROVIDER_ENVELOPE_BYTES {
+                if self.output_bytes > self.limits.envelope {
                     return Err(Outcome::ResourceLimit);
                 }
                 state.done = Some(item.clone());
@@ -765,13 +790,14 @@ impl ResponsesParser {
             "response.function_call_arguments.delta" | "response.function_call_arguments.done" => {
                 self.failure.stage = ProviderFailureStage::Arguments;
                 self.failure.field = Some("arguments/item_id");
+                let envelope = self.limits.envelope;
                 let state = self.item(&event, "function_call")?;
                 if state.arguments_done {
                     return Err(Outcome::Framing);
                 }
                 if kind.ends_with(".delta") {
                     let delta = string(&event, "delta")?;
-                    if delta.len() > PROVIDER_ENVELOPE_BYTES - state.arguments.len() {
+                    if delta.len() > envelope - state.arguments.len() {
                         return Err(Outcome::ResourceLimit);
                     }
                     state.arguments.push_str(delta);
@@ -802,7 +828,7 @@ impl ResponsesParser {
                     .provisional_bytes
                     .checked_add(initial.len())
                     .ok_or(Outcome::ResourceLimit)?;
-                if self.provisional_bytes > PROVIDER_ENVELOPE_BYTES {
+                if self.provisional_bytes > self.limits.envelope {
                     return Err(Outcome::ResourceLimit);
                 }
                 let state = self.item(&event, if reasoning { "reasoning" } else { "message" })?;
@@ -839,6 +865,7 @@ impl ResponsesParser {
                 self.failure.stage = ProviderFailureStage::PartText;
                 self.failure.field = Some("part/text/index/item_id");
                 let reasoning = kind.starts_with("response.reasoning_");
+                let envelope = self.limits.envelope;
                 let state = self.item(&event, if reasoning { "reasoning" } else { "message" })?;
                 let i = index(
                     &event,
@@ -854,7 +881,7 @@ impl ResponsesParser {
                         return Err(Outcome::Framing);
                     }
                     let delta = string(&event, "delta")?;
-                    if delta.len() > PROVIDER_ENVELOPE_BYTES - part.text.len() {
+                    if delta.len() > envelope - part.text.len() {
                         return Err(Outcome::ResourceLimit);
                     }
                     part.text.push_str(delta);
@@ -928,7 +955,7 @@ impl ResponsesParser {
                     let selected: Vec<_> = self.items.iter().map(|s| &s.done).collect();
                     bounded_json_bytes(
                         &json!({"response_id":self.response_id,"items":selected}),
-                        PROVIDER_ENVELOPE_BYTES,
+                        self.limits.envelope,
                     )?;
                 }
                 self.terminal = Some(response.clone());
@@ -987,13 +1014,18 @@ impl ResponsesParser {
                 items: self
                     .items
                     .into_iter()
-                    .map(|state| ProviderItem::from_context(state.done.unwrap()))
+                    .map(|state| ProviderItem::checked(state.done.unwrap(), self.limits.envelope))
                     .collect::<Result<Vec<_>, _>>()?,
             })
         } else {
             None
         };
+        let error = response["error"]["message"]
+            .as_str()
+            .or(response["incomplete_details"]["reason"].as_str())
+            .map(str::to_owned);
         Ok(ParsedResponse {
+            error,
             envelope,
             usage,
             response_id,

@@ -1,6 +1,7 @@
 mod adaptive_demo;
 #[path = "../tests/support/adaptive_fixture.rs"]
 mod adaptive_fixture;
+mod agent_cli;
 mod coding_cli;
 mod coding_demo;
 mod coding_ui_demo;
@@ -45,12 +46,21 @@ fn provider_report_writer_preserves_its_byte_budget() {
     provider_demo::check_report_writer_budget();
 }
 
-const USAGE: &str = "Usage: scramjet-rs smoke\n       scramjet-rs stream-demo\n       scramjet-rs coding-demo\n       scramjet-rs coding --project PATH --storage PATH --run ID --file NAME --file NAME --prompt-file PATH [--endpoint ADDR] [--record-file PATH] [--approve-effects]\n       scramjet-rs parent-demo\n       scramjet-rs cooldown-demo\n       scramjet-rs pacing-demo\n       scramjet-rs token-demo\n       scramjet-rs adaptive-demo\n       scramjet-rs command-demo [--automatic | --resume]\n       scramjet-rs command-coding-demo\n       scramjet-rs command-readers-demo\n       scramjet-rs provider-demo --live|--fixture --storage PATH [--tool] [--retain-unknown-through N] [--capture NEW_DIRECTORY]\n       scramjet-rs provider-demo --validation-pair --fixture --storage PATH --capture NEW_DIRECTORY\n       scramjet-rs provider-demo --validation-pair --live --capture NEW_DIRECTORY\n       scramjet-rs provider-demo --validation-observe DIRECTORY\n       scramjet-rs provider-demo --validation-observe --fixture --storage PATH --capture DIRECTORY\n       scramjet-rs haiku-demo --fixture --project PATH --storage PATH [--approve-effects] [--session ID]\n       scramjet-rs haiku-demo --history --storage PATH [--session ID]\n       scramjet-rs haiku-ui-demo --fixture --project PATH --storage PATH [--session ID]\n       scramjet-rs haiku-ui-demo --history --storage PATH [--session ID]\n       scramjet-rs project-demo --project PATH --storage PATH --request JSON [--approve-edit] [--verify-edited] [--second-request JSON] [--session ID]\n       scramjet-rs project-demo --history --storage PATH [--session ID]\n       scramjet-rs project-ui-demo --project PATH --storage PATH [--session ID] [--fixture golden|reader-failure|model-failure|unknown-usage]\n       scramjet-rs command-ui-demo [--automatic]\n       scramjet-rs ui-demo [--diagnostic]\n       scramjet-rs runtime-ui-demo\n       scramjet-rs reader-ui-demo [--command]\n       scramjet-rs coding-ui-demo [--follow-up | --command]\n       scramjet-rs --help";
+const USAGE: &str = "Usage: scramjet-rs agent [--help]\n       scramjet-rs smoke\n       scramjet-rs stream-demo\n       scramjet-rs coding-demo\n       scramjet-rs coding --project PATH --storage PATH --run ID --file NAME --file NAME --prompt-file PATH [--endpoint ADDR] [--record-file PATH] [--approve-effects]\n       scramjet-rs parent-demo\n       scramjet-rs cooldown-demo\n       scramjet-rs pacing-demo\n       scramjet-rs token-demo\n       scramjet-rs adaptive-demo\n       scramjet-rs command-demo [--automatic | --resume]\n       scramjet-rs command-coding-demo\n       scramjet-rs command-readers-demo\n       scramjet-rs provider-demo --live|--fixture --storage PATH [--tool] [--retain-unknown-through N] [--capture NEW_DIRECTORY]\n       scramjet-rs provider-demo --validation-pair --fixture --storage PATH --capture NEW_DIRECTORY\n       scramjet-rs provider-demo --validation-pair --live --capture NEW_DIRECTORY\n       scramjet-rs provider-demo --validation-observe DIRECTORY\n       scramjet-rs provider-demo --validation-observe --fixture --storage PATH --capture DIRECTORY\n       scramjet-rs haiku-demo --fixture --project PATH --storage PATH [--approve-effects] [--session ID]\n       scramjet-rs haiku-demo --history --storage PATH [--session ID]\n       scramjet-rs haiku-ui-demo --fixture --project PATH --storage PATH [--session ID]\n       scramjet-rs haiku-ui-demo --history --storage PATH [--session ID]\n       scramjet-rs project-demo --project PATH --storage PATH --request JSON [--approve-edit] [--verify-edited] [--second-request JSON] [--session ID]\n       scramjet-rs project-demo --history --storage PATH [--session ID]\n       scramjet-rs project-ui-demo --project PATH --storage PATH [--session ID] [--fixture golden|reader-failure|model-failure|unknown-usage]\n       scramjet-rs command-ui-demo [--automatic]\n       scramjet-rs ui-demo [--diagnostic]\n       scramjet-rs runtime-ui-demo\n       scramjet-rs reader-ui-demo [--command]\n       scramjet-rs coding-ui-demo [--follow-up | --command]\n       scramjet-rs --help";
 
 fn main() -> ExitCode {
     let mut arguments = env::args_os().skip(1);
 
     let command = arguments.next();
+    if command.as_ref().is_some_and(|command| command == "agent") {
+        return match agent_cli::execute(arguments) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("scramjet-rs agent: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if command.as_ref().is_some_and(|command| command == "coding") {
         return match coding_cli::execute(arguments) {
             Ok(()) => ExitCode::SUCCESS,

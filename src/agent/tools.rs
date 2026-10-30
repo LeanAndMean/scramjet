@@ -1,0 +1,410 @@
+use serde_json::{Value, json};
+use std::{
+    io::Read,
+    path::{Component, Path, PathBuf},
+    process::{Command, Stdio},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
+const MAX_LINES: usize = 2000;
+const MAX_BYTES: usize = 50 * 1024;
+/// Bash output kept in memory while a command runs; only the tail is shown to the model.
+const CAPTURE_BYTES: usize = 4 << 20;
+const DEFAULT_TIMEOUT: u64 = 120;
+const MAX_TIMEOUT: u64 = 3600;
+
+pub(super) fn definitions() -> Value {
+    json!([
+        {"type":"function","name":"read","strict":false,
+         "description":"Read a text file. Output is truncated to 2000 lines or 50KB; use offset/limit (1-based line numbers) to read large files in parts.",
+         "parameters":{"type":"object","properties":{
+            "path":{"type":"string","description":"File path, relative to the project directory or absolute"},
+            "offset":{"type":"integer","description":"First line to read (1-based)"},
+            "limit":{"type":"integer","description":"Maximum number of lines to read"}},
+          "required":["path"]}},
+        {"type":"function","name":"write","strict":false,
+         "description":"Create or overwrite a file with the given content. Creates parent directories.",
+         "parameters":{"type":"object","properties":{
+            "path":{"type":"string"},"content":{"type":"string"}},
+          "required":["path","content"]}},
+        {"type":"function","name":"edit","strict":false,
+         "description":"Edit a file by exact text replacement. Each oldText must match exactly once in the original file; edits must not overlap.",
+         "parameters":{"type":"object","properties":{
+            "path":{"type":"string"},
+            "edits":{"type":"array","items":{"type":"object","properties":{
+                "oldText":{"type":"string"},"newText":{"type":"string"}},"required":["oldText","newText"]}}},
+          "required":["path","edits"]}},
+        {"type":"function","name":"bash","strict":false,
+         "description":"Run a bash command in the project directory. Returns the exit code and combined stdout/stderr, truncated to the last 2000 lines or 50KB. The user approves each command; just call this tool.",
+         "parameters":{"type":"object","properties":{
+            "command":{"type":"string"},
+            "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
+          "required":["command"]}}
+    ])
+}
+
+/// What the user is asked to approve before a tool runs, if anything.
+pub(super) enum Approval {
+    None,
+    Ask(String),
+}
+
+pub(super) struct Call<'a> {
+    pub name: &'a str,
+    pub arguments: Value,
+}
+
+impl<'a> Call<'a> {
+    pub fn parse(item: &'a Value) -> Result<Self, String> {
+        let name = item["name"].as_str().unwrap_or_default();
+        let arguments = serde_json::from_str(item["arguments"].as_str().unwrap_or("{}"))
+            .map_err(|e| format!("invalid tool arguments: {e}"))?;
+        Ok(Self { name, arguments })
+    }
+    fn str(&self, field: &str) -> Result<&str, String> {
+        self.arguments[field]
+            .as_str()
+            .ok_or_else(|| format!("missing string argument `{field}`"))
+    }
+    /// A one-line description for display.
+    pub fn summary(&self) -> String {
+        match self.name {
+            "bash" => self.arguments["command"].as_str().unwrap_or("").to_owned(),
+            _ => self.arguments["path"].as_str().unwrap_or("").to_owned(),
+        }
+    }
+    pub fn approval(&self, root: &Path) -> Approval {
+        match self.name {
+            "bash" => Approval::Ask(format!(
+                "Run in {}:\n{}",
+                root.display(),
+                self.arguments["command"].as_str().unwrap_or("")
+            )),
+            "write" | "edit" => {
+                let path = self.arguments["path"].as_str().unwrap_or("");
+                if resolve(root, path).starts_with(root) {
+                    Approval::None
+                } else {
+                    Approval::Ask(format!("{} outside the project: {path}", self.name))
+                }
+            }
+            _ => Approval::None,
+        }
+    }
+    pub fn run(&self, root: &Path, cancel: &AtomicBool) -> Result<String, String> {
+        match self.name {
+            "read" => read(root, self),
+            "write" => write(root, self),
+            "edit" => edit(root, self),
+            "bash" => bash(root, self, cancel),
+            other => Err(format!("unknown tool `{other}`")),
+        }
+    }
+}
+
+/// Resolves `path` against the project root without following symlinks.
+fn resolve(root: &Path, path: &str) -> PathBuf {
+    let mut resolved = PathBuf::new();
+    for component in root.join(path).components() {
+        match component {
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            Component::CurDir => {}
+            other => resolved.push(other),
+        }
+    }
+    resolved
+}
+
+fn read(root: &Path, call: &Call) -> Result<String, String> {
+    let path = resolve(root, call.str("path")?);
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| format!("{} is not a UTF-8 text file", path.display()))?;
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let offset = call.arguments["offset"].as_u64().unwrap_or(1).max(1) as usize;
+    if offset > lines.len().max(1) {
+        return Err(format!(
+            "offset {offset} is past the end of the file ({} lines)",
+            lines.len()
+        ));
+    }
+    let limit = call.arguments["limit"]
+        .as_u64()
+        .map_or(usize::MAX, |n| n as usize);
+    let selected = &lines[offset - 1..lines.len().min((offset - 1).saturating_add(limit))];
+    let mut output = String::new();
+    let mut shown = 0;
+    for line in selected {
+        if shown == MAX_LINES || output.len() + line.len() > MAX_BYTES {
+            break;
+        }
+        output.push_str(line);
+        shown += 1;
+    }
+    let last = offset - 1 + shown;
+    if last < lines.len() {
+        output.push_str(&format!(
+            "\n[Showing lines {offset}-{last} of {}. Use offset={} to continue.]",
+            lines.len(),
+            last + 1
+        ));
+    }
+    Ok(output)
+}
+
+fn write(root: &Path, call: &Call) -> Result<String, String> {
+    let path = resolve(root, call.str("path")?);
+    let content = call.str("content")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(format!(
+        "Wrote {} bytes to {}",
+        content.len(),
+        path.display()
+    ))
+}
+
+fn edit(root: &Path, call: &Call) -> Result<String, String> {
+    let path = resolve(root, call.str("path")?);
+    let original =
+        std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let edits = call.arguments["edits"]
+        .as_array()
+        .ok_or("missing array argument `edits`")?;
+    let mut spans = Vec::with_capacity(edits.len());
+    for (index, edit) in edits.iter().enumerate() {
+        let old = edit["oldText"]
+            .as_str()
+            .ok_or(format!("edit {index}: missing oldText"))?;
+        let new = edit["newText"]
+            .as_str()
+            .ok_or(format!("edit {index}: missing newText"))?;
+        if old.is_empty() {
+            return Err(format!("edit {index}: oldText is empty"));
+        }
+        let mut matches = original.match_indices(old);
+        let Some((start, _)) = matches.next() else {
+            return Err(format!(
+                "edit {index}: oldText not found in {}",
+                path.display()
+            ));
+        };
+        if matches.next().is_some() {
+            return Err(format!(
+                "edit {index}: oldText matches more than once; include more context"
+            ));
+        }
+        spans.push((start, start + old.len(), new));
+    }
+    spans.sort_by_key(|span| span.0);
+    if spans.windows(2).any(|pair| pair[0].1 > pair[1].0) {
+        return Err("edits overlap; merge them into one edit".into());
+    }
+    let mut updated = String::with_capacity(original.len());
+    let mut cursor = 0;
+    for (start, end, new) in &spans {
+        updated.push_str(&original[cursor..*start]);
+        updated.push_str(new);
+        cursor = *end;
+    }
+    updated.push_str(&original[cursor..]);
+    std::fs::write(&path, &updated).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(format!(
+        "Applied {} edit(s) to {}",
+        spans.len(),
+        path.display()
+    ))
+}
+
+fn bash(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String> {
+    use std::os::unix::process::CommandExt;
+    let command = call.str("command")?;
+    let timeout = Duration::from_secs(
+        call.arguments["timeout"]
+            .as_u64()
+            .unwrap_or(DEFAULT_TIMEOUT)
+            .clamp(1, MAX_TIMEOUT),
+    );
+    let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
+    let mut child = {
+        let mut process = Command::new("bash");
+        process
+            .arg("-c")
+            .arg(command)
+            .current_dir(root)
+            .stdin(Stdio::null())
+            .stdout(writer.try_clone().map_err(|e| e.to_string())?)
+            .stderr(writer)
+            .process_group(0);
+        process
+            .spawn()
+            .map_err(|e| format!("cannot start bash: {e}"))?
+    };
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let total = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let collector = {
+        let (output, total) = (output.clone(), total.clone());
+        std::thread::spawn(move || {
+            let mut buffer = [0u8; 8192];
+            while let Ok(n) = reader.read(&mut buffer) {
+                if n == 0 {
+                    break;
+                }
+                total.fetch_add(n, Ordering::Relaxed);
+                let mut output = output.lock().unwrap();
+                output.extend_from_slice(&buffer[..n]);
+                if output.len() > CAPTURE_BYTES {
+                    let excess = output.len() - CAPTURE_BYTES / 2;
+                    output.drain(..excess);
+                }
+            }
+        })
+    };
+    let started = Instant::now();
+    let mut stopped = None;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            stopped = Some("cancelled by the user");
+        } else if started.elapsed() > timeout {
+            stopped = Some("timed out");
+        }
+        if stopped.is_some() {
+            if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
+                let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+            }
+            break child.wait().map_err(|e| e.to_string())?;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // Background processes may keep the pipe open; don't wait for them indefinitely.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !collector.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let bytes = output.lock().unwrap().clone();
+    let (mut text, truncated) = tail(&String::from_utf8_lossy(&bytes));
+    if truncated || total.load(Ordering::Relaxed) > bytes.len() {
+        text = format!(
+            "[Output truncated to the last {} lines/{}KB of {} bytes]\n{text}",
+            MAX_LINES,
+            MAX_BYTES / 1024,
+            total.load(Ordering::Relaxed)
+        );
+    }
+    let ending = match (stopped, status.code()) {
+        (Some(reason), _) => format!("Command {reason} after {}s.", started.elapsed().as_secs()),
+        (None, Some(code)) => format!("Exit code {code}."),
+        (None, None) => format!("Terminated: {status}."),
+    };
+    Ok(match text.is_empty() || text.ends_with('\n') {
+        true => format!("{text}{ending}"),
+        false => format!("{text}\n{ending}"),
+    })
+}
+
+/// Keeps the last `MAX_LINES` lines, then at most the last `MAX_BYTES` bytes.
+fn tail(text: &str) -> (String, bool) {
+    let body = text.strip_suffix('\n').unwrap_or(text);
+    let mut start = body
+        .rmatch_indices('\n')
+        .nth(MAX_LINES - 1)
+        .map_or(0, |(index, _)| index + 1)
+        .max(text.len().saturating_sub(MAX_BYTES));
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    (text[start..].to_owned(), start > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(name: &str, arguments: Value) -> Call<'_> {
+        Call { name, arguments }
+    }
+
+    #[test]
+    fn edit_requires_unique_non_overlapping_matches() {
+        let root = std::env::temp_dir().join(format!("scramjet-agent-edit-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("f.txt"), "alpha beta gamma beta\n").unwrap();
+        let cancel = AtomicBool::new(false);
+        let run =
+            |edits: Value| call("edit", json!({"path":"f.txt","edits":edits})).run(&root, &cancel);
+        assert!(
+            run(json!([{"oldText":"beta","newText":"x"}]))
+                .unwrap_err()
+                .contains("more than once")
+        );
+        assert!(
+            run(json!([{"oldText":"delta","newText":"x"}]))
+                .unwrap_err()
+                .contains("not found")
+        );
+        assert!(run(json!([{"oldText":"alpha beta","newText":"x"},{"oldText":"beta gamma","newText":"y"}])).unwrap_err().contains("overlap"));
+        run(json!([{"oldText":"gamma","newText":"G"},{"oldText":"alpha","newText":"A"}])).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("f.txt")).unwrap(),
+            "A beta G beta\n"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn read_pages_long_files_and_bash_reports_exit_and_tail() {
+        let root = std::env::temp_dir().join(format!("scramjet-agent-read-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let text: String = (1..=3000).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(root.join("long.txt"), &text).unwrap();
+        let cancel = AtomicBool::new(false);
+        let first = call("read", json!({"path":"long.txt"}))
+            .run(&root, &cancel)
+            .unwrap();
+        assert!(first.starts_with("line 1\n") && first.contains("Use offset=2001 to continue"));
+        let page = call("read", json!({"path":"long.txt","offset":2999}))
+            .run(&root, &cancel)
+            .unwrap();
+        assert_eq!(page, "line 2999\nline 3000\n");
+        let output = call(
+            "bash",
+            json!({"command":"seq 1 5000; echo err >&2; exit 3"}),
+        )
+        .run(&root, &cancel)
+        .unwrap();
+        assert!(output.contains("[Output truncated") && output.ends_with("err\nExit code 3."));
+        assert!(!output.contains("\n1\n") && output.contains("\n5000\n"));
+        let timed = call("bash", json!({"command":"sleep 30","timeout":1}))
+            .run(&root, &cancel)
+            .unwrap();
+        assert!(timed.contains("timed out"));
+        assert!(
+            call("write", json!({"path":"a/b.txt","content":"hi"}))
+                .approval(&root)
+                .is_none()
+        );
+        assert!(
+            !call("write", json!({"path":"../escape.txt","content":"x"}))
+                .approval(&root)
+                .is_none()
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    impl Approval {
+        fn is_none(&self) -> bool {
+            matches!(self, Approval::None)
+        }
+    }
+}

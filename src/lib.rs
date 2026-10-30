@@ -1,3 +1,4 @@
+pub mod agent;
 mod coding;
 mod commands;
 
