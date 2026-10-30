@@ -957,7 +957,7 @@ fn progress_reports_deltas_and_started_calls_only_when_enabled() {
         })
         .collect();
     assert_eq!(text, "hé🙂");
-    assert_eq!(reasoning, "consider hé🙂consider hé🙂");
+    assert_eq!(reasoning, "consider hé🙂\n\nconsider hé🙂\n\n");
     let calls: Vec<_> = collected
         .iter()
         .enumerate()

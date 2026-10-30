@@ -302,6 +302,8 @@ struct Terminal {
     streaming: Streaming,
     /// Whether assistant text streamed during the current response.
     streamed_text: bool,
+    /// Newlines ending the streamed block so far, not yet printed.
+    held_newlines: usize,
     tool_started: Option<Instant>,
 }
 
@@ -331,6 +333,7 @@ impl Terminal {
             status,
             streaming: Streaming::None,
             streamed_text: false,
+            held_newlines: 0,
             tool_started: None,
         }
     }
@@ -351,9 +354,32 @@ impl Terminal {
             text.to_owned()
         }
     }
+    /// Continues or starts a streamed block. Trailing newlines wait for more of the block, so
+    /// that ending it adds exactly one blank line.
+    fn stream(&mut self, kind: Streaming, delta: &str) {
+        if self.streaming != kind {
+            self.clear();
+            if kind == Streaming::Reasoning && self.color {
+                eprint!("\x1b[2m");
+            }
+            self.streaming = kind;
+        }
+        let body = delta.trim_end_matches('\n');
+        if !body.is_empty() {
+            let text = "\n".repeat(std::mem::take(&mut self.held_newlines)) + body;
+            if self.streaming == Streaming::Text {
+                print!("{text}");
+                let _ = std::io::stdout().flush();
+            } else {
+                eprint!("{text}");
+            }
+        }
+        self.held_newlines += delta.len() - body.len();
+    }
     /// Removes the status line and ends any streamed block before other output.
     fn clear(&mut self) {
         self.status.lock().unwrap().clear();
+        self.held_newlines = 0;
         match self.streaming {
             Streaming::None => {}
             Streaming::Reasoning => eprint!("{}\n\n", if self.color { "\x1b[0m" } else { "" }),
@@ -384,24 +410,10 @@ impl AgentUi for Terminal {
     }
     fn progress(&mut self, update: &StreamProgress) {
         match update {
-            StreamProgress::Reasoning(delta) => {
-                if self.streaming != Streaming::Reasoning {
-                    self.clear();
-                    if self.color {
-                        eprint!("\x1b[2m");
-                    }
-                    self.streaming = Streaming::Reasoning;
-                }
-                eprint!("{delta}");
-            }
+            StreamProgress::Reasoning(delta) => self.stream(Streaming::Reasoning, delta),
             StreamProgress::Text(delta) => {
-                if self.streaming != Streaming::Text {
-                    self.clear();
-                    self.streaming = Streaming::Text;
-                }
                 self.streamed_text = true;
-                print!("{delta}");
-                let _ = std::io::stdout().flush();
+                self.stream(Streaming::Text, delta);
             }
             StreamProgress::Call(name) => {
                 self.clear();

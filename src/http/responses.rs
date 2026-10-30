@@ -929,6 +929,10 @@ impl ResponsesParser {
                         return Err(Outcome::Framing);
                     }
                     part.closed = true;
+                    // Like Scramjet, summary parts are shown as separate paragraphs.
+                    if reasoning && let Some(progress) = &mut self.progress {
+                        progress.push(StreamProgress::Reasoning("\n\n".into()));
+                    }
                 } else {
                     if part.done || string(&event, "text")? != part.text {
                         return Err(Outcome::Framing);
