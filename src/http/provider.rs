@@ -87,6 +87,9 @@ pub(crate) async fn attempt(
         if ledger.lock().unwrap().validation_cancelled() {
             return Err(Outcome::Cancelled);
         }
+        if ledger.lock().unwrap().validation_metadata_expired() {
+            return Err(Outcome::Deadline);
+        }
         failure.stage = ProviderFailureStage::Connect;
         let socket = TcpStream::connect(endpoint)
             .await
@@ -138,6 +141,15 @@ pub(crate) async fn attempt(
                 break;
             }
             tokio::time::sleep(wait).await;
+        }
+        {
+            let owner = ledger.lock().unwrap();
+            if owner.validation_cancelled() {
+                return Err(Outcome::Cancelled);
+            }
+            if owner.validation_metadata_expired() {
+                return Err(Outcome::Deadline);
+            }
         }
         shared.dispatched(id);
         let dispatched = tokio::time::Instant::now();

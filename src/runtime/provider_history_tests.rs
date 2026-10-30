@@ -508,6 +508,38 @@ fn checked_validation_baseline_charges_only_two_and_never_resumes_suffix() {
     );
 }
 #[test]
+fn validation_metadata_expiry_is_checked_again_at_reservation() {
+    let (path, digest, baseline) = validation_baseline();
+    let ledger = ProviderLedger::validation_open(&path, endpoint(), digest).unwrap();
+    let mut owner = ledger.lock().unwrap();
+    owner
+        .validation_metadata_expiry(std::time::Instant::now() + std::time::Duration::from_secs(5))
+        .unwrap();
+    assert!(!owner.validation_metadata_expired());
+    owner
+        .validation_metadata_expiry(std::time::Instant::now())
+        .unwrap();
+    assert!(owner.validation_metadata_expired());
+    assert!(owner.reserve(5).is_err());
+    assert_eq!(owner.history_ref().consumed(), 4);
+    assert_eq!(
+        std::fs::read(path.join("provider-attempts.jsonl")).unwrap(),
+        baseline
+    );
+    drop(owner);
+    release(ledger);
+    let ordinary = ProviderLedger::open(&storage(), endpoint()).unwrap();
+    let mut owner = ordinary.lock().unwrap();
+    assert!(
+        owner
+            .validation_metadata_expiry(std::time::Instant::now())
+            .is_err()
+    );
+    assert!(!owner.validation_metadata_expired());
+    assert_eq!(owner.reserve(1).unwrap(), 1);
+}
+
+#[test]
 fn validation_cancellation_is_checked_again_at_reservation() {
     let (path, digest, baseline) = validation_baseline();
     let ledger = ProviderLedger::validation_open(&path, endpoint(), digest).unwrap();

@@ -16,6 +16,156 @@ fn storage() -> PathBuf {
     path
 }
 #[test]
+fn metadata_expiry_during_dispatch_pacing_prevents_post() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "provider_validation::tests::metadata_pacing_child",
+            "--nocapture",
+        ])
+        .env("VALIDATION_METADATA_PACING", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let root = Path::new(
+        stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("PACING_RECOVERY|"))
+            .unwrap(),
+    );
+    let path = root.join("ledger");
+    let checkpoint: ValidationCheckpoint =
+        serde_json::from_slice(&std::fs::read(root.join("checkpoint.json")).unwrap()).unwrap();
+    let before = std::fs::read(path.join("provider-attempts.jsonl")).unwrap();
+    assert!(
+        ProviderLedger::validation_open(&path, checkpoint.binding.endpoint, checkpoint.sha256)
+            .is_err()
+    );
+    let history = provider_history::observe_validation(&path, &checkpoint).unwrap();
+    assert_eq!(history.consumed(), 5);
+    assert_eq!(history.unresolved_remote(), 5);
+    assert_eq!(history.unknown_usage(), 5);
+    assert!(history.attempts[4].locally_joined);
+    assert_eq!(
+        std::fs::read(path.join("provider-attempts.jsonl")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn metadata_pacing_child() {
+    if std::env::var_os("VALIDATION_METADATA_PACING").is_none() {
+        return;
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            use crate::runtime::{Checkpoint, Probe};
+            use tokio::io::AsyncReadExt;
+            let root = storage();
+            let path = root.join("ledger");
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&path)
+                .unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) =
+                    tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let mut byte = [0];
+                let received = tokio::time::timeout(Duration::from_secs(5), socket.read(&mut byte))
+                    .await
+                    .unwrap();
+                assert!(
+                    matches!(received, Ok(0))
+                        || received
+                            .as_ref()
+                            .is_err_and(|e| e.kind() == std::io::ErrorKind::ConnectionReset),
+                    "POST bytes received: {received:?}"
+                );
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                        .await
+                        .is_err()
+                );
+            });
+            let digest = fixture_driver::seed(&path, endpoint).unwrap();
+            let ledger = ProviderLedger::validation_open(&path, endpoint, digest).unwrap();
+            let checkpoint = ledger.lock().unwrap().validation_checkpoint().unwrap();
+            ledger
+                .lock()
+                .unwrap()
+                .validation_metadata_expiry(Instant::now() + Duration::from_secs(5))
+                .unwrap();
+            let runtime = Runtime::provider_validation(endpoint, ledger.clone()).unwrap();
+            let shared = runtime.ownership();
+            let (reached, mut reached_rx) = tokio::sync::mpsc::channel(1);
+            let release = Arc::new(tokio::sync::Notify::new());
+            *shared.probe.lock().unwrap() = Some(Probe {
+                checkpoint: Checkpoint::ProviderBeforeDispatch,
+                reached,
+                release: release.clone(),
+            });
+            let request =
+                ProviderRequest::new(&[ProviderInput::User(TEXT_PROMPT.into())], &[]).unwrap();
+            let (mut handle, receiver) = runtime.submit_provider_captured(request).unwrap();
+            tokio::time::timeout(Duration::from_secs(5), reached_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            ledger
+                .lock()
+                .unwrap()
+                .validation_metadata_expiry(Instant::now() + Duration::from_millis(200))
+                .unwrap();
+            assert!(shared.provider_dispatch_delay().is_zero());
+            let paced = Instant::now();
+            release.notify_one();
+            let response = tokio::time::timeout(Duration::from_secs(5), handle.result())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(paced.elapsed() >= Duration::from_secs(1));
+            assert_eq!(response.outcome, crate::Outcome::Deadline);
+            assert_eq!(response.reservation, Some(5));
+            assert!(response.durable);
+            assert!(response.envelope.is_none());
+            assert!(response.remote_terminal.is_none());
+            assert!(response.usage.is_none());
+            let capture = receiver.receive().await.unwrap();
+            assert!(capture.bytes.is_empty());
+            assert!(!capture.body_eof);
+            assert!(capture.local_joined);
+            drop(handle);
+            assert_eq!(runtime.shutdown().await.active, 0);
+            server.await.unwrap();
+            let expected = ledger.lock().unwrap().history();
+            assert_eq!(expected.consumed(), 5);
+            assert_eq!(expected.unresolved_remote(), 5);
+            assert_eq!(expected.unknown_usage(), 5);
+            assert!(expected.attempts[4].locally_joined);
+            std::fs::write(
+                root.join("checkpoint.json"),
+                serde_json::to_vec(&checkpoint).unwrap(),
+            )
+            .unwrap();
+            println!("PACING_RECOVERY|{}", root.display());
+        });
+}
+
+#[test]
 fn pair_checks_in_isolated_processes() {
     for case in [
         "success",

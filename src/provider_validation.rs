@@ -750,7 +750,12 @@ async fn drive(
         if stopped.load(Ordering::SeqCst) {
             return Err(refused("pair cancelled; no further dispatch"));
         }
-        let fresh = Instant::now();
+        let metadata_expiry = Instant::now() + Duration::from_secs(5);
+        ledger
+            .lock()
+            .unwrap()
+            .validation_metadata_expiry(metadata_expiry)
+            .map_err(|_| refused("pair metadata expiry binding refused; no dispatch"))?;
         let metadata = provider_metadata::observe_controlled(endpoint, Some(stopped))
             .await
             .map_err(|_| refused("pair metadata readiness refused; no further dispatch"))?;
@@ -773,7 +778,7 @@ async fn drive(
             refused("complete pair context resource refusal; no further dispatch")
         })?;
         let request_hash = artifacts.request(index, &request)?;
-        if fresh.elapsed() > Duration::from_secs(5) || stopped.load(Ordering::SeqCst) {
+        if Instant::now() >= metadata_expiry || stopped.load(Ordering::SeqCst) {
             return Err(refused("pair metadata stale or cancelled; no dispatch"));
         }
         {
@@ -786,8 +791,8 @@ async fn drive(
             }
         }
         artifacts.verify()?;
-        if stopped.load(Ordering::SeqCst) {
-            return Err(refused("pair cancelled before admission"));
+        if Instant::now() >= metadata_expiry || stopped.load(Ordering::SeqCst) {
+            return Err(refused("pair metadata stale or cancelled before admission"));
         }
         let (mut handle, receiver) = runtime
             .submit_provider_captured(request)

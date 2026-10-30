@@ -45,6 +45,7 @@ int fsync(int fd) {
         if (strstr(mode,"reserve6")) at=4;
         if (strstr(mode,"join6")) at=5;
         if (count==at) {
+            if (strncmp(mode,"delay-",6)==0) {int result=real_fsync(fd);if(result==0)usleep(6000000);return result;}
             if (strncmp(mode,"lose-",5)==0) {int result=real_fsync(fd);if(result==0)_exit(17);return result;}
             errno=EIO;return -1;
         }
@@ -54,6 +55,9 @@ int fsync(int fd) {
         int a=snprintf(ready,sizeof(ready),"%s/holder.ready",root),b=snprintf(release,sizeof(release),"%s/holder.release",root);
         if(a>0 && b>0 && (size_t)a<sizeof(ready) && (size_t)b<sizeof(release)){int marker=open(ready,O_CREAT|O_EXCL|O_WRONLY,0600);if(marker>=0)syscall(SYS_close,marker);for(int i=0;i<5000 && access(release,F_OK)!=0;i++)usleep(1000);}
         return result;
+    }
+    if(mode && strcmp(mode,"stale-request")==0 && owned_path(fd,path) && strstr(path,"/evidence/first/request.json")) {
+        int result=real_fsync(fd);if(result==0)usleep(6000000);return result;
     }
     return real_fsync(fd);
 }

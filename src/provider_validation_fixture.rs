@@ -63,7 +63,7 @@ pub(super) async fn server_controlled(
             requests: Vec::new(),
             dispatched: Vec::new(),
         };
-        loop {
+        'connections: loop {
             let accepted = tokio::time::timeout(
                 Duration::from_secs(if result.requests.is_empty() { 10 } else { 3 }),
                 listener.accept(),
@@ -75,7 +75,14 @@ pub(super) async fn server_controlled(
             let mut head = Vec::new();
             while !head.ends_with(b"\r\n\r\n") {
                 let mut byte = [0];
-                socket.read_exact(&mut byte).await.unwrap();
+                if let Err(error) = socket.read_exact(&mut byte).await {
+                    assert!(head.is_empty());
+                    assert!(matches!(
+                        error.kind(),
+                        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                    ));
+                    continue 'connections;
+                }
                 head.push(byte[0]);
                 assert!(head.len() <= 4096);
             }
@@ -197,5 +204,9 @@ pub(super) async fn run(
     {
         return Err(refused("pair fixture spacing violated"));
     }
-    result
+    result.map(|bytes| {
+        let mut report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        report["fixture_posts"] = json!(observed.requests.len());
+        serde_json::to_vec(&report).unwrap()
+    })
 }

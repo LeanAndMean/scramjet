@@ -153,6 +153,9 @@ fn validation_pair_native_faults_and_producer_loss_preserve_accounting_without_r
         String::from_utf8_lossy(&compiled.stderr)
     );
     for mode in [
+        "stale-request",
+        "delay-reserve5",
+        "delay-reserve6",
         "lose-reserve5",
         "lose-join5",
         "lose-reserve6",
@@ -201,15 +204,49 @@ fn validation_pair_native_faults_and_producer_loss_preserve_accounting_without_r
                 assert_eq!(report["accounting_observed"], true, "{mode}");
                 assert_eq!(
                     report["consumed"],
-                    if mode == "replace-request" {
+                    if mode == "replace-request" || mode == "stale-request" {
                         4
-                    } else if mode.starts_with("summary-") {
+                    } else if mode.starts_with("summary-") || mode == "delay-reserve6" {
                         6
                     } else {
                         5
                     },
                     "{mode}"
                 );
+            }
+        }
+        if mode == "stale-request" || mode.starts_with("delay-") {
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let posts = usize::from(mode == "delay-reserve6");
+            let consumed = if mode == "stale-request" {
+                4
+            } else {
+                5 + posts
+            };
+            assert_eq!(report["fixture_posts"], posts, "{mode}");
+            assert_eq!(report["consumed"], consumed, "{mode}");
+            assert_eq!(report["acknowledged_consumed"], consumed, "{mode}");
+            assert_eq!(
+                report["unresolved_remote"],
+                if posts == 0 && consumed == 4 { 4 } else { 5 },
+                "{mode}"
+            );
+            if mode.starts_with("delay-") {
+                let detail: Value = serde_json::from_slice(
+                    &std::fs::read(root.join(if posts == 0 {
+                        "evidence/first/provenance.json"
+                    } else {
+                        "evidence/second/provenance.json"
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                let attempt = &detail["attempt"];
+                assert_eq!(attempt["passed"], false, "{mode}");
+                assert_eq!(attempt["durable"], true, "{mode}");
+                assert_eq!(attempt["local_joined"], true, "{mode}");
+                assert!(attempt["terminal"].is_null(), "{mode}");
+                assert!(attempt["usage"].is_null(), "{mode}");
             }
         }
         let file = root.join("ledger/provider-attempts.jsonl");
@@ -258,7 +295,7 @@ fn validation_pair_native_faults_and_producer_loss_preserve_accounting_without_r
         let observed = observe_from(&root, evidence);
         let consumed = if mode.contains('6') || mode.starts_with("summary-") {
             6
-        } else if mode == "replace-request" {
+        } else if mode == "replace-request" || mode == "stale-request" {
             4
         } else {
             5

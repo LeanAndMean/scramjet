@@ -146,6 +146,7 @@ pub(crate) struct ProviderLedger {
     policy: Policy,
     checkpoint: Option<ValidationCheckpoint>,
     cancellation: Option<Arc<AtomicBool>>,
+    metadata_expiry: Option<std::time::Instant>,
     poisoned: bool,
     #[cfg(test)]
     append_fault: Option<AppendFault>,
@@ -335,6 +336,7 @@ impl ProviderLedger {
             policy: Policy::Ordinary,
             checkpoint: None,
             cancellation: None,
+            metadata_expiry: None,
             poisoned: false,
             #[cfg(test)]
             append_fault: None,
@@ -379,6 +381,7 @@ impl ProviderLedger {
             policy: Policy::Validation,
             checkpoint: None,
             cancellation: None,
+            metadata_expiry: None,
             poisoned: false,
             #[cfg(test)]
             append_fault: None,
@@ -398,6 +401,20 @@ impl ProviderLedger {
         }
         self.cancellation = Some(flag);
         Ok(())
+    }
+    pub(crate) fn validation_metadata_expiry(
+        &mut self,
+        expiry: std::time::Instant,
+    ) -> io::Result<()> {
+        if !matches!(self.policy, Policy::Validation) {
+            return Err(invalid());
+        }
+        self.metadata_expiry = Some(expiry);
+        Ok(())
+    }
+    pub(crate) fn validation_metadata_expired(&self) -> bool {
+        self.metadata_expiry
+            .is_some_and(|expiry| std::time::Instant::now() >= expiry)
     }
     pub(crate) fn validation_checkpoint(&self) -> io::Result<ValidationCheckpoint> {
         self.verify_content(&[])?;
@@ -577,7 +594,7 @@ impl ProviderLedger {
         Ok(())
     }
     pub(crate) fn reserve(&mut self, request_id: u64) -> io::Result<usize> {
-        if !self.eligible() {
+        if !self.eligible() || self.validation_metadata_expired() {
             return Err(invalid());
         }
         let ordinal = self.history.attempts.len() + 1;
@@ -642,6 +659,7 @@ pub(crate) fn observe_validation(
         policy: Policy::Validation,
         checkpoint: Some(checkpoint.clone()),
         cancellation: None,
+        metadata_expiry: None,
         poisoned: false,
         #[cfg(test)]
         append_fault: None,
