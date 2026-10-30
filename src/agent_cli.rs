@@ -1,4 +1,5 @@
 mod editor;
+mod markdown;
 
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -326,6 +327,30 @@ struct Wrap {
     /// Where lines wrapped from the current one start: under the text of a list item, or at
     /// the indentation of an indented line.
     indent: usize,
+    escape: Escape,
+}
+
+/// Where the text is in an escape sequence, which takes no columns.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Escape {
+    #[default]
+    None,
+    Start,
+    Csi,
+}
+
+impl Escape {
+    /// Whether `c` is part of an escape sequence.
+    fn step(&mut self, c: char) -> bool {
+        *self = match (*self, c) {
+            (Self::None, '\x1b') => Self::Start,
+            (Self::None, _) => return false,
+            (Self::Start, '[') => Self::Csi,
+            (Self::Csi, c) if !('@'..='~').contains(&c) => Self::Csi,
+            _ => Self::None,
+        };
+        true
+    }
 }
 
 impl Wrap {
@@ -339,6 +364,7 @@ impl Wrap {
             continued: false,
             line_start: true,
             indent: 0,
+            escape: Escape::None,
         }
     }
     fn push(&mut self, text: &str) -> String {
@@ -347,6 +373,10 @@ impl Wrap {
         }
         let mut out = String::new();
         for c in text.chars() {
+            if self.escape.step(c) {
+                self.word.push(c);
+                continue;
+            }
             match c {
                 '\n' => {
                     self.place(&mut out);
@@ -410,8 +440,12 @@ impl Wrap {
             self.spaces = 0;
         }
         let word = std::mem::take(&mut self.word);
+        let mut escape = Escape::None;
         for c in word.chars() {
-            let cells = c.width().unwrap_or(0);
+            let cells = match escape.step(c) {
+                true => 0,
+                false => c.width().unwrap_or(0),
+            };
             if self.column > self.indent && self.column + cells > self.width {
                 self.break_line(out);
             }
@@ -446,6 +480,7 @@ struct Terminal {
     held_newlines: usize,
     /// Newlines ending the streamed block that were printed early.
     printed_newlines: usize,
+    markdown: markdown::Markdown,
     wrap: Wrap,
     tool_started: Option<Instant>,
 }
@@ -478,6 +513,7 @@ impl Terminal {
             streamed_text: false,
             held_newlines: 0,
             printed_newlines: 0,
+            markdown: markdown::Markdown::new(false, ""),
             wrap: Wrap::new(0),
             tool_started: None,
         }
@@ -521,26 +557,30 @@ impl Terminal {
     /// that ending it adds exactly one blank line.
     fn stream(&mut self, kind: Streaming, delta: &str) {
         if self.streaming == kind {
-            // The status line's style reset ended the dim reasoning style.
-            if self.status.lock().unwrap().clear() && kind == Streaming::Reasoning {
-                eprint!("\x1b[2m");
+            // The status line's style reset ended the style of the streamed text.
+            if self.status.lock().unwrap().clear() {
+                self.print_streamed(&self.markdown.reopen());
             }
         } else {
             self.clear();
-            if kind == Streaming::Reasoning && self.color {
-                eprint!("\x1b[2m");
-            }
-            let wraps = match kind {
+            let styled = match kind {
                 Streaming::Text => std::io::stdout().is_terminal(),
                 _ => self.color,
             };
-            self.wrap = Wrap::new(if wraps { editor::terminal_size().0 } else { 0 });
+            let base = if kind == Streaming::Reasoning {
+                "\x1b[2m"
+            } else {
+                ""
+            };
+            self.markdown = markdown::Markdown::new(styled, base);
+            self.wrap = Wrap::new(if styled { editor::terminal_size().0 } else { 0 });
             self.streaming = kind;
+            self.print_streamed(&self.markdown.reopen());
         }
         let body = delta.trim_end_matches('\n');
         if !body.is_empty() {
             let text = "\n".repeat(std::mem::take(&mut self.held_newlines)) + body;
-            let text = self.wrap.push(&text);
+            let text = self.wrap.push(&self.markdown.push(&text));
             self.print_streamed(&text);
             self.printed_newlines = 0;
         }
@@ -548,13 +588,14 @@ impl Terminal {
         if self.held_newlines == 0 {
             return;
         }
-        let mut text = self.wrap.end_word();
+        let mut text = self.wrap.push(&self.markdown.end_line());
+        text += &self.wrap.end_word();
         // An ended reasoning paragraph is finished now, so that while the model thinks on, the
         // status line can show under it.
         let paragraph =
             kind == Streaming::Reasoning && self.held_newlines >= 2 && self.printed_newlines == 0;
         if paragraph {
-            text += &self.wrap.push("\n\n");
+            text += &self.wrap.push(&self.markdown.push("\n\n"));
             self.held_newlines -= 2;
             self.printed_newlines = 2;
         }
@@ -575,7 +616,8 @@ impl Terminal {
     fn clear(&mut self) {
         self.status.lock().unwrap().clear();
         self.held_newlines = 0;
-        let rest = self.wrap.finish();
+        let rest = self.wrap.push(&self.markdown.finish());
+        let rest = rest + &self.wrap.finish();
         self.print_streamed(&rest);
         match self.streaming {
             Streaming::None => {}
@@ -642,8 +684,10 @@ impl AgentUi for Terminal {
                 true => editor::terminal_size().0,
                 false => 0,
             };
+            let mut markdown = markdown::Markdown::new(width > 0, "");
+            let text = markdown.push(text.trim_end()) + &markdown.finish();
             let mut wrap = Wrap::new(width);
-            let text = wrap.push(text.trim_end()) + &wrap.finish();
+            let text = wrap.push(&text) + &wrap.finish();
             println!("{text}\n");
             let _ = std::io::stdout().flush();
         }
@@ -977,6 +1021,10 @@ mod tests {
             "● bash cargo fmt\n  --check && cargo\n  clippy"
         );
         assert_eq!(wrapped(0, &["no  wrap \n"]), "no  wrap \n");
+        assert_eq!(
+            wrapped(11, &["\x1b[1mhel", "lo\x1b[0m world\x1b[36m foo"]),
+            "\x1b[1mhello\x1b[0m world\n\x1b[36mfoo"
+        );
     }
 
     #[test]
