@@ -38,6 +38,24 @@ function expectInvalidConfig(config: unknown, fragments: string[]): void {
 }
 
 describe("GPT-6.1 Terra catalog visibility", () => {
+	it("preserves inherited Vercel custom-model transport defaults alongside Terra Responses routes", () => {
+		const registry = expectValid({
+			providers: {
+				"vercel-ai-gateway": { models: [{ id: "anthropic/custom-deployment" }] },
+			},
+		});
+		expect(registry.find("vercel-ai-gateway", "anthropic/custom-deployment")).toMatchObject({
+			api: "anthropic-messages",
+			baseUrl: "https://ai-gateway.vercel.sh",
+		});
+		for (const id of ["openai/gpt-6.1-terra", "openai/gpt-6.1-terra-fast"]) {
+			expect(registry.find("vercel-ai-gateway", id)).toMatchObject({
+				api: "openai-responses",
+				baseUrl: "https://ai-gateway.vercel.sh/v1",
+			});
+		}
+	});
+
 	it.each([
 		["openrouter", "openai/gpt-6.1-terra"],
 		["vercel-ai-gateway", "openai/gpt-6.1-terra"],
