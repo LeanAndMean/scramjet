@@ -302,7 +302,7 @@ fn diff(original: &str, spans: &[(usize, usize, &str)]) -> String {
         let first = line_of(*start);
         let removed: Vec<&str> = original[*start..*end].lines().collect();
         ops.extend(old_lines[next..first].iter().map(|line| (' ', *line)));
-        line_diff(&removed, &replaced.lines().collect::<Vec<_>>(), &mut ops);
+        sequence_diff(&removed, &replaced.lines().collect::<Vec<_>>(), &mut ops);
         next = first + removed.len();
     }
     ops.extend(old_lines[next..].iter().map(|line| (' ', *line)));
@@ -345,13 +345,13 @@ fn diff(original: &str, spans: &[(usize, usize, &str)]) -> String {
     out
 }
 
-/// Above this many compared line pairs, a hunk is shown as all its old lines removed and all its
-/// new lines added, to bound the memory of the comparison table.
-const LINE_DIFF_CELLS: usize = 1 << 22;
+/// Above this many compared pairs, all old items are shown removed and all new items added, to
+/// bound the memory of the comparison table.
+const DIFF_CELLS: usize = 1 << 22;
 
-/// Appends the lines that change `old` into `new`, keeping their longest common subsequence as
-/// unchanged lines and showing removed lines before added ones.
-fn line_diff<'a>(old: &[&'a str], new: &[&'a str], ops: &mut Vec<(char, &'a str)>) {
+/// Appends the items (lines, or the words of a line) that change `old` into `new` as ` `, `-`
+/// and `+` operations, keeping their longest common subsequence and removals before additions.
+pub fn sequence_diff<'a>(old: &[&'a str], new: &[&'a str], ops: &mut Vec<(char, &'a str)>) {
     let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
     let suffix = old[prefix..]
         .iter()
@@ -365,7 +365,7 @@ fn line_diff<'a>(old: &[&'a str], new: &[&'a str], ops: &mut Vec<(char, &'a str)
         &new[prefix..new.len() - suffix],
     );
     let columns = b.len() + 1;
-    if a.len().saturating_mul(b.len()) > LINE_DIFF_CELLS {
+    if a.len().saturating_mul(b.len()) > DIFF_CELLS {
         ops.extend(a.iter().map(|line| ('-', *line)));
         ops.extend(b.iter().map(|line| ('+', *line)));
     } else {

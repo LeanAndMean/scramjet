@@ -6,6 +6,7 @@ mod tools;
 
 pub use client::StreamProgress;
 pub use session::Session;
+pub use tools::sequence_diff;
 
 use client::ClientError;
 use serde_json::{Value, json};

@@ -1,3 +1,4 @@
+mod diff;
 mod editor;
 mod markdown;
 
@@ -747,28 +748,33 @@ impl AgentUi for Terminal {
         self.clear();
         let width = editor::terminal_size().0.saturating_sub(2).max(20);
         let took = self.tool_started.take().map(|started| started.elapsed());
-        let lines = match (name, detail) {
-            (_, Some(ToolDetail::Diff(diff))) => preview(diff, Shown::First(DIFF_LINES), width),
+        let style = match () {
+            _ if !self.color => "",
+            _ if failed => "\x1b[31m",
+            _ => "\x1b[2m",
+        };
+        let reset = if style.is_empty() { "" } else { "\x1b[0m" };
+        let styled = |lines: Vec<String>| -> Vec<String> {
+            let row = |line| format!("{style}{line}{reset}");
+            lines.into_iter().map(row).collect()
+        };
+        let rows = match (name, detail) {
+            (_, Some(ToolDetail::Diff(diff))) => diff::rows(diff, width, self.color),
             // As in Scramjet, trailing blank lines of a written file are not counted.
-            (_, Some(ToolDetail::Written(content))) => preview(
+            (_, Some(ToolDetail::Written(content))) => styled(preview(
                 content.trim_end_matches(['\n', '\r']),
                 Shown::First(WRITE_LINES),
                 width,
-            ),
-            ("bash", None) => preview(&bash_shown(output, failed), Shown::Last(BASH_LINES), width),
-            _ => preview(output, Shown::First(RESULT_LINES), width),
+            )),
+            ("bash", None) => styled(preview(
+                &bash_shown(output, failed),
+                Shown::Last(BASH_LINES),
+                width,
+            )),
+            _ => styled(preview(output, Shown::First(RESULT_LINES), width)),
         };
-        let diff = matches!(detail, Some(ToolDetail::Diff(_)));
-        for line in lines {
-            let style = match line.as_bytes().first() {
-                _ if !self.color => "",
-                _ if failed => "\x1b[31m",
-                Some(b'-') if diff => "\x1b[31m",
-                Some(b'+') if diff => "\x1b[32m",
-                _ => "\x1b[2m",
-            };
-            let reset = if style.is_empty() { "" } else { "\x1b[0m" };
-            eprintln!("  {style}{line}{reset}");
+        for row in rows {
+            eprintln!("  {row}");
         }
         if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
             eprintln!(
@@ -843,7 +849,6 @@ fn answer(typed: &str) -> Answer {
 
 /// Scramjet shows the end of bash output, where errors and the exit code are.
 const BASH_LINES: usize = 5;
-const DIFF_LINES: usize = 40;
 const WRITE_LINES: usize = 10;
 const RESULT_LINES: usize = 6;
 
