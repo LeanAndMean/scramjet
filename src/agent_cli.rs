@@ -253,7 +253,7 @@ impl Drop for Echo {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Streaming {
     None,
     Reasoning,
@@ -294,12 +294,15 @@ impl Status {
         eprint!("\r\x1b[2m{text}\x1b[0m\x1b[K");
         self.drawn = Some(text);
     }
-    fn clear(&mut self) {
-        if self.drawn.take().is_some() {
+    /// Removes the line and the activity. Returns whether the line was shown.
+    fn clear(&mut self) -> bool {
+        let drawn = self.drawn.take().is_some();
+        if drawn {
             eprint!("\r\x1b[K");
         }
         self.activity = None;
         self.countdown = None;
+        drawn
     }
 }
 
@@ -364,6 +367,12 @@ impl Wrap {
                 }
             }
         }
+        out
+    }
+    /// The held word, once a newline that is not yet passed on has ended it.
+    fn end_word(&mut self) -> String {
+        let mut out = String::new();
+        self.place(&mut out);
         out
     }
     /// The held word, at the end of the text.
@@ -432,6 +441,8 @@ struct Terminal {
     streamed_text: bool,
     /// Newlines ending the streamed block so far, not yet printed.
     held_newlines: usize,
+    /// Newlines ending the streamed block that were printed early.
+    printed_newlines: usize,
     wrap: Wrap,
     tool_started: Option<Instant>,
 }
@@ -463,6 +474,7 @@ impl Terminal {
             streaming: Streaming::None,
             streamed_text: false,
             held_newlines: 0,
+            printed_newlines: 0,
             wrap: Wrap::new(0),
             tool_started: None,
         }
@@ -496,7 +508,12 @@ impl Terminal {
     /// Continues or starts a streamed block. Trailing newlines wait for more of the block, so
     /// that ending it adds exactly one blank line.
     fn stream(&mut self, kind: Streaming, delta: &str) {
-        if self.streaming != kind {
+        if self.streaming == kind {
+            // The status line's style reset ended the dim reasoning style.
+            if self.status.lock().unwrap().clear() && kind == Streaming::Reasoning {
+                eprint!("\x1b[2m");
+            }
+        } else {
             self.clear();
             if kind == Streaming::Reasoning && self.color {
                 eprint!("\x1b[2m");
@@ -513,8 +530,26 @@ impl Terminal {
             let text = "\n".repeat(std::mem::take(&mut self.held_newlines)) + body;
             let text = self.wrap.push(&text);
             self.print_streamed(&text);
+            self.printed_newlines = 0;
         }
         self.held_newlines += delta.len() - body.len();
+        if self.held_newlines == 0 {
+            return;
+        }
+        let mut text = self.wrap.end_word();
+        // An ended reasoning paragraph is finished now, so that while the model thinks on, the
+        // status line can show under it.
+        let paragraph =
+            kind == Streaming::Reasoning && self.held_newlines >= 2 && self.printed_newlines == 0;
+        if paragraph {
+            text += &self.wrap.push("\n\n");
+            self.held_newlines -= 2;
+            self.printed_newlines = 2;
+        }
+        self.print_streamed(&text);
+        if paragraph {
+            self.show("thinking".into(), false);
+        }
     }
     fn print_streamed(&self, text: &str) {
         if self.streaming == Streaming::Text {
@@ -532,12 +567,17 @@ impl Terminal {
         self.print_streamed(&rest);
         match self.streaming {
             Streaming::None => {}
-            Streaming::Reasoning => eprint!("{}\n\n", if self.color { "\x1b[0m" } else { "" }),
+            Streaming::Reasoning => eprint!(
+                "{}{}",
+                if self.color { "\x1b[0m" } else { "" },
+                "\n".repeat(2 - self.printed_newlines)
+            ),
             Streaming::Text => {
                 println!("\n");
                 let _ = std::io::stdout().flush();
             }
         }
+        self.printed_newlines = 0;
         self.streaming = Streaming::None;
     }
     fn usage(&self, agent: &Agent) {

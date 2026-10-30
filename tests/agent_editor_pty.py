@@ -77,6 +77,38 @@ def serve_call(command):
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
+def serve_quiet_reasoning():
+    """Streams one reasoning summary paragraph, then keeps the response open without more events."""
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+    item = {'type': 'reasoning', 'id': 'rs_1', 'summary': []}
+    part = {'type': 'summary_text', 'text': ''}
+    text = 'Reading the code first, then the paragraph ends here.'
+    where = {'output_index': 0, 'item_id': 'rs_1', 'summary_index': 0}
+    events = [
+        {'type': 'response.created', 'response': {'id': 'resp_1', 'status': 'in_progress', 'output': []}},
+        {'type': 'response.output_item.added', 'output_index': 0, 'item': item},
+        dict(where, type='response.reasoning_summary_part.added', part=part),
+        dict(where, type='response.reasoning_summary_text.delta', delta=text),
+        dict(where, type='response.reasoning_summary_text.done', text=text),
+        dict(where, type='response.reasoning_summary_part.done', part=dict(part, text=text)),
+    ]
+    body = b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events)
+
+    def answer():
+        while True:
+            connection, _ = listener.accept()
+            connection.recv(65536)
+            connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n'
+                               b'transfer-encoding: chunked\r\n\r\n%x\r\n%s\r\n' % (len(body), body))
+            threading.Thread(target=lambda c=connection: (time.sleep(30), c.close()), daemon=True).start()
+
+    threading.Thread(target=answer, daemon=True).start()
+    return '127.0.0.1:%d' % listener.getsockname()[1]
+
+
+quiet_reasoning = serve_quiet_reasoning()
 # The command's output pipe outlives the killed process group, so a cancellation stays pending for
 # about two seconds.
 calling = serve_call('setsid sleep 5 & sleep 30')
@@ -195,6 +227,17 @@ def thinking_counts_seconds(read, until, send, output):
     send(b'\x04')
 
 
+def quiet_after_reasoning_shows_thinking(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'the paragraph ends here.\r\n\r\n', mark)
+    until(b'thinking 1s', mark)
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
 def running_counts_seconds(read, until, send, output):
     mark = until(b'> ')
     send(b'go\r')
@@ -246,6 +289,7 @@ run(['--continue'], resumed)
 run(['--retries', '0'], typed_during_turn, delayed)
 run([], cancel_retry)
 run([], thinking_counts_seconds, hanging)
+run([], quiet_after_reasoning_shows_thinking, quiet_reasoning)
 run(['--yes'], running_counts_seconds, calling)
 run([], approval_shows_hidden_characters, disguised)
 run(['--yes'], exit_during_turn, calling, 130)
