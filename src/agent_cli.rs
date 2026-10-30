@@ -41,6 +41,7 @@ Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1
 In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing \\ starts
 a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
+/new starts a new session.
 While a turn runs, typed text is kept for the next prompt without being shown; Ctrl-C cancels
 the turn (and discards that text); press it twice to quit.";
 
@@ -191,7 +192,18 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         if matches!(prompt, "/exit" | "/quit") {
             return Ok(());
         }
-        if editor.is_some() {
+        if prompt == "/new" {
+            match agent.new_session() {
+                Ok(()) => eprintln!(
+                    "✓ New session started\nsession {}",
+                    agent.session_path().display()
+                ),
+                Err(error) => eprintln!("error: {error}"),
+            }
+            continue;
+        }
+        if let Some(editor) = &mut editor {
+            editor.remember(prompt);
             eprintln!();
         }
         cancel.store(false, Ordering::Relaxed);

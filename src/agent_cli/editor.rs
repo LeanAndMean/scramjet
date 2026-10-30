@@ -547,6 +547,13 @@ impl Editor {
         Self { history }
     }
 
+    /// Makes `prompt` the most recent entry that Up recalls.
+    pub fn remember(&mut self, prompt: &str) {
+        if self.history.last().is_none_or(|last| last != prompt) {
+            self.history.push(prompt.to_owned());
+        }
+    }
+
     /// Reads one prompt. `None` means the user asked to exit.
     pub fn read(&mut self) -> io::Result<Option<String>> {
         let _raw = RawMode::enter()?;
@@ -581,9 +588,6 @@ impl Editor {
                 Key::Enter if buffer.text.trim().is_empty() => true,
                 Key::Enter => {
                     screen.draw(&buffer, None, true)?;
-                    if self.history.last() != Some(&buffer.text) {
-                        self.history.push(buffer.text.clone());
-                    }
                     return Ok(Some(buffer.text));
                 }
                 Key::Interrupt if buffer.text.is_empty() => {

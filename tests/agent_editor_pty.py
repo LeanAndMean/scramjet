@@ -296,6 +296,22 @@ def approval_shows_hidden_characters(read, until, send, output):
     send(b'\x04')
 
 
+def new_session(read, until, send, output):
+    mark = until(b'> ')
+    send(b'one\r')
+    mark = until(b'error: provider: cannot connect', mark)
+    mark = until(b'> ', mark)
+    send(b'/new\r')
+    mark = until('\u2713 New session started\r\nsession '.encode(), mark)
+    mark = until(b'> ', mark)
+    send(b'two\r')
+    mark = until(b'error: provider: cannot connect', mark)
+    mark = until(b'> ', mark)
+    send(b'\x1b[A\x1b[A')
+    until(b'> one', mark)
+    send(b'\x03\x04')
+
+
 def session_files():
     return glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
 
@@ -314,6 +330,11 @@ run(['--yes'], running_counts_seconds, calling)
 run(['--yes'], running_shows_output, talking)
 run([], approval_shows_hidden_characters, disguised)
 run(['--yes'], exit_during_turn, calling, 130)
+known = set(session_files())
+run(['--retries', '0'], new_session)
+started = sorted(set(session_files()) - known)
+prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
+assert prompts == [['one'], ['two']], prompts
 known = set(session_files())
 run([], cancel_at_approval, calling)
 (cancelled,) = set(session_files()) - known

@@ -130,7 +130,10 @@ impl Agent {
         };
         let (session, conversation) = match opened {
             Some(path) => Session::open(&path)?,
-            None => (Session::create(&config.root)?, Vec::new()),
+            None => (
+                Session::create(&session::directory(&config.root)?, &config.root)?,
+                Vec::new(),
+            ),
         };
         let executor = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -145,6 +148,16 @@ impl Agent {
         };
         agent.answer_interrupted_calls()?;
         Ok(agent)
+    }
+
+    /// Continues in an empty session saved next to the current one; on failure nothing changes.
+    /// Approvals given with `a` still apply.
+    pub fn new_session(&mut self) -> Result<(), AgentError> {
+        let directory = self.session.path().parent().unwrap_or(Path::new("."));
+        self.session = Session::create(directory, &self.config.root)?;
+        self.conversation.clear();
+        self.usage = Usage::default();
+        Ok(())
     }
 
     pub fn session_path(&self) -> &Path {
@@ -471,7 +484,7 @@ mod tests {
 
     impl Drop for ScratchDir {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            let _ = std::fs::remove_dir_all(&self.0).or_else(|_| std::fs::remove_file(&self.0));
         }
     }
 
@@ -651,6 +664,37 @@ response is incomplete; retry the request."});
             .filter_map(|item| item["output"].as_str())
             .collect();
         assert_eq!(outputs, ["(no output)"; 3]);
+    }
+
+    #[test]
+    fn a_new_session_starts_an_empty_conversation_next_to_the_old_one() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("first", fixture::known_usage())),
+            stream(&fixture::text_events("second", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "new-session");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("one", &mut ui, &cancel).unwrap();
+        let old = agent.session_path().to_owned();
+        agent.new_session().unwrap();
+        assert_eq!(agent.usage.requests, 0);
+        assert!(agent.conversation().is_empty());
+        agent.turn("two", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies[1]["input"], json!([{"role":"user","content":"two"}]));
+        assert_ne!(bodies[0]["prompt_cache_key"], bodies[1]["prompt_cache_key"]);
+        let new = agent.session_path().to_owned();
+        assert_eq!(new.parent(), old.parent());
+        let lines = |path: &Path| std::fs::read_to_string(path).unwrap().lines().count();
+        assert_eq!((lines(&old), lines(&new)), (3, 3));
+
+        let directory = new.parent().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        std::fs::write(directory, "").unwrap();
+        assert!(matches!(agent.new_session(), Err(AgentError::Session(_))));
+        assert_eq!(agent.session_path(), new);
+        assert_eq!(agent.conversation().len(), 2);
     }
 
     #[test]

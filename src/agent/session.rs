@@ -30,9 +30,9 @@ pub fn directory(root: &Path) -> io::Result<PathBuf> {
 }
 
 impl Session {
-    pub fn create(root: &Path) -> io::Result<Self> {
-        let directory = directory(root)?;
-        std::fs::create_dir_all(&directory)?;
+    /// Starts a session for the project `root` in `directory`.
+    pub fn create(directory: &Path, root: &Path) -> io::Result<Self> {
+        std::fs::create_dir_all(directory)?;
         let created = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
