@@ -17,8 +17,8 @@ scramjet-rs agent --continue                                     # resume the la
 scramjet-rs agent --help
 ```
 
-- **Tools:** `read` (paged at 2000 lines/50KB), `write`, `edit` (exact unique text replacement), `bash` (runs in the project directory; output tail at 2000 lines/50KB, default 120s timeout).
-- **Tool display:** each call shows a short preview: the last 5 lines of bash output (with its time when 1s or more), a numbered diff of each edit, the first 10 lines of a written file with its line count, and the first lines of other results. Escape sequences and control characters in output are dropped and long lines are cut to the terminal width.
+- **Tools:** `read` (paged at 2000 lines/50KB), `write`, `edit` (exact unique text replacement), `bash` (runs in the project directory; returns the output tail at 2000 lines/50KB, or `(no output)`; a non-zero exit, timeout or cancellation is a failed result with the reason after the output; default 120s timeout).
+- **Tool display:** each call shows a short preview: the last 5 lines of bash output (red when it failed, with its time when 1s or more), the line range of a paged read, a numbered diff of each edit, the first 10 lines of a written file with its line count, and the first lines of other results. Escape sequences and control characters in output are dropped and long lines are cut to the terminal width.
 - **Approval:** each bash command, and any write/edit outside the project directory, asks `Allow? [y/N, a = allow all until exit]`; control and text-direction characters in the question are shown as escapes. `a` approves that call and every later one until the agent exits (not remembered by `--continue`); `--yes` approves everything from the start. Bash is not sandboxed.
 - **Context:** `AGENTS.md` and `CLAUDE.md` in the project directory and its ancestors are added to the instructions.
 - **Sessions:** saved as JSON lines under `$XDG_STATE_HOME/scramjet-rs/sessions/` (default `~/.local/state/...`). `--continue` resumes the newest session for the project; `--session FILE` a specific one. A tool call interrupted mid-run is reported to the model as unknown and never re-run.
