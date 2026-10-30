@@ -1,6 +1,9 @@
 use super::*;
-use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    io::{Read, Seek, SeekFrom, Write},
+    os::unix::fs::PermissionsExt,
+};
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 fn storage() -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -16,6 +19,9 @@ fn release(ledger: Arc<Mutex<ProviderLedger>>) {
     // CLOEXEC does not prevent transient lock inheritance during parallel subprocess spawning.
     flock(&ledger.lock().unwrap().file, FlockOperation::Unlock).unwrap();
     drop(ledger);
+}
+fn acknowledged(ledger: &ProviderLedger) -> Vec<u8> {
+    ledger.acknowledged.iter().flatten().copied().collect()
 }
 fn endpoint() -> SocketAddr {
     "127.0.0.1:18080".parse().unwrap()
@@ -183,6 +189,264 @@ fn strict_recovery_rejects_incomplete_foreign_or_contradictory_history() {
     std::fs::write(&file, &original).unwrap();
     assert!(reconstruct_provider_history(&path, "127.0.0.1:18081".parse().unwrap()).is_err());
 }
+#[test]
+fn positional_verification_and_appends_preserve_every_acknowledged_byte() {
+    let path = storage();
+    let ledger = ProviderLedger::open(&path, endpoint()).unwrap();
+    let file = path.join("provider-attempts.jsonl");
+    let mut previous = std::fs::read(&file).unwrap();
+    for ordinal in 1..=6 {
+        let mut ledger = ledger.lock().unwrap();
+        let mut cloned = ledger.file.try_clone().unwrap();
+        cloned.seek(SeekFrom::Start(0)).unwrap();
+        let mut first = [0; 1];
+        cloned.read_exact(&mut first).unwrap();
+        assert_eq!(first, [b'{']);
+        ledger.verify_content(&[]).unwrap();
+        assert_eq!(cloned.stream_position().unwrap(), 1);
+        assert_eq!(ledger.reserve(ordinal as u64).unwrap(), ordinal);
+        assert_eq!(cloned.stream_position().unwrap(), 1);
+        let reservation = bounded_json_bytes(
+            &Record::Reserved {
+                ordinal,
+                request_id: ordinal as u64,
+            },
+            RECORD_BYTES,
+        )
+        .unwrap();
+        previous.extend_from_slice(&reservation);
+        previous.push(b'\n');
+        assert_eq!(std::fs::read(&file).unwrap(), previous);
+        let terminal = Some(ProviderTerminalEvidence {
+            response_id: format!("synthetic:/é {ordinal}"),
+            reported_model: Some("gpt-6-luna".into()),
+            status: "completed".into(),
+        });
+        cloned.seek(SeekFrom::Start(0)).unwrap();
+        ledger
+            .joined(ordinal, terminal.clone(), Some(known()))
+            .unwrap();
+        assert_eq!(cloned.stream_position().unwrap(), 0);
+        let join = bounded_json_bytes(
+            &Record::Joined {
+                ordinal,
+                terminal,
+                usage: Some(known()),
+            },
+            RECORD_BYTES,
+        )
+        .unwrap();
+        previous.extend_from_slice(&join);
+        previous.push(b'\n');
+        assert_eq!(std::fs::read(&file).unwrap(), previous);
+        assert_eq!(acknowledged(&ledger), previous);
+        ledger.verify_content(&[]).unwrap();
+    }
+    let history = ledger.lock().unwrap().history();
+    release(ledger);
+    assert_eq!(
+        reconstruct_provider_history(&path, endpoint()).unwrap(),
+        history
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), previous);
+}
+
+#[test]
+fn noncanonical_recovered_bytes_remain_exact_not_reserialized() {
+    let path = storage();
+    let ledger = ProviderLedger::open(&path, endpoint()).unwrap();
+    release(ledger);
+    let file = path.join("provider-attempts.jsonl");
+    let canonical = std::fs::read(&file).unwrap();
+    let mut baseline = b" \t".to_vec();
+    baseline.extend_from_slice(&canonical[..canonical.len() - 1]);
+    baseline.extend_from_slice(b" \t\n");
+    std::fs::write(&file, &baseline).unwrap();
+    let ledger = ProviderLedger::open(&path, endpoint()).unwrap();
+    assert_eq!(acknowledged(&ledger.lock().unwrap()), baseline);
+    ledger.lock().unwrap().reserve(1).unwrap();
+    assert!(std::fs::read(&file).unwrap().starts_with(&baseline));
+    release(ledger);
+    assert_eq!(
+        reconstruct_provider_history(&path, endpoint())
+            .unwrap()
+            .consumed(),
+        1
+    );
+}
+
+#[test]
+fn changed_acknowledged_content_poisoning_prevents_repair_and_retry() {
+    for join in [false, true] {
+        for mutation in 0..4 {
+            let path = storage();
+            let ledger = ProviderLedger::open(&path, endpoint()).unwrap();
+            ledger.lock().unwrap().reserve(1).unwrap();
+            let file = path.join("provider-attempts.jsonl");
+            let original = std::fs::read(&file).unwrap();
+            let mut changed = original.clone();
+            match mutation {
+                0 => {
+                    let index = changed.iter().position(|byte| *byte == b'3').unwrap();
+                    changed[index] = b'2';
+                }
+                1 => {
+                    changed.pop();
+                }
+                2 => changed.extend_from_slice(b" \n"),
+                3 => {
+                    let index = changed.iter().rposition(|byte| *byte == b'1').unwrap();
+                    changed[index] = b'2';
+                }
+                _ => unreachable!(),
+            }
+            std::fs::write(&file, &changed).unwrap();
+            let mut owner = ledger.lock().unwrap();
+            let result = if join {
+                owner.joined(1, None, None)
+            } else {
+                owner.reserve(2).map(|_| ())
+            };
+            assert!(result.is_err());
+            assert_eq!(std::fs::read(&file).unwrap(), changed);
+            assert_eq!(owner.history().consumed(), 1);
+            assert!(!owner.history().attempts[0].locally_joined);
+            assert!(!owner.eligible());
+            std::fs::write(&file, &original).unwrap();
+            assert!(owner.reserve(2).is_err());
+            assert!(owner.joined(1, None, None).is_err());
+            assert_eq!(std::fs::read(&file).unwrap(), original);
+            drop(owner);
+            release(ledger);
+        }
+    }
+}
+
+#[test]
+fn same_bytes_under_replaced_named_identity_never_acknowledge_an_append() {
+    for replace_directory in [false, true] {
+        let path = storage();
+        let ledger = ProviderLedger::open(&path, endpoint()).unwrap();
+        ledger.lock().unwrap().reserve(1).unwrap();
+        let file = path.join("provider-attempts.jsonl");
+        let original = std::fs::read(&file).unwrap();
+        if replace_directory {
+            std::fs::rename(&path, path.with_extension("old")).unwrap();
+            std::fs::create_dir(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        } else {
+            std::fs::rename(&file, path.join("old-history")).unwrap();
+        }
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&file)
+            .unwrap()
+            .write_all(&original)
+            .unwrap();
+        let mut owner = ledger.lock().unwrap();
+        assert!(owner.reserve(2).is_err());
+        assert!(!owner.eligible());
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+        let mut held = Vec::new();
+        let mut clone = owner.file.try_clone().unwrap();
+        clone.seek(SeekFrom::Start(0)).unwrap();
+        clone.read_to_end(&mut held).unwrap();
+        assert_eq!(held, original);
+        drop(owner);
+        release(ledger);
+    }
+}
+
+#[test]
+fn failed_positional_write_keeps_consumed_facts_and_poisoned_owner() {
+    let path = storage();
+    let ledger = ProviderLedger::open(&path, endpoint()).unwrap();
+    ledger.lock().unwrap().reserve(1).unwrap();
+    let file = path.join("provider-attempts.jsonl");
+    let original = std::fs::read(&file).unwrap();
+    let mut owner = ledger.lock().unwrap();
+    owner.force_write_error();
+    assert!(owner.joined(1, None, None).is_err());
+    assert!(!owner.eligible());
+    assert_eq!(owner.history().consumed(), 1);
+    assert!(!owner.history().attempts[0].locally_joined);
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    drop(owner);
+    release(ledger);
+    let history = reconstruct_provider_history(&path, endpoint()).unwrap();
+    assert_eq!(history.consumed(), 1);
+    assert_eq!(history.unresolved_remote(), 1);
+}
+
+#[test]
+fn ambiguous_append_failpoints_never_advance_live_acknowledgement_or_retry() {
+    for join in [false, true] {
+        for fault in [
+            AppendFault::PartialWrite,
+            AppendFault::Sync,
+            AppendFault::Content,
+            AppendFault::Binding,
+        ] {
+            let path = storage();
+            let ledger = ProviderLedger::open(&path, endpoint()).unwrap();
+            ledger.lock().unwrap().reserve(1).unwrap();
+            let file = path.join("provider-attempts.jsonl");
+            let original = std::fs::read(&file).unwrap();
+            let mut owner = ledger.lock().unwrap();
+            owner.append_fault = Some(fault);
+            let result = if join {
+                owner.joined(
+                    1,
+                    Some(ProviderTerminalEvidence {
+                        response_id: "synthetic:/é".into(),
+                        reported_model: None,
+                        status: "completed".into(),
+                    }),
+                    Some(known()),
+                )
+            } else {
+                owner.reserve(2).map(|_| ())
+            };
+            assert!(result.is_err());
+            assert_eq!(acknowledged(&owner), original);
+            assert_eq!(owner.history().consumed(), 1);
+            assert!(!owner.history().attempts[0].locally_joined);
+            assert_eq!(owner.history().unresolved_remote(), 1);
+            assert_eq!(owner.history().unknown_usage(), 1);
+            assert!(!owner.eligible());
+            let observed_file = if fault == AppendFault::Binding {
+                path.join("lost-binding.jsonl")
+            } else {
+                file.clone()
+            };
+            let after = std::fs::read(&observed_file).unwrap();
+            assert!(owner.reserve(2).is_err());
+            assert!(owner.joined(1, None, None).is_err());
+            assert_eq!(std::fs::read(&observed_file).unwrap(), after);
+            drop(owner);
+            release(ledger);
+            let recovered = reconstruct_provider_history(&path, endpoint());
+            if fault == AppendFault::Sync {
+                let observed = recovered.unwrap();
+                if join {
+                    assert_eq!(observed.consumed(), 1);
+                    assert!(observed.attempts[0].locally_joined);
+                    assert_eq!(observed.attempts[0].usage, Some(known()));
+                } else {
+                    assert_eq!(observed.consumed(), 2);
+                    assert!(!observed.attempts[1].locally_joined);
+                }
+            } else {
+                assert!(recovered.is_err());
+            }
+            assert_eq!(std::fs::read(&observed_file).unwrap(), after);
+        }
+    }
+}
+
 #[test]
 fn descriptor_owner_permissions_and_lock_fail_closed() {
     let path = storage();

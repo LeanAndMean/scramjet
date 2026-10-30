@@ -149,6 +149,91 @@ fn bounded_maximum_request_frame_and_history_allocations() {
     );
     measure("maximum-malformed-history", base, 2_097_152);
     executor.block_on(async {
+        let path = storage("provider-owned-history-meter");
+        let events = fixture::text_events("checked", fixture::known_usage());
+        let (endpoint, task) = server::start(fixture::wire(&events, false)).await;
+        let mut records = lines[..63].to_vec();
+        records[0]["endpoint"] = serde_json::json!(endpoint.to_string());
+        for record in &mut records {
+            if record["kind"] == "Joined" {
+                record["terminal"]["response_id"] = serde_json::json!(format!("{}\u{0000}é", "r".repeat(16300)));
+            }
+        }
+        let record_budget = scramjet_rs::PROVIDER_FRAME_BYTES + 1024;
+        let mut baseline = Vec::new();
+        for record in &records {
+            let encoded = serde_json::to_vec(record).unwrap();
+            assert!(encoded.len() <= record_budget);
+            baseline.extend(std::iter::repeat_n(b' ', record_budget - encoded.len()));
+            baseline.extend_from_slice(&encoded);
+            baseline.push(b'\n');
+        }
+        let file = path.join("provider-attempts.jsonl");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&file)
+            .unwrap()
+            .write_all(&baseline)
+            .unwrap();
+        let probe_request = ProviderRequest::new(&[ProviderInput::User("synthetic".into())], &[]).unwrap();
+        let base = reset();
+        let runtime = Runtime::new_provider(endpoint, &path).unwrap();
+        let mut handle = runtime.submit_provider(probe_request).unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), handle.result())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.outcome, Outcome::Success);
+        assert_eq!(response.reservation, Some(32));
+        assert!(response.durable);
+        measure("maximum-noncanonical-owned-history-append", base, 2097152);
+        let history = runtime.provider_history().unwrap();
+        assert_eq!(history.consumed(), 32);
+        assert_eq!(history.unresolved_remote(), 0);
+        assert_eq!(history.unknown_usage(), 0);
+        measure("maximum-owned-history-with-caller-snapshot", base, 4194304);
+        assert!(std::fs::read(&file).unwrap().starts_with(&baseline));
+        drop(history);
+        drop(response);
+        drop(handle);
+        runtime.shutdown().await;
+        task.await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let refused_path = storage("provider-owned-history-refusal-meter");
+        let refused_file = refused_path.join("provider-attempts.jsonl");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&refused_file)
+            .unwrap()
+            .write_all(&baseline)
+            .unwrap();
+        let mut changed = baseline.clone();
+        let index = changed.iter().position(|byte| *byte == b'3').unwrap();
+        changed[index] = b'2';
+        let base = reset();
+        let runtime = Runtime::new_provider(endpoint, &refused_path).unwrap();
+        std::fs::write(&refused_file, &changed).unwrap();
+        let mut handle = runtime
+            .submit_provider(ProviderRequest::new(&[ProviderInput::User("refused".into())], &[]).unwrap())
+            .unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), handle.result())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.outcome, Outcome::ResourceLimit);
+        assert!(response.reservation.is_none());
+        assert_eq!(runtime.snapshot().attempts, 0);
+        measure("maximum-owned-history-content-refusal", base, 2097152);
+        drop(response);
+        drop(handle);
+        runtime.shutdown().await;
+        assert_eq!(std::fs::read(&refused_file).unwrap(), changed);
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
         let path = storage("provider-meter");
         let (endpoint, task) = server::start(body).await;
         let runtime = Runtime::new_provider(endpoint, &path).unwrap();

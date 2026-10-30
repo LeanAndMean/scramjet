@@ -6,9 +6,9 @@ use rustix::fs::{CWD, FlockOperation, Mode, OFlags, flock, openat};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read},
     net::SocketAddr,
-    os::unix::fs::MetadataExt,
+    os::unix::fs::{FileExt, MetadataExt},
     path::{Component, Path},
     sync::{Arc, Mutex},
 };
@@ -94,13 +94,25 @@ pub(crate) struct ProviderBinding {
     pub endpoint: SocketAddr,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AppendFault {
+    PartialWrite,
+    Sync,
+    Content,
+    Binding,
+}
+
 pub(crate) struct ProviderLedger {
     file: File,
     directory: File,
     path: std::path::PathBuf,
     endpoint: SocketAddr,
     history: ProviderHistory,
+    acknowledged: Vec<Vec<u8>>,
     poisoned: bool,
+    #[cfg(test)]
+    append_fault: Option<AppendFault>,
 }
 fn invalid() -> io::Error {
     io::Error::other("invalid or unacknowledged provider history")
@@ -176,7 +188,7 @@ fn open(path: &Path, writable: bool) -> io::Result<(File, File)> {
     )?;
     Ok((file, dir))
 }
-fn read(file: &mut File, endpoint: SocketAddr) -> io::Result<ProviderHistory> {
+fn read(file: &mut File, endpoint: SocketAddr) -> io::Result<(ProviderHistory, Vec<u8>)> {
     let capacity = file.metadata()?.len().min(HISTORY_BYTES) as usize + 1;
     let mut bytes = Vec::with_capacity(capacity);
     file.take(HISTORY_BYTES + 1).read_to_end(&mut bytes)?;
@@ -261,7 +273,7 @@ fn read(file: &mut File, endpoint: SocketAddr) -> io::Result<ProviderHistory> {
             _ => return Err(invalid()),
         }
     }
-    Ok(history)
+    Ok((history, bytes))
 }
 impl ProviderLedger {
     pub(crate) fn open(path: &Path, endpoint: SocketAddr) -> io::Result<Arc<Mutex<Self>>> {
@@ -270,8 +282,8 @@ impl ProviderLedger {
         }
         let (mut file, directory) = open(path, true)?;
         let empty = file.metadata()?.len() == 0;
-        let history = if empty {
-            ProviderHistory::default()
+        let (history, acknowledged) = if empty {
+            (ProviderHistory::default(), Vec::new())
         } else {
             read(&mut file, endpoint)?
         };
@@ -281,8 +293,12 @@ impl ProviderLedger {
             path: path.into(),
             endpoint,
             history,
+            acknowledged: vec![acknowledged],
             poisoned: false,
+            #[cfg(test)]
+            append_fault: None,
         };
+        ledger.verify_content(&[])?;
         if empty {
             ledger.append(&Record::Header {
                 endpoint: endpoint.to_string(),
@@ -340,27 +356,95 @@ impl ProviderLedger {
     pub(crate) fn history(&self) -> ProviderHistory {
         self.history.clone()
     }
+    pub(crate) fn history_ref(&self) -> &ProviderHistory {
+        &self.history
+    }
     pub(crate) fn eligible(&self) -> bool {
         !self.poisoned
             && self.history.remaining() > 0
             && self.history.unresolved_remote() < 4
             && self.history.unknown_usage() < 4
     }
+    fn acknowledged_len(&self) -> usize {
+        self.acknowledged.iter().map(Vec::len).sum()
+    }
+    fn verify_content(&self, suffix: &[u8]) -> io::Result<()> {
+        self.binding()?;
+        let length = self.acknowledged_len() as u64 + suffix.len() as u64;
+        if length > HISTORY_BYTES || self.file.metadata()?.len() != length {
+            return Err(invalid());
+        }
+        let mut offset = 0;
+        let mut buffer = [0; 4096];
+        for bytes in self
+            .acknowledged
+            .iter()
+            .map(Vec::as_slice)
+            .chain(std::iter::once(suffix))
+        {
+            for expected in bytes.chunks(buffer.len()) {
+                let actual = &mut buffer[..expected.len()];
+                self.file.read_exact_at(actual, offset)?;
+                if actual != expected {
+                    return Err(invalid());
+                }
+                offset += expected.len() as u64;
+            }
+        }
+        self.binding()?;
+        if self.file.metadata()?.len() != length {
+            return Err(invalid());
+        }
+        Ok(())
+    }
     fn append(&mut self, record: &Record) -> io::Result<()> {
         if self.poisoned {
             return Err(invalid());
         }
-        self.binding()?;
+        if let Err(error) = self.verify_content(&[]) {
+            self.poisoned = true;
+            return Err(error);
+        }
         let mut bytes = bounded_json_bytes(record, RECORD_BYTES)
             .map_err(|_| io::Error::other("provider history record budget exhausted"))?;
-        if self.file.metadata()?.len() + bytes.len() as u64 + 1 > HISTORY_BYTES {
+        if self.acknowledged_len() as u64 + bytes.len() as u64 + 1 > HISTORY_BYTES {
             return Err(invalid());
         }
         bytes.push(b'\n');
+        self.acknowledged
+            .try_reserve(1)
+            .map_err(|_| io::Error::other("provider history allocation budget exhausted"))?;
         self.poisoned = true;
-        self.file.write_all(&bytes)?;
+        #[cfg(test)]
+        let fault = self.append_fault.take();
+        #[cfg(test)]
+        if fault == Some(AppendFault::PartialWrite) {
+            self.file
+                .write_all_at(&bytes[..bytes.len() / 2], self.acknowledged_len() as u64)?;
+            return Err(invalid());
+        }
+        self.file
+            .write_all_at(&bytes, self.acknowledged_len() as u64)?;
+        #[cfg(test)]
+        if fault == Some(AppendFault::Sync) {
+            return Err(invalid());
+        }
         self.file.sync_all()?;
+        #[cfg(test)]
+        match fault {
+            Some(AppendFault::Content) => self.file.write_all_at(b"!", 0)?,
+            Some(AppendFault::Binding) => std::fs::rename(
+                self.path.join("provider-attempts.jsonl"),
+                self.path.join("lost-binding.jsonl"),
+            )?,
+            _ => {}
+        }
         self.poisoned = false;
+        if let Err(error) = self.verify_content(&bytes) {
+            self.poisoned = true;
+            return Err(error);
+        }
+        self.acknowledged.push(bytes);
         Ok(())
     }
     pub(crate) fn reserve(&mut self, request_id: u64) -> io::Result<usize> {
@@ -404,7 +488,7 @@ pub fn reconstruct_provider_history(
     endpoint: SocketAddr,
 ) -> io::Result<ProviderHistory> {
     let (mut file, _directory) = open(path, false)?;
-    read(&mut file, endpoint)
+    read(&mut file, endpoint).map(|(history, _)| history)
 }
 
 #[cfg(test)]

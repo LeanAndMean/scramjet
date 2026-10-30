@@ -382,25 +382,25 @@ impl Runtime {
         retained: Option<usize>,
     ) -> std::io::Result<Self> {
         let ledger = ProviderLedger::open(storage, endpoint)?;
-        let history = ledger.lock().unwrap().history();
-        if retained.is_some_and(|through| {
-            through > history.consumed() || history.has_unknown_after(through)
-        }) {
-            return Err(std::io::Error::other(
-                "provider uncertainty exceeds explicit retained boundary",
-            ));
-        }
-        let next = ledger
-            .lock()
-            .unwrap()
-            .history()
-            .attempts
-            .iter()
-            .map(|a| a.request_id)
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| std::io::Error::other("provider request identity exhausted"))?;
+        let next = {
+            let ledger = ledger.lock().unwrap();
+            let history = ledger.history_ref();
+            if retained.is_some_and(|through| {
+                through > history.consumed() || history.has_unknown_after(through)
+            }) {
+                return Err(std::io::Error::other(
+                    "provider uncertainty exceeds explicit retained boundary",
+                ));
+            }
+            history
+                .attempts
+                .iter()
+                .map(|a| a.request_id)
+                .max()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| std::io::Error::other("provider request identity exhausted"))?
+        };
         NEXT_ID.fetch_max(next, Ordering::Relaxed);
         Self::construct(
             endpoint,
@@ -965,7 +965,7 @@ impl State {
             if !ledger.eligible()
                 || self
                     .retained_unknown_through
-                    .is_some_and(|through| ledger.history().has_unknown_after(through))
+                    .is_some_and(|through| ledger.history_ref().has_unknown_after(through))
             {
                 return false;
             }
@@ -1056,7 +1056,7 @@ impl State {
         self.stats.handles = self.slots.len();
         if let Some(ledger) = &self.provider {
             if let Ok(ledger) = ledger.try_lock() {
-                let history = ledger.history();
+                let history = ledger.history_ref();
                 let slots = &self.slots;
                 let past = |attempt: &&ProviderAttemptFact| {
                     !slots.iter().any(|slot| {
