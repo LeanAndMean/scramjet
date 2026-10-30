@@ -111,6 +111,14 @@ impl Session {
         &self.path
     }
 
+    /// Stable across resumes: the file name without its extension.
+    pub fn id(&self) -> String {
+        self.path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
     pub fn append(&mut self, item: &Value) -> io::Result<()> {
         let mut line = serde_json::to_vec(item)?;
         line.push(b'\n');

@@ -168,6 +168,8 @@ impl Agent {
             "stream": true,
             "store": false,
             "include": ["reasoning.encrypted_content"],
+            // GPT-5.6 and later only reuse cached prefixes reliably when requests share a key.
+            "prompt_cache_key": self.session.id(),
         });
         request["reasoning"] = json!({"summary": "auto"});
         if let Some(effort) = &self.config.effort {
@@ -328,4 +330,33 @@ fn today() -> String {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
     format!("{year:04}-{month:02}-{day:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requests_share_the_session_cache_key_across_resumes() {
+        let root =
+            std::env::temp_dir().join(format!("scramjet-agent-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("1700000000000-42.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"session\",\"version\":1}\n{\"role\":\"user\",\"content\":\"hi\"}\n",
+        )
+        .unwrap();
+        let config = AgentConfig {
+            endpoint: ([127, 0, 0, 1], 9).into(),
+            model: "m".into(),
+            root: root.clone(),
+            effort: None,
+            max_output_tokens: None,
+            approve_all: false,
+        };
+        let agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
+        assert_eq!(agent.request()["prompt_cache_key"], "1700000000000-42");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
