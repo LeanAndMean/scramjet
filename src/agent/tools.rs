@@ -95,11 +95,14 @@ impl<'a> Call<'a> {
     }
     pub fn approval(&self, root: &Path) -> Approval {
         match self.name {
-            "bash" => Approval::Ask(format!(
-                "Run in {}:\n{}",
-                root.display(),
-                self.arguments["command"].as_str().unwrap_or("")
-            )),
+            "bash" => {
+                let command = self.arguments["command"].as_str().unwrap_or("");
+                // The call line above the question shows the first line of the command.
+                Approval::Ask(match command.lines().nth(1) {
+                    None => format!("Run in {}", root.display()),
+                    Some(_) => format!("Run in {}:\n{command}", root.display()),
+                })
+            }
             "write" | "edit" => {
                 let path = self.arguments["path"].as_str().unwrap_or("");
                 if resolve(root, path).starts_with(root) {
@@ -561,6 +564,13 @@ mod tests {
         assert_eq!(bash("false"), ("Command exited with code 1".into(), true));
         let (timed, failed) = bash("echo started; sleep 30");
         assert!(timed.starts_with("started\n\nCommand timed out after ") && failed);
+        let question =
+            |command: &str| match call("bash", json!({"command":command})).approval(&root) {
+                Approval::Ask(question) => question.replace(&root.display().to_string(), "ROOT"),
+                Approval::None => panic!("bash runs without approval"),
+            };
+        assert_eq!(question("ls -la\n"), "Run in ROOT");
+        assert_eq!(question("cd x\nmake"), "Run in ROOT:\ncd x\nmake");
         assert!(
             call("write", json!({"path":"a/b.txt","content":"hi"}))
                 .approval(&root)
