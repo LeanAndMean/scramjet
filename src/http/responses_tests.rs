@@ -940,7 +940,7 @@ fn progress_reports_text_and_reasoning_deltas_only_when_enabled() {
         for byte in chunk {
             parser.byte(*byte).unwrap();
         }
-        collected.extend(parser.progress.as_mut().unwrap().drain(..));
+        collected.append(parser.progress.as_mut().unwrap());
     }
     let text: String = collected
         .iter()

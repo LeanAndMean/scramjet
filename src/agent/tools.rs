@@ -364,6 +364,7 @@ mod tests {
 
     #[test]
     fn read_pages_long_files_and_bash_reports_exit_and_tail() {
+        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let root = std::env::temp_dir().join(format!("scramjet-agent-read-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let text: String = (1..=3000).map(|n| format!("line {n}\n")).collect();

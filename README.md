@@ -2,7 +2,7 @@
 
 A ground-up Rust redesign of Scramjet: a terminal coding harness, aiming at lightweight parallel agents and actively managed LLM concurrency.
 
-**Status:** `scramjet-rs agent` is a working interactive coding agent through the local Proxy proxy, verified live on Linux/WSL2 Ubuntu. It is early: there is no streaming display, context compaction or full-screen UI yet (see [docs/TASKS.md](docs/TASKS.md)). macOS is untested. The ~8,000 concurrent request goal is an aspiration, not measured performance.
+**Status:** `scramjet-rs agent` is a working interactive coding agent through the local Proxy proxy, verified live on Linux/WSL2 Ubuntu. It is early: there is no context compaction or full-screen UI yet (see [docs/TASKS.md](docs/TASKS.md)). macOS is untested. The ~8,000 concurrent request goal is an aspiration, not measured performance.
 
 ## Use the agent
 
@@ -22,7 +22,8 @@ scramjet-rs agent --help
 - **Context:** `AGENTS.md` and `CLAUDE.md` in the project directory and its ancestors are added to the instructions.
 - **Sessions:** saved as JSON lines under `$XDG_STATE_HOME/scramjet-rs/sessions/` (default `~/.local/state/...`). `--continue` resumes the newest session for the project; `--session FILE` a specific one. A tool call interrupted mid-run is reported to the model as unknown and never re-run.
 - **Model and limits:** `--model` (default `gpt-6-luna`), `--effort low|medium|high`, `--max-output-tokens N`, `--endpoint ADDR`. At most 200 model requests per prompt.
-- **Keys:** in interactive mode, end a line with `\` to continue it; `/exit` or Ctrl-D quits. Ctrl-C cancels the running turn (killing a running command); press it twice to quit.
+- **Prompt editor:** Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing `\` starts a new line, and pasted text is inserted without sending. Arrow keys, Home/End, Ctrl-A/E/U/K/W and Alt/Ctrl+arrows edit; Up/Down at the first/last row recall earlier prompts, including those of a resumed session. Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type `/exit`, to quit. Typed-ahead input is discarded before an approval question. Piped stdin falls back to plain lines, where a trailing `\` continues.
+- **During a turn:** Ctrl-C cancels it (killing a running command); press it twice to quit.
 
 The client speaks the OpenAI Responses streaming protocol (`/v1/responses`, `store:false`, encrypted reasoning replayed unchanged). As in Scramjet's own clients, each streamed `output_item.done` item is authoritative; the terminal `response.completed` copy supplies status and usage, and its item copies need not match.
 

@@ -1,3 +1,5 @@
+mod editor;
+
 use scramjet_rs::agent::{Agent, AgentConfig, AgentError, AgentUi, SessionChoice, StreamProgress};
 use std::{
     ffi::OsString,
@@ -21,8 +23,10 @@ Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1
   --session FILE         resume a specific session file
   --yes                  approve every tool call without asking
   -p PROMPT              run one prompt and exit (`-p -` reads it from stdin)
-In the interactive prompt, end a line with \\ to continue it; /exit or Ctrl-D quits.
-Ctrl-C cancels the running turn; press it twice to quit.";
+In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing \\ starts
+a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
+Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
+While a turn runs, Ctrl-C cancels it; press it twice to quit.";
 
 pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
     let mut project = None;
@@ -124,29 +128,31 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             format!(" ({} items resumed)", agent.conversation().len())
         }
     );
-    let stdin = std::io::stdin();
+    let mut editor =
+        (std::io::stdin().is_terminal() && std::io::stderr().is_terminal()).then(|| {
+            editor::Editor::new(
+                agent
+                    .conversation()
+                    .iter()
+                    .filter(|item| item["role"] == "user")
+                    .filter_map(|item| item["content"].as_str().map(str::to_owned))
+                    .collect(),
+            )
+        });
     loop {
-        let mut prompt = String::new();
-        loop {
-            eprint!("{}", if prompt.is_empty() { "\n> " } else { ". " });
-            let mut line = String::new();
-            if stdin
-                .lock()
-                .read_line(&mut line)
-                .map_err(|e| e.to_string())?
-                == 0
-            {
-                return Ok(());
+        let prompt = match &mut editor {
+            Some(editor) => {
+                eprintln!();
+                match editor.read().map_err(|e| e.to_string())? {
+                    Some(prompt) => prompt,
+                    None => return Ok(()),
+                }
             }
-            let line = line.trim_end_matches(['\n', '\r']);
-            if let Some(start) = line.strip_suffix('\\') {
-                prompt.push_str(start);
-                prompt.push('\n');
-            } else {
-                prompt.push_str(line);
-                break;
-            }
-        }
+            None => match read_lines()? {
+                Some(prompt) => prompt,
+                None => return Ok(()),
+            },
+        };
         let prompt = prompt.trim();
         if prompt.is_empty() {
             continue;
@@ -164,6 +170,31 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         }
         cancel.store(false, Ordering::Relaxed);
         ui.usage(&agent);
+    }
+}
+
+/// Reads a prompt from non-terminal input, where a line ending in \ continues on the next line.
+fn read_lines() -> Result<Option<String>, String> {
+    let mut prompt = String::new();
+    loop {
+        eprint!("{}", if prompt.is_empty() { "\n> " } else { ". " });
+        let mut line = String::new();
+        if std::io::stdin()
+            .lock()
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?
+            == 0
+        {
+            return Ok(None);
+        }
+        let line = line.trim_end_matches(['\n', '\r']);
+        if let Some(start) = line.strip_suffix('\\') {
+            prompt.push_str(start);
+            prompt.push('\n');
+        } else {
+            prompt.push_str(line);
+            return Ok(Some(prompt));
+        }
     }
 }
 
@@ -292,6 +323,11 @@ impl AgentUi for Terminal {
     }
     fn approve(&mut self, question: &str) -> bool {
         self.clear();
+        // Only an answer typed after the question is shown may approve it.
+        if std::io::stdin().is_terminal() {
+            let _ =
+                rustix::termios::tcflush(std::io::stdin(), rustix::termios::QueueSelector::IFlush);
+        }
         eprint!("{question}\nAllow? [y/N] ");
         let mut answer = String::new();
         if std::io::stdin().lock().read_line(&mut answer).is_err() {

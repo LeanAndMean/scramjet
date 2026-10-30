@@ -1,0 +1,729 @@
+//! Prompt editor for the interactive agent: raw-mode editing, bracketed paste and history.
+
+use rustix::{
+    event::{PollFd, PollFlags, Timespec, poll},
+    io::Errno,
+    termios::{self, OptionalActions, Termios},
+};
+use std::{
+    fmt::Write as _,
+    io::{self, Write},
+    time::Duration,
+};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+/// How long the rest of an escape sequence may take to arrive before Escape counts as a lone key.
+const ESCAPE_WAIT: Duration = Duration::from_millis(30);
+/// How often an idle editor checks for a terminal resize.
+const RESIZE_CHECK: Duration = Duration::from_millis(250);
+const TAB: &str = "    ";
+const INDENT: usize = 2;
+
+#[derive(Debug, PartialEq)]
+enum Key {
+    Text(String),
+    Paste(String),
+    Enter,
+    NewLine,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    WordLeft,
+    WordRight,
+    Up,
+    Down,
+    LineStart,
+    LineEnd,
+    DeleteWordBack,
+    DeleteWordForward,
+    KillStart,
+    KillEnd,
+    Interrupt,
+    EndOfInput,
+    Idle,
+    Ignored,
+}
+
+trait ByteSource {
+    /// The next input byte; `None` when `wait` elapses first. `wait: None` blocks.
+    fn byte(&mut self, wait: Option<Duration>) -> io::Result<Option<u8>>;
+}
+
+fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> io::Result<Key> {
+    let Some(byte) = source.byte(wait)? else {
+        return Ok(Key::Idle);
+    };
+    Ok(match byte {
+        0x1b => escape(source)?,
+        b'\r' => Key::Enter,
+        b'\n' => Key::NewLine,
+        b'\t' => Key::Text("\t".into()),
+        0x7f | 8 => Key::Backspace,
+        1 => Key::LineStart,
+        2 => Key::Left,
+        3 => Key::Interrupt,
+        4 => Key::EndOfInput,
+        5 => Key::LineEnd,
+        6 => Key::Right,
+        11 => Key::KillEnd,
+        14 => Key::Down,
+        16 => Key::Up,
+        21 => Key::KillStart,
+        23 => Key::DeleteWordBack,
+        0x20..=0x7e => Key::Text(char::from(byte).to_string()),
+        0xc2..=0xf4 => {
+            let length = match byte {
+                0xc2..=0xdf => 2,
+                0xe0..=0xef => 3,
+                _ => 4,
+            };
+            let mut bytes = vec![byte];
+            while bytes.len() < length {
+                match source.byte(Some(ESCAPE_WAIT))? {
+                    Some(next) => bytes.push(next),
+                    None => return Ok(Key::Ignored),
+                }
+            }
+            String::from_utf8(bytes).map_or(Key::Ignored, Key::Text)
+        }
+        _ => Key::Ignored,
+    })
+}
+
+fn escape(source: &mut impl ByteSource) -> io::Result<Key> {
+    let mut next = source.byte(Some(ESCAPE_WAIT))?;
+    // Some terminals send Alt+key as an extra Escape before the key's own sequence.
+    while next == Some(0x1b) {
+        next = source.byte(Some(ESCAPE_WAIT))?;
+    }
+    Ok(match next {
+        None => Key::Ignored,
+        Some(b'[') => csi(source)?,
+        Some(b'O') => match source.byte(Some(ESCAPE_WAIT))? {
+            Some(b'A') => Key::Up,
+            Some(b'B') => Key::Down,
+            Some(b'C') => Key::Right,
+            Some(b'D') => Key::Left,
+            Some(b'H') => Key::LineStart,
+            Some(b'F') => Key::LineEnd,
+            _ => Key::Ignored,
+        },
+        Some(b'\r' | b'\n') => Key::NewLine,
+        Some(0x7f | 8) => Key::DeleteWordBack,
+        Some(b'b') => Key::WordLeft,
+        Some(b'f') => Key::WordRight,
+        Some(b'd') => Key::DeleteWordForward,
+        Some(_) => Key::Ignored,
+    })
+}
+
+fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
+    let mut parameters = Vec::new();
+    let last = loop {
+        let Some(byte) = source.byte(Some(ESCAPE_WAIT))? else {
+            return Ok(Key::Ignored);
+        };
+        if (0x40..=0x7e).contains(&byte) {
+            break byte;
+        }
+        if parameters.len() < 32 {
+            parameters.push(byte);
+        }
+    };
+    let parameters = String::from_utf8_lossy(&parameters);
+    let modifier = parameters.split(';').nth(1);
+    let word = matches!(modifier, Some("3" | "5"));
+    Ok(match (last, parameters.as_ref()) {
+        (b'A', _) => Key::Up,
+        (b'B', _) => Key::Down,
+        (b'C', _) if word => Key::WordRight,
+        (b'D', _) if word => Key::WordLeft,
+        (b'C', _) => Key::Right,
+        (b'D', _) => Key::Left,
+        (b'H', _) | (b'~', "1" | "7") => Key::LineStart,
+        (b'F', _) | (b'~', "4" | "8") => Key::LineEnd,
+        (b'~', "3") => Key::Delete,
+        (b'~', "3;3" | "3;5") => Key::DeleteWordForward,
+        (b'~', "200") => paste(source)?,
+        (b'~', "27;2;13" | "27;3;13") | (b'u', "13;2" | "13;3") => Key::NewLine,
+        (b'u', "13") => Key::Enter,
+        _ => Key::Ignored,
+    })
+}
+
+fn paste(source: &mut impl ByteSource) -> io::Result<Key> {
+    const END: &[u8] = b"\x1b[201~";
+    let mut bytes = Vec::new();
+    while !bytes.ends_with(END) {
+        if let Some(byte) = source.byte(None)? {
+            bytes.push(byte);
+        }
+    }
+    bytes.truncate(bytes.len() - END.len());
+    Ok(Key::Paste(clean(&String::from_utf8_lossy(&bytes))))
+}
+
+/// Pasted text keeps its line breaks and tabs; other control characters are dropped.
+fn clean(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect()
+}
+
+#[derive(Default)]
+struct Buffer {
+    text: String,
+    /// Byte offset, always on a grapheme boundary.
+    cursor: usize,
+}
+
+impl Buffer {
+    fn set(&mut self, text: String) {
+        self.cursor = text.len();
+        self.text = text;
+    }
+    fn insert(&mut self, text: &str) {
+        self.text.insert_str(self.cursor, text);
+        self.cursor += text.len();
+    }
+    fn remove(&mut self, start: usize, end: usize) {
+        self.text.replace_range(start..end, "");
+        self.cursor = start;
+    }
+    fn previous(&self) -> usize {
+        self.text[..self.cursor]
+            .grapheme_indices(true)
+            .next_back()
+            .map_or(0, |(index, _)| index)
+    }
+    fn next(&self) -> usize {
+        self.text[self.cursor..]
+            .graphemes(true)
+            .next()
+            .map_or(self.cursor, |g| self.cursor + g.len())
+    }
+    fn word_start(&self) -> usize {
+        let before = self.text[..self.cursor].trim_end();
+        before
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map_or(0, |(index, c)| index + c.len_utf8())
+    }
+    fn word_end(&self) -> usize {
+        let after = &self.text[self.cursor..];
+        let rest = after.trim_start();
+        let skipped = after.len() - rest.len();
+        self.cursor + skipped + rest.find(char::is_whitespace).unwrap_or(rest.len())
+    }
+    fn line_start(&self) -> usize {
+        self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1)
+    }
+    fn line_end(&self) -> usize {
+        self.text[self.cursor..]
+            .find('\n')
+            .map_or(self.text.len(), |i| self.cursor + i)
+    }
+    fn apply(&mut self, key: &Key) {
+        match key {
+            Key::Text(text) | Key::Paste(text) => self.insert(text),
+            Key::NewLine => self.insert("\n"),
+            Key::Backspace => self.remove(self.previous(), self.cursor),
+            Key::Delete => {
+                let end = self.next();
+                self.remove(self.cursor, end);
+            }
+            Key::Left => self.cursor = self.previous(),
+            Key::Right => self.cursor = self.next(),
+            Key::WordLeft => self.cursor = self.word_start(),
+            Key::WordRight => self.cursor = self.word_end(),
+            Key::LineStart => self.cursor = self.line_start(),
+            Key::LineEnd => self.cursor = self.line_end(),
+            Key::DeleteWordBack => self.remove(self.word_start(), self.cursor),
+            Key::DeleteWordForward => {
+                let end = self.word_end();
+                self.remove(self.cursor, end);
+            }
+            Key::KillStart => match self.line_start() {
+                start if start == self.cursor => self.remove(self.previous(), self.cursor),
+                start => self.remove(start, self.cursor),
+            },
+            Key::KillEnd => match self.line_end() {
+                end if end == self.cursor => {
+                    let next = self.next();
+                    self.remove(self.cursor, next);
+                }
+                end => self.remove(self.cursor, end),
+            },
+            _ => {}
+        }
+    }
+}
+
+/// Screen rows for the text, with the row and column of every cursor position.
+struct Layout {
+    rows: Vec<String>,
+    stops: Vec<Stop>,
+}
+
+#[derive(Clone, Copy)]
+struct Stop {
+    offset: usize,
+    row: usize,
+    column: usize,
+}
+
+impl Layout {
+    fn new(text: &str, cursor: usize, width: usize) -> Self {
+        let width = width.max(INDENT + 2);
+        let mut rows = vec!["> ".to_owned()];
+        let mut stops = Vec::new();
+        let mut column = INDENT;
+        let mut offset = 0;
+        for (number, line) in text.split('\n').enumerate() {
+            if number > 0 {
+                rows.push(". ".into());
+                column = INDENT;
+            }
+            for (index, grapheme) in line.grapheme_indices(true) {
+                let shown = if grapheme == "\t" { TAB } else { grapheme };
+                let cells = shown.width();
+                if column + cells > width && column > INDENT {
+                    rows.push(" ".repeat(INDENT));
+                    column = INDENT;
+                }
+                stops.push(Stop {
+                    offset: offset + index,
+                    row: rows.len() - 1,
+                    column,
+                });
+                rows.last_mut().unwrap().push_str(shown);
+                column += cells;
+            }
+            let end = offset + line.len();
+            if end == cursor && column >= width {
+                rows.push(" ".repeat(INDENT));
+                column = INDENT;
+            }
+            stops.push(Stop {
+                offset: end,
+                row: rows.len() - 1,
+                column,
+            });
+            offset = end + 1;
+        }
+        Self { rows, stops }
+    }
+
+    fn at(&self, cursor: usize) -> Stop {
+        *self
+            .stops
+            .iter()
+            .find(|stop| stop.offset == cursor)
+            .unwrap_or_else(|| self.stops.last().unwrap())
+    }
+
+    /// The cursor offset on the row above or below, nearest the current column.
+    fn vertical(&self, cursor: usize, up: bool) -> Option<usize> {
+        let here = self.at(cursor);
+        let row = if up {
+            here.row.checked_sub(1)?
+        } else {
+            here.row + 1
+        };
+        let mut row_stops = self.stops.iter().filter(|stop| stop.row == row);
+        let first = *row_stops.next()?;
+        Some(
+            std::iter::once(first)
+                .chain(row_stops.copied())
+                .take_while(|stop| stop.column <= here.column)
+                .last()
+                .unwrap_or(first)
+                .offset,
+        )
+    }
+}
+
+struct RawMode {
+    original: Termios,
+}
+
+impl RawMode {
+    fn enter() -> io::Result<Self> {
+        let original = termios::tcgetattr(io::stdin())?;
+        let mut raw = original.clone();
+        raw.make_raw();
+        termios::tcsetattr(io::stdin(), OptionalActions::Now, &raw)?;
+        eprint!("\x1b[?2004h");
+        Ok(Self { original })
+    }
+}
+
+impl Drop for RawMode {
+    fn drop(&mut self) {
+        eprint!("\x1b[?2004l");
+        let _ = io::stderr().flush();
+        let _ = termios::tcsetattr(io::stdin(), OptionalActions::Now, &self.original);
+    }
+}
+
+#[derive(Default)]
+struct Stdin {
+    buffer: Vec<u8>,
+    start: usize,
+}
+
+impl Stdin {
+    fn pending(&self) -> bool {
+        self.start < self.buffer.len()
+    }
+}
+
+impl ByteSource for Stdin {
+    fn byte(&mut self, wait: Option<Duration>) -> io::Result<Option<u8>> {
+        if self.start == self.buffer.len() {
+            let stdin = io::stdin();
+            let timeout = wait.map(|wait| Timespec {
+                tv_sec: wait.as_secs() as i64,
+                tv_nsec: i64::from(wait.subsec_nanos()),
+            });
+            let mut fds = [PollFd::new(&stdin, PollFlags::IN)];
+            match poll(&mut fds, timeout.as_ref()) {
+                Ok(0) => return Ok(None),
+                Ok(_) => {}
+                Err(Errno::INTR) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            }
+            self.buffer.resize(4096, 0);
+            let read = loop {
+                match rustix::io::read(&stdin, &mut self.buffer) {
+                    Err(Errno::INTR) => continue,
+                    result => break result?,
+                }
+            };
+            if read == 0 {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            self.buffer.truncate(read);
+            self.start = 0;
+        }
+        self.start += 1;
+        Ok(Some(self.buffer[self.start - 1]))
+    }
+}
+
+/// The editor's place on screen between redraws.
+#[derive(Default)]
+struct Screen {
+    /// Row of the terminal cursor, counted from the first drawn row.
+    cursor_row: usize,
+    /// First layout row drawn when the text is taller than the terminal.
+    top: usize,
+    width: usize,
+}
+
+fn terminal_size() -> (usize, usize) {
+    termios::tcgetwinsize(io::stderr())
+        .ok()
+        .filter(|size| size.ws_col > 0 && size.ws_row > 0)
+        .map_or((80, 24), |size| {
+            (usize::from(size.ws_col), usize::from(size.ws_row))
+        })
+}
+
+impl Screen {
+    /// Redraws the editor. `done` draws every row and leaves the cursor below them.
+    fn draw(&mut self, buffer: &Buffer, hint: Option<&str>, done: bool) -> io::Result<()> {
+        let (width, height) = terminal_size();
+        self.width = width;
+        let layout = Layout::new(&buffer.text, buffer.cursor, width);
+        let cursor = layout.at(buffer.cursor);
+        let total = layout.rows.len();
+        let visible = if done {
+            total
+        } else {
+            height.saturating_sub(2).max(1).min(total)
+        };
+        self.top = self
+            .top
+            .min(cursor.row)
+            .max((cursor.row + 1).saturating_sub(visible))
+            .min(total - visible);
+        let mut out = String::new();
+        if self.cursor_row > 0 {
+            write!(out, "\x1b[{}A", self.cursor_row).unwrap();
+        }
+        out.push_str("\r\x1b[J");
+        out.push_str(&layout.rows[self.top..self.top + visible].join("\r\n"));
+        if let Some(hint) = hint {
+            write!(out, "\r\n\x1b[2m{hint}\x1b[0m").unwrap();
+        }
+        if done {
+            out.push_str("\r\n");
+            self.cursor_row = 0;
+            self.top = 0;
+        } else {
+            let row = cursor.row - self.top;
+            let last = visible - 1 + usize::from(hint.is_some());
+            if last > row {
+                write!(out, "\x1b[{}A", last - row).unwrap();
+            }
+            out.push('\r');
+            if cursor.column > 0 {
+                write!(out, "\x1b[{}C", cursor.column).unwrap();
+            }
+            self.cursor_row = row;
+        }
+        let mut stderr = io::stderr().lock();
+        stderr.write_all(out.as_bytes())?;
+        stderr.flush()
+    }
+}
+
+pub struct Editor {
+    history: Vec<String>,
+}
+
+impl Editor {
+    pub fn new(history: Vec<String>) -> Self {
+        Self { history }
+    }
+
+    /// Reads one prompt. `None` means the user asked to exit.
+    pub fn read(&mut self) -> io::Result<Option<String>> {
+        let _raw = RawMode::enter()?;
+        let mut source = Stdin::default();
+        let mut screen = Screen::default();
+        let mut buffer = Buffer::default();
+        let mut browsing = self.history.len();
+        let mut draft = String::new();
+        let mut exit_armed = false;
+        let mut dirty = false;
+        screen.draw(&buffer, None, false)?;
+        loop {
+            let key = match read_key(&mut source, Some(RESIZE_CHECK)) {
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Key::EndOfInput,
+                result => result?,
+            };
+            let armed = std::mem::take(&mut exit_armed);
+            let changed = match key {
+                Key::Idle => {
+                    exit_armed = armed;
+                    terminal_size().0 != screen.width
+                }
+                Key::Ignored => {
+                    exit_armed = armed;
+                    false
+                }
+                Key::Enter if buffer.text[..buffer.cursor].ends_with('\\') => {
+                    buffer.apply(&Key::Backspace);
+                    buffer.apply(&Key::NewLine);
+                    true
+                }
+                Key::Enter if buffer.text.trim().is_empty() => true,
+                Key::Enter => {
+                    screen.draw(&buffer, None, true)?;
+                    if self.history.last() != Some(&buffer.text) {
+                        self.history.push(buffer.text.clone());
+                    }
+                    return Ok(Some(buffer.text));
+                }
+                Key::Interrupt if buffer.text.is_empty() => {
+                    if armed {
+                        screen.draw(&buffer, None, true)?;
+                        return Ok(None);
+                    }
+                    exit_armed = true;
+                    true
+                }
+                Key::Interrupt => {
+                    buffer = Buffer::default();
+                    browsing = self.history.len();
+                    true
+                }
+                Key::EndOfInput if buffer.text.is_empty() => {
+                    screen.draw(&buffer, None, true)?;
+                    return Ok(None);
+                }
+                Key::Up | Key::Down => {
+                    let up = key == Key::Up;
+                    let layout = Layout::new(&buffer.text, buffer.cursor, terminal_size().0);
+                    if let Some(cursor) = layout.vertical(buffer.cursor, up) {
+                        buffer.cursor = cursor;
+                    } else if up && browsing > 0 {
+                        if browsing == self.history.len() {
+                            draft = std::mem::take(&mut buffer.text);
+                        }
+                        browsing -= 1;
+                        buffer.set(self.history[browsing].clone());
+                    } else if !up && browsing < self.history.len() {
+                        browsing += 1;
+                        buffer.set(match self.history.get(browsing) {
+                            Some(entry) => entry.clone(),
+                            None => std::mem::take(&mut draft),
+                        });
+                    }
+                    true
+                }
+                Key::EndOfInput => {
+                    buffer.apply(&Key::Delete);
+                    true
+                }
+                key => {
+                    buffer.apply(&key);
+                    true
+                }
+            };
+            dirty |= changed;
+            if dirty && !source.pending() {
+                screen.draw(&buffer, exit_armed.then_some(EXIT_HINT), false)?;
+                dirty = false;
+            }
+        }
+    }
+}
+
+const EXIT_HINT: &str = "(Ctrl-C again or Ctrl-D to exit)";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    impl ByteSource for VecDeque<u8> {
+        fn byte(&mut self, _wait: Option<Duration>) -> io::Result<Option<u8>> {
+            Ok(self.pop_front())
+        }
+    }
+
+    fn keys(bytes: &[u8]) -> Vec<Key> {
+        let mut source: VecDeque<u8> = bytes.iter().copied().collect();
+        let mut keys = Vec::new();
+        loop {
+            match read_key(&mut source, None).unwrap() {
+                Key::Idle => return keys,
+                key => keys.push(key),
+            }
+        }
+    }
+
+    fn edit(text: &str, cursor: usize, input: &[u8]) -> (String, usize) {
+        let mut buffer = Buffer {
+            text: text.into(),
+            cursor,
+        };
+        for key in keys(input) {
+            buffer.apply(&key);
+        }
+        (buffer.text, buffer.cursor)
+    }
+
+    #[test]
+    fn decodes_keys_terminals_send() {
+        assert_eq!(
+            keys("aé界\r\n\x1b\r\x1b[13;2u\x1b[27;2;13~".as_bytes()),
+            [
+                Key::Text("a".into()),
+                Key::Text("é".into()),
+                Key::Text("界".into()),
+                Key::Enter,
+                Key::NewLine,
+                Key::NewLine,
+                Key::NewLine,
+                Key::NewLine,
+            ]
+        );
+        assert_eq!(
+            keys(b"\x1b[D\x1bOC\x1b[1;5D\x1b[1;3C\x1bb\x1b[H\x1b[4~\x1b[3~\x1b[3;5~\x1b\x7f\x17"),
+            [
+                Key::Left,
+                Key::Right,
+                Key::WordLeft,
+                Key::WordRight,
+                Key::WordLeft,
+                Key::LineStart,
+                Key::LineEnd,
+                Key::Delete,
+                Key::DeleteWordForward,
+                Key::DeleteWordBack,
+                Key::DeleteWordBack,
+            ]
+        );
+        assert_eq!(
+            keys(b"\x03\x04\x1b\x1b[D\x1b[99;5u\x1b[5~\x1b"),
+            [
+                Key::Interrupt,
+                Key::EndOfInput,
+                Key::Left,
+                Key::Ignored,
+                Key::Ignored,
+                Key::Ignored
+            ]
+        );
+    }
+
+    #[test]
+    fn paste_is_inserted_literally_without_submitting() {
+        assert_eq!(
+            keys(b"\x1b[200~one\r\ntwo\rthree\x03\x1b[A\tend\x1b[201~\r"),
+            [Key::Paste("one\ntwo\nthree[A\tend".into()), Key::Enter]
+        );
+        assert_eq!(
+            edit("ab", 1, b"\x1b[200~x\ny\x1b[201~"),
+            ("ax\nyb".into(), 4)
+        );
+    }
+
+    #[test]
+    fn edits_by_grapheme_word_and_line() {
+        let family = "👨‍👩‍👧";
+        let text = format!("a{family}é");
+        assert_eq!(edit(&text, text.len(), b"\x7f\x7f"), ("a".into(), 1));
+        assert_eq!(
+            edit(&text, 1, b"\x1b[C\x1b[C\x7f"),
+            (format!("a{family}"), 1 + family.len())
+        );
+        assert_eq!(
+            edit("cargo test  --all", 17, b"\x17"),
+            ("cargo test  ".into(), 12)
+        );
+        assert_eq!(
+            edit("cargo test  --all", 17, b"\x17\x17"),
+            ("cargo ".into(), 6)
+        );
+        assert_eq!(edit("one two", 0, b"\x1bd"), (" two".into(), 0));
+        assert_eq!(edit("one\ntwo", 5, b"\x15"), ("one\nwo".into(), 4));
+        assert_eq!(edit("one\ntwo", 4, b"\x15"), ("onetwo".into(), 3));
+        assert_eq!(edit("one\ntwo", 1, b"\x0b"), ("o\ntwo".into(), 1));
+        assert_eq!(edit("one\ntwo", 5, b"\x01\x02\x05"), ("one\ntwo".into(), 3));
+    }
+
+    #[test]
+    fn layout_wraps_by_display_width_and_places_the_cursor() {
+        let layout = Layout::new("abcdef\n界界界", 6, 6);
+        assert_eq!(layout.rows, ["> abcd", "  ef", ". 界界", "  界"]);
+        let cursor = layout.at(6);
+        assert_eq!((cursor.row, cursor.column), (1, 4));
+        let wide = layout.at(7 + 6);
+        assert_eq!((wide.row, wide.column), (3, 2));
+        let exact = Layout::new("abcd", 4, 6);
+        assert_eq!(exact.rows, ["> abcd", "  "]);
+        assert_eq!((exact.at(4).row, exact.at(4).column), (1, 2));
+        assert_eq!(Layout::new("a\tb", 0, 80).rows, ["> a    b"]);
+    }
+
+    #[test]
+    fn vertical_moves_follow_screen_rows_then_reach_history() {
+        let text = "abcdef\nxy";
+        let layout = Layout::new(text, 9, 6);
+        assert_eq!(layout.vertical(9, true), Some(6));
+        assert_eq!(layout.vertical(6, true), Some(2));
+        assert_eq!(layout.vertical(2, true), None);
+        assert_eq!(layout.vertical(1, false), Some(5));
+        assert_eq!(layout.vertical(9, false), None);
+    }
+}
