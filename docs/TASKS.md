@@ -4,16 +4,16 @@ This file owns priority order, selection and selection rationale. Each linked ta
 
 ## Selection
 
-[S4.14b — reusable headless coding invocation and conversation continuity](tasks/S4.14b.md), following the user's 2026-10-29 clarification: supply a natural-language prompt and optional prior conversation record to the executable, then use ordinary external scripting for successive fresh invocations. Avoid throwaway consumers, production haiku choreography and a specialty two-message or retained-process interface. Both independent advisers recommended this reusable path; direct source evidence confirms ordered provider context already exists but fresh-process record import, ordinary per-message completion and reusable effect authority require a coherent same-task redesign, not CLI flags alone. Accepted offline provider/effect evidence supports planning; the revised task record owns its boundaries and confirmed isolated generated-Python scope. No new task ID or new runtime/framework is selected.
+[S4.14a — bounded deployed text/inert-call validation](tasks/S4.14a.md), following independent reusable offline acceptance and the user's informed2026-10-29 authorization to prepare at most two new sequential provider POSTs with additional bounded unresolved exposure. Both read-only advisers identified deployed validation as the substantive remaining commitment, not another accepted offline correction or specialty consumer. The parent owns exact authorization; a owns unresolved admission/shared-ledger/check design and pre-dispatch independent acceptance. Local planning is eligible, not immediate dispatch. No private accounting was accessed or attested by this selection.
 
-The previous specialty haiku-TUI selection is superseded, with code, checkpoints and incomplete evidence retained in [S4.14c](tasks/S4.14c.md). General retained/native interaction remains a wider product goal, not a prerequisite for this short-term headless demonstration or an abandoned outcome. Actual deployed compatibility remains required and separately stopped; restarting or passing a record cannot renew call allowances or settle uncertainty. No speculative reconciliation service or repeated accepted provider correction is selected.
+The obsolete b-redesign cursor is removed: its reusable offline outcome has candidate-bound independent acceptance, while deployed integration/effect authority remains a separate dependency. The README's supported-output capture example is corrected rather than creating another product task. c remains superseded specialty work with incomplete evidence retained; general retained/native interaction remains wider product scope. No speculative reconciliation framework, repeated accepted provider correction or capacity/platform expansion is selected.
 
 ## Ordered work
 
-1. [S4.14b — reusable headless coding invocation and conversation continuity](tasks/S4.14b.md). Make the user's reusable prompt/record outcome actionable while preserving exact approvals, isolation, bounded work and uncertain-effect no retry.
-2. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Preserve required deployed compatibility; accepted offline contracts need no further work absent concrete findings, and live evidence needs separately eligible authority.
+1. [S4.14a — bounded deployed text/inert-call validation](tasks/S4.14a.md). Resolve the newly authorized prospective admission/ledger/check contract before eligible deployed evidence.
+2. [S4.14b — reusable headless coding invocation and conversation continuity](tasks/S4.14b.md). Preserve the still-required real-provider outcome; do not repeat its accepted offline implementation or bypass a/live-effect dependencies.
 
-Milestone context: [S4.14 — first real-provider coding journey](tasks/S4.14.md). Its record owns shared authorization and revised parent acceptance, not another queue.
+Milestone context: [S4.14 — first real-provider coding journey](tasks/S4.14.md). Its record owns shared authorization and parent acceptance, not another queue. Reordering preserves required deployed obligations; no task is marked completed merely by housekeeping.
 
 ## Housekeeping
 

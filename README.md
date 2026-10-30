@@ -2,7 +2,7 @@
 
 A ground-up Rust redesign of Scramjet: a dependable terminal coding harness with lightweight parallel agents and actively managed LLM concurrency.
 
-**Status:** the offline runtime, controlled coding, parallel readers, admission feedback, command journeys and retained-project application are independently accepted within their bounded WSL2 Ubuntu scopes; [historical acceptance](docs/PROGRESS-ARCHIVE.md) preserves exact candidates and qualifications. [S4.14a](docs/tasks/S4.14a.md) adds an opt-in Proxy Responses transport with accepted offline diagnostic/capture corrections, but whole-task live compatibility remains blocked. [S4.14b](docs/tasks/S4.14b.md) now supplies the reusable `coding` prompt/record invocation and externally orchestrated fresh-process fixture journeys; its new contracts require independent review, and deployed compatibility remains stopped. The existing haiku commands below are fixed fixture demonstrations, not general coding or continuation. Native desktop/platform readiness and backend capacity remain unverified; no remote or publication is authorized. Start development orientation at [the task queue](docs/TASKS.md), not the activity history.
+**Status:** the offline runtime, controlled coding, parallel readers, admission feedback, command journeys and retained-project application are independently accepted within their bounded WSL2 Ubuntu scopes; [historical acceptance](docs/PROGRESS-ARCHIVE.md) preserves exact candidates and qualifications. [S4.14a](docs/tasks/S4.14a.md) adds an opt-in Proxy Responses transport with accepted offline diagnostic/capture corrections, but whole-task live compatibility remains blocked. [S4.14b](docs/tasks/S4.14b.md) now supplies the reusable `coding` prompt/record invocation and externally orchestrated fresh-process fixture journeys; its complete reusable offline candidate is independently accepted, while deployed compatibility remains outstanding under the task's bounded authorization and readiness gates. The existing haiku commands below are fixed fixture demonstrations, not general coding or continuation. Native desktop/platform readiness and backend capacity remain unverified; no remote or publication is authorized. Start development orientation at [the task queue](docs/TASKS.md), not the activity history.
 
 The initial experience is familiar: separate project tabs, a main coding agent, and parallel specialist subagents. The longer-term ambition is approximately 8,000 concurrent LLM requests from one node, subject to workload, host resources, provider limits, and inference capacity. This is a target to investigate, not demonstrated performance.
 
@@ -95,7 +95,7 @@ The client fixes one active attempt, eight pending requests, at most one POST di
 
 The exclusive0700 storage directory contains a descriptor-relative0600 locked journal, with32 durable possible-POST reservations across fresh processes and separate four-obligation remote/unknown-usage caps. Records accommodate an accepted16384-byte wire frame plus1024 bytes for fixed wrapping/scalar conversion; the file budget covers the header and both records for all32 reservations. Sizes are related storage policies, not provider identifier limits. Provider HTTP header-count capacity follows the4096-byte head budget rather than an assumed16 headers; fixture limits remain separate. Reservation precedes possible send; local transport join is separate from durable provider-terminal/usage acknowledgement and is never billing proof. Unknown usage does not become zero; fixture attestation cannot settle it. Recovery is read-only via `reconstruct_provider_history`, never retries, and refuses incomplete/contradictory history. Default live startup refuses prior uncertainty; an explicitly selected retained ordinal boundary permits known new attempts while keeping old obligations counted, and any new uncertainty stops further runtime dispatch. This is not a status lookup, retry or reconciliation API. This first slice supplies no reconciliation API, general provider registry, TLS/OAuth client, file creation, Bash/Python execution or provider TUI.
 
-## Reusable headless coding invocation (S4.14b offline candidate)
+## Reusable headless coding invocation (S4.14b accepted offline)
 
 `coding` accepts a caller's UTF-8 prompt and, on a later invocation, the previous complete JSON result/record. Each process runs one message through the existing provider admission/turn driver, returns actual correlated tool results and exports complete ordered conversation material. Production has no poem names, supplied reader solution, two-message choreography or stdout-equality success predicate. A model's no-call final completes its message, not proof that the requested files/output are correct.
 
@@ -108,9 +108,10 @@ cargo test --offline --locked --test coding_invocation_controls \
   --test coding_invocation_meter --test coding_invocation_publication
 ```
 
-Ordinary scripting against your already-running owned fixture can use:
+Ordinary Bash scripting against your already-running owned fixture can use (pipeline failures stop the script; do not automatically retry a failed invocation or capture):
 
-```sh
+```bash
+set -euo pipefail
 umask 077
 mkdir -m 700 owned-project owned-storage
 printf '%s\n' 'Create a short verse in notes.md, then finish this message.' > first.txt
@@ -118,12 +119,12 @@ printf '%s\n' 'Write your own Python reader for notes.md and run it to print the
 cargo run --offline --locked -- coding --owned-fixture \
   --endpoint "127.0.0.1:$FIXTURE_PORT" \
   --project "$PWD/owned-project" --storage "$PWD/owned-storage" --run example \
-  --file notes.md --file reader.py --prompt-file first.txt > first.json
+  --file notes.md --file reader.py --prompt-file first.txt | tee first.json >/dev/null
 cargo run --offline --locked -- coding --owned-fixture \
   --endpoint "127.0.0.1:$FIXTURE_PORT" \
   --project "$PWD/owned-project" --storage "$PWD/owned-storage" --run example \
   --file notes.md --file reader.py --prompt-file second.txt \
-  --record-file first.json > second.json
+  --record-file first.json | tee second.json >/dev/null
 ```
 
 Machine-readable stdout is separate from terminal-safe complete intent display on stderr. Normal approval reads one bounded JSON line of the form `{"approve":true,"intent":<the exact displayed intent>}`; a stale/foreign intent, bare yes, EOF, signal or deadline does not approve. `--prompt-file -` accepts one bounded stdin line; use a prompt file when stdin is also needed for approvals. `--approve-effects` is synthetic automatic approval **only in the explicitly selected owned fixture lane, after emitting each full current intent**.
@@ -134,7 +135,7 @@ One locked run retains the same provider ledger, original boot-qualified300s dea
 
 Fresh selected-file preflight runs under the workspace lock before creating any run/provider artifacts; correcting a deterministic input refusal can reuse the same run ID without cleanup. Genuine torn or already-bound stores still refuse. CLI stdout must be a pipe, socket or terminal: descriptor delivery uses nonblocking writes and bounded readiness waits, retaining the locked publication owner and original signal/deadline guards even when the reader stops draining. Regular-file/device output is refused; use a draining pipe (for example, `coding ... | tee record.json`) to capture the result. The descriptor's output and shared status flags require exclusive ownership during delivery; original flags are restored before returning. Noncontinuable diagnostics without a publication owner have a separate five-second output-wait budget, not a renewed run allowance. Observed cancellation, expiry or failed delivery records a noncontinuable stop; failed stop persistence is reported as incomplete, never successful. Terminal failure diagnostics are best-effort nonblocking output to pipe/socket/terminal stderr; a saturated shared stdout/stderr cannot prevent exit, but may lose diagnostic text. Unsupported stderr sinks receive no terminal diagnostic; authoritative material remains in the run store. Library callers can use consuming `CodingInvocationResult::deliver_fd` for supported descriptor delivery. The synchronous `deliver` method checks between returned write/flush operations but cannot interrupt an arbitrary blocking `Write` implementation. Neither method nor inspectable record bytes attest reader receipt, filesystem persistence or remote billing. Clean producer loss alone still leaves final-export acknowledgement unknown and may permit inert continuation from the latest complete artifact.
 
-Owned fixtures establish the reusable path and bounded native controls, not deployed reasoning continuity/tool intelligence, physical desktop/macOS readiness or final user QA. [Required independent review and remaining live gates](docs/tasks/S4.14b.md) remain authoritative. The historical haiku APIs below are preserved separately.
+Owned fixtures establish the reusable path and bounded native controls, not deployed reasoning continuity/tool intelligence, physical desktop/macOS readiness or final user QA. [Independent offline acceptance and remaining live gates](docs/tasks/S4.14b.md#independent-blocked-output-acceptance-2026-10-29) remain authoritative. The historical haiku APIs below are preserved separately.
 
 ## Headless haiku journey (historically accepted offline)
 
