@@ -6,7 +6,7 @@ use rustix::{
     termios::{self, LocalModes, OptionalActions, Termios},
 };
 use scramjet_rs::agent::{
-    Agent, AgentConfig, AgentError, AgentUi, SessionChoice, StreamProgress, ToolDetail,
+    Agent, AgentConfig, AgentError, AgentUi, Answer, SessionChoice, StreamProgress, ToolDetail,
 };
 use std::{
     ffi::OsString,
@@ -33,7 +33,8 @@ Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1
   --retries N            resend a request that failed transiently up to N times (default 3)
   --continue             resume the most recent session for this project
   --session FILE         resume a specific session file
-  --yes                  approve every tool call without asking
+  --yes                  approve every tool call without asking (answering `a` to an
+                         approval question does the same from then on)
   -p PROMPT              run one prompt and exit (`-p -` reads it from stdin)
 In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing \\ starts
 a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
@@ -513,43 +514,65 @@ impl AgentUi for Terminal {
             );
         }
     }
-    fn approve(&mut self, question: &str, cancel: &AtomicBool) -> bool {
+    fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         self.clear();
         let question = visible(question);
         let stdin = std::io::stdin();
-        let yes = |answer: &str| matches!(answer.trim(), "y" | "Y" | "yes");
-        if !stdin.is_terminal() {
-            eprint!("{question}\nAllow? [y/N] ");
-            let mut answer = String::new();
-            return stdin.lock().read_line(&mut answer).is_ok() && yes(&answer);
-        }
-        // Only an answer typed after the question is shown may approve it.
-        let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
-        eprint!("{question}\nAllow? [y/N] ");
-        let _echo = Echo::set(true);
-        // SIGINT does not interrupt a blocking read, so wait in poll and watch for Ctrl-C.
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                eprintln!();
-                return false;
+        let ask = format!("{question}\nAllow? [y/N, a = allow all until exit] ");
+        let typed = if !stdin.is_terminal() {
+            eprint!("{ask}");
+            let mut typed = String::new();
+            if stdin.lock().read_line(&mut typed).is_err() {
+                return Answer::Deny;
             }
-            let mut fds = [PollFd::new(&stdin, PollFlags::IN)];
-            match poll(
-                &mut fds,
-                Some(&Timespec {
-                    tv_sec: 0,
-                    tv_nsec: 50_000_000,
-                }),
-            ) {
-                Ok(0) | Err(Errno::INTR) => {}
-                Ok(_) => break,
-                Err(_) => return false,
+            typed
+        } else {
+            // Only an answer typed after the question is shown may approve it.
+            let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
+            eprint!("{ask}");
+            let _echo = Echo::set(true);
+            // SIGINT does not interrupt a blocking read, so wait in poll and watch for Ctrl-C.
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    eprintln!();
+                    return Answer::Deny;
+                }
+                let mut fds = [PollFd::new(&stdin, PollFlags::IN)];
+                match poll(
+                    &mut fds,
+                    Some(&Timespec {
+                        tv_sec: 0,
+                        tv_nsec: 50_000_000,
+                    }),
+                ) {
+                    Ok(0) | Err(Errno::INTR) => {}
+                    Ok(_) => break,
+                    Err(_) => return Answer::Deny,
+                }
             }
+            // In canonical mode one read returns one typed line.
+            let mut typed = [0; 4096];
+            match rustix::io::read(&stdin, &mut typed) {
+                Ok(n) => String::from_utf8_lossy(&typed[..n]).into_owned(),
+                Err(_) => return Answer::Deny,
+            }
+        };
+        let answer = answer(&typed);
+        if answer == Answer::AllowAll {
+            eprintln!(
+                "{}",
+                self.dim("Tool calls now run without asking until exit.")
+            );
         }
-        // In canonical mode one read returns one typed line.
-        let mut answer = [0; 4096];
-        rustix::io::read(&stdin, &mut answer)
-            .is_ok_and(|n| yes(&String::from_utf8_lossy(&answer[..n])))
+        answer
+    }
+}
+
+fn answer(typed: &str) -> Answer {
+    match typed.trim() {
+        "y" | "Y" | "yes" => Answer::Allow,
+        "a" | "A" | "all" => Answer::AllowAll,
+        _ => Answer::Deny,
     }
 }
 
@@ -710,6 +733,14 @@ mod tests {
         assert_eq!(
             visible("rm -rf ~\r\x1b[2Kecho é\t\u{202e}txt.sh\nls"),
             "rm -rf ~\\r\\u{1b}[2Kecho é\t\\u{202e}txt.sh\nls"
+        );
+        let answers: Vec<_> = ["y\n", "yes", "a\n", "all", "", "n", "ya"]
+            .map(answer)
+            .into();
+        use Answer::*;
+        assert_eq!(
+            answers,
+            [Allow, Allow, AllowAll, AllowAll, Deny, Deny, Deny]
         );
     }
 

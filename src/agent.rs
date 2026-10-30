@@ -56,8 +56,16 @@ pub trait AgentUi {
     fn tool_running(&mut self);
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
-    /// Asks whether a tool call may run; returns false without an answer once `cancel` is set.
-    fn approve(&mut self, question: &str, cancel: &AtomicBool) -> bool;
+    /// Asks whether a tool call may run; returns `Deny` without an answer once `cancel` is set.
+    fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Answer {
+    Deny,
+    Allow,
+    /// Allow this call and every later one until the agent exits.
+    AllowAll,
 }
 
 /// What the user sees of a successful tool call instead of the text the model receives.
@@ -293,7 +301,7 @@ impl Agent {
         }
     }
 
-    fn call(&self, item: &Value, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> String {
+    fn call(&mut self, item: &Value, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> String {
         let call = match Call::parse(item) {
             Ok(call) => call,
             Err(error) => {
@@ -303,10 +311,14 @@ impl Agent {
             }
         };
         ui.tool_call(call.name, &call.summary());
-        if let Approval::Ask(question) = call.approval(&self.config.root)
-            && !self.config.approve_all
-            && !ui.approve(&question, cancel)
-        {
+        let answer = match call.approval(&self.config.root) {
+            Approval::Ask(question) if !self.config.approve_all => ui.approve(&question, cancel),
+            _ => Answer::Allow,
+        };
+        if answer == Answer::AllowAll {
+            self.config.approve_all = true;
+        }
+        if answer == Answer::Deny {
             let output = if cancel.load(Ordering::Relaxed) {
                 "The user cancelled the turn before this tool call ran."
             } else {
@@ -409,6 +421,10 @@ mod tests {
     struct Recorder {
         retries: Vec<(String, u32, Duration)>,
         replies: Vec<String>,
+        calls: Vec<String>,
+        /// Answers to give, in order; questions beyond them are denied.
+        answers: Vec<Answer>,
+        questions: usize,
     }
     impl AgentUi for Recorder {
         fn waiting(&mut self) {}
@@ -420,12 +436,16 @@ mod tests {
             self.replies.push(text.to_owned());
         }
         fn tool_call(&mut self, name: &str, _: &str) {
-            panic!("unexpected tool call {name}");
+            self.calls.push(name.to_owned());
         }
         fn tool_running(&mut self) {}
         fn tool_result(&mut self, _: &str, _: &str, _: Option<&ToolDetail>, _: bool) {}
-        fn approve(&mut self, _: &str, _: &AtomicBool) -> bool {
-            false
+        fn approve(&mut self, _: &str, _: &AtomicBool) -> Answer {
+            self.questions += 1;
+            self.answers
+                .get(self.questions - 1)
+                .copied()
+                .unwrap_or(Answer::Deny)
         }
     }
 
@@ -515,6 +535,7 @@ response is incomplete; retry the request."});
         assert!(ui.retries[0].0.contains("retry the request"));
         assert_eq!((ui.retries[0].1, ui.retries[0].2), (1, RETRY_DELAY));
         assert_eq!(ui.replies, ["done"]);
+        assert!(ui.calls.is_empty());
         assert_eq!(agent.usage.requests, 2);
         let kinds: Vec<_> = agent
             .conversation()
@@ -572,6 +593,41 @@ response is incomplete; retry the request."});
             "This model's maximum context length is 128000 tokens; timeout"
         ));
         assert!(!transient(None, "Invalid value for 'input'"));
+    }
+
+    #[test]
+    fn allowing_all_stops_later_approval_questions() {
+        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
+        let bash = |id: &str| {
+            let events = fixture::call_events(r#"{"command":"true"}"#, fixture::known_usage());
+            let text = serde_json::to_string(&events).unwrap();
+            let text = text.replace("\"inert\"", "\"bash\"").replace("call_1", id);
+            serde_json::from_str::<Vec<Value>>(&text).unwrap()
+        };
+        let (endpoint, server) = serve(vec![
+            stream(&bash("call_1")),
+            stream(&bash("call_2")),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+            stream(&bash("call_3")),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, root) = agent(endpoint, "allow-all");
+        let mut ui = Recorder {
+            answers: vec![Answer::AllowAll],
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        agent.turn("one", &mut ui, &cancel).unwrap();
+        agent.turn("two", &mut ui, &cancel).unwrap();
+        server.join().unwrap();
+        assert_eq!((ui.questions, ui.calls.len()), (1, 3));
+        let outputs: Vec<_> = agent
+            .conversation()
+            .iter()
+            .filter_map(|item| item["output"].as_str())
+            .collect();
+        assert_eq!(outputs, ["Exit code 0."; 3]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
