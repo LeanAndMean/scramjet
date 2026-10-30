@@ -266,22 +266,16 @@ fn edit(root: &Path, call: &Call) -> Result<Output, String> {
     })
 }
 
-/// Shows replacing the sorted, non-overlapping byte `spans` of `original` as numbered lines:
-/// ` ` unchanged (old numbering), `-` removed (old numbering), `+` added (new numbering), and
+/// Shows replacing the sorted, non-overlapping byte `spans` of `original` as numbered lines, as
+/// Scramjet does: ` ` unchanged and `-` removed (old numbering), `+` added (new numbering), and
 /// `...` for skipped unchanged lines.
 fn diff(original: &str, spans: &[(usize, usize, &str)]) -> String {
-    struct Change {
-        old: usize,
-        new: usize,
-        removed: Vec<String>,
-        added: Vec<String>,
-    }
     let line_of = |offset: usize| original[..offset].matches('\n').count();
-    let mut changes: Vec<Change> = Vec::new();
-    let mut shift = 0isize;
+    let old_lines: Vec<&str> = original.lines().collect();
+    // Edits touching the same lines form one hunk of whole lines: its byte range and new text.
+    let mut hunks: Vec<(usize, usize, String)> = Vec::new();
     let mut index = 0;
     while index < spans.len() {
-        // Edits touching the same lines are shown as one change of whole lines.
         let start = original[..spans[index].0].rfind('\n').map_or(0, |i| i + 1);
         let mut end = start;
         let mut replaced = String::new();
@@ -300,69 +294,108 @@ fn diff(original: &str, spans: &[(usize, usize, &str)]) -> String {
             index += 1;
         }
         replaced.push_str(&original[cursor..end]);
-        let mut removed: Vec<String> = original[start..end].lines().map(str::to_owned).collect();
-        let mut added: Vec<String> = replaced.lines().map(str::to_owned).collect();
-        let same_start = removed
-            .iter()
-            .zip(&added)
-            .take_while(|(a, b)| a == b)
-            .count();
-        removed.drain(..same_start);
-        added.drain(..same_start);
-        let same_end = removed
-            .iter()
-            .rev()
-            .zip(added.iter().rev())
-            .take_while(|(a, b)| a == b)
-            .count();
-        removed.truncate(removed.len() - same_end);
-        added.truncate(added.len() - same_end);
-        let old = line_of(start) + same_start;
-        let lines_shift = added.len() as isize - removed.len() as isize;
-        if !removed.is_empty() || !added.is_empty() {
-            changes.push(Change {
-                old,
-                new: old.saturating_add_signed(shift),
-                removed,
-                added,
-            });
-        }
-        shift += lines_shift;
+        hunks.push((start, end, replaced));
     }
-    let old_lines: Vec<&str> = original.lines().collect();
-    let width = (old_lines.len() as isize + shift.max(0)).to_string().len();
+    let mut ops: Vec<(char, &str)> = Vec::new();
+    let mut next = 0;
+    for (start, end, replaced) in &hunks {
+        let first = line_of(*start);
+        let removed: Vec<&str> = original[*start..*end].lines().collect();
+        ops.extend(old_lines[next..first].iter().map(|line| (' ', *line)));
+        line_diff(&removed, &replaced.lines().collect::<Vec<_>>(), &mut ops);
+        next = first + removed.len();
+    }
+    ops.extend(old_lines[next..].iter().map(|line| (' ', *line)));
+
+    // An unchanged line is shown when it is at most DIFF_CONTEXT lines from a change.
+    let mut near = vec![false; ops.len()];
+    for order in [false, true] {
+        let mut since = usize::MAX;
+        for i in 0..ops.len() {
+            let i = if order { ops.len() - 1 - i } else { i };
+            since = if ops[i].0 == ' ' {
+                since.saturating_add(1)
+            } else {
+                0
+            };
+            near[i] |= since <= DIFF_CONTEXT;
+        }
+    }
+    let new_count = ops.iter().filter(|(mark, _)| *mark != '-').count();
+    let width = old_lines.len().max(new_count).to_string().len();
+    let (mut old, mut new) = (0, 0);
+    let mut skipped = false;
     let mut out = String::new();
-    let mut shown = 0;
-    let mut line = |mark: char, number: Option<usize>, text: &str| {
-        let number = number.map_or(String::new(), |n| (n + 1).to_string());
-        out.push_str(&format!("{mark}{number:>width$} {text}\n"));
-    };
-    for (i, change) in changes.iter().enumerate() {
-        let from = change.old.saturating_sub(DIFF_CONTEXT).max(shown);
-        if from > shown {
-            line(' ', None, "...");
+    for ((mark, text), near) in ops.into_iter().zip(near) {
+        if !near {
+            skipped = true;
+        } else {
+            if std::mem::take(&mut skipped) {
+                out.push_str(&format!(" {:width$} ...\n", ""));
+            }
+            let number = if mark == '+' { new } else { old } + 1;
+            out.push_str(&format!("{mark}{number:>width$} {text}\n"));
         }
-        for (n, text) in (from..).zip(&old_lines[from..change.old]) {
-            line(' ', Some(n), text);
-        }
-        for (n, text) in change.removed.iter().enumerate() {
-            line('-', Some(change.old + n), text);
-        }
-        for (n, text) in change.added.iter().enumerate() {
-            line('+', Some(change.new + n), text);
-        }
-        shown = change.old + change.removed.len();
-        let next = changes.get(i + 1).map_or(old_lines.len(), |c| c.old);
-        let until = (shown + DIFF_CONTEXT).min(next).min(old_lines.len());
-        for (n, text) in (shown..).zip(&old_lines[shown..until]) {
-            line(' ', Some(n), text);
-        }
-        if i + 1 == changes.len() && until < old_lines.len() {
-            line(' ', None, "...");
-        }
-        shown = until;
+        old += usize::from(mark != '+');
+        new += usize::from(mark != '-');
+    }
+    if skipped && !out.is_empty() {
+        out.push_str(&format!(" {:width$} ...\n", ""));
     }
     out
+}
+
+/// Above this many compared line pairs, a hunk is shown as all its old lines removed and all its
+/// new lines added, to bound the memory of the comparison table.
+const LINE_DIFF_CELLS: usize = 1 << 22;
+
+/// Appends the lines that change `old` into `new`, keeping their longest common subsequence as
+/// unchanged lines and showing removed lines before added ones.
+fn line_diff<'a>(old: &[&'a str], new: &[&'a str], ops: &mut Vec<(char, &'a str)>) {
+    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    ops.extend(old[..prefix].iter().map(|line| (' ', *line)));
+    let (a, b) = (
+        &old[prefix..old.len() - suffix],
+        &new[prefix..new.len() - suffix],
+    );
+    let columns = b.len() + 1;
+    if a.len().saturating_mul(b.len()) > LINE_DIFF_CELLS {
+        ops.extend(a.iter().map(|line| ('-', *line)));
+        ops.extend(b.iter().map(|line| ('+', *line)));
+    } else {
+        // common[i * columns + j] is the length of the longest common subsequence of a[i..], b[j..].
+        let mut common = vec![0u32; (a.len() + 1) * columns];
+        for i in (0..a.len()).rev() {
+            for j in (0..b.len()).rev() {
+                common[i * columns + j] = match a[i] == b[j] {
+                    true => common[(i + 1) * columns + j + 1] + 1,
+                    false => common[(i + 1) * columns + j].max(common[i * columns + j + 1]),
+                };
+            }
+        }
+        let (mut i, mut j) = (0, 0);
+        while i < a.len() || j < b.len() {
+            if i < a.len() && j < b.len() && a[i] == b[j] {
+                ops.push((' ', a[i]));
+                (i, j) = (i + 1, j + 1);
+            } else if j == b.len()
+                || (i < a.len() && common[(i + 1) * columns + j] >= common[i * columns + j + 1])
+            {
+                ops.push(('-', a[i]));
+                i += 1;
+            } else {
+                ops.push(('+', b[j]));
+                j += 1;
+            }
+        }
+    }
+    ops.extend(old[old.len() - suffix..].iter().map(|line| (' ', *line)));
 }
 
 /// As in Scramjet, a command that succeeds returns just its output; any other ending is a failure
@@ -677,6 +710,36 @@ mod tests {
             diff("f(x, y)\nend\n", &[(2, 3, "left"), (5, 6, "right")]),
             "-1 f(x, y)\n+1 f(left, right)\n 2 end\n"
         );
+        // Unchanged lines inside one edit stay unchanged, as in a dogfood edit of a function.
+        let original = "fn f() -> P {\n    let r =\n        g();\n    r\n}\n";
+        let new = "fn f() -> G {\n    let r =\n        g();\n    G(r)\n";
+        assert_eq!(
+            diff(original, &[(0, original.len() - 2, new)]),
+            "-1 fn f() -> P {\n+1 fn f() -> G {\n 2     let r =\n 3         g();\n-4     r\n+4     G(r)\n 5 }\n"
+        );
+        let original: String = (1..=12).map(|n| format!("{n}\n")).collect();
+        let new = original.replace("1\n2", "one\n2").replace("12", "twelve");
+        assert_eq!(
+            diff(&original, &[(0, original.len(), &new)])
+                .lines()
+                .collect::<Vec<_>>(),
+            [
+                "- 1 1",
+                "+ 1 one",
+                "  2 2",
+                "  3 3",
+                "  4 4",
+                "  5 5",
+                "    ...",
+                "  8 8",
+                "  9 9",
+                " 10 10",
+                " 11 11",
+                "-12 12",
+                "+12 twelve",
+            ]
+        );
+        assert_eq!(diff("same\n", &[(0, 4, "same")]), "");
     }
 
     impl Approval {

@@ -776,6 +776,8 @@ impl AgentUi for Terminal {
                 self.dim(&format!("took {:.1}s", took.as_secs_f64()))
             );
         }
+        // As in Scramjet, a blank line separates each tool block from what follows.
+        eprintln!();
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         self.clear();
