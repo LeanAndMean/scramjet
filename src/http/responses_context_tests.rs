@@ -73,10 +73,7 @@ fn incomplete_and_unsupported_continuation_cannot_be_inert_input_items() {
                     missing["encrypted_content"] = value;
                 }
                 assert!(validate_item(&missing, true).is_ok());
-                assert_eq!(
-                    ProviderItem::from_context(missing).unwrap_err(),
-                    Outcome::Unsupported
-                );
+                assert!(ProviderItem::from_context(missing).is_ok());
             }
             let mut malformed = raw.clone();
             malformed["encrypted_content"] = json!(42);

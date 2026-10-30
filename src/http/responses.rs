@@ -1,6 +1,4 @@
-use super::provider_diagnostic::{
-    ProviderFailure, ProviderFailureStage, ProviderFinalDifference, ProviderIdentityProblem,
-};
+use super::provider_diagnostic::{ProviderFailure, ProviderFailureStage, ProviderIdentityProblem};
 use crate::Outcome;
 use serde::{
     Deserialize,
@@ -56,10 +54,7 @@ pub struct ProviderItem {
 impl ProviderItem {
     pub(crate) fn from_context(wire: Value) -> Result<Self, Outcome> {
         bounded_json(&wire, PROVIDER_ENVELOPE_BYTES)?;
-        let (_, refused) = select_replay(&wire, &wire)?;
-        if refused {
-            return Err(Outcome::Unsupported);
-        }
+        validate_item(&wire, true)?;
         Ok(Self { wire })
     }
     pub(crate) fn raw(&self) -> &Value {
@@ -492,101 +487,6 @@ pub(crate) fn validate_item(item: &Value, complete: bool) -> Result<(), Outcome>
     Ok(())
 }
 
-fn compare_parts(done: &Value, terminal: &Value, text: bool) -> Result<bool, Outcome> {
-    let done = done.as_array().ok_or(Outcome::Framing)?;
-    let terminal = terminal.as_array().ok_or(Outcome::Framing)?;
-    if done.len() != terminal.len() {
-        return Err(Outcome::Framing);
-    }
-    let mut replay_refused = false;
-    for (done, terminal) in done.iter().zip(terminal) {
-        for key in ["type", "text"] {
-            if done[key] != terminal[key] {
-                return Err(Outcome::Framing);
-            }
-        }
-        for key in done
-            .as_object()
-            .unwrap()
-            .keys()
-            .chain(terminal.as_object().unwrap().keys())
-        {
-            if matches!(key.as_str(), "type" | "text")
-                || (text && matches!(key.as_str(), "annotations" | "logprobs"))
-            {
-                continue;
-            }
-            if done.get(key) != terminal.get(key) {
-                replay_refused = true;
-            }
-        }
-    }
-    Ok(replay_refused)
-}
-
-fn select_replay(done: &Value, terminal: &Value) -> Result<(bool, bool), Outcome> {
-    validate_item(done, true)?;
-    validate_item(terminal, true)?;
-    let kind = string(done, "type")?;
-    let material: &[&str] = match kind {
-        "message" => &["id", "type", "role"],
-        "function_call" => &["id", "type", "name", "call_id", "arguments"],
-        "reasoning" => &["id", "type"],
-        _ => unreachable!(),
-    };
-    for key in material {
-        if done.get(*key) != terminal.get(*key) {
-            return Err(Outcome::Framing);
-        }
-    }
-    let mut replay_refused = false;
-    let continuation = match kind {
-        "message" => {
-            replay_refused |= compare_parts(&done["content"], &terminal["content"], true)?;
-            Some("phase")
-        }
-        "reasoning" => {
-            replay_refused |= compare_parts(&done["summary"], &terminal["summary"], false)?;
-            Some("encrypted_content")
-        }
-        "function_call" => None,
-        _ => unreachable!(),
-    };
-    for key in done
-        .as_object()
-        .unwrap()
-        .keys()
-        .chain(terminal.as_object().unwrap().keys())
-    {
-        if material.contains(&key.as_str())
-            || Some(key.as_str()) == continuation
-            || (key == "status" && matches!(kind, "function_call" | "reasoning"))
-            || (key == "content" && kind == "message")
-            || (key == "summary" && kind == "reasoning")
-        {
-            continue;
-        }
-        if done.get(key) != terminal.get(key) {
-            replay_refused = true;
-        }
-    }
-    let mut use_terminal = false;
-    if let Some(key) = continuation {
-        let done_value = done.get(key).filter(|v| !v.is_null());
-        let terminal_value = terminal.get(key).filter(|v| !v.is_null());
-        match (done_value, terminal_value) {
-            (Some(a), Some(b)) if a != b => return Err(Outcome::Framing),
-            (None, Some(_)) if kind == "reasoning" => replay_refused = true,
-            (None, Some(_)) => use_terminal = true,
-            _ => {}
-        }
-        if kind == "reasoning" && done_value.is_none() {
-            replay_refused = true;
-        }
-    }
-    Ok((use_terminal, replay_refused))
-}
-
 struct Part {
     text: String,
     done: bool,
@@ -595,13 +495,11 @@ struct Part {
 struct ItemState {
     added: Value,
     done: Option<Value>,
-    replay_terminal: bool,
     parts: Vec<Part>,
     arguments: String,
     arguments_done: bool,
 }
 pub(crate) struct ParsedResponse {
-    pub(crate) refusal: Option<ProviderFailure>,
     pub(crate) envelope: Option<ProviderEnvelope>,
     pub(crate) usage: Option<ProviderUsage>,
     pub(crate) response_id: String,
@@ -613,11 +511,8 @@ pub(crate) struct ResponsesParser {
     frame: Vec<u8>,
     response_id: Option<String>,
     reported_model: Option<String>,
-    sequence: Option<usize>,
     items: Vec<ItemState>,
     terminal: Option<Value>,
-    replay_refusal: Option<ProviderFailure>,
-    done_marker: bool,
     output_bytes: usize,
     provisional_bytes: usize,
     in_progress: bool,
@@ -629,20 +524,17 @@ impl ResponsesParser {
             frame: Vec::with_capacity(PROVIDER_FRAME_BYTES),
             response_id: None,
             reported_model: None,
-            sequence: None,
             items: Vec::with_capacity(PROVIDER_OUTPUT_ITEMS),
             terminal: None,
-            replay_refusal: None,
-            done_marker: false,
             output_bytes: 0,
             provisional_bytes: 0,
             in_progress: false,
         }
     }
     pub(crate) fn byte(&mut self, byte: u8) -> Result<(), Outcome> {
-        if self.done_marker {
-            self.failure = ProviderFailure::at(ProviderFailureStage::TrailingData);
-            return Err(Outcome::Framing);
+        // Like Scramjet's clients, nothing after the terminal event affects the response.
+        if self.terminal.is_some() {
+            return Ok(());
         }
         if self.frame.is_empty() {
             self.failure = ProviderFailure::at(ProviderFailureStage::SseFrame);
@@ -685,9 +577,6 @@ impl ResponsesParser {
                 }
                 has_data = true;
                 data.push_str(value.strip_prefix(' ').unwrap_or(value));
-            } else {
-                self.failure.field = Some("SSE unknown line");
-                return Err(Outcome::Framing);
             }
         }
         if !has_data {
@@ -695,16 +584,7 @@ impl ResponsesParser {
             return Ok(());
         }
         if data == "[DONE]" {
-            if self.terminal.is_none() || event.is_some() {
-                return Err(Outcome::Incomplete);
-            }
-            self.done_marker = true;
-            self.frame.clear();
-            return Ok(());
-        }
-        if self.terminal.is_some() {
-            self.failure = ProviderFailure::at(ProviderFailureStage::TrailingData);
-            return Err(Outcome::Framing);
+            return Err(Outcome::Incomplete);
         }
         self.failure.stage = ProviderFailureStage::Json;
         let value = strict_json(data.as_bytes())?;
@@ -721,12 +601,7 @@ impl ResponsesParser {
             .get("type")
             .and_then(Value::as_str)
             .map(ProviderFailure::event);
-        self.failure.field = Some("sequence_number");
-        let sequence = index(&event, "sequence_number")?;
-        if self.sequence.is_some_and(|previous| sequence <= previous) {
-            return Err(Outcome::Framing);
-        }
-        self.sequence = Some(sequence);
+        self.failure.field = Some("type");
         let kind = string(&event, "type")?;
         if self.response_id.is_none() {
             if kind != "response.created" {
@@ -832,7 +707,6 @@ impl ResponsesParser {
                 self.items.push(ItemState {
                     added: item,
                     done: None,
-                    replay_terminal: false,
                     parts: Vec::new(),
                     arguments,
                     arguments_done: false,
@@ -1014,6 +888,8 @@ impl ResponsesParser {
                 self.failure.stage = ProviderFailureStage::Usage;
                 self.failure.field = Some("response.usage");
                 usage(response)?;
+                self.failure.stage = ProviderFailureStage::Terminal;
+                self.failure.field = Some("response.status");
                 if status == "completed" {
                     self.failure.stage = ProviderFailureStage::FinalItems;
                     self.failure.field = Some("response.error");
@@ -1027,82 +903,37 @@ impl ResponsesParser {
                     {
                         return Err(Outcome::Framing);
                     }
-                    self.failure.field = Some("response.output");
-                    let mut difference =
-                        ProviderFinalDifference::new(self.items.len(), response.get("output"));
-                    let Some(output) = response["output"].as_array() else {
-                        self.failure.final_difference = Some(Box::new(difference));
-                        return Err(Outcome::Framing);
-                    };
-                    self.failure.field = Some("response.output.count");
-                    if output.len() != self.items.len() || output.is_empty() {
-                        for i in 0..self
-                            .items
-                            .len()
-                            .max(output.len())
-                            .min(PROVIDER_OUTPUT_ITEMS)
-                        {
-                            difference.item(
-                                i,
-                                self.items.get(i).and_then(|s| s.done.as_ref()),
-                                output.get(i),
-                            );
+                    self.failure.field = Some("response.output.item");
+                    // As in Scramjet's clients, each streamed `output_item.done` item is
+                    // authoritative; the terminal summary copy only fills an item whose done
+                    // event never arrived. The two copies need not agree.
+                    let output = response.get("output").and_then(Value::as_array);
+                    for (i, state) in self.items.iter_mut().enumerate() {
+                        if state.done.is_some() {
+                            continue;
                         }
-                        difference.additional_items = output.len() > PROVIDER_OUTPUT_ITEMS;
-                        self.failure.final_difference = Some(Box::new(difference));
+                        let item = output
+                            .and_then(|output| output.get(i))
+                            .filter(|item| {
+                                item["type"] == state.added["type"]
+                                    && state.added["type"] != "function_call"
+                            })
+                            .ok_or(Outcome::Incomplete)?;
+                        validate_item(item, true)?;
+                        state.done = Some(item.clone());
+                    }
+                    if self.items.is_empty() {
                         return Err(Outcome::Framing);
                     }
-                    self.failure.field = Some("response.output.item");
-                    let selection = self
-                        .items
-                        .iter()
-                        .zip(output)
-                        .map(|(state, item)| {
-                            let done = state.done.as_ref().ok_or(Outcome::Framing)?;
-                            select_replay(done, item)
-                        })
-                        .collect::<Result<Vec<_>, _>>();
-                    let selection = match selection {
-                        Ok(selection) => selection,
-                        Err(outcome) => {
-                            for (i, (state, item)) in self.items.iter().zip(output).enumerate() {
-                                difference.item(i, state.done.as_ref(), Some(item));
-                            }
-                            self.failure.final_difference = Some(Box::new(difference));
-                            return Err(outcome);
-                        }
-                    };
-                    let selected: Vec<_> = self
-                        .items
-                        .iter()
-                        .zip(output)
-                        .zip(&selection)
-                        .map(|((state, item), (terminal, _))| {
-                            if *terminal {
-                                item
-                            } else {
-                                state.done.as_ref().unwrap()
-                            }
-                        })
-                        .collect();
+                    let selected: Vec<_> = self.items.iter().map(|s| &s.done).collect();
                     bounded_json_bytes(
                         &json!({"response_id":self.response_id,"items":selected}),
                         PROVIDER_ENVELOPE_BYTES,
                     )?;
-                    if selection.iter().any(|(_, refused)| *refused) {
-                        for (i, (state, item)) in self.items.iter().zip(output).enumerate() {
-                            difference.item(i, state.done.as_ref(), Some(item));
-                        }
-                        self.failure.final_difference = Some(Box::new(difference));
-                        self.replay_refusal = Some(self.failure.clone());
-                    }
-                    for (state, (terminal, _)) in self.items.iter_mut().zip(selection) {
-                        state.replay_terminal = terminal;
-                    }
                 }
                 self.terminal = Some(response.clone());
             }
-            _ => return Err(Outcome::Unsupported),
+            _ => {}
         }
         Ok(())
     }
@@ -1150,27 +981,19 @@ impl ResponsesParser {
         let status = string(&response, "status")?.to_owned();
         let response_id = self.response_id.unwrap();
         let usage = usage(&response)?;
-        let envelope = if status == "completed" && self.replay_refusal.is_none() {
+        let envelope = if status == "completed" {
             Some(ProviderEnvelope {
                 response_id: response_id.clone(),
                 items: self
                     .items
                     .into_iter()
-                    .enumerate()
-                    .map(|(index, state)| {
-                        ProviderItem::from_context(if state.replay_terminal {
-                            response["output"][index].clone()
-                        } else {
-                            state.done.unwrap()
-                        })
-                    })
+                    .map(|state| ProviderItem::from_context(state.done.unwrap()))
                     .collect::<Result<Vec<_>, _>>()?,
             })
         } else {
             None
         };
         Ok(ParsedResponse {
-            refusal: self.replay_refusal,
             envelope,
             usage,
             response_id,

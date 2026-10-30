@@ -258,12 +258,9 @@ pub(crate) async fn attempt(
         })?);
         let completed = parsed.as_ref().unwrap();
         if let Some(capture) = &mut capture {
-            capture.parser_accepted = completed.refusal.is_none();
+            capture.parser_accepted = true;
         }
-        Ok(if let Some(refusal) = &completed.refusal {
-            failure = refusal.clone();
-            Outcome::Unsupported
-        } else if completed.envelope.is_some() {
+        Ok(if completed.envelope.is_some() {
             Outcome::Success
         } else {
             Outcome::Incomplete

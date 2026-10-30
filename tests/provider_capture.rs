@@ -93,7 +93,7 @@ fn private_raw_capture_and_fresh_process_replay() {
         let report: serde_json::Value = serde_json::from_slice(&replay.stdout).unwrap();
         assert_eq!(report["execution_authority"], false);
         assert_eq!(report["settlement_authority"], false);
-        assert_eq!(report["parser_accepted"], case != "disagreement");
+        assert_eq!(report["parser_accepted"], true);
         assert_eq!(report["full_stream"], true);
         assert!(!String::from_utf8_lossy(&replay.stdout).contains("synthetic-private"));
         assert!(!String::from_utf8_lossy(&replay.stdout).contains("resp_1"));
@@ -114,7 +114,7 @@ fn private_raw_capture_and_fresh_process_replay() {
         assert_eq!(provenance["candidate_sha256"].as_str().unwrap().len(), 64);
         if case == "disagreement" {
             assert!(String::from_utf8_lossy(&before[0]).contains("synthetic-private"));
-            assert_eq!(report["failure"]["field"], "response.output.item");
+            assert_eq!(report["failure"]["field"], "response.status");
         }
         for (field, value) in [
             ("parser_fed_bytes", serde_json::json!(0)),
@@ -122,9 +122,7 @@ fn private_raw_capture_and_fresh_process_replay() {
             ("overflow", serde_json::json!(true)),
             ("body_eof", serde_json::json!(false)),
         ] {
-            if (case == "disagreement" && matches!(field, "parser_fed_bytes" | "body_eof"))
-                || (case != "disagreement" && field == "parser_accepted")
-            {
+            if field == "parser_accepted" {
                 continue;
             }
             let mut altered = provenance.clone();
@@ -173,7 +171,7 @@ fn raw_capture_child() {
         });
     }
     let events = if case == "disagreement" {
-        Some(demo::fixture::disagreement_events())
+        Some(demo::fixture::failed_terminal_events())
     } else {
         None
     };
@@ -209,7 +207,14 @@ fn raw_capture_child() {
     )
     .unwrap();
     assert_eq!(ledger["terminal"]["response_id"], "resp_1");
-    assert_eq!(ledger["terminal"]["status"], "completed");
+    assert_eq!(
+        ledger["terminal"]["status"],
+        if case == "disagreement" {
+            "failed"
+        } else {
+            "completed"
+        }
+    );
     assert_eq!(ledger["usage"]["total_tokens"], 15);
 }
 #[test]
@@ -257,13 +262,12 @@ fn replay_preserves_strict_failure_and_valid_representations() {
                 assert!(!replay_provider_data(&body[..end]).parser_accepted);
             }
             let mut trailing = body.clone();
-            trailing.extend_from_slice(b"contradictory");
-            assert!(!replay_provider_data(&trailing).parser_accepted);
+            trailing.extend_from_slice(b"ignored after the terminal event");
+            assert!(replay_provider_data(&trailing).parser_accepted);
         }
-        let body = demo::fixture::wire(&demo::fixture::disagreement_events(), crlf);
+        let body = demo::fixture::wire(&demo::fixture::failed_terminal_events(), crlf);
         let replay = replay_provider_data(&body);
-        assert_eq!(replay.outcome, Outcome::Unsupported);
-        assert!(replay.failure.unwrap().final_difference.is_some());
+        assert_eq!(replay.outcome, Outcome::Incomplete);
     }
     assert_eq!(
         replay_provider_data(&vec![b'x'; scramjet_rs::PROVIDER_CAPTURE_BYTES + 1]).outcome,

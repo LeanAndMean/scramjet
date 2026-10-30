@@ -26,9 +26,7 @@ pub use http::provider_capture::{
     replay_provider_data,
 };
 pub use http::provider_diagnostic::{
-    PROVIDER_DIAGNOSTIC_BYTES, PROVIDER_ITEM_FIELDS, PROVIDER_PART_FIELDS, ProviderArrayDifference,
-    ProviderFailure, ProviderFailureStage, ProviderFinalDifference, ProviderIdentityProblem,
-    ProviderItemDifference, ProviderJsonKind, ProviderPartDifference,
+    PROVIDER_DIAGNOSTIC_BYTES, ProviderFailure, ProviderFailureStage, ProviderIdentityProblem,
 };
 pub use http::responses::{
     PROVIDER_ENVELOPE_BYTES, PROVIDER_FRAME_BYTES, PROVIDER_MODEL, PROVIDER_OUTPUT_ITEMS,

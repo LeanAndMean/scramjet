@@ -71,15 +71,13 @@ pub fn replay_provider_data(bytes: &[u8]) -> ProviderReplay {
     });
     match result {
         Ok(parsed) => ProviderReplay {
-            outcome: if parsed.refusal.is_some() {
-                Outcome::Unsupported
-            } else if parsed.envelope.is_some() {
+            outcome: if parsed.envelope.is_some() {
                 Outcome::Success
             } else {
                 Outcome::Incomplete
             },
-            parser_accepted: parsed.refusal.is_none(),
-            failure: parsed.refusal,
+            parser_accepted: true,
+            failure: parsed.envelope.is_none().then_some(failure),
         },
         Err(outcome) => ProviderReplay {
             outcome,

@@ -125,7 +125,7 @@ fn provider_capture_case() {
         false,
         false,
         None,
-        Some(fixture::disagreement_events()),
+        Some(fixture::failed_terminal_events()),
     ));
     let error = result.unwrap_err();
     assert_eq!(
@@ -148,7 +148,7 @@ fn provider_capture_read() {
     assert!(line.len() <= scramjet_rs::PROVIDER_DIAGNOSTIC_BYTES);
     let report: serde_json::Value = serde_json::from_str(line).unwrap();
     assert_eq!(report["version"], 1);
-    assert_eq!(report["outcome"], "Unsupported");
+    assert_eq!(report["outcome"], "Incomplete");
     assert_eq!(report["durable"], true);
     assert_eq!(report["terminal_observed"], true);
     assert_eq!(report["usage"]["total_tokens"], 15);
@@ -157,15 +157,6 @@ fn provider_capture_read() {
     assert_eq!(report["unresolved_remote"], 0);
     assert_eq!(report["unknown_usage"], 0);
     assert_eq!(report["local_active"], 0);
-    assert_eq!(report["failure"]["field"], "response.output.item");
-    let item = &report["failure"]["final_difference"]["items"][0];
-    assert_eq!(item["index"], 0);
-    assert_eq!(item["fields"], (1 << 7) | (1 << 9));
-    assert_eq!(item["done_kinds"][9], 0);
-    assert_eq!(item["final_kinds"][9], 4);
-    assert_eq!(item["other_fields"], true);
-    assert_eq!(item["content"][2][0], 0);
-    assert_eq!(item["content"][2][1], 8);
 }
 fn request() -> ProviderRequest {
     ProviderRequest::new(&[ProviderInput::User("Synthetic hello".into())], &[]).unwrap()
@@ -305,7 +296,7 @@ fn provider_case() {
                     events.push(serde_json::json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":1,"delta":"x".repeat(9000)}));
                 }
                 if case_server=="unsupported" {events=fixture::call_events("{}",fixture::known_usage());events[1]["item"]["namespace"]=serde_json::json!("foreign");}
-                if case_server=="diagnostic" {events=fixture::disagreement_events();}
+                if case_server=="diagnostic" {events=fixture::failed_terminal_events();}
                 let mut wire=fixture::wire(&events,true);
                 if case_server=="frame-limit" {wire=vec![b'x';16385];}
                 if case_server=="trailing" {wire.extend_from_slice(b"garbage");}
@@ -331,15 +322,15 @@ fn provider_case() {
             assert_eq!(response.id,id);assert!(response.durable);
             assert!(Runtime::reconcile_fixture(id).is_err());assert!(Runtime::reconcile_usage_fixture(id,0).is_err());
             match case.as_str() {
-                "text"|"call"|"headers"|"recovery"|"corrupt" => {assert_eq!(response.outcome,Outcome::Success);assert!(response.envelope.is_some());assert!(response.usage.unwrap().complete());},
+                "text"|"call"|"headers"|"recovery"|"corrupt"|"trailing" => {assert_eq!(response.outcome,Outcome::Success);assert!(response.envelope.is_some());assert!(response.usage.unwrap().complete());},
                 "missing-usage"|"cap" => {assert_eq!(response.outcome,Outcome::Success);assert!(response.envelope.is_some());assert!(response.usage.is_none());},
                 "failed-usage" => {assert_ne!(response.outcome,Outcome::Success);assert!(response.envelope.is_none());assert!(response.usage.unwrap().complete());},
                 "cancel" => {assert_eq!(response.outcome,Outcome::Cancelled);assert!(response.envelope.is_none());},
                 "deadline" => {assert_eq!(response.outcome,Outcome::Deadline);assert!(response.envelope.is_none());},
-                "trailing"|"missing-terminal"|"bad-identity" => {assert_ne!(response.outcome,Outcome::Success);assert!(response.envelope.is_none());assert!(response.remote_terminal.is_none());},
+                "missing-terminal"|"bad-identity" => {assert_ne!(response.outcome,Outcome::Success);assert!(response.envelope.is_none());assert!(response.remote_terminal.is_none());},
                 "wire-limit"|"frame-limit"|"output-limit" => {assert_eq!(response.outcome,Outcome::ResourceLimit);assert!(response.envelope.is_none());},
                 "unsupported" => {assert_eq!(response.outcome,Outcome::Unsupported);assert!(response.envelope.is_none());},
-                "diagnostic" => {assert_eq!(response.outcome,Outcome::Unsupported);assert!(response.envelope.is_none());assert_eq!(response.remote_terminal.as_ref().unwrap().response_id,"resp_1");assert!(response.usage.as_ref().unwrap().complete());let difference=response.failure.unwrap().final_difference.unwrap();assert!(difference.items[0].unwrap().other_fields);assert_eq!(difference.items[0].unwrap().content.unwrap().first_part.unwrap().fields,8);},
+                "diagnostic" => {assert_eq!(response.outcome,Outcome::Incomplete);assert!(response.envelope.is_none());assert_eq!(response.remote_terminal.as_ref().unwrap().response_id,"resp_1");assert!(response.usage.as_ref().unwrap().complete());},
                 status => {assert_eq!(response.outcome,Outcome::HttpRejected(status.parse().unwrap()));assert!(response.envelope.is_none());assert!(response.remote_terminal.is_none());}
             }
             drop(handle);
@@ -353,8 +344,10 @@ fn provider_case() {
                 assert_eq!(scramjet_rs::replay_provider_data(&capture.bytes).outcome,Outcome::Success);
             } else if case=="missing-terminal" {assert!(capture.body_eof);assert!(!capture.parser_accepted);}
             else if matches!(case.as_str(),"cancel"|"deadline") {assert!(!capture.body_eof);assert!(capture.bytes.is_empty());}
-            else if matches!(case.as_str(),"diagnostic"|"trailing"|"bad-identity"|"frame-limit") {
-                assert_eq!(capture.body_eof,matches!(case.as_str(),"trailing"|"diagnostic"));assert!(!capture.parser_accepted);assert_ne!(scramjet_rs::replay_provider_data(&capture.bytes).outcome,Outcome::Success);
+            else if case=="trailing" {assert!(capture.body_eof);assert!(capture.parser_accepted);assert_eq!(scramjet_rs::replay_provider_data(&capture.bytes).outcome,Outcome::Success);}
+            else if case=="diagnostic" {assert!(capture.body_eof);assert!(capture.parser_accepted);assert_eq!(scramjet_rs::replay_provider_data(&capture.bytes).outcome,Outcome::Incomplete);}
+            else if matches!(case.as_str(),"bad-identity"|"frame-limit") {
+                assert!(!capture.body_eof);assert!(!capture.parser_accepted);assert_ne!(scramjet_rs::replay_provider_data(&capture.bytes).outcome,Outcome::Success);
             }
         }
         let history=runtime.provider_history().unwrap();

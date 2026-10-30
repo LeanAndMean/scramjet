@@ -182,9 +182,7 @@ fn pair_checks_in_isolated_processes() {
         "partial-body",
         "cancel-before-eof",
         "deadline-before-eof",
-        "unsupported",
         "non-fit",
-        "trailing",
         "metadata-change",
         "cancel",
     ] {
@@ -283,7 +281,6 @@ fn pair_child() {
             "over-usage"=>{first[9]["response"]["usage"]["output_tokens"]=json!(1025);first[9]["response"]["usage"]["total_tokens"]=json!(1035);},
             "missing-usage"=>first[9]["response"]["usage"]=serde_json::Value::Null,
             "partial-usage"=>first[9]["response"]["usage"]=json!({"input_tokens":10,"input_tokens_details":{"cached_tokens":3}}),
-            "unsupported"=>first[9]["response"]["output"][0]["opaque"]=json!("different"),
             "non-fit"|"nonfit-max"=>{let encrypted=json!("é".repeat(7800));first[8]["item"]["encrypted_content"]=encrypted.clone();first[9]["response"]["output"][0]["encrypted_content"]=encrypted;},
             "success-max"=>{let encrypted=json!(format!("{}{}","é".repeat(7400),"\u{0000}".repeat(64)));first[8]["item"]["encrypted_content"]=encrypted.clone();first[9]["response"]["output"][0]["encrypted_content"]=encrypted;},
             "evidence-budget"=>{let id=json!("r".repeat(15000));first[0]["response"]["id"]=id.clone();first[9]["response"]["id"]=id;},
@@ -296,7 +293,6 @@ fn pair_child() {
             let mut item=extra[7]["item"].clone();item["id"]=json!("extra-message");terminal["response"]["output"].as_array_mut().unwrap().push(item);first.push(terminal);
         }
         let mut body=fixture::wire(&first,true);
-        if case=="trailing" {body.extend_from_slice(b"data: {}\n\n");}
         let mut changed=fixture_driver::metadata();changed[0]["model_catalog"]["new-predicate"]=json!(true);
         let second=fixture::call_events(if case=="bad-call"{"{\"message\":\"wrong\"}"}else{"{\"message\":\"synthetic-smoke\"}"},fixture::known_usage());
         let mut metadata=fixture_driver::metadata();

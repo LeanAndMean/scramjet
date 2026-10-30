@@ -26,13 +26,16 @@ pub fn call_events(arguments: &str, usage: Value) -> Vec<Value> {
         json!({"type":"response.completed","response":{"id":"resp_1","status":"completed","model":"gpt-6-luna","output":[item],"usage":usage}}),
     ]
 }
+/// A complete stream whose terminal reports failure, with complete usage: never executable.
 #[allow(dead_code)]
-pub fn disagreement_events() -> Vec<Value> {
+pub fn failed_terminal_events() -> Vec<Value> {
     let mut events = text_events("synthetic-private\u{001b}hé🙂", known_usage());
-    let item = &mut events.last_mut().unwrap()["response"]["output"][0];
-    item["phase"] = json!("final_answer");
-    item["content"][0]["logprobs"] = json!([{"token":"synthetic-private"}]);
-    item["synthetic-private\u{001b}key"] = json!({"nested":"synthetic-private"});
+    let terminal = events.last_mut().unwrap();
+    terminal["type"] = json!("response.failed");
+    terminal["response"]["status"] = json!("failed");
+    terminal["response"]["error"] = json!({"code":"server_error","message":"synthetic-private"});
+    terminal["response"]["output"][0]["synthetic-private\u{001b}key"] =
+        json!({"nested":"synthetic-private"});
     events
 }
 #[allow(dead_code)]
@@ -63,6 +66,9 @@ pub fn continuation_events(text: &str, arguments: &str, encrypted: &str) -> Vec<
     for event in &message[2..8] {
         let mut event = event.clone();
         event["output_index"] = json!(3);
+        if event["type"] == "response.output_item.done" {
+            event["item"]["phase"] = json!("final_answer");
+        }
         events.push(event);
     }
     for index in [1, 0] {

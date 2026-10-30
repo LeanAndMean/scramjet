@@ -464,7 +464,7 @@ fn bounded_journey_child() {
         let request = journey::sequence("poem", 0, "e").remove(0).0;
         vec![(
             request,
-            fixture::wire(&fixture::disagreement_events(), true),
+            fixture::wire(&fixture::failed_terminal_events(), true),
         )]
     };
     let expected_posts = if case == "cancelled" {
@@ -593,7 +593,7 @@ fn bounded_journey_child() {
         assert!(!project.join("haiku.md").exists());
     } else {
         assert!(
-            matches!(result, Err(scramjet_rs::CodingError::Unsupported(_))),
+            matches!(result, Err(scramjet_rs::CodingError::Invalid(_))),
             "{result:?}"
         );
         assert!(!project.join("haiku.md").exists());
