@@ -1,10 +1,12 @@
 mod editor;
 
+use rustix::termios::{self, LocalModes, OptionalActions, Termios};
 use scramjet_rs::agent::{Agent, AgentConfig, AgentError, AgentUi, SessionChoice, StreamProgress};
 use std::{
     ffi::OsString,
     io::{BufRead, IsTerminal, Write},
     net::SocketAddr,
+    os::fd::BorrowedFd,
     path::PathBuf,
     sync::{
         Arc,
@@ -26,7 +28,8 @@ Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1
 In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing \\ starts
 a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
-While a turn runs, Ctrl-C cancels it; press it twice to quit.";
+While a turn runs, typed text is kept for the next prompt without being shown; Ctrl-C cancels
+the turn (and discards that text); press it twice to quit.";
 
 pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
     let mut project = None;
@@ -94,15 +97,25 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
 
     let cancel = Arc::new(AtomicBool::new(false));
-    // A second Ctrl-C while a cancellation is still pending exits.
-    signal_hook::flag::register_conditional_shutdown(
-        signal_hook::consts::SIGINT,
-        130,
-        cancel.clone(),
-    )
+    let startup = termios::tcgetattr(std::io::stdin()).ok();
+    let flag = cancel.clone();
+    // SAFETY: the handler only swaps an atomic, calls tcsetattr and _exit, all async-signal-safe.
+    unsafe {
+        signal_hook::low_level::register(signal_hook::consts::SIGINT, move || {
+            // A second Ctrl-C while a cancellation is still pending exits.
+            if flag.swap(true, Ordering::Relaxed) {
+                if let Some(startup) = &startup {
+                    let _ = termios::tcsetattr(
+                        BorrowedFd::borrow_raw(0),
+                        OptionalActions::Now,
+                        startup,
+                    );
+                }
+                signal_hook::low_level::exit(130);
+            }
+        })
+    }
     .map_err(|e| e.to_string())?;
-    signal_hook::flag::register(signal_hook::consts::SIGINT, cancel.clone())
-        .map_err(|e| e.to_string())?;
     let mut ui = Terminal::new();
 
     if let Some(prompt) = prompt {
@@ -111,7 +124,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         } else {
             prompt
         };
+        let echo = Echo::set(false);
         let result = agent.turn(&prompt, &mut ui, &cancel);
+        drop(echo);
         ui.clear();
         ui.usage(&agent);
         return result.map_err(|e| e.to_string());
@@ -161,7 +176,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             return Ok(());
         }
         cancel.store(false, Ordering::Relaxed);
+        let echo = Echo::set(false);
         let result = agent.turn(prompt, &mut ui, &cancel);
+        drop(echo);
         ui.clear();
         match result {
             Ok(()) => {}
@@ -194,6 +211,30 @@ fn read_lines() -> Result<Option<String>, String> {
         } else {
             prompt.push_str(line);
             return Ok(Some(prompt));
+        }
+    }
+}
+
+/// Sets whether the terminal echoes typed keys until dropped. Keys typed while a turn runs stay
+/// queued for the prompt editor instead of appearing in the output.
+struct Echo(Option<Termios>);
+
+impl Echo {
+    fn set(on: bool) -> Self {
+        let Ok(previous) = termios::tcgetattr(std::io::stdin()) else {
+            return Self(None);
+        };
+        let mut changed = previous.clone();
+        changed.local_modes.set(LocalModes::ECHO, on);
+        let _ = termios::tcsetattr(std::io::stdin(), OptionalActions::Now, &changed);
+        Self(Some(previous))
+    }
+}
+
+impl Drop for Echo {
+    fn drop(&mut self) {
+        if let Some(previous) = &self.0 {
+            let _ = termios::tcsetattr(std::io::stdin(), OptionalActions::Now, previous);
         }
     }
 }
@@ -329,6 +370,7 @@ impl AgentUi for Terminal {
                 rustix::termios::tcflush(std::io::stdin(), rustix::termios::QueueSelector::IFlush);
         }
         eprint!("{question}\nAllow? [y/N] ");
+        let _echo = Echo::set(true);
         let mut answer = String::new();
         if std::io::stdin().lock().read_line(&mut answer).is_err() {
             return false;

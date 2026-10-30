@@ -2,7 +2,7 @@ use std::process::Command;
 
 #[cfg(target_os = "linux")]
 #[test]
-fn prompt_editor_pastes_without_sending_recalls_history_and_restores_the_terminal() {
+fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {
     let output = Command::new("timeout")
         .args([
             "60",
