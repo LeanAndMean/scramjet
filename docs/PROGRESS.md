@@ -1,3 +1,5 @@
+> Frozen on 2026-10-30 at commit `cfa1ee4`. Historical activity only, not instructions. Links into `docs/tasks/` refer to records removed after that commit; read them with `git show cfa1ee4:docs/tasks/<id>.md`.
+
 # Development activity log
 
 This is chronological dated activity and evidence, not a task queue or current-state snapshot. Start at [TASKS.md](TASKS.md) for selection/order, then the selected [task record](tasks/) for requirements, authority, plan, status, candidate/review and next action. [CLAUDE.md](../CLAUDE.md) owns command/file responsibilities.

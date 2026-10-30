@@ -1,10 +1,10 @@
 # Staged roadmap
 
-The strategy is small, complete working features plus early risk probes, not an exhaustive framework followed by a late integration. [Design](DESIGN.md) owns direction; [the queue](TASKS.md) owns selection/order, task records own current state, and [progress](PROGRESS.md) records dated activity/evidence. Milestones below describe outcomes, not a fixed future file structure or an authorization to implement the entire stage.
+The strategy is small, complete working features plus early risk probes, not an exhaustive framework followed by a late integration. [Design](DESIGN.md) owns direction and [the task list](TASKS.md) holds current work. Milestones below describe outcomes, not a fixed future file structure.
 
 ## Delivery rhythm
 
-Triage owns a short priority queue; plan resolves only material task uncertainty; work implements/checks one slice; review independently evaluates candidates when needed. Their exact responsibilities and routing live in `CLAUDE.md`, not a central workflow definition. Select one bounded task that fits a session and has an observable result. Split a stage into a few tasks only when it becomes active; do not pre-plan every future interface. Design enough to preserve essential responsibilities and invariants, then implement and verify the smallest integrated slice. Revise proposed mechanisms when evidence warrants it without silently changing user-owned scope.
+Pick the most useful next feature, build the smallest complete version, verify it for real (through Proxy when it involves the provider), and commit. Split a stage into a few tasks only when it becomes active; do not pre-plan every future interface. Revise mechanisms when evidence warrants it without silently changing user-owned scope.
 
 Keep transport/runtime and native TUI work moving in parallel where they are independent. Missing native hardware blocks that acceptance claim, not unrelated headless work. Every stage leaves a usable demonstration, a recorded evidence boundary, and a specific next task. Complete targeted fixes when necessary; defer unrelated improvements rather than widening the session indefinitely.
 
@@ -14,7 +14,7 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 
 - Establish the minimum Cargo structure, selected Apache-2.0 license file, ignore rules, and local Git history. Remote repository setup/publication needs separate authorization.
 - Use the installed stable toolchain where suitable; do not impose nightly or heavy dependencies without a concrete requirement.
-- Add only an initial CLI smoke and a small behavioral test. Record actual build/test commands and toolchain as dated progress evidence; the selected task record owns current acceptance.
+- Add only an initial CLI smoke and a small behavioral test. Record actual build/test commands and toolchain.
 - Establish dependency/license checking proportionally; do not build a plugin SDK or speculative crate hierarchy.
 
 **Exit evidence:** CLI smoke, formatting, build, and tests succeed on the available host; unsupported/untested hosts remain explicit. Documentation reflects actual commands and layout.
@@ -77,9 +77,7 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 - Repeat native copy/paste, focus, resize, hidden-control approval, external-editor, suspend/resume, and exit journeys against the integrated application. Include failure/negative controls that catch no-op Copy and intercepted-but-not-inserted Paste.
 - Select initial real providers/auth routes with the user, and use explicit authority for live calls and publication. Exercise normal daily work before expanding catalogs.
 
-**Selected offline milestone (2026-10-26):** S4.13 now contains the authorized retained project request → parallel readers → exact-approved edit → explicit read-only verification journey, with useful history and cancellation/restoration. Its historical coding→companion outcome remains required, but is no longer a separate tiny prerequisite. Deliver two substantial batches: headless retained-project execution/history/continuation, then the consuming retained application and integrated journeys. Plan material project/runtime/evidence ownership uncertainty before the first batch; independently accept each material candidate. The application batch depends on accepted headless contracts; both are necessary for the parent outcome. Bounded offline fixtures establish harness behavior, not general model intelligence. No live/paid providers, publication, arbitrary shell, shared-endpoint load or new desktop/clipboard automation belongs to this authorization.
-
-**Selected first-provider outcome (clarified 2026-10-29):** S4.14 prioritizes a reusable headless prompt plus optional prior-conversation-record invocation, with ordinary scripting orchestrating successive fresh processes. Demonstrate two natural-language messages: create Markdown, then write and exact-approve/execute the Python reader using the first record as context. Deliver real prompt/context/tool behavior, not a fixed-request haiku workflow or another throwaway consumer. Reuse provider/effect/isolation foundations; plan bounded record continuity and fresh authority, and preserve unresolved live-call obligations. The specialty retained haiku application is removed from this short-term acceptance sequence, not from Git; wider retained/native interaction goals remain. Offline proofs precede eligible deployed evidence and final headless user QA. [S4.14](tasks/S4.14.md) owns exact authorization and acceptance; [S4.14b](tasks/S4.14b.md) owns the same-task redesign.
+**Status (2026-10-30):** the offline retained-project milestone (S4.13) was accepted; the first real-provider journey (S4.14) passed live through Proxy. `scramjet-rs agent` now provides the first daily-use interactive agent; the retained TUI, parallel subagents and command composition are still to be integrated into it.
 
 **Exit evidence:** daily-use journeys pass; native acceptance is tied to the exact candidate and tested matrix, not inherited from the probe. Completion of the selected offline milestone does not complete all S4. Known gaps are visible; no platform is described as first-class merely because it compiles.
 
@@ -108,4 +106,4 @@ Potential work includes additional providers/auth routes, optional Rust extensio
 
 Local fixture tests establish client behavior, not backend entitlement or real server capacity. Headless TUI tests establish cells/input dispatch, not desktop gestures or clipboard contents. Native journeys establish only their declared platform/profile/revision. A queued task count establishes neither in-flight requests nor useful throughput.
 
-Keep priority order/selection in `TASKS.md`, current requirements/state/handoff in the selected task record, and dated activity/evidence in `PROGRESS.md`. Once substantive work uses issues/PRs, link those artifacts instead of duplicating their full plans. Keep raw traces and benchmark outputs outside normal orientation documents; create focused permanent evidence files only when their size/reuse earns it. Release versioning and changelog preparation happen at the end of the release/PR lifecycle, not in feature tasks.
+Keep current work in `TASKS.md` and the record of changes in Git. Raw traces and benchmark outputs stay out of orientation documents. Release versioning and changelog preparation happen at the end of the release lifecycle, not in feature tasks.
