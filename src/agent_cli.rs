@@ -303,6 +303,119 @@ impl Status {
     }
 }
 
+/// Breaks streamed text into lines that fit the terminal, between words where it can, instead of
+/// leaving the terminal to split words at its edge. A word is held until it is complete.
+struct Wrap {
+    /// Zero passes text through unchanged.
+    width: usize,
+    column: usize,
+    word: String,
+    word_width: usize,
+    /// Spaces before `word`, dropped if it starts a new line after a break.
+    spaces: usize,
+    /// `word` continues one already broken at the edge of the line.
+    continued: bool,
+    /// No word has been placed since the last newline in the text.
+    line_start: bool,
+    /// Where lines wrapped from the current one start: under the text of a list item, or at
+    /// the indentation of an indented line.
+    indent: usize,
+}
+
+impl Wrap {
+    fn new(width: usize) -> Self {
+        Self {
+            width,
+            column: 0,
+            word: String::new(),
+            word_width: 0,
+            spaces: 0,
+            continued: false,
+            line_start: true,
+            indent: 0,
+        }
+    }
+    fn push(&mut self, text: &str) -> String {
+        if self.width == 0 {
+            return text.to_owned();
+        }
+        let mut out = String::new();
+        for c in text.chars() {
+            match c {
+                '\n' => {
+                    self.place(&mut out);
+                    self.spaces = 0;
+                    self.column = 0;
+                    self.line_start = true;
+                    self.indent = 0;
+                    out.push('\n');
+                }
+                ' ' | '\t' => {
+                    self.place(&mut out);
+                    self.spaces += if c == '\t' { 4 } else { 1 };
+                }
+                c => {
+                    self.word.push(c);
+                    self.word_width += c.width().unwrap_or(0);
+                    if self.word_width > self.width {
+                        self.place(&mut out);
+                        self.continued = true;
+                    }
+                }
+            }
+        }
+        out
+    }
+    /// The held word, at the end of the text.
+    fn finish(&mut self) -> String {
+        let mut out = String::new();
+        self.place(&mut out);
+        *self = Self::new(self.width);
+        out
+    }
+    fn place(&mut self, out: &mut String) {
+        if self.word.is_empty() {
+            self.continued = false;
+            return;
+        }
+        if self.line_start {
+            let marker = matches!(self.word.as_str(), "-" | "*" | "+")
+                || self.word.strip_suffix(['.', ')']).is_some_and(|number| {
+                    !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+                });
+            let indent = self.spaces + if marker { self.word_width + 1 } else { 0 };
+            self.indent = if indent < self.width / 2 { indent } else { 0 };
+            self.line_start = false;
+        }
+        if !self.continued {
+            if self.column > self.indent && self.column + self.spaces + self.word_width > self.width
+            {
+                self.break_line(out);
+                self.spaces = 0;
+            }
+            out.extend(std::iter::repeat_n(' ', self.spaces));
+            self.column += self.spaces;
+            self.spaces = 0;
+        }
+        let word = std::mem::take(&mut self.word);
+        for c in word.chars() {
+            let cells = c.width().unwrap_or(0);
+            if self.column > self.indent && self.column + cells > self.width {
+                self.break_line(out);
+            }
+            out.push(c);
+            self.column += cells;
+        }
+        self.word_width = 0;
+        self.continued = false;
+    }
+    fn break_line(&mut self, out: &mut String) {
+        out.push('\n');
+        out.extend(std::iter::repeat_n(' ', self.indent));
+        self.column = self.indent;
+    }
+}
+
 fn elapsed(seconds: u64) -> String {
     match seconds {
         0 => String::new(),
@@ -319,6 +432,7 @@ struct Terminal {
     streamed_text: bool,
     /// Newlines ending the streamed block so far, not yet printed.
     held_newlines: usize,
+    wrap: Wrap,
     tool_started: Option<Instant>,
 }
 
@@ -349,6 +463,7 @@ impl Terminal {
             streaming: Streaming::None,
             streamed_text: false,
             held_newlines: 0,
+            wrap: Wrap::new(0),
             tool_started: None,
         }
     }
@@ -386,24 +501,35 @@ impl Terminal {
             if kind == Streaming::Reasoning && self.color {
                 eprint!("\x1b[2m");
             }
+            let wraps = match kind {
+                Streaming::Text => std::io::stdout().is_terminal(),
+                _ => self.color,
+            };
+            self.wrap = Wrap::new(if wraps { editor::terminal_size().0 } else { 0 });
             self.streaming = kind;
         }
         let body = delta.trim_end_matches('\n');
         if !body.is_empty() {
             let text = "\n".repeat(std::mem::take(&mut self.held_newlines)) + body;
-            if self.streaming == Streaming::Text {
-                print!("{text}");
-                let _ = std::io::stdout().flush();
-            } else {
-                eprint!("{text}");
-            }
+            let text = self.wrap.push(&text);
+            self.print_streamed(&text);
         }
         self.held_newlines += delta.len() - body.len();
+    }
+    fn print_streamed(&self, text: &str) {
+        if self.streaming == Streaming::Text {
+            print!("{text}");
+            let _ = std::io::stdout().flush();
+        } else {
+            eprint!("{text}");
+        }
     }
     /// Removes the status line and ends any streamed block before other output.
     fn clear(&mut self) {
         self.status.lock().unwrap().clear();
         self.held_newlines = 0;
+        let rest = self.wrap.finish();
+        self.print_streamed(&rest);
         match self.streaming {
             Streaming::None => {}
             Streaming::Reasoning => eprint!("{}\n\n", if self.color { "\x1b[0m" } else { "" }),
@@ -462,7 +588,13 @@ impl AgentUi for Terminal {
         let streamed = self.streamed_text;
         self.clear();
         if !streamed && !text.is_empty() {
-            println!("{}\n", text.trim_end());
+            let width = match std::io::stdout().is_terminal() {
+                true => editor::terminal_size().0,
+                false => 0,
+            };
+            let mut wrap = Wrap::new(width);
+            let text = wrap.push(text.trim_end()) + &wrap.finish();
+            println!("{text}\n");
             let _ = std::io::stdout().flush();
         }
     }
@@ -742,6 +874,39 @@ mod tests {
             answers,
             [Allow, Allow, AllowAll, AllowAll, Deny, Deny, Deny]
         );
+    }
+
+    #[test]
+    fn streamed_text_wraps_between_words() {
+        let wrapped = |width, pieces: &[&str]| {
+            let mut wrap = Wrap::new(width);
+            let mut out: String = pieces.iter().map(|piece| wrap.push(piece)).collect();
+            out += &wrap.finish();
+            out
+        };
+        assert_eq!(
+            wrapped(11, &["hel", "lo wo", "rld foo"]),
+            "hello world\nfoo"
+        );
+        assert_eq!(wrapped(11, &["hello   ", "  world"]), "hello\nworld");
+        assert_eq!(
+            wrapped(20, &["- a\n    indented  \nend"]),
+            "- a\n    indented\nend"
+        );
+        let long = format!("a {} b", "x".repeat(25));
+        let broken = format!("a\n{0}\n{0}\n{1} b", "x".repeat(10), "x".repeat(5));
+        assert_eq!(wrapped(10, &[&long]), broken);
+        assert_eq!(
+            wrapped(10, &[&format!("{} b", "x".repeat(11))]),
+            "xxxxxxxxxx\nx b"
+        );
+        assert_eq!(wrapped(6, &["日本語 です"]), "日本語\nです");
+        assert_eq!(
+            wrapped(12, &["- one two three\n12. four five six\n  seven eight"]),
+            "- one two\n  three\n12. four\n    five six\n  seven\n  eight"
+        );
+        assert_eq!(wrapped(12, &["-flag one two"]), "-flag one\ntwo");
+        assert_eq!(wrapped(0, &["no  wrap \n"]), "no  wrap \n");
     }
 
     #[test]
