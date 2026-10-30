@@ -637,9 +637,7 @@ impl AgentUi for Terminal {
             let reset = if style.is_empty() { "" } else { "\x1b[0m" };
             eprintln!("  {style}{line}{reset}");
         }
-        if let Some(took) =
-            took.filter(|took| name == "bash" && !failed && *took >= Duration::from_secs(1))
-        {
+        if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
             eprintln!(
                 "  {}",
                 self.dim(&format!("took {:.1}s", took.as_secs_f64()))
@@ -829,16 +827,20 @@ mod tests {
     #[test]
     fn previews_keep_the_end_of_bash_output_and_are_safe_to_print() {
         let output: String = (1..=20).map(|n| format!("line {n}\n")).collect();
-        let bash = preview(&format!("{output}Exit code 1."), Shown::Last(5), 80);
+        let bash = preview(
+            &format!("{output}\nCommand exited with code 1"),
+            Shown::Last(5),
+            80,
+        );
         assert_eq!(
             bash,
             [
-                "… (16 earlier lines)",
-                "line 17",
+                "… (17 earlier lines)",
                 "line 18",
                 "line 19",
                 "line 20",
-                "Exit code 1."
+                "",
+                "Command exited with code 1"
             ]
         );
         let head = preview(&output, Shown::First(2), 80);

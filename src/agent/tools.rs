@@ -42,7 +42,7 @@ pub(super) fn definitions() -> Value {
                 "oldText":{"type":"string"},"newText":{"type":"string"}},"required":["oldText","newText"]}}},
           "required":["path","edits"]}},
         {"type":"function","name":"bash","strict":false,
-         "description":"Run a bash command in the project directory. Returns the exit code and combined stdout/stderr, truncated to the last 2000 lines or 50KB. The user approves each command; just call this tool.",
+         "description":"Run a bash command in the project directory. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output. The user approves each command; just call this tool.",
          "parameters":{"type":"object","properties":{
             "command":{"type":"string"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
@@ -99,14 +99,17 @@ impl<'a> Call<'a> {
         }
     }
     pub fn run(&self, root: &Path, cancel: &AtomicBool) -> Result<Output, String> {
-        let text = match self.name {
-            "read" => read(root, self)?,
-            "write" => return write(root, self),
-            "edit" => return edit(root, self),
-            "bash" => bash(root, self, cancel)?,
-            other => return Err(format!("unknown tool `{other}`")),
-        };
-        Ok(Output { text, detail: None })
+        match self.name {
+            "read" => Ok(Output {
+                text: read(root, self)?,
+                detail: None,
+                failed: false,
+            }),
+            "write" => write(root, self),
+            "edit" => edit(root, self),
+            "bash" => bash(root, self, cancel),
+            other => Err(format!("unknown tool `{other}`")),
+        }
     }
 }
 
@@ -115,6 +118,8 @@ pub(super) struct Output {
     /// What the model receives.
     pub text: String,
     pub detail: Option<ToolDetail>,
+    /// The tool ran but reports failure, such as a command's non-zero exit.
+    pub failed: bool,
 }
 
 /// Resolves `path` against the project root without following symlinks.
@@ -179,6 +184,7 @@ fn write(root: &Path, call: &Call) -> Result<Output, String> {
     Ok(Output {
         text: format!("Wrote {} bytes to {}", content.len(), path.display()),
         detail: Some(ToolDetail::Written(content.to_owned())),
+        failed: false,
     })
 }
 
@@ -230,6 +236,7 @@ fn edit(root: &Path, call: &Call) -> Result<Output, String> {
     Ok(Output {
         text: format!("Applied {} edit(s) to {}", spans.len(), path.display()),
         detail: Some(ToolDetail::Diff(diff(&original, &spans))),
+        failed: false,
     })
 }
 
@@ -332,7 +339,9 @@ fn diff(original: &str, spans: &[(usize, usize, &str)]) -> String {
     out
 }
 
-fn bash(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String> {
+/// As in Scramjet, a command that succeeds returns just its output; any other ending is a failure
+/// with its reason after the output.
+fn bash(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<Output, String> {
     use std::os::unix::process::CommandExt;
     let command = call.str("command")?;
     let timeout = Duration::from_secs(
@@ -411,13 +420,29 @@ fn bash(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String>
         );
     }
     let ending = match (stopped, status.code()) {
-        (Some(reason), _) => format!("Command {reason} after {}s.", started.elapsed().as_secs()),
-        (None, Some(code)) => format!("Exit code {code}."),
-        (None, None) => format!("Terminated: {status}."),
+        (Some(reason), _) => format!("Command {reason} after {}s", started.elapsed().as_secs()),
+        (None, Some(0)) => {
+            return Ok(Output {
+                text: if text.is_empty() {
+                    "(no output)".into()
+                } else {
+                    text
+                },
+                detail: None,
+                failed: false,
+            });
+        }
+        (None, Some(code)) => format!("Command exited with code {code}"),
+        (None, None) => format!("Command terminated ({status})"),
     };
-    Ok(match text.is_empty() || text.ends_with('\n') {
-        true => format!("{text}{ending}"),
-        false => format!("{text}\n{ending}"),
+    let text = match text.trim_end_matches('\n') {
+        "" => ending,
+        output => format!("{output}\n\n{ending}"),
+    };
+    Ok(Output {
+        text,
+        detail: None,
+        failed: true,
     })
 }
 
@@ -500,20 +525,21 @@ mod tests {
             .unwrap()
             .text;
         assert_eq!(page, "line 2999\nline 3000\n");
-        let output = call(
-            "bash",
-            json!({"command":"seq 1 5000; echo err >&2; exit 3"}),
-        )
-        .run(&root, &cancel)
-        .unwrap()
-        .text;
-        assert!(output.contains("[Output truncated") && output.ends_with("err\nExit code 3."));
-        assert!(!output.contains("\n1\n") && output.contains("\n5000\n"));
-        let timed = call("bash", json!({"command":"sleep 30","timeout":1}))
-            .run(&root, &cancel)
-            .unwrap()
-            .text;
-        assert!(timed.contains("timed out"));
+        let bash = |command: &str| {
+            let output = call("bash", json!({"command":command,"timeout":1}))
+                .run(&root, &cancel)
+                .unwrap();
+            (output.text, output.failed)
+        };
+        let (output, failed) = bash("seq 1 5000; echo err >&2; exit 3");
+        assert!(output.contains("[Output truncated") && failed);
+        assert!(output.ends_with("5000\nerr\n\nCommand exited with code 3"));
+        assert!(!output.contains("\n1\n"));
+        assert_eq!(bash("echo ok"), ("ok\n".into(), false));
+        assert_eq!(bash("true"), ("(no output)".into(), false));
+        assert_eq!(bash("false"), ("Command exited with code 1".into(), true));
+        let (timed, failed) = bash("echo started; sleep 30");
+        assert!(timed.starts_with("started\n\nCommand timed out after ") && failed);
         assert!(
             call("write", json!({"path":"a/b.txt","content":"hi"}))
                 .approval(&root)

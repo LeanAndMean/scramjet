@@ -330,7 +330,12 @@ impl Agent {
         ui.tool_running();
         match call.run(&self.config.root, cancel) {
             Ok(output) => {
-                ui.tool_result(call.name, &output.text, output.detail.as_ref(), false);
+                ui.tool_result(
+                    call.name,
+                    &output.text,
+                    output.detail.as_ref(),
+                    output.failed,
+                );
                 output.text
             }
             Err(error) => {
@@ -626,7 +631,7 @@ response is incomplete; retry the request."});
             .iter()
             .filter_map(|item| item["output"].as_str())
             .collect();
-        assert_eq!(outputs, ["Exit code 0."; 3]);
+        assert_eq!(outputs, ["(no output)"; 3]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
