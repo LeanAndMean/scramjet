@@ -62,6 +62,14 @@ function feedModel(id: string, context: number, overrides: Record<string, unknow
 }
 
 const copilotAdditions = {
+	"gpt-6.1-terra": {
+		api: "openai-responses",
+		contextWindow: 1000000,
+		maxInputTokens: 1000000,
+		maxTokens: 128000,
+		cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	},
 	"gpt-6.1-sol": {
 		api: "openai-responses",
 		contextWindow: 1050000,
@@ -1259,6 +1267,52 @@ describe("real generator context corrections", () => {
 			});
 		},
 	);
+
+	it("pins Copilot Terra against inherited public limits and preserves neighboring routing", async () => {
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				data["github-copilot"].models["gpt-6.1-terra"] = feedModel("gpt-6.1-terra", 1050000, {
+					name: "Conflicting feed name",
+					reasoning: false,
+					modalities: { input: ["text", "image", "pdf"] },
+					limit: { context: 1050000, input: 922000, output: 4000 },
+				});
+				data["github-copilot"].models["gpt-6.1-terra-neighbor"] = feedModel("gpt-6.1-terra-neighbor", 240000);
+			},
+		}))!["github-copilot"];
+		expect(models["gpt-6.1-terra"]).toMatchObject({
+			id: "gpt-6.1-terra",
+			name: "gpt-6.1-terra",
+			...copilotAdditions["gpt-6.1-terra"],
+			reasoning: true,
+			input: ["text", "image"],
+		});
+		expect(models["gpt-6.1-terra"].thinkingLevelMap).toEqual(copilotAdditions["gpt-6.1-terra"].thinkingLevelMap);
+		expect(Object.keys(models).filter((id) => id === "gpt-6.1-terra")).toHaveLength(1);
+		expect(models["gpt-6.1-terra-neighbor"]).toMatchObject({ contextWindow: 240000, api: "openai-completions" });
+	});
+
+	it.each(["missing", "deprecated", "no-tools"])("rejects %s Copilot Terra before writing", async (state) => {
+		await generate(true, {
+			modelsDevChange: (data) => {
+				const models = data["github-copilot"].models;
+				if (state === "missing") delete models["gpt-6.1-terra"];
+				else
+					models["gpt-6.1-terra"][state === "deprecated" ? "status" : "tool_call"] =
+						state === "deprecated" ? "deprecated" : false;
+			},
+			expectFailure: true,
+			expectedError: "Missing corrected GitHub Copilot candidates: gpt-6.1-terra",
+		});
+	});
+
+	it("preserves the exact-loss guard for an unrecognized committed Terra neighbor", async () => {
+		await generate(true, {
+			committedModels: { "github-copilot": { "gpt-6.1-terra-neighbor": {} } },
+			expectFailure: true,
+			expectedError: "Unreviewed catalog losses: github-copilot/gpt-6.1-terra-neighbor",
+		});
+	});
 
 	it("rejects a missing corrected GitHub Copilot candidate before writing", async () => {
 		await generate(true, {

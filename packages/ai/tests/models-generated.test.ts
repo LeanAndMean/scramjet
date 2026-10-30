@@ -788,6 +788,36 @@ describe("generated catalog - GPT-6 Astra", () => {
 });
 
 describe("generated catalog - GPT-6.1 Terra route contracts", () => {
+	it("pins the account-qualified Copilot contract without inherited none support", () => {
+		const matches = getModels("github-copilot").filter((model) => model.id === "gpt-6.1-terra");
+		expect(matches).toHaveLength(1);
+		const model = matches[0];
+		expect(getModel("github-copilot", "gpt-6.1-terra")).toBe(model);
+		expect(model).toEqual({
+			id: "gpt-6.1-terra",
+			name: "gpt-6.1-terra",
+			provider: "github-copilot",
+			api: "openai-responses",
+			baseUrl: "https://api.individual.githubcopilot.com",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+			contextWindow: 1000000,
+			maxInputTokens: 1000000,
+			maxTokens: 128000,
+			thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+			headers: {
+				"User-Agent": "GitHubCopilotChat/0.35.0",
+				"Editor-Version": "vscode/1.107.0",
+				"Editor-Plugin-Version": "copilot-chat/0.35.0",
+				"Copilot-Integration-Id": "vscode-chat",
+				"X-GitHub-Api-Version": "2026-06-01",
+			},
+		});
+		expect(getSupportedThinkingLevels(model)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+		for (const level of ["off", "minimal"] as const) expect(clampThinkingLevel(model, level)).toBe("low");
+	});
+
 	it.each([
 		["openai", "openai-responses", "https://api.openai.com/v1", 1050000],
 		["openai-codex", "openai-codex-responses", "https://chatgpt.com/backend-api", 872000],

@@ -38,25 +38,29 @@ function expectInvalidConfig(config: unknown, fragments: string[]): void {
 }
 
 describe("GPT-6.1 Terra catalog visibility", () => {
-	it.each(["openai", "openai-codex"] as const)("resolves built-in %s with synthetic configured auth", (provider) => {
-		const registry = ModelRegistry.create(
-			AuthStorage.inMemory({ [provider]: { type: "api_key", key: "synthetic-test-key" } }),
-			"/nonexistent/terra-test/models.json",
-		);
-		expect(registry.getError()).toBeUndefined();
-		expect(registry.find(provider, "gpt-6.1-terra")).toMatchObject({
-			provider,
-			id: "gpt-6.1-terra",
-			contextWindow: provider === "openai" ? 1050000 : 872000,
-		});
-		expect(
-			registry.getAvailable().filter((model) => model.provider === provider && model.id === "gpt-6.1-terra"),
-		).toHaveLength(1);
-	});
+	it.each(["openai", "openai-codex", "github-copilot"] as const)(
+		"resolves built-in %s with synthetic configured auth",
+		(provider) => {
+			const registry = ModelRegistry.create(
+				AuthStorage.inMemory({ [provider]: { type: "api_key", key: "synthetic-test-key" } }),
+				"/nonexistent/terra-test/models.json",
+			);
+			expect(registry.getError()).toBeUndefined();
+			expect(registry.find(provider, "gpt-6.1-terra")).toMatchObject({
+				provider,
+				id: "gpt-6.1-terra",
+				contextWindow: provider === "openai" ? 1050000 : provider === "github-copilot" ? 1000000 : 872000,
+			});
+			expect(
+				registry.getAvailable().filter((model) => model.provider === provider && model.id === "gpt-6.1-terra"),
+			).toHaveLength(1);
+		},
+	);
 });
 
 describe("GitHub Copilot catalog visibility", () => {
 	const additionIds = [
+		"gpt-6.1-terra",
 		"claude-fable-5.1",
 		"claude-opus-5",
 		"claude-opus-5.5",

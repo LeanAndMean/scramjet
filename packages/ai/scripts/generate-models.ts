@@ -77,6 +77,14 @@ const COPILOT_STATIC_HEADERS = {
 
 // SCRAMJET-DIVERGENCE: Exact Copilot routing, limits, and effort metadata plus scalar price estimates (issues 477, 567).
 const COPILOT_MODEL_CORRECTIONS = {
+	"gpt-6.1-terra": {
+		api: "openai-responses",
+		contextWindow: 1000000,
+		maxInputTokens: 1000000,
+		maxTokens: 128000,
+		cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	},
 	"gpt-6.1-sol": {
 		api: "openai-responses",
 		contextWindow: 1050000,

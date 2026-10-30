@@ -16,6 +16,7 @@ import {
 } from "../src/providers/openai-responses-shared.js";
 import { streamSimple } from "../src/stream.js";
 import type { AssistantMessage, Context, Model, ModelThinkingLevel, ToolResultMessage } from "../src/types.js";
+import { githubCopilotOAuthProvider } from "../src/utils/oauth/github-copilot.js";
 import { isContextOverflow } from "../src/utils/overflow.js";
 
 const CATEGORY_PREFIX_MAX = "OpenAI Responses request failed without recognized details: ".length;
@@ -335,6 +336,79 @@ describe("built-in GPT-6.1 Terra through public Responses dispatch", () => {
 			expect(request.url).toBe("https://api.openai.com/v1/responses");
 			expect((await requestBody(request)).model).toBe("gpt-6.1-terra");
 		}
+	});
+});
+
+describe("built-in Copilot Terra through public Responses dispatch", () => {
+	it.each([...efforts, "off", "minimal", undefined] as const)("serializes effort %s", async (reasoning) => {
+		const requests = stubFetch([completedResponse()]);
+		const model = getModel("github-copilot", "gpt-6.1-terra");
+		const result = await streamSimple(model, toolContext, { apiKey, reasoning }).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests[0].url).toBe("https://api.individual.githubcopilot.com/responses");
+		expect(requests[0].headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+		for (const [name, value] of Object.entries(model.headers ?? {}))
+			expect(requests[0].headers.get(name)).toBe(value);
+		const body = await requestBody(requests[0]);
+		expect(body.model).toBe("gpt-6.1-terra");
+		if (reasoning === undefined) expect(body).not.toHaveProperty("reasoning");
+		else
+			expect(body.reasoning).toEqual(
+				expect.objectContaining({ effort: reasoning === "off" || reasoning === "minimal" ? "low" : reasoning }),
+			);
+		expect(body.tools).toContainEqual(
+			expect.objectContaining({
+				type: "function",
+				name: "read",
+				parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+			}),
+		);
+	});
+
+	it("continues a streamed tool call with matching IDs and user-to-agent initiator headers", async () => {
+		const model = getModel("github-copilot", "gpt-6.1-terra");
+		const requests = await assertToolContinuation(model, streamSimple);
+		for (const request of requests) {
+			expect(request.url).toBe("https://api.individual.githubcopilot.com/responses");
+			for (const [name, value] of Object.entries(model.headers ?? {})) expect(request.headers.get(name)).toBe(value);
+			expect(request.headers.get("openai-intent")).toBe("conversation-edits");
+			const body = await requestBody(request);
+			expect(body.model).toBe("gpt-6.1-terra");
+			expect(body.reasoning).toEqual(expect.objectContaining({ effort: "low" }));
+			expect(body.tools).toContainEqual(expect.objectContaining({ type: "function", name: "read" }));
+		}
+		expect(requests[0].headers.get("x-initiator")).toBe("user");
+		expect(requests[1].headers.get("x-initiator")).toBe("agent");
+	});
+
+	it("keeps the OAuth-derived account host and dynamic vision header", async () => {
+		const model = getModel("github-copilot", "gpt-6.1-terra");
+		const [accountModel] = githubCopilotOAuthProvider.modifyModels!([model], {
+			access: "tid=synthetic;proxy-ep=proxy.business.githubcopilot.com;exp=9999999999",
+			refresh: "synthetic-refresh",
+			expires: 9999999999000,
+		});
+		const requests = stubFetch([completedResponse()]);
+		const result = await streamSimple(
+			accountModel,
+			{
+				messages: [
+					{
+						role: "user",
+						timestamp: 0,
+						content: [
+							{ type: "text", text: "inspect" },
+							{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+						],
+					},
+				],
+			},
+			{ apiKey },
+		).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests[0].url).toBe("https://api.business.githubcopilot.com/responses");
+		expect(requests[0].headers.get("copilot-vision-request")).toBe("true");
+		expect(requests[0].headers.get("x-initiator")).toBe("user");
 	});
 });
 
