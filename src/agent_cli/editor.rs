@@ -277,24 +277,81 @@ struct Stop {
     column: usize,
 }
 
+/// Where the word being placed starts, when moving it to a new row would leave text behind.
+struct WordStart {
+    stop: usize,
+    byte: usize,
+    column: usize,
+}
+
 impl Layout {
-    fn new(text: &str, cursor: usize, width: usize) -> Self {
-        let width = width.max(INDENT + 2);
+    /// Wraps lines between words where it can. As in Scramjet's editor the last column stays
+    /// free for the cursor; spaces that reach it hang there instead of starting a row.
+    fn new(text: &str, width: usize) -> Self {
+        let limit = width.max(INDENT + 3) - 1;
         let mut rows = vec!["> ".to_owned()];
         let mut stops = Vec::new();
-        let mut column = INDENT;
         let mut offset = 0;
         for (number, line) in text.split('\n').enumerate() {
             if number > 0 {
                 rows.push(". ".into());
-                column = INDENT;
             }
+            let mut column = INDENT;
+            let mut row_has_text = false;
+            let mut after_space = false;
+            let mut hanging = false;
+            let mut word: Option<WordStart> = None;
             for (index, grapheme) in line.grapheme_indices(true) {
                 let shown = if grapheme == "\t" { TAB } else { grapheme };
                 let cells = shown.width();
-                if column + cells > width && column > INDENT {
+                let row = rows.len() - 1;
+                if grapheme == " " || grapheme == "\t" {
+                    after_space = true;
+                    word = None;
+                    hanging |= column + cells > limit;
+                    stops.push(Stop {
+                        offset: offset + index,
+                        row,
+                        column,
+                    });
+                    if !hanging {
+                        rows[row].push_str(shown);
+                        column += cells;
+                    }
+                    continue;
+                }
+                let starts_word = std::mem::take(&mut after_space);
+                if hanging {
                     rows.push(" ".repeat(INDENT));
                     column = INDENT;
+                    hanging = false;
+                } else if starts_word && row_has_text {
+                    word = Some(WordStart {
+                        stop: stops.len(),
+                        byte: rows[row].len(),
+                        column,
+                    });
+                }
+                if column + cells > limit && column > INDENT {
+                    let tail = match word.take() {
+                        Some(start) => {
+                            for stop in &mut stops[start.stop..] {
+                                stop.row += 1;
+                                stop.column = stop.column - start.column + INDENT;
+                            }
+                            column = column - start.column + INDENT;
+                            rows[row].split_off(start.byte)
+                        }
+                        None => {
+                            column = INDENT;
+                            String::new()
+                        }
+                    };
+                    rows.push(" ".repeat(INDENT) + &tail);
+                    if column + cells > limit && column > INDENT {
+                        rows.push(" ".repeat(INDENT));
+                        column = INDENT;
+                    }
                 }
                 stops.push(Stop {
                     offset: offset + index,
@@ -303,12 +360,9 @@ impl Layout {
                 });
                 rows.last_mut().unwrap().push_str(shown);
                 column += cells;
+                row_has_text = true;
             }
             let end = offset + line.len();
-            if end == cursor && column >= width {
-                rows.push(" ".repeat(INDENT));
-                column = INDENT;
-            }
             stops.push(Stop {
                 offset: end,
                 row: rows.len() - 1,
@@ -440,7 +494,7 @@ impl Screen {
     fn draw(&mut self, buffer: &Buffer, hint: Option<&str>, done: bool) -> io::Result<()> {
         let (width, height) = terminal_size();
         self.width = width;
-        let layout = Layout::new(&buffer.text, buffer.cursor, width);
+        let layout = Layout::new(&buffer.text, width);
         let cursor = layout.at(buffer.cursor);
         let total = layout.rows.len();
         let visible = if done {
@@ -551,7 +605,7 @@ impl Editor {
                 }
                 Key::Up | Key::Down => {
                     let up = key == Key::Up;
-                    let layout = Layout::new(&buffer.text, buffer.cursor, terminal_size().0);
+                    let layout = Layout::new(&buffer.text, terminal_size().0);
                     if let Some(cursor) = layout.vertical(buffer.cursor, up) {
                         buffer.cursor = cursor;
                     } else if up && browsing > 0 {
@@ -704,22 +758,53 @@ mod tests {
 
     #[test]
     fn layout_wraps_by_display_width_and_places_the_cursor() {
-        let layout = Layout::new("abcdef\n界界界", 6, 6);
-        assert_eq!(layout.rows, ["> abcd", "  ef", ". 界界", "  界"]);
-        let cursor = layout.at(6);
-        assert_eq!((cursor.row, cursor.column), (1, 4));
-        let wide = layout.at(7 + 6);
+        let layout = Layout::new("abcdefg\n界界界", 7);
+        assert_eq!(layout.rows, ["> abcd", "  efg", ". 界界", "  界"]);
+        let cursor = layout.at(7);
+        assert_eq!((cursor.row, cursor.column), (1, 5));
+        let wide = layout.at(8 + 6);
         assert_eq!((wide.row, wide.column), (3, 2));
-        let exact = Layout::new("abcd", 4, 6);
-        assert_eq!(exact.rows, ["> abcd", "  "]);
-        assert_eq!((exact.at(4).row, exact.at(4).column), (1, 2));
-        assert_eq!(Layout::new("a\tb", 0, 80).rows, ["> a    b"]);
+        let exact = Layout::new("abcd", 7);
+        assert_eq!(exact.rows, ["> abcd"]);
+        assert_eq!((exact.at(4).row, exact.at(4).column), (0, 6));
+        assert_eq!(Layout::new("a\tb", 80).rows, ["> a    b"]);
+    }
+
+    #[test]
+    fn layout_wraps_between_words() {
+        let at = |layout: &Layout, offset| {
+            let stop = layout.at(offset);
+            (stop.row, stop.column)
+        };
+        let layout = Layout::new("hello world again", 10);
+        assert_eq!(layout.rows, ["> hello ", "  world ", "  again"]);
+        assert_eq!(at(&layout, 6), (1, 2));
+        assert_eq!(at(&layout, 5), (0, 7));
+        // A space reaching the last free column hangs there; the next word starts a row.
+        let hung = Layout::new("one two three", 10);
+        assert_eq!(hung.rows, ["> one two", "  three"]);
+        assert_eq!(at(&hung, 7), (0, 9));
+        assert_eq!(at(&hung, 8), (1, 2));
+        let typed = Layout::new("one two ", 10);
+        assert_eq!(typed.rows, ["> one two"]);
+        assert_eq!(at(&typed, 8), (0, 9));
+        // A word longer than a row starts a new row and breaks at its edge.
+        assert_eq!(
+            Layout::new("a bcdefghij", 8).rows,
+            ["> a ", "  bcdef", "  ghij"]
+        );
+        // Indentation is not left alone on a row.
+        assert_eq!(Layout::new("   abcdef", 8).rows, [">    ab", "  cdef"]);
+        assert_eq!(
+            Layout::new("ab 界界\nx y", 8).rows,
+            ["> ab ", "  界界", ". x y"]
+        );
     }
 
     #[test]
     fn vertical_moves_follow_screen_rows_then_reach_history() {
         let text = "abcdef\nxy";
-        let layout = Layout::new(text, 9, 6);
+        let layout = Layout::new(text, 7);
         assert_eq!(layout.vertical(9, true), Some(6));
         assert_eq!(layout.vertical(6, true), Some(2));
         assert_eq!(layout.vertical(2, true), None);
