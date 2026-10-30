@@ -1,11 +1,13 @@
 """Drives `scramjet-rs agent` in a pseudo-terminal: the prompt editor, and typing or quitting while
 a turn runs, against closed and scripted endpoints."""
+import atexit
 import fcntl
 import glob
 import json
 import os
 import pty
 import select
+import shutil
 import socket
 import struct
 import subprocess
@@ -17,6 +19,7 @@ import time
 
 BINARY = sys.argv[1]
 work = tempfile.mkdtemp(prefix='agent-editor-')
+atexit.register(shutil.rmtree, work, True)
 project = os.path.join(work, 'project')
 os.mkdir(project)
 probe = socket.socket()
