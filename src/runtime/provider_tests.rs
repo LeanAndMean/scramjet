@@ -121,6 +121,7 @@ fn consumer_deadline_child() {
             let local = runtime.shutdown().await;
             assert_eq!(local.active, 0);
             server.await.unwrap();
+            std::fs::remove_dir_all(path).unwrap();
         });
 }
 
@@ -237,6 +238,7 @@ fn frame_deadline_child() {
         let stats = runtime.shutdown().await;
         assert_eq!(stats.active, 0);
         server.await.unwrap();
+        std::fs::remove_dir_all(path).unwrap();
     });
 }
 
@@ -343,5 +345,6 @@ fn provider_boundary_child() {
         drop(shared);
         drop(ledger);
         if case=="fail-reserve" {fixture_task.abort();let _=fixture_task.await;}else{fixture_task.await.unwrap();}
+        std::fs::remove_dir_all(path).unwrap();
     });
 }

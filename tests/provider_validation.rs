@@ -127,6 +127,7 @@ fn validation_pair_cli_and_fresh_read_only_observation() {
     assert_eq!(requests[1]["input"][1]["type"], "reasoning");
     assert_eq!(requests[1]["input"][2]["phase"], "final_answer");
     assert_eq!(requests[1]["tools"][0]["name"], "inert");
+    std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
 fn validation_pair_native_faults_and_producer_loss_preserve_accounting_without_retry() {
@@ -290,6 +291,7 @@ fn validation_pair_native_faults_and_producer_loss_preserve_accounting_without_r
             println!(
                 "validation native fault: partial-reserve5 unreadable suffix retained; no retry"
             );
+            std::fs::remove_dir_all(root).unwrap();
             continue;
         }
         let observed = observe_from(&root, evidence);
@@ -311,6 +313,7 @@ fn validation_pair_native_faults_and_producer_loss_preserve_accounting_without_r
         println!(
             "validation native fault: {mode} observed_consumed={consumed}; no restart or producer-ack inference"
         );
+        std::fs::remove_dir_all(root).unwrap();
     }
     let root = storage();
     let mut child = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
@@ -379,4 +382,6 @@ fn validation_pair_native_faults_and_producer_loss_preserve_accounting_without_r
     println!(
         "validation held-owner proof: competing fresh reader refused during first persistence; pair completed only after release"
     );
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(compiler).unwrap();
 }

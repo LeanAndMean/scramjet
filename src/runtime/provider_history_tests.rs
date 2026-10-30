@@ -5,7 +5,25 @@ use std::{
     os::unix::fs::PermissionsExt,
 };
 static NEXT: AtomicUsize = AtomicUsize::new(0);
-fn storage() -> std::path::PathBuf {
+struct ScratchPath(std::path::PathBuf);
+impl std::ops::Deref for ScratchPath {
+    type Target = std::path::Path;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl AsRef<std::path::Path> for ScratchPath {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl Drop for ScratchPath {
+    fn drop(&mut self) {
+        // A panic here while a failed test unwinds would abort the test binary.
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+fn storage() -> ScratchPath {
     let path = std::env::temp_dir().join(format!(
         "provider-history-{}-{}",
         std::process::id(),
@@ -13,7 +31,7 @@ fn storage() -> std::path::PathBuf {
     ));
     std::fs::create_dir(&path).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-    path
+    ScratchPath(path)
 }
 fn release(ledger: Arc<Mutex<ProviderLedger>>) {
     // CLOEXEC does not prevent transient lock inheritance during parallel subprocess spawning.
@@ -361,6 +379,9 @@ fn same_bytes_under_replaced_named_identity_never_acknowledge_an_append() {
         assert_eq!(held, original);
         drop(owner);
         release(ledger);
+        if replace_directory {
+            std::fs::remove_dir_all(path.with_extension("old")).unwrap();
+        }
     }
 }
 
@@ -451,7 +472,7 @@ fn ambiguous_append_failpoints_never_advance_live_acknowledgement_or_retry() {
     }
 }
 
-fn validation_baseline() -> (std::path::PathBuf, [u8; 32], Vec<u8>) {
+fn validation_baseline() -> (ScratchPath, [u8; 32], Vec<u8>) {
     let path = storage();
     let ledger = ProviderLedger::open(&path, endpoint()).unwrap();
     for id in 1..=4 {
@@ -532,7 +553,8 @@ fn validation_metadata_expiry_is_checked_again_at_reservation() {
     );
     drop(owner);
     release(ledger);
-    let ordinary = ProviderLedger::open(&storage(), endpoint()).unwrap();
+    let ordinary_path = storage();
+    let ordinary = ProviderLedger::open(&ordinary_path, endpoint()).unwrap();
     let mut owner = ordinary.lock().unwrap();
     assert!(
         owner

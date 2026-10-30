@@ -74,6 +74,7 @@ fn private_raw_capture_and_fresh_process_replay() {
                     .unwrap()
                     .is_empty()
             );
+            std::fs::remove_dir_all(directory).unwrap();
             continue;
         }
         let before: Vec<_> = ["response.data", "diagnostic.json", "provenance.json"]
@@ -154,6 +155,7 @@ fn private_raw_capture_and_fresh_process_replay() {
         corrupted[0] ^= 1;
         std::fs::write(artifact.join("response.data"), corrupted).unwrap();
         assert!(demo::capture::replay(&artifact).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
 #[test]
@@ -246,6 +248,7 @@ fn preopen_refuses_before_reservation_and_replay_refuses_unsafe_files() {
     std::os::unix::fs::symlink("diagnostic.json", artifact.join("response.data")).unwrap();
     assert!(demo::capture::replay(&artifact).is_err());
     assert!(!directory.join("provider-attempts.jsonl").exists());
+    std::fs::remove_dir_all(directory).unwrap();
 }
 #[test]
 fn replay_preserves_strict_failure_and_valid_representations() {

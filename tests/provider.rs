@@ -110,6 +110,8 @@ fn private_diagnostic_capture_and_fresh_read_do_not_replay() {
         std::fs::read_to_string(failed_directory.join("provider-attempts.jsonl")).unwrap();
     assert_eq!(ledger.lines().count(), 3);
     assert_eq!(ledger.lines().filter(|l| l.contains("Reserved")).count(), 1);
+    std::fs::remove_dir_all(failed_directory).unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
 }
 #[test]
 fn provider_capture_case() {
@@ -199,17 +201,17 @@ fn provider_transport_cases() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout
+            .lines()
+            .find(|line| line.starts_with("RECOVERY|"))
+            .unwrap();
+        let fields: Vec<_> = line.split('|').collect();
+        let path = PathBuf::from(fields[1]);
         if matches!(
             case,
             "recovery" | "corrupt" | "cap" | "cancel" | "drop" | "trailing"
         ) {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let line = stdout
-                .lines()
-                .find(|line| line.starts_with("RECOVERY|"))
-                .unwrap();
-            let fields: Vec<_> = line.split('|').collect();
-            let path = PathBuf::from(fields[1]);
             let before = std::fs::read(path.join("provider-attempts.jsonl")).unwrap();
             let recovered = Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "provider_recover", "--nocapture"])
@@ -236,6 +238,7 @@ fn provider_transport_cases() {
                 std::fs::read(path.join("provider-attempts.jsonl")).unwrap()
             );
         }
+        std::fs::remove_dir_all(path).unwrap();
     }
 }
 #[test]
@@ -446,6 +449,7 @@ fn provider_continuation_case() {
         assert_eq!(stats.unknown_usage,0);
         assert_eq!(stats.unresolved,0);
         server.await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
     });
 }
 

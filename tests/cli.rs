@@ -278,6 +278,7 @@ fn provider_demo_requires_explicit_network_selection_and_runs_offline_envelopes(
         } else {
             "validated text envelope; no tools executed"
         }));
+        std::fs::remove_dir_all(path).unwrap();
     }
 }
 

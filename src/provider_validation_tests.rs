@@ -57,6 +57,7 @@ fn metadata_expiry_during_dispatch_pacing_prevents_post() {
         std::fs::read(path.join("provider-attempts.jsonl")).unwrap(),
         before
     );
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -232,6 +233,7 @@ fn pair_checks_in_isolated_processes() {
             String::from_utf8_lossy(&recovery.stderr)
         );
         assert_eq!(std::fs::read(file).unwrap(), before);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 #[test]

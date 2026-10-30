@@ -148,6 +148,7 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         .is_err()
     );
     measure("maximum-malformed-history", base, 2_097_152);
+    std::fs::remove_dir_all(history_path).unwrap();
     executor.block_on(async {
         let path = storage("provider-owned-history-meter");
         let events = fixture::text_events("checked", fixture::known_usage());
@@ -233,6 +234,8 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         runtime.shutdown().await;
         assert_eq!(std::fs::read(&refused_file).unwrap(), changed);
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(refused_path).unwrap();
+        std::fs::remove_dir_all(path).unwrap();
 
         let path = storage("provider-meter");
         let (endpoint, task) = server::start(body).await;
@@ -254,6 +257,7 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         drop(handle);
         runtime.shutdown().await;
         task.await.unwrap();
+        std::fs::remove_dir_all(path).unwrap();
 
         for (encrypted_bytes, id_bytes, refused, expected) in [(14000,1000,false,Outcome::Success),(15000,1500,false,Outcome::ResourceLimit),(14000,1000,true,Outcome::Success),(15000,1500,true,Outcome::ResourceLimit)] {
             let id = "r".repeat(id_bytes);
@@ -307,5 +311,6 @@ fn bounded_maximum_request_frame_and_history_allocations() {
         drop(handle);
         runtime.shutdown().await;
         task.await.unwrap();
+        std::fs::remove_dir_all(path).unwrap();
     });
 }
