@@ -490,14 +490,20 @@ describe("Terra gateway generator contracts", () => {
 					supported_parameters: ["tools"],
 				},
 			];
+			const addLookalike = (items: any[]) =>
+				items.push({
+					...items.find((item) => item.id === "openai/gpt-6.1-terra"),
+					id: "openai/gpt-6.1-terra-mini",
+					name: "GPT-6.1 Terra Mini",
+				});
 			const models = (await generate(true, {
-				expectedFetchCount: 10,
+				expectedFetchCount: 12,
 				openRouterEndpoints: endpoints,
 				openRouterEndpointFor: "openai/gpt-6.1-terra",
 				vercelEndpoints: [
 					{ context_length: 1050000, max_completion_tokens: 128000, supported_parameters: ["tools"] },
 				],
-				openRouterChange: (items) =>
+				openRouterChange: (items) => {
 					items.push({
 						id: "openai/gpt-6.1-terra",
 						name: "GPT-6.1 Terra",
@@ -511,7 +517,9 @@ describe("Terra gateway generator contracts", () => {
 							input_cache_write: "0.00000125",
 						},
 						supported_parameters: ["tools", "reasoning"],
-					}),
+					});
+					addLookalike(items);
+				},
 				vercelChange: (items) => {
 					for (const [id, multiplier] of [
 						["openai/gpt-6.1-terra", 1],
@@ -531,6 +539,7 @@ describe("Terra gateway generator contracts", () => {
 							tags: ["tool-use", "vision", "reasoning"],
 						});
 					}
+					addLookalike(items);
 				},
 			}))!;
 			for (const [provider, id, multiplier] of [
@@ -565,6 +574,10 @@ describe("Terra gateway generator contracts", () => {
 				baseUrl: "https://ai-gateway.vercel.sh",
 			});
 			expect(models.openrouter["openai/gpt-5.4"].api).toBe("openai-completions");
+			const vercelLookalike = models["vercel-ai-gateway"]["openai/gpt-6.1-terra-mini"];
+			expect(vercelLookalike).toMatchObject({ api: "anthropic-messages", baseUrl: "https://ai-gateway.vercel.sh" });
+			expect(vercelLookalike).not.toHaveProperty("thinkingLevelMap");
+			expect(models.openrouter["openai/gpt-6.1-terra-mini"]).not.toHaveProperty("thinkingLevelMap");
 		},
 	);
 });
