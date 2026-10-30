@@ -15,6 +15,10 @@ const MAX_LINES: usize = 2000;
 const MAX_BYTES: usize = 50 * 1024;
 /// Bash output kept in memory while a command runs; only the tail is shown to the model.
 const CAPTURE_BYTES: usize = 4 << 20;
+/// How often a running command's output is passed on to be shown, as in Scramjet.
+const OUTPUT_UPDATE: Duration = Duration::from_millis(100);
+/// How much of the end of a running command's output is passed on.
+const OUTPUT_TAIL_BYTES: usize = 8 << 10;
 const DEFAULT_TIMEOUT: u64 = 120;
 const MAX_TIMEOUT: u64 = 3600;
 /// Unchanged lines shown around each change in an edit diff, as in Scramjet.
@@ -114,7 +118,13 @@ impl<'a> Call<'a> {
             _ => Approval::None,
         }
     }
-    pub fn run(&self, root: &Path, cancel: &AtomicBool) -> Result<Output, String> {
+    /// `progress` receives the end of a running command's output as it grows.
+    pub fn run(
+        &self,
+        root: &Path,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(&str),
+    ) -> Result<Output, String> {
         match self.name {
             "read" => Ok(Output {
                 text: read(root, self)?,
@@ -123,7 +133,7 @@ impl<'a> Call<'a> {
             }),
             "write" => write(root, self),
             "edit" => edit(root, self),
-            "bash" => bash(root, self, cancel),
+            "bash" => bash(root, self, cancel, progress),
             other => Err(format!("unknown tool `{other}`")),
         }
     }
@@ -357,7 +367,12 @@ fn diff(original: &str, spans: &[(usize, usize, &str)]) -> String {
 
 /// As in Scramjet, a command that succeeds returns just its output; any other ending is a failure
 /// with its reason after the output.
-fn bash(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<Output, String> {
+fn bash(
+    root: &Path,
+    call: &Call,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&str),
+) -> Result<Output, String> {
     use std::os::unix::process::CommandExt;
     let command = call.str("command")?;
     let timeout = Duration::from_secs(
@@ -403,9 +418,16 @@ fn bash(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<Output, String>
     };
     let started = Instant::now();
     let mut stopped = None;
+    let mut reported = (0, started);
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             break status;
+        }
+        let seen = total.load(Ordering::Relaxed);
+        if seen != reported.0 && reported.1.elapsed() >= OUTPUT_UPDATE {
+            reported = (seen, Instant::now());
+            let tail = output_tail(&output.lock().unwrap());
+            progress(&tail);
         }
         if cancel.load(Ordering::Relaxed) {
             stopped = Some("cancelled by the user");
@@ -462,6 +484,16 @@ fn bash(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<Output, String>
     })
 }
 
+/// The end of a running command's output, from the start of a line where it is cut.
+fn output_tail(bytes: &[u8]) -> String {
+    let start = bytes.len().saturating_sub(OUTPUT_TAIL_BYTES);
+    let text = String::from_utf8_lossy(&bytes[start..]);
+    match text.split_once('\n') {
+        Some((_, rest)) if start > 0 => rest.to_owned(),
+        _ => text.into_owned(),
+    }
+}
+
 /// Keeps the last `MAX_LINES` lines, then at most the last `MAX_BYTES` bytes.
 fn tail(text: &str) -> (String, bool) {
     let body = text.strip_suffix('\n').unwrap_or(text);
@@ -490,8 +522,9 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("f.txt"), "alpha beta gamma beta\n").unwrap();
         let cancel = AtomicBool::new(false);
-        let run =
-            |edits: Value| call("edit", json!({"path":"f.txt","edits":edits})).run(&root, &cancel);
+        let run = |edits: Value| {
+            call("edit", json!({"path":"f.txt","edits":edits})).run(&root, &cancel, &mut |_| {})
+        };
         assert!(
             run(json!([{"oldText":"beta","newText":"x"}]))
                 .unwrap_err()
@@ -509,7 +542,7 @@ mod tests {
             "A beta G beta\n"
         );
         let written = call("write", json!({"path":"new/g.txt","content":"é\nx\n"}))
-            .run(&root, &cancel)
+            .run(&root, &cancel, &mut |_| {})
             .unwrap();
         assert_eq!(
             written.text,
@@ -532,12 +565,12 @@ mod tests {
         std::fs::write(root.join("long.txt"), &text).unwrap();
         let cancel = AtomicBool::new(false);
         let first = call("read", json!({"path":"long.txt"}))
-            .run(&root, &cancel)
+            .run(&root, &cancel, &mut |_| {})
             .unwrap()
             .text;
         assert!(first.starts_with("line 1\n") && first.contains("Use offset=2001 to continue"));
         let page = call("read", json!({"path":"long.txt","offset":2999}))
-            .run(&root, &cancel)
+            .run(&root, &cancel, &mut |_| {})
             .unwrap()
             .text;
         assert_eq!(page, "line 2999\nline 3000\n");
@@ -551,7 +584,7 @@ mod tests {
         assert_eq!(summary(json!({"path":"f","limit":20})), "f:1-20");
         let bash = |command: &str| {
             let output = call("bash", json!({"command":command,"timeout":1}))
-                .run(&root, &cancel)
+                .run(&root, &cancel, &mut |_| {})
                 .unwrap();
             (output.text, output.failed)
         };
@@ -564,6 +597,20 @@ mod tests {
         assert_eq!(bash("false"), ("Command exited with code 1".into(), true));
         let (timed, failed) = bash("echo started; sleep 30");
         assert!(timed.starts_with("started\n\nCommand timed out after ") && failed);
+        let mut shown = Vec::new();
+        call(
+            "bash",
+            json!({"command":"echo first; sleep 1; echo second"}),
+        )
+        .run(&root, &cancel, &mut |output| shown.push(output.to_owned()))
+        .unwrap();
+        assert_eq!(shown.first().map(String::as_str), Some("first\n"));
+        assert!(shown.len() <= 2, "{shown:?}");
+        let long: String = (1..=5000).map(|n| format!("{n}\n")).collect();
+        let end = output_tail(long.as_bytes());
+        assert!(end.len() <= OUTPUT_TAIL_BYTES && end.ends_with("\n5000\n"));
+        assert!(long.contains(&format!("\n{end}")));
+        assert_eq!(output_tail(b"partial"), "partial");
         let question =
             |command: &str| match call("bash", json!({"command":command})).approval(&root) {
                 Approval::Ask(question) => question.replace(&root.display().to_string(), "ROOT"),

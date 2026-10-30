@@ -264,15 +264,19 @@ enum Streaming {
     Text,
 }
 
-/// The dim line under the output saying what the agent waits for and for how long. A ticker
-/// thread redraws it while an activity is set; other output first clears it.
+/// The dim line under the output saying what the agent waits for and for how long, under the
+/// last lines of a running command's output. A ticker thread redraws it while an activity is
+/// set; other output first clears it.
 #[derive(Default)]
 struct Status {
     activity: Option<(String, Instant)>,
     /// Shows the seconds left of this wait instead of the elapsed seconds.
     countdown: Option<Duration>,
-    /// The text on the line, while it is shown.
+    /// Shown above the line, each cut to fit one row.
+    output: Vec<String>,
+    /// The text on the screen, while it is shown, and the number of output rows above the line.
     drawn: Option<String>,
+    rows_above: usize,
 }
 
 impl Status {
@@ -291,21 +295,36 @@ impl Status {
             return;
         };
         let width = editor::terminal_size().0.saturating_sub(1).max(10);
-        let text = clip(&text, width);
-        if self.drawn.as_deref() == Some(&text) {
+        let mut block: String = self
+            .output
+            .iter()
+            .map(|line| format!("  \x1b[2m{line}\x1b[0m\n"))
+            .collect();
+        block += &format!("\x1b[2m{}\x1b[0m", clip(&text, width));
+        if self.drawn.as_deref() == Some(&block) {
             return;
         }
-        eprint!("\r\x1b[2m{text}\x1b[0m\x1b[K");
-        self.drawn = Some(text);
+        eprint!("{}{block}", self.erase());
+        self.rows_above = self.output.len();
+        self.drawn = Some(block);
     }
-    /// Removes the line and the activity. Returns whether the line was shown.
+    /// Moves to the first row drawn and clears from there.
+    fn erase(&self) -> String {
+        match self.rows_above {
+            0 => "\r\x1b[J".into(),
+            rows => format!("\r\x1b[{rows}A\x1b[J"),
+        }
+    }
+    /// Removes the line, the output above it and the activity. Returns whether it was shown.
     fn clear(&mut self) -> bool {
         let drawn = self.drawn.take().is_some();
         if drawn {
-            eprint!("\r\x1b[K");
+            eprint!("{}", self.erase());
         }
         self.activity = None;
         self.countdown = None;
+        self.output.clear();
+        self.rows_above = 0;
         drawn
     }
 }
@@ -704,6 +723,26 @@ impl AgentUi for Terminal {
         self.tool_started = Some(Instant::now());
         self.show("running".into(), false);
     }
+    fn tool_output(&mut self, output: &str) {
+        if !self.color {
+            return;
+        }
+        // Two columns of indent, and one spare so that no line reaches the edge and wraps.
+        let width = editor::terminal_size().0.saturating_sub(3).max(20);
+        let mut status = self.status.lock().unwrap();
+        let mut lines: Vec<String> = output
+            .lines()
+            .rev()
+            .take(BASH_LINES)
+            .map(|line| clip(&printable(line), width))
+            .collect();
+        lines.reverse();
+        status.output = lines;
+        // Like the line itself, the output appears once the command has run for a second.
+        if status.drawn.is_some() {
+            status.draw();
+        }
+    }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
         self.clear();
         let width = editor::terminal_size().0.saturating_sub(2).max(20);
@@ -1035,7 +1074,7 @@ mod tests {
         let mut status = Status {
             activity: Some(("retrying in".into(), started)),
             countdown: Some(Duration::from_secs(4)),
-            drawn: None,
+            ..Status::default()
         };
         assert_eq!(status.line().unwrap(), "… retrying in 3s");
         status.countdown = Some(Duration::from_secs(1));

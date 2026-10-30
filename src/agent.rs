@@ -54,6 +54,8 @@ pub trait AgentUi {
     fn tool_call(&mut self, name: &str, summary: &str);
     /// The tool call announced last starts running, after any approval.
     fn tool_running(&mut self);
+    /// The end of the running tool's output so far.
+    fn tool_output(&mut self, _output: &str) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
     /// Asks whether a tool call may run; returns `Deny` without an answer once `cancel` is set.
@@ -328,7 +330,9 @@ impl Agent {
             return output.to_owned();
         }
         ui.tool_running();
-        match call.run(&self.config.root, cancel) {
+        match call.run(&self.config.root, cancel, &mut |output| {
+            ui.tool_output(output)
+        }) {
             Ok(output) => {
                 ui.tool_result(
                     call.name,

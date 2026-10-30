@@ -112,6 +112,8 @@ quiet_reasoning = serve_quiet_reasoning()
 # The command's output pipe outlives the killed process group, so a cancellation stays pending for
 # about two seconds.
 calling = serve_call('setsid sleep 5 & sleep 30')
+# Prints a line, then another after the first second of running.
+talking = serve_call('echo first; sleep 1.5; echo second; sleep 30')
 # A command whose raw text would show only `echo hello` on a terminal.
 disguised = serve_call('rm -rf scratch\r\x1b[2Kecho hello')
 env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'))
@@ -252,6 +254,21 @@ def running_counts_seconds(read, until, send, output):
     send(b'\x04')
 
 
+def running_shows_output(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'bash echo first', mark)
+    shown = until(b'running 1s', mark)
+    assert b'  \x1b[2mfirst\x1b[0m\r\n' in output[mark:shown], bytes(output[mark:shown])
+    more = until(b'second', shown)
+    assert b'\r\x1b[1A\x1b[J' in output[shown:more], 'the output was not redrawn in place'
+    until(b'running', more)
+    send(b'\x03')
+    mark = until(b'(cancelled)', more)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
 def cancel_retry(read, until, send, output):
     mark = until(b'> ')
     send(b'go\r')
@@ -291,6 +308,7 @@ run([], cancel_retry)
 run([], thinking_counts_seconds, hanging)
 run([], quiet_after_reasoning_shows_thinking, quiet_reasoning)
 run(['--yes'], running_counts_seconds, calling)
+run(['--yes'], running_shows_output, talking)
 run([], approval_shows_hidden_characters, disguised)
 run(['--yes'], exit_during_turn, calling, 130)
 known = set(session_files())
