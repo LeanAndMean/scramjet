@@ -31,6 +31,12 @@ fn received_data_lifetime_and_framing_cases() {
         );
     }
 }
+struct Removed(std::path::PathBuf);
+impl Drop for Removed {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 #[test]
 fn transport_child() {
     let Ok(case) = std::env::var("S414_TRANSPORT_CASE") else {
@@ -41,7 +47,11 @@ fn transport_child() {
         .build()
         .unwrap();
     executor.block_on(async {
-        let directory=std::env::temp_dir().join(format!("s414-transport-{}",std::process::id()));std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+        let directory=std::env::temp_dir().join(format!("s414-transport-{}",std::process::id()));
+        // A directory left by an earlier process with the same id would make create fail.
+        let _=std::fs::remove_dir_all(&directory);
+        std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+        let _cleanup=Removed(directory.clone());
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let endpoint=listener.local_addr().unwrap();
         let events=if case=="mid-chunk" {demo::fixture::failed_terminal_events()}else{demo::fixture::text_events("hé🙂",demo::fixture::known_usage())};
         let events=if case=="interleaved" {
