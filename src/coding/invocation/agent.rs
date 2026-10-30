@@ -109,6 +109,23 @@ impl CodingInvocationResult {
 
     /// Requires exclusive ownership of the descriptor's output and shared status flags.
     pub fn deliver_fd(self, fd: impl std::os::fd::AsFd) -> Result<(), CodingError> {
+        self.deliver_descriptor(fd, None)
+    }
+
+    /// Retains caller cancellation through delivery, including noncontinuable diagnostics.
+    pub fn deliver_fd_with_cancellation(
+        self,
+        fd: impl std::os::fd::AsFd,
+        cancellation: &EditCancellation,
+    ) -> Result<(), CodingError> {
+        self.deliver_descriptor(fd, Some(cancellation))
+    }
+
+    fn deliver_descriptor(
+        self,
+        fd: impl std::os::fd::AsFd,
+        cancellation: Option<&EditCancellation>,
+    ) -> Result<(), CodingError> {
         use rustix::{
             event::{PollFd, PollFlags, Timespec, poll},
             fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat},
@@ -129,6 +146,9 @@ impl CodingInvocationResult {
                 for bytes in [self.record.as_slice(), b"\n"] {
                     let mut remaining = bytes;
                     while !remaining.is_empty() {
+                        if cancellation.is_some_and(EditCancellation::is_cancelled) {
+                            return Err(CodingError::Cancelled);
+                        }
                         if let Some(owner) = &self.publication {
                             owner.store.publication_guard(&owner.cancellation)?;
                         } else if Instant::now() >= diagnostic_deadline {
@@ -163,6 +183,9 @@ impl CodingInvocationResult {
                             Err(error) => return Err(error.into()),
                         }
                     }
+                }
+                if cancellation.is_some_and(EditCancellation::is_cancelled) {
+                    return Err(CodingError::Cancelled);
                 }
                 if let Some(owner) = &self.publication {
                     owner.store.publication_guard(&owner.cancellation)?;

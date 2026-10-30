@@ -487,3 +487,236 @@ fn saturated_stdout_cancellation_stops_without_reader_drain_and_refuses_successo
         );
     }
 }
+
+#[test]
+fn saturated_approval_stderr_stops_without_drain_and_refuses_prior_export() {
+    use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+    use std::{
+        os::unix::fs::OpenOptionsExt,
+        time::{Duration, Instant},
+    };
+    for (kind, shared_stdout) in [
+        ("pipe", false),
+        ("socket", false),
+        ("pipe", true),
+        ("socket", true),
+    ] {
+        let dirs = Dirs::new();
+        let names = ["hé input.md", "reader.py"];
+        let first = dirs.input("first", b"Finish without tools.");
+        let next = dirs.input("next", b"Create the selected file.");
+        let (endpoint, worker) = server(
+            vec![
+                None,
+                Some((
+                    "write",
+                    serde_json::json!({"path":names[0],"content":"hé\r\n\u{001b}\u{202e}"}),
+                )),
+            ],
+            [
+                "Finish without tools.".into(),
+                "Create the selected file.".into(),
+            ],
+            1,
+            "".into(),
+            dirs.project.clone(),
+            names.map(str::to_owned),
+        );
+        let initial = command(&dirs, endpoint, &names, &first, None)
+            .output()
+            .unwrap();
+        assert!(initial.status.success());
+        let prior = dirs.input("prior", &initial.stdout);
+        let (reader, output): (fs::File, fs::File) = if kind == "pipe" {
+            let path = dirs.base.join("approval-pipe");
+            rustix::fs::mkfifoat(
+                rustix::fs::CWD,
+                &path,
+                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            )
+            .unwrap();
+            let reader = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(OFlags::NONBLOCK.bits() as i32)
+                .open(&path)
+                .unwrap();
+            (
+                reader,
+                fs::OpenOptions::new().write(true).open(path).unwrap(),
+            )
+        } else {
+            let (reader, output) = std::os::unix::net::UnixStream::pair().unwrap();
+            (
+                std::os::fd::OwnedFd::from(reader).into(),
+                std::os::fd::OwnedFd::from(output).into(),
+            )
+        };
+        let flags = fcntl_getfl(&output).unwrap();
+        fcntl_setfl(&output, flags | OFlags::NONBLOCK).unwrap();
+        loop {
+            match rustix::io::write(&output, &[b'x'; 4096]) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::AGAIN) => break,
+                Err(error) => panic!("{error}"),
+            }
+        }
+        fcntl_setfl(&output, flags).unwrap();
+        let mut child = command(&dirs, endpoint, &names, &next, Some(&prior))
+            .stderr(Stdio::from(output.try_clone().unwrap()))
+            .stdout(if shared_stdout {
+                Stdio::from(output.try_clone().unwrap())
+            } else {
+                Stdio::piped()
+            })
+            .spawn()
+            .unwrap();
+        let journal = dirs.storage.join("ordinary-run/invocation.jsonl");
+        let started = Instant::now();
+        while !fcntl_getfl(&output).unwrap().contains(OFlags::NONBLOCK) {
+            if started.elapsed() > Duration::from_secs(5) {
+                child.kill().unwrap();
+                panic!("approval timeout");
+            }
+            assert!(child.try_wait().unwrap().is_none());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            fs::read_to_string(&journal)
+                .unwrap()
+                .lines()
+                .last()
+                .unwrap()
+                .contains("\"kind\":\"Selected\"")
+        );
+        assert!(
+            Command::new("kill")
+                .args(["-TERM", &child.id().to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let stopped = Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            if stopped.elapsed() > Duration::from_secs(2) {
+                child.kill().unwrap();
+                panic!("approval cancellation required drainage");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!child.wait_with_output().unwrap().status.success());
+        assert_eq!(fcntl_getfl(&output).unwrap(), flags);
+        assert_eq!(worker.join().unwrap().len(), 2);
+        assert!(!dirs.project.join(names[0]).exists());
+        assert!(
+            fs::read_to_string(&journal)
+                .unwrap()
+                .lines()
+                .last()
+                .unwrap()
+                .contains("\"kind\":\"Stopped\"")
+        );
+        let before = (tree(&dirs.project), tree(&dirs.storage));
+        let retry = command(&dirs, endpoint, &names, &next, Some(&prior))
+            .output()
+            .unwrap();
+        assert!(!retry.status.success());
+        assert_eq!((tree(&dirs.project), tree(&dirs.storage)), before);
+        drop(reader);
+        println!(
+            "approval {kind}, shared stdout={shared_stdout}: stopped in {:?} without drainage; prior export refused",
+            stopped.elapsed()
+        );
+    }
+}
+
+#[test]
+fn incomplete_approval_presentation_and_eof_never_approve() {
+    for mode in ["stderr-partial", "unsupported", "eof", "deny"] {
+        let dirs = Dirs::new();
+        let names = ["input.md", "reader.py"];
+        let prompt = dirs.input("prompt", b"Create the selected file.");
+        let (endpoint, worker) = server(
+            vec![Some((
+                "write",
+                serde_json::json!({"path":names[0],"content":"hé🙂\u{001b}\u{202e}"}),
+            ))],
+            ["Create the selected file.".into(), "".into()],
+            usize::MAX,
+            "".into(),
+            dirs.project.clone(),
+            names.map(str::to_owned),
+        );
+        let base = command(&dirs, endpoint, &names, &prompt, None);
+        let mut cli = Command::new(base.get_program());
+        cli.args(base.get_args().filter(|arg| {
+            mode == "stderr-partial" || mode == "unsupported" || *arg != "--approve-effects"
+        }));
+        cli.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if mode == "stderr-partial" {
+            cli.env("LD_PRELOAD", shim(&dirs))
+                .env("SCRAMJET_FAULT_MODE", mode);
+        } else if mode == "unsupported" {
+            cli.stderr(Stdio::from(
+                fs::File::create(dirs.base.join("stderr")).unwrap(),
+            ));
+        } else if mode == "deny" {
+            cli.stdin(Stdio::piped());
+        }
+        let mut child = cli.spawn().unwrap();
+        let log = if mode == "deny" {
+            use std::io::{BufRead, BufReader, Write};
+            let mut stderr = BufReader::new(child.stderr.take().unwrap());
+            let mut line = String::new();
+            stderr.read_line(&mut line).unwrap();
+            let intent: Value =
+                serde_json::from_str(line.strip_prefix("proposal ").unwrap()).unwrap();
+            writeln!(
+                child.stdin.take().unwrap(),
+                "{}",
+                serde_json::json!({"approve":false,"intent":intent})
+            )
+            .unwrap();
+            Some((stderr, line))
+        } else {
+            None
+        };
+        let output = child.wait_with_output().unwrap();
+        assert!(!output.status.success());
+        if mode == "stderr-partial" {
+            assert!(output.stderr.starts_with(b"prop"));
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("proposal "));
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("EOF denies."));
+        }
+        if let Some((mut stderr, mut line)) = log {
+            use std::io::Read;
+            stderr.read_to_string(&mut line).unwrap();
+            assert!(line.contains("EOF denies."));
+            assert!(
+                !line.contains('é') && !line.contains('\u{001b}') && !line.contains('\u{202e}')
+            );
+        }
+        assert_eq!(worker.join().unwrap().len(), 1);
+        assert!(!dirs.project.join(names[0]).exists());
+        let journal = dirs.storage.join("ordinary-run/invocation.jsonl");
+        let rows = fs::read_to_string(journal).unwrap();
+        let expected = if mode == "eof" || mode == "deny" {
+            "Denied"
+        } else {
+            "Stopped"
+        };
+        let last: Value = serde_json::from_str(rows.lines().last().unwrap()).unwrap();
+        assert_eq!(last["record"]["kind"], expected);
+        let record: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(record["disposition"], "stopped");
+        let prior = dirs.input("stopped-record", &output.stdout);
+        let before = (tree(&dirs.project), tree(&dirs.storage));
+        let retry = command(&dirs, endpoint, &names, &prompt, Some(&prior))
+            .output()
+            .unwrap();
+        assert!(!retry.status.success());
+        assert_eq!((tree(&dirs.project), tree(&dirs.storage)), before);
+        println!("approval {mode}: no effect or further request");
+    }
+}

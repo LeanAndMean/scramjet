@@ -65,12 +65,14 @@ ssize_t write(int fd, const void *bytes, size_t count) {
     const char *mode = getenv("SCRAMJET_FAULT_MODE");
     static int partial;
     struct stat current, output;
-    if (mode && !strcmp(mode, "stdout-partial") &&
-        !fstat(fd, &current) && !fstat(STDOUT_FILENO, &output) &&
+    int sink = mode && !strcmp(mode, "stderr-partial") ? STDERR_FILENO : STDOUT_FILENO;
+    if (mode && (!strcmp(mode, "stdout-partial") || !strcmp(mode, "stderr-partial")) &&
+        !fstat(fd, &current) && !fstat(sink, &output) &&
         current.st_dev == output.st_dev && current.st_ino == output.st_ino) {
         if (partial) { errno = EIO; return -1; }
         partial = 1;
-        return real_write(fd, bytes, count > 11 ? 11 : count);
+        size_t limit = sink == STDERR_FILENO ? 4 : 11;
+        return real_write(fd, bytes, count > limit ? limit : count);
     }
     return real_write(fd, bytes, count);
 }
