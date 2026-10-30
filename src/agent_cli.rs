@@ -189,6 +189,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         if matches!(prompt, "/exit" | "/quit") {
             return Ok(());
         }
+        if editor.is_some() {
+            eprintln!();
+        }
         cancel.store(false, Ordering::Relaxed);
         let echo = Echo::set(false);
         let result = agent.turn(prompt, &mut ui, &cancel);
