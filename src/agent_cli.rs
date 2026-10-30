@@ -264,29 +264,41 @@ enum Streaming {
 #[derive(Default)]
 struct Status {
     activity: Option<(String, Instant)>,
-    /// The elapsed seconds on the line, while it is shown.
-    drawn: Option<u64>,
+    /// Shows the seconds left of this wait instead of the elapsed seconds.
+    countdown: Option<Duration>,
+    /// The text on the line, while it is shown.
+    drawn: Option<String>,
 }
 
 impl Status {
+    fn line(&self) -> Option<String> {
+        let (activity, since) = self.activity.as_ref()?;
+        Some(match self.countdown {
+            Some(wait) => {
+                let left = wait.saturating_sub(since.elapsed()).as_secs_f64().ceil();
+                format!("… {activity} {left}s")
+            }
+            None => format!("… {activity}{}", elapsed(since.elapsed().as_secs())),
+        })
+    }
     fn draw(&mut self) {
-        let Some((activity, since)) = &self.activity else {
+        let Some(text) = self.line() else {
             return;
         };
-        let seconds = since.elapsed().as_secs();
-        if self.drawn == Some(seconds) {
+        let width = editor::terminal_size().0.saturating_sub(1).max(10);
+        let text = clip(&text, width);
+        if self.drawn.as_deref() == Some(&text) {
             return;
         }
-        let width = editor::terminal_size().0.saturating_sub(1).max(10);
-        let text = clip(&format!("… {activity}{}", elapsed(seconds)), width);
         eprint!("\r\x1b[2m{text}\x1b[0m\x1b[K");
-        self.drawn = Some(seconds);
+        self.drawn = Some(text);
     }
     fn clear(&mut self) {
         if self.drawn.take().is_some() {
             eprint!("\r\x1b[K");
         }
         self.activity = None;
+        self.countdown = None;
     }
 }
 
@@ -344,9 +356,18 @@ impl Terminal {
         if self.color {
             let mut status = self.status.lock().unwrap();
             status.activity = Some((activity, Instant::now()));
+            status.countdown = None;
             if now {
                 status.draw();
             }
+        }
+    }
+    fn show_countdown(&mut self, activity: String, delay: Duration) {
+        if self.color {
+            let mut status = self.status.lock().unwrap();
+            status.activity = Some((activity, Instant::now()));
+            status.countdown = Some(delay);
+            status.draw();
         }
     }
     fn dim(&self, text: &str) -> String {
@@ -434,6 +455,7 @@ impl AgentUi for Terminal {
         } else {
             eprintln!("{text}");
         }
+        self.show_countdown("retrying in".into(), delay);
     }
     fn assistant(&mut self, text: &str) {
         let streamed = self.streamed_text;
@@ -695,5 +717,14 @@ mod tests {
     fn status_shows_whole_seconds_then_minutes() {
         let shown: Vec<_> = [0, 1, 59, 60, 185].map(elapsed).into();
         assert_eq!(shown, ["", " 1s", " 59s", " 1m 00s", " 3m 05s"]);
+        let started = Instant::now() - Duration::from_millis(1500);
+        let mut status = Status {
+            activity: Some(("retrying in".into(), started)),
+            countdown: Some(Duration::from_secs(4)),
+            drawn: None,
+        };
+        assert_eq!(status.line().unwrap(), "… retrying in 3s");
+        status.countdown = Some(Duration::from_secs(1));
+        assert_eq!(status.line().unwrap(), "… retrying in 0s");
     }
 }
