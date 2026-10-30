@@ -4,16 +4,18 @@ This file owns priority order, selection and selection rationale. Each linked ta
 
 ## Selection
 
-[S4.14a — bounded read-only deployment qualification](tasks/S4.14a.md#selected-read-only-deployment-qualification-triage-2026-10-30). Both independent advisers identified deployment-qualified reasoning correspondence and untouched continuation as the decisive remaining prerequisite, with no useful new offline implementation candidate. The user authorized bounded local read-only qualification and selected planning first; determine the decisive evidence and access boundary before investigation rather than guessing a client accommodation or adding exposure.
+None. The bounded [S4.14a deployment qualification](tasks/S4.14a.md#independent-read-only-qualification-review-2026-10-30) is independently accepted with no required corrections, but leaves the decisive deployment correspondence/untouched-continuation prerequisite unresolved. Clear its exhausted investigation cursor rather than repeat planning, qualification or review. Both independent advisers found no worthwhile immediately eligible offline implementation or structural change.
 
-Remove the exhausted S4.14b approval-correction cursor after its candidate-bound independent acceptance. Retain b's required deployed consumer outcome as a conditional follow-on, not another correction or reopened review. All live dispatch remains stopped; the unspent second pair check is not restart permission. No private accounting was accessed or freshly attested. c remains superseded specialty work with incomplete evidence retained. Defer repeated compatibility research, speculative reconciliation/refactoring and UI/capacity/platform expansion without a current selected consumer.
+Prefer prospective route-owner qualification of a consistent route over indefinite reconstruction of ordinal5's historical build/settings. An authoritative deployment-qualified transformation contract explaining both differing fields is also a valid unblock route. Neither approach is currently an executable task: route intervention, additional access or live checks require separately informed authorization. [S4.14a's reconciliation](tasks/S4.14a.md#post-qualification-triage-reconciliation-2026-10-30) owns the exact dependency and stop. No user outcome is abandoned and no new scope is granted.
+
+Retain b's required deployed consumer after its provider and authority prerequisites; its offline approval correction is accepted, not another active correction. All live dispatch remains stopped; the unspent second pair check is not restart permission. No private accounting was accessed or freshly attested. c remains superseded specialty work with incomplete evidence retained. Defer repeated compatibility research, synthetic alias acceptance, speculative reconciliation/refactoring and UI/capacity/platform expansion without a current authorized consumer.
 
 ## Ordered work
 
-1. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Prioritize the newly authorized read-only qualification of the unresolved deployment contract.
-2. [S4.14b — reusable headless coding invocation and conversation continuity](tasks/S4.14b.md). Retain the required deployed integration/journey obligation after its provider and authority prerequisites; the accepted offline correction is no longer active work.
+1. [S4.14a — real-provider transport and accountable completion](tasks/S4.14a.md). Retain the provider obligation and exact external deployment prerequisite, without selecting the completed qualification again.
+2. [S4.14b — reusable headless coding invocation and conversation continuity](tasks/S4.14b.md). Retain the required deployed integration/journey obligation after its provider and authority prerequisites.
 
-Milestone context: [S4.14 — first real-provider coding journey](tasks/S4.14.md). Its record owns shared authorization and parent acceptance, not another queue. Reordering preserves required deployed obligations; no task is marked completed merely by housekeeping.
+Milestone context: [S4.14 — first real-provider coding journey](tasks/S4.14.md). Its record owns shared authorization and parent acceptance, not another queue. Retention preserves required deployed obligations; no task is marked completed merely by housekeeping.
 
 ## Housekeeping
 
