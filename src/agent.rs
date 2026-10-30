@@ -458,6 +458,22 @@ mod tests {
         }
     }
 
+    /// Creates a scratch directory and removes it when dropped, also when a test panics.
+    pub(super) struct ScratchDir(PathBuf);
+
+    impl ScratchDir {
+        pub(super) fn new(path: PathBuf) -> Self {
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn stream(events: &[Value]) -> Vec<u8> {
         let body = fixture::wire(events, false);
         let mut response = format!(
@@ -499,10 +515,10 @@ mod tests {
         (address, server)
     }
 
-    fn agent(endpoint: SocketAddr, name: &str) -> (Agent, PathBuf) {
+    fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
         let root =
             std::env::temp_dir().join(format!("scramjet-agent-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let scratch = ScratchDir::new(root.clone());
         let path = root.join("session.jsonl");
         std::fs::write(&path, "{\"type\":\"session\",\"version\":1}\n").unwrap();
         let config = AgentConfig {
@@ -516,7 +532,7 @@ mod tests {
         };
         (
             Agent::start(config, SessionChoice::Open(path)).unwrap(),
-            root,
+            scratch,
         )
     }
 
@@ -534,7 +550,7 @@ response is incomplete; retry the request."});
             stream(&failed),
             stream(&fixture::text_events("done", fixture::known_usage())),
         ]);
-        let (mut agent, root) = agent(endpoint, "retry");
+        let (mut agent, _scratch) = agent(endpoint, "retry");
         let mut ui = Recorder::default();
         agent.turn("hi", &mut ui, &AtomicBool::new(false)).unwrap();
         let bodies = server.join().unwrap();
@@ -552,7 +568,6 @@ response is incomplete; retry the request."});
             .map(|item| item["type"].as_str().or(item["role"].as_str()).unwrap())
             .collect();
         assert_eq!(kinds, ["user", "message"]);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -567,7 +582,7 @@ response is incomplete; retry the request."});
             b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 120\r\ncontent-length: 4\r\n\r\nslow"
                 .to_vec(),
         ]);
-        let (mut agent, root) = agent(endpoint, "permanent");
+        let (mut agent, _scratch) = agent(endpoint, "permanent");
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         let errors: Vec<_> = (0..3)
@@ -586,7 +601,6 @@ response is incomplete; retry the request."});
         );
         assert!(ui.retries.is_empty());
         assert_eq!(server.join().unwrap().len(), 3);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -620,7 +634,7 @@ response is incomplete; retry the request."});
             stream(&bash("call_3")),
             stream(&fixture::text_events("done", fixture::known_usage())),
         ]);
-        let (mut agent, root) = agent(endpoint, "allow-all");
+        let (mut agent, _scratch) = agent(endpoint, "allow-all");
         let mut ui = Recorder {
             answers: vec![Answer::AllowAll],
             ..Recorder::default()
@@ -636,14 +650,13 @@ response is incomplete; retry the request."});
             .filter_map(|item| item["output"].as_str())
             .collect();
         assert_eq!(outputs, ["(no output)"; 3]);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn requests_share_the_session_cache_key_across_resumes() {
         let root =
             std::env::temp_dir().join(format!("scramjet-agent-cache-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let _scratch = ScratchDir::new(root.clone());
         let path = root.join("1700000000000-42.jsonl");
         std::fs::write(
             &path,
@@ -661,6 +674,5 @@ response is incomplete; retry the request."});
         };
         let agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
         assert_eq!(agent.request()["prompt_cache_key"], "1700000000000-42");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

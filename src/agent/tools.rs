@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn edit_requires_unique_non_overlapping_matches() {
         let root = std::env::temp_dir().join(format!("scramjet-agent-edit-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
         std::fs::write(root.join("f.txt"), "alpha beta gamma beta\n").unwrap();
         let cancel = AtomicBool::new(false);
         let run = |edits: Value| {
@@ -586,14 +586,13 @@ mod tests {
             std::fs::read_to_string(root.join("new/g.txt")).unwrap(),
             "é\nx\n"
         );
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn read_pages_long_files_and_bash_reports_exit_and_tail() {
         let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let root = std::env::temp_dir().join(format!("scramjet-agent-read-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
         let text: String = (1..=3000).map(|n| format!("line {n}\n")).collect();
         std::fs::write(root.join("long.txt"), &text).unwrap();
         let cancel = AtomicBool::new(false);
@@ -661,7 +660,6 @@ mod tests {
                 .approval(&root)
                 .is_none()
         );
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
