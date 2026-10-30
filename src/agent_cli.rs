@@ -1022,7 +1022,7 @@ mod tests {
         );
         assert_eq!(wrapped(0, &["no  wrap \n"]), "no  wrap \n");
         assert_eq!(
-            wrapped(11, &["\x1b[1mhel", "lo\x1b[0m world\x1b[36m foo"]),
+            wrapped(11, &["\x1b[1mhel", "lo\x1b[0m world \x1b[36mfoo"]),
             "\x1b[1mhello\x1b[0m world\n\x1b[36mfoo"
         );
     }
