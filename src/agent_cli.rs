@@ -391,7 +391,7 @@ impl Wrap {
             return;
         }
         if self.line_start {
-            let marker = matches!(self.word.as_str(), "-" | "*" | "+")
+            let marker = matches!(self.word.as_str(), "-" | "*" | "+" | "•" | "●")
                 || self.word.strip_suffix(['.', ')']).is_some_and(|number| {
                     !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
                 });
@@ -501,6 +501,15 @@ impl Terminal {
             status.draw();
         }
     }
+    /// `text` broken between words to fit the terminal, for output to stderr.
+    fn wrapped(&self, text: &str) -> String {
+        let mut wrap = Wrap::new(if self.color {
+            editor::terminal_size().0
+        } else {
+            0
+        });
+        wrap.push(text) + &wrap.finish()
+    }
     fn dim(&self, text: &str) -> String {
         if self.color {
             format!("\x1b[2m{text}\x1b[0m")
@@ -585,13 +594,11 @@ impl Terminal {
     }
     fn usage(&self, agent: &Agent) {
         let usage = agent.usage;
-        eprintln!(
-            "{}",
-            self.dim(&format!(
-                "[{} requests · {} input tokens ({} cached) · {} output tokens]",
-                usage.requests, usage.input_tokens, usage.cached_input_tokens, usage.output_tokens
-            ))
+        let line = format!(
+            "[{} requests · {} input tokens ({} cached) · {} output tokens]",
+            usage.requests, usage.input_tokens, usage.cached_input_tokens, usage.output_tokens
         );
+        eprintln!("{}", self.dim(&self.wrapped(&line)));
     }
 }
 
@@ -646,8 +653,8 @@ impl AgentUi for Terminal {
         let mut lines = summary.lines();
         let first = lines.next().unwrap_or("");
         let more = if lines.next().is_some() { " …" } else { "" };
-        let first = visible(first);
-        eprintln!("{}", self.dim(&format!("● {name} {first}{more}")));
+        let line = format!("● {name} {}{more}", visible(first));
+        eprintln!("{}", self.dim(&self.wrapped(&line)));
     }
     fn tool_running(&mut self) {
         self.tool_started = Some(Instant::now());
@@ -951,6 +958,10 @@ mod tests {
             "- one two\n  three\n12. four\n    five six\n  seven\n  eight"
         );
         assert_eq!(wrapped(12, &["-flag one two"]), "-flag one\ntwo");
+        assert_eq!(
+            wrapped(20, &["● bash cargo fmt --check && cargo clippy"]),
+            "● bash cargo fmt\n  --check && cargo\n  clippy"
+        );
         assert_eq!(wrapped(0, &["no  wrap \n"]), "no  wrap \n");
     }
 
