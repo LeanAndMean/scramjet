@@ -672,7 +672,7 @@ impl AgentUi for Terminal {
                 Shown::First(WRITE_LINES),
                 width,
             ),
-            ("bash", None) => preview(output, Shown::Last(BASH_LINES), width),
+            ("bash", None) => preview(&bash_shown(output, failed), Shown::Last(BASH_LINES), width),
             _ => preview(output, Shown::First(RESULT_LINES), width),
         };
         let diff = matches!(detail, Some(ToolDetail::Diff(_)));
@@ -765,6 +765,15 @@ const RESULT_LINES: usize = 6;
 enum Shown {
     First(usize),
     Last(usize),
+}
+
+/// A failed command's ending follows its output after a blank line, which is not worth one of
+/// the few lines shown.
+fn bash_shown(output: &str, failed: bool) -> String {
+    match output.rsplit_once("\n\n") {
+        Some((body, ending)) if failed => format!("{body}\n{ending}"),
+        _ => output.to_owned(),
+    }
 }
 
 /// The lines of a tool result to show, made safe for the terminal and cut to `width` cells,
@@ -877,22 +886,27 @@ mod tests {
     #[test]
     fn previews_keep_the_end_of_bash_output_and_are_safe_to_print() {
         let output: String = (1..=20).map(|n| format!("line {n}\n")).collect();
-        let bash = preview(
-            &format!("{output}\nCommand exited with code 1"),
-            Shown::Last(5),
-            80,
-        );
+        let failed = format!("{output}\nCommand exited with code 1");
         assert_eq!(
-            bash,
+            preview(&bash_shown(&failed, true), Shown::Last(5), 80),
             [
-                "… (17 earlier lines)",
+                "… (16 earlier lines)",
+                "line 17",
                 "line 18",
                 "line 19",
                 "line 20",
-                "",
                 "Command exited with code 1"
             ]
         );
+        assert_eq!(
+            bash_shown("started\n\nCommand timed out after 5s", true),
+            "started\nCommand timed out after 5s"
+        );
+        assert_eq!(
+            bash_shown("Command exited with code 1", true),
+            "Command exited with code 1"
+        );
+        assert_eq!(bash_shown("a\n\nb", false), "a\n\nb");
         let head = preview(&output, Shown::First(2), 80);
         assert_eq!(head, ["line 1", "line 2", "… (18 more lines, 20 total)"]);
         assert_eq!(
