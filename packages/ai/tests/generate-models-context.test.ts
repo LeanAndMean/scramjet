@@ -280,7 +280,7 @@ async function generate(
 				}),
 			};
 		}
-		if (url === "https://ai-gateway.vercel.sh/v1/models/openai/gpt-5.4/endpoints") {
+		if (url.startsWith("https://ai-gateway.vercel.sh/v1/models/") && url.endsWith("/endpoints")) {
 			return {
 				ok: !options.endpointError,
 				status: options.endpointError ? 503 : 200,
@@ -471,6 +471,102 @@ afterEach(() => {
 	else process.env.SCRAMJET_MODEL_CANDIDATE = initialCandidatePath;
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
+});
+
+describe("Terra gateway generator contracts", () => {
+	it.each([false, true])(
+		"preserves route metadata and normalizes binding=%s endpoint declarations",
+		async (binding) => {
+			const endpoints = [
+				{
+					context_length: 1050000,
+					max_prompt_tokens: 922000,
+					max_completion_tokens: 128000,
+					supported_parameters: ["tools"],
+				},
+				{
+					context_length: 1050000,
+					max_completion_tokens: binding ? 64000 : 128000,
+					supported_parameters: ["tools"],
+				},
+			];
+			const models = (await generate(true, {
+				expectedFetchCount: 10,
+				openRouterEndpoints: endpoints,
+				openRouterEndpointFor: "openai/gpt-6.1-terra",
+				vercelEndpoints: [
+					{ context_length: 1050000, max_completion_tokens: 128000, supported_parameters: ["tools"] },
+				],
+				openRouterChange: (items) =>
+					items.push({
+						id: "openai/gpt-6.1-terra",
+						name: "GPT-6.1 Terra",
+						context_length: 1050000,
+						top_provider: { max_completion_tokens: 128000 },
+						architecture: { modality: "text+image->text" },
+						pricing: {
+							prompt: "0.000001",
+							completion: "0.000005",
+							input_cache_read: "0.00000005",
+							input_cache_write: "0.00000125",
+						},
+						supported_parameters: ["tools", "reasoning"],
+					}),
+				vercelChange: (items) => {
+					for (const [id, multiplier] of [
+						["openai/gpt-6.1-terra", 1],
+						["openai/gpt-6.1-terra-fast", 2],
+					] as const) {
+						items.push({
+							id,
+							name: multiplier === 2 ? "GPT-6.1 Terra Fast" : "GPT-6.1 Terra",
+							context_window: 200000,
+							max_tokens: 128000,
+							pricing: {
+								input: String(multiplier / 1000000),
+								output: String((5 * multiplier) / 1000000),
+								input_cache_read: String((0.05 * multiplier) / 1000000),
+								input_cache_write: String((1.25 * multiplier) / 1000000),
+							},
+							tags: ["tool-use", "vision", "reasoning"],
+						});
+					}
+				},
+			}))!;
+			for (const [provider, id, multiplier] of [
+				["openrouter", "openai/gpt-6.1-terra", 1],
+				["vercel-ai-gateway", "openai/gpt-6.1-terra", 1],
+				["vercel-ai-gateway", "openai/gpt-6.1-terra-fast", 2],
+			] as const) {
+				const model = models[provider][id];
+				expect(model).toMatchObject({
+					id,
+					provider,
+					api: provider === "openrouter" ? "openai-completions" : "openai-responses",
+					baseUrl: provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://ai-gateway.vercel.sh/v1",
+					contextWindow: 1050000,
+					maxTokens: 128000,
+					reasoning: true,
+					input: ["text", "image"],
+					cost: { input: multiplier, output: 5 * multiplier, cacheWrite: 1.25 * multiplier },
+					thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh", max: "max" },
+				});
+				expect(model.cost.cacheRead).toBeCloseTo(0.05 * multiplier);
+				expect(model).not.toHaveProperty("maxInputTokens");
+				if (provider === "openrouter" && binding) {
+					expect(model.requestLimits).toEqual([
+						{ maxTotalTokens: 1050000, maxInputTokens: 922000, maxOutputTokens: 128000, supportsTools: true },
+						{ maxTotalTokens: 1050000, maxOutputTokens: 64000, supportsTools: true },
+					]);
+				} else expect(model).not.toHaveProperty("requestLimits");
+			}
+			expect(models["vercel-ai-gateway"]["openai/gpt-5.4"]).toMatchObject({
+				api: "anthropic-messages",
+				baseUrl: "https://ai-gateway.vercel.sh",
+			});
+			expect(models.openrouter["openai/gpt-5.4"].api).toBe("openai-completions");
+		},
+	);
 });
 
 describe("real generator context corrections", () => {

@@ -38,6 +38,35 @@ function expectInvalidConfig(config: unknown, fragments: string[]): void {
 }
 
 describe("GPT-6.1 Terra catalog visibility", () => {
+	it.each([
+		["openrouter", "openai/gpt-6.1-terra"],
+		["vercel-ai-gateway", "openai/gpt-6.1-terra"],
+		["vercel-ai-gateway", "openai/gpt-6.1-terra-fast"],
+	] as const)("resolves gateway %s/%s with synthetic configured auth", (provider, id) => {
+		const registry = ModelRegistry.create(
+			AuthStorage.inMemory({ [provider]: { type: "api_key", key: "synthetic-test-key" } }),
+			"/nonexistent/terra-test/models.json",
+		);
+		expect(registry.getError()).toBeUndefined();
+		expect(registry.find(provider, id)).toMatchObject({ provider, id, contextWindow: 1050000 });
+		expect(registry.getAvailable().filter((model) => model.provider === provider && model.id === id)).toHaveLength(1);
+	});
+
+	it("rejects Completions-only Vercel routing on the new Responses records", () => {
+		expectInvalidConfig(
+			{
+				providers: {
+					"vercel-ai-gateway": {
+						modelOverrides: {
+							"openai/gpt-6.1-terra": { compat: { vercelGatewayRouting: { only: ["openai"] } } },
+						},
+					},
+				},
+			},
+			["vercelGatewayRouting", "openai-responses"],
+		);
+	});
+
 	it.each(["openai", "openai-codex", "github-copilot"] as const)(
 		"resolves built-in %s with synthetic configured auth",
 		(provider) => {

@@ -381,6 +381,14 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 			mergeThinkingLevelMap(model, { off: null, minimal: null, xhigh: "xhigh", max: "max" });
 		}
 	}
+	// SCRAMJET-DIVERGENCE: Gateway Terra efforts are scoped to the evidenced IDs and transports.
+	if (
+		(model.provider === "openrouter" && model.api === "openai-completions" && model.id === "openai/gpt-6.1-terra") ||
+		(model.provider === "vercel-ai-gateway" && model.api === "openai-responses" &&
+			["openai/gpt-6.1-terra", "openai/gpt-6.1-terra-fast"].includes(model.id))
+	) {
+		mergeThinkingLevelMap(model, { off: "none", minimal: null, xhigh: "xhigh", max: "max" });
+	}
 	if (model.provider === "openai" && model.api === "openai-responses" &&
 		["gpt-6-sol", "gpt-6-luna"].includes(model.id)) {
 		mergeThinkingLevelMap(model, { off: "none", minimal: null, xhigh: "xhigh", max: "max" });
@@ -706,11 +714,13 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 			const cacheReadCost = price(model.pricing?.input_cache_read, `vercel-ai-gateway/${model.id} cache read`) * 1_000_000;
 			const cacheWriteCost = price(model.pricing?.input_cache_write, `vercel-ai-gateway/${model.id} cache write`) * 1_000_000;
 
+			// SCRAMJET-DIVERGENCE: Only the evidenced Terra routes use the gateway Responses endpoint.
+			const usesResponses = ["openai/gpt-6.1-terra", "openai/gpt-6.1-terra-fast"].includes(model.id);
 			models.push({
 				id: model.id,
 				name: model.name || model.id,
-				api: "anthropic-messages",
-				baseUrl: AI_GATEWAY_BASE_URL,
+				api: usesResponses ? "openai-responses" : "anthropic-messages",
+				baseUrl: usesResponses ? AI_GATEWAY_MODELS_URL : AI_GATEWAY_BASE_URL,
 				provider: "vercel-ai-gateway",
 				reasoning: tags.includes("reasoning"),
 				input,

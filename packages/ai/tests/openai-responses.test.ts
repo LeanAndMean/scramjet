@@ -339,6 +339,64 @@ describe("built-in GPT-6.1 Terra through public Responses dispatch", () => {
 	});
 });
 
+describe.each(["openai/gpt-6.1-terra", "openai/gpt-6.1-terra-fast"] as const)(
+	"built-in Vercel %s public Responses dispatch",
+	(id) => {
+		it.each([...efforts, "off", "minimal", undefined] as const)("serializes effort %s", async (reasoning) => {
+			const requests = stubFetch([completedResponse()]);
+			const result = await streamSimple(getModel("vercel-ai-gateway", id), toolContext, {
+				apiKey,
+				reasoning,
+			}).result();
+			expect(result.stopReason).toBe("stop");
+			expect(requests[0].url).toBe("https://ai-gateway.vercel.sh/v1/responses");
+			expect(requests[0].headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+			const body = await requestBody(requests[0]);
+			expect(body.model).toBe(id);
+			expect(body.reasoning).toEqual(
+				expect.objectContaining({
+					effort:
+						reasoning === "minimal" ? "low" : reasoning === "off" || reasoning === undefined ? "none" : reasoning,
+				}),
+			);
+			expect(body.tools).toContainEqual(
+				expect.objectContaining({
+					type: "function",
+					name: "read",
+					parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+				}),
+			);
+		});
+
+		it("continues a streamed tool result through the catalog-selected adapter", async () => {
+			const requests = stubFetch([toolCallResponse(), completedResponse("continued")]);
+			const model = getModel("vercel-ai-gateway", id);
+			const first = await streamSimple(model, toolContext, { apiKey, reasoning: "low" }).result();
+			expect(first.stopReason).toBe("toolUse");
+			const call = first.content.find((block) => block.type === "toolCall");
+			expect(call).toMatchObject({ name: "read", arguments: { path: "README.md" } });
+			const second = await streamSimple(model, continuationContext(first), { apiKey, reasoning: "max" }).result();
+			expect(second.stopReason).toBe("stop");
+			expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "continued" }));
+			for (const request of requests) {
+				expect(request.url).toBe("https://ai-gateway.vercel.sh/v1/responses");
+				expect((await requestBody(request.clone())).model).toBe(id);
+			}
+			const body = await requestBody(requests[1]);
+			expect(body.input).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ type: "function_call", call_id: "call_read_1", name: "read" }),
+					expect.objectContaining({
+						type: "function_call_output",
+						call_id: "call_read_1",
+						output: "file contents",
+					}),
+				]),
+			);
+		});
+	},
+);
+
 describe("built-in Copilot Terra through public Responses dispatch", () => {
 	it.each([...efforts, "off", "minimal", undefined] as const)("serializes effort %s", async (reasoning) => {
 		const requests = stubFetch([completedResponse()]);
