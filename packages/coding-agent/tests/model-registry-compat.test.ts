@@ -37,8 +37,77 @@ function expectInvalidConfig(config: unknown, fragments: string[]): void {
 	}
 }
 
+describe("GPT-6.1 Terra catalog visibility", () => {
+	it("preserves inherited Vercel custom-model transport defaults alongside Terra Responses routes", () => {
+		const registry = expectValid({
+			providers: {
+				"vercel-ai-gateway": { models: [{ id: "anthropic/custom-deployment" }] },
+			},
+		});
+		expect(registry.find("vercel-ai-gateway", "anthropic/custom-deployment")).toMatchObject({
+			api: "anthropic-messages",
+			baseUrl: "https://ai-gateway.vercel.sh",
+		});
+		for (const id of ["openai/gpt-6.1-terra", "openai/gpt-6.1-terra-fast"]) {
+			expect(registry.find("vercel-ai-gateway", id)).toMatchObject({
+				api: "openai-responses",
+				baseUrl: "https://ai-gateway.vercel.sh/v1",
+			});
+		}
+	});
+
+	it.each([
+		["openrouter", "openai/gpt-6.1-terra"],
+		["vercel-ai-gateway", "openai/gpt-6.1-terra"],
+		["vercel-ai-gateway", "openai/gpt-6.1-terra-fast"],
+	] as const)("resolves gateway %s/%s with synthetic configured auth", (provider, id) => {
+		const registry = ModelRegistry.create(
+			AuthStorage.inMemory({ [provider]: { type: "api_key", key: "synthetic-test-key" } }),
+			"/nonexistent/terra-test/models.json",
+		);
+		expect(registry.getError()).toBeUndefined();
+		expect(registry.find(provider, id)).toMatchObject({ provider, id, contextWindow: 1050000 });
+		expect(registry.getAvailable().filter((model) => model.provider === provider && model.id === id)).toHaveLength(1);
+	});
+
+	it("rejects Completions-only Vercel routing on the new Responses records", () => {
+		expectInvalidConfig(
+			{
+				providers: {
+					"vercel-ai-gateway": {
+						modelOverrides: {
+							"openai/gpt-6.1-terra": { compat: { vercelGatewayRouting: { only: ["openai"] } } },
+						},
+					},
+				},
+			},
+			["vercelGatewayRouting", "openai-responses"],
+		);
+	});
+
+	it.each(["openai", "openai-codex", "github-copilot"] as const)(
+		"resolves built-in %s with synthetic configured auth",
+		(provider) => {
+			const registry = ModelRegistry.create(
+				AuthStorage.inMemory({ [provider]: { type: "api_key", key: "synthetic-test-key" } }),
+				"/nonexistent/terra-test/models.json",
+			);
+			expect(registry.getError()).toBeUndefined();
+			expect(registry.find(provider, "gpt-6.1-terra")).toMatchObject({
+				provider,
+				id: "gpt-6.1-terra",
+				contextWindow: provider === "openai" ? 1050000 : provider === "github-copilot" ? 1000000 : 872000,
+			});
+			expect(
+				registry.getAvailable().filter((model) => model.provider === provider && model.id === "gpt-6.1-terra"),
+			).toHaveLength(1);
+		},
+	);
+});
+
 describe("GitHub Copilot catalog visibility", () => {
 	const additionIds = [
+		"gpt-6.1-terra",
 		"claude-fable-5.1",
 		"claude-opus-5",
 		"claude-opus-5.5",
