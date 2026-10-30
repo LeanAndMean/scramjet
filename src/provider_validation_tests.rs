@@ -17,6 +17,7 @@ fn storage() -> PathBuf {
 }
 #[test]
 fn metadata_expiry_during_dispatch_pacing_prevents_post() {
+    let _fork_gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -167,6 +168,7 @@ fn metadata_pacing_child() {
 
 #[test]
 fn pair_checks_in_isolated_processes() {
+    let _fork_gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
     for case in [
         "success",
         "success-max",

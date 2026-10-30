@@ -4,6 +4,7 @@ use std::os::unix::fs::DirBuilderExt;
 #[cfg(target_os = "linux")]
 #[test]
 fn accounting_observation_never_waits_for_runtime_or_ledger_locks() {
+    let _fork_gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
     let output = std::process::Command::new("timeout")
         .arg("10")
         .arg(std::env::current_exe().unwrap())

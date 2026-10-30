@@ -7,6 +7,7 @@ mod server;
 
 #[test]
 fn provider_authority_boundaries() {
+    let _fork_gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
     for case in [
         "cancel-settlement",
         "accepted-control",
@@ -38,6 +39,7 @@ fn provider_authority_boundaries() {
 }
 #[test]
 fn consumer_deadline_reaches_transport_without_changing_default_attempt_limit() {
+    let _fork_gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -124,6 +126,7 @@ fn consumer_deadline_child() {
 
 #[test]
 fn obtained_data_survives_elapsed_deadline_without_parser_or_settlement_authority() {
+    let _fork_gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
     for case in ["captured", "uncaptured"] {
         let output = Command::new(std::env::current_exe().unwrap())
             .args([

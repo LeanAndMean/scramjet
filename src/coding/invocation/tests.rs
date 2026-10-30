@@ -6,6 +6,7 @@ use std::{
 };
 #[test]
 fn cancellation_and_runtime_affinity_run_in_independent_owners() {
+    let _fork_gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
     let shim_base =
         std::env::temp_dir().join(format!("scramjet-publication-shim-{}", std::process::id()));
     std::fs::create_dir(&shim_base).unwrap();
