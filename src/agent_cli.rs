@@ -1,4 +1,4 @@
-use scramjet_rs::agent::{Agent, AgentConfig, AgentError, AgentUi, SessionChoice};
+use scramjet_rs::agent::{Agent, AgentConfig, AgentError, AgentUi, SessionChoice, StreamProgress};
 use std::{
     ffi::OsString,
     io::{BufRead, IsTerminal, Write},
@@ -167,9 +167,19 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     }
 }
 
+#[derive(PartialEq)]
+enum Streaming {
+    None,
+    Reasoning,
+    Text,
+}
+
 struct Terminal {
     color: bool,
     status_shown: bool,
+    streaming: Streaming,
+    /// Whether assistant text streamed during the current response.
+    streamed_text: bool,
 }
 
 impl Terminal {
@@ -177,6 +187,8 @@ impl Terminal {
         Self {
             color: std::io::stderr().is_terminal(),
             status_shown: false,
+            streaming: Streaming::None,
+            streamed_text: false,
         }
     }
     fn dim(&self, text: &str) -> String {
@@ -186,11 +198,21 @@ impl Terminal {
             text.to_owned()
         }
     }
+    /// Removes the status line and ends any streamed block before other output.
     fn clear(&mut self) {
         if self.status_shown {
             eprint!("\r\x1b[K");
             self.status_shown = false;
         }
+        match self.streaming {
+            Streaming::None => {}
+            Streaming::Reasoning => eprint!("{}\n\n", if self.color { "\x1b[0m" } else { "" }),
+            Streaming::Text => {
+                println!("\n");
+                let _ = std::io::stdout().flush();
+            }
+        }
+        self.streaming = Streaming::None;
     }
     fn usage(&self, agent: &Agent) {
         let usage = agent.usage;
@@ -206,14 +228,40 @@ impl Terminal {
 
 impl AgentUi for Terminal {
     fn waiting(&mut self) {
+        self.clear();
+        self.streamed_text = false;
         if self.color {
             eprint!("{}", self.dim("… thinking"));
             self.status_shown = true;
         }
     }
+    fn progress(&mut self, update: &StreamProgress) {
+        match update {
+            StreamProgress::Reasoning(delta) => {
+                if self.streaming != Streaming::Reasoning {
+                    self.clear();
+                    if self.color {
+                        eprint!("\x1b[2m");
+                    }
+                    self.streaming = Streaming::Reasoning;
+                }
+                eprint!("{delta}");
+            }
+            StreamProgress::Text(delta) => {
+                if self.streaming != Streaming::Text {
+                    self.clear();
+                    self.streaming = Streaming::Text;
+                }
+                self.streamed_text = true;
+                print!("{delta}");
+                let _ = std::io::stdout().flush();
+            }
+        }
+    }
     fn assistant(&mut self, text: &str) {
+        let streamed = self.streamed_text;
         self.clear();
-        if !text.is_empty() {
+        if !streamed && !text.is_empty() {
             println!("{}\n", text.trim_end());
             let _ = std::io::stdout().flush();
         }

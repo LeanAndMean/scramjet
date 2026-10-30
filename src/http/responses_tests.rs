@@ -930,3 +930,39 @@ fn done_items_are_authoritative_when_the_terminal_copy_differs() {
         Some(Outcome::Incomplete)
     );
 }
+#[test]
+fn progress_reports_text_and_reasoning_deltas_only_when_enabled() {
+    let bytes = fixture::wire(&fixture::continuation_events("hé🙂", "{}", "opaque"), false);
+    let mut parser = ResponsesParser::new();
+    parser.progress = Some(Vec::new());
+    let mut collected = Vec::new();
+    for chunk in bytes.chunks(7) {
+        for byte in chunk {
+            parser.byte(*byte).unwrap();
+        }
+        collected.extend(parser.progress.as_mut().unwrap().drain(..));
+    }
+    let text: String = collected
+        .iter()
+        .filter_map(|p| match p {
+            StreamProgress::Text(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+    let reasoning: String = collected
+        .iter()
+        .filter_map(|p| match p {
+            StreamProgress::Reasoning(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "hé🙂");
+    assert_eq!(reasoning, "consider hé🙂consider hé🙂");
+    assert!(parser.complete().unwrap().envelope.is_some());
+
+    let mut quiet = ResponsesParser::new();
+    for byte in &bytes {
+        quiet.byte(*byte).unwrap();
+    }
+    assert!(quiet.progress.is_none());
+}

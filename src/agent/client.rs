@@ -1,3 +1,4 @@
+pub use crate::http::responses::StreamProgress;
 use crate::http::responses::{ParserLimits, ResponsesParser};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -52,15 +53,20 @@ pub(super) async fn respond(
     endpoint: SocketAddr,
     body: Vec<u8>,
     cancel: &AtomicBool,
+    progress: &mut dyn FnMut(StreamProgress),
 ) -> Result<Reply, ClientError> {
     tokio::select! {
         biased;
         () = cancelled(cancel) => Err(ClientError::Cancelled),
-        result = exchange(endpoint, body) => result.map_err(ClientError::Failed),
+        result = exchange(endpoint, body, progress) => result.map_err(ClientError::Failed),
     }
 }
 
-async fn exchange(endpoint: SocketAddr, body: Vec<u8>) -> Result<Reply, String> {
+async fn exchange(
+    endpoint: SocketAddr,
+    body: Vec<u8>,
+    progress: &mut dyn FnMut(StreamProgress),
+) -> Result<Reply, String> {
     let socket = TcpStream::connect(endpoint)
         .await
         .map_err(|e| format!("cannot connect to {endpoint}: {e} (is Proxy running?)"))?;
@@ -103,6 +109,7 @@ async fn exchange(endpoint: SocketAddr, body: Vec<u8>) -> Result<Reply, String> 
         ))
     } else {
         let mut parser = ResponsesParser::with_limits(LIMITS);
+        parser.progress = Some(Vec::new());
         let mut received = 0usize;
         let mut failure = None;
         loop {
@@ -126,7 +133,11 @@ async fn exchange(endpoint: SocketAddr, body: Vec<u8>) -> Result<Reply, String> 
                 failure = Some("response exceeded the client size limit".into());
                 break;
             }
-            if let Some(outcome) = data.iter().find_map(|b| parser.byte(*b).err()) {
+            let error = data.iter().find_map(|b| parser.byte(*b).err());
+            for update in parser.progress.as_mut().unwrap().drain(..) {
+                progress(update);
+            }
+            if let Some(outcome) = error {
                 failure = Some(describe(&parser, outcome));
                 break;
             }

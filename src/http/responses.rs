@@ -14,6 +14,13 @@ pub const PROVIDER_MODEL: &str = "gpt-6-luna";
 // Eight selected journey turns can each retain eight items, a result and user input.
 const INPUT_ITEMS: usize = 8 * (PROVIDER_OUTPUT_ITEMS + 2);
 
+/// Incremental output reported while a response streams, for display only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StreamProgress {
+    Text(String),
+    Reasoning(String),
+}
+
 /// Byte and item budgets for one streamed response.
 #[derive(Clone, Copy, Debug)]
 pub struct ParserLimits {
@@ -537,6 +544,8 @@ pub(crate) struct ResponsesParser {
     provisional_bytes: usize,
     in_progress: bool,
     limits: ParserLimits,
+    /// Collected only when enabled; the consumer drains it as the stream arrives.
+    pub(crate) progress: Option<Vec<StreamProgress>>,
 }
 impl ResponsesParser {
     pub(crate) fn new() -> Self {
@@ -554,6 +563,7 @@ impl ResponsesParser {
             provisional_bytes: 0,
             in_progress: false,
             limits,
+            progress: None,
         }
     }
     pub(crate) fn byte(&mut self, byte: u8) -> Result<(), Outcome> {
@@ -885,6 +895,13 @@ impl ResponsesParser {
                         return Err(Outcome::ResourceLimit);
                     }
                     part.text.push_str(delta);
+                    if let Some(progress) = &mut self.progress {
+                        progress.push(if reasoning {
+                            StreamProgress::Reasoning(delta.to_owned())
+                        } else {
+                            StreamProgress::Text(delta.to_owned())
+                        });
+                    }
                 } else if kind.ends_with("_part.done") {
                     if !part.done
                         || part.closed

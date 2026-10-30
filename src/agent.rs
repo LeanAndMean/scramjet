@@ -4,7 +4,7 @@ mod client;
 mod session;
 mod tools;
 
-pub use client::ClientError;
+pub use client::{ClientError, StreamProgress};
 pub use session::Session;
 
 use serde_json::{Value, json};
@@ -37,6 +37,9 @@ pub enum SessionChoice {
 /// How the agent presents progress and asks for approval.
 pub trait AgentUi {
     fn waiting(&mut self);
+    /// Text or reasoning summary as it streams; may never be called for a response.
+    fn progress(&mut self, update: &StreamProgress);
+    /// The complete text of an assistant message, after any streamed progress for it.
     fn assistant(&mut self, text: &str);
     fn tool_call(&mut self, name: &str, summary: &str);
     fn tool_result(&mut self, output: &str, failed: bool);
@@ -166,8 +169,9 @@ impl Agent {
             "store": false,
             "include": ["reasoning.encrypted_content"],
         });
+        request["reasoning"] = json!({"summary": "auto"});
         if let Some(effort) = &self.config.effort {
-            request["reasoning"] = json!({"effort": effort, "summary": "auto"});
+            request["reasoning"]["effort"] = json!(effort);
         }
         if let Some(tokens) = self.config.max_output_tokens {
             request["max_output_tokens"] = json!(tokens);
@@ -191,7 +195,12 @@ impl Agent {
             let body = serde_json::to_vec(&self.request()).map_err(std::io::Error::from)?;
             let reply = self
                 .executor
-                .block_on(client::respond(self.config.endpoint, body, cancel))
+                .block_on(client::respond(
+                    self.config.endpoint,
+                    body,
+                    cancel,
+                    &mut |update| ui.progress(&update),
+                ))
                 .map_err(|error| match error {
                     ClientError::Cancelled => AgentError::Cancelled,
                     ClientError::Failed(message) => AgentError::Provider(message),
