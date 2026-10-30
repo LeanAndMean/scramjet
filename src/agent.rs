@@ -4,20 +4,26 @@ mod client;
 mod session;
 mod tools;
 
-pub use client::{ClientError, StreamProgress};
+pub use client::StreamProgress;
 pub use session::Session;
 
+use client::ClientError;
 use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
 };
 use tools::{Approval, Call};
 
 /// Guards against a model that never stops calling tools.
 const MAX_STEPS: usize = 200;
 const CONTEXT_FILE_BYTES: u64 = 256 << 10;
+/// Scramjet's retry backoff: 2s, 4s, 8s, ...
+const RETRY_DELAY: Duration = Duration::from_secs(2);
+/// Like Scramjet, a longer wait (backoff or the provider's Retry-After) fails the request instead.
+const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
 
 pub struct AgentConfig {
     pub endpoint: SocketAddr,
@@ -26,6 +32,8 @@ pub struct AgentConfig {
     pub effort: Option<String>,
     pub max_output_tokens: Option<u64>,
     pub approve_all: bool,
+    /// Extra attempts for a model request that failed transiently (rate limit, overload, network).
+    pub retries: u32,
 }
 
 pub enum SessionChoice {
@@ -39,6 +47,8 @@ pub trait AgentUi {
     fn waiting(&mut self);
     /// Text or reasoning summary as it streams; may never be called for a response.
     fn progress(&mut self, update: &StreamProgress);
+    /// A model request failed transiently and will be sent again after `delay`.
+    fn retrying(&mut self, error: &str, attempt: u32, retries: u32, delay: Duration);
     /// The complete text of an assistant message, after any streamed progress for it.
     fn assistant(&mut self, text: &str);
     fn tool_call(&mut self, name: &str, summary: &str);
@@ -194,21 +204,7 @@ impl Agent {
             if cancel.load(Ordering::Relaxed) {
                 return Err(AgentError::Cancelled);
             }
-            ui.waiting();
-            let body = serde_json::to_vec(&self.request()).map_err(std::io::Error::from)?;
-            let reply = self
-                .executor
-                .block_on(client::respond(
-                    self.config.endpoint,
-                    body,
-                    cancel,
-                    &mut |update| ui.progress(&update),
-                ))
-                .map_err(|error| match error {
-                    ClientError::Cancelled => AgentError::Cancelled,
-                    ClientError::Failed(message) => AgentError::Provider(message),
-                })?;
-            self.usage.requests += 1;
+            let reply = self.respond(ui, cancel)?;
             if let Some(usage) = &reply.usage {
                 self.usage.input_tokens += usage.input_tokens.unwrap_or(0);
                 self.usage.cached_input_tokens += usage.cached_input_tokens.unwrap_or(0);
@@ -235,6 +231,53 @@ impl Agent {
             }
         }
         Err(AgentError::TooManySteps)
+    }
+
+    /// Sends the conversation, sending it again after transient failures. A failed response's
+    /// items are discarded, so a retry never runs a tool call from it.
+    fn respond(
+        &mut self,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<client::Reply, AgentError> {
+        let body = serde_json::to_vec(&self.request()).map_err(std::io::Error::from)?;
+        let mut attempt = 0;
+        loop {
+            ui.waiting();
+            self.usage.requests += 1;
+            let failure = match self.executor.block_on(client::respond(
+                self.config.endpoint,
+                body.clone(),
+                cancel,
+                &mut |update| ui.progress(&update),
+            )) {
+                Ok(reply) => return Ok(reply),
+                Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
+                Err(ClientError::Failed(failure)) => failure,
+            };
+            let backoff = RETRY_DELAY * 2u32.pow(attempt.min(5));
+            let delay = backoff
+                .min(MAX_RETRY_WAIT)
+                .max(failure.wait.unwrap_or_default());
+            if !failure.transient || attempt == self.config.retries || delay > MAX_RETRY_WAIT {
+                return Err(AgentError::Provider(match attempt {
+                    0 => failure.message,
+                    n => format!("{} (after {n} retries)", failure.message),
+                }));
+            }
+            attempt += 1;
+            ui.retrying(&failure.message, attempt, self.config.retries, delay);
+            let interrupted = self.executor.block_on(async {
+                tokio::select! {
+                    biased;
+                    () = client::cancelled(cancel) => true,
+                    () = tokio::time::sleep(delay) => false,
+                }
+            });
+            if interrupted {
+                return Err(AgentError::Cancelled);
+            }
+        }
     }
 
     fn call(&self, item: &Value, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> String {
@@ -340,6 +383,176 @@ fn today() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider_fixture as fixture;
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    #[derive(Default)]
+    struct Recorder {
+        retries: Vec<(String, u32, Duration)>,
+        replies: Vec<String>,
+    }
+    impl AgentUi for Recorder {
+        fn waiting(&mut self) {}
+        fn progress(&mut self, _: &StreamProgress) {}
+        fn retrying(&mut self, error: &str, attempt: u32, _: u32, delay: Duration) {
+            self.retries.push((error.to_owned(), attempt, delay));
+        }
+        fn assistant(&mut self, text: &str) {
+            self.replies.push(text.to_owned());
+        }
+        fn tool_call(&mut self, name: &str, _: &str) {
+            panic!("unexpected tool call {name}");
+        }
+        fn tool_result(&mut self, _: &str, _: bool) {}
+        fn approve(&mut self, _: &str, _: &AtomicBool) -> bool {
+            false
+        }
+    }
+
+    fn stream(events: &[Value]) -> Vec<u8> {
+        let body = fixture::wire(events, false);
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend(body);
+        response
+    }
+
+    /// Answers each connection with the next scripted response; returns the request bodies.
+    fn serve(responses: Vec<Vec<u8>>) -> (SocketAddr, std::thread::JoinHandle<Vec<Value>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut bodies = Vec::new();
+            for response in responses {
+                let (connection, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(connection);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap();
+                    }
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                bodies.push(serde_json::from_slice(&body).unwrap());
+                reader.get_mut().write_all(&response).unwrap();
+            }
+            bodies
+        });
+        (address, server)
+    }
+
+    fn agent(endpoint: SocketAddr, name: &str) -> (Agent, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("scramjet-agent-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("session.jsonl");
+        std::fs::write(&path, "{\"type\":\"session\",\"version\":1}\n").unwrap();
+        let config = AgentConfig {
+            endpoint,
+            model: "m".into(),
+            root: root.clone(),
+            effort: None,
+            max_output_tokens: None,
+            approve_all: false,
+            retries: 3,
+        };
+        (
+            Agent::start(config, SessionChoice::Open(path)).unwrap(),
+            root,
+        )
+    }
+
+    #[test]
+    fn transient_failures_are_sent_again_without_running_their_tool_calls() {
+        let mut failed = fixture::call_events("{}", fixture::known_usage());
+        let terminal = failed.last_mut().unwrap();
+        terminal["type"] = json!("response.failed");
+        terminal["response"]["status"] = json!("failed");
+        // Observed through Proxy on 2026-10-30.
+        terminal["response"]["error"] = json!({"message": "Upstream model provider failed before \
+the response completed (ReadError: ConnectionResetError(104, 'Connection reset by peer')). The \
+response is incomplete; retry the request."});
+        let (endpoint, server) = serve(vec![
+            stream(&failed),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, root) = agent(endpoint, "retry");
+        let mut ui = Recorder::default();
+        agent.turn("hi", &mut ui, &AtomicBool::new(false)).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[0], bodies[1]);
+        assert_eq!(ui.retries.len(), 1);
+        assert!(ui.retries[0].0.contains("retry the request"));
+        assert_eq!((ui.retries[0].1, ui.retries[0].2), (1, RETRY_DELAY));
+        assert_eq!(ui.replies, ["done"]);
+        assert_eq!(agent.usage.requests, 2);
+        let kinds: Vec<_> = agent
+            .conversation()
+            .iter()
+            .map(|item| item["type"].as_str().or(item["role"].as_str()).unwrap())
+            .collect();
+        assert_eq!(kinds, ["user", "message"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn permanent_failures_and_long_retry_waits_end_the_turn_at_once() {
+        let mut overflow = fixture::text_events("partial", fixture::known_usage());
+        overflow.truncate(4);
+        overflow.push(json!({"type":"error","code":"context_length_exceeded",
+            "message":"Your input exceeds the context window of this model."}));
+        let (endpoint, server) = serve(vec![
+            stream(&overflow),
+            b"HTTP/1.1 400 Bad Request\r\ncontent-length: 15\r\n\r\ninvalid request".to_vec(),
+            b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 120\r\ncontent-length: 4\r\n\r\nslow"
+                .to_vec(),
+        ]);
+        let (mut agent, root) = agent(endpoint, "permanent");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let errors: Vec<_> = (0..3)
+            .map(|_| match agent.turn("hi", &mut ui, &cancel) {
+                Err(AgentError::Provider(message)) => message,
+                other => panic!("{:?}", other.err()),
+            })
+            .collect();
+        assert_eq!(
+            errors,
+            [
+                "provider error: Your input exceeds the context window of this model.",
+                "HTTP 400 Bad Request: invalid request",
+                "HTTP 429 Too Many Requests: slow",
+            ]
+        );
+        assert!(ui.retries.is_empty());
+        assert_eq!(server.join().unwrap().len(), 3);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn failures_are_classified_by_code_then_wording() {
+        let transient =
+            |code, message: &str| client::Failure::provider(code, message.into()).transient;
+        assert!(transient(Some("server_error"), "anything"));
+        assert!(!transient(Some("insufficient_quota"), "rate limit"));
+        assert!(transient(None, "Rate limit reached for requests"));
+        assert!(transient(Some("unknown_code"), "The server is overloaded"));
+        assert!(!transient(
+            None,
+            "This model's maximum context length is 128000 tokens; timeout"
+        ));
+        assert!(!transient(None, "Invalid value for 'input'"));
+    }
 
     #[test]
     fn requests_share_the_session_cache_key_across_resumes() {
@@ -359,6 +572,7 @@ mod tests {
             effort: None,
             max_output_tokens: None,
             approve_all: false,
+            retries: 3,
         };
         let agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
         assert_eq!(agent.request()["prompt_cache_key"], "1700000000000-42");

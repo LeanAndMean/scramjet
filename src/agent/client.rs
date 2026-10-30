@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::{
     net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 use tokio::net::TcpStream;
 
@@ -22,28 +22,91 @@ const WIRE_BYTES: usize = 256 << 20;
 const ERROR_BODY_BYTES: usize = 64 << 10;
 /// Like Scramjet's provider timeout: reset by every received chunk, so long generations continue.
 const INACTIVITY: Duration = Duration::from_secs(600);
+/// Failure wording that another attempt cannot fix, checked before `TRANSIENT_WORDS`.
+const PERMANENT_WORDS: &[&str] = &[
+    "context length",
+    "context window",
+    "maximum context",
+    "quota",
+    "billing",
+];
+const TRANSIENT_WORDS: &[&str] = &[
+    "rate limit",
+    "too many requests",
+    "overload",
+    "capacity",
+    "timeout",
+    "timed out",
+    "server error",
+    "internal error",
+    "service unavailable",
+    "bad gateway",
+    "upstream",
+    "connection",
+    "network",
+    "stream ended",
+    "retry",
+];
 
 pub(super) struct Reply {
     pub items: Vec<Value>,
     pub usage: Option<crate::ProviderUsage>,
 }
 
-#[derive(Debug)]
-pub enum ClientError {
+pub(super) enum ClientError {
     Cancelled,
-    Failed(String),
+    Failed(Failure),
 }
 
-impl std::fmt::Display for ClientError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Cancelled => f.write_str("cancelled"),
-            Self::Failed(message) => f.write_str(message),
+pub(super) struct Failure {
+    pub message: String,
+    /// Whether another attempt may succeed: rate limits, overload, server and connection failures.
+    pub transient: bool,
+    /// The provider's Retry-After wait; `Duration::MAX` when it is unrepresentable.
+    pub wait: Option<Duration>,
+}
+
+impl Failure {
+    fn new(message: impl Into<String>, transient: bool) -> Self {
+        Self {
+            message: message.into(),
+            transient,
+            wait: None,
         }
+    }
+    /// A failure the provider explained, classified by its error code, then by its message.
+    pub(super) fn provider(code: Option<&str>, message: String) -> Self {
+        let transient = match code {
+            Some("rate_limit_exceeded" | "server_error" | "overloaded_error" | "timeout") => true,
+            Some(
+                "context_length_exceeded"
+                | "insufficient_quota"
+                | "billing_hard_limit_reached"
+                | "invalid_request_error"
+                | "authentication_error"
+                | "permission_denied"
+                | "not_found"
+                | "content_filter"
+                | "content_policy_violation",
+            ) => false,
+            _ => !mentions(&message, PERMANENT_WORDS) && mentions(&message, TRANSIENT_WORDS),
+        };
+        Self::new(message, transient)
+    }
+    /// An `error` event; its fields may be at the top level or under `error`.
+    fn event(event: &Value) -> Self {
+        let field = |name: &str| event[name].as_str().or(event["error"][name].as_str());
+        let message = field("message").unwrap_or("no message");
+        Self::provider(field("code"), format!("provider error: {message}"))
     }
 }
 
-async fn cancelled(flag: &AtomicBool) {
+fn mentions(message: &str, words: &[&str]) -> bool {
+    let message = message.to_lowercase();
+    words.iter().any(|word| message.contains(word))
+}
+
+pub(super) async fn cancelled(flag: &AtomicBool) {
     while !flag.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -66,13 +129,16 @@ async fn exchange(
     endpoint: SocketAddr,
     body: Vec<u8>,
     progress: &mut dyn FnMut(StreamProgress),
-) -> Result<Reply, String> {
-    let socket = TcpStream::connect(endpoint)
-        .await
-        .map_err(|e| format!("cannot connect to {endpoint}: {e} (is Proxy running?)"))?;
+) -> Result<Reply, Failure> {
+    let socket = TcpStream::connect(endpoint).await.map_err(|e| {
+        Failure::new(
+            format!("cannot connect to {endpoint}: {e} (is Proxy running?)"),
+            true,
+        )
+    })?;
     let (mut sender, driver) = http1::handshake(TokioIo::new(socket))
         .await
-        .map_err(|e| format!("HTTP handshake failed: {e}"))?;
+        .map_err(|e| Failure::new(format!("HTTP handshake failed: {e}"), true))?;
     let driver = tokio::spawn(driver);
     let request = Request::builder()
         .method("POST")
@@ -83,12 +149,26 @@ async fn exchange(
         .header("Authorization", "Bearer managed-by-proxy")
         .header("Content-Length", body.len())
         .body(Full::new(Bytes::from(body)))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Failure::new(e.to_string(), false))?;
     let response = sender
         .send_request(request)
         .await
-        .map_err(|e| format!("request failed: {e}"))?;
+        .map_err(|e| Failure::new(format!("request failed: {e}"), true))?;
     let status = response.status();
+    let wait = match crate::http::retry_after::parse(
+        response
+            .headers()
+            .get_all(hyper::header::RETRY_AFTER)
+            .iter()
+            .map(|value| value.as_bytes()),
+        SystemTime::now(),
+    )
+    .wait
+    {
+        Some(crate::RetryWait::Delay(delay)) => Some(delay),
+        Some(crate::RetryWait::Unrepresentable) => Some(Duration::MAX),
+        None => None,
+    };
     let mut body = response.into_body();
     let result = if status != 200 {
         let mut text = Vec::new();
@@ -103,10 +183,13 @@ async fn exchange(
             }
         }
         text.truncate(ERROR_BODY_BYTES);
-        Err(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(&text).trim()
-        ))
+        let text = String::from_utf8_lossy(&text);
+        Err(Failure {
+            message: format!("HTTP {status}: {}", text.trim()),
+            transient: matches!(status.as_u16(), 408 | 429 | 500..)
+                && !mentions(&text, PERMANENT_WORDS),
+            wait,
+        })
     } else {
         let mut parser = ResponsesParser::with_limits(LIMITS);
         parser.progress = Some(Vec::new());
@@ -115,12 +198,15 @@ async fn exchange(
         loop {
             let frame = match tokio::time::timeout(INACTIVITY, body.frame()).await {
                 Err(_) => {
-                    failure = Some(format!("no data for {}s", INACTIVITY.as_secs()));
+                    failure = Some(Failure::new(
+                        format!("no data for {}s", INACTIVITY.as_secs()),
+                        true,
+                    ));
                     break;
                 }
                 Ok(None) => break,
                 Ok(Some(Err(e))) => {
-                    failure = Some(format!("stream failed: {e}"));
+                    failure = Some(Failure::new(format!("stream failed: {e}"), true));
                     break;
                 }
                 Ok(Some(Ok(frame))) => frame,
@@ -130,7 +216,10 @@ async fn exchange(
             };
             received += data.len();
             if received > WIRE_BYTES {
-                failure = Some("response exceeded the client size limit".into());
+                failure = Some(Failure::new(
+                    "response exceeded the client size limit",
+                    false,
+                ));
                 break;
             }
             let error = data.iter().find_map(|b| parser.byte(*b).err());
@@ -138,14 +227,22 @@ async fn exchange(
                 progress(update);
             }
             if let Some(outcome) = error {
-                failure = Some(describe(&parser, outcome));
+                // Without an error event, `Incomplete` means `[DONE]` before the terminal event.
+                let cut_short = outcome == crate::Outcome::Incomplete;
+                failure = Some(match &parser.stream_error {
+                    Some(event) => Failure::event(event),
+                    None => Failure::new(describe(&parser, outcome), cut_short),
+                });
                 break;
             }
         }
         match failure {
             Some(failure) => Err(failure),
             None => match parser.complete() {
-                Err(outcome) => Err(format!("stream ended early ({outcome:?})")),
+                Err(outcome) => Err(Failure::new(
+                    format!("stream ended before the response completed ({outcome:?})"),
+                    outcome == crate::Outcome::Incomplete,
+                )),
                 Ok(parsed) => match parsed.envelope {
                     Some(envelope) => Ok(Reply {
                         items: envelope
@@ -155,11 +252,18 @@ async fn exchange(
                             .collect(),
                         usage: parsed.usage,
                     }),
-                    None => Err(format!(
-                        "response {}{}",
-                        parsed.status,
-                        parsed.error.map(|e| format!(": {e}")).unwrap_or_default()
-                    )),
+                    None => {
+                        let message = format!(
+                            "response {}{}",
+                            parsed.status,
+                            parsed.error.map(|e| format!(": {e}")).unwrap_or_default()
+                        );
+                        // An incomplete response (output limit, content filter) would end the same way again.
+                        Err(match parsed.status.as_str() {
+                            "failed" => Failure::provider(parsed.error_code.as_deref(), message),
+                            _ => Failure::new(message, false),
+                        })
+                    }
                 },
             },
         }

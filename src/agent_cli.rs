@@ -16,15 +16,18 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 const USAGE: &str = "Usage: scramjet-rs agent [--project DIR] [--endpoint ADDR] [--model ID] \
-[--effort LEVEL] [--max-output-tokens N] [--continue | --session FILE] [--yes] [-p PROMPT]
+[--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | --session FILE] [--yes]
+[-p PROMPT]
 
 Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1:18080).
   --project DIR          project directory (default: current directory)
   --model ID             model (default: gpt-6-luna)
   --effort LEVEL         reasoning effort, e.g. low, medium, high
+  --retries N            resend a request that failed transiently up to N times (default 3)
   --continue             resume the most recent session for this project
   --session FILE         resume a specific session file
   --yes                  approve every tool call without asking
@@ -43,6 +46,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let mut max_output_tokens = None;
     let mut choice = SessionChoice::New;
     let mut approve_all = false;
+    let mut retries = 3;
     let mut prompt = None;
     let mut arguments = arguments;
     while let Some(argument) = arguments.next() {
@@ -69,6 +73,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                         .map_err(|_| "invalid --max-output-tokens")?,
                 )
             }
+            Some("--retries") => retries = value()?.parse().map_err(|_| "invalid --retries")?,
             Some("--continue") => choice = SessionChoice::Continue,
             Some("--session") => choice = SessionChoice::Open(PathBuf::from(value()?)),
             Some("--yes") => approve_all = true,
@@ -97,6 +102,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         effort,
         max_output_tokens,
         approve_all,
+        retries,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
 
@@ -332,6 +338,18 @@ impl AgentUi for Terminal {
                 print!("{delta}");
                 let _ = std::io::stdout().flush();
             }
+        }
+    }
+    fn retrying(&mut self, error: &str, attempt: u32, retries: u32, delay: Duration) {
+        self.clear();
+        let text = format!(
+            "{error}\nretrying in {}s ({attempt}/{retries}; Ctrl-C cancels)",
+            delay.as_secs_f64().ceil()
+        );
+        if self.color {
+            eprintln!("\x1b[33m{text}\x1b[0m");
+        } else {
+            eprintln!("{text}");
         }
     }
     fn assistant(&mut self, text: &str) {

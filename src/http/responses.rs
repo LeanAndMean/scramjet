@@ -527,6 +527,7 @@ struct ItemState {
 pub(crate) struct ParsedResponse {
     /// Provider explanation for a failed or incomplete response, when it gave one.
     pub(crate) error: Option<String>,
+    pub(crate) error_code: Option<String>,
     pub(crate) envelope: Option<ProviderEnvelope>,
     pub(crate) usage: Option<ProviderUsage>,
     pub(crate) response_id: String,
@@ -546,6 +547,8 @@ pub(crate) struct ResponsesParser {
     limits: ParserLimits,
     /// Collected only when enabled; the consumer drains it as the stream arrives.
     pub(crate) progress: Option<Vec<StreamProgress>>,
+    /// An `error` event, which ends the stream as a failure (parsing stops with `Incomplete`).
+    pub(crate) stream_error: Option<Value>,
 }
 impl ResponsesParser {
     pub(crate) fn new() -> Self {
@@ -564,6 +567,7 @@ impl ResponsesParser {
             in_progress: false,
             limits,
             progress: None,
+            stream_error: None,
         }
     }
     pub(crate) fn byte(&mut self, byte: u8) -> Result<(), Outcome> {
@@ -638,6 +642,10 @@ impl ResponsesParser {
             .map(ProviderFailure::event);
         self.failure.field = Some("type");
         let kind = string(&event, "type")?;
+        if kind == "error" {
+            self.stream_error = Some(event);
+            return Err(Outcome::Incomplete);
+        }
         if self.response_id.is_none() {
             if kind != "response.created" {
                 return Err(Outcome::Framing);
@@ -1043,6 +1051,7 @@ impl ResponsesParser {
             .map(str::to_owned);
         Ok(ParsedResponse {
             error,
+            error_code: response["error"]["code"].as_str().map(str::to_owned),
             envelope,
             usage,
             response_id,

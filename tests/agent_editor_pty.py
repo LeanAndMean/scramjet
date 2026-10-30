@@ -177,17 +177,28 @@ def cancel_at_approval(read, until, send, output):
     send(b'\x04')
 
 
+def cancel_retry(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'retrying in 2s (1/3; Ctrl-C cancels)', mark)
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
 def session_files():
     return glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
 
 
-run([], first)
+run(['--retries', '0'], first)
 sessions = session_files()
 assert len(sessions) == 1, sessions
 prompts = [item['content'] for item in map(json.loads, open(sessions[0])) if item.get('role') == 'user']
 assert prompts == ['one\ntwo\nthree'], prompts
 run(['--continue'], resumed)
-run([], typed_during_turn, delayed)
+run(['--retries', '0'], typed_during_turn, delayed)
+run([], cancel_retry)
 run(['--yes'], exit_during_turn, calling, 130)
 known = set(session_files())
 run([], cancel_at_approval, calling)
