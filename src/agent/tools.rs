@@ -148,10 +148,17 @@ pub(super) struct Output {
     pub failed: bool,
 }
 
-/// Resolves `path` against the project root without following symlinks.
+/// Resolves `path` against the project root without following symlinks. A leading `~` is the
+/// home directory, as in Scramjet.
 fn resolve(root: &Path, path: &str) -> PathBuf {
+    let joined = match (path.strip_prefix('~'), std::env::home_dir()) {
+        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
+            home.join(rest.trim_start_matches('/'))
+        }
+        _ => root.join(path),
+    };
     let mut resolved = PathBuf::new();
-    for component in root.join(path).components() {
+    for component in joined.components() {
         match component {
             Component::ParentDir => {
                 resolved.pop();
@@ -660,6 +667,21 @@ mod tests {
                 .approval(&root)
                 .is_none()
         );
+        assert!(
+            !call("edit", json!({"path":"~/escape.txt","edits":[]}))
+                .approval(&root)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn paths_starting_with_a_tilde_are_in_the_home_directory() {
+        let home = std::env::home_dir().unwrap();
+        let root = Path::new("/project");
+        assert_eq!(resolve(root, "~/a/../b.txt"), home.join("b.txt"));
+        assert_eq!(resolve(root, "~"), home);
+        assert_eq!(resolve(root, "~other/x"), root.join("~other/x"));
+        assert_eq!(resolve(root, "x/~/y"), root.join("x/~/y"));
     }
 
     #[test]
