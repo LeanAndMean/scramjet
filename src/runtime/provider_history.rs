@@ -4,13 +4,17 @@ use crate::http::responses::{
 use crate::{Outcome, ProviderUsage};
 use rustix::fs::{CWD, FlockOperation, Mode, OFlags, flock, openat};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     fs::File,
     io::{self, Read},
     net::SocketAddr,
     os::unix::fs::{FileExt, MetadataExt},
     path::{Component, Path},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 pub const PROVIDER_POST_BUDGET: usize = 32;
@@ -103,6 +107,35 @@ enum AppendFault {
     Binding,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ValidationCheckpoint {
+    pub binding: ProviderBinding,
+    pub bytes: usize,
+    pub sha256: [u8; 32],
+}
+
+#[derive(Clone, Copy)]
+enum Policy {
+    Ordinary,
+    Validation,
+}
+impl Policy {
+    fn caps(self) -> (usize, usize) {
+        match self {
+            Self::Ordinary => (4, PROVIDER_POST_BUDGET),
+            Self::Validation => (6, 6),
+        }
+    }
+    fn eligible(self, history: &ProviderHistory) -> bool {
+        let (exposure, ceiling) = self.caps();
+        history.consumed() < ceiling
+            && history.unresolved_remote() < exposure
+            && history.unknown_usage() < exposure
+            && (!matches!(self, Self::Validation) || !history.has_unknown_after(4))
+    }
+}
+
 pub(crate) struct ProviderLedger {
     file: File,
     directory: File,
@@ -110,6 +143,9 @@ pub(crate) struct ProviderLedger {
     endpoint: SocketAddr,
     history: ProviderHistory,
     acknowledged: Vec<Vec<u8>>,
+    policy: Policy,
+    checkpoint: Option<ValidationCheckpoint>,
+    cancellation: Option<Arc<AtomicBool>>,
     poisoned: bool,
     #[cfg(test)]
     append_fault: Option<AppendFault>,
@@ -117,7 +153,7 @@ pub(crate) struct ProviderLedger {
 fn invalid() -> io::Error {
     io::Error::other("invalid or unacknowledged provider history")
 }
-fn directory(path: &Path) -> io::Result<File> {
+pub(crate) fn directory(path: &Path) -> io::Result<File> {
     if !path.is_absolute() {
         return Err(invalid());
     }
@@ -147,7 +183,7 @@ fn directory(path: &Path) -> io::Result<File> {
     }
     Ok(dir)
 }
-fn open(path: &Path, writable: bool) -> io::Result<(File, File)> {
+fn open(path: &Path, writable: bool, create: bool) -> io::Result<(File, File)> {
     let dir = directory(path)?;
     let flags = if writable {
         OFlags::RDWR
@@ -161,7 +197,7 @@ fn open(path: &Path, writable: bool) -> io::Result<(File, File)> {
         Mode::empty(),
     ) {
         Ok(fd) => File::from(fd),
-        Err(rustix::io::Errno::NOENT) if writable => File::from(openat(
+        Err(rustix::io::Errno::NOENT) if writable && create => File::from(openat(
             &dir,
             "provider-attempts.jsonl",
             flags | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -188,7 +224,11 @@ fn open(path: &Path, writable: bool) -> io::Result<(File, File)> {
     )?;
     Ok((file, dir))
 }
-fn read(file: &mut File, endpoint: SocketAddr) -> io::Result<(ProviderHistory, Vec<u8>)> {
+fn read(
+    file: &mut File,
+    endpoint: SocketAddr,
+    policy: Policy,
+) -> io::Result<(ProviderHistory, Vec<u8>)> {
     let capacity = file.metadata()?.len().min(HISTORY_BYTES) as usize + 1;
     let mut bytes = Vec::with_capacity(capacity);
     file.take(HISTORY_BYTES + 1).read_to_end(&mut bytes)?;
@@ -218,9 +258,7 @@ fn read(file: &mut File, endpoint: SocketAddr) -> io::Result<(ProviderHistory, V
                 request_id,
             } if line_index > 0
                 && ordinal == history.attempts.len() + 1
-                && ordinal <= PROVIDER_POST_BUDGET
-                && history.unresolved_remote() < 4
-                && history.unknown_usage() < 4
+                && policy.eligible(&history)
                 && request_id != 0
                 && history.attempts.iter().all(|a| a.request_id != request_id) =>
             {
@@ -280,12 +318,12 @@ impl ProviderLedger {
         if !endpoint.ip().is_loopback() {
             return Err(invalid());
         }
-        let (mut file, directory) = open(path, true)?;
+        let (mut file, directory) = open(path, true, true)?;
         let empty = file.metadata()?.len() == 0;
         let (history, acknowledged) = if empty {
             (ProviderHistory::default(), Vec::new())
         } else {
-            read(&mut file, endpoint)?
+            read(&mut file, endpoint, Policy::Ordinary)?
         };
         let mut ledger = Self {
             file,
@@ -294,6 +332,9 @@ impl ProviderLedger {
             endpoint,
             history,
             acknowledged: vec![acknowledged],
+            policy: Policy::Ordinary,
+            checkpoint: None,
+            cancellation: None,
             poisoned: false,
             #[cfg(test)]
             append_fault: None,
@@ -310,6 +351,87 @@ impl ProviderLedger {
         }
         Ok(Arc::new(Mutex::new(ledger)))
     }
+    pub(crate) fn validation_open(
+        path: &Path,
+        endpoint: SocketAddr,
+        expected: [u8; 32],
+    ) -> io::Result<Arc<Mutex<Self>>> {
+        if !endpoint.ip().is_loopback() {
+            return Err(invalid());
+        }
+        let (mut file, directory) = open(path, true, false)?;
+        let (history, bytes) = read(&mut file, endpoint, Policy::Validation)?;
+        if Sha256::digest(&bytes).as_slice() != expected
+            || history.consumed() != 4
+            || history.unresolved_remote() != 4
+            || history.unknown_usage() != 4
+            || history.attempts.iter().any(|a| !a.locally_joined)
+        {
+            return Err(invalid());
+        }
+        let mut ledger = Self {
+            file,
+            directory,
+            path: path.into(),
+            endpoint,
+            history,
+            acknowledged: vec![bytes],
+            policy: Policy::Validation,
+            checkpoint: None,
+            cancellation: None,
+            poisoned: false,
+            #[cfg(test)]
+            append_fault: None,
+        };
+        ledger.verify_content(&[])?;
+        ledger.checkpoint = Some(ValidationCheckpoint {
+            binding: ledger.binding()?,
+            bytes: ledger.acknowledged_len(),
+            sha256: expected,
+        });
+        Ok(Arc::new(Mutex::new(ledger)))
+    }
+
+    pub(crate) fn validation_cancellation(&mut self, flag: Arc<AtomicBool>) -> io::Result<()> {
+        if !matches!(self.policy, Policy::Validation) {
+            return Err(invalid());
+        }
+        self.cancellation = Some(flag);
+        Ok(())
+    }
+    pub(crate) fn validation_checkpoint(&self) -> io::Result<ValidationCheckpoint> {
+        self.verify_content(&[])?;
+        let checkpoint = self.checkpoint.as_ref().ok_or_else(invalid)?;
+        if self.binding()? != checkpoint.binding {
+            return Err(invalid());
+        }
+        Ok(checkpoint.clone())
+    }
+
+    pub(crate) fn validation_observe(&mut self) -> io::Result<(ProviderHistory, [u8; 32], usize)> {
+        let checkpoint = self.validation_checkpoint()?;
+        let mut file = self.file.try_clone()?;
+        let mut bytes = vec![0; self.acknowledged_len()];
+        file.read_exact_at(&mut bytes, 0)?;
+        if bytes.len() < checkpoint.bytes
+            || Sha256::digest(&bytes[..checkpoint.bytes]).as_slice() != checkpoint.sha256
+        {
+            return Err(invalid());
+        }
+        file = File::from(openat(
+            &self.directory,
+            "provider-attempts.jsonl",
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        let (history, read_bytes) = read(&mut file, self.endpoint, Policy::Validation)?;
+        if read_bytes != bytes || history != self.history {
+            return Err(invalid());
+        }
+        self.verify_content(&[])?;
+        Ok((history, Sha256::digest(&bytes).into(), bytes.len()))
+    }
+
     #[cfg(test)]
     pub(crate) fn force_write_error(&mut self) {
         self.file = File::from(
@@ -359,11 +481,18 @@ impl ProviderLedger {
     pub(crate) fn history_ref(&self) -> &ProviderHistory {
         &self.history
     }
+    pub(crate) fn validation_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+    }
     pub(crate) fn eligible(&self) -> bool {
         !self.poisoned
-            && self.history.remaining() > 0
-            && self.history.unresolved_remote() < 4
-            && self.history.unknown_usage() < 4
+            && self.policy.eligible(&self.history)
+            && self
+                .cancellation
+                .as_ref()
+                .is_none_or(|flag| !flag.load(Ordering::SeqCst))
     }
     fn acknowledged_len(&self) -> usize {
         self.acknowledged.iter().map(Vec::len).sum()
@@ -487,8 +616,38 @@ pub fn reconstruct_provider_history(
     path: &Path,
     endpoint: SocketAddr,
 ) -> io::Result<ProviderHistory> {
-    let (mut file, _directory) = open(path, false)?;
-    read(&mut file, endpoint).map(|(history, _)| history)
+    let (mut file, _directory) = open(path, false, false)?;
+    read(&mut file, endpoint, Policy::Ordinary).map(|(history, _)| history)
+}
+
+pub(crate) fn observe_validation(
+    path: &Path,
+    checkpoint: &ValidationCheckpoint,
+) -> io::Result<ProviderHistory> {
+    let endpoint = checkpoint.binding.endpoint;
+    let (mut file, directory) = open(path, false, false)?;
+    let (history, bytes) = read(&mut file, endpoint, Policy::Validation)?;
+    if bytes.len() < checkpoint.bytes
+        || Sha256::digest(&bytes[..checkpoint.bytes]).as_slice() != checkpoint.sha256
+    {
+        return Err(invalid());
+    }
+    let ledger = ProviderLedger {
+        file,
+        directory,
+        path: path.into(),
+        endpoint,
+        history,
+        acknowledged: vec![bytes],
+        policy: Policy::Validation,
+        checkpoint: Some(checkpoint.clone()),
+        cancellation: None,
+        poisoned: false,
+        #[cfg(test)]
+        append_fault: None,
+    };
+    ledger.validation_checkpoint()?;
+    Ok(ledger.history)
 }
 
 #[cfg(test)]

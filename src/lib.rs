@@ -35,6 +35,11 @@ pub use http::responses::{
     ProviderEnvelope, ProviderFunctionCall, ProviderInput, ProviderItem, ProviderRequest,
     ProviderTool, ProviderUsage,
 };
+mod provider_validation;
+pub use provider_validation::{
+    provider_validation_fixture_observe, provider_validation_fixture_pair,
+    provider_validation_live_pair, provider_validation_observe,
+};
 mod project;
 mod readers;
 mod runtime;
@@ -87,8 +92,8 @@ pub fn smoke_message() -> &'static str {
     "scramjet-rs: offline bootstrap ready"
 }
 
-#[cfg(test)]
 #[path = "../tests/support/responses_fixture.rs"]
+#[allow(dead_code)]
 mod provider_fixture;
 
 #[cfg(test)]

@@ -72,7 +72,7 @@ fn refusal_transport_child() {
         return;
     };
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-        let directory=std::env::temp_dir().join(format!("s414-refusal-{}",std::process::id()));std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+        let directory=std::env::temp_dir().join(format!("s414-refusal-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
         let mut events=demo::fixture::continuation_events("hé🙂\\\"\n","{\"message\":\"hé🙂\"}","opaque-hé🙂");
         events[0]["response"]["model"]=serde_json::json!("gpt-6-luna");
         events.last_mut().unwrap()["response"]["model"]=serde_json::json!("gpt-6-luna");

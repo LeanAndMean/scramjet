@@ -84,6 +84,9 @@ pub(crate) async fn attempt(
     let mut failure = ProviderFailure::at(ProviderFailureStage::Reservation);
     let work = async {
         ordinal.as_ref().map_err(Clone::clone)?;
+        if ledger.lock().unwrap().validation_cancelled() {
+            return Err(Outcome::Cancelled);
+        }
         failure.stage = ProviderFailureStage::Connect;
         let socket = TcpStream::connect(endpoint)
             .await
@@ -121,6 +124,9 @@ pub(crate) async fn attempt(
             .expect("fixed provider metadata");
         if tokio::time::Instant::now() >= deadline {
             return Err(Outcome::Deadline);
+        }
+        if ledger.lock().unwrap().validation_cancelled() {
+            return Err(Outcome::Cancelled);
         }
         #[cfg(test)]
         shared

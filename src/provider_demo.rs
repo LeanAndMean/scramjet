@@ -14,6 +14,53 @@ pub(crate) mod server;
 
 pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
     let arguments: Vec<_> = arguments.collect();
+    if arguments
+        .first()
+        .is_some_and(|v| v == "--validation-pair" || v == "--validation-observe")
+    {
+        let report = if arguments.len() == 2 && arguments[0] == "--validation-observe" {
+            scramjet_rs::provider_validation_observe(&PathBuf::from(&arguments[1]))?
+        } else if arguments.len() == 4
+            && arguments[0] == "--validation-pair"
+            && arguments[1] == "--live"
+            && arguments[2] == "--capture"
+        {
+            scramjet_rs::provider_validation_live_pair(&PathBuf::from(&arguments[3]))?
+        } else if arguments.len() == 6
+            && arguments[0] == "--validation-pair"
+            && arguments[1] == "--fixture"
+            && arguments[2] == "--storage"
+            && arguments[4] == "--capture"
+        {
+            scramjet_rs::provider_validation_fixture_pair(
+                &PathBuf::from(&arguments[3]),
+                &PathBuf::from(&arguments[5]),
+            )?
+        } else if arguments.len() == 6
+            && arguments[0] == "--validation-observe"
+            && arguments[1] == "--fixture"
+            && arguments[2] == "--storage"
+            && arguments[4] == "--capture"
+        {
+            scramjet_rs::provider_validation_fixture_observe(
+                &PathBuf::from(&arguments[3]),
+                &PathBuf::from(&arguments[5]),
+            )?
+        } else {
+            return Err("requires --validation-pair --live --capture NEW_DIRECTORY, --validation-pair --fixture --storage OWNED_DIRECTORY --capture NEW_DIRECTORY, or --validation-observe DIRECTORY".into());
+        };
+        let mut stdout = std::io::stdout().lock();
+        stdout
+            .write_all(&report)
+            .and_then(|()| stdout.write_all(b"\n"))
+            .map_err(|_| "validation report write failed; no retry")?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&report).map_err(|_| "validation report unavailable")?;
+        if arguments[0] == "--validation-pair" && value["success"] != true {
+            return Err("validation pair stopped; no retry".into());
+        }
+        return Ok(());
+    }
     if arguments.len() == 2 && arguments[0] == "--replay" {
         let report = capture::replay(&PathBuf::from(&arguments[1]))?;
         let mut stdout = std::io::stdout().lock();

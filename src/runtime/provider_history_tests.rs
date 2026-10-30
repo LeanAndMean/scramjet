@@ -447,6 +447,202 @@ fn ambiguous_append_failpoints_never_advance_live_acknowledgement_or_retry() {
     }
 }
 
+fn validation_baseline() -> (std::path::PathBuf, [u8; 32], Vec<u8>) {
+    let path = storage();
+    let ledger = ProviderLedger::open(&path, endpoint()).unwrap();
+    for id in 1..=4 {
+        let mut owner = ledger.lock().unwrap();
+        let ordinal = owner.reserve(id).unwrap();
+        owner.joined(ordinal, None, None).unwrap();
+    }
+    release(ledger);
+    let bytes = std::fs::read(path.join("provider-attempts.jsonl")).unwrap();
+    let digest = Sha256::digest(&bytes).into();
+    (path, digest, bytes)
+}
+#[test]
+fn checked_validation_baseline_charges_only_two_and_never_resumes_suffix() {
+    let (path, digest, baseline) = validation_baseline();
+    let ledger = ProviderLedger::validation_open(&path, endpoint(), digest).unwrap();
+    let checkpoint = ledger.lock().unwrap().validation_checkpoint().unwrap();
+    assert!(ProviderLedger::validation_open(&path, endpoint(), digest).is_err());
+    assert!(observe_validation(&path, &checkpoint).is_err());
+    for id in 5..=6 {
+        let mut owner = ledger.lock().unwrap();
+        assert!(owner.eligible());
+        assert_eq!(owner.reserve(id).unwrap(), id as usize);
+        assert!(!owner.eligible());
+        let reserved = std::fs::read(path.join("provider-attempts.jsonl")).unwrap();
+        assert!(reserved.starts_with(&baseline));
+        owner
+            .joined(
+                id as usize,
+                Some(ProviderTerminalEvidence {
+                    response_id: format!("synthetic-:/é-{id}"),
+                    reported_model: Some("gpt-6-luna".into()),
+                    status: "completed".into(),
+                }),
+                Some(known()),
+            )
+            .unwrap();
+        let (observed, actual, length) = owner.validation_observe().unwrap();
+        assert_eq!(observed.consumed(), id as usize);
+        assert_eq!(observed.unresolved_remote(), 4);
+        assert_eq!(observed.unknown_usage(), 4);
+        let bytes = std::fs::read(path.join("provider-attempts.jsonl")).unwrap();
+        assert_eq!(actual, Sha256::digest(&bytes)[..]);
+        assert_eq!(length, bytes.len());
+        assert!(bytes.starts_with(&reserved));
+    }
+    assert!(!ledger.lock().unwrap().eligible());
+    assert!(ledger.lock().unwrap().reserve(7).is_err());
+    let expected = ledger.lock().unwrap().history();
+    release(ledger);
+    let after = std::fs::read(path.join("provider-attempts.jsonl")).unwrap();
+    assert!(ProviderLedger::validation_open(&path, endpoint(), digest).is_err());
+    assert!(reconstruct_provider_history(&path, endpoint()).is_err());
+    assert_eq!(observe_validation(&path, &checkpoint).unwrap(), expected);
+    assert_eq!(
+        after,
+        std::fs::read(path.join("provider-attempts.jsonl")).unwrap()
+    );
+}
+#[test]
+fn validation_cancellation_is_checked_again_at_reservation() {
+    let (path, digest, baseline) = validation_baseline();
+    let ledger = ProviderLedger::validation_open(&path, endpoint(), digest).unwrap();
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut owner = ledger.lock().unwrap();
+    owner.validation_cancellation(flag.clone()).unwrap();
+    assert!(owner.eligible());
+    flag.store(true, Ordering::SeqCst);
+    assert!(!owner.eligible());
+    assert!(owner.reserve(5).is_err());
+    assert_eq!(
+        std::fs::read(path.join("provider-attempts.jsonl")).unwrap(),
+        baseline
+    );
+}
+#[test]
+fn validation_reserve_itself_freezes_every_new_unknown_obligation() {
+    for usage in [
+        None,
+        Some(ProviderUsage {
+            input_tokens: Some(3),
+            output_tokens: None,
+            total_tokens: None,
+            cached_input_tokens: None,
+            reasoning_tokens: None,
+        }),
+    ] {
+        let (path, digest, baseline) = validation_baseline();
+        let ledger = ProviderLedger::validation_open(&path, endpoint(), digest).unwrap();
+        let mut owner = ledger.lock().unwrap();
+        owner.reserve(5).unwrap();
+        assert!(!owner.eligible());
+        assert!(owner.reserve(6).is_err());
+        owner
+            .joined(
+                5,
+                Some(ProviderTerminalEvidence {
+                    response_id: "synthetic-response".into(),
+                    reported_model: None,
+                    status: "completed".into(),
+                }),
+                usage.clone(),
+            )
+            .unwrap();
+        assert!(!owner.eligible());
+        assert!(owner.reserve(6).is_err());
+        assert_eq!(owner.history().attempts[4].usage, usage);
+        assert!(owner.history().has_unknown_after(4));
+        let checkpoint = owner.validation_checkpoint().unwrap();
+        drop(owner);
+        release(ledger);
+        assert!(
+            observe_validation(&path, &checkpoint)
+                .unwrap()
+                .has_unknown_after(4)
+        );
+        let bytes = std::fs::read(path.join("provider-attempts.jsonl")).unwrap();
+        assert!(bytes.starts_with(&baseline));
+        let mut invalid = bytes.clone();
+        invalid.extend_from_slice(b"{\"kind\":\"Reserved\",\"ordinal\":6,\"request_id\":6}\n");
+        std::fs::write(path.join("provider-attempts.jsonl"), &invalid).unwrap();
+        assert!(observe_validation(&path, &checkpoint).is_err());
+        assert_eq!(
+            std::fs::read(path.join("provider-attempts.jsonl")).unwrap(),
+            invalid
+        );
+    }
+}
+#[test]
+fn validation_existing_only_hash_accounting_and_scoped_identity_fail_closed() {
+    let empty = storage();
+    assert!(ProviderLedger::validation_open(&empty, endpoint(), [0; 32]).is_err());
+    assert!(!empty.join("provider-attempts.jsonl").exists());
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(empty.join("provider-attempts.jsonl"))
+        .unwrap();
+    assert!(ProviderLedger::validation_open(&empty, endpoint(), [0; 32]).is_err());
+    assert_eq!(
+        std::fs::metadata(empty.join("provider-attempts.jsonl"))
+            .unwrap()
+            .len(),
+        0
+    );
+    for change in 0..4 {
+        let (path, digest, original) = validation_baseline();
+        let file = path.join("provider-attempts.jsonl");
+        let mut bytes = original.clone();
+        match change {
+            0 => bytes.push(b' '),
+            1 => {
+                bytes.truncate(bytes.len() - 1);
+            }
+            2 => {
+                let n = bytes.iter().position(|b| *b == b'3').unwrap();
+                bytes[n] = b'2';
+            }
+            3 => {
+                let index = std::str::from_utf8(&bytes)
+                    .unwrap()
+                    .find("\"terminal\":null")
+                    .unwrap();
+                bytes.splice(index..index+15,b"\"terminal\":{\"response_id\":\"known\",\"reported_model\":null,\"status\":\"completed\"}".iter().copied());
+            }
+            _ => unreachable!(),
+        }
+        std::fs::write(&file, &bytes).unwrap();
+        assert!(ProviderLedger::validation_open(&path, endpoint(), digest).is_err());
+        assert!(
+            ProviderLedger::validation_open(&path, endpoint(), Sha256::digest(&bytes).into())
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    }
+    let (path, digest, bytes) = validation_baseline();
+    let ledger = ProviderLedger::validation_open(&path, endpoint(), digest).unwrap();
+    let checkpoint = ledger.lock().unwrap().validation_checkpoint().unwrap();
+    release(ledger);
+    let file = path.join("provider-attempts.jsonl");
+    std::fs::rename(&file, path.join("old")).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&file)
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
+    assert!(observe_validation(&path, &checkpoint).is_err());
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+}
+
 #[test]
 fn descriptor_owner_permissions_and_lock_fail_closed() {
     let path = storage();

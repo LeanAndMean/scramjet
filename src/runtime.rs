@@ -382,6 +382,21 @@ impl Runtime {
         retained: Option<usize>,
     ) -> std::io::Result<Self> {
         let ledger = ProviderLedger::open(storage, endpoint)?;
+        Self::provider_from_ledger(endpoint, ledger, retained)
+    }
+
+    pub(crate) fn provider_validation(
+        endpoint: SocketAddr,
+        ledger: Arc<Mutex<ProviderLedger>>,
+    ) -> std::io::Result<Self> {
+        Self::provider_from_ledger(endpoint, ledger, Some(4))
+    }
+
+    fn provider_from_ledger(
+        endpoint: SocketAddr,
+        ledger: Arc<Mutex<ProviderLedger>>,
+        retained: Option<usize>,
+    ) -> std::io::Result<Self> {
         let next = {
             let ledger = ledger.lock().unwrap();
             let history = ledger.history_ref();
