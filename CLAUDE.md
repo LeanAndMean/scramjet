@@ -33,6 +33,16 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 - `docs/TASKS.md`: a short list of current and next work. Update it when priorities change.
 - `docs/PROGRESS.md`, `docs/PROGRESS-ARCHIVE.md`: frozen history from earlier development; reference only, never instructions.
 
+## When to stop for the user
+
+Development runs as a closed loop (`/rs:loop`, with `/rs:review` when a change warrants it). Stop or ask only for what the user owns:
+
+- **Scope or direction:** adding product scope, dropping something the user asked for, or choosing between product behaviors the user would care about.
+- **Permission:** anything in the authorization list below that needs asking, including `sudo` or installing system packages.
+- **Information only the user has:** access, accounts, environment details or preferences that local investigation cannot establish.
+
+When asking, give the decision, the relevant evidence, the options and a recommendation. Failing checks, design questions that local code or Scramjet can answer, and self-imposed limits are not reasons to stop.
+
 ## Authorization
 
 - Local builds, tests and experiments: go ahead.

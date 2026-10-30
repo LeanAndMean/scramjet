@@ -48,6 +48,8 @@ SCRAMJET_CONTROL_CLI="$PWD/target/debug/scramjet-rs" cargo test --offline --lock
 
 Linux PTY tests use installed Python 3's standard library, `timeout` and `cc`; the process tests need Bubblewrap. Nothing is installed into the system Python.
 
+Development runs inside Scramjet as a closed loop: `/rs:loop [focus]` builds, verifies and commits one increment per fresh session and chains to the next, stopping only for decisions, permissions or information that belong to you. `/rs:review [commits]` independently checks risky changes. A running Scramjet needs `/reload` to pick up command changes.
+
 - [CLAUDE.md](CLAUDE.md): development rules.
 - [docs/DESIGN.md](docs/DESIGN.md): product direction and invariants.
 - [docs/ROADMAP.md](docs/ROADMAP.md): stages.

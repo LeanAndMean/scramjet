@@ -1,6 +1,6 @@
 ---
-description: Independently evaluate a scramjet-rs candidate and route acceptance or corrections
-argument-hint: "<task-id> [context]"
+description: Independently review recent scramjet-rs changes for material defects
+argument-hint: "[commits or area]"
 allowed-tools:
   - read
   - bash
@@ -12,41 +12,29 @@ allowed-tools:
 next:
   mode: closed
   candidates:
-    - name: rs:work
-      hint: Correct this candidate or execute the next ready task after acceptance.
-    - name: rs:plan
-      hint: Evidence requires redesign within the same authorized task.
-    - name: rs:triage
-      hint: Reconcile milestone completion, changed priorities, or an exhausted queue.
+    - name: rs:loop
+      hint: Continue building once required findings are fixed or recorded.
 ---
 
-# Review one scramjet-rs candidate
+# Review scramjet-rs changes
 
 ## Goals
 
-- Independently assess the current candidate against the selected task's acceptance and controlling invariants, using focused executable evidence where useful.
-- Record and locally checkpoint acceptance, required corrections, or critical evidence gaps with enough detail for the next session, without fixing the implementation or widening scope.
+- Find material defects in the named changes, or in a sensible range of recent commits when none are named: bugs, safety problems, or behavior that does not work when actually used.
+- Fix or record each required finding so building can continue.
 
-## Task
+## Scope
 
 <user-context>
 $ARGUMENTS
 </user-context>
 
-Apply the shared Git entry-recovery policy in `CLAUDE.md` before beginning this role.
+## Review
 
-Follow `CLAUDE.md`, `docs/TASKS.md` selection context and `docs/tasks/<task-id>.md` requirements/plan, parent/dependency authority and linked candidate/work evidence. Consult log/archive only for necessary history. Identify the exact candidate, including relevant uncommitted/untracked changes; confirm it is reviewable rather than reviewing a claimed result or unrelated dirty tree. Changed candidate contents cannot inherit an earlier acceptance.
+Follow `CLAUDE.md`. Get an independent perspective from a fresh read-only reviewer subagent, then verify each of its findings yourself against the code and by running it; the reviewer's output is evidence, not authority. Keep only findings with concrete evidence and a real consequence. Optional improvements are not blockers.
 
-Use a fresh independent read-only perspective for material review, with the smallest suitable specialist and bounded brief; review commands with the command specialist, code with the code specialist. When reviewer findings are returned, prefer chaining them into a fresh read-only independent assessment (`scramjet:independent-command-assessor` for command findings, `mach12:independent-assessor` for code findings). Give the assessor the candidate, controlling acceptance and reviewer claims; ask it to re-derive each claim from evidence and distinguish required corrections, optional nitpicks, rejected claims and evidence gaps before disposition. This is a reliability default, not a mandatory extra pass. The parent owns synthesis, executable checks, disposition, interaction, and the ledger; neither specialist's verdict is authority. Do not repeat checks solely for ceremony or equate a clean build with behavioral acceptance.
+Fix required findings that are small and clear, verify, and commit. Put the rest at the top of `docs/TASKS.md`. Stop for the user only as described in `CLAUDE.md`.
 
-Evaluate requirements from their authority, not from hypothetical future perfection. Use focused tests/probes to challenge important behavior. Do not edit implementation or its tracked tests; temporary probes and generated check artifacts are permissible within authority. Update the task's independent review/disposition, candidate-bound findings/coverage, blockers and next action; append dated review evidence to `docs/PROGRESS.md`. Do not duplicate current status in the queue/log. Candidate changes by another actor invalidate affected review evidence.
+## Report
 
-Required findings need concrete evidence, consequence, and correction acceptance. Distinguish optional improvements; they do not prevent acceptance unless current authority requires them. Assess disputed findings independently rather than automatically fixing or accepting them. Critical requirements within the reviewed outcome that cannot be verified remain unaccepted and leave the task blocked. Record acceptance only for the verified reviewed outcome; mark the task `done` only when its full acceptance holds. Required bounded corrections become `corrections`; redesign becomes `needs-plan`. A completed review can establish bounded acceptance or actionable findings without completing the whole task.
-
-## Complete the handoff
-
-Persist task review/disposition/next action and a dated activity entry; release task ownership. Advance queue selection only to already-eligible queued work after acceptance, without changing priorities. Apply the shared Git checkpoint policy in `CLAUDE.md` before terminal reporting, including orderly stops. Present the complete concise result in assistant text, then call `report_scramjet_command_status` in the same turn; do not end with prose alone or wait for the fallback probe. Write performed-work `summary` first and `status: "completed"` when this independent review outcome is established, including actionable corrections rather than task acceptance.
-
-Include one eligible `next_steps` entry: `message` is `/rs:work <task-id>` for bounded corrections, `/rs:plan <task-id>` for same-scope redesign, or `/rs:work <next-task-id>` from the still-valid ready queue after acceptance. Use `/rs:triage` for needed queue/selection reconciliation under the shared completion contract. Set `fresh_session: true`, give the concrete `reason`, and set `recommended_next_step` to the selected entry's actual array index. The harness applies the user's chain/pause settings; no handoff confirmation is needed for already-authorized work.
-
-For necessary user alignment, use `get_scramjet_user_input` with informed context. Apply the shared [completion, reconciliation and stop rules](../../../CLAUDE.md#active-rs-completion-contract); a stop still requires a truthful status report.
+Tell the user briefly what was reviewed, what was found, and what was fixed or recorded. Then call `report_scramjet_command_status` with the work performed as `summary` and `status: "completed"`. Include one `next_steps` entry: `/rs:loop` with `fresh_session: true` and a concrete `reason`, and set `recommended_next_step` to its index. If only the user can unblock the work, report `status: "blocked"`, name the exact need and omit `next_steps`.

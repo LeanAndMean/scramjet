@@ -8,6 +8,10 @@ Short list of current and next work. Git history records what was done.
 - The original first-provider goal is met: two fresh `coding` invocations through Proxy wrote a haiku, then wrote and ran a Python reader whose output matched the file.
 - Earlier offline demos (runtime, readers, retained TUI probes, haiku, provider validation pair) remain in the tree as development fixtures.
 
+## Current focus
+
+None. `/rs:loop <focus>` records a user-given focus here until it is finished.
+
 ## Next candidates
 
 Roughly in priority order; reorder freely as the user's needs become clearer.
