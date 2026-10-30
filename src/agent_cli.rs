@@ -30,7 +30,7 @@ const USAGE: &str = "Usage: scramjet-rs agent [--project DIR] [--endpoint ADDR] 
 
 Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1:18080).
   --project DIR          project directory (default: current directory)
-  --model ID             model (default: gpt-6-luna)
+  --model ID             model (default: gpt-6-luna, or the one a resumed session last used)
   --effort LEVEL         reasoning effort, e.g. low, medium, high
   --retries N            resend a request that failed transiently up to N times (default 3)
   --continue             resume the most recent session for this project
@@ -41,14 +41,14 @@ Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1
 In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing \\ starts
 a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
-/new starts a new session.
+/new starts a new session. /model lists the models and /model ID switches to one.
 While a turn runs, typed text is kept for the next prompt without being shown; Ctrl-C cancels
 the turn (and discards that text); press it twice to quit.";
 
 pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
     let mut project = None;
     let mut endpoint: SocketAddr = ([127, 0, 0, 1], 18080).into();
-    let mut model = "gpt-6-luna".to_owned();
+    let mut model = None;
     let mut effort = None;
     let mut max_output_tokens = None;
     let mut choice = SessionChoice::New;
@@ -71,7 +71,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             Some("--endpoint") => {
                 endpoint = value()?.parse().map_err(|_| "invalid --endpoint address")?
             }
-            Some("--model") => model = value()?,
+            Some("--model") => model = Some(value()?),
             Some("--effort") => effort = Some(value()?),
             Some("--max-output-tokens") => {
                 max_output_tokens = Some(
@@ -102,9 +102,10 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
     }
+    let chosen = model.is_some();
     let config = AgentConfig {
         endpoint,
-        model,
+        model: model.unwrap_or_else(|| "gpt-6-luna".to_owned()),
         root,
         effort,
         max_output_tokens,
@@ -112,7 +113,10 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         retries,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
-    let window = agent.context_window();
+    if let Some(last) = agent.last_model().filter(|_| !chosen) {
+        agent.set_model(last.to_owned());
+    }
+    let mut window = agent.context_window();
 
     let cancel = Arc::new(AtomicBool::new(false));
     let startup = termios::tcgetattr(std::io::stdin()).ok();
@@ -200,6 +204,28 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     agent.session_path().display()
                 ),
                 Err(error) => eprintln!("error: {error}"),
+            }
+            continue;
+        }
+        if let Some(wanted) = prompt
+            .strip_prefix("/model")
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let wanted = wanted.trim();
+            match agent.models() {
+                None => eprintln!("error: could not list the endpoint's models"),
+                Some(models) if wanted.is_empty() => {
+                    for model in models {
+                        let current = if model == agent.model() { "*" } else { " " };
+                        eprintln!("{current} {model}");
+                    }
+                }
+                Some(models) if models.iter().any(|model| model == wanted) => {
+                    agent.set_model(wanted);
+                    window = agent.context_window();
+                    eprintln!("✓ Model set to {wanted}");
+                }
+                Some(_) => eprintln!("error: no model {wanted} (/model lists them)"),
             }
             continue;
         }

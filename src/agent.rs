@@ -25,6 +25,8 @@ const CONTEXT_FILE_BYTES: u64 = 256 << 10;
 const RETRY_DELAY: Duration = Duration::from_secs(2);
 /// Like Scramjet, a longer wait (backoff or the provider's Retry-After) fails the request instead.
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
+/// Stored with each response item: the model that produced it. Never sent to the endpoint.
+const PRODUCER: &str = "_scramjet_model";
 
 pub struct AgentConfig {
     pub endpoint: SocketAddr,
@@ -175,6 +177,24 @@ impl Agent {
         &self.config.model
     }
 
+    /// Changes the model used for subsequent requests in this session.
+    pub fn set_model(&mut self, model: impl Into<String>) {
+        self.config.model = model.into();
+    }
+
+    /// The model that produced the conversation's latest response item, if one is recorded.
+    pub fn last_model(&self) -> Option<&str> {
+        self.conversation
+            .iter()
+            .rev()
+            .find_map(|item| item[PRODUCER].as_str())
+    }
+
+    /// The endpoint's models that accept Responses requests, or `None` if they cannot be listed.
+    pub fn models(&self) -> Option<Vec<String>> {
+        self.executor.block_on(client::models(self.config.endpoint))
+    }
+
     pub fn conversation(&self) -> &[Value] {
         &self.conversation
     }
@@ -220,7 +240,7 @@ impl Agent {
         let mut request = json!({
             "model": self.config.model,
             "instructions": self.instructions,
-            "input": self.conversation,
+            "input": self.replay_conversation(),
             "tools": tools::definitions(),
             "tool_choice": "auto",
             "parallel_tool_calls": false,
@@ -238,6 +258,32 @@ impl Agent {
             request["max_output_tokens"] = json!(tokens);
         }
         request
+    }
+
+    /// The conversation as sent to the current model. As in Scramjet, items another model produced
+    /// lose what only that model accepts: encrypted reasoning, and `fc_` ids paired with it.
+    fn replay_conversation(&self) -> Vec<Value> {
+        self.conversation
+            .iter()
+            .map(|item| {
+                let mut item = item.clone();
+                let producer = item
+                    .as_object_mut()
+                    .and_then(|object| object.remove(PRODUCER));
+                if producer.is_some_and(|producer| producer != self.config.model.as_str()) {
+                    if item["type"] == "reasoning" {
+                        return Value::Null;
+                    }
+                    if item["type"] == "function_call"
+                        && item["id"].as_str().is_some_and(|id| id.starts_with("fc_"))
+                    {
+                        item.as_object_mut().unwrap().remove("id");
+                    }
+                }
+                item
+            })
+            .filter(|item| !item.is_null())
+            .collect()
     }
 
     /// Runs one user prompt to completion: model requests and tool calls until a final answer.
@@ -260,7 +306,10 @@ impl Agent {
                 self.usage.output_tokens += usage.output_tokens.unwrap_or(0);
             }
             let mut calls = Vec::new();
-            for item in reply.items {
+            for mut item in reply.items {
+                if let Some(object) = item.as_object_mut() {
+                    object.insert(PRODUCER.into(), json!(self.config.model));
+                }
                 match item["type"].as_str() {
                     Some("message") => ui.assistant(&message_text(&item)),
                     Some("function_call") => calls.push(item.clone()),
@@ -589,6 +638,8 @@ response is incomplete; retry the request."});
         assert!(ui.calls.is_empty());
         assert_eq!(agent.usage.requests, 2);
         assert_eq!(agent.usage.context_tokens, Some(15));
+        assert_eq!(agent.conversation()[1]["_scramjet_model"], "m");
+        assert!(bodies[1]["input"][0].get("_scramjet_model").is_none());
         let kinds: Vec<_> = agent
             .conversation()
             .iter()
@@ -604,11 +655,29 @@ response is incomplete; retry the request."});
             {"requestId": "m", "limits": {"context": 1_050_000, "output": 128_000}},
         ]})
         .to_string();
+        let (endpoint, server) =
+            serve_gets(vec![("200 OK", cards), ("404 Not Found", "no".into())]);
+        let (cards, _scratch) = agent(endpoint, "cards");
+        assert_eq!(cards.context_window(), Some(1_050_000));
+        assert_eq!(cards.context_window(), None);
+        assert_eq!(server.join().unwrap(), ["GET /api/model-cards HTTP/1.1"; 2]);
+        assert_eq!(cards.context_window(), None);
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let (hung, _scratch) = agent(silent.local_addr().unwrap(), "cards-silent");
+        let started = std::time::Instant::now();
+        assert_eq!(hung.context_window(), None);
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    /// Answers one GET request per response in turn; returns the request lines.
+    fn serve_gets(
+        responses: Vec<(&'static str, String)>,
+    ) -> (SocketAddr, std::thread::JoinHandle<Vec<String>>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let mut requests = Vec::new();
-            for (status, body) in [("200 OK", cards.as_str()), ("404 Not Found", "no")] {
+            for (status, body) in responses {
                 let (connection, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(connection);
                 let mut head = String::new();
@@ -624,16 +693,7 @@ response is incomplete; retry the request."});
             }
             requests
         });
-        let (cards, _scratch) = agent(endpoint, "cards");
-        assert_eq!(cards.context_window(), Some(1_050_000));
-        assert_eq!(cards.context_window(), None);
-        assert_eq!(server.join().unwrap(), ["GET /api/model-cards HTTP/1.1"; 2]);
-        assert_eq!(cards.context_window(), None);
-        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let (hung, _scratch) = agent(silent.local_addr().unwrap(), "cards-silent");
-        let started = std::time::Instant::now();
-        assert_eq!(hung.context_window(), None);
-        assert!(started.elapsed() < Duration::from_secs(2));
+        (endpoint, server)
     }
 
     #[test]
@@ -747,6 +807,85 @@ response is incomplete; retry the request."});
         assert!(matches!(agent.new_session(), Err(AgentError::Session(_))));
         assert_eq!(agent.session_path(), new);
         assert_eq!(agent.conversation().len(), 2);
+    }
+
+    #[test]
+    fn replay_drops_other_models_reasoning_and_unpairs_function_calls_after_resume() {
+        let root =
+            std::env::temp_dir().join(format!("scramjet-agent-model-{}", std::process::id()));
+        let _scratch = ScratchDir::new(root.clone());
+        let path = root.join("1700000000000-42.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session\",\"version\":1}\n",
+                "{\"type\":\"reasoning\",\"encrypted_content\":\"opaque\",\"_scramjet_model\":\"old\"}\n",
+                "{\"type\":\"function_call\",\"id\":\"fc_item\",\"call_id\":\"call_1\",\"_scramjet_model\":\"old\"}\n",
+                "{\"type\":\"function_call\",\"id\":\"item_other\",\"call_id\":\"call_2\",\"_scramjet_model\":\"old\"}\n",
+                "{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"ok\"}\n",
+                "{\"type\":\"function_call_output\",\"call_id\":\"call_2\",\"output\":\"ok\"}\n"
+            ),
+        )
+        .unwrap();
+        let config = AgentConfig {
+            endpoint: ([127, 0, 0, 1], 9).into(),
+            model: "new".into(),
+            root: root.clone(),
+            effort: None,
+            max_output_tokens: None,
+            approve_all: false,
+            retries: 3,
+        };
+        let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
+        let replay = agent.replay_conversation();
+        assert_eq!(replay.len(), 4);
+        assert_eq!(replay[0]["type"], "function_call");
+        assert!(replay[0].get("id").is_none());
+        assert_eq!(replay[0]["call_id"], "call_1");
+        assert_eq!(replay[1]["id"], "item_other");
+        assert_eq!(replay[2]["type"], "function_call_output");
+        assert!(
+            replay
+                .iter()
+                .all(|item| item.get("_scramjet_model").is_none())
+        );
+
+        assert_eq!(agent.last_model(), Some("old"));
+        agent.set_model("old");
+        let same_model = agent.replay_conversation();
+        assert_eq!(same_model.len(), 5);
+        assert_eq!(same_model[0]["type"], "reasoning");
+        assert_eq!(same_model[1]["id"], "fc_item");
+    }
+
+    #[test]
+    fn the_model_list_leaves_out_models_whose_card_lacks_the_responses_protocol() {
+        let list =
+            json!({"data": [{"id": "claude"}, {"id": "gpt"}, {"id": "both"}, {"id": "new"}]})
+                .to_string();
+        let cards = json!({"models": [
+            {"requestId": "claude", "supportedProtocols": ["anthropic-messages"]},
+            {"requestId": "gpt", "supportedProtocols": ["openai-responses"]},
+            {"requestId": "both", "supportedProtocols": ["openai-responses", "anthropic-messages"]},
+        ]})
+        .to_string();
+        let (endpoint, server) = serve_gets(vec![
+            ("200 OK", list.clone()),
+            ("200 OK", cards),
+            ("200 OK", list),
+            ("404 Not Found", "no".into()),
+            ("404 Not Found", "no".into()),
+        ]);
+        let (agent, _scratch) = agent(endpoint, "model-list");
+        let ids = |ids: &[&str]| Some(ids.iter().map(|id| id.to_string()).collect::<Vec<_>>());
+        assert_eq!(agent.models(), ids(&["gpt", "both", "new"]));
+        assert_eq!(agent.models(), ids(&["claude", "gpt", "both", "new"]));
+        assert_eq!(agent.models(), None);
+        let lines = ["GET /v1/models HTTP/1.1", "GET /api/model-cards HTTP/1.1"];
+        assert_eq!(
+            server.join().unwrap(),
+            [&lines[..], &lines[..], &lines[..1]].concat()
+        );
     }
 
     #[test]

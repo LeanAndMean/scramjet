@@ -116,18 +116,51 @@ pub(super) async fn cancelled(flag: &AtomicBool) {
     }
 }
 
+/// The endpoint's models (`/v1/models`) except those whose Proxy model card says they do not
+/// accept Responses requests; `None` when the list is not served in time.
+pub(super) async fn models(endpoint: SocketAddr) -> Option<Vec<String>> {
+    let list = tokio::time::timeout(CARDS_TIMEOUT, get(endpoint, "/v1/models"))
+        .await
+        .ok()??;
+    let list: Value = serde_json::from_slice(&list).ok()?;
+    let cards = cards(endpoint).await.unwrap_or_default();
+    let responses = |id: &str| {
+        let card = cards.iter().find(|card| card["requestId"] == id);
+        match card.and_then(|card| card["supportedProtocols"].as_array()) {
+            Some(protocols) => protocols.iter().any(|p| p == "openai-responses"),
+            None => true,
+        }
+    };
+    Some(
+        list["data"]
+            .as_array()?
+            .iter()
+            .filter_map(|model| model["id"].as_str())
+            .filter(|id| responses(id))
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
 /// The model's context window (input and output tokens) from Proxy's model cards; `None` when
 /// the endpoint does not serve them in time or does not list the model.
 pub(super) async fn context_window(endpoint: SocketAddr, model: &str) -> Option<u64> {
-    let cards = tokio::time::timeout(CARDS_TIMEOUT, get(endpoint, "/api/model-cards"))
-        .await
-        .ok()??;
-    let cards: Value = serde_json::from_slice(&cards).ok()?;
-    cards["models"]
-        .as_array()?
+    cards(endpoint)
+        .await?
         .iter()
         .find(|card| card["requestId"] == model)?["limits"]["context"]
         .as_u64()
+}
+
+async fn cards(endpoint: SocketAddr) -> Option<Vec<Value>> {
+    let cards = tokio::time::timeout(CARDS_TIMEOUT, get(endpoint, "/api/model-cards"))
+        .await
+        .ok()??;
+    let mut cards: Value = serde_json::from_slice(&cards).ok()?;
+    match cards["models"].take() {
+        Value::Array(cards) => Some(cards),
+        _ => None,
+    }
 }
 
 async fn get(endpoint: SocketAddr, path: &str) -> Option<Bytes> {
