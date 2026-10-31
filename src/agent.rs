@@ -1,7 +1,9 @@
-//! A coding agent that talks to a Responses endpoint (such as Proxy) and works in a project.
+//! A coding agent that talks to Proxy (Responses for GPT models, Messages for Claude) and works in
+//! a project.
 
 mod client;
 mod compaction;
+mod messages;
 mod session;
 mod tools;
 
@@ -9,7 +11,7 @@ pub use client::StreamProgress;
 pub use session::Session;
 pub use tools::sequence_diff;
 
-use client::ClientError;
+use client::{ClientError, ModelInfo, Protocol};
 use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
@@ -163,8 +165,8 @@ pub struct Agent {
     prompts: Vec<String>,
     session: Session,
     executor: tokio::runtime::Runtime,
-    /// The current model's context window, once the caller learned it: see `set_context_window`.
-    window: Option<u64>,
+    /// The current model's protocol and limits, from its name until `load_model_card`.
+    info: ModelInfo,
     pub usage: Usage,
 }
 
@@ -188,12 +190,12 @@ impl Agent {
             .build()?;
         let mut agent = Self {
             instructions: instructions(&config.root),
+            info: ModelInfo::guess(&config.model),
             config,
             conversation,
             prompts,
             session,
             executor,
-            window: None,
             usage: Usage::default(),
         };
         agent.answer_interrupted_calls()?;
@@ -320,15 +322,14 @@ impl Agent {
     pub fn set_model(&mut self, model: impl Into<String>) -> Result<(), AgentError> {
         let model = model.into();
         self.session.record_model(&model)?;
+        self.info = ModelInfo::guess(&model);
         self.config.model = model;
-        // The window belongs to the model that gave it.
-        self.window = None;
         Ok(())
     }
 
-    /// The window automatic compaction checks, from `context_window`; `None` skips the check.
+    /// The window automatic compaction checks; `None` skips the check.
     pub fn set_context_window(&mut self, window: Option<u64>) {
-        self.window = window;
+        self.info.window = window;
     }
 
     /// The model the session last recorded: its latest switch or response item's producer.
@@ -336,7 +337,7 @@ impl Agent {
         self.session.model()
     }
 
-    /// The endpoint's models that accept Responses requests, or `None` if they cannot be listed.
+    /// The endpoint's models, or `None` if they cannot be listed.
     pub fn models(&self) -> Option<Vec<String>> {
         self.executor.block_on(client::models(self.config.endpoint))
     }
@@ -345,12 +346,17 @@ impl Agent {
         &self.conversation
     }
 
-    /// Asks the endpoint for the model's context window (Proxy's model cards); `None` if unknown.
-    pub fn context_window(&self) -> Option<u64> {
-        self.executor.block_on(client::context_window(
-            self.config.endpoint,
-            &self.config.model,
-        ))
+    /// Reads the current model's Proxy model card: which protocol its requests use, its output
+    /// limit and its context window, which is returned. Without a card the model's name decides
+    /// the protocol, and the window is unknown (`None`).
+    pub fn load_model_card(&mut self) -> Option<u64> {
+        if let Some(info) = self
+            .executor
+            .block_on(client::model_info(self.config.endpoint, &self.config.model))
+        {
+            self.info = info;
+        }
+        self.info.window
     }
 
     /// A tool call left without a result (the process stopped mid-call) is answered, never re-run.
@@ -523,7 +529,7 @@ to a larger-context model)"
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
-        let (Some(tokens), Some(window)) = (self.usage.context_tokens, self.window) else {
+        let (Some(tokens), Some(window)) = (self.usage.context_tokens, self.info.window) else {
             return Ok(());
         };
         if compaction::should_compact(tokens, window) {
@@ -541,13 +547,22 @@ to a larger-context model)"
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<client::Reply, AgentError> {
-        let body = serde_json::to_vec(request).map_err(std::io::Error::from)?;
+        let body = match self.info.protocol {
+            Protocol::Responses => serde_json::to_vec(request),
+            Protocol::Messages => serde_json::to_vec(&messages::request(
+                request,
+                self.info.output.unwrap_or(messages::DEFAULT_MAX_TOKENS),
+                self.info.reasoning && messages::adaptive_thinking(&self.config.model),
+            )),
+        }
+        .map_err(std::io::Error::from)?;
         let mut attempt = 0;
         loop {
             ui.waiting(compacting);
             self.usage.requests += 1;
             let failure = match self.executor.block_on(client::respond(
                 self.config.endpoint,
+                self.info.protocol,
                 body.clone(),
                 cancel,
                 &mut |update| {
@@ -794,14 +809,27 @@ mod tests {
 
     /// Answers each connection with the next scripted response; returns the request bodies.
     fn serve(responses: Vec<Vec<u8>>) -> (SocketAddr, std::thread::JoinHandle<Vec<Value>>) {
+        let (address, server) = serve_requests(responses);
+        let bodies = std::thread::spawn(move || {
+            let requests = server.join().unwrap();
+            requests.into_iter().map(|(_, body)| body).collect()
+        });
+        (address, bodies)
+    }
+
+    /// As `serve`, returning each request's head (request line and headers, lowercased) too.
+    fn serve_requests(
+        responses: Vec<Vec<u8>>,
+    ) -> (SocketAddr, std::thread::JoinHandle<Vec<(String, Value)>>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
-            let mut bodies = Vec::new();
+            let mut requests = Vec::new();
             for response in responses {
                 let (connection, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(connection);
                 let mut length = 0;
+                let mut head = String::new();
                 loop {
                     let mut line = String::new();
                     reader.read_line(&mut line).unwrap();
@@ -811,13 +839,14 @@ mod tests {
                     if line == "\r\n" {
                         break;
                     }
+                    head.push_str(&line.to_lowercase());
                 }
                 let mut body = vec![0; length];
                 reader.read_exact(&mut body).unwrap();
-                bodies.push(serde_json::from_slice(&body).unwrap());
+                requests.push((head, serde_json::from_slice(&body).unwrap()));
                 reader.get_mut().write_all(&response).unwrap();
             }
-            bodies
+            requests
         });
         (address, server)
     }
@@ -1252,15 +1281,18 @@ response is incomplete; retry the request."});
         .to_string();
         let (endpoint, server) =
             serve_gets(vec![("200 OK", cards), ("404 Not Found", "no".into())]);
-        let (cards, _scratch) = agent(endpoint, "cards");
-        assert_eq!(cards.context_window(), Some(1_050_000));
-        assert_eq!(cards.context_window(), None);
+        let (mut cards, _scratch) = agent(endpoint, "cards");
+        assert_eq!(cards.load_model_card(), Some(1_050_000));
+        assert_eq!(cards.info.output, Some(128_000));
+        cards.set_model("m").unwrap();
+        assert_eq!(cards.info.output, None);
+        assert_eq!(cards.load_model_card(), None);
         assert_eq!(server.join().unwrap(), ["GET /api/model-cards HTTP/1.1"; 2]);
-        assert_eq!(cards.context_window(), None);
+        assert_eq!(cards.load_model_card(), None);
         let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let (hung, _scratch) = agent(silent.local_addr().unwrap(), "cards-silent");
+        let (mut hung, _scratch) = agent(silent.local_addr().unwrap(), "cards-silent");
         let started = std::time::Instant::now();
-        assert_eq!(hung.context_window(), None);
+        assert_eq!(hung.load_model_card(), None);
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
@@ -1533,32 +1565,165 @@ response is incomplete; retry the request."});
     }
 
     #[test]
-    fn the_model_list_leaves_out_models_whose_card_lacks_the_responses_protocol() {
-        let list =
-            json!({"data": [{"id": "claude"}, {"id": "gpt"}, {"id": "both"}, {"id": "new"}]})
-                .to_string();
+    fn the_model_list_is_the_endpoints() {
+        let list = json!({"data": [{"id": "claude"}, {"id": "gpt"}]}).to_string();
+        let (endpoint, server) = serve_gets(vec![("200 OK", list), ("404 Not Found", "no".into())]);
+        let (agent, _scratch) = agent(endpoint, "model-list");
+        let ids = Some(vec!["claude".to_owned(), "gpt".to_owned()]);
+        assert_eq!(agent.models(), ids);
+        assert_eq!(agent.models(), None);
+        assert_eq!(server.join().unwrap(), ["GET /v1/models HTTP/1.1"; 2]);
+    }
+
+    #[test]
+    fn model_cards_choose_the_protocol_and_names_do_without_one() {
         let cards = json!({"models": [
-            {"requestId": "claude", "supportedProtocols": ["anthropic-messages"]},
-            {"requestId": "gpt", "supportedProtocols": ["openai-responses"]},
-            {"requestId": "both", "supportedProtocols": ["openai-responses", "anthropic-messages"]},
+            {"requestId": "claude-opus-5-5", "supportedProtocols": ["anthropic-messages"],
+             "limits": {"context": 1_000_000, "output": 128_000}, "reasoning": {"levels": ["high"]}},
+            {"requestId": "both", "supportedProtocols": ["openai-responses", "anthropic-messages"],
+             "reasoning": null},
         ]})
         .to_string();
-        let (endpoint, server) = serve_gets(vec![
-            ("200 OK", list.clone()),
-            ("200 OK", cards),
-            ("200 OK", list),
-            ("404 Not Found", "no".into()),
-            ("404 Not Found", "no".into()),
+        let (endpoint, server) = serve_gets(vec![("200 OK", cards.clone()), ("200 OK", cards)]);
+        let (mut agent, _scratch) = agent(endpoint, "protocols");
+        agent.set_model("claude-opus-5-5").unwrap();
+        assert_eq!(agent.load_model_card(), Some(1_000_000));
+        let expected = ModelInfo {
+            protocol: Protocol::Messages,
+            window: Some(1_000_000),
+            output: Some(128_000),
+            reasoning: true,
+        };
+        assert_eq!(agent.info, expected);
+        agent.set_model("both").unwrap();
+        agent.load_model_card();
+        assert_eq!(agent.info.protocol, Protocol::Responses);
+        assert!(!agent.info.reasoning);
+        server.join().unwrap();
+        assert_eq!(ModelInfo::guess("claude-new").protocol, Protocol::Messages);
+        assert_eq!(ModelInfo::guess("gpt-new").protocol, Protocol::Responses);
+    }
+
+    /// A streamed Messages reply with these events.
+    fn messages_stream(events: &[Value]) -> Vec<u8> {
+        let body: String = events
+            .iter()
+            .map(|event| {
+                format!(
+                    "event: {}\ndata: {event}\n\n",
+                    event["type"].as_str().unwrap()
+                )
+            })
+            .collect();
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn claude_models_use_messages_and_replay_their_thinking_calls_and_results() {
+        let start = |id: &str, input: u64| {
+            json!({"type":"message_start","message":{"id":id,"usage":{"input_tokens":input,
+                "cache_read_input_tokens":5,"cache_creation_input_tokens":2,"output_tokens":1}}})
+        };
+        let stop = |index: u64| json!({"type":"content_block_stop","index":index});
+        let delta = |index: u64, delta: Value| json!({"type":"content_block_delta","index":index,"delta":delta});
+        let (endpoint, server) = serve_requests(vec![
+            messages_stream(&[
+                start("msg_1", 10),
+                json!({"type":"ping"}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
+                delta(
+                    0,
+                    json!({"type":"thinking_delta","thinking":"Need the file."}),
+                ),
+                delta(0, json!({"type":"signature_delta","signature":"sig1"})),
+                stop(0),
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+                delta(1, json!({"type":"text_delta","text":"Reading"})),
+                stop(1),
+                json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"read","input":{}}}),
+                delta(
+                    2,
+                    json!({"type":"input_json_delta","partial_json":"{\"path\":"}),
+                ),
+                delta(
+                    2,
+                    json!({"type":"input_json_delta","partial_json":"\"notes.txt\"}"}),
+                ),
+                stop(2),
+                json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20}}),
+                json!({"type":"message_stop"}),
+            ]),
+            messages_stream(&[
+                start("msg_2", 30),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+                delta(0, json!({"type":"text_delta","text":"It says hello."})),
+                stop(0),
+                json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}),
+                json!({"type":"message_stop"}),
+            ]),
         ]);
-        let (agent, _scratch) = agent(endpoint, "model-list");
-        let ids = |ids: &[&str]| Some(ids.iter().map(|id| id.to_string()).collect::<Vec<_>>());
-        assert_eq!(agent.models(), ids(&["gpt", "both", "new"]));
-        assert_eq!(agent.models(), ids(&["claude", "gpt", "both", "new"]));
-        assert_eq!(agent.models(), None);
-        let lines = ["GET /v1/models HTTP/1.1", "GET /api/model-cards HTTP/1.1"];
+        let (mut agent, scratch) = agent(endpoint, "claude");
+        std::fs::write(scratch.0.join("notes.txt"), "hello\n").unwrap();
+        agent.set_model("claude-opus-5-5").unwrap();
+        let mut ui = Recorder::default();
+        agent
+            .turn("What is in notes.txt?", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(ui.replies, ["Reading", "It says hello."]);
+        assert_eq!(ui.calls, ["read"]);
+        let requests = server.join().unwrap();
+        for (head, _) in &requests {
+            assert!(head.starts_with("post /v1/messages http/1.1\r\n"), "{head}");
+            assert!(head.contains("anthropic-version: 2023-06-01\r\n"), "{head}");
+        }
+        let first = &requests[0].1;
+        assert_eq!(first["model"], "claude-opus-5-5");
+        assert_eq!(first["max_tokens"], messages::DEFAULT_MAX_TOKENS);
         assert_eq!(
-            server.join().unwrap(),
-            [&lines[..], &lines[..], &lines[..1]].concat()
+            first["thinking"],
+            json!({"type":"adaptive","display":"summarized"})
+        );
+        assert_eq!(first["system"][0]["text"], agent.instructions);
+        assert_eq!(first["tools"][0]["name"], "read");
+        assert_eq!(
+            first["tools"][0]["input_schema"]["required"],
+            json!(["path"])
+        );
+        assert_eq!(
+            first["messages"],
+            json!([{"role":"user","content":[{"type":"text","text":"What is in notes.txt?",
+                "cache_control":{"type":"ephemeral"}}]}])
+        );
+        let second = &requests[1].1["messages"];
+        assert_eq!(
+            second[1],
+            json!({"role":"assistant","content":[
+                {"type":"thinking","thinking":"Need the file.","signature":"sig1"},
+                {"type":"text","text":"Reading"},
+                {"type":"tool_use","id":"toolu_1","name":"read","input":{"path":"notes.txt"}},
+            ]})
+        );
+        let result = &second[2]["content"][0];
+        assert_eq!(second[2]["role"], "user");
+        assert_eq!(result["tool_use_id"], "toolu_1");
+        assert!(result["content"].as_str().unwrap().contains("hello"));
+        assert_eq!(result["cache_control"], json!({"type":"ephemeral"}));
+        assert!(second[0]["content"][0].get("cache_control").is_none());
+        // Input counts cache reads and writes, as Responses input does.
+        assert_eq!(agent.usage.input_tokens, 17 + 37);
+        assert_eq!(agent.usage.cached_input_tokens, 10);
+        assert_eq!(agent.usage.output_tokens, 24);
+        assert_eq!(agent.usage.context_tokens, Some(41));
+        assert!(
+            agent.conversation()[1..]
+                .iter()
+                .filter(|item| item.get("type").is_some())
+                .all(|item| item["_scramjet_model"] == "claude-opus-5-5"
+                    || item["type"] == "function_call_output")
         );
     }
 

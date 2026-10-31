@@ -29,7 +29,8 @@ const USAGE: &str = "Usage: scramjet-rs agent [--project DIR] [--endpoint ADDR] 
 [--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | --session FILE] [--ask]
 [-p PROMPT]
 
-Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1:18080).
+Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
+the Messages API for Claude models (those whose Proxy model card lists only Messages).
   --project DIR          project directory (default: current directory)
   --model ID             model (default: gpt-6-luna, or the one a resumed session last used)
   --effort LEVEL         reasoning effort, e.g. low, medium, high
@@ -123,8 +124,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         _ => agent.model().to_owned(),
     };
     agent.set_model(model).map_err(|e| e.to_string())?;
-    let mut window = agent.context_window();
-    agent.set_context_window(window);
+    let mut window = agent.load_model_card();
 
     let cancel = Arc::new(AtomicBool::new(false));
     let startup = termios::tcgetattr(std::io::stdin()).ok();
@@ -234,8 +234,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 Some(models) if models.iter().any(|model| model == wanted) => {
                     match agent.set_model(wanted) {
                         Ok(()) => {
-                            window = agent.context_window();
-                            agent.set_context_window(window);
+                            window = agent.load_model_card();
                             eprintln!("✓ Model set to {wanted}");
                         }
                         Err(error) => eprintln!("error: {error}"),
