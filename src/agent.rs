@@ -50,7 +50,8 @@ pub enum SessionChoice {
 
 /// How the agent presents progress and asks for approval.
 pub trait AgentUi {
-    fn waiting(&mut self);
+    /// A model request is sent; `compacting` when it asks for a compaction summary.
+    fn waiting(&mut self, compacting: bool);
     /// Text or reasoning summary as it streams; may never be called for a response.
     fn progress(&mut self, update: &StreamProgress);
     /// A model request failed transiently and will be sent again after `delay`.
@@ -64,6 +65,8 @@ pub trait AgentUi {
     fn tool_output(&mut self, _output: &str) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
+    /// Shows a finished compaction; `automatic` says why the agent ran it without `/compact`.
+    fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>);
     /// Asks whether a tool call may run; returns `Deny` without an answer once `cancel` is set.
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer;
 }
@@ -90,6 +93,10 @@ pub enum ToolDetail {
 pub enum AgentError {
     Cancelled,
     Provider(String),
+    /// A request failed because its input exceeded the model's context window.
+    ContextOverflow(String),
+    /// A compaction the agent started by itself failed.
+    CompactionFailed(Box<AgentError>),
     Session(std::io::Error),
     TooManySteps,
 }
@@ -98,6 +105,8 @@ impl std::fmt::Display for AgentError {
         match self {
             Self::Cancelled => f.write_str("cancelled"),
             Self::Provider(message) => write!(f, "provider: {message}"),
+            Self::ContextOverflow(message) => write!(f, "context overflow: {message}"),
+            Self::CompactionFailed(error) => write!(f, "automatic compaction failed: {error}"),
             Self::Session(error) => write!(f, "session: {error}"),
             Self::TooManySteps => write!(f, "stopped after {MAX_STEPS} model requests in one turn"),
         }
@@ -127,6 +136,25 @@ pub struct Compaction {
     pub summary: String,
 }
 
+/// Why compaction ran without `/compact`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AutoCompaction {
+    /// The last response's context passed the model's window minus `RESERVE_TOKENS`.
+    Threshold,
+    /// A request failed because its input exceeded the model's window.
+    Overflow,
+}
+
+impl AutoCompaction {
+    /// A short line saying why compaction ran, for the user.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::Threshold => "Automatic: the context was nearing the model's window.",
+            Self::Overflow => "Automatic: a request exceeded the model's context window.",
+        }
+    }
+}
+
 pub struct Agent {
     config: AgentConfig,
     instructions: String,
@@ -134,6 +162,8 @@ pub struct Agent {
     prompts: Vec<String>,
     session: Session,
     executor: tokio::runtime::Runtime,
+    /// The current model's context window, once the caller learned it: see `set_context_window`.
+    window: Option<u64>,
     pub usage: Usage,
 }
 
@@ -162,6 +192,7 @@ impl Agent {
             prompts,
             session,
             executor,
+            window: None,
             usage: Usage::default(),
         };
         agent.answer_interrupted_calls()?;
@@ -250,7 +281,7 @@ impl Agent {
         if let Some(tokens) = self.config.max_output_tokens {
             request["max_output_tokens"] = json!(tokens);
         }
-        let reply = self.respond(&request, false, ui, cancel)?;
+        let reply = self.respond(&request, true, ui, cancel)?;
         let summary = reply
             .items
             .iter()
@@ -284,6 +315,13 @@ impl Agent {
     /// Changes the model used for subsequent requests in this session.
     pub fn set_model(&mut self, model: impl Into<String>) {
         self.config.model = model.into();
+        // The window belongs to the model that gave it.
+        self.window = None;
+    }
+
+    /// The window automatic compaction checks, from `context_window`; `None` skips the check.
+    pub fn set_context_window(&mut self, window: Option<u64>) {
+        self.window = window;
     }
 
     /// The model that produced the conversation's latest response item, if one is recorded.
@@ -391,6 +429,9 @@ impl Agent {
     }
 
     /// Runs one user prompt to completion: model requests and tool calls until a final answer.
+    /// Then, as Scramjet does, compacts the conversation if the last response's context passed
+    /// the model's window minus `compaction::RESERVE_TOKENS`. A request that fails because its
+    /// input exceeded the window is compacted and sent again, once per turn.
     pub fn turn(
         &mut self,
         prompt: &str,
@@ -399,12 +440,31 @@ impl Agent {
     ) -> Result<(), AgentError> {
         self.add(json!({"role":"user","content":prompt}))?;
         self.prompts.push(prompt.to_owned());
+        let mut overflow_recovered = false;
         for _ in 0..MAX_STEPS {
             if cancel.load(Ordering::Relaxed) {
                 return Err(AgentError::Cancelled);
             }
             let request = self.request();
-            let reply = self.respond(&request, true, ui, cancel)?;
+            let reply = match self.respond(&request, false, ui, cancel) {
+                Ok(reply) => reply,
+                Err(AgentError::ContextOverflow(message)) if !overflow_recovered => {
+                    overflow_recovered = true;
+                    if !self.auto_compact(AutoCompaction::Overflow, ui, cancel)? {
+                        return Err(AgentError::ContextOverflow(format!(
+                            "{message} (nothing is old enough to compact)"
+                        )));
+                    }
+                    continue;
+                }
+                Err(AgentError::ContextOverflow(message)) => {
+                    return Err(AgentError::ContextOverflow(format!(
+                        "{message} (again after compacting once; reduce the context or switch \
+to a larger-context model)"
+                    )));
+                }
+                Err(error) => return Err(error),
+            };
             self.usage.context_tokens = reply.usage.as_ref().and_then(|usage| usage.total_tokens);
             let mut calls = Vec::new();
             for mut item in reply.items {
@@ -419,6 +479,7 @@ impl Agent {
                 self.add(item)?;
             }
             if calls.is_empty() {
+                self.compact_when_full(ui, cancel)?;
                 return Ok(());
             }
             for item in calls {
@@ -432,26 +493,61 @@ impl Agent {
         Err(AgentError::TooManySteps)
     }
 
+    /// Compacts as `/compact` without a focus does and shows the result as `/compact` does,
+    /// saying why it ran. Returns whether there was anything to compact.
+    fn auto_compact(
+        &mut self,
+        reason: AutoCompaction,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<bool, AgentError> {
+        match self.compact("", ui, cancel) {
+            Ok(Some(compaction)) => {
+                ui.compacted(&compaction, Some(reason));
+                Ok(true)
+            }
+            Ok(None) => Ok(false),
+            Err(AgentError::Cancelled) => Err(AgentError::Cancelled),
+            Err(error) => Err(AgentError::CompactionFailed(Box::new(error))),
+        }
+    }
+
+    /// As Scramjet's threshold check: compacts after a turn once the context passed the model's
+    /// window minus `compaction::RESERVE_TOKENS`. Without a known window it does nothing.
+    fn compact_when_full(
+        &mut self,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<(), AgentError> {
+        let (Some(tokens), Some(window)) = (self.usage.context_tokens, self.window) else {
+            return Ok(());
+        };
+        if compaction::should_compact(tokens, window) {
+            self.auto_compact(AutoCompaction::Threshold, ui, cancel)?;
+        }
+        Ok(())
+    }
+
     /// Sends `request`, sending it again after transient failures, and counts its usage. A failed
     /// response's items are discarded, so a retry never runs a tool call from it.
     fn respond(
         &mut self,
         request: &Value,
-        show_progress: bool,
+        compacting: bool,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<client::Reply, AgentError> {
         let body = serde_json::to_vec(request).map_err(std::io::Error::from)?;
         let mut attempt = 0;
         loop {
-            ui.waiting();
+            ui.waiting(compacting);
             self.usage.requests += 1;
             let failure = match self.executor.block_on(client::respond(
                 self.config.endpoint,
                 body.clone(),
                 cancel,
                 &mut |update| {
-                    if show_progress {
+                    if !compacting {
                         ui.progress(&update)
                     }
                 },
@@ -471,11 +567,20 @@ impl Agent {
             let delay = backoff
                 .min(MAX_RETRY_WAIT)
                 .max(failure.wait.unwrap_or_default());
-            if !failure.transient || attempt == self.config.retries || delay > MAX_RETRY_WAIT {
-                return Err(AgentError::Provider(match attempt {
+            // A context overflow is not retried as is: only compaction can let the request through.
+            if !failure.transient
+                || failure.overflow
+                || attempt == self.config.retries
+                || delay > MAX_RETRY_WAIT
+            {
+                let message = match attempt {
                     0 => failure.message,
                     n => format!("{} (after {n} retries)", failure.message),
-                }));
+                };
+                return Err(match failure.overflow {
+                    true => AgentError::ContextOverflow(message),
+                    false => AgentError::Provider(message),
+                });
             }
             attempt += 1;
             ui.retrying(&failure.message, attempt, self.config.retries, delay);
@@ -620,12 +725,17 @@ mod tests {
         retries: Vec<(String, u32, Duration)>,
         replies: Vec<String>,
         calls: Vec<String>,
+        compactions: Vec<(u64, usize, Option<AutoCompaction>)>,
+        /// Whether each request asked for a compaction summary.
+        waits: Vec<bool>,
         /// Answers to give, in order; questions beyond them are denied.
         answers: Vec<Answer>,
         questions: usize,
     }
     impl AgentUi for Recorder {
-        fn waiting(&mut self) {}
+        fn waiting(&mut self, compacting: bool) {
+            self.waits.push(compacting);
+        }
         fn progress(&mut self, _: &StreamProgress) {}
         fn retrying(&mut self, error: &str, attempt: u32, _: u32, delay: Duration) {
             self.retries.push((error.to_owned(), attempt, delay));
@@ -638,6 +748,10 @@ mod tests {
         }
         fn tool_running(&mut self) {}
         fn tool_result(&mut self, _: &str, _: &str, _: Option<&ToolDetail>, _: bool) {}
+        fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>) {
+            self.compactions
+                .push((compaction.tokens_before, compaction.kept_items, automatic));
+        }
         fn approve(&mut self, _: &str, _: &AtomicBool) -> Answer {
             self.questions += 1;
             self.answers
@@ -903,6 +1017,191 @@ mod tests {
         assert_eq!(agent.usage.requests, 0);
     }
 
+    /// Usage of a response that filled `total` tokens of context.
+    fn full_usage(total: u64) -> Value {
+        json!({"input_tokens": total - 10, "output_tokens": 10, "total_tokens": total})
+    }
+
+    /// A conversation with a small old prompt and ~21k tokens of recent work to keep.
+    fn seed_long_conversation(agent: &mut Agent) {
+        agent
+            .add(json!({"role":"user", "content":"remember the goal"}))
+            .unwrap();
+        agent
+            .add(json!({"role":"user", "content":"recent work ".repeat(7000)}))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_full_context_is_compacted_after_the_turn() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("done", full_usage(10_000))),
+            stream(&fixture::text_events("summary", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "auto-threshold");
+        seed_long_conversation(&mut agent);
+        agent.set_context_window(Some(20_000));
+        let mut ui = Recorder::default();
+        agent
+            .turn("continue", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(ui.replies, ["done"]);
+        assert_eq!(
+            ui.compactions,
+            [(10_000, 3, Some(AutoCompaction::Threshold))]
+        );
+        assert_eq!(ui.waits, [false, true]);
+        // The turn ends after compacting: no further request is sent.
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1]["instructions"], compaction::SYSTEM_PROMPT);
+        assert!(
+            requests[1]["input"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("[User]: remember the goal")
+        );
+        assert_eq!(agent.usage.context_tokens, None);
+        assert!(ui.calls.is_empty());
+        assert!(ui.retries.is_empty());
+    }
+
+    #[test]
+    fn a_failed_automatic_compaction_is_reported_as_such_after_the_reply() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("done", full_usage(10_000))),
+            b"HTTP/1.1 400 Bad Request\r\ncontent-length: 4\r\n\r\nnope".to_vec(),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "auto-threshold-failed");
+        seed_long_conversation(&mut agent);
+        agent.set_context_window(Some(20_000));
+        let mut ui = Recorder::default();
+        let error = agent
+            .turn("continue", &mut ui, &AtomicBool::new(false))
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "automatic compaction failed: provider: HTTP 400 Bad Request: nope"
+        );
+        assert_eq!(server.join().unwrap().len(), 2);
+        assert_eq!(ui.replies, ["done"]);
+        assert!(ui.compactions.is_empty());
+        assert_eq!(agent.conversation().len(), 4);
+    }
+
+    #[test]
+    fn the_threshold_needs_a_known_window_and_a_full_enough_context() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "done",
+            full_usage(1_000_000),
+        ))]);
+        let (mut unknown, _scratch) = agent(endpoint, "auto-threshold-unknown");
+        let mut ui = Recorder::default();
+        unknown
+            .turn("hi", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert!(ui.compactions.is_empty());
+
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "done",
+            fixture::known_usage(),
+        ))]);
+        let (mut low, _scratch) = agent(endpoint, "auto-threshold-low");
+        low.set_context_window(Some(20_000));
+        low.turn("hi", &mut ui, &AtomicBool::new(false)).unwrap();
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert!(ui.compactions.is_empty());
+    }
+
+    /// A stream that ends with the provider saying the input exceeded the context window.
+    fn overflow_events() -> Vec<Value> {
+        let mut events = fixture::text_events("partial", fixture::known_usage());
+        events.truncate(4);
+        events.push(json!({"type":"error","code":"context_length_exceeded",
+            "message":"Your input exceeds the context window of this model."}));
+        events
+    }
+
+    #[test]
+    fn an_overflowing_request_is_compacted_and_sent_again() {
+        let (endpoint, server) = serve(vec![
+            stream(&overflow_events()),
+            stream(&fixture::text_events("summary", fixture::known_usage())),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "auto-overflow");
+        seed_long_conversation(&mut agent);
+        agent.usage.context_tokens = Some(30_000);
+        let mut ui = Recorder::default();
+        agent
+            .turn("continue", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(ui.replies, ["done"]);
+        assert_eq!(
+            ui.compactions,
+            [(30_000, 2, Some(AutoCompaction::Overflow))]
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[1]["instructions"], compaction::SYSTEM_PROMPT);
+        let retried = requests[2]["input"].as_array().unwrap();
+        assert_eq!(
+            retried[0]["content"],
+            format!(
+                "{}summary{}",
+                compaction::SUMMARY_PREFIX,
+                compaction::SUMMARY_SUFFIX
+            )
+        );
+        assert_eq!(retried[2], json!({"role":"user","content":"continue"}));
+        assert!(ui.calls.is_empty());
+        assert!(ui.retries.is_empty());
+    }
+
+    #[test]
+    fn a_second_overflow_fails_the_turn_with_a_clear_message() {
+        let (endpoint, server) = serve(vec![
+            stream(&overflow_events()),
+            stream(&fixture::text_events("summary", fixture::known_usage())),
+            stream(&overflow_events()),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "auto-overflow-twice");
+        seed_long_conversation(&mut agent);
+        let mut ui = Recorder::default();
+        let error = agent
+            .turn("continue", &mut ui, &AtomicBool::new(false))
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "context overflow: provider error: Your input exceeds the context window of this \
+model. (again after compacting once; reduce the context or switch to a larger-context model)"
+        );
+        assert_eq!(server.join().unwrap().len(), 3);
+        assert_eq!(ui.compactions.len(), 1);
+        assert!(ui.replies.is_empty());
+        assert!(ui.retries.is_empty());
+    }
+
+    #[test]
+    fn an_overflow_that_cannot_compact_fails_the_turn() {
+        let (endpoint, server) = serve(vec![stream(&overflow_events())]);
+        let (mut agent, _scratch) = agent(endpoint, "auto-overflow-nothing");
+        let mut ui = Recorder::default();
+        let error = agent
+            .turn("hi", &mut ui, &AtomicBool::new(false))
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "context overflow: provider error: Your input exceeds the context window of this \
+model. (nothing is old enough to compact)"
+        );
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert!(ui.compactions.is_empty());
+        assert!(ui.replies.is_empty());
+        assert!(ui.retries.is_empty());
+    }
+
     #[test]
     fn transient_failures_are_sent_again_without_running_their_tool_calls() {
         let mut failed = fixture::call_events("{}", fixture::known_usage());
@@ -990,12 +1289,7 @@ response is incomplete; retry the request."});
 
     #[test]
     fn permanent_failures_and_long_retry_waits_end_the_turn_at_once() {
-        let mut overflow = fixture::text_events("partial", fixture::known_usage());
-        overflow.truncate(4);
-        overflow.push(json!({"type":"error","code":"context_length_exceeded",
-            "message":"Your input exceeds the context window of this model."}));
         let (endpoint, server) = serve(vec![
-            stream(&overflow),
             b"HTTP/1.1 400 Bad Request\r\ncontent-length: 15\r\n\r\ninvalid request".to_vec(),
             b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 120\r\ncontent-length: 4\r\n\r\nslow"
                 .to_vec(),
@@ -1003,7 +1297,7 @@ response is incomplete; retry the request."});
         let (mut agent, _scratch) = agent(endpoint, "permanent");
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
-        let errors: Vec<_> = (0..3)
+        let errors: Vec<_> = (0..2)
             .map(|_| match agent.turn("hi", &mut ui, &cancel) {
                 Err(AgentError::Provider(message)) => message,
                 other => panic!("{:?}", other.err()),
@@ -1012,19 +1306,18 @@ response is incomplete; retry the request."});
         assert_eq!(
             errors,
             [
-                "provider error: Your input exceeds the context window of this model.",
                 "HTTP 400 Bad Request: invalid request",
                 "HTTP 429 Too Many Requests: slow",
             ]
         );
         assert!(ui.retries.is_empty());
-        assert_eq!(server.join().unwrap().len(), 3);
+        assert_eq!(server.join().unwrap().len(), 2);
     }
 
     #[test]
     fn failures_are_classified_by_code_then_wording() {
-        let transient =
-            |code, message: &str| client::Failure::provider(code, message.into()).transient;
+        let failure = |code, message: &str| client::Failure::provider(code, message.into());
+        let transient = |code, message: &str| failure(code, message).transient;
         assert!(transient(Some("server_error"), "anything"));
         assert!(!transient(Some("insufficient_quota"), "rate limit"));
         assert!(transient(None, "Rate limit reached for requests"));
@@ -1034,6 +1327,11 @@ response is incomplete; retry the request."});
             "This model's maximum context length is 128000 tokens; timeout"
         ));
         assert!(!transient(None, "Invalid value for 'input'"));
+        assert!(failure(Some("context_length_exceeded"), "anything").overflow);
+        assert!(failure(None, "Your input exceeds the context window of this model.").overflow);
+        assert!(failure(None, "prompt is too long: 213462 tokens > 200000 maximum").overflow);
+        assert!(!failure(None, "Rate limit reached: too many tokens").overflow);
+        assert!(!failure(None, "Invalid value for 'input'").overflow);
     }
 
     #[test]

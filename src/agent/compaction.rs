@@ -93,6 +93,16 @@ Summarize the prefix to provide context for the retained suffix:
 
 Be concise. Focus on what's needed to understand the kept suffix."#;
 
+/// Scramjet's `reserveTokens`: automatic compaction runs once the context passes what is left
+/// of the model's window after this much is kept for the next response.
+pub(super) const RESERVE_TOKENS: u64 = 16_384;
+
+/// Whether a context of `tokens` should be compacted for a model whose window is `window`, as
+/// Scramjet's `shouldCompact`: a window no larger than the reserve never compacts.
+pub(super) fn should_compact(tokens: u64, window: u64) -> bool {
+    window > RESERVE_TOKENS && tokens > window - RESERVE_TOKENS
+}
+
 pub(super) fn summary_message(summary: &str) -> Value {
     json!({"role":"user", "content":format!("{SUMMARY_PREFIX}{summary}{SUMMARY_SUFFIX}")})
 }
@@ -340,6 +350,15 @@ mod tests {
             json!({"role":"user","content":"x".repeat(80_000)}),
         ];
         assert_eq!(cut_point(&users, 0, 20_000), 1);
+    }
+
+    #[test]
+    fn compaction_runs_past_the_window_less_the_reserve() {
+        assert!(!should_compact(20_000, 36_384));
+        assert!(should_compact(20_001, 36_384));
+        assert!(should_compact(u64::MAX, u64::MAX));
+        assert!(!should_compact(1_000_000, RESERVE_TOKENS));
+        assert!(!should_compact(0, 0));
     }
 
     #[test]

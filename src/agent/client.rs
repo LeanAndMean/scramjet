@@ -51,6 +51,32 @@ const TRANSIENT_WORDS: &[&str] = &[
     "stream ended",
     "retry",
 ];
+/// Failure wording that says the input exceeded the model's context window, from Scramjet's
+/// overflow patterns (`packages/ai/src/utils/overflow.ts`), as case-insensitive substrings.
+const OVERFLOW_WORDS: &[&str] = &[
+    "prompt is too long",
+    "request_too_large",
+    "input is too long for requested model",
+    "exceeds the context window",
+    "maximum context length",
+    "input token count",
+    "maximum prompt length is",
+    "reduce the length of the messages",
+    "exceeds the limit of",
+    "exceeds the available context size",
+    "greater than the context length",
+    "context window exceeds limit",
+    "exceeded model token limit",
+    "too large for model with",
+    "model_context_window_exceeded",
+    "prompt too long",
+    "context_length_exceeded",
+    "context length exceeded",
+    "too many tokens",
+    "token limit exceeded",
+];
+/// Wording that mentions tokens or limits for another reason, such as throttling.
+const NON_OVERFLOW_WORDS: &[&str] = &["rate limit", "too many requests", "throttl"];
 
 pub(super) struct Reply {
     pub items: Vec<Value>,
@@ -66,6 +92,8 @@ pub(super) struct Failure {
     pub message: String,
     /// Whether another attempt may succeed: rate limits, overload, server and connection failures.
     pub transient: bool,
+    /// The input exceeded the model's context window; compacting may let it through.
+    pub overflow: bool,
     /// The provider's Retry-After wait; `Duration::MAX` when it is unrepresentable.
     pub wait: Option<Duration>,
 }
@@ -75,6 +103,7 @@ impl Failure {
         Self {
             message: message.into(),
             transient,
+            overflow: false,
             wait: None,
         }
     }
@@ -95,7 +124,10 @@ impl Failure {
             ) => false,
             _ => !mentions(&message, PERMANENT_WORDS) && mentions(&message, TRANSIENT_WORDS),
         };
-        Self::new(message, transient)
+        Self {
+            overflow: code == Some("context_length_exceeded") || overflows(&message),
+            ..Self::new(message, transient)
+        }
     }
     /// An `error` event; its fields may be at the top level or under `error`.
     fn event(event: &Value) -> Self {
@@ -108,6 +140,11 @@ impl Failure {
 fn mentions(message: &str, words: &[&str]) -> bool {
     let message = message.to_lowercase();
     words.iter().any(|word| message.contains(word))
+}
+
+/// Whether a failure's message says the input exceeded the model's context window.
+fn overflows(message: &str) -> bool {
+    !mentions(message, NON_OVERFLOW_WORDS) && mentions(message, OVERFLOW_WORDS)
 }
 
 pub(super) async fn cancelled(flag: &AtomicBool) {
@@ -262,6 +299,9 @@ async fn exchange(
             message: format!("HTTP {status}: {}", text.trim()),
             transient: matches!(status.as_u16(), 408 | 429 | 500..)
                 && !mentions(&text, PERMANENT_WORDS),
+            // Cerebras reports an oversized request as a 400 or 413 without a body.
+            overflow: overflows(&text)
+                || (matches!(status.as_u16(), 400 | 413) && text.trim().is_empty()),
             wait,
         })
     } else {

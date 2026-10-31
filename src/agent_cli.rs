@@ -8,8 +8,8 @@ use rustix::{
     termios::{self, LocalModes, OptionalActions, Termios},
 };
 use scramjet_rs::agent::{
-    Agent, AgentConfig, AgentError, AgentUi, Answer, Compaction, SessionChoice, StreamProgress,
-    ToolDetail,
+    Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Compaction, SessionChoice,
+    StreamProgress, ToolDetail,
 };
 use std::{
     ffi::OsString,
@@ -43,7 +43,8 @@ In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trai
 a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
 /new starts a new session. /model lists the models and /model ID switches to one.
-/compact [focus] replaces all but the last ~20k tokens of the conversation with a summary.
+/compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
+this also happens by itself when the context nears the model's window.
 While a turn runs, typed text is kept for the next prompt without being shown; Ctrl-C cancels
 the turn (and discards that text); press it twice to quit.";
 
@@ -119,6 +120,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         agent.set_model(last.to_owned());
     }
     let mut window = agent.context_window();
+    agent.set_context_window(window);
 
     let cancel = Arc::new(AtomicBool::new(false));
     let startup = termios::tcgetattr(std::io::stdin()).ok();
@@ -216,6 +218,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 Some(models) if models.iter().any(|model| model == wanted) => {
                     agent.set_model(wanted);
                     window = agent.context_window();
+                    agent.set_context_window(window);
                     eprintln!("✓ Model set to {wanted}");
                 }
                 Some(_) => eprintln!("error: no model {wanted} (/model lists them)"),
@@ -232,7 +235,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             drop(echo);
             ui.clear();
             match result {
-                Ok(Some(compaction)) => ui.compacted(&compaction),
+                Ok(Some(compaction)) => ui.compacted(&compaction, None),
                 Ok(None) => eprintln!("Nothing to compact: the conversation is all recent."),
                 Err(AgentError::Cancelled) => eprintln!("{}", ui.dim("(cancelled)")),
                 Err(error) => eprintln!("error: {error}"),
@@ -739,23 +742,6 @@ impl Terminal {
         self.printed_newlines = 0;
         self.streaming = Streaming::None;
     }
-    /// As Scramjet shows a compaction: the estimated context size before it, then the summary.
-    fn compacted(&self, compaction: &Compaction) {
-        let heading = format!(
-            "✓ Compacted: the context was about {} tokens; kept the last {} items",
-            context(compaction.tokens_before, None),
-            compaction.kept_items,
-        );
-        let mut markdown = markdown::Markdown::new(self.color, "\x1b[2m");
-        let summary =
-            markdown.reopen() + &markdown.push(compaction.summary.trim_end()) + &markdown.finish();
-        let reset = if self.color { "\x1b[0m" } else { "" };
-        eprintln!(
-            "{}\n\n{}{reset}",
-            self.wrapped(&heading),
-            self.wrapped(&summary)
-        );
-    }
     fn usage(&self, agent: &Agent, window: Option<u64>) {
         let usage = agent.usage;
         let line = format!(
@@ -774,12 +760,13 @@ impl Terminal {
 }
 
 impl AgentUi for Terminal {
-    fn waiting(&mut self) {
+    fn waiting(&mut self, compacting: bool) {
         self.clear();
         self.streamed.clear();
         self.consumed = 0;
         self.text_rows = None;
-        self.show("thinking".into(), true);
+        let activity = if compacting { "compacting" } else { "thinking" };
+        self.show(activity.into(), true);
     }
     fn progress(&mut self, update: &StreamProgress) {
         match update {
@@ -913,6 +900,28 @@ impl AgentUi for Terminal {
         }
         // As in Scramjet, a blank line separates each tool block from what follows.
         eprintln!();
+    }
+    /// As Scramjet shows a compaction: the estimated context size before it, then the summary;
+    /// an automatic one also says why it ran.
+    fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>) {
+        self.clear();
+        let heading = format!(
+            "✓ Compacted: the context was about {} tokens; kept the last {} items",
+            context(compaction.tokens_before, None),
+            compaction.kept_items,
+        );
+        let reason = automatic
+            .map(|reason| format!("\n{}", self.dim(&self.wrapped(reason.reason()))))
+            .unwrap_or_default();
+        let mut markdown = markdown::Markdown::new(self.color, "\x1b[2m");
+        let summary =
+            markdown.reopen() + &markdown.push(compaction.summary.trim_end()) + &markdown.finish();
+        let reset = if self.color { "\x1b[0m" } else { "" };
+        eprintln!(
+            "{}{reason}\n\n{}{reset}",
+            self.wrapped(&heading),
+            self.wrapped(&summary)
+        );
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         self.clear();
