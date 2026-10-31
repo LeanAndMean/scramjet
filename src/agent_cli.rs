@@ -553,8 +553,13 @@ struct Terminal {
     color: bool,
     status: Arc<Mutex<Status>>,
     streaming: Streaming,
-    /// Whether assistant text streamed during the current response.
-    streamed_text: bool,
+    /// Assistant text streamed during the current response, and how much of it the response's
+    /// messages have matched so far.
+    streamed: String,
+    consumed: usize,
+    /// Rows printed by the response's text while it is a single block, the latest output and on
+    /// a terminal.
+    text_rows: Option<usize>,
     /// Newlines ending the streamed block so far, not yet printed.
     held_newlines: usize,
     /// Newlines ending the streamed block that were printed early.
@@ -589,7 +594,9 @@ impl Terminal {
             color,
             status,
             streaming: Streaming::None,
-            streamed_text: false,
+            streamed: String::new(),
+            consumed: 0,
+            text_rows: None,
             held_newlines: 0,
             printed_newlines: 0,
             markdown: markdown::Markdown::new(false, ""),
@@ -638,7 +645,8 @@ impl Terminal {
         if self.streaming == kind {
             // The status line's style reset ended the style of the streamed text.
             if self.status.lock().unwrap().clear() {
-                self.print_streamed(&self.markdown.reopen());
+                let reopen = self.markdown.reopen();
+                self.print_streamed(&reopen);
             }
         } else {
             self.clear();
@@ -654,7 +662,10 @@ impl Terminal {
             self.markdown = markdown::Markdown::new(styled, base);
             self.wrap = Wrap::new(if styled { editor::terminal_size().0 } else { 0 });
             self.streaming = kind;
-            self.print_streamed(&self.markdown.reopen());
+            self.text_rows =
+                (kind == Streaming::Text && styled && self.streamed.is_empty()).then_some(0);
+            let reopen = self.markdown.reopen();
+            self.print_streamed(&reopen);
         }
         let body = delta.trim_end_matches('\n');
         if !body.is_empty() {
@@ -683,8 +694,11 @@ impl Terminal {
             self.show("thinking".into(), false);
         }
     }
-    fn print_streamed(&self, text: &str) {
+    fn print_streamed(&mut self, text: &str) {
         if self.streaming == Streaming::Text {
+            if let Some(rows) = &mut self.text_rows {
+                *rows += text.matches('\n').count();
+            }
             print!("{text}");
             let _ = std::io::stdout().flush();
         } else {
@@ -706,6 +720,7 @@ impl Terminal {
                 "\n".repeat(2 - self.printed_newlines)
             ),
             Streaming::Text => {
+                self.text_rows = self.text_rows.map(|rows| rows + 2);
                 println!("\n");
                 let _ = std::io::stdout().flush();
             }
@@ -733,15 +748,17 @@ impl Terminal {
 impl AgentUi for Terminal {
     fn waiting(&mut self) {
         self.clear();
-        self.streamed_text = false;
+        self.streamed.clear();
+        self.consumed = 0;
+        self.text_rows = None;
         self.show("thinking".into(), true);
     }
     fn progress(&mut self, update: &StreamProgress) {
         match update {
             StreamProgress::Reasoning(delta) => self.stream(Streaming::Reasoning, delta),
             StreamProgress::Text(delta) => {
-                self.streamed_text = true;
                 self.stream(Streaming::Text, delta);
+                self.streamed.push_str(delta);
             }
             StreamProgress::Call(name) => {
                 self.clear();
@@ -763,9 +780,27 @@ impl AgentUi for Terminal {
         self.show_countdown("retrying in".into(), delay);
     }
     fn assistant(&mut self, text: &str) {
-        let streamed = self.streamed_text;
         self.clear();
-        if !streamed && !text.is_empty() {
+        let shown = &self.streamed[self.consumed..];
+        if shown.starts_with(text) {
+            self.consumed += text.len();
+            return;
+        }
+        let mut text = text.to_owned();
+        if !shown.is_empty() {
+            // The deltas missed part of the final text (Proxy's DeepSeek route drops a reply's first
+            // one). As Scramjet replaces the streamed block with the final text, rewrite it while
+            // it is still on screen; otherwise show the final text after it.
+            let height = editor::terminal_size().1;
+            if let Some(rows) = self.text_rows.filter(|&rows| rows > 0 && rows < height) {
+                print!("\r\x1b[{rows}A\x1b[J");
+                text = self.streamed[..self.consumed].to_owned() + &text;
+            }
+            self.streamed.clear();
+            self.consumed = 0;
+        }
+        self.text_rows = None;
+        if !text.is_empty() {
             let width = match std::io::stdout().is_terminal() {
                 true => editor::terminal_size().0,
                 false => 0,

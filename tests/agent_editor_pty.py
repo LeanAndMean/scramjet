@@ -111,7 +111,49 @@ def serve_quiet_reasoning():
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
+def serve_replies(replies):
+    """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`."""
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+    streams = []
+    for deltas, text in replies:
+        item = {'type': 'message', 'id': 'msg_1', 'role': 'assistant', 'status': 'completed',
+                'content': [{'type': 'output_text', 'text': text, 'annotations': []}]}
+        part = {'type': 'output_text', 'text': '', 'annotations': []}
+        where = {'output_index': 0, 'item_id': 'msg_1', 'content_index': 0}
+        events = [
+            {'type': 'response.created', 'response': {'id': 'resp_1', 'status': 'in_progress', 'output': []}},
+            {'type': 'response.output_item.added', 'output_index': 0,
+             'item': dict(item, status='in_progress', content=[])},
+            dict(where, type='response.content_part.added', part=part),
+            *(dict(where, type='response.output_text.delta', delta=delta) for delta in deltas),
+            dict(where, type='response.output_text.done', text=text),
+            dict(where, type='response.content_part.done', part=dict(part, text=text)),
+            {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
+            {'type': 'response.completed', 'response': {'id': 'resp_1', 'status': 'completed', 'output': [item]}},
+        ]
+        streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
+
+    def answer():
+        for stream in streams:
+            connection, _ = listener.accept()
+            while connection.recv(65536).startswith(b'GET'):
+                connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
+                connection.close()
+                connection, _ = listener.accept()
+            connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
+                               b'connection: close\r\n\r\n%s' % (len(stream), stream))
+            connection.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    return '127.0.0.1:%d' % listener.getsockname()[1]
+
+
 quiet_reasoning = serve_quiet_reasoning()
+# As from Proxy's DeepSeek route: the first delta lost, then a text sent only in its done event.
+replies = serve_replies([([' of the reply.'], 'The start of the reply.'), ([], 'Only at the end.'),
+                         (['Streamed ', 'whole.'], 'Streamed whole.')])
 # The command's output pipe outlives the killed process group, so a cancellation stays pending for
 # about two seconds.
 calling = serve_call('setsid sleep 5 & sleep 30')
@@ -312,6 +354,23 @@ def new_session(read, until, send, output):
     send(b'\x03\x04')
 
 
+def final_texts_replace_lost_deltas(read, until, send, output):
+    mark = until(b'> ')
+    send(b'one\r')
+    streamed = until(b' of the reply.', mark)
+    mark = until(b'The start of the reply.\r\n\r\n', streamed)
+    assert output[streamed:mark].startswith(b'\r\n\r\n\r\x1b[2A\x1b[J'), bytes(output[streamed:mark])
+    mark = until(b'> ', mark)
+    send(b'two\r')
+    mark = until(b'Only at the end.\r\n\r\n', mark)
+    mark = until(b'> ', mark)
+    send(b'three\r')
+    mark = until(b'whole.', mark)
+    shown = until(b'> ', mark)
+    assert b'Streamed' not in output[mark:shown] and b'A\x1b[J' not in output[mark:shown], bytes(output[mark:shown])
+    send(b'\x04')
+
+
 def session_files():
     return glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
 
@@ -329,6 +388,7 @@ run([], quiet_after_reasoning_shows_thinking, quiet_reasoning)
 run(['--yes'], running_counts_seconds, calling)
 run(['--yes'], running_shows_output, talking)
 run([], approval_shows_hidden_characters, disguised)
+run([], final_texts_replace_lost_deltas, replies)
 run(['--yes'], exit_during_turn, calling, 130)
 known = set(session_files())
 run(['--retries', '0'], new_session)
