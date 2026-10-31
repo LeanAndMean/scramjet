@@ -46,7 +46,7 @@ pub(super) fn definitions() -> Value {
                 "oldText":{"type":"string"},"newText":{"type":"string"}},"required":["oldText","newText"]}}},
           "required":["path","edits"]}},
         {"type":"function","name":"bash","strict":false,
-         "description":"Run a bash command in the project directory. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output. Some commands need the user's approval first; just call this tool.",
+         "description":"Run a bash command in the project directory. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
          "parameters":{"type":"object","properties":{
             "command":{"type":"string"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
@@ -54,7 +54,7 @@ pub(super) fn definitions() -> Value {
     ])
 }
 
-/// What the user is asked to approve before a tool runs, if anything.
+/// What the user is asked to approve before a tool runs, if anything, when approvals are on.
 pub(super) enum Approval {
     None,
     Ask(String),
@@ -101,9 +101,6 @@ impl<'a> Call<'a> {
         match self.name {
             "bash" => {
                 let command = self.arguments["command"].as_str().unwrap_or("");
-                if super::readonly::read_only(command) {
-                    return Approval::None;
-                }
                 // The call line above the question shows the first line of the command.
                 Approval::Ask(match command.lines().nth(1) {
                     None => format!("Run in {}", root.display()),
@@ -710,11 +707,7 @@ disjoint regions."
                 Approval::None => panic!("bash runs without approval"),
             };
         assert_eq!(question("make -j4\n"), "Run in ROOT");
-        assert!(
-            call("bash", json!({"command":"git status"}))
-                .approval(&root)
-                .is_none()
-        );
+        assert_eq!(question("git status"), "Run in ROOT");
         assert_eq!(question("cd x\nmake"), "Run in ROOT:\ncd x\nmake");
         assert!(
             call("write", json!({"path":"a/b.txt","content":"hi"}))

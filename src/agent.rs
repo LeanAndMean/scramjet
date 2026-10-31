@@ -2,7 +2,6 @@
 
 mod client;
 mod compaction;
-mod readonly;
 mod session;
 mod tools;
 
@@ -38,7 +37,8 @@ pub struct AgentConfig {
     pub root: PathBuf,
     pub effort: Option<String>,
     pub max_output_tokens: Option<u64>,
-    pub approve_all: bool,
+    /// Ask before each bash command and each write or edit outside the project.
+    pub ask: bool,
     /// Extra attempts for a model request that failed transiently (rate limit, overload, network).
     pub retries: u32,
 }
@@ -609,11 +609,11 @@ to a larger-context model)"
         };
         ui.tool_call(call.name, &call.summary());
         let answer = match call.approval(&self.config.root) {
-            Approval::Ask(question) if !self.config.approve_all => ui.approve(&question, cancel),
+            Approval::Ask(question) if self.config.ask => ui.approve(&question, cancel),
             _ => Answer::Allow,
         };
         if answer == Answer::AllowAll {
-            self.config.approve_all = true;
+            self.config.ask = false;
         }
         if answer == Answer::Deny {
             let output = if cancel.load(Ordering::Relaxed) {
@@ -831,7 +831,7 @@ mod tests {
             root: root.clone(),
             effort: None,
             max_output_tokens: None,
-            approve_all: false,
+            ask: false,
             retries: 3,
         };
         (
@@ -1352,6 +1352,7 @@ response is incomplete; retry the request."});
             stream(&fixture::text_events("done", fixture::known_usage())),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "allow-all");
+        agent.config.ask = true;
         let mut ui = Recorder {
             answers: vec![Answer::AllowAll],
             ..Recorder::default()
@@ -1370,7 +1371,7 @@ response is incomplete; retry the request."});
     }
 
     #[test]
-    fn read_only_commands_run_without_a_question() {
+    fn tool_calls_run_without_questions_unless_asked() {
         let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let bash = |id: &str, command: &str| {
             let arguments = json!({ "command": command }).to_string();
@@ -1380,15 +1381,19 @@ response is incomplete; retry the request."});
             serde_json::from_str::<Vec<Value>>(&text).unwrap()
         };
         let (endpoint, server) = serve(vec![
-            stream(&bash("call_1", "ls -a")),
-            stream(&bash("call_2", "ls -a > listing")),
+            stream(&bash("call_1", "ls -a > listing")),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+            stream(&bash("call_2", "ls -a")),
             stream(&fixture::text_events("done", fixture::known_usage())),
         ]);
-        let (mut agent, _scratch) = agent(endpoint, "read-only");
+        let (mut agent, _scratch) = agent(endpoint, "unasked");
         let mut ui = Recorder::default();
-        agent
-            .turn("list", &mut ui, &AtomicBool::new(false))
-            .unwrap();
+        let cancel = AtomicBool::new(false);
+        agent.turn("list", &mut ui, &cancel).unwrap();
+        assert_eq!((ui.questions, ui.calls.len()), (0, 1));
+        assert!(agent.root().join("listing").exists());
+        agent.config.ask = true;
+        agent.turn("list again", &mut ui, &cancel).unwrap();
         server.join().unwrap();
         assert_eq!((ui.questions, ui.calls.len()), (1, 2));
         let outputs: Vec<_> = agent
@@ -1396,8 +1401,7 @@ response is incomplete; retry the request."});
             .iter()
             .filter_map(|item| item["output"].as_str())
             .collect();
-        assert!(outputs[0].contains("session.jsonl"), "{outputs:?}");
-        assert!(!agent.root().join("listing").exists());
+        assert_eq!(outputs, ["(no output)", "The user denied this tool call."]);
     }
 
     #[test]
@@ -1455,7 +1459,7 @@ response is incomplete; retry the request."});
             root: root.clone(),
             effort: None,
             max_output_tokens: None,
-            approve_all: false,
+            ask: false,
             retries: 3,
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
@@ -1527,7 +1531,7 @@ response is incomplete; retry the request."});
             root: root.clone(),
             effort: None,
             max_output_tokens: None,
-            approve_all: false,
+            ask: false,
             retries: 3,
         };
         let agent = Agent::start(config, SessionChoice::Open(path)).unwrap();

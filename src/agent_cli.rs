@@ -26,7 +26,7 @@ use std::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const USAGE: &str = "Usage: scramjet-rs agent [--project DIR] [--endpoint ADDR] [--model ID] \
-[--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | --session FILE] [--yes]
+[--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | --session FILE] [--ask]
 [-p PROMPT]
 
 Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1:18080).
@@ -36,8 +36,9 @@ Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1
   --retries N            resend a request that failed transiently up to N times (default 3)
   --continue             resume the most recent session for this project
   --session FILE         resume a specific session file
-  --yes                  approve every tool call without asking (answering `a` to an
-                         approval question does the same from then on)
+  --ask                  ask before each bash command and each write or edit outside the
+                         project (answer `a` to stop asking until exit); by default tool
+                         calls run without asking, as in Scramjet. Bash is not sandboxed.
   -p PROMPT              run one prompt and exit (`-p -` reads it from stdin)
 In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing \\ starts
 a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
@@ -55,7 +56,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let mut effort = None;
     let mut max_output_tokens = None;
     let mut choice = SessionChoice::New;
-    let mut approve_all = false;
+    let mut ask = false;
     let mut retries = 3;
     let mut prompt = None;
     let mut arguments = arguments;
@@ -86,7 +87,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             Some("--retries") => retries = value()?.parse().map_err(|_| "invalid --retries")?,
             Some("--continue") => choice = SessionChoice::Continue,
             Some("--session") => choice = SessionChoice::Open(PathBuf::from(value()?)),
-            Some("--yes") => approve_all = true,
+            Some("--ask") => ask = true,
             Some("-p" | "--print") => prompt = Some(value()?),
             Some("-h" | "--help") => {
                 println!("{USAGE}");
@@ -112,7 +113,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         root,
         effort,
         max_output_tokens,
-        approve_all,
+        ask,
         retries,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;

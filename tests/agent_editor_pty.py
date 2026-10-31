@@ -385,18 +385,18 @@ run(['--retries', '0'], typed_during_turn, delayed)
 run([], cancel_retry)
 run([], thinking_counts_seconds, hanging)
 run([], quiet_after_reasoning_shows_thinking, quiet_reasoning)
-run(['--yes'], running_counts_seconds, calling)
-run(['--yes'], running_shows_output, talking)
-run([], approval_shows_hidden_characters, disguised)
+run([], running_counts_seconds, calling)
+run([], running_shows_output, talking)
+run(['--ask'], approval_shows_hidden_characters, disguised)
 run([], final_texts_replace_lost_deltas, replies)
-run(['--yes'], exit_during_turn, calling, 130)
+run([], exit_during_turn, calling, 130)
 known = set(session_files())
 run(['--retries', '0'], new_session)
 started = sorted(set(session_files()) - known)
 prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
 assert prompts == [['one'], ['two']], prompts
 known = set(session_files())
-run([], cancel_at_approval, calling)
+run(['--ask'], cancel_at_approval, calling)
 (cancelled,) = set(session_files()) - known
 outputs = [item['output'] for item in map(json.loads, open(cancelled)) if item.get('type') == 'function_call_output']
 assert outputs == ['The user cancelled the turn before this tool call ran.'], outputs
