@@ -1,3 +1,4 @@
+use super::compaction::FileLists;
 use serde_json::{Value, json};
 use std::{
     fs::{File, OpenOptions},
@@ -6,12 +7,30 @@ use std::{
 };
 
 /// An append-only JSON-lines log: a header, then each input item, each model change and each
-/// compaction, which replaces the items before `first_kept` with its summary.
+/// compaction, which replaces the items before `first_kept` with its summary and lists the files
+/// read and modified before then.
 pub struct Session {
     path: PathBuf,
     file: File,
     /// The latest model change or response item producer in the file, as Scramjet restores it.
     model: Option<String>,
+    /// The file lists of the latest compaction, which the next one carries on.
+    files: FileLists,
+}
+
+fn compacted_files(compaction: &Value) -> FileLists {
+    let paths = |key: &str| {
+        compaction[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|path| path.as_str().map(str::to_owned))
+            .collect()
+    };
+    FileLists {
+        read: paths("read_files"),
+        modified: paths("modified_files"),
+    }
 }
 
 fn invalid(path: &Path, reason: &str) -> io::Error {
@@ -49,6 +68,7 @@ impl Session {
             path,
             file,
             model: None,
+            files: FileLists::default(),
         };
         session
             .append(&json!({"type":"session","version":1,"root":root,"created":created as u64}))?;
@@ -89,6 +109,7 @@ impl Session {
         let mut items = Vec::new();
         let mut prompts = Vec::new();
         let mut model = None;
+        let mut files = FileLists::default();
         for (index, line) in reader.lines().enumerate() {
             let line = line?;
             if line.trim().is_empty() {
@@ -111,6 +132,7 @@ impl Session {
                     .ok_or_else(|| invalid(path, "missing compaction summary"))?;
                 items.drain(..cut);
                 items.insert(0, super::compaction::summary_message(summary));
+                files = compacted_files(&value);
             } else if value["type"] == "model_change" {
                 let changed = value["model"]
                     .as_str()
@@ -137,6 +159,7 @@ impl Session {
                 path: path.to_owned(),
                 file,
                 model,
+                files,
             },
             items,
             prompts,
@@ -159,6 +182,10 @@ impl Session {
         self.model.as_deref()
     }
 
+    pub(super) fn compacted_files(&self) -> &FileLists {
+        &self.files
+    }
+
     /// Records that later requests use `model`, unless the file already says so.
     pub fn record_model(&mut self, model: &str) -> io::Result<()> {
         if self.model.as_deref() != Some(model) {
@@ -173,6 +200,8 @@ impl Session {
         self.file.write_all(&line)?;
         if item["type"] == "model_change" {
             self.model = item["model"].as_str().map(str::to_owned);
+        } else if item["type"] == "compaction" {
+            self.files = compacted_files(item);
         } else if let Some(producer) = item[super::PRODUCER].as_str() {
             self.model = Some(producer.to_owned());
         }

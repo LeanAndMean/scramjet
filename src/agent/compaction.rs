@@ -1,6 +1,6 @@
 //! Scramjet's checkpoint prompts and a text view of Responses conversation items.
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 pub(super) const SUMMARY_PREFIX: &str = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
 pub(super) const SUMMARY_SUFFIX: &str = "\n</summary>";
@@ -101,6 +101,65 @@ pub(super) const RESERVE_TOKENS: u64 = 16_384;
 /// Scramjet's `shouldCompact`: a window no larger than the reserve never compacts.
 pub(super) fn should_compact(tokens: u64, window: u64) -> bool {
     window > RESERVE_TOKENS && tokens > window - RESERVE_TOKENS
+}
+
+/// The paths a summarized conversation gave to read, write and edit calls.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct FileLists {
+    /// Read and never written or edited.
+    pub read: Vec<String>,
+    pub modified: Vec<String>,
+}
+
+impl FileLists {
+    /// Scramjet's `computeFileLists`: `self` (an earlier compaction's lists) and the paths of
+    /// the calls in `items` as given, each list sorted.
+    pub fn with_calls(&self, items: &[Value]) -> Self {
+        let mut read: BTreeSet<String> = self.read.iter().cloned().collect();
+        let mut modified: BTreeSet<String> = self.modified.iter().cloned().collect();
+        for item in items.iter().filter(|item| item["type"] == "function_call") {
+            let Ok(arguments) =
+                serde_json::from_str::<Value>(item["arguments"].as_str().unwrap_or_default())
+            else {
+                continue;
+            };
+            let Some(path) = arguments["path"].as_str().filter(|path| !path.is_empty()) else {
+                continue;
+            };
+            match item["name"].as_str() {
+                Some("read") => read.insert(path.to_owned()),
+                Some("write" | "edit") => modified.insert(path.to_owned()),
+                _ => false,
+            };
+        }
+        read.retain(|path| !modified.contains(path));
+        Self {
+            read: read.into_iter().collect(),
+            modified: modified.into_iter().collect(),
+        }
+    }
+
+    /// Scramjet's `formatFileOperations`, appended to a summary.
+    pub fn format(&self) -> String {
+        let mut sections = Vec::new();
+        if !self.read.is_empty() {
+            sections.push(format!(
+                "<read-files>\n{}\n</read-files>",
+                self.read.join("\n")
+            ));
+        }
+        if !self.modified.is_empty() {
+            sections.push(format!(
+                "<modified-files>\n{}\n</modified-files>",
+                self.modified.join("\n")
+            ));
+        }
+        if sections.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n{}", sections.join("\n\n"))
+        }
+    }
 }
 
 pub(super) fn summary_message(summary: &str) -> Value {
@@ -350,6 +409,38 @@ mod tests {
             json!({"role":"user","content":"x".repeat(80_000)}),
         ];
         assert_eq!(cut_point(&users, 0, 20_000), 1);
+    }
+
+    #[test]
+    fn file_lists_merge_earlier_ones_and_list_modified_files_once() {
+        let call = |name: &str, arguments: &str| json!({"type":"function_call","name":name,"arguments":arguments});
+        let earlier = FileLists {
+            read: vec!["z.rs".into(), "w.rs".into()],
+            modified: vec!["m.rs".into()],
+        };
+        let lists = earlier.with_calls(&[
+            call("read", r#"{"path":"b.rs","offset":3}"#),
+            call("read", r#"{"path":"a.rs"}"#),
+            call("read", r#"{"path":"a.rs"}"#),
+            call("edit", r#"{"path":"w.rs","edits":[]}"#),
+            call("write", r#"{"path":"~/n.rs","content":""}"#),
+            call("bash", r#"{"path":"x.rs","command":"ls"}"#),
+            call("read", r#"{"path":""}"#),
+            call("read", "not json"),
+            json!({"type":"function_call_output","name":"read","output":r#"{"path":"o.rs"}"#}),
+        ]);
+        assert_eq!(lists.read, ["a.rs", "b.rs", "z.rs"]);
+        assert_eq!(lists.modified, ["m.rs", "w.rs", "~/n.rs"]);
+        assert_eq!(
+            lists.format(),
+            "\n\n<read-files>\na.rs\nb.rs\nz.rs\n</read-files>\n\n<modified-files>\nm.rs\nw.rs\n~/n.rs\n</modified-files>"
+        );
+        assert_eq!(FileLists::default().format(), "");
+        let modified_only = FileLists::default().with_calls(&[call("edit", r#"{"path":"e.rs"}"#)]);
+        assert_eq!(
+            modified_only.format(),
+            "\n\n<modified-files>\ne.rs\n</modified-files>"
+        );
     }
 
     #[test]

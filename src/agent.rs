@@ -216,7 +216,8 @@ impl Agent {
     }
 
     /// Replaces the conversation before its last ~20k tokens with a summary the model writes, as
-    /// Scramjet's compaction does, and records that in the session. On failure or cancellation
+    /// Scramjet's compaction does, followed by the files read and modified in all compacted
+    /// history, and records that in the session. On failure or cancellation
     /// nothing changes. `None`: nothing is old enough to summarize.
     pub fn compact(
         &mut self,
@@ -233,8 +234,13 @@ impl Agent {
         // As in Scramjet, a turn cut in two is summarized apart from the history before it.
         let turn = compaction::turn_start(&self.conversation, start, cut);
         let history = &self.conversation[start..turn.unwrap_or(cut)];
+        let previous_files = self.session.compacted_files();
+        let files = previous_files.with_calls(&self.conversation[start..cut]);
         let mut summary = match previous {
-            Some(previous) if history.is_empty() => previous,
+            Some(previous) if history.is_empty() => previous
+                .strip_suffix(&previous_files.format())
+                .unwrap_or(&previous)
+                .to_owned(),
             _ if history.is_empty() => "No prior history.".into(),
             previous => {
                 let prompt = compaction::prompt(history, previous.as_deref(), focus);
@@ -246,12 +252,15 @@ impl Agent {
             let prefix = self.summarize(prompt, ui, cancel)?;
             summary = compaction::split_turn_summary(&summary, &prefix);
         }
+        summary.push_str(&files.format());
         let tokens_before = self
             .usage
             .context_tokens
             .unwrap_or_else(|| compaction::estimate(&self.conversation));
-        self.session
-            .append(&json!({"type":"compaction","summary":summary,"first_kept":cut}))?;
+        self.session.append(
+            &json!({"type":"compaction", "summary":summary, "first_kept":cut,
+                "read_files":files.read, "modified_files":files.modified}),
+        )?;
         let kept = self.conversation.split_off(cut);
         self.conversation = vec![compaction::summary_message(&summary)];
         self.conversation.extend(kept);
@@ -886,9 +895,21 @@ mod tests {
             stream(&fixture::text_events("continued", fixture::known_usage())),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "compact");
+        let add_call = |agent: &mut Agent, name: &str, path: &str| {
+            let arguments = json!({"path":path}).to_string();
+            let id = format!("{name}-{path}");
+            let call =
+                json!({"type":"function_call","call_id":id,"name":name,"arguments":arguments});
+            agent.add(call).unwrap();
+            let output = json!({"type":"function_call_output","call_id":id,"output":"ok"});
+            agent.add(output).unwrap();
+        };
         let old = json!({"role":"user", "content":"remember the goal"});
         let recent = json!({"role":"user", "content":"recent work ".repeat(7000)});
         agent.add(old).unwrap();
+        add_call(&mut agent, "read", "a.rs");
+        add_call(&mut agent, "edit", "b.rs");
+        add_call(&mut agent, "bash", "ignored.rs");
         agent.add(recent.clone()).unwrap();
         agent.usage.context_tokens = Some(30_000);
         let mut ui = Recorder::default();
@@ -898,24 +919,35 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!((first.kept_items, first.tokens_before), (1, 30_000));
-        assert_eq!(first.summary, "first summary");
+        assert_eq!(
+            first.summary,
+            "first summary\n\n<read-files>\na.rs\n</read-files>\n\n<modified-files>\nb.rs\n</modified-files>"
+        );
         assert_eq!(agent.usage.context_tokens, None);
         assert_eq!(agent.conversation()[1], recent);
         assert_eq!(
             agent.conversation()[0]["content"],
             format!(
-                "{}first summary{}",
+                "{}{}{}",
                 compaction::SUMMARY_PREFIX,
+                first.summary,
                 compaction::SUMMARY_SUFFIX
             )
         );
-        let (_, resumed, _) = Session::open(agent.session_path()).unwrap();
+        let (session, resumed, _) = Session::open(agent.session_path()).unwrap();
         assert_eq!(resumed, agent.conversation());
+        agent.session = session;
+        add_call(&mut agent, "read", "c.rs");
+        add_call(&mut agent, "read", "b.rs");
         let newest = json!({"role":"user", "content":"newer work ".repeat(8000)});
         agent.add(newest.clone()).unwrap();
         let second = agent.compact("", &mut ui, &cancel).unwrap().unwrap();
         assert_eq!(second.kept_items, 1);
         assert!(second.tokens_before > 20_000);
+        assert_eq!(
+            second.summary,
+            "updated summary\n\n<read-files>\na.rs\nc.rs\n</read-files>\n\n<modified-files>\nb.rs\n</modified-files>"
+        );
         let (session, resumed, prompts) = Session::open(agent.session_path()).unwrap();
         assert_eq!(resumed, agent.conversation());
         assert_eq!(prompts.len(), 3);
@@ -934,15 +966,19 @@ mod tests {
         assert!(!first_prompt.contains("recent work"));
         assert!(first_prompt.ends_with("Additional focus: file paths"));
         let second_prompt = requests[1]["input"][0]["content"].as_str().unwrap();
-        assert!(second_prompt.contains("<previous-summary>\nfirst summary\n</previous-summary>"));
+        assert!(second_prompt.contains(&format!(
+            "<previous-summary>\n{}\n</previous-summary>",
+            first.summary
+        )));
         assert!(second_prompt.contains("[User]: recent work"));
         assert!(!second_prompt.contains("newer work"));
         assert_eq!(requests[2]["input"][1], newest);
         assert_eq!(
             requests[2]["input"][0]["content"],
             format!(
-                "{}updated summary{}",
+                "{}{}{}",
                 compaction::SUMMARY_PREFIX,
+                second.summary,
                 compaction::SUMMARY_SUFFIX
             )
         );
@@ -958,16 +994,15 @@ mod tests {
             stream(&fixture::text_events("prefix", fixture::known_usage())),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "compact-split");
-        let call =
-            |id: &str| json!({"type":"function_call","call_id":id,"name":"read","arguments":"{}"});
+        let call = |id: &str, name: &str| json!({"type":"function_call","call_id":id,"name":name,"arguments":json!({"path":format!("{id}.rs")}).to_string()});
         let output = |id: &str, text: String| json!({"type":"function_call_output","call_id":id,"output":text});
         for item in [
             json!({"role":"user","content":"old goal"}),
             json!({"type":"message","role":"assistant","content":[{"text":"noted"}]}),
             json!({"role":"user","content":"long task"}),
-            call("a"),
+            call("a", "read"),
             output("a", "x".repeat(90_000)),
-            call("b"),
+            call("b", "edit"),
             output("b", "y".repeat(1000)),
             json!({"type":"message","role":"assistant","content":[{"text":"done"}]}),
         ] {
@@ -981,7 +1016,7 @@ mod tests {
         assert_eq!(compacted.kept_items, 3);
         assert_eq!(
             compacted.summary,
-            "history\n\n---\n\n**Turn Context (split turn):**\n\nprefix"
+            "history\n\n---\n\n**Turn Context (split turn):**\n\nprefix\n\n<read-files>\na.rs\n</read-files>"
         );
         assert_eq!(agent.conversation()[1]["call_id"], "b");
         let requests = server.join().unwrap();
@@ -993,12 +1028,46 @@ mod tests {
         };
         assert!(prompt(0).contains("[User]: old goal\n\n[Assistant]: noted\n</conversation>"));
         assert!(prompt(0).ends_with("Additional focus: focus"));
-        assert!(
-            prompt(1)
-                .starts_with("<conversation>\n[User]: long task\n\n[Assistant tool calls]: read()")
-        );
+        assert!(prompt(1).starts_with(
+            "<conversation>\n[User]: long task\n\n[Assistant tool calls]: read(path=\"a.rs\")"
+        ));
         assert!(prompt(1).contains("[... 88000 more characters truncated]\n</conversation>"));
         assert!(prompt(1).ends_with("Focus on what's needed to understand the kept suffix."));
+    }
+
+    #[test]
+    fn a_reused_summary_keeps_one_file_list() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "prefix",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, _scratch) = agent(endpoint, "compact-reuse");
+        let previous = "earlier\n\n<read-files>\na.rs\n</read-files>";
+        agent
+            .session
+            .append(&json!({"type":"compaction","summary":previous,"first_kept":0,"read_files":["a.rs"]}))
+            .unwrap();
+        agent.conversation = vec![compaction::summary_message(previous)];
+        let call = |id: &str| json!({"type":"function_call","call_id":id,"name":"write","arguments":json!({"path":"a.rs"}).to_string()});
+        let output = |id: &str, text: String| json!({"type":"function_call_output","call_id":id,"output":text});
+        for item in [
+            json!({"role":"user","content":"long task"}),
+            call("a"),
+            output("a", "x".repeat(90_000)),
+            call("b"),
+            output("b", "ok".into()),
+        ] {
+            agent.add(item).unwrap();
+        }
+        let compacted = agent
+            .compact("", &mut Recorder::default(), &AtomicBool::new(false))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            compacted.summary,
+            "earlier\n\n---\n\n**Turn Context (split turn):**\n\nprefix\n\n<modified-files>\na.rs\n</modified-files>"
+        );
+        assert_eq!(server.join().unwrap().len(), 1);
     }
 
     #[test]
