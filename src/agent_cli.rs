@@ -8,7 +8,8 @@ use rustix::{
     termios::{self, LocalModes, OptionalActions, Termios},
 };
 use scramjet_rs::agent::{
-    Agent, AgentConfig, AgentError, AgentUi, Answer, SessionChoice, StreamProgress, ToolDetail,
+    Agent, AgentConfig, AgentError, AgentUi, Answer, Compaction, SessionChoice, StreamProgress,
+    ToolDetail,
 };
 use std::{
     ffi::OsString,
@@ -42,6 +43,7 @@ In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trai
 a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
 /new starts a new session. /model lists the models and /model ID switches to one.
+/compact [focus] replaces all but the last ~20k tokens of the conversation with a summary.
 While a turn runs, typed text is kept for the next prompt without being shown; Ctrl-C cancels
 the turn (and discards that text); press it twice to quit.";
 
@@ -165,17 +167,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             format!(" ({} items resumed)", agent.conversation().len())
         }
     );
-    let mut editor =
-        (std::io::stdin().is_terminal() && std::io::stderr().is_terminal()).then(|| {
-            editor::Editor::new(
-                agent
-                    .conversation()
-                    .iter()
-                    .filter(|item| item["role"] == "user")
-                    .filter_map(|item| item["content"].as_str().map(str::to_owned))
-                    .collect(),
-            )
-        });
+    let mut editor = (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
+        .then(|| editor::Editor::new(agent.prompts().to_vec()));
     loop {
         let prompt = match &mut editor {
             Some(editor) => {
@@ -227,6 +220,24 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 }
                 Some(_) => eprintln!("error: no model {wanted} (/model lists them)"),
             }
+            continue;
+        }
+        if let Some(focus) = prompt
+            .strip_prefix("/compact")
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            cancel.store(false, Ordering::Relaxed);
+            let echo = Echo::set(false);
+            let result = agent.compact(focus.trim(), &mut ui, &cancel);
+            drop(echo);
+            ui.clear();
+            match result {
+                Ok(Some(compaction)) => ui.compacted(&compaction),
+                Ok(None) => eprintln!("Nothing to compact: the conversation is all recent."),
+                Err(AgentError::Cancelled) => eprintln!("{}", ui.dim("(cancelled)")),
+                Err(error) => eprintln!("error: {error}"),
+            }
+            cancel.store(false, Ordering::Relaxed);
             continue;
         }
         if let Some(editor) = &mut editor {
@@ -727,6 +738,23 @@ impl Terminal {
         }
         self.printed_newlines = 0;
         self.streaming = Streaming::None;
+    }
+    /// As Scramjet shows a compaction: the estimated context size before it, then the summary.
+    fn compacted(&self, compaction: &Compaction) {
+        let heading = format!(
+            "✓ Compacted: the context was about {} tokens; kept the last {} items",
+            context(compaction.tokens_before, None),
+            compaction.kept_items,
+        );
+        let mut markdown = markdown::Markdown::new(self.color, "\x1b[2m");
+        let summary =
+            markdown.reopen() + &markdown.push(compaction.summary.trim_end()) + &markdown.finish();
+        let reset = if self.color { "\x1b[0m" } else { "" };
+        eprintln!(
+            "{}\n\n{}{reset}",
+            self.wrapped(&heading),
+            self.wrapped(&summary)
+        );
     }
     fn usage(&self, agent: &Agent, window: Option<u64>) {
         let usage = agent.usage;

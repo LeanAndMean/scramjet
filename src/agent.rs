@@ -1,6 +1,7 @@
 //! A coding agent that talks to a Responses endpoint (such as Proxy) and works in a project.
 
 mod client;
+mod compaction;
 mod session;
 mod tools;
 
@@ -27,6 +28,8 @@ const RETRY_DELAY: Duration = Duration::from_secs(2);
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
 /// Stored with each response item: the model that produced it. Never sent to the endpoint.
 const PRODUCER: &str = "_scramjet_model";
+/// Compaction keeps about this much of the latest conversation, as Scramjet does.
+const KEEP_RECENT_TOKENS: u64 = 20_000;
 
 pub struct AgentConfig {
     pub endpoint: SocketAddr,
@@ -117,10 +120,18 @@ pub struct Usage {
     pub context_tokens: Option<u64>,
 }
 
+pub struct Compaction {
+    /// The last response's context size, or else an estimate of the conversation's (chars/4).
+    pub tokens_before: u64,
+    pub kept_items: usize,
+    pub summary: String,
+}
+
 pub struct Agent {
     config: AgentConfig,
     instructions: String,
     conversation: Vec<Value>,
+    prompts: Vec<String>,
     session: Session,
     executor: tokio::runtime::Runtime,
     pub usage: Usage,
@@ -133,10 +144,11 @@ impl Agent {
             SessionChoice::Continue => Session::latest(&config.root)?,
             SessionChoice::Open(path) => Some(path),
         };
-        let (session, conversation) = match opened {
+        let (session, conversation, prompts) = match opened {
             Some(path) => Session::open(&path)?,
             None => (
                 Session::create(&session::directory(&config.root)?, &config.root)?,
+                Vec::new(),
                 Vec::new(),
             ),
         };
@@ -147,6 +159,7 @@ impl Agent {
             instructions: instructions(&config.root),
             config,
             conversation,
+            prompts,
             session,
             executor,
             usage: Usage::default(),
@@ -161,8 +174,99 @@ impl Agent {
         let directory = self.session.path().parent().unwrap_or(Path::new("."));
         self.session = Session::create(directory, &self.config.root)?;
         self.conversation.clear();
+        self.prompts.clear();
         self.usage = Usage::default();
         Ok(())
+    }
+
+    /// Replaces the conversation before its last ~20k tokens with a summary the model writes, as
+    /// Scramjet's compaction does, and records that in the session. On failure or cancellation
+    /// nothing changes. `None`: nothing is old enough to summarize.
+    pub fn compact(
+        &mut self,
+        focus: &str,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<Option<Compaction>, AgentError> {
+        let previous = compaction::previous_summary(&self.conversation).map(str::to_owned);
+        let start = usize::from(previous.is_some());
+        let cut = compaction::cut_point(&self.conversation, start, KEEP_RECENT_TOKENS);
+        if cut == start {
+            return Ok(None);
+        }
+        // As in Scramjet, a turn cut in two is summarized apart from the history before it.
+        let turn = compaction::turn_start(&self.conversation, start, cut);
+        let history = &self.conversation[start..turn.unwrap_or(cut)];
+        let mut summary = match previous {
+            Some(previous) if history.is_empty() => previous,
+            _ if history.is_empty() => "No prior history.".into(),
+            previous => {
+                let prompt = compaction::prompt(history, previous.as_deref(), focus);
+                self.summarize(prompt, ui, cancel)?
+            }
+        };
+        if let Some(turn) = turn {
+            let prompt = compaction::turn_prefix_prompt(&self.conversation[turn..cut]);
+            let prefix = self.summarize(prompt, ui, cancel)?;
+            summary = compaction::split_turn_summary(&summary, &prefix);
+        }
+        let tokens_before = self
+            .usage
+            .context_tokens
+            .unwrap_or_else(|| compaction::estimate(&self.conversation));
+        self.session
+            .append(&json!({"type":"compaction","summary":summary,"first_kept":cut}))?;
+        let kept = self.conversation.split_off(cut);
+        self.conversation = vec![compaction::summary_message(&summary)];
+        self.conversation.extend(kept);
+        // Unknown until the next response reports it.
+        self.usage.context_tokens = None;
+        Ok(Some(Compaction {
+            tokens_before,
+            kept_items: self.conversation.len() - 1,
+            summary,
+        }))
+    }
+
+    /// One request without tools for the text a summarization `prompt` asks for.
+    fn summarize(
+        &mut self,
+        prompt: String,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<String, AgentError> {
+        let mut request = json!({
+            "model": self.config.model,
+            "instructions": compaction::SYSTEM_PROMPT,
+            "input": [{"role":"user", "content":prompt}],
+            "stream": true,
+            "store": false,
+            "prompt_cache_key": self.session.id(),
+            "reasoning": {"summary": "auto"},
+        });
+        if let Some(effort) = &self.config.effort {
+            request["reasoning"]["effort"] = json!(effort);
+        }
+        if let Some(tokens) = self.config.max_output_tokens {
+            request["max_output_tokens"] = json!(tokens);
+        }
+        let reply = self.respond(&request, false, ui, cancel)?;
+        let summary = reply
+            .items
+            .iter()
+            .filter(|item| item["type"] == "message")
+            .map(message_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if summary.trim().is_empty() {
+            return Err(AgentError::Provider("the model returned no summary".into()));
+        }
+        Ok(summary)
+    }
+
+    /// The user's prompts in this session, oldest first, including those compacted away.
+    pub fn prompts(&self) -> &[String] {
+        &self.prompts
     }
 
     pub fn session_path(&self) -> &Path {
@@ -294,17 +398,14 @@ impl Agent {
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
         self.add(json!({"role":"user","content":prompt}))?;
+        self.prompts.push(prompt.to_owned());
         for _ in 0..MAX_STEPS {
             if cancel.load(Ordering::Relaxed) {
                 return Err(AgentError::Cancelled);
             }
-            let reply = self.respond(ui, cancel)?;
+            let request = self.request();
+            let reply = self.respond(&request, true, ui, cancel)?;
             self.usage.context_tokens = reply.usage.as_ref().and_then(|usage| usage.total_tokens);
-            if let Some(usage) = &reply.usage {
-                self.usage.input_tokens += usage.input_tokens.unwrap_or(0);
-                self.usage.cached_input_tokens += usage.cached_input_tokens.unwrap_or(0);
-                self.usage.output_tokens += usage.output_tokens.unwrap_or(0);
-            }
             let mut calls = Vec::new();
             for mut item in reply.items {
                 if let Some(object) = item.as_object_mut() {
@@ -331,14 +432,16 @@ impl Agent {
         Err(AgentError::TooManySteps)
     }
 
-    /// Sends the conversation, sending it again after transient failures. A failed response's
-    /// items are discarded, so a retry never runs a tool call from it.
+    /// Sends `request`, sending it again after transient failures, and counts its usage. A failed
+    /// response's items are discarded, so a retry never runs a tool call from it.
     fn respond(
         &mut self,
+        request: &Value,
+        show_progress: bool,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<client::Reply, AgentError> {
-        let body = serde_json::to_vec(&self.request()).map_err(std::io::Error::from)?;
+        let body = serde_json::to_vec(request).map_err(std::io::Error::from)?;
         let mut attempt = 0;
         loop {
             ui.waiting();
@@ -347,9 +450,20 @@ impl Agent {
                 self.config.endpoint,
                 body.clone(),
                 cancel,
-                &mut |update| ui.progress(&update),
+                &mut |update| {
+                    if show_progress {
+                        ui.progress(&update)
+                    }
+                },
             )) {
-                Ok(reply) => return Ok(reply),
+                Ok(reply) => {
+                    if let Some(usage) = &reply.usage {
+                        self.usage.input_tokens += usage.input_tokens.unwrap_or(0);
+                        self.usage.cached_input_tokens += usage.cached_input_tokens.unwrap_or(0);
+                        self.usage.output_tokens += usage.output_tokens.unwrap_or(0);
+                    }
+                    return Ok(reply);
+                }
                 Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
                 Err(ClientError::Failed(failure)) => failure,
             };
@@ -609,6 +723,184 @@ mod tests {
             Agent::start(config, SessionChoice::Open(path)).unwrap(),
             scratch,
         )
+    }
+
+    #[test]
+    fn compaction_summarizes_older_items_and_resumes_compacted() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events(
+                "first summary",
+                fixture::known_usage(),
+            )),
+            stream(&fixture::text_events(
+                "updated summary",
+                fixture::known_usage(),
+            )),
+            stream(&fixture::text_events("continued", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "compact");
+        let old = json!({"role":"user", "content":"remember the goal"});
+        let recent = json!({"role":"user", "content":"recent work ".repeat(7000)});
+        agent.add(old).unwrap();
+        agent.add(recent.clone()).unwrap();
+        agent.usage.context_tokens = Some(30_000);
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let first = agent
+            .compact("file paths", &mut ui, &cancel)
+            .unwrap()
+            .unwrap();
+        assert_eq!((first.kept_items, first.tokens_before), (1, 30_000));
+        assert_eq!(first.summary, "first summary");
+        assert_eq!(agent.usage.context_tokens, None);
+        assert_eq!(agent.conversation()[1], recent);
+        assert_eq!(
+            agent.conversation()[0]["content"],
+            format!(
+                "{}first summary{}",
+                compaction::SUMMARY_PREFIX,
+                compaction::SUMMARY_SUFFIX
+            )
+        );
+        let (_, resumed, _) = Session::open(agent.session_path()).unwrap();
+        assert_eq!(resumed, agent.conversation());
+        let newest = json!({"role":"user", "content":"newer work ".repeat(8000)});
+        agent.add(newest.clone()).unwrap();
+        let second = agent.compact("", &mut ui, &cancel).unwrap().unwrap();
+        assert_eq!(second.kept_items, 1);
+        assert!(second.tokens_before > 20_000);
+        let (session, resumed, prompts) = Session::open(agent.session_path()).unwrap();
+        assert_eq!(resumed, agent.conversation());
+        assert_eq!(prompts.len(), 3);
+        agent.session = session;
+        agent.conversation = resumed;
+        agent.turn("continue", &mut ui, &cancel).unwrap();
+        let requests = server.join().unwrap();
+        for request in &requests[..2] {
+            assert_eq!(request["instructions"], compaction::SYSTEM_PROMPT);
+            assert!(request.get("tools").is_none());
+            assert!(request.get("tool_choice").is_none());
+            assert_eq!(request["input"].as_array().unwrap().len(), 1);
+        }
+        let first_prompt = requests[0]["input"][0]["content"].as_str().unwrap();
+        assert!(first_prompt.contains("[User]: remember the goal"));
+        assert!(!first_prompt.contains("recent work"));
+        assert!(first_prompt.ends_with("Additional focus: file paths"));
+        let second_prompt = requests[1]["input"][0]["content"].as_str().unwrap();
+        assert!(second_prompt.contains("<previous-summary>\nfirst summary\n</previous-summary>"));
+        assert!(second_prompt.contains("[User]: recent work"));
+        assert!(!second_prompt.contains("newer work"));
+        assert_eq!(requests[2]["input"][1], newest);
+        assert_eq!(
+            requests[2]["input"][0]["content"],
+            format!(
+                "{}updated summary{}",
+                compaction::SUMMARY_PREFIX,
+                compaction::SUMMARY_SUFFIX
+            )
+        );
+        assert!(requests[2]["input"][0].get(PRODUCER).is_none());
+        assert_eq!(ui.replies, ["continued"]);
+        assert!(ui.calls.is_empty());
+    }
+
+    #[test]
+    fn a_turn_cut_in_two_is_summarized_apart_from_the_history_before_it() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("history", fixture::known_usage())),
+            stream(&fixture::text_events("prefix", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "compact-split");
+        let call =
+            |id: &str| json!({"type":"function_call","call_id":id,"name":"read","arguments":"{}"});
+        let output = |id: &str, text: String| json!({"type":"function_call_output","call_id":id,"output":text});
+        for item in [
+            json!({"role":"user","content":"old goal"}),
+            json!({"type":"message","role":"assistant","content":[{"text":"noted"}]}),
+            json!({"role":"user","content":"long task"}),
+            call("a"),
+            output("a", "x".repeat(90_000)),
+            call("b"),
+            output("b", "y".repeat(1000)),
+            json!({"type":"message","role":"assistant","content":[{"text":"done"}]}),
+        ] {
+            agent.add(item).unwrap();
+        }
+        let mut ui = Recorder::default();
+        let compacted = agent
+            .compact("focus", &mut ui, &AtomicBool::new(false))
+            .unwrap()
+            .unwrap();
+        assert_eq!(compacted.kept_items, 3);
+        assert_eq!(
+            compacted.summary,
+            "history\n\n---\n\n**Turn Context (split turn):**\n\nprefix"
+        );
+        assert_eq!(agent.conversation()[1]["call_id"], "b");
+        let requests = server.join().unwrap();
+        let prompt = |n: usize| {
+            requests[n]["input"][0]["content"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert!(prompt(0).contains("[User]: old goal\n\n[Assistant]: noted\n</conversation>"));
+        assert!(prompt(0).ends_with("Additional focus: focus"));
+        assert!(
+            prompt(1)
+                .starts_with("<conversation>\n[User]: long task\n\n[Assistant tool calls]: read()")
+        );
+        assert!(prompt(1).contains("[... 88000 more characters truncated]\n</conversation>"));
+        assert!(prompt(1).ends_with("Focus on what's needed to understand the kept suffix."));
+    }
+
+    #[test]
+    fn failed_or_textless_compactions_leave_history_unchanged() {
+        let mut failed = fixture::text_events("partial", fixture::known_usage());
+        let terminal = failed.last_mut().unwrap();
+        terminal["type"] = json!("response.failed");
+        terminal["response"]["status"] = json!("failed");
+        terminal["response"]["error"] = json!({"code":"invalid_prompt","message":"Invalid prompt"});
+        let (endpoint, server) = serve(vec![
+            stream(&failed),
+            stream(&fixture::text_events(" ", fixture::known_usage())),
+            stream(&fixture::call_events("{}", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "compact-failure");
+        agent.add(json!({"role":"user","content":"old"})).unwrap();
+        agent
+            .add(json!({"role":"user","content":"recent ".repeat(12000)}))
+            .unwrap();
+        let before = agent.conversation().to_vec();
+        let log = std::fs::read(agent.session_path()).unwrap();
+        let mut ui = Recorder::default();
+        for _ in 0..3 {
+            assert!(agent.compact("", &mut ui, &AtomicBool::new(false)).is_err());
+            assert_eq!(agent.conversation(), before);
+            assert_eq!(std::fs::read(agent.session_path()).unwrap(), log);
+        }
+        assert!(matches!(
+            agent.compact("", &mut ui, &AtomicBool::new(true)),
+            Err(AgentError::Cancelled)
+        ));
+        assert_eq!(agent.conversation(), before);
+        assert_eq!(server.join().unwrap().len(), 3);
+        assert!(ui.calls.is_empty());
+        assert!(ui.replies.is_empty());
+        assert!(ui.retries.is_empty());
+    }
+
+    #[test]
+    fn short_history_compaction_is_a_no_op_without_a_request() {
+        let (mut agent, _scratch) = agent(([127, 0, 0, 1], 9).into(), "compact-short");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        assert!(agent.compact("", &mut ui, &cancel).unwrap().is_none());
+        agent.add(json!({"role":"user","content":"hi"})).unwrap();
+        let log = std::fs::read(agent.session_path()).unwrap();
+        assert!(agent.compact("", &mut ui, &cancel).unwrap().is_none());
+        assert_eq!(std::fs::read(agent.session_path()).unwrap(), log);
+        assert_eq!(agent.usage.requests, 0);
     }
 
     #[test]

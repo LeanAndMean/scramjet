@@ -5,7 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// An append-only JSON-lines log of one conversation: a header, then each input item.
+/// An append-only JSON-lines log: a header, then each input item and each compaction, which
+/// replaces the items before `first_kept` with its summary.
 pub struct Session {
     path: PathBuf,
     file: File,
@@ -75,10 +76,12 @@ impl Session {
         Ok(latest.map(|(_, path)| path))
     }
 
-    /// Opens an existing session for appending and returns its conversation items.
-    pub fn open(path: &Path) -> io::Result<(Self, Vec<Value>)> {
+    /// Opens an existing session for appending and returns its conversation items and every
+    /// prompt the user gave in it, including those a compaction summarized.
+    pub fn open(path: &Path) -> io::Result<(Self, Vec<Value>, Vec<String>)> {
         let reader = BufReader::new(File::open(path)?);
         let mut items = Vec::new();
+        let mut prompts = Vec::new();
         for (index, line) in reader.lines().enumerate() {
             let line = line?;
             if line.trim().is_empty() {
@@ -90,7 +93,23 @@ impl Session {
                 if value["type"] != "session" {
                     return Err(invalid(path, "not a scramjet-rs session"));
                 }
+            } else if value["type"] == "compaction" {
+                let cut = value["first_kept"]
+                    .as_u64()
+                    .and_then(|cut| usize::try_from(cut).ok())
+                    .filter(|&cut| cut <= items.len())
+                    .ok_or_else(|| invalid(path, "invalid compaction cut point"))?;
+                let summary = value["summary"]
+                    .as_str()
+                    .ok_or_else(|| invalid(path, "missing compaction summary"))?;
+                items.drain(..cut);
+                items.insert(0, super::compaction::summary_message(summary));
             } else {
+                if value["role"] == "user"
+                    && let Some(prompt) = value["content"].as_str()
+                {
+                    prompts.push(prompt.to_owned());
+                }
                 items.push(value);
             }
         }
@@ -104,6 +123,7 @@ impl Session {
                 file,
             },
             items,
+            prompts,
         ))
     }
 
