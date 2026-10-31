@@ -58,6 +58,7 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 **Demonstration:** a parent uses parallel isolated readers without launching a complete CLI per child; cancellation, request accounting, and pressure feedback remain correct.
 
 - Share immutable definitions/client infrastructure while isolating agent context, route, cwd, authority, and cancellation.
+- Make read-only children and unattended runs genuinely confined with an OS sandbox (Landlock or bubblewrap on Linux, Seatbelt on macOS) that limits writes to declared directories, and network where needed. Approval questions and tool allowlists are not containment.
 - Keep descendant histories as references, not recursive snapshots. Establish result/usage ownership and load details only when requested.
 - Bound fan-out and storage/output backlog; exercise parent/child admission deadlocks, fairness, late results, cancellation, and cleanup.
 - Strengthen journal settlement/recovery and artifact storage as required by this slice. Completed work must not restart on reconstruction.
