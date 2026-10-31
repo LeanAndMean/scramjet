@@ -592,15 +592,20 @@ to a larger-context model)"
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<client::Reply, AgentError> {
-        let body = match self.info.protocol {
-            Protocol::Responses => serde_json::to_vec(request),
-            Protocol::Messages => serde_json::to_vec(&messages::request(
-                request,
-                self.info.output.unwrap_or(messages::DEFAULT_MAX_TOKENS),
-                self.info.reasoning && messages::adaptive_thinking(&self.config.model),
-            )),
-        }
-        .map_err(std::io::Error::from)?;
+        let (body, interleaved) = match self.info.protocol {
+            Protocol::Responses => (serde_json::to_vec(request), false),
+            Protocol::Messages => {
+                let body = messages::request(
+                    request,
+                    self.info.output.unwrap_or(messages::DEFAULT_MAX_TOKENS),
+                    self.info.reasoning,
+                )
+                .map_err(AgentError::Provider)?;
+                let interleaved = messages::budget_thinking(&body);
+                (serde_json::to_vec(&body), interleaved)
+            }
+        };
+        let body = body.map_err(std::io::Error::from)?;
         let mut attempt = 0;
         loop {
             ui.waiting(compacting);
@@ -609,6 +614,7 @@ to a larger-context model)"
                 self.config.endpoint,
                 self.info.protocol,
                 body.clone(),
+                interleaved,
                 cancel,
                 &mut |update| {
                     if !compacting {
@@ -1775,6 +1781,54 @@ response is incomplete; retry the request."});
         assert_eq!(ModelInfo::guess("gpt-new").protocol, Protocol::Responses);
     }
 
+    #[test]
+    fn older_claude_models_send_budget_thinking_with_the_interleaved_beta() {
+        let (endpoint, server) = serve_requests(vec![messages_stream(&[
+            json!({"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3,"output_tokens":1}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}),
+            json!({"type":"message_stop"}),
+        ])]);
+        let (mut agent, _scratch) = agent(endpoint, "budget");
+        agent.config.effort = Some("low".into());
+        agent.set_model("claude-haiku-4-5-20251001").unwrap();
+        let mut ui = Recorder::default();
+        agent.turn("Hi", &mut ui, &AtomicBool::new(false)).unwrap();
+        let requests = server.join().unwrap();
+        let (head, body) = &requests[0];
+        assert!(
+            head.contains("anthropic-beta: interleaved-thinking-2025-05-14\r\n"),
+            "{head}"
+        );
+        assert_eq!(
+            body["thinking"],
+            json!({"type":"enabled","budget_tokens":2048,"display":"summarized"})
+        );
+    }
+
+    #[test]
+    fn budget_thinking_without_room_fails_before_sending() {
+        // Nothing listens on the endpoint: the request must not be sent.
+        let endpoint = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let (mut agent, _scratch) = agent(endpoint, "no-room");
+        agent.config.effort = Some("high".into());
+        agent.config.max_output_tokens = Some(2000);
+        agent.set_model("claude-sonnet-4-5").unwrap();
+        let mut ui = Recorder::default();
+        let error = agent
+            .turn("Hi", &mut ui, &AtomicBool::new(false))
+            .unwrap_err();
+        assert!(
+            matches!(&error, AgentError::Provider(message) if message.starts_with("Insufficient output space for Anthropic thinking")),
+            "{error}"
+        );
+    }
+
     /// A streamed Messages reply with these events.
     fn messages_stream(events: &[Value]) -> Vec<u8> {
         let body: String = events
@@ -1850,6 +1904,7 @@ response is incomplete; retry the request."});
         for (head, _) in &requests {
             assert!(head.starts_with("post /v1/messages http/1.1\r\n"), "{head}");
             assert!(head.contains("anthropic-version: 2023-06-01\r\n"), "{head}");
+            assert!(!head.contains("anthropic-beta"), "{head}");
         }
         let first = &requests[0].1;
         assert_eq!(first["model"], "claude-opus-5-5");

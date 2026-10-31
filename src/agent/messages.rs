@@ -9,6 +9,12 @@ use std::collections::HashSet;
 /// Used without a model card to say how much a reply may have.
 pub(super) const DEFAULT_MAX_TOKENS: u64 = 32_000;
 
+/// The beta header budget thinking needs; adaptive models have interleaved thinking built in.
+pub(super) const INTERLEAVED_THINKING_BETA: &str = "interleaved-thinking-2025-05-14";
+
+/// Least output space left for a reply when thinking takes a budget, as Scramjet keeps it.
+const MIN_OUTPUT_TOKENS: u64 = 1024;
+
 /// Whether `model` takes adaptive thinking: Claude 4.6 and later (Proxy rewrites budget thinking
 /// for 4.7 and later, which reject it).
 pub(super) fn adaptive_thinking(model: &str) -> bool {
@@ -34,17 +40,36 @@ pub(super) fn adaptive_thinking(model: &str) -> bool {
     major > 4 || (major == 4 && minor >= 6)
 }
 
+/// Whether `body` asks for budget thinking, which needs the interleaved-thinking beta header.
+pub(super) fn budget_thinking(body: &Value) -> bool {
+    body["thinking"]["type"] == "enabled"
+}
+
+/// The thinking budget for an effort level, as Scramjet's default budgets; `xhigh` and `max`
+/// count as `high`, and no effort as `medium`.
+fn budget(effort: Option<&str>) -> u64 {
+    match effort {
+        Some("minimal") => 1024,
+        Some("low") => 2048,
+        Some("high" | "xhigh" | "max") => 16384,
+        _ => 8192,
+    }
+}
+
 /// The Messages request for a Responses `request` built by the agent. As in Scramjet, the system
 /// prompt (with the tools before it) and the conversation up to its last block are marked for
-/// caching; Foundry rejects `cache_control` on tools.
-pub(super) fn request(request: &Value, max_tokens: u64, thinking: bool) -> Value {
+/// caching; Foundry rejects `cache_control` on tools. Claude models before 4.6 that reason get
+/// budget thinking, which takes room from `max_tokens`; without room for it the request is an
+/// error. Other models, such as `deepseek-v4-pro`, get no thinking parameter.
+pub(super) fn request(request: &Value, max_tokens: u64, thinking: bool) -> Result<Value, String> {
     let items = request["input"]
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or(&[]);
+    let max_tokens = request["max_output_tokens"].as_u64().unwrap_or(max_tokens);
     let mut body = json!({
         "model": request["model"],
-        "max_tokens": request["max_output_tokens"].as_u64().unwrap_or(max_tokens),
+        "max_tokens": max_tokens,
         "stream": true,
         "system": [{"type":"text","text":request["instructions"],"cache_control":{"type":"ephemeral"}}],
         "messages": messages(items),
@@ -58,15 +83,28 @@ pub(super) fn request(request: &Value, max_tokens: u64, thinking: bool) -> Value
             .collect();
     }
     let effort = request["reasoning"]["effort"].as_str();
-    if thinking && effort != Some("none") {
-        // Opus 4.7 and later omit the thinking text unless asked; Scramjet asks for summaries.
-        body["thinking"] = json!({"type":"adaptive","display":"summarized"});
-        if let Some(effort) = effort {
-            let effort = if effort == "minimal" { "low" } else { effort };
-            body["output_config"] = json!({ "effort": effort });
+    let model = request["model"].as_str().unwrap_or("");
+    if thinking && effort != Some("none") && model.starts_with("claude-") {
+        if adaptive_thinking(model) {
+            // Opus 4.7 and later omit the thinking text unless asked; Scramjet asks for summaries.
+            body["thinking"] = json!({"type":"adaptive","display":"summarized"});
+            if let Some(effort) = effort {
+                let effort = if effort == "minimal" { "low" } else { effort };
+                body["output_config"] = json!({ "effort": effort });
+            }
+        } else {
+            let mut budget = budget(effort);
+            if max_tokens <= budget {
+                budget = max_tokens.saturating_sub(MIN_OUTPUT_TOKENS);
+            }
+            if budget < MIN_OUTPUT_TOKENS {
+                return Err("Insufficient output space for Anthropic thinking; reduce input or request more output space.".into());
+            }
+            body["thinking"] =
+                json!({"type":"enabled","budget_tokens":budget,"display":"summarized"});
         }
     }
-    body
+    Ok(body)
 }
 
 /// Responses items as Messages: consecutive items of one role share a message, and as in
@@ -520,7 +558,7 @@ mod tests {
                 {"role":"user","content":"second"},
             ],
         });
-        let body = super::request(&request, 9, true);
+        let body = super::request(&request, 9, true).unwrap();
         assert_eq!(body["max_tokens"], 500);
         assert_eq!(body["output_config"], json!({"effort":"low"}));
         assert!(body.get("tools").is_none());
@@ -545,10 +583,79 @@ mod tests {
             ])
         );
         let plain = super::request(&json!({"model":"claude-sonnet-4-5","input":[]}), 9, false);
+        let plain = plain.unwrap();
         assert_eq!(plain["max_tokens"], 9);
         assert!(plain.get("thinking").is_none());
+        let deepseek = json!({"model":"deepseek-v4-pro","input":[]});
+        assert!(
+            super::request(&deepseek, 9, true)
+                .unwrap()
+                .get("thinking")
+                .is_none()
+        );
         let none = json!({"model":"m","input":[],"reasoning":{"effort":"none"}});
-        assert!(super::request(&none, 9, true).get("thinking").is_none());
+        assert!(
+            super::request(&none, 9, true)
+                .unwrap()
+                .get("thinking")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn older_claude_models_get_budget_thinking_by_effort() {
+        let budgets = [
+            (None, 8192),
+            (Some("minimal"), 1024),
+            (Some("low"), 2048),
+            (Some("medium"), 8192),
+            (Some("high"), 16384),
+            (Some("xhigh"), 16384),
+            (Some("max"), 16384),
+        ];
+        for (effort, expected) in budgets {
+            let mut request =
+                json!({"model":"claude-sonnet-4-5","input":[],"max_output_tokens":40000});
+            if let Some(effort) = effort {
+                request["reasoning"] = json!({"effort":effort});
+            }
+            let body = super::request(&request, DEFAULT_MAX_TOKENS, true).unwrap();
+            assert_eq!(body["max_tokens"], 40000);
+            assert_eq!(
+                body["thinking"],
+                json!({"type":"enabled","budget_tokens":expected,"display":"summarized"}),
+                "{effort:?}"
+            );
+            assert!(budget_thinking(&body));
+            assert!(body.get("output_config").is_none());
+        }
+        let card = json!({"model":"claude-haiku-4-5-20251001","input":[]});
+        let body = super::request(&card, 4096, true).unwrap();
+        assert_eq!(body["max_tokens"], 4096);
+        // No effort is medium, 8192, more than the 4096 limit: the budget becomes 4096 - 1024.
+        assert_eq!(body["thinking"]["budget_tokens"], 3072);
+    }
+
+    #[test]
+    fn budget_thinking_leaves_room_for_the_reply_or_fails_before_sending() {
+        let request = |max: u64, effort: &str| {
+            json!({"model":"claude-sonnet-4-5","input":[],"max_output_tokens":max,
+                "reasoning":{"effort":effort}})
+        };
+        // A limit at or below the budget gives the budget the limit less 1024 tokens.
+        let body = super::request(&request(8192, "medium"), 0, true).unwrap();
+        assert_eq!(body["thinking"]["budget_tokens"], 7168);
+        let body = super::request(&request(2048, "high"), 0, true).unwrap();
+        assert_eq!(body["thinking"]["budget_tokens"], 1024);
+        let error = super::request(&request(2047, "high"), 0, true).unwrap_err();
+        assert_eq!(
+            error,
+            "Insufficient output space for Anthropic thinking; reduce input or request more output space."
+        );
+        assert!(super::request(&request(1024, "low"), 0, true).is_err());
+        // Without thinking, the limit alone decides.
+        let body = super::request(&request(1000, "low"), 0, false).unwrap();
+        assert!(body.get("thinking").is_none());
     }
 
     fn sse(events: &[Value]) -> Vec<u8> {

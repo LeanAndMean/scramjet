@@ -274,17 +274,20 @@ async fn get(endpoint: SocketAddr, path: &str) -> Option<Bytes> {
     }
 }
 
+/// `interleaved` asks a Messages request for the interleaved-thinking beta, which budget thinking
+/// needs.
 pub(super) async fn respond(
     endpoint: SocketAddr,
     protocol: Protocol,
     body: Vec<u8>,
+    interleaved: bool,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(StreamProgress),
 ) -> Result<Reply, ClientError> {
     tokio::select! {
         biased;
         () = cancelled(cancel) => Err(ClientError::Cancelled),
-        result = exchange(endpoint, protocol, body, progress) => result.map_err(ClientError::Failed),
+        result = exchange(endpoint, protocol, body, interleaved, progress) => result.map_err(ClientError::Failed),
     }
 }
 
@@ -292,6 +295,7 @@ async fn exchange(
     endpoint: SocketAddr,
     protocol: Protocol,
     body: Vec<u8>,
+    interleaved: bool,
     progress: &mut dyn FnMut(StreamProgress),
 ) -> Result<Reply, Failure> {
     let socket = TcpStream::connect(endpoint).await.map_err(|e| {
@@ -309,10 +313,17 @@ async fn exchange(
         Protocol::Responses => Request::builder()
             .uri("/v1/responses")
             .header("Authorization", "Bearer managed-by-proxy"),
-        Protocol::Messages => Request::builder()
-            .uri("/v1/messages")
-            .header("x-api-key", "managed-by-proxy")
-            .header("anthropic-version", "2023-06-01"),
+        Protocol::Messages => {
+            let request = Request::builder()
+                .uri("/v1/messages")
+                .header("x-api-key", "managed-by-proxy")
+                .header("anthropic-version", "2023-06-01");
+            if interleaved {
+                request.header("anthropic-beta", super::messages::INTERLEAVED_THINKING_BETA)
+            } else {
+                request
+            }
+        }
     };
     let request = request
         .method("POST")
