@@ -2,6 +2,7 @@
 
 mod client;
 mod compaction;
+mod readonly;
 mod session;
 mod tools;
 
@@ -1366,6 +1367,37 @@ response is incomplete; retry the request."});
             .filter_map(|item| item["output"].as_str())
             .collect();
         assert_eq!(outputs, ["(no output)"; 3]);
+    }
+
+    #[test]
+    fn read_only_commands_run_without_a_question() {
+        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
+        let bash = |id: &str, command: &str| {
+            let arguments = json!({ "command": command }).to_string();
+            let events = fixture::call_events(&arguments, fixture::known_usage());
+            let text = serde_json::to_string(&events).unwrap();
+            let text = text.replace("\"inert\"", "\"bash\"").replace("call_1", id);
+            serde_json::from_str::<Vec<Value>>(&text).unwrap()
+        };
+        let (endpoint, server) = serve(vec![
+            stream(&bash("call_1", "ls -a")),
+            stream(&bash("call_2", "ls -a > listing")),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "read-only");
+        let mut ui = Recorder::default();
+        agent
+            .turn("list", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!((ui.questions, ui.calls.len()), (1, 2));
+        let outputs: Vec<_> = agent
+            .conversation()
+            .iter()
+            .filter_map(|item| item["output"].as_str())
+            .collect();
+        assert!(outputs[0].contains("session.jsonl"), "{outputs:?}");
+        assert!(!agent.root().join("listing").exists());
     }
 
     #[test]
