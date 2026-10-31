@@ -20,7 +20,8 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 
 - Make small, complete, working changes. Prefer established crates and simple code; add abstractions only for a current need.
 - Before committing, run `cargo fmt --check`, `cargo clippy --offline --locked --all-targets -- -D warnings`, and the tests that cover the change. Run the full `cargo test --offline --locked` (about 10 minutes; set `SCRAMJET_CONTROL_CLI="$PWD/target/debug/scramjet-rs"`) before larger handoffs.
-- Exercise user-facing behavior for real, including through Proxy when it involves the provider. A passing fixture test is not proof that the real route works.
+- Exercise user-facing behavior for real. Automated tests never contact Proxy; they use local scripted servers (`serve` in `src/agent.rs`, `tests/agent_editor_pty.py`) or closed ports.
+- Check live through Proxy only when a change touches the provider boundary: what is sent, stream parsing, models and routes, provider errors and retries. Keep such a check to 1–5 requests. Display, editor, tool and session changes take their input from the parsed stream; verify them against scripted streams, not live prompts (user decision, 2026-10-30, after about 450 loop requests in one day, mostly for display checks and practice runs).
 - Commit small coherent changes with clear messages. Git history is the record of what changed and why; there are no content fingerprints, candidate manifests or per-turn activity logs.
 - Independent review only when the user asks for it or a change is genuinely risky (destructive file operations, credentials, process isolation).
 - Fix tests that encode removed behavior rather than preserving the behavior for the test's sake.
@@ -47,6 +48,7 @@ When asking, give the decision, the relevant evidence, the options and a recomme
 
 - Local builds, tests and experiments: go ahead.
 - Small live tests through the local Proxy endpoint (127.0.0.1:18080) for development are approved (user decision, 2026-10-30). Ask before anything large or long-running, such as load tests.
+- Practice runs (the agent doing a real task, e.g. on a clone of this repo): at most one per loop session, only when no clearer item is waiting, and stopped at about 30 requests (watch the usage line). User decision, 2026-10-30.
 - Ask before pushing, publishing, creating remote issues/PRs, destructive operations outside scratch directories, or desktop/clipboard automation.
 - Don't read credentials or personal data. Don't upload unpublished code to external services.
 - Python tooling: use `uv` with an isolated environment; never install into the system Python.

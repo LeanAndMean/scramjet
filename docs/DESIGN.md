@@ -17,7 +17,9 @@ Established 2026-10-08 from the founding discussion. This file owns product dire
 
 ## Current direction (2026-10-30)
 
-Get to daily use quickly. `scramjet-rs agent` is the usable path: one interactive agent per project through the local Proxy Responses endpoint, with read/write/edit/bash tools, approvals and resumable sessions. Improve it from real use (see [the task list](TASKS.md)) before expanding into parallel agents, the retained TUI and capacity work.
+Get to daily use quickly. `scramjet-rs agent` is the usable path: one interactive agent per project through the local Proxy Responses endpoint, with read/write/edit/bash tools, approvals and resumable sessions. Improve it from real use (see [the task list](TASKS.md)) before expanding into parallel agents, the retained TUI and capacity work. Claude models through Proxy's Anthropic Messages route are a near-term addition (user decision, 2026-10-30).
+
+Approvals (user decision, 2026-10-30): writes and edits inside the project run without asking; outside it they ask. A shell command asks, except a single plain command from a short read-only list (such as `ls`, `cat`, `rg`, `git status`/`diff`/`log`): no `;`, `&`, `|`, redirection or substitution, and no option that makes it write files or run other programs (such as `rg --pre`, `git diff --output`). Answering `a` or `--yes` still allows everything.
 
 Scramjet (`~/repos/scramjet`) and Proxy (`~/repos/proxy`) are the working reference for protocol and tool behavior. A limit or check needs a concrete basis: a documented contract, a user decision, a real safety risk, or an observed failure. "No document guarantees X" is not a reason to reject X. When a self-imposed rule blocks the real system, compare with Scramjet and loosen or remove it.
 
