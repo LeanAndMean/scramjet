@@ -34,21 +34,25 @@ pub(super) fn definitions() -> Value {
             "limit":{"type":"integer","description":"Maximum number of lines to read"}},
           "required":["path"]}},
         {"type":"function","name":"write","strict":false,
-         "description":"Create or overwrite a file with the given content. Creates parent directories.",
+         "description":"Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
          "parameters":{"type":"object","properties":{
-            "path":{"type":"string"},"content":{"type":"string"}},
+            "path":{"type":"string","description":"Path to the file to write, relative to the project directory or absolute"},
+            "content":{"type":"string","description":"Content to write to the file"}},
           "required":["path","content"]}},
         {"type":"function","name":"edit","strict":false,
-         "description":"Edit a file by exact text replacement. Each oldText must match exactly once in the original file; edits must not overlap.",
+         "description":"Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
          "parameters":{"type":"object","properties":{
-            "path":{"type":"string"},
-            "edits":{"type":"array","items":{"type":"object","properties":{
-                "oldText":{"type":"string"},"newText":{"type":"string"}},"required":["oldText","newText"]}}},
+            "path":{"type":"string","description":"Path to the file to edit, relative to the project directory or absolute"},
+            "edits":{"type":"array",
+                "description":"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+                "items":{"type":"object","properties":{
+                "oldText":{"type":"string","description":"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."},
+                "newText":{"type":"string","description":"Replacement text for this targeted edit."}},"required":["oldText","newText"]}}},
           "required":["path","edits"]}},
         {"type":"function","name":"bash","strict":false,
          "description":"Run a bash command in the project directory. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
          "parameters":{"type":"object","properties":{
-            "command":{"type":"string"},
+            "command":{"type":"string","description":"Bash command to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
           "required":["command"]}}
     ])
