@@ -204,7 +204,9 @@ impl Agent {
     /// Approvals given with `a` still apply.
     pub fn new_session(&mut self) -> Result<(), AgentError> {
         let directory = self.session.path().parent().unwrap_or(Path::new("."));
-        self.session = Session::create(directory, &self.config.root)?;
+        let mut session = Session::create(directory, &self.config.root)?;
+        session.record_model(&self.config.model)?;
+        self.session = session;
         self.conversation.clear();
         self.prompts.clear();
         self.usage = Usage::default();
@@ -313,11 +315,15 @@ impl Agent {
         &self.config.model
     }
 
-    /// Changes the model used for subsequent requests in this session.
-    pub fn set_model(&mut self, model: impl Into<String>) {
-        self.config.model = model.into();
+    /// Changes the model used for subsequent requests and records it in the session, so a resume
+    /// continues with it; on failure nothing changes.
+    pub fn set_model(&mut self, model: impl Into<String>) -> Result<(), AgentError> {
+        let model = model.into();
+        self.session.record_model(&model)?;
+        self.config.model = model;
         // The window belongs to the model that gave it.
         self.window = None;
+        Ok(())
     }
 
     /// The window automatic compaction checks, from `context_window`; `None` skips the check.
@@ -325,12 +331,9 @@ impl Agent {
         self.window = window;
     }
 
-    /// The model that produced the conversation's latest response item, if one is recorded.
+    /// The model the session last recorded: its latest switch or response item's producer.
     pub fn last_model(&self) -> Option<&str> {
-        self.conversation
-            .iter()
-            .rev()
-            .find_map(|item| item[PRODUCER].as_str())
+        self.session.model()
     }
 
     /// The endpoint's models that accept Responses requests, or `None` if they cannot be listed.
@@ -1425,7 +1428,7 @@ response is incomplete; retry the request."});
         let new = agent.session_path().to_owned();
         assert_eq!(new.parent(), old.parent());
         let lines = |path: &Path| std::fs::read_to_string(path).unwrap().lines().count();
-        assert_eq!((lines(&old), lines(&new)), (3, 3));
+        assert_eq!((lines(&old), lines(&new)), (3, 4));
 
         let directory = new.parent().unwrap();
         std::fs::remove_dir_all(directory).unwrap();
@@ -1477,11 +1480,56 @@ response is incomplete; retry the request."});
         );
 
         assert_eq!(agent.last_model(), Some("old"));
-        agent.set_model("old");
+        agent.set_model("old").unwrap();
         let same_model = agent.replay_conversation();
         assert_eq!(same_model.len(), 5);
         assert_eq!(same_model[0]["type"], "reasoning");
         assert_eq!(same_model[1]["id"], "fc_item");
+    }
+
+    #[test]
+    fn model_switches_are_saved_at_once_and_resumed() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "hi",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, _scratch) = agent(endpoint, "model-switch");
+        let path = agent.session_path().to_owned();
+        let changes = || {
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .filter(|line| line.contains("model_change"))
+                .count()
+        };
+        assert_eq!(agent.last_model(), None);
+        agent.set_model("m").unwrap();
+        agent.set_model("m").unwrap();
+        agent.set_model("other").unwrap();
+        assert_eq!(changes(), 2);
+        let (session, items, _) = Session::open(&path).unwrap();
+        assert_eq!((session.model(), items.len()), (Some("other"), 0));
+
+        agent.set_model("m").unwrap();
+        agent
+            .turn("one", &mut Recorder::default(), &AtomicBool::new(false))
+            .unwrap();
+        server.join().unwrap();
+        agent.set_model("m").unwrap();
+        assert_eq!(changes(), 3);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{\"type\":\"model_change\",\"model\":\"later\"}\n")
+            .unwrap();
+        let (session, items, _) = Session::open(&path).unwrap();
+        assert_eq!((session.model(), items.len()), (Some("later"), 2));
+
+        agent.new_session().unwrap();
+        assert_eq!(agent.last_model(), Some("m"));
+        let (session, _, _) = Session::open(agent.session_path()).unwrap();
+        assert_eq!(session.model(), Some("m"));
     }
 
     #[test]

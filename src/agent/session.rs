@@ -5,11 +5,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// An append-only JSON-lines log: a header, then each input item and each compaction, which
-/// replaces the items before `first_kept` with its summary.
+/// An append-only JSON-lines log: a header, then each input item, each model change and each
+/// compaction, which replaces the items before `first_kept` with its summary.
 pub struct Session {
     path: PathBuf,
     file: File,
+    /// The latest model change or response item producer in the file, as Scramjet restores it.
+    model: Option<String>,
 }
 
 fn invalid(path: &Path, reason: &str) -> io::Error {
@@ -43,7 +45,11 @@ impl Session {
             .append(true)
             .create_new(true)
             .open(&path)?;
-        let mut session = Self { path, file };
+        let mut session = Self {
+            path,
+            file,
+            model: None,
+        };
         session
             .append(&json!({"type":"session","version":1,"root":root,"created":created as u64}))?;
         Ok(session)
@@ -82,6 +88,7 @@ impl Session {
         let reader = BufReader::new(File::open(path)?);
         let mut items = Vec::new();
         let mut prompts = Vec::new();
+        let mut model = None;
         for (index, line) in reader.lines().enumerate() {
             let line = line?;
             if line.trim().is_empty() {
@@ -104,7 +111,15 @@ impl Session {
                     .ok_or_else(|| invalid(path, "missing compaction summary"))?;
                 items.drain(..cut);
                 items.insert(0, super::compaction::summary_message(summary));
+            } else if value["type"] == "model_change" {
+                let changed = value["model"]
+                    .as_str()
+                    .ok_or_else(|| invalid(path, "missing model in a model change"))?;
+                model = Some(changed.to_owned());
             } else {
+                if let Some(producer) = value[super::PRODUCER].as_str() {
+                    model = Some(producer.to_owned());
+                }
                 if value["role"] == "user"
                     && let Some(prompt) = value["content"].as_str()
                 {
@@ -121,6 +136,7 @@ impl Session {
             Self {
                 path: path.to_owned(),
                 file,
+                model,
             },
             items,
             prompts,
@@ -139,9 +155,27 @@ impl Session {
             .unwrap_or_default()
     }
 
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// Records that later requests use `model`, unless the file already says so.
+    pub fn record_model(&mut self, model: &str) -> io::Result<()> {
+        if self.model.as_deref() != Some(model) {
+            self.append(&json!({"type":"model_change","model":model}))?;
+        }
+        Ok(())
+    }
+
     pub fn append(&mut self, item: &Value) -> io::Result<()> {
         let mut line = serde_json::to_vec(item)?;
         line.push(b'\n');
-        self.file.write_all(&line)
+        self.file.write_all(&line)?;
+        if item["type"] == "model_change" {
+            self.model = item["model"].as_str().map(str::to_owned);
+        } else if let Some(producer) = item[super::PRODUCER].as_str() {
+            self.model = Some(producer.to_owned());
+        }
+        Ok(())
     }
 }

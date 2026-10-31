@@ -117,9 +117,11 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         retries,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
-    if let Some(last) = agent.last_model().filter(|_| !chosen) {
-        agent.set_model(last.to_owned());
-    }
+    let model = match agent.last_model() {
+        Some(last) if !chosen => last.to_owned(),
+        _ => agent.model().to_owned(),
+    };
+    agent.set_model(model).map_err(|e| e.to_string())?;
     let mut window = agent.context_window();
     agent.set_context_window(window);
 
@@ -217,10 +219,14 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     }
                 }
                 Some(models) if models.iter().any(|model| model == wanted) => {
-                    agent.set_model(wanted);
-                    window = agent.context_window();
-                    agent.set_context_window(window);
-                    eprintln!("✓ Model set to {wanted}");
+                    match agent.set_model(wanted) {
+                        Ok(()) => {
+                            window = agent.context_window();
+                            agent.set_context_window(window);
+                            eprintln!("✓ Model set to {wanted}");
+                        }
+                        Err(error) => eprintln!("error: {error}"),
+                    }
                 }
                 Some(_) => eprintln!("error: no model {wanted} (/model lists them)"),
             }
