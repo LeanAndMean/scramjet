@@ -111,6 +111,68 @@ def serve_quiet_reasoning():
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
+def serve_thoughts(gates):
+    """Answers each request with a reasoning paragraph, then, once its gate in `gates` is set,
+    another and a reply."""
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+    texts = ['First thought.', 'Second thought.']
+    reasoning = {'type': 'reasoning', 'id': 'rs_1', 'status': 'completed',
+                 'summary': [{'type': 'summary_text', 'text': text} for text in texts]}
+    message = {'type': 'message', 'id': 'msg_1', 'role': 'assistant', 'status': 'completed',
+               'content': [{'type': 'output_text', 'text': 'The reply.', 'annotations': []}]}
+
+    def part(index):
+        where = {'output_index': 0, 'item_id': 'rs_1', 'summary_index': index}
+        empty = {'type': 'summary_text', 'text': ''}
+        text = texts[index]
+        return [dict(where, type='response.reasoning_summary_part.added', part=empty),
+                dict(where, type='response.reasoning_summary_text.delta', delta=text),
+                dict(where, type='response.reasoning_summary_text.done', text=text),
+                dict(where, type='response.reasoning_summary_part.done', part=dict(empty, text=text))]
+
+    where = {'output_index': 1, 'item_id': 'msg_1', 'content_index': 0}
+    empty = {'type': 'output_text', 'text': '', 'annotations': []}
+    first = [
+        {'type': 'response.created', 'response': {'id': 'resp_1', 'status': 'in_progress', 'output': []}},
+        {'type': 'response.output_item.added', 'output_index': 0,
+         'item': dict(reasoning, status='in_progress', summary=[])},
+        *part(0),
+    ]
+    rest = [
+        *part(1),
+        {'type': 'response.output_item.done', 'output_index': 0, 'item': reasoning},
+        {'type': 'response.output_item.added', 'output_index': 1,
+         'item': dict(message, status='in_progress', content=[])},
+        dict(where, type='response.content_part.added', part=empty),
+        dict(where, type='response.output_text.delta', delta='The reply.'),
+        dict(where, type='response.output_text.done', text='The reply.'),
+        dict(where, type='response.content_part.done', part=dict(empty, text='The reply.')),
+        {'type': 'response.output_item.done', 'output_index': 1, 'item': message},
+        {'type': 'response.completed',
+         'response': {'id': 'resp_1', 'status': 'completed', 'output': [reasoning, message]}},
+    ]
+    chunks = [b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events) for events in (first, rest)]
+
+    def answer():
+        for gate in gates:
+            connection, _ = listener.accept()
+            if connection.recv(65536).startswith(b'GET'):
+                connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
+                connection.close()
+                connection, _ = listener.accept()
+                connection.recv(65536)
+            connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n'
+                               b'transfer-encoding: chunked\r\n\r\n%x\r\n%s\r\n' % (len(chunks[0]), chunks[0]))
+            gate.wait(10)
+            connection.sendall(b'%x\r\n%s\r\n0\r\n\r\n' % (len(chunks[1]), chunks[1]))
+            connection.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    return '127.0.0.1:%d' % listener.getsockname()[1]
+
+
 def serve_replies(replies):
     """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`."""
     listener = socket.socket()
@@ -151,6 +213,8 @@ def serve_replies(replies):
 
 
 quiet_reasoning = serve_quiet_reasoning()
+gates = [threading.Event(), threading.Event()]
+thoughts = serve_thoughts(gates)
 # As from Proxy's DeepSeek route: the first delta lost, then a text sent only in its done event.
 replies = serve_replies([([' of the reply.'], 'The start of the reply.'), ([], 'Only at the end.'),
                          (['Streamed ', 'whole.'], 'Streamed whole.')])
@@ -268,9 +332,44 @@ def thinking_counts_seconds(read, until, send, output):
     send(b'go\r')
     mark = until(b'thinking 1s', mark)
     until(b'thinking 2s', mark)
+    send(b'dropped')
+    read(.2)
     send(b'\x03')
     mark = until(b'(cancelled)', mark)
-    until(b'> ', mark)
+    mark = until(b'> ', mark)
+    read(.3)
+    assert b'dropped' not in output[mark:], 'text typed before cancelling a turn was kept'
+    send(b'\x04')
+
+
+def ctrl_t_hides_reasoning(read, until, send, output):
+    marker = b'\x1b[2;3mThinking...\x1b[0m\r\n\r\n'
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'First thought.', mark)
+    send(b'kept')
+    read(.2)
+    send(b'\x14')
+    mark = until(b'Thinking blocks: hidden', mark)
+    gates[0].set()
+    mark = until(marker, mark)
+    mark = until(b'The reply.', mark)
+    shown = until(b'> kept', mark)
+    assert b'Second thought' not in output and b'kept' not in output[:mark], bytes(output[-1500:])
+    send(b'\x03again\r')
+    start = until(b'> again', shown)
+    mark = until(marker, start)
+    read(.3)
+    assert b'thought' not in output[start:], bytes(output[start:])
+    send(b'\x14')
+    mark = until(b'Thinking blocks: visible', mark)
+    gates[1].set()
+    mark = until(b'First thought.', mark)
+    mark = until(b'Second thought.', mark)
+    mark = until(b'The reply.', mark)
+    mark = until(b'> ', mark)
+    send(b'\x14')
+    until(b'Thinking blocks: hidden', mark)
     send(b'\x04')
 
 
@@ -385,6 +484,7 @@ run(['--retries', '0'], typed_during_turn, delayed)
 run([], cancel_retry)
 run([], thinking_counts_seconds, hanging)
 run([], quiet_after_reasoning_shows_thinking, quiet_reasoning)
+run([], ctrl_t_hides_reasoning, thoughts)
 run([], running_counts_seconds, calling)
 run([], running_shows_output, talking)
 run(['--ask'], approval_shows_hidden_characters, disguised)

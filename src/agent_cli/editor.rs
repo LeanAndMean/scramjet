@@ -8,6 +8,10 @@ use rustix::{
 use std::{
     fmt::Write as _,
     io::{self, Write},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -42,6 +46,7 @@ enum Key {
     KillEnd,
     Interrupt,
     EndOfInput,
+    ToggleThinking,
     Idle,
     Ignored,
 }
@@ -70,6 +75,7 @@ fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> io::Result<
         11 => Key::KillEnd,
         14 => Key::Down,
         16 => Key::Up,
+        20 => Key::ToggleThinking,
         21 => Key::KillStart,
         23 => Key::DeleteWordBack,
         0x20..=0x7e => Key::Text(char::from(byte).to_string()),
@@ -540,11 +546,16 @@ impl Screen {
 
 pub struct Editor {
     history: Vec<String>,
+    hide_thinking: Arc<AtomicBool>,
 }
 
 impl Editor {
-    pub fn new(history: Vec<String>) -> Self {
-        Self { history }
+    /// Ctrl+T flips `hide_thinking`.
+    pub fn new(history: Vec<String>, hide_thinking: Arc<AtomicBool>) -> Self {
+        Self {
+            history,
+            hide_thinking,
+        }
     }
 
     /// Makes `prompt` the most recent entry that Up recalls.
@@ -563,6 +574,7 @@ impl Editor {
         let mut browsing = self.history.len();
         let mut draft = String::new();
         let mut exit_armed = false;
+        let mut note = None;
         let mut dirty = false;
         screen.draw(&buffer, None, false)?;
         loop {
@@ -571,14 +583,22 @@ impl Editor {
                 result => result?,
             };
             let armed = std::mem::take(&mut exit_armed);
+            let noted = note.take();
             let changed = match key {
                 Key::Idle => {
                     exit_armed = armed;
+                    note = noted;
                     terminal_size().0 != screen.width
                 }
                 Key::Ignored => {
                     exit_armed = armed;
+                    note = noted;
                     false
+                }
+                Key::ToggleThinking => {
+                    let hidden = !self.hide_thinking.fetch_xor(true, Ordering::Relaxed);
+                    note = Some(thinking_note(hidden));
+                    true
                 }
                 Key::Enter if buffer.text[..buffer.cursor].ends_with('\\') => {
                     buffer.apply(&Key::Backspace);
@@ -638,7 +658,8 @@ impl Editor {
             };
             dirty |= changed;
             if dirty && !source.pending() {
-                screen.draw(&buffer, exit_armed.then_some(EXIT_HINT), false)?;
+                let hint = exit_armed.then_some(EXIT_HINT).or(note);
+                screen.draw(&buffer, hint, false)?;
                 dirty = false;
             }
         }
@@ -646,6 +667,14 @@ impl Editor {
 }
 
 const EXIT_HINT: &str = "(Ctrl-C again or Ctrl-D to exit)";
+
+/// As Scramjet reports a Ctrl+T.
+pub(super) fn thinking_note(hidden: bool) -> &'static str {
+    match hidden {
+        true => "Thinking blocks: hidden",
+        false => "Thinking blocks: visible",
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -712,10 +741,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            keys(b"\x03\x04\x1b\x1b[D\x1b[99;5u\x1b[5~\x1b"),
+            keys(b"\x03\x04\x14\x1b\x1b[D\x1b[99;5u\x1b[5~\x1b"),
             [
                 Key::Interrupt,
                 Key::EndOfInput,
+                Key::ToggleThinking,
                 Key::Left,
                 Key::Ignored,
                 Key::Ignored,

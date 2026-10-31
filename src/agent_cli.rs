@@ -5,7 +5,7 @@ mod markdown;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
-    termios::{self, LocalModes, OptionalActions, Termios},
+    termios::{self, LocalModes, OptionalActions, QueueSelector, SpecialCodeIndex, Termios},
 };
 use scramjet_rs::agent::{
     Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Compaction, SessionChoice,
@@ -43,7 +43,8 @@ Interactive coding agent using a Responses endpoint (default: Proxy at 127.0.0.1
 In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing \\ starts
 a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
-/new starts a new session. /model lists the models and /model ID switches to one.
+Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
+next one on; it works while a turn runs too. /new starts a new session. /model lists the models and /model ID switches to one.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
 While a turn runs, typed text is kept for the next prompt without being shown; Ctrl-C cancels
@@ -128,7 +129,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let cancel = Arc::new(AtomicBool::new(false));
     let startup = termios::tcgetattr(std::io::stdin()).ok();
     let flag = cancel.clone();
-    // SAFETY: the handler only swaps an atomic, calls tcsetattr and _exit, all async-signal-safe.
+    // SAFETY: the handler only swaps an atomic, calls tcflush, tcsetattr and _exit, all
+    // async-signal-safe.
     unsafe {
         signal_hook::low_level::register(signal_hook::consts::SIGINT, move || {
             // A second Ctrl-C while a cancellation is still pending exits.
@@ -142,10 +144,21 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 }
                 signal_hook::low_level::exit(130);
             }
+            // The kernel keeps text typed during a turn (`InputMode::turn`); a cancel drops it.
+            let _ = termios::tcflush(BorrowedFd::borrow_raw(0), QueueSelector::IFlush);
         })
     }
     .map_err(|e| e.to_string())?;
-    let mut ui = Terminal::new();
+    let hide_thinking = Arc::new(AtomicBool::new(false));
+    let flag = hide_thinking.clone();
+    // SAFETY: the handler only flips an atomic.
+    unsafe {
+        signal_hook::low_level::register(signal_hook::consts::SIGQUIT, move || {
+            flag.fetch_xor(true, Ordering::Relaxed);
+        })
+    }
+    .map_err(|e| e.to_string())?;
+    let mut ui = Terminal::new(hide_thinking.clone());
 
     if let Some(prompt) = prompt {
         let prompt = if prompt == "-" {
@@ -153,9 +166,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         } else {
             prompt
         };
-        let echo = Echo::set(false);
+        let mode = InputMode::turn();
         let result = agent.turn(&prompt, &mut ui, &cancel);
-        drop(echo);
+        drop(mode);
         ui.clear();
         ui.usage(&agent, window);
         return result.map_err(|e| e.to_string());
@@ -173,7 +186,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         }
     );
     let mut editor = (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
-        .then(|| editor::Editor::new(agent.prompts().to_vec()));
+        .then(|| editor::Editor::new(agent.prompts().to_vec(), hide_thinking.clone()));
     loop {
         let prompt = match &mut editor {
             Some(editor) => {
@@ -237,9 +250,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
             cancel.store(false, Ordering::Relaxed);
-            let echo = Echo::set(false);
+            let mode = InputMode::turn();
             let result = agent.compact(focus.trim(), &mut ui, &cancel);
-            drop(echo);
+            drop(mode);
             ui.clear();
             match result {
                 Ok(Some(compaction)) => ui.compacted(&compaction, None),
@@ -255,9 +268,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             eprintln!();
         }
         cancel.store(false, Ordering::Relaxed);
-        let echo = Echo::set(false);
+        let mode = InputMode::turn();
         let result = agent.turn(prompt, &mut ui, &cancel);
-        drop(echo);
+        drop(mode);
         ui.clear();
         match result {
             Ok(()) => {}
@@ -294,23 +307,35 @@ fn read_lines() -> Result<Option<String>, String> {
     }
 }
 
-/// Sets whether the terminal echoes typed keys until dropped. Keys typed while a turn runs stay
-/// queued for the prompt editor instead of appearing in the output.
-struct Echo(Option<Termios>);
+/// Changes the terminal's input settings until dropped.
+struct InputMode(Option<Termios>);
 
-impl Echo {
-    fn set(on: bool) -> Self {
+impl InputMode {
+    /// While a turn runs, typed keys are not echoed and stay queued for the prompt editor.
+    /// Ctrl+T becomes the quit character, so the kernel sends SIGQUIT for it without the agent
+    /// reading the queue, and `NOFLSH` keeps the queue when it does.
+    fn turn() -> Self {
+        Self::change(|mode| {
+            mode.local_modes.remove(LocalModes::ECHO);
+            mode.local_modes.insert(LocalModes::NOFLSH);
+            mode.special_codes[SpecialCodeIndex::VQUIT] = 0x14;
+        })
+    }
+    fn echo(on: bool) -> Self {
+        Self::change(|mode| mode.local_modes.set(LocalModes::ECHO, on))
+    }
+    fn change(change: impl FnOnce(&mut Termios)) -> Self {
         let Ok(previous) = termios::tcgetattr(std::io::stdin()) else {
             return Self(None);
         };
         let mut changed = previous.clone();
-        changed.local_modes.set(LocalModes::ECHO, on);
+        change(&mut changed);
         let _ = termios::tcsetattr(std::io::stdin(), OptionalActions::Now, &changed);
         Self(Some(previous))
     }
 }
 
-impl Drop for Echo {
+impl Drop for InputMode {
     fn drop(&mut self) {
         if let Some(previous) = &self.0 {
             let _ = termios::tcsetattr(std::io::stdin(), OptionalActions::Now, previous);
@@ -333,6 +358,8 @@ struct Status {
     activity: Option<(String, Instant)>,
     /// Shows the seconds left of this wait instead of the elapsed seconds.
     countdown: Option<Duration>,
+    /// Follows the activity for a moment, such as the reply to Ctrl+T.
+    note: Option<(&'static str, Instant)>,
     /// Shown above the line, each cut to fit one row.
     output: Vec<String>,
     /// The text on the screen, while it is shown, and the number of output rows above the line.
@@ -343,12 +370,16 @@ struct Status {
 impl Status {
     fn line(&self) -> Option<String> {
         let (activity, since) = self.activity.as_ref()?;
+        let note = match self.note {
+            Some((note, at)) if at.elapsed() < NOTE_TIME => format!(" · {note}"),
+            _ => String::new(),
+        };
         Some(match self.countdown {
             Some(wait) => {
                 let left = wait.saturating_sub(since.elapsed()).as_secs_f64().ceil();
-                format!("… {activity} {left}s")
+                format!("… {activity} {left}s{note}")
             }
-            None => format!("… {activity}{}", elapsed(since.elapsed().as_secs())),
+            None => format!("… {activity}{}{note}", elapsed(since.elapsed().as_secs())),
         })
     }
     fn draw(&mut self) {
@@ -389,6 +420,8 @@ impl Status {
         drawn
     }
 }
+
+const NOTE_TIME: Duration = Duration::from_secs(2);
 
 /// Breaks streamed text into lines that fit the terminal, between words where it can, instead of
 /// leaving the terminal to split words at its edge. A word is held until it is complete.
@@ -588,18 +621,30 @@ struct Terminal {
     markdown: markdown::Markdown,
     wrap: Wrap,
     tool_started: Option<Instant>,
+    hide_thinking: Arc<AtomicBool>,
+    /// The reasoning streamed in the current block, and whether only its marker is shown.
+    reasoning: String,
+    reasoning_hidden: bool,
 }
 
 impl Terminal {
-    fn new() -> Self {
+    fn new(hide_thinking: Arc<AtomicBool>) -> Self {
         let color = std::io::stderr().is_terminal();
         let status = Arc::new(Mutex::<Status>::default());
         if color {
             let status = status.clone();
+            let hide = hide_thinking.clone();
+            let mut hidden = hide.load(Ordering::Relaxed);
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(Duration::from_millis(200));
                     let mut status = status.lock().unwrap();
+                    // Ctrl+T during a turn arrives as a signal; say at once what it did.
+                    if hide.load(Ordering::Relaxed) != hidden {
+                        hidden = !hidden;
+                        status.note = Some((editor::thinking_note(hidden), Instant::now()));
+                        status.draw();
+                    }
                     // An activity set without drawing appears once it has lasted a second.
                     if status
                         .activity
@@ -623,6 +668,9 @@ impl Terminal {
             markdown: markdown::Markdown::new(false, ""),
             wrap: Wrap::new(0),
             tool_started: None,
+            hide_thinking,
+            reasoning: String::new(),
+            reasoning_hidden: false,
         }
     }
     /// Shows `activity` on the status line now, or only once it lasts a second.
@@ -715,6 +763,37 @@ impl Terminal {
             self.show("thinking".into(), false);
         }
     }
+    /// Streams reasoning, or while Ctrl+T hides it, Scramjet's `Thinking...` line in its place.
+    /// Shown again during the block, the block so far follows that line.
+    fn reason(&mut self, delta: &str) {
+        let started = self.streaming == Streaming::Reasoning;
+        if !started {
+            self.reasoning.clear();
+        }
+        self.reasoning.push_str(delta);
+        let hide = self.hide_thinking.load(Ordering::Relaxed);
+        match (hide, started && self.reasoning_hidden) {
+            (false, false) => self.stream(Streaming::Reasoning, delta),
+            (false, true) => {
+                self.clear();
+                let text = self.reasoning.clone();
+                self.stream(Streaming::Reasoning, &text);
+            }
+            (true, false) => {
+                self.clear();
+                let marker = match self.color {
+                    true => "\x1b[2;3mThinking...\x1b[0m",
+                    false => "Thinking...",
+                };
+                eprint!("{marker}\n\n");
+                self.streaming = Streaming::Reasoning;
+                self.printed_newlines = 2;
+                self.show("thinking".into(), true);
+            }
+            (true, true) => {}
+        }
+        self.reasoning_hidden = hide;
+    }
     fn print_streamed(&mut self, text: &str) {
         if self.streaming == Streaming::Text {
             if let Some(rows) = &mut self.text_rows {
@@ -777,7 +856,7 @@ impl AgentUi for Terminal {
     }
     fn progress(&mut self, update: &StreamProgress) {
         match update {
-            StreamProgress::Reasoning(delta) => self.stream(Streaming::Reasoning, delta),
+            StreamProgress::Reasoning(delta) => self.reason(delta),
             StreamProgress::Text(delta) => {
                 self.stream(Streaming::Text, delta);
                 self.streamed.push_str(delta);
@@ -946,7 +1025,7 @@ impl AgentUi for Terminal {
             // Only an answer typed after the question is shown may approve it.
             let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
             eprint!("{ask}");
-            let _echo = Echo::set(true);
+            let _echo = InputMode::echo(true);
             // SIGINT does not interrupt a blocking read, so wait in poll and watch for Ctrl-C.
             loop {
                 if cancel.load(Ordering::Relaxed) {
@@ -1240,5 +1319,13 @@ mod tests {
         assert_eq!(status.line().unwrap(), "… retrying in 3s");
         status.countdown = Some(Duration::from_secs(1));
         assert_eq!(status.line().unwrap(), "… retrying in 0s");
+        status.countdown = None;
+        status.note = Some(("Thinking blocks: hidden", Instant::now()));
+        assert_eq!(
+            status.line().unwrap(),
+            "… retrying in 1s · Thinking blocks: hidden"
+        );
+        status.note = Some(("Thinking blocks: hidden", started - NOTE_TIME));
+        assert_eq!(status.line().unwrap(), "… retrying in 1s");
     }
 }
