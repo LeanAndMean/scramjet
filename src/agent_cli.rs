@@ -1007,6 +1007,17 @@ impl AgentUi for Terminal {
             self.wrapped(&heading),
             self.wrapped(&summary)
         );
+        // During a turn, as after a tool block; after `/compact` the prompt's blank line follows.
+        if automatic.is_some() {
+            eprintln!();
+        }
+    }
+    fn compaction_failed(&mut self, error: &AgentError) {
+        self.clear();
+        eprintln!(
+            "{}\n",
+            self.wrapped(&format!("error: automatic compaction failed: {error}"))
+        );
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         self.clear();

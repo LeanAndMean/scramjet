@@ -70,6 +70,8 @@ pub trait AgentUi {
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
     /// Shows a finished compaction; `automatic` says why the agent ran it without `/compact`.
     fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>);
+    /// An automatic compaction before a prompt failed; the prompt is sent anyway.
+    fn compaction_failed(&mut self, error: &AgentError);
     /// Asks whether a tool call may run; returns `Deny` without an answer once `cancel` is set.
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer;
 }
@@ -133,7 +135,8 @@ pub struct Usage {
 }
 
 pub struct Compaction {
-    /// The last response's context size, or else an estimate of the conversation's (chars/4).
+    /// The last response's context size and an estimate of the items after it, or without a
+    /// response of the current model an estimate of the whole conversation (chars/4).
     pub tokens_before: u64,
     pub kept_items: usize,
     pub summary: String,
@@ -254,8 +257,7 @@ impl Agent {
         }
         summary.push_str(&files.format());
         let tokens_before = self
-            .usage
-            .context_tokens
+            .context_size()
             .unwrap_or_else(|| compaction::estimate(&self.conversation));
         self.session.append(
             &json!({"type":"compaction", "summary":summary, "first_kept":cut,
@@ -448,15 +450,16 @@ impl Agent {
     }
 
     /// Runs one user prompt to completion: model requests and tool calls until a final answer.
-    /// Then, as Scramjet does, compacts the conversation if the last response's context passed
-    /// the model's window minus `compaction::RESERVE_TOKENS`. A request that fails because its
-    /// input exceeded the window is compacted and sent again, once per turn.
+    /// As Scramjet does, the conversation is compacted before the prompt and after the reply if
+    /// its context passed the model's window minus `compaction::RESERVE_TOKENS`. A request that
+    /// fails because its input exceeded the window is compacted and sent again, once per turn.
     pub fn turn(
         &mut self,
         prompt: &str,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
+        self.compact_before_prompt(ui, cancel)?;
         self.add(json!({"role":"user","content":prompt}))?;
         self.prompts.push(prompt.to_owned());
         let mut overflow_recovered = false;
@@ -545,6 +548,39 @@ to a larger-context model)"
             self.auto_compact(AutoCompaction::Threshold, ui, cancel)?;
         }
         Ok(())
+    }
+
+    /// As Scramjet counts the context: the last response's, if the current model gave it, and an
+    /// estimate of the items added after it, such as tool output from a cancelled turn.
+    fn context_size(&self) -> Option<u64> {
+        let tokens = self.usage.context_tokens?;
+        let last = self
+            .conversation
+            .iter()
+            .rposition(|item| item.get(PRODUCER).is_some())?;
+        (self.conversation[last][PRODUCER] == self.config.model.as_str())
+            .then(|| tokens + compaction::estimate(&self.conversation[last + 1..]))
+    }
+
+    /// As Scramjet's check before a new prompt, which catches a turn that ended without a reply.
+    fn compact_before_prompt(
+        &mut self,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<(), AgentError> {
+        let (Some(tokens), Some(window)) = (self.context_size(), self.info.window) else {
+            return Ok(());
+        };
+        if !compaction::should_compact(tokens, window) {
+            return Ok(());
+        }
+        match self.auto_compact(AutoCompaction::Threshold, ui, cancel) {
+            Err(AgentError::CompactionFailed(error)) => {
+                ui.compaction_failed(&error);
+                Ok(())
+            }
+            result => result.map(drop),
+        }
     }
 
     /// Sends `request`, sending it again after transient failures, and counts its usage. A failed
@@ -754,6 +790,7 @@ mod tests {
         replies: Vec<String>,
         calls: Vec<String>,
         compactions: Vec<(u64, usize, Option<AutoCompaction>)>,
+        failed_compactions: Vec<String>,
         /// Whether each request asked for a compaction summary.
         waits: Vec<bool>,
         /// Answers to give, in order; questions beyond them are denied.
@@ -779,6 +816,9 @@ mod tests {
         fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>) {
             self.compactions
                 .push((compaction.tokens_before, compaction.kept_items, automatic));
+        }
+        fn compaction_failed(&mut self, error: &AgentError) {
+            self.failed_compactions.push(error.to_string());
         }
         fn approve(&mut self, _: &str, _: &AtomicBool) -> Answer {
             self.questions += 1;
@@ -911,14 +951,16 @@ mod tests {
         add_call(&mut agent, "edit", "b.rs");
         add_call(&mut agent, "bash", "ignored.rs");
         agent.add(recent.clone()).unwrap();
+        // No response of the current model gave this count, so the conversation is estimated.
         agent.usage.context_tokens = Some(30_000);
+        let estimate = compaction::estimate(agent.conversation());
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         let first = agent
             .compact("file paths", &mut ui, &cancel)
             .unwrap()
             .unwrap();
-        assert_eq!((first.kept_items, first.tokens_before), (1, 30_000));
+        assert_eq!((first.kept_items, first.tokens_before), (1, estimate));
         assert_eq!(
             first.summary,
             "first summary\n\n<read-files>\na.rs\n</read-files>\n\n<modified-files>\nb.rs\n</modified-files>"
@@ -1192,6 +1234,67 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_left_without_a_reply_is_compacted_before_the_next_prompt() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events(
+                "counted by another model",
+                full_usage(100),
+            )),
+            b"HTTP/1.1 400 Bad Request\r\ncontent-length: 4\r\n\r\nnope".to_vec(),
+            stream(&fixture::text_events("sent anyway", full_usage(100))),
+            stream(&fixture::text_events("summary", full_usage(100))),
+            stream(&fixture::text_events("compacted first", full_usage(100))),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "auto-before-prompt");
+        agent.set_context_window(Some(40_000));
+        // A turn cancelled after a tool call: its output is not in the last response's count.
+        let cancelled = |producer: &str| {
+            vec![
+                json!({"role":"user","content":"old goal"}),
+                json!({"type":"message","role":"assistant","content":[{"text":"noted"}],"_scramjet_model":producer}),
+                json!({"role":"user","content":"big task ".repeat(9000)}),
+                json!({"type":"function_call","call_id":"a","name":"read","arguments":"{}","_scramjet_model":producer}),
+                json!({"type":"function_call_output","call_id":"a","output":"y".repeat(20_000)}),
+            ]
+        };
+        let mut ui = Recorder::default();
+        for (producer, prompt) in [("other", "one"), ("m", "two"), ("m", "three")] {
+            agent.conversation = cancelled(producer);
+            agent.usage.context_tokens = Some(20_000);
+            agent
+                .turn(prompt, &mut ui, &AtomicBool::new(false))
+                .unwrap();
+        }
+        assert_eq!(
+            ui.replies,
+            ["counted by another model", "sent anyway", "compacted first"]
+        );
+        assert_eq!(
+            ui.failed_compactions,
+            ["provider: HTTP 400 Bad Request: nope"]
+        );
+        assert_eq!(
+            ui.compactions,
+            [(25_000, 3, Some(AutoCompaction::Threshold))]
+        );
+        assert_eq!(ui.waits, [false, true, false, true, false]);
+        let requests = server.join().unwrap();
+        assert_eq!(requests[0]["input"].as_array().unwrap().len(), 6);
+        assert_eq!(requests[2]["input"].as_array().unwrap().len(), 6);
+        assert_eq!(requests[2]["input"][5]["content"], "two");
+        assert!(
+            requests[3]["input"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("[User]: old goal\n\n[Assistant]: noted\n</conversation>")
+        );
+        let input = requests[4]["input"].as_array().unwrap();
+        assert_eq!(input.len(), 5);
+        assert_eq!(input[0], compaction::summary_message("summary"));
+        assert_eq!(input[4]["content"], "three");
+    }
+
+    #[test]
     fn the_threshold_needs_a_known_window_and_a_full_enough_context() {
         let (endpoint, server) = serve(vec![stream(&fixture::text_events(
             "done",
@@ -1234,16 +1337,15 @@ mod tests {
         ]);
         let (mut agent, _scratch) = agent(endpoint, "auto-overflow");
         seed_long_conversation(&mut agent);
-        agent.usage.context_tokens = Some(30_000);
         let mut ui = Recorder::default();
         agent
             .turn("continue", &mut ui, &AtomicBool::new(false))
             .unwrap();
         assert_eq!(ui.replies, ["done"]);
-        assert_eq!(
-            ui.compactions,
-            [(30_000, 2, Some(AutoCompaction::Overflow))]
-        );
+        assert!(matches!(
+            ui.compactions[..],
+            [(_, 2, Some(AutoCompaction::Overflow))]
+        ));
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 3);
         assert_eq!(requests[1]["instructions"], compaction::SYSTEM_PROMPT);
