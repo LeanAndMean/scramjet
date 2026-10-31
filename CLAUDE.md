@@ -35,7 +35,7 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 
 ## When to stop for the user
 
-Development runs as a closed loop (`/rs:loop`, with `/rs:review` when a change warrants it). Stop or ask only for what the user owns:
+Development runs as a closed loop (`/rs:loop`, with `/rs:review` when a change warrants it); `/rs:steer` is where the user reviews direction and answers the loop's open questions. Stop or ask only for what the user owns:
 
 - **Scope or direction:** adding product scope, dropping something the user asked for, or choosing between product behaviors the user would care about.
 - **Permission:** anything in the authorization list below that needs asking, including `sudo` or installing system packages.

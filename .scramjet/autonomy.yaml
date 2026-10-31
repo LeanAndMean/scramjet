@@ -2,5 +2,8 @@ edges:
   rs:loop:
     rs:loop: chain
     rs:review: chain
+    rs:steer: pause
   rs:review:
+    rs:loop: chain
+  rs:steer:
     rs:loop: chain

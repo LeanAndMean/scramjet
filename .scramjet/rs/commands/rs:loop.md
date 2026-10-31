@@ -16,6 +16,8 @@ next:
       hint: Continue with the next most useful increment.
     - name: rs:review
       hint: This increment changed process isolation, credential handling or destructive file operations and should be independently checked before building on it.
+    - name: rs:steer
+      hint: Recorded open questions now block further useful work and need the user's direction.
 ---
 
 # Build scramjet-rs
@@ -42,12 +44,12 @@ The increment is done when it works when actually used, through Proxy when the p
 
 When an item stops making progress, change the approach or switch to another item within this run, and record the obstacle in one line in `docs/TASKS.md`. Do not repeat an approach that an earlier recorded obstacle shows failed. A run that only documents a blocker is not progress.
 
-Stop for the user only as described in `CLAUDE.md`, using `get_scramjet_user_input` with the context the user needs to decide.
+Stop for the user only as described in `CLAUDE.md`, using `get_scramjet_user_input` with the context the user needs to decide. When such a decision does not block the current item, do not stop: record it under `## Open questions` in `docs/TASKS.md` and continue with work that does not depend on it. Record there too smaller product choices you made that the user may want to revisit. The user reviews these with `/rs:steer`. Stop only when the answer is needed now.
 
 ## Report
 
-Tell the user briefly what changed, how it was verified, the commit, and what comes next. Then call `report_scramjet_command_status` with the work performed as `summary`:
+Tell the user briefly what changed, how it was verified, the commit, any open questions added, and what comes next. Then call `report_scramjet_command_status` with the work performed as `summary`:
 
-- `status: "completed"` when this run committed real progress, including partial progress with its continuation recorded. Include one `next_steps` entry with `fresh_session: true` and a concrete `reason`: `/rs:review <commits>` when the increment changed process isolation, credential handling or destructive file operations, otherwise `/rs:loop`. Set `recommended_next_step` to that entry's index.
+- `status: "completed"` when this run committed real progress, including partial progress with its continuation recorded. Include one `next_steps` entry with `fresh_session: true` and a concrete `reason`: `/rs:review <commits>` when the increment changed process isolation, credential handling or destructive file operations; `/rs:steer` when the remaining useful work depends on recorded open questions; otherwise `/rs:loop`. Set `recommended_next_step` to that entry's index.
 - `status: "blocked"` when only the user can unblock the work and they have not answered. Name the exact need and omit `next_steps`.
 - `status: "incomplete"` when nothing usable could be saved. Describe what happened and omit `next_steps`.
