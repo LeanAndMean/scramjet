@@ -717,10 +717,9 @@ impl ResponsesParser {
             }
             "response.output_item.added" => {
                 self.failure.stage = ProviderFailureStage::ItemAdded;
-                self.failure.field = Some("item/output_index");
-                if index(&event, "output_index")? != self.items.len() {
-                    return Err(Outcome::Framing);
-                }
+                self.failure.field = Some("item/id");
+                // Items are found by id, not `output_index`: Proxy's DeepSeek route gave a message
+                // and a reasoning item the same index.
                 if self.items.len() == self.limits.items {
                     return Err(Outcome::ResourceLimit);
                 }
@@ -762,15 +761,15 @@ impl ResponsesParser {
             }
             "response.output_item.done" => {
                 self.failure.stage = ProviderFailureStage::ItemDone;
-                self.failure.field = Some("item/output_index");
-                let i = index(&event, "output_index")?;
+                self.failure.field = Some("item/id");
                 let item = &event["item"];
                 validate_item(item, true)?;
-                let state = self.items.get_mut(i).ok_or(Outcome::Framing)?;
-                if state.done.is_some()
-                    || item["id"] != state.added["id"]
-                    || item["type"] != state.added["type"]
-                {
+                let state = self
+                    .items
+                    .iter_mut()
+                    .find(|state| state.added["id"] == item["id"])
+                    .ok_or(Outcome::Framing)?;
+                if state.done.is_some() || item["type"] != state.added["type"] {
                     return Err(Outcome::Framing);
                 }
                 match item["type"].as_str().unwrap() {
@@ -934,9 +933,16 @@ impl ResponsesParser {
                         progress.push(StreamProgress::Reasoning("\n\n".into()));
                     }
                 } else {
-                    if part.done || string(&event, "text")? != part.text {
+                    let text = string(&event, "text")?;
+                    if part.done {
                         return Err(Outcome::Framing);
                     }
+                    if text.len() > envelope {
+                        return Err(Outcome::ResourceLimit);
+                    }
+                    // As in Scramjet the final text counts, not the deltas: Proxy's DeepSeek route
+                    // sent a reply's text only here.
+                    part.text = text.to_owned();
                     part.done = true;
                 }
             }
@@ -1024,12 +1030,13 @@ impl ResponsesParser {
         Ok(())
     }
     fn item(&mut self, event: &Value, kind: &str) -> Result<&mut ItemState, Outcome> {
-        let i = index(event, "output_index")?;
-        let state = self.items.get_mut(i).ok_or(Outcome::Framing)?;
-        if state.done.is_some()
-            || state.added["type"] != kind
-            || string(event, "item_id")? != string(&state.added, "id")?
-        {
+        let id = string(event, "item_id")?;
+        let state = self
+            .items
+            .iter_mut()
+            .find(|state| state.added["id"] == id)
+            .ok_or(Outcome::Framing)?;
+        if state.done.is_some() || state.added["type"] != kind {
             return Err(Outcome::Framing);
         }
         Ok(state)

@@ -61,7 +61,6 @@ fn rejects_identity_order_terminal_and_strict_argument_mutations() {
             "response",
             json!({"id":"","status":"in_progress","output":[]}),
         ),
-        (1, "output_index", json!(1)),
         (2, "item_id", json!("foreign")),
         (3, "arguments", json!("{\"x\":1}")),
         (
@@ -629,21 +628,61 @@ fn unsupported_namespace_and_part_or_item_repetition_are_non_executable() {
     for i in 1..text.len() - 1 {
         let mut events = text.clone();
         events.insert(i, events[i].clone());
-        assert!(
-            parse(&fixture::wire(&events, false)).is_err(),
-            "repeated text event {i}"
-        );
+        let parsed = parse(&fixture::wire(&events, false));
+        if text[i]["type"] == "response.output_text.delta" {
+            // Deltas are only shown while streaming; the final text is the done event's.
+            let items = parsed.unwrap().envelope.unwrap().items;
+            assert_eq!(items[0].text().as_deref(), Some("x"));
+        } else {
+            assert!(parsed.is_err(), "repeated text event {i}");
+        }
     }
+    // Other events are ignored; an `error` event ends the stream.
     for kind in [
         "response.refusal.delta",
-        "error",
         "response.output_text.annotation.added",
         "response.unknown",
+        "error",
     ] {
         let mut events = text.clone();
         events[4]["type"] = json!(kind);
-        assert!(parse(&fixture::wire(&events, false)).is_err());
+        let parsed = parse(&fixture::wire(&events, false));
+        assert_eq!(parsed.is_ok(), kind != "error", "{kind}");
     }
+}
+#[test]
+fn items_are_found_by_id_and_a_text_may_arrive_only_in_its_done_event() {
+    // The shape of a deepseek-v4.1-flash reply through Proxy on 2026-10-30.
+    let message = json!({"type":"message","id":"msg_1","role":"assistant","status":"completed",
+        "content":[{"type":"output_text","text":"2","annotations":[]}]});
+    let reasoning = json!({"type":"reasoning","id":"rs_1","status":"completed",
+        "summary":[{"type":"summary_text","text":"Two lines."}]});
+    let events = [
+        json!({"type":"response.created","response":{"id":"resp_1","status":"in_progress","output":[]}}),
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress","content":[]}}),
+        json!({"type":"response.content_part.added","output_index":0,"item_id":"msg_1","content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}),
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","status":"in_progress","summary":[]}}),
+        json!({"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"rs_1","summary_index":0,"part":{"type":"summary_text","text":""}}),
+        json!({"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"rs_1","summary_index":0,"delta":"Two lines."}),
+        json!({"type":"response.reasoning_summary_text.done","output_index":0,"item_id":"rs_1","summary_index":0,"text":"Two lines."}),
+        json!({"type":"response.reasoning_summary_part.done","output_index":0,"item_id":"rs_1","summary_index":0,"part":{"type":"summary_text","text":"Two lines."}}),
+        json!({"type":"response.output_item.done","output_index":0,"item":reasoning}),
+        json!({"type":"response.output_text.done","output_index":0,"item_id":"msg_1","content_index":0,"text":"2"}),
+        json!({"type":"response.content_part.done","output_index":0,"item_id":"msg_1","content_index":0,"part":{"type":"output_text","text":"2","annotations":[]}}),
+        json!({"type":"response.output_item.done","output_index":0,"item":message}),
+        json!({"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[reasoning, message]}}),
+    ];
+    let items = parse(&fixture::wire(&events, false))
+        .unwrap()
+        .envelope
+        .unwrap()
+        .items;
+    let kinds: Vec<_> = items.iter().map(|item| item.kind()).collect();
+    assert_eq!(kinds, ["message", "reasoning"]);
+    assert_eq!(items[0].text().as_deref(), Some("2"));
+    let mut repeated = events.to_vec();
+    repeated.insert(4, events[3].clone());
+    assert!(parse(&fixture::wire(&repeated, false)).is_err());
 }
 #[test]
 fn compatibility_resource_and_malformed_failures_are_distinct() {
