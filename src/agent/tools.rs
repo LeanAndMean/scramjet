@@ -228,35 +228,62 @@ fn edit(root: &Path, call: &Call) -> Result<Output, String> {
     let edits = call.arguments["edits"]
         .as_array()
         .ok_or("missing array argument `edits`")?;
+    // Scramjet's wording; `edits[N]` rather than `edit N`, which models read as 1-based.
+    let single = edits.len() == 1;
+    let shown = path.display();
     let mut spans = Vec::with_capacity(edits.len());
     for (index, edit) in edits.iter().enumerate() {
         let old = edit["oldText"]
             .as_str()
-            .ok_or(format!("edit {index}: missing oldText"))?;
+            .ok_or(format!("edits[{index}]: missing oldText"))?;
         let new = edit["newText"]
             .as_str()
-            .ok_or(format!("edit {index}: missing newText"))?;
+            .ok_or(format!("edits[{index}]: missing newText"))?;
         if old.is_empty() {
-            return Err(format!("edit {index}: oldText is empty"));
+            return Err(match single {
+                true => format!("oldText must not be empty in {shown}."),
+                false => format!("edits[{index}].oldText must not be empty in {shown}."),
+            });
         }
-        let mut matches = original.match_indices(old);
-        let Some((start, _)) = matches.next() else {
-            return Err(format!(
-                "edit {index}: oldText not found in {}",
-                path.display()
-            ));
+        let Some(start) = original.find(old) else {
+            return Err(match single {
+                true => format!(
+                    "Could not find the exact text in {shown}. The old text must match exactly \
+including all whitespace and newlines."
+                ),
+                false => format!(
+                    "Could not find edits[{index}] in {shown}. The oldText must match exactly \
+including all whitespace and newlines."
+                ),
+            });
         };
-        if matches.next().is_some() {
-            return Err(format!(
-                "edit {index}: oldText matches more than once; include more context"
-            ));
+        let occurrences = original.matches(old).count();
+        if occurrences > 1 {
+            return Err(match single {
+                true => format!(
+                    "Found {occurrences} occurrences of the text in {shown}. The text must be \
+unique. Please provide more context to make it unique."
+                ),
+                false => format!(
+                    "Found {occurrences} occurrences of edits[{index}] in {shown}. Each oldText \
+must be unique. Please provide more context to make it unique."
+                ),
+            });
         }
-        spans.push((start, start + old.len(), new));
+        spans.push((start, start + old.len(), new, index));
     }
     spans.sort_by_key(|span| span.0);
-    if spans.windows(2).any(|pair| pair[0].1 > pair[1].0) {
-        return Err("edits overlap; merge them into one edit".into());
+    if let Some(pair) = spans.windows(2).find(|pair| pair[0].1 > pair[1].0) {
+        return Err(format!(
+            "edits[{}] and edits[{}] overlap in {shown}. Merge them into one edit or target \
+disjoint regions.",
+            pair[0].3, pair[1].3
+        ));
     }
+    let spans: Vec<_> = spans
+        .into_iter()
+        .map(|(start, end, new, _)| (start, end, new))
+        .collect();
     let mut updated = String::with_capacity(original.len());
     let mut cursor = 0;
     for (start, end, new) in &spans {
@@ -565,17 +592,41 @@ mod tests {
         let run = |edits: Value| {
             call("edit", json!({"path":"f.txt","edits":edits})).run(&root, &cancel, &mut |_| {})
         };
-        assert!(
-            run(json!([{"oldText":"beta","newText":"x"}]))
-                .unwrap_err()
-                .contains("more than once")
+        let path = root.join("f.txt").display().to_string();
+        assert_eq!(
+            run(json!([{"oldText":"beta","newText":"x"}])).unwrap_err(),
+            format!(
+                "Found 2 occurrences of the text in {path}. The text must be unique. Please \
+provide more context to make it unique."
+            )
         );
-        assert!(
-            run(json!([{"oldText":"delta","newText":"x"}]))
-                .unwrap_err()
-                .contains("not found")
+        assert_eq!(
+            run(json!([{"oldText":"delta","newText":"x"}])).unwrap_err(),
+            format!(
+                "Could not find the exact text in {path}. The old text must match exactly \
+including all whitespace and newlines."
+            )
         );
-        assert!(run(json!([{"oldText":"alpha beta","newText":"x"},{"oldText":"beta gamma","newText":"y"}])).unwrap_err().contains("overlap"));
+        assert_eq!(
+            run(json!([{"oldText":"alpha","newText":"x"},{"oldText":"delta","newText":"x"}]))
+                .unwrap_err(),
+            format!(
+                "Could not find edits[1] in {path}. The oldText must match exactly including \
+all whitespace and newlines."
+            )
+        );
+        assert_eq!(
+            run(json!([{"oldText":"gamma","newText":"x"},{"oldText":"","newText":"x"}]))
+                .unwrap_err(),
+            format!("edits[1].oldText must not be empty in {path}.")
+        );
+        assert_eq!(
+            run(json!([{"oldText":"gamma beta","newText":"y"},{"oldText":"alpha beta","newText":"x"},{"oldText":"beta gamma","newText":"y"}])).unwrap_err(),
+            format!(
+                "edits[1] and edits[2] overlap in {path}. Merge them into one edit or target \
+disjoint regions."
+            )
+        );
         run(json!([{"oldText":"gamma","newText":"G"},{"oldText":"alpha","newText":"A"}])).unwrap();
         assert_eq!(
             std::fs::read_to_string(root.join("f.txt")).unwrap(),
