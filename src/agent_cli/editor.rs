@@ -10,7 +10,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     os::unix::fs::OpenOptionsExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     sync::{
         Arc,
@@ -544,8 +544,15 @@ impl Screen {
         stderr.flush()
     }
 
-    /// Redraws the editor. `done` draws every row and leaves the cursor below them.
-    fn draw(&mut self, buffer: &Buffer, hint: Option<&str>, done: bool) -> io::Result<()> {
+    /// Redraws the editor, with `list` (a completion list's rows) under it. `done` draws every
+    /// row and leaves the cursor below them.
+    fn draw(
+        &mut self,
+        buffer: &Buffer,
+        hint: Option<&str>,
+        list: &[String],
+        done: bool,
+    ) -> io::Result<()> {
         let (width, height) = terminal_size();
         self.width = width;
         let layout = Layout::new(&buffer.text, width);
@@ -554,7 +561,7 @@ impl Screen {
         let visible = if done {
             total
         } else {
-            height.saturating_sub(2).max(1).min(total)
+            height.saturating_sub(2 + list.len()).max(1).min(total)
         };
         self.top = self
             .top
@@ -576,13 +583,16 @@ impl Screen {
             )
             .unwrap();
         }
+        for row in list {
+            write!(out, "\r\n{row}").unwrap();
+        }
         if done {
             out.push_str("\r\n");
             self.cursor_row = 0;
             self.top = 0;
         } else {
             let row = cursor.row - self.top;
-            let last = visible - 1 + usize::from(hint.is_some());
+            let last = visible - 1 + usize::from(hint.is_some()) + list.len();
             if last > row {
                 write!(out, "\x1b[{}A", last - row).unwrap();
             }
@@ -606,9 +616,169 @@ pub enum Input {
     Tree,
 }
 
+/// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
+const SLASH_COMMANDS: [(&str, &str); 7] = [
+    ("model", "Select model (opens selector UI)"),
+    ("fork", "Create a new fork from a previous user message"),
+    ("tree", "Navigate session tree (switch branches)"),
+    ("new", "Start a new session"),
+    ("compact", "Manually compact the session context"),
+    ("resume", "Resume a different session"),
+    ("quit", "Quit scramjet-rs"),
+];
+
+/// Rows of the completion list, as Scramjet's autocomplete shows at most.
+const COMPLETION_ROWS: usize = 5;
+
+struct Suggestion {
+    /// What replaces the completed text.
+    value: String,
+    label: String,
+    description: &'static str,
+}
+
+/// The list under the prompt that completes a slash command or a path, as Scramjet's editor
+/// does. It replaces the text from `start` to the cursor.
+struct Completion {
+    start: usize,
+    slash: bool,
+    items: Vec<Suggestion>,
+    selected: usize,
+}
+
+impl Completion {
+    /// The commands whose names start with what follows a `/` that begins the prompt.
+    fn slash(before: &str) -> Option<Self> {
+        let typed = before.strip_prefix('/')?;
+        if typed.contains(char::is_whitespace) {
+            return None;
+        }
+        let items = SLASH_COMMANDS
+            .iter()
+            .filter(|(name, _)| name.starts_with(typed))
+            .map(|&(name, description)| Suggestion {
+                value: format!("/{name} "),
+                label: format!("/{name}"),
+                description,
+            })
+            .collect();
+        Self::new(0, true, items)
+    }
+
+    /// The entries of the directory named by the word before the cursor whose names start with
+    /// the rest of it, as Scramjet's `getFileSuggestions` lists them: relative to `root`, `~/` in
+    /// the home directory, ignoring case, directories first.
+    fn path(before: &str, root: &Path) -> Option<Self> {
+        let start = before
+            .rfind([' ', '\t', '"', '\'', '='])
+            .map_or(0, |at| at + 1);
+        let word = &before[start..];
+        let (shown, name) = match word.rfind('/') {
+            Some(slash) => word.split_at(slash + 1),
+            None if word == "~" => ("~/", ""),
+            None => ("", word),
+        };
+        let directory = match shown.strip_prefix("~/") {
+            Some(rest) => std::env::home_dir()?.join(rest),
+            None => root.join(shown),
+        };
+        let name = name.to_lowercase();
+        let mut items: Vec<(bool, Suggestion)> = fs::read_dir(directory)
+            .ok()?
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let file = entry.file_name().into_string().ok()?;
+                if !file.to_lowercase().starts_with(&name) {
+                    return None;
+                }
+                // A link to a directory counts as one.
+                let kind = entry.file_type().ok()?;
+                let directory = kind.is_dir() || kind.is_symlink() && entry.path().is_dir();
+                let label = if directory { format!("{file}/") } else { file };
+                Some((
+                    directory,
+                    Suggestion {
+                        value: format!("{shown}{label}"),
+                        label,
+                        description: "",
+                    },
+                ))
+            })
+            .collect();
+        items.sort_by_cached_key(|(directory, item)| (!directory, item.label.to_lowercase()));
+        Self::new(
+            start,
+            false,
+            items.into_iter().map(|(_, item)| item).collect(),
+        )
+    }
+
+    fn new(start: usize, slash: bool, items: Vec<Suggestion>) -> Option<Self> {
+        (!items.is_empty()).then_some(Self {
+            start,
+            slash,
+            items,
+            selected: 0,
+        })
+    }
+
+    fn select(&mut self, up: bool) {
+        let count = self.items.len();
+        self.selected = (self.selected + if up { count - 1 } else { 1 }) % count;
+    }
+
+    fn apply(self, buffer: &mut Buffer) {
+        let value = &self.items[self.selected].value;
+        buffer.text.replace_range(self.start..buffer.cursor, value);
+        buffer.cursor = self.start + value.len();
+    }
+
+    /// The rows under the prompt, as Scramjet's select list draws them: the selected one
+    /// highlighted with `→ `, descriptions in a column, and the position when some are hidden.
+    fn rows(&self, width: usize) -> Vec<String> {
+        use super::style::{COMPLETION_SELECTED, MUTED, RESET};
+        let width = width.saturating_sub(1);
+        let count = self.items.len();
+        let visible = count.min(COMPLETION_ROWS);
+        let top = self
+            .selected
+            .saturating_sub(visible / 2)
+            .min(count - visible);
+        let column = self.items.iter().map(|item| item.label.width() + 2).max();
+        let column = column.unwrap_or(0).clamp(12, 32);
+        let mut rows: Vec<String> = (top..top + visible)
+            .map(|index| {
+                let item = &self.items[index];
+                let label = super::clip(&item.label, width.saturating_sub(2));
+                let room = width.saturating_sub(2 + column);
+                let description = if item.description.is_empty() || room <= 10 {
+                    String::new()
+                } else {
+                    let pad = " ".repeat(column.saturating_sub(label.width()));
+                    format!("{pad}{}", super::clip(item.description, room))
+                };
+                if index == self.selected {
+                    format!("{COMPLETION_SELECTED}→ {label}{description}{RESET}")
+                } else if description.is_empty() {
+                    format!("  {label}")
+                } else {
+                    format!("  {label}{MUTED}{description}{RESET}")
+                }
+            })
+            .collect();
+        if visible < count {
+            let position = format!("  ({}/{count})", self.selected + 1);
+            rows.push(format!("{MUTED}{}{RESET}", super::clip(&position, width)));
+        }
+        rows
+    }
+}
+
 pub struct Editor {
     history: Vec<String>,
     hide_thinking: Arc<AtomicBool>,
+    /// Where Tab completes relative paths from.
+    root: PathBuf,
     /// Reads one text for a question, as Scramjet's dialog editor: Escape or Ctrl-C cancels, and
     /// the text is erased when it returns.
     dialog: bool,
@@ -620,10 +790,11 @@ pub struct Editor {
 
 impl Editor {
     /// Ctrl+T flips `hide_thinking`.
-    pub fn new(history: Vec<String>, hide_thinking: Arc<AtomicBool>) -> Self {
+    pub fn new(history: Vec<String>, hide_thinking: Arc<AtomicBool>, root: PathBuf) -> Self {
         Self {
             history,
             hide_thinking,
+            root,
             dialog: false,
             typed: Vec::new(),
             text: String::new(),
@@ -634,7 +805,7 @@ impl Editor {
     pub fn dialog(hide_thinking: Arc<AtomicBool>) -> Self {
         Self {
             dialog: true,
-            ..Self::new(Vec::new(), hide_thinking)
+            ..Self::new(Vec::new(), hide_thinking, PathBuf::new())
         }
     }
 
@@ -672,7 +843,8 @@ impl Editor {
         let mut last_escape: Option<Instant> = None;
         let mut note: Option<String> = None;
         let mut dirty = false;
-        screen.draw(&buffer, None, false)?;
+        let mut completion: Option<Completion> = None;
+        screen.draw(&buffer, None, &[], false)?;
         loop {
             let key = match read_key(&mut source, Some(RESIZE_CHECK)) {
                 Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Key::EndOfInput,
@@ -680,6 +852,7 @@ impl Editor {
             };
             let armed = std::mem::take(&mut exit_armed);
             let noted = note.take();
+            let tab = matches!(&key, Key::Text(text) if text == "\t");
             let changed = match key {
                 // Stopped by a SIGTSTP from outside: the shell wrote below the prompt.
                 Key::Idle if super::job::continued() => {
@@ -702,6 +875,28 @@ impl Editor {
                     raw.resume()?;
                     exit_armed = armed;
                     note = noted;
+                    true
+                }
+                Key::Escape if completion.is_some() => {
+                    completion = None;
+                    true
+                }
+                Key::Up | Key::Down if completion.is_some() => {
+                    if let Some(list) = &mut completion {
+                        list.select(key == Key::Up);
+                    }
+                    true
+                }
+                // As in Scramjet, Enter on a command also submits it.
+                Key::Text(_) | Key::Enter if (tab || key == Key::Enter) && completion.is_some() => {
+                    let list = completion.take().expect("checked above");
+                    let submit = list.slash && key == Key::Enter;
+                    list.apply(&mut buffer);
+                    if submit {
+                        buffer.set(buffer.text.trim().to_owned());
+                        screen.draw(&buffer, None, &[], true)?;
+                        return Ok(Some(Input::Prompt(buffer.text)));
+                    }
                     true
                 }
                 Key::Escape | Key::Interrupt if self.dialog => {
@@ -738,6 +933,7 @@ impl Editor {
                     true
                 }
                 Key::External => {
+                    completion = None;
                     if let Some(command) = editor_command() {
                         // A full-screen editor gives the screen back as it was, so the prompt
                         // is drawn again in its place.
@@ -768,12 +964,12 @@ impl Editor {
                 Key::Enter => {
                     // As in Scramjet, the prompt is sent trimmed, and shown as sent.
                     buffer.set(buffer.text.trim().to_owned());
-                    screen.draw(&buffer, None, true)?;
+                    screen.draw(&buffer, None, &[], true)?;
                     return Ok(Some(Input::Prompt(buffer.text)));
                 }
                 Key::Interrupt if buffer.text.is_empty() => {
                     if armed {
-                        screen.draw(&buffer, None, true)?;
+                        screen.draw(&buffer, None, &[], true)?;
                         return Ok(None);
                     }
                     exit_armed = true;
@@ -781,12 +977,38 @@ impl Editor {
                 }
                 Key::Interrupt => {
                     buffer = Buffer::default();
+                    completion = None;
                     browsing = self.history.len();
                     true
                 }
                 Key::EndOfInput if buffer.text.is_empty() => {
-                    screen.draw(&buffer, None, true)?;
+                    screen.draw(&buffer, None, &[], true)?;
                     return Ok(None);
+                }
+                // Scramjet completes only commands after a `/` that starts the prompt; a path
+                // there is completed when no command matches.
+                Key::Text(_) if tab && !self.dialog => {
+                    let before = &buffer.text[..buffer.cursor];
+                    completion =
+                        Completion::slash(before).or_else(|| Completion::path(before, &self.root));
+                    if let Some(list) =
+                        completion.take_if(|list| list.items.len() == 1 && !list.slash)
+                    {
+                        list.apply(&mut buffer);
+                    }
+                    true
+                }
+                // A list follows what is typed, a path's while the same word is typed; commands
+                // are listed as soon as a `/` starts the prompt.
+                Key::Text(_) | Key::Backspace if !self.dialog => {
+                    buffer.apply(&key);
+                    let before = &buffer.text[..buffer.cursor];
+                    completion = match completion.take() {
+                        Some(list) if !list.slash => Completion::path(before, &self.root)
+                            .filter(|next| next.start == list.start),
+                        _ => Completion::slash(before),
+                    };
+                    true
                 }
                 Key::Up | Key::Down => {
                     let up = key == Key::Up;
@@ -809,10 +1031,12 @@ impl Editor {
                     true
                 }
                 Key::EndOfInput => {
+                    completion = None;
                     buffer.apply(&Key::Delete);
                     true
                 }
                 key => {
+                    completion = None;
                     buffer.apply(&key);
                     true
                 }
@@ -820,7 +1044,10 @@ impl Editor {
             dirty |= changed;
             if dirty && !source.pending() {
                 let hint = exit_armed.then_some(EXIT_HINT).or(note.as_deref());
-                screen.draw(&buffer, hint, false)?;
+                let rows = completion
+                    .as_ref()
+                    .map_or_else(Vec::new, |list| list.rows(terminal_size().0));
+                screen.draw(&buffer, hint, &rows, false)?;
                 dirty = false;
             }
         }
@@ -1083,6 +1310,143 @@ mod tests {
         assert_eq!(
             Layout::new("ab 界界\nx y", 8).rows,
             ["> ab ", "  界界", ". x y"]
+        );
+    }
+
+    fn plain(rows: Vec<String>) -> Vec<String> {
+        rows.iter()
+            .map(|row| {
+                row.replace(crate::agent_cli::style::COMPLETION_SELECTED, "")
+                    .replace(crate::agent_cli::style::MUTED, "")
+                    .replace(crate::agent_cli::style::RESET, "")
+            })
+            .collect()
+    }
+
+    fn labels(list: &Completion) -> Vec<&str> {
+        list.items.iter().map(|item| item.label.as_str()).collect()
+    }
+
+    #[test]
+    fn slash_commands_filter_and_complete_with_a_trailing_space() {
+        let list = Completion::slash("/").unwrap();
+        assert_eq!(
+            labels(&list),
+            [
+                "/model", "/fork", "/tree", "/new", "/compact", "/resume", "/quit"
+            ]
+        );
+        assert_eq!(
+            plain(list.rows(60)),
+            [
+                "→ /model      Select model (opens selector UI)",
+                "  /fork       Create a new fork from a previous user messa…",
+                "  /tree       Navigate session tree (switch branches)",
+                "  /new        Start a new session",
+                "  /compact    Manually compact the session context",
+                "  (1/7)",
+            ]
+        );
+        // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
+        let mut list = list;
+        for _ in 0..4 {
+            list.select(false);
+        }
+        assert_eq!(
+            plain(list.rows(24)),
+            [
+                "  /tree",
+                "  /new",
+                "→ /compact",
+                "  /resume",
+                "  /quit",
+                "  (5/7)"
+            ]
+        );
+        list.select(false);
+        list.select(false);
+        list.select(false);
+        assert_eq!(list.selected, 0);
+        list.select(true);
+        assert_eq!(list.items[list.selected].label, "/quit");
+
+        let mut buffer = Buffer {
+            text: "/re rest".into(),
+            cursor: 3,
+        };
+        let list = Completion::slash(&buffer.text[..buffer.cursor]).unwrap();
+        assert_eq!(labels(&list), ["/resume"]);
+        list.apply(&mut buffer);
+        assert_eq!((buffer.text.as_str(), buffer.cursor), ("/resume  rest", 8));
+
+        assert!(Completion::slash("/x").is_none());
+        assert!(Completion::slash("/model ").is_none());
+        assert!(Completion::slash("a /model").is_none());
+    }
+
+    #[test]
+    fn paths_complete_from_the_word_before_the_cursor() {
+        let root = std::env::temp_dir().join(format!("sjrs-editor-paths-{}", std::process::id()));
+        struct Scratch(PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _scratch = Scratch(root.clone());
+        fs::create_dir_all(root.join("Alpha-dir")).unwrap();
+        for file in ["alpine.txt", "also.txt", "beta", "Alpha-dir/inner.rs"] {
+            fs::write(root.join(file), "").unwrap();
+        }
+        std::os::unix::fs::symlink(root.join("Alpha-dir"), root.join("link")).unwrap();
+
+        // Directories first, then by name ignoring case.
+        let list = Completion::path("see AL", &root).unwrap();
+        assert_eq!(labels(&list), ["Alpha-dir/", "alpine.txt", "also.txt"]);
+        assert_eq!(plain(list.rows(40))[0], "→ Alpha-dir/");
+        let mut buffer = Buffer {
+            text: "see AL".into(),
+            cursor: 6,
+        };
+        let mut list = list;
+        list.select(false);
+        list.apply(&mut buffer);
+        assert_eq!(buffer.text, "see alpine.txt");
+
+        let list = |before: &str| {
+            Completion::path(before, &root).map(|list| {
+                list.items
+                    .into_iter()
+                    .map(|item| item.value)
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(list("li").unwrap(), ["link/"]);
+        assert_eq!(list("x=./Alpha-dir/").unwrap(), ["./Alpha-dir/inner.rs"]);
+        assert_eq!(list("'Alpha-dir/I").unwrap(), ["Alpha-dir/inner.rs"]);
+        let absolute = format!("{}/b", root.display());
+        assert_eq!(list(&absolute).unwrap(), [format!("{absolute}eta")]);
+        assert_eq!(list("").unwrap().len(), 5);
+        assert!(list("nothing").is_none());
+        assert!(list("missing/a").is_none());
+
+        let home = std::env::home_dir().unwrap();
+        let name = fs::read_dir(&home)
+            .unwrap()
+            .filter_map(|entry| entry.unwrap().file_name().into_string().ok())
+            .min()
+            .unwrap();
+        assert!(
+            list("~")
+                .unwrap()
+                .iter()
+                .all(|value| value.starts_with("~/"))
+        );
+        assert!(
+            list(&format!("~/{name}"))
+                .unwrap()
+                .iter()
+                .any(|value| value.starts_with(&format!("~/{name}")))
         );
     }
 

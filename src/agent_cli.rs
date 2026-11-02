@@ -209,8 +209,14 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     );
     // A tool block ends with a blank line; other output gets one before the prompt.
     let mut spaced = show_resumed(&agent, &mut ui);
-    let mut editor = (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
-        .then(|| editor::Editor::new(agent.prompts().to_vec(), hide_thinking.clone()));
+    let mut editor =
+        (std::io::stdin().is_terminal() && std::io::stderr().is_terminal()).then(|| {
+            editor::Editor::new(
+                agent.prompts().to_vec(),
+                hide_thinking.clone(),
+                agent.root().to_path_buf(),
+            )
+        });
     loop {
         // A double Escape erased the prompt for the tree, which then takes its place.
         let mut escaped = false;

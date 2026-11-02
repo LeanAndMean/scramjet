@@ -706,6 +706,50 @@ def new_session(read, until, send, output):
     send(b'\x03\x04')
 
 
+def completes_paths_and_commands(read, until, send, output):
+    os.makedirs(os.path.join(project, 'completion'))
+    for name in ['alpha-file', 'alpine-file', 'unique-file']:
+        open(os.path.join(project, 'completion', name), 'w').close()
+    open(os.path.join(project, 'notes.txt'), 'w').close()
+    mark = until(b'> ')
+    # Several entries are listed; Down and Tab insert the second one.
+    send(b'see comp\t')
+    mark = until(b'> see completion/', mark)
+    send(b'al\t')
+    mark = until('\u2192 alpha-file'.encode(), mark)
+    mark = until(b'  alpine-file', mark)
+    send(b'\x1b[B')
+    mark = until('\u2192 alpine-file'.encode(), mark)
+    send(b'\t')
+    mark = until(b'> see completion/alpine-file', mark)
+    # The list follows what is typed, and Enter inserts without sending.
+    send(b' and completion/\t')
+    mark = until(b'  unique-file', mark)
+    send(b'u')
+    mark = until('\u2192 unique-file'.encode(), mark)
+    send(b'\r')
+    mark = until(b'> see completion/alpine-file and completion/unique-file', mark)
+    send(b'\r')
+    mark = until(b'error: provider: cannot connect', mark)
+    # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
+    mark = until(b'> ', mark)
+    send(b'/')
+    mark = until(b'(1/7)', mark)
+    send(b're')
+    mark = until('\u2192 /resume'.encode(), mark)
+    # On an empty prompt Tab lists the project; the Escape that closes the list does not count
+    # toward the double Escape that opens the tree.
+    send(b'\x03\t')
+    mark = until('\u2192 completion/'.encode(), mark)
+    send(b'\x1b')
+    read(.1)
+    send(b'\x1b')
+    read(.7)
+    assert b'Session Tree' not in output[mark:], bytes(output[mark:])
+    # Enter on a command inserts and sends it.
+    send(b'/qu\r')
+
+
 def bang_commands(read, until, send, output):
     mark = until(b'> ')
     send(b'!echo hi; exit 3\r')
@@ -987,6 +1031,11 @@ run(['--retries', '0'], new_session)
 started = sorted(set(session_files()) - known)
 prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
 assert prompts == [['one'], ['two']], prompts
+known = set(session_files())
+run(['--retries', '0'], completes_paths_and_commands)
+(completed,) = set(session_files()) - known
+prompts = [item['content'] for item in map(json.loads, open(completed)) if item.get('role') == 'user']
+assert prompts == ['see completion/alpine-file and completion/unique-file'], prompts
 known = set(session_files())
 run([], bang_commands)
 (ran,) = set(session_files()) - known
