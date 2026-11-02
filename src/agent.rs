@@ -2356,6 +2356,30 @@ response is incomplete; retry the request."});
     }
 
     #[test]
+    fn a_tool_call_with_large_arguments_runs() {
+        let content = "let x = 1;\n".repeat(4_000);
+        let arguments = json!({ "path": "big.rs", "content": content }).to_string();
+        let events = fixture::call_events(&arguments, fixture::known_usage());
+        let text = serde_json::to_string(&events)
+            .unwrap()
+            .replace("\"inert\"", "\"write\"");
+        let (endpoint, server) = serve(vec![
+            stream(&serde_json::from_str::<Vec<Value>>(&text).unwrap()),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "large-arguments");
+        let mut ui = Recorder::default();
+        agent
+            .turn("write it", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(agent.root().join("big.rs")).unwrap(),
+            content
+        );
+    }
+
+    #[test]
     fn tool_calls_run_without_questions_unless_asked() {
         let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let bash = |id: &str, command: &str| {

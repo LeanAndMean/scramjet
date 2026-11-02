@@ -369,6 +369,7 @@ pub(crate) fn bounded_json_value(bytes: &[u8], limit: usize) -> Result<Value, Ou
             }
         })
 }
+#[cfg(test)]
 pub(crate) fn strict_json(bytes: &[u8]) -> Result<Value, Outcome> {
     bounded_json_value(bytes, PROVIDER_FRAME_BYTES)
 }
@@ -825,7 +826,7 @@ impl ResponsesParser {
                     state.arguments.push_str(delta);
                 } else {
                     if string(&event, "arguments")? != state.arguments
-                        || !strict_json(state.arguments.as_bytes())?.is_object()
+                        || !bounded_json_value(state.arguments.as_bytes(), envelope)?.is_object()
                     {
                         return Err(Outcome::Framing);
                     }
