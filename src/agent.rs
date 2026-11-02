@@ -30,6 +30,10 @@ const RETRY_DELAY: Duration = Duration::from_secs(2);
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
 /// Stored with each response item: the model that produced it. Never sent to the endpoint.
 const PRODUCER: &str = "_scramjet_model";
+/// Stored with a response's last item when the response reported it: the context size, so a
+/// resumed session knows how full the context is before its first reply, as Scramjet reads it
+/// from saved usage. Never sent.
+const CONTEXT: &str = "_scramjet_context_tokens";
 /// Stored with a user message whose text is not its prompt: the `!command` it ran, which is recalled
 /// as typed. Never sent to the endpoint.
 pub(super) const TYPED: &str = "_scramjet_typed";
@@ -202,6 +206,7 @@ impl Agent {
                 Vec::new(),
             ),
         };
+        let context_tokens = session.context_tokens();
         let executor = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -213,7 +218,10 @@ impl Agent {
             prompts,
             session,
             executor,
-            usage: Usage::default(),
+            usage: Usage {
+                context_tokens,
+                ..Usage::default()
+            },
         };
         agent.answer_interrupted_calls()?;
         Ok(agent)
@@ -245,10 +253,14 @@ impl Agent {
         }
         let (session, conversation, prompts) = Session::open(path)?;
         let model = session.model().map(str::to_owned);
+        let context_tokens = session.context_tokens();
         self.session = session;
         self.conversation = conversation;
         self.prompts = prompts;
-        self.usage = Usage::default();
+        self.usage = Usage {
+            context_tokens,
+            ..Usage::default()
+        };
         if let Some(model) = model {
             self.info = ModelInfo::guess(&model);
             self.config.model = model;
@@ -549,9 +561,13 @@ to a larger-context model)"
             };
             self.usage.context_tokens = reply.usage.as_ref().and_then(|usage| usage.total_tokens);
             let mut calls = Vec::new();
-            for mut item in reply.items {
+            let last = reply.items.len().saturating_sub(1);
+            for (index, mut item) in reply.items.into_iter().enumerate() {
                 if let Some(object) = item.as_object_mut() {
                     object.insert(PRODUCER.into(), json!(self.config.model));
+                    if let Some(tokens) = self.usage.context_tokens.filter(|_| index == last) {
+                        object.insert(CONTEXT.into(), json!(tokens));
+                    }
                 }
                 match item["type"].as_str() {
                     Some("message") => ui.assistant(&message_text(&item)),
@@ -1230,6 +1246,7 @@ mod tests {
         );
         let (session, resumed, _) = Session::open(agent.session_path()).unwrap();
         assert_eq!(resumed, agent.conversation());
+        assert_eq!(session.context_tokens(), None);
         agent.session = session;
         add_call(&mut agent, "read", "c.rs");
         add_call(&mut agent, "read", "b.rs");
@@ -1416,6 +1433,65 @@ mod tests {
     /// Usage of a response that filled `total` tokens of context.
     fn full_usage(total: u64) -> Value {
         json!({"input_tokens": total - 10, "output_tokens": 10, "total_tokens": total})
+    }
+
+    #[test]
+    fn a_resumed_session_knows_its_context_size_until_a_compaction() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("first answer", full_usage(29_000))),
+            stream(&fixture::text_events("summary", fixture::known_usage())),
+            stream(&fixture::text_events("continued", fixture::known_usage())),
+        ]);
+        let (mut first, scratch) = agent(endpoint, "resume-context");
+        let cancel = AtomicBool::new(false);
+        first
+            .turn("initial", &mut Recorder::default(), &cancel)
+            .unwrap();
+        first
+            .add(json!({"role":"user", "content":"recent work ".repeat(7000)}))
+            .unwrap();
+        let path = first.session_path().to_owned();
+        drop(first);
+
+        let config = AgentConfig {
+            endpoint,
+            model: "m".into(),
+            root: scratch.0.clone(),
+            effort: None,
+            max_output_tokens: None,
+            ask: false,
+            retries: 3,
+        };
+        let mut resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
+        assert_eq!(resumed.usage.context_tokens, Some(29_000));
+        resumed.set_context_window(Some(30_000));
+        let mut ui = Recorder::default();
+        resumed.turn("continue", &mut ui, &cancel).unwrap();
+        assert_eq!(ui.compactions.len(), 1);
+        assert_eq!(ui.compactions[0].2, Some(AutoCompaction::Threshold));
+        assert_eq!(ui.replies, ["continued"]);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[1]["instructions"], compaction::SYSTEM_PROMPT);
+        assert!(!requests[2].to_string().contains("_scramjet_"));
+        let (session, _, _) = Session::open(&path).unwrap();
+        assert_eq!(session.context_tokens(), Some(15));
+
+        // Saved before the compaction, the first answer's count is not trusted after it.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let compaction = lines
+            .iter()
+            .position(|line| line.contains("\"type\":\"compaction\""))
+            .unwrap();
+        assert!(
+            lines[..compaction]
+                .concat()
+                .contains("\"_scramjet_context_tokens\":29000")
+        );
+        let cut = scratch.0.join("cut.jsonl");
+        std::fs::write(&cut, lines[..=compaction].join("\n")).unwrap();
+        assert_eq!(Session::open(&cut).unwrap().0.context_tokens(), None);
     }
 
     /// A conversation with a small old prompt and ~21k tokens of recent work to keep.

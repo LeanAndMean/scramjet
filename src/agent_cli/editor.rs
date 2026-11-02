@@ -690,6 +690,8 @@ impl Editor {
                 }
                 Key::Enter if buffer.text.trim().is_empty() => true,
                 Key::Enter => {
+                    // As in Scramjet, the prompt is sent trimmed, and shown as sent.
+                    buffer.set(buffer.text.trim().to_owned());
                     screen.draw(&buffer, None, true)?;
                     return Ok(Some(buffer.text));
                 }

@@ -460,9 +460,12 @@ def first(read, until, send, output):
     send(b'\x1b[200~one\r\ntwo\x1b[201~')
     read(.5)
     assert b'error' not in output[mark:], 'paste submitted the prompt'
-    send(b'\x1b[13;2uthree\r')
-    mark = until(b'error: provider: cannot connect', mark)
-    mark = until(b'> ', mark)
+    send(b'\x1b[13;2uthree\x1b[13;2u\r')
+    failed = until(b'error: provider: cannot connect', mark)
+    # The prompt is sent trimmed and shown as sent, without the empty line it ended with.
+    echo = output.rfind(b'\x1b[J> ', mark, failed)
+    assert output[echo:failed].startswith(b'\x1b[J> one\r\n. two\r\n. three\r\n\x1b[?2004l'), bytes(output[echo:failed])
+    mark = until(b'> ', failed)
     send(b'\x1b[A')
     until(b'. three', mark)
     send(b'\x03')

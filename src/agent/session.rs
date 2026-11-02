@@ -26,6 +26,8 @@ pub struct Session {
     model: Option<String>,
     /// The file lists of the latest compaction, which the next one carries on.
     files: FileLists,
+    /// The context size the latest response reported, unless a compaction followed it.
+    context_tokens: Option<u64>,
 }
 
 fn compacted_files(compaction: &Value) -> FileLists {
@@ -56,6 +58,7 @@ struct Loaded {
     prompts: Vec<String>,
     model: Option<String>,
     files: FileLists,
+    context_tokens: Option<u64>,
 }
 
 fn load(path: &Path) -> io::Result<Loaded> {
@@ -64,6 +67,7 @@ fn load(path: &Path) -> io::Result<Loaded> {
     let mut prompts = Vec::new();
     let mut model = None;
     let mut files = FileLists::default();
+    let mut context_tokens = None;
     for (index, line) in reader.lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
@@ -87,6 +91,7 @@ fn load(path: &Path) -> io::Result<Loaded> {
             items.drain(..cut);
             items.insert(0, super::compaction::summary_message(summary));
             files = compacted_files(&value);
+            context_tokens = None;
         } else if value["type"] == "model_change" {
             let changed = value["model"]
                 .as_str()
@@ -95,6 +100,7 @@ fn load(path: &Path) -> io::Result<Loaded> {
         } else {
             if let Some(producer) = value[super::PRODUCER].as_str() {
                 model = Some(producer.to_owned());
+                context_tokens = value[super::CONTEXT].as_u64();
             }
             if value["role"] == "user"
                 && let Some(prompt) = value[super::TYPED].as_str().or(value["content"].as_str())
@@ -112,6 +118,7 @@ fn load(path: &Path) -> io::Result<Loaded> {
         prompts,
         model,
         files,
+        context_tokens,
     })
 }
 
@@ -175,6 +182,7 @@ impl Session {
             file,
             model: None,
             files: FileLists::default(),
+            context_tokens: None,
         };
         session
             .append(&json!({"type":"session","version":1,"root":root,"created":created as u64}))?;
@@ -220,6 +228,7 @@ impl Session {
                 file,
                 model: loaded.model,
                 files: loaded.files,
+                context_tokens: loaded.context_tokens,
             },
             loaded.items,
             loaded.prompts,
@@ -251,6 +260,10 @@ impl Session {
         self.model.as_deref()
     }
 
+    pub fn context_tokens(&self) -> Option<u64> {
+        self.context_tokens
+    }
+
     pub(super) fn compacted_files(&self) -> &FileLists {
         &self.files
     }
@@ -271,8 +284,10 @@ impl Session {
             self.model = item["model"].as_str().map(str::to_owned);
         } else if item["type"] == "compaction" {
             self.files = compacted_files(item);
+            self.context_tokens = None;
         } else if let Some(producer) = item[super::PRODUCER].as_str() {
             self.model = Some(producer.to_owned());
+            self.context_tokens = item[super::CONTEXT].as_u64();
         }
         Ok(())
     }
