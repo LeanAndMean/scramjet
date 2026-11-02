@@ -1,5 +1,6 @@
 mod diff;
 mod editor;
+mod job;
 mod markdown;
 
 use rustix::{
@@ -133,6 +134,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
 
     let cancel = Arc::new(AtomicBool::new(false));
     let startup = termios::tcgetattr(std::io::stdin()).ok();
+    job::install(startup.clone()).map_err(|e| e.to_string())?;
     let flag = cancel.clone();
     // SAFETY: the handler only swaps an atomic, calls tcflush, tcsetattr and _exit, all
     // async-signal-safe.
@@ -478,6 +480,11 @@ impl Status {
         let Some(text) = self.line() else {
             return;
         };
+        // After a stop the shell has written below the drawn rows, which stay as they are.
+        if job::continued() {
+            self.drawn = None;
+            self.rows_above = 0;
+        }
         let width = editor::terminal_size().0.saturating_sub(1).max(10);
         let mut block: String = self
             .output
@@ -502,7 +509,7 @@ impl Status {
     /// Removes the line, the output above it and the activity. Returns whether it was shown.
     fn clear(&mut self) -> bool {
         let drawn = self.drawn.take().is_some();
-        if drawn {
+        if drawn && !job::continued() {
             eprint!("{}", self.erase());
         }
         self.activity = None;

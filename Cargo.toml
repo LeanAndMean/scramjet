@@ -15,6 +15,7 @@ ratatui-core = { version = "=0.1.2", default-features = false, features = ["std"
 ratatui-crossterm = { version = "=0.1.2", default-features = false, features = ["crossterm_0_29"] }
 rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "termios", "process", "event", "time"] }
 signal-hook = { version = "=0.3.18", default-features = false }
+libc = { version = "=0.2.190", default-features = false }
 unicode-segmentation = { version = "=1.13.3", default-features = false }
 unicode-width = { version = "=0.2.2", default-features = false }
 bytes = { version = "=1.12.1", default-features = false }

@@ -285,6 +285,109 @@ def run(arguments, script, endpoint=closed, status=0, variables={}):
     os.close(slave)
 
 
+def run_in_shell(script, endpoint):
+    """Runs the agent from an interactive shell with job control, which on a stop restores no
+    terminal mode of its own (dash), so the agent's own restoring is what the shell sees."""
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 60, 0, 0))
+
+    def own_terminal():
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    variables = dict(env, PS1='$ ')
+    variables.pop('ENV', None)
+    shell = subprocess.Popen([shutil.which('dash') or 'sh', '-i'], cwd=project, env=variables,
+                             stdin=slave, stdout=slave, stderr=slave, close_fds=True, preexec_fn=own_terminal)
+    os.close(slave)
+    output = bytearray()
+
+    def read(seconds):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if select.select([master], [], [], .02)[0]:
+                try:
+                    output.extend(os.read(master, 65536))
+                except OSError:
+                    return
+
+    def until(text, since=0):
+        end = time.monotonic() + 10
+        while text not in output[since:]:
+            assert time.monotonic() < end, (text, bytes(output[-2000:]))
+            read(.05)
+        return output.find(text, since) + len(text)
+
+    def send(data):
+        os.write(master, data)
+
+    send(b'stty -g > ../mode; %s agent --endpoint %s\r' % (BINARY.encode(), endpoint.encode()))
+    script(read, until, send, output)
+    send(b'exit\r')
+    assert shell.wait(timeout=10) == 0, bytes(output[-2000:])
+    os.close(master)
+
+
+# Typed into the shell; only the shell's arithmetic makes the reply.
+SAME_MODE = b'stty -g | cmp -s - ../mode && echo restored-$((6*7))\r'
+
+
+def suspend_in_shell(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'running 1s', mark)
+    # Typed ahead, hidden; the shell must not get it.
+    send(b'echo LEAKED\r')
+    read(.3)
+    send(b'\x1a')
+    mark = until(b'Stopped', mark)
+    send(SAME_MODE)
+    mark = until(b'restored-42', mark)
+    send(b'fg\r')
+    mark = until(b'agent --endpoint', mark)
+    shown = until(b'running', mark)
+    assert b'A\x1b[J' not in output[mark:shown], 'redrawn over the shell\'s lines: %r' % bytes(output[mark:shown])
+    send(b'hidden')
+    read(.5)
+    assert b'hidden' not in output[mark:], 'keys typed after fg were echoed'
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    mark = until(b'> ', mark)
+    send(b'draft')
+    mark = until(b'draft', mark)
+    send(b'\x1a')
+    stopped = until(b'Stopped', mark)
+    assert output.rfind(b'\x1b[?2004l', 0, stopped) > output.rfind(b'\x1b[?2004h', 0, stopped), 'bracketed paste left on'
+    send(SAME_MODE)
+    mark = until(b'restored-42', stopped)
+    send(b'fg\r')
+    mark = until(b'> draft', mark)
+    send(b'\x7f!')
+    mark = until(b'> draf!', mark)
+    send(b'\x03\x04')
+    mark = until(b'$ ', mark)
+    send(SAME_MODE)
+    until(b'restored-42', mark)
+    assert b'LEAKED' not in output, 'text typed during the turn ran in the shell'
+
+
+def suspend_without_job_control(read, until, send, output):
+    # Leading its own session, the agent has no shell to continue it, so Ctrl-Z must not stop it.
+    mark = until(b'> ')
+    send(b'ab\x1a')
+    read(.5)
+    send(b'c')
+    mark = until(b'> abc', mark)
+    send(b'\x15go\r')
+    mark = until(b'thinking', mark)
+    send(b'\x1a')
+    mark = until(b'thinking 2s', mark)
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
 def first(read, until, send, output):
     mark = until(b'> ')
     send(b'\x1b[200~one\r\ntwo\x1b[201~')
@@ -558,6 +661,8 @@ assert len(sessions) == 1, sessions
 prompts = [item['content'] for item in map(json.loads, open(sessions[0])) if item.get('role') == 'user']
 assert prompts == ['one\ntwo\nthree'], prompts
 run(['--continue'], resumed)
+run([], suspend_without_job_control, hanging)
+run_in_shell(suspend_in_shell, talking)
 run(['--retries', '0'], typed_during_turn, delayed)
 run([], cancel_retry)
 run([], thinking_counts_seconds, hanging)

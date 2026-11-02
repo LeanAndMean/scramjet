@@ -52,6 +52,7 @@ enum Key {
     EndOfInput,
     ToggleThinking,
     External,
+    Suspend,
     Idle,
     Ignored,
 }
@@ -84,6 +85,7 @@ fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> io::Result<
         20 => Key::ToggleThinking,
         21 => Key::KillStart,
         23 => Key::DeleteWordBack,
+        26 => Key::Suspend,
         0x20..=0x7e => Key::Text(char::from(byte).to_string()),
         0xc2..=0xf4 => {
             let length = match byte {
@@ -435,7 +437,7 @@ impl RawMode {
         Ok(())
     }
 
-    /// The terminal as the shell left it, for an external editor.
+    /// The terminal as the shell left it, for an external editor or the shell itself.
     fn suspend(&self) {
         eprint!("\x1b[?2004l");
         let _ = io::stderr().flush();
@@ -615,10 +617,28 @@ impl Editor {
             let armed = std::mem::take(&mut exit_armed);
             let noted = note.take();
             let changed = match key {
+                // Stopped by a SIGTSTP from outside: the shell wrote below the prompt.
+                Key::Idle if super::job::continued() => {
+                    exit_armed = armed;
+                    note = noted;
+                    screen = Screen::default();
+                    true
+                }
                 Key::Idle => {
                     exit_armed = armed;
                     note = noted;
                     terminal_size().0 != screen.width
+                }
+                Key::Suspend => {
+                    screen.erase()?;
+                    raw.suspend();
+                    super::job::suspend();
+                    // Drawn again below, not once more at the next idle check.
+                    super::job::continued();
+                    raw.resume()?;
+                    exit_armed = armed;
+                    note = noted;
+                    true
                 }
                 Key::Ignored => {
                     exit_armed = armed;
@@ -870,10 +890,15 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_g_opens_the_external_editor() {
+    fn ctrl_g_opens_the_external_editor_and_ctrl_z_suspends() {
         assert_eq!(
-            keys(b"ab\x07"),
-            [Key::Text("a".into()), Key::Text("b".into()), Key::External]
+            keys(b"ab\x07\x1a"),
+            [
+                Key::Text("a".into()),
+                Key::Text("b".into()),
+                Key::External,
+                Key::Suspend
+            ]
         );
     }
 

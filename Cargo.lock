@@ -672,6 +672,7 @@ dependencies = [
  "httpdate",
  "hyper",
  "hyper-util",
+ "libc",
  "ratatui-core",
  "ratatui-crossterm",
  "rustix",
