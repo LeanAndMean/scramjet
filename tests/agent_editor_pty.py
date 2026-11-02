@@ -22,10 +22,10 @@ work = tempfile.mkdtemp(prefix='agent-editor-')
 atexit.register(shutil.rmtree, work, True)
 project = os.path.join(work, 'project')
 os.mkdir(project)
+# Bound without listening: connections are refused, and later servers cannot take the port.
 probe = socket.socket()
 probe.bind(('127.0.0.1', 0))
 closed = '127.0.0.1:%d' % probe.getsockname()[1]
-probe.close()
 # Accepts connections into its backlog and never answers, so a turn stays in progress.
 silent = socket.socket()
 silent.bind(('127.0.0.1', 0))
@@ -453,6 +453,26 @@ def new_session(read, until, send, output):
     send(b'\x03\x04')
 
 
+def bang_commands(read, until, send, output):
+    mark = until(b'> ')
+    send(b'!echo hi; exit 3\r')
+    mark = until(b'Command exited with code 3', mark)
+    shown = until(b'> ', mark)
+    assert b'\r\n\r\n\r\n' not in output[mark:shown], bytes(output[mark:shown])
+    send(b'!!echo secret\r')
+    mark = until(b'bash echo secret', shown)
+    mark = until(b'secret', mark)
+    mark = until(b'> ', mark)
+    send(b'!sleep 30\r')
+    mark = until(b'running 1s', mark)
+    send(b'\x03')
+    mark = until(b'Command cancelled by the user', mark)
+    mark = until(b'> ', mark)
+    send(b'\x1b[A\x1b[A')
+    until(b'> !!echo secret', mark)
+    send(b'\x03\x04')
+
+
 def final_texts_replace_lost_deltas(read, until, send, output):
     mark = until(b'> ')
     send(b'one\r')
@@ -495,6 +515,13 @@ run(['--retries', '0'], new_session)
 started = sorted(set(session_files()) - known)
 prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
 assert prompts == [['one'], ['two']], prompts
+known = set(session_files())
+run([], bang_commands)
+(ran,) = set(session_files()) - known
+items = [item for item in map(json.loads, open(ran)) if item.get('role') == 'user']
+assert [item['_scramjet_typed'] for item in items] == ['!echo hi; exit 3', '!sleep 30'], items
+assert items[1]['content'] == 'Ran `sleep 30`\n(no output)\n\n(command cancelled)', items
+assert 'secret' not in open(ran).read()
 known = set(session_files())
 run(['--ask'], cancel_at_approval, calling)
 (cancelled,) = set(session_files()) - known

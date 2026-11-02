@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::{
     io::Read,
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -436,15 +436,12 @@ pub fn sequence_diff<'a>(old: &[&'a str], new: &[&'a str], ops: &mut Vec<(char, 
     ops.extend(old[old.len() - suffix..].iter().map(|line| (' ', *line)));
 }
 
-/// As in Scramjet, a command that succeeds returns just its output; any other ending is a failure
-/// with its reason after the output.
 fn bash(
     root: &Path,
     call: &Call,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Output, String> {
-    use std::os::unix::process::CommandExt;
     let command = call.str("command")?;
     let timeout = Duration::from_secs(
         call.arguments["timeout"]
@@ -452,6 +449,19 @@ fn bash(
             .unwrap_or(DEFAULT_TIMEOUT)
             .clamp(1, MAX_TIMEOUT),
     );
+    Ok(run_command(root, command, Some(timeout), cancel, progress)?.tool_output())
+}
+
+/// Runs `command` with bash in `root` until it ends, `cancel` is set or, if given, `timeout` passes.
+/// `progress` receives the end of its output as it grows.
+pub(super) fn run_command(
+    root: &Path,
+    command: &str,
+    timeout: Option<Duration>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&str),
+) -> Result<Ran, String> {
+    use std::os::unix::process::CommandExt;
     let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
     let mut child = {
         let mut process = Command::new("bash");
@@ -502,7 +512,7 @@ fn bash(
         }
         if cancel.load(Ordering::Relaxed) {
             stopped = Some("cancelled by the user");
-        } else if started.elapsed() > timeout {
+        } else if timeout.is_some_and(|timeout| started.elapsed() > timeout) {
             stopped = Some("timed out");
         }
         if stopped.is_some() {
@@ -528,31 +538,69 @@ fn bash(
             total.load(Ordering::Relaxed)
         );
     }
-    let ending = match (stopped, status.code()) {
-        (Some(reason), _) => format!("Command {reason} after {}s", started.elapsed().as_secs()),
-        (None, Some(0)) => {
-            return Ok(Output {
-                text: if text.is_empty() {
-                    "(no output)".into()
-                } else {
-                    text
-                },
-                detail: None,
-                failed: false,
-            });
-        }
-        (None, Some(code)) => format!("Command exited with code {code}"),
-        (None, None) => format!("Command terminated ({status})"),
-    };
-    let text = match text.trim_end_matches('\n') {
-        "" => ending,
-        output => format!("{output}\n\n{ending}"),
-    };
-    Ok(Output {
-        text,
-        detail: None,
-        failed: true,
+    Ok(Ran {
+        output: text,
+        stopped,
+        status,
+        elapsed: started.elapsed(),
     })
+}
+
+/// A command that has ended: the end of its output, with a note when earlier output was left out,
+/// and how it ended.
+pub(super) struct Ran {
+    output: String,
+    /// Why it was stopped before it ended: `cancelled by the user` or `timed out`.
+    stopped: Option<&'static str>,
+    status: ExitStatus,
+    elapsed: Duration,
+}
+
+impl Ran {
+    /// As in Scramjet, a command that succeeds returns just its output; any other ending is a
+    /// failure with its reason after the output.
+    pub fn tool_output(&self) -> Output {
+        let ending = match (self.stopped, self.status.code()) {
+            (Some(reason), _) => format!("Command {reason} after {}s", self.elapsed.as_secs()),
+            (None, Some(0)) => {
+                return Output {
+                    text: if self.output.is_empty() {
+                        "(no output)".into()
+                    } else {
+                        self.output.clone()
+                    },
+                    detail: None,
+                    failed: false,
+                };
+            }
+            (None, Some(code)) => format!("Command exited with code {code}"),
+            (None, None) => format!("Command terminated ({})", self.status),
+        };
+        let text = match self.output.trim_end_matches('\n') {
+            "" => ending,
+            output => format!("{output}\n\n{ending}"),
+        };
+        Output {
+            text,
+            detail: None,
+            failed: true,
+        }
+    }
+
+    /// As Scramjet's text for a `!` command: what it ran, its output and how it ended.
+    pub fn message(&self, command: &str) -> String {
+        let mut text = format!("Ran `{command}`\n");
+        match self.output.trim_end_matches('\n') {
+            "" => text += "(no output)",
+            output => text += &format!("```\n{output}\n```"),
+        }
+        if self.stopped.is_some() {
+            text += "\n\n(command cancelled)";
+        } else if let Some(code) = self.status.code().filter(|code| *code != 0) {
+            text += &format!("\n\nCommand exited with code {code}");
+        }
+        text
+    }
 }
 
 /// The end of a running command's output, from the start of a line where it is cut.

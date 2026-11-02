@@ -143,7 +143,7 @@ impl Session {
                     model = Some(producer.to_owned());
                 }
                 if value["role"] == "user"
-                    && let Some(prompt) = value["content"].as_str()
+                    && let Some(prompt) = value[super::TYPED].as_str().or(value["content"].as_str())
                 {
                     prompts.push(prompt.to_owned());
                 }

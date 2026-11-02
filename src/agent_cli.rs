@@ -43,6 +43,8 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   -p PROMPT              run one prompt and exit (`-p -` reads it from stdin)
 In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing \\ starts
 a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
+`!command` runs a bash command in the project directory without a model turn and adds its output
+to the conversation for the next prompt; `!!command` runs it without adding it. Ctrl-C cancels it.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
 Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
 next one on; it works while a turn runs too. /new starts a new session. /model lists the models and /model ID switches to one.
@@ -187,10 +189,14 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     );
     let mut editor = (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
         .then(|| editor::Editor::new(agent.prompts().to_vec(), hide_thinking.clone()));
+    // A tool block ends with a blank line; other output gets one before the prompt.
+    let mut spaced = false;
     loop {
         let prompt = match &mut editor {
             Some(editor) => {
-                eprintln!();
+                if !std::mem::take(&mut spaced) {
+                    eprintln!();
+                }
                 match editor.read().map_err(|e| e.to_string())? {
                     Some(prompt) => prompt,
                     None => return Ok(()),
@@ -261,6 +267,31 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             }
             cancel.store(false, Ordering::Relaxed);
             continue;
+        }
+        // `!command` runs a command without a model turn; `!!command` keeps it out of the context.
+        if let Some(command) = prompt.strip_prefix('!') {
+            let (include, command) = match command.strip_prefix('!') {
+                Some(command) => (false, command),
+                None => (true, command),
+            };
+            let command = command.trim();
+            if !command.is_empty() {
+                if let Some(editor) = &mut editor {
+                    editor.remember(prompt);
+                    eprintln!();
+                }
+                cancel.store(false, Ordering::Relaxed);
+                let mode = InputMode::turn();
+                let result = agent.shell(command, include, &mut ui, &cancel);
+                drop(mode);
+                ui.clear();
+                match result {
+                    Ok(()) => spaced = true,
+                    Err(error) => eprintln!("error: {error}"),
+                }
+                cancel.store(false, Ordering::Relaxed);
+                continue;
+            }
         }
         if let Some(editor) = &mut editor {
             editor.remember(prompt);
@@ -627,6 +658,55 @@ struct Terminal {
 }
 
 impl Terminal {
+    /// A tool's result block; `bash_lines` is how many of a command's last lines it shows.
+    fn result(
+        &mut self,
+        name: &str,
+        output: &str,
+        detail: Option<&ToolDetail>,
+        failed: bool,
+        bash_lines: usize,
+    ) {
+        self.clear();
+        let width = editor::terminal_size().0.saturating_sub(2).max(20);
+        let took = self.tool_started.take().map(|started| started.elapsed());
+        let style = match () {
+            _ if !self.color => "",
+            _ if failed => "\x1b[31m",
+            _ => "\x1b[2m",
+        };
+        let reset = if style.is_empty() { "" } else { "\x1b[0m" };
+        let styled = |lines: Vec<String>| -> Vec<String> {
+            let row = |line| format!("{style}{line}{reset}");
+            lines.into_iter().map(row).collect()
+        };
+        let rows = match (name, detail) {
+            (_, Some(ToolDetail::Diff(diff))) => diff::rows(diff, width, self.color),
+            // As in Scramjet, trailing blank lines of a written file are not counted.
+            (_, Some(ToolDetail::Written(content))) => styled(preview(
+                content.trim_end_matches(['\n', '\r']),
+                Shown::First(WRITE_LINES),
+                width,
+            )),
+            ("bash", None) => styled(preview(
+                &bash_shown(output, failed),
+                Shown::Last(bash_lines),
+                width,
+            )),
+            _ => styled(preview(output, Shown::First(RESULT_LINES), width)),
+        };
+        for row in rows {
+            eprintln!("  {row}");
+        }
+        if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
+            eprintln!(
+                "  {}",
+                self.dim(&format!("took {:.1}s", took.as_secs_f64()))
+            );
+        }
+        // As in Scramjet, a blank line separates each tool block from what follows.
+        eprintln!();
+    }
     fn new(hide_thinking: Arc<AtomicBool>) -> Self {
         let color = std::io::stderr().is_terminal();
         let status = Arc::new(Mutex::<Status>::default());
@@ -946,45 +1026,10 @@ impl AgentUi for Terminal {
         }
     }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
-        self.clear();
-        let width = editor::terminal_size().0.saturating_sub(2).max(20);
-        let took = self.tool_started.take().map(|started| started.elapsed());
-        let style = match () {
-            _ if !self.color => "",
-            _ if failed => "\x1b[31m",
-            _ => "\x1b[2m",
-        };
-        let reset = if style.is_empty() { "" } else { "\x1b[0m" };
-        let styled = |lines: Vec<String>| -> Vec<String> {
-            let row = |line| format!("{style}{line}{reset}");
-            lines.into_iter().map(row).collect()
-        };
-        let rows = match (name, detail) {
-            (_, Some(ToolDetail::Diff(diff))) => diff::rows(diff, width, self.color),
-            // As in Scramjet, trailing blank lines of a written file are not counted.
-            (_, Some(ToolDetail::Written(content))) => styled(preview(
-                content.trim_end_matches(['\n', '\r']),
-                Shown::First(WRITE_LINES),
-                width,
-            )),
-            ("bash", None) => styled(preview(
-                &bash_shown(output, failed),
-                Shown::Last(BASH_LINES),
-                width,
-            )),
-            _ => styled(preview(output, Shown::First(RESULT_LINES), width)),
-        };
-        for row in rows {
-            eprintln!("  {row}");
-        }
-        if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
-            eprintln!(
-                "  {}",
-                self.dim(&format!("took {:.1}s", took.as_secs_f64()))
-            );
-        }
-        // As in Scramjet, a blank line separates each tool block from what follows.
-        eprintln!();
+        self.result(name, output, detail, failed, BASH_LINES);
+    }
+    fn command_result(&mut self, output: &str, failed: bool) {
+        self.result("bash", output, None, failed, COMMAND_LINES);
     }
     /// As Scramjet shows a compaction: the estimated context size before it, then the summary;
     /// an automatic one also says why it ran.
@@ -1083,6 +1128,8 @@ fn answer(typed: &str) -> Answer {
 
 /// Scramjet shows the end of bash output, where errors and the exit code are.
 const BASH_LINES: usize = 5;
+/// As Scramjet shows the output of a command the user ran with `!`.
+const COMMAND_LINES: usize = 20;
 const WRITE_LINES: usize = 10;
 const RESULT_LINES: usize = 6;
 
