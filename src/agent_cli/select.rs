@@ -4,12 +4,18 @@
 use super::editor::{Key, RESIZE_CHECK, RawMode, Stdin, read_key, terminal_size};
 use super::fuzzy::{self, Haystack};
 use super::style;
+use scramjet_rs::agent::Choice;
 use std::io::{self, Write};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Rows shown at once, as in Scramjet's selectors other than its tree.
 pub(super) const VISIBLE: usize = 10;
 const HINT: &str = "↑↓ move · Enter select · Esc cancel";
+/// Options shown at once in a question's list, as in Scramjet.
+const QUESTION_VISIBLE: usize = 8;
+/// Rows an option's label or description takes at most, as in Scramjet.
+const OPTION_ROWS: usize = 4;
+const DESCRIPTION_INDENT: &str = "     ";
 
 /// Shows `title` over `count` rows, at most `visible` at once, `row(index, width)` giving each
 /// one's text in at most `width` columns, and returns the index chosen with Enter, starting at
@@ -23,7 +29,8 @@ pub(super) fn select(
     current: Option<usize>,
     row: impl Fn(usize, usize) -> String,
 ) -> io::Result<Option<usize>> {
-    choose(title, List::new(count, initial, visible), current, row)
+    let list = List::new(count, initial, visible);
+    choose(list, |list, size| lines(title, list, current, size, &row))
 }
 
 /// As `select`, with a line to type a query on, as Scramjet's session and model selectors have:
@@ -38,19 +45,28 @@ pub(super) fn search(
     none: &str,
     row: impl Fn(usize, usize) -> String,
 ) -> io::Result<Option<usize>> {
-    choose(
-        title,
-        List::searching(texts, initial, visible, none),
-        current,
-        row,
-    )
+    let list = List::searching(texts, initial, visible, none);
+    choose(list, |list, size| lines(title, list, current, size, &row))
 }
 
-fn choose(
+/// As Scramjet's list for a question the model asks: each option's label with its description
+/// under it, at most `QUESTION_VISIBLE` options at once, framed with `title` and the keys to use.
+pub(super) fn question(
     title: &str,
+    options: &[Choice],
+    recommended: Option<usize>,
+) -> io::Result<Option<usize>> {
+    let visible = options.len().min(QUESTION_VISIBLE);
+    let list = List::new(options.len(), recommended.unwrap_or(0), visible);
+    choose(list, |list, size| {
+        question_lines(title, options, recommended, list, size)
+    })
+}
+
+/// `lines(list, (width, height))` draws the list for the terminal's size.
+fn choose(
     mut list: List,
-    current: Option<usize>,
-    row: impl Fn(usize, usize) -> String,
+    lines: impl Fn(&List, (usize, usize)) -> Vec<String>,
 ) -> io::Result<Option<usize>> {
     if list.rows.is_empty() {
         return Ok(None);
@@ -65,7 +81,7 @@ fn choose(
         if redraw && !source.pending() {
             let size = terminal_size();
             width = size.0;
-            let lines = lines(title, &list, current, size, &row);
+            let lines = lines(&list, size);
             let mut stderr = io::stderr().lock();
             write!(stderr, "{}{}", erase(drawn), lines.join("\r\n"))?;
             stderr.flush()?;
@@ -278,6 +294,102 @@ fn lines(
     lines
 }
 
+/// A question's lines for a terminal of `(width, height)`: a rule, the title, the options around
+/// the selected one, the selected one's position when some are not shown, the keys, a rule.
+fn question_lines(
+    title: &str,
+    options: &[Choice],
+    recommended: Option<usize>,
+    list: &List,
+    (width, height): (usize, usize),
+) -> Vec<String> {
+    use style::{MUTED, QUESTION_BORDER, QUESTION_TITLE, RESET};
+    let width = width.saturating_sub(1).max(8);
+    let count = options.len();
+    let selected = list.rows[list.selected];
+    let rows: Vec<Vec<String>> = (0..count)
+        .map(|index| {
+            let option = &options[index];
+            option_rows(option, index == selected, recommended == Some(index), width)
+        })
+        .collect();
+    // The rules, the title and the keys; the rest is for the options and their position.
+    let room = height.saturating_sub(4).max(1);
+    let shown = list.visible.clamp(1, count);
+    let mut top = selected.saturating_sub(shown / 2).min(count - shown);
+    let mut end = top + shown;
+    let needed = |top: usize, end: usize| {
+        let position = usize::from(top > 0 || end < count);
+        rows[top..end].iter().map(Vec::len).sum::<usize>() + position
+    };
+    // Options farthest from the selected one go first when they do not all fit.
+    while end - top > 1 && needed(top, end) > room {
+        if selected - top > end - 1 - selected {
+            top += 1;
+        } else {
+            end -= 1;
+        }
+    }
+    let rule = format!("{QUESTION_BORDER}{}{RESET}", "─".repeat(width));
+    let mut lines = vec![rule.clone(), format!("{QUESTION_TITLE}{title}{RESET}")];
+    let hidden = top > 0 || end < count;
+    let option_room = room.saturating_sub(usize::from(hidden)).max(1);
+    let options = rows[top..end].iter().flatten().take(option_room).cloned();
+    lines.extend(options);
+    if hidden {
+        lines.push(format!("  {MUTED}({}/{count}){RESET}", selected + 1));
+    }
+    lines.push(format!("{MUTED}{}{RESET}", super::clip(HINT, width)));
+    lines.push(rule);
+    lines
+}
+
+/// An option as Scramjet's question list shows it: `→` before the selected one, its label, then
+/// its description indented under it, each wrapped to at most `OPTION_ROWS` rows.
+fn option_rows(option: &Choice, selected: bool, recommended: bool, width: usize) -> Vec<String> {
+    use style::{MUTED, QUESTION_SELECTED, RESET};
+    let style = |text: String, other: &str| match (selected, other) {
+        (true, _) => format!("{QUESTION_SELECTED}{text}{RESET}"),
+        (false, "") => text,
+        (false, other) => format!("{other}{text}{RESET}"),
+    };
+    let mark = if selected { "→ " } else { "  " };
+    let mut rows: Vec<String> = wrapped(&option.label, width - 2)
+        .into_iter()
+        .enumerate()
+        .map(|(row, text)| style(format!("{}{text}", if row == 0 { mark } else { "  " }), ""))
+        .collect();
+    if let Some(description) = &option.description {
+        // As in Scramjet, only a recommended option's description says it is recommended.
+        let text = match recommended {
+            true => format!("[recommended] {description}"),
+            false => description.clone(),
+        };
+        let width = width - DESCRIPTION_INDENT.len();
+        for text in wrapped(&text, width) {
+            rows.push(style(format!("{DESCRIPTION_INDENT}{text}"), MUTED));
+        }
+    }
+    rows
+}
+
+/// `text` wrapped between words to `width` columns, in at most `OPTION_ROWS` rows, the last
+/// one ending with `…` when there is more.
+fn wrapped(text: &str, width: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let mut wrap = super::Wrap::new(width.max(1));
+        let line = wrap.push(&super::printable(line)) + &wrap.finish();
+        rows.extend(line.split('\n').map(str::to_owned));
+    }
+    if rows.len() > OPTION_ROWS {
+        rows.truncate(OPTION_ROWS);
+        let last = &mut rows[OPTION_ROWS - 1];
+        *last = super::clip(&format!("{last}…"), width);
+    }
+    rows
+}
+
 /// The end of `text` that fits in `width` columns, so that the end of a long query shows.
 fn tail(text: &str, width: usize) -> &str {
     let mut used = 0;
@@ -367,6 +479,52 @@ mod tests {
                 "Pick  ↑↓ move · Enter select · Esc cancel",
                 "  row 0",
                 "› row 1"
+            ]
+        );
+    }
+
+    #[test]
+    fn question_options_show_their_descriptions_under_them() {
+        let option = |label: &str, description: Option<&str>| Choice {
+            label: label.into(),
+            description: description.map(str::to_owned),
+            value: String::new(),
+        };
+        let options = [
+            option("Ship it", Some("Commit and push the change now")),
+            option("Wait", None),
+            option("Ask again later", Some(&"long words ".repeat(20))),
+        ];
+        let list = List::new(3, 2, 8);
+        assert_eq!(
+            plain(question_lines("Choose", &options, Some(2), &list, (31, 24))),
+            [
+                "─".repeat(30).as_str(),
+                "Choose",
+                "  Ship it",
+                "     Commit and push the",
+                "     change now",
+                "  Wait",
+                "→ Ask again later",
+                "     [recommended] long words",
+                "     long words long words",
+                "     long words long words",
+                "     long words long words…",
+                "↑↓ move · Enter select · Esc …",
+                "─".repeat(30).as_str(),
+            ]
+        );
+        // A short terminal keeps the selected option and the ones nearest it, with its position.
+        let first = List::new(3, 0, 8);
+        let short = plain(question_lines("Choose", &options, None, &first, (31, 8)));
+        assert_eq!(
+            short[1..6],
+            [
+                "Choose",
+                "→ Ship it",
+                "     Commit and push the",
+                "     change now",
+                "  (1/3)"
             ]
         );
     }

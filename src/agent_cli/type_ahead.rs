@@ -32,15 +32,20 @@ pub(super) struct TypeAhead {
 impl TypeAhead {
     /// Reads stdin; a lone Escape sets `cancel`.
     pub(super) fn start(cancel: Arc<AtomicBool>) -> Self {
-        Self::reading(std::io::stdin(), cancel)
+        Self::reading(std::io::stdin(), cancel, Vec::new())
     }
 
-    fn reading(input: impl AsFd + Send + 'static, cancel: Arc<AtomicBool>) -> Self {
+    /// Reads stdin again after `finish` returned `typed`, which Ctrl-C can still discard.
+    pub(super) fn resume(cancel: Arc<AtomicBool>, typed: Vec<u8>) -> Self {
+        Self::reading(std::io::stdin(), cancel, typed)
+    }
+
+    fn reading(input: impl AsFd + Send + 'static, cancel: Arc<AtomicBool>, typed: Vec<u8>) -> Self {
         DISCARD.store(false, Ordering::Relaxed);
         let stop = Arc::new(AtomicBool::new(false));
         let thread = std::thread::spawn({
             let (stop, cancel) = (stop.clone(), cancel.clone());
-            move || collect(input.as_fd(), &stop, &cancel)
+            move || collect(input.as_fd(), &stop, &cancel, typed)
         });
         Self {
             stop,
@@ -60,8 +65,12 @@ impl TypeAhead {
     }
 }
 
-fn collect(input: BorrowedFd, stop: &AtomicBool, cancel: &AtomicBool) -> Vec<u8> {
-    let mut typed = Vec::new();
+fn collect(
+    input: BorrowedFd,
+    stop: &AtomicBool,
+    cancel: &AtomicBool,
+    mut typed: Vec<u8>,
+) -> Vec<u8> {
     // Escapes ending the last read: a key of their own unless more bytes follow at once, as
     // they do in the sequence of an arrow key or Alt+key.
     let mut escapes = 0;
@@ -125,7 +134,7 @@ mod tests {
     fn a_lone_escape_cancels_and_is_not_kept() {
         let (reader, mut writer) = pipe().unwrap();
         let cancel = Arc::new(AtomicBool::new(false));
-        let typed = TypeAhead::reading(reader, cancel.clone());
+        let typed = TypeAhead::reading(reader, cancel.clone(), Vec::new());
         writer.write_all(b"kept\x1b").unwrap();
         assert!(wait_for(&cancel));
         writer.write_all(b" after").unwrap();
@@ -137,7 +146,7 @@ mod tests {
     fn escape_sequences_are_typed_text() {
         let (reader, mut writer) = pipe().unwrap();
         let cancel = Arc::new(AtomicBool::new(false));
-        let typed = TypeAhead::reading(reader, cancel.clone());
+        let typed = TypeAhead::reading(reader, cancel.clone(), Vec::new());
         // Up, Alt+b, Alt+Up as some terminals send it.
         writer.write_all(b"a\x1b[A\x1bb\x1b\x1b[A").unwrap();
         std::thread::sleep(ESCAPE_WAIT * 4);

@@ -5,11 +5,13 @@ mod client;
 mod commands;
 mod compaction;
 mod messages;
+mod question;
 mod session;
 mod tools;
 
 pub use client::StreamProgress;
 pub use commands::{Command, Commands};
+pub use question::Choice;
 pub use session::{Session, SessionInfo};
 pub use tools::sequence_diff;
 
@@ -110,6 +112,17 @@ pub trait AgentUi {
     fn branch_summary(&mut self, summary: &str);
     /// Asks whether a tool call may run; returns `Deny` without an answer once `cancel` is set.
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer;
+    /// The markdown message of a question the model asks the user, shown before its options or,
+    /// in a resumed conversation, before the answer.
+    fn question(&mut self, message: &str);
+    /// Lets the user choose one of `options` under `title`, `recommended` selected at first;
+    /// `None` when they cancel.
+    fn choose(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+    ) -> Option<usize>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -128,6 +141,8 @@ pub enum ToolDetail {
     Diff(String),
     /// The content a write put in the file.
     Written(String),
+    /// What the user answered a question, as Scramjet's result row shows it.
+    Answer(String),
 }
 
 #[derive(Debug)]
@@ -1024,8 +1039,11 @@ to a larger-context model)"
                 self.compact_when_full(ui, cancel)?;
                 return Ok(());
             }
+            // As in Pi, the turn ends without another request when every call ends it.
+            let mut ends = true;
             for item in calls {
-                let output = self.call(&item, ui, cancel);
+                let (output, ends_turn) = self.call(&item, ui, cancel);
+                ends &= ends_turn;
                 let mut result = json!({"type":"function_call_output","call_id":item["call_id"],"output":output.text});
                 if output.failed {
                     result[FAILED] = json!(true);
@@ -1037,6 +1055,10 @@ to a larger-context model)"
                 if cancel.load(Ordering::Relaxed) {
                     return Err(AgentError::Cancelled);
                 }
+            }
+            if ends {
+                self.compact_when_full(ui, cancel)?;
+                return Ok(());
             }
         }
         Err(AgentError::TooManySteps)
@@ -1229,7 +1251,9 @@ to a larger-context model)"
         }
     }
 
-    fn call(&mut self, item: &Value, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> Output {
+    /// Runs a tool call, after any approval; also says whether the turn ends after it, as a
+    /// question the user cancelled or is to answer at the prompt ends it.
+    fn call(&mut self, item: &Value, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> (Output, bool) {
         let failure = |text: String| Output {
             text,
             detail: None,
@@ -1240,10 +1264,13 @@ to a larger-context model)"
             Err(error) => {
                 let output = format!("Error: {error}");
                 ui.tool_result(item["name"].as_str().unwrap_or(""), &output, None, true);
-                return failure(output);
+                return (failure(output), false);
             }
         };
         ui.tool_call(call.name, &call.summary());
+        if call.name == question::NAME {
+            return ask(&call.arguments, ui);
+        }
         let answer = match call.approval(&self.config.root) {
             Approval::Ask(question) if self.config.ask => ui.approve(&question, cancel),
             _ => Answer::Allow,
@@ -1258,7 +1285,7 @@ to a larger-context model)"
                 "The user denied this tool call."
             };
             ui.tool_result(call.name, output, None, true);
-            return failure(output.to_owned());
+            return (failure(output.to_owned()), false);
         }
         ui.tool_running();
         let output = call
@@ -1272,8 +1299,41 @@ to a larger-context model)"
             output.detail.as_ref(),
             output.failed,
         );
-        output
+        (output, false)
     }
+}
+
+/// Asks the user the question of a `get_scramjet_user_input` call, as Scramjet's tool does.
+fn ask(arguments: &Value, ui: &mut dyn AgentUi) -> (Output, bool) {
+    let question = match question::Question::parse(arguments) {
+        Ok(question) => question,
+        Err(error) => {
+            ui.tool_result(question::NAME, &error, None, true);
+            let output = Output {
+                text: error,
+                detail: None,
+                failed: true,
+            };
+            return (output, false);
+        }
+    };
+    ui.question(&question.message);
+    let chosen = match question.kind {
+        question::Kind::Freetext => None,
+        question::Kind::Confirm => ui.choose("Confirm", &question.options, None),
+        question::Kind::Select => {
+            ui.choose("Choose an option", &question.options, question.recommended)
+        }
+    };
+    let (text, ends) = question.answer(chosen);
+    let detail = question::shown(arguments, &text).map(|(_, shown)| ToolDetail::Answer(shown));
+    ui.tool_result(question::NAME, &text, detail.as_ref(), false);
+    let output = Output {
+        text,
+        detail,
+        failed: false,
+    };
+    (output, ends)
 }
 
 /// Shows stored items as their turns showed them, as Scramjet redraws a resumed session: each
@@ -1326,16 +1386,24 @@ fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                 if let Some(call) = &call {
                     ui.tool_call(call.name, &call.summary());
                 }
-                let detail = match item[DIFF].as_str() {
-                    Some(diff) => Some(ToolDetail::Diff(diff.to_owned())),
+                let output = item["output"].as_str().unwrap_or_default();
+                let asked = call
+                    .as_ref()
+                    .filter(|call| call.name == question::NAME)
+                    .and_then(|call| question::shown(&call.arguments, output));
+                let detail = match (item[DIFF].as_str(), asked) {
+                    (Some(diff), _) => Some(ToolDetail::Diff(diff.to_owned())),
+                    (None, Some((message, answer))) => {
+                        ui.question(&message);
+                        Some(ToolDetail::Answer(answer))
+                    }
                     // A write's preview is the content it was given.
-                    None if name == "write" && !failed => call
+                    (None, None) if name == "write" && !failed => call
                         .as_ref()
                         .and_then(|call| call.arguments["content"].as_str())
                         .map(|content| ToolDetail::Written(content.to_owned())),
-                    None => None,
+                    (None, None) => None,
                 };
-                let output = item["output"].as_str().unwrap_or_default();
                 ui.tool_result(name, output, detail.as_ref(), failed);
             }
             _ if item["role"] == "user" => {
@@ -1421,6 +1489,7 @@ Available tools:
 - bash: Execute bash commands (ls, grep, find, etc.)
 - edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call
 - write: Create or overwrite files
+- {question}: {snippet}
 
 Guidelines:
 - Use bash for file operations like ls, rg, find, and for git, builds and tests
@@ -1443,6 +1512,8 @@ Current working directory: {root}
 ",
         root = root.display(),
         date = today(),
+        question = question::NAME,
+        snippet = question::SNIPPET,
     );
     let mut files = Vec::new();
     for directory in root.ancestors() {
@@ -1507,6 +1578,8 @@ mod tests {
         /// Answers to give, in order; questions beyond them are denied.
         answers: Vec<Answer>,
         questions: usize,
+        /// Options to choose, in order; questions beyond them are cancelled.
+        choices: Vec<Option<usize>>,
         /// What a replay showed, in order, with the results of calls.
         shown: Vec<String>,
     }
@@ -1571,6 +1644,23 @@ mod tests {
                 .get(self.questions - 1)
                 .copied()
                 .unwrap_or(Answer::Deny)
+        }
+        fn question(&mut self, message: &str) {
+            self.shown.push(format!("question {message}"));
+        }
+        fn choose(
+            &mut self,
+            title: &str,
+            options: &[Choice],
+            recommended: Option<usize>,
+        ) -> Option<usize> {
+            let labels: Vec<_> = options.iter().map(|o| o.label.as_str()).collect();
+            self.shown
+                .push(format!("choose {title} {labels:?} {recommended:?}"));
+            match self.choices.is_empty() {
+                true => None,
+                false => self.choices.remove(0),
+            }
         }
     }
 
@@ -1950,7 +2040,7 @@ mod tests {
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 3);
         assert_eq!(requests[1]["instructions"], compaction::SYSTEM_PROMPT);
-        assert!(!requests[2].to_string().contains("_scramjet_"));
+        assert!(!requests[2].to_string().contains("\"_scramjet_"));
         let (session, _, _) = Session::open(&path).unwrap();
         assert_eq!(session.context_tokens(), Some(15));
 
@@ -2479,7 +2569,7 @@ response is incomplete; retry the request."});
             bodies[0]["input"],
             json!([{"role":"user","content":message},{"role":"user","content":"next"}])
         );
-        assert!(!bodies[0].to_string().contains("_scramjet_"));
+        assert!(!bodies[0].to_string().contains("\"_scramjet_"));
         let path = agent.session_path().to_owned();
         let (_, _, prompts) = Session::open(&path).unwrap();
         assert_eq!(prompts, ["!echo hi; exit 3", "next"]);
@@ -2530,7 +2620,7 @@ response is incomplete; retry the request."});
             bodies[1]["input"][2],
             json!({"role":"user","content":"/sjrstest:other x"})
         );
-        assert!(!bodies[1].to_string().contains("_scramjet_"));
+        assert!(!bodies[1].to_string().contains("\"_scramjet_"));
         assert!(
             bodies[0]["instructions"]
                 .as_str()
@@ -2664,7 +2754,7 @@ response is incomplete; retry the request."});
             .unwrap();
         let bodies = server.join().unwrap();
         assert!(
-            !bodies[2].to_string().contains("_scramjet_"),
+            !bodies[2].to_string().contains("\"_scramjet_"),
             "{}",
             bodies[2]
         );
@@ -2684,6 +2774,106 @@ response is incomplete; retry the request."});
         assert_eq!(
             results,
             [&edited, "result bash Command exited with code 2 failed"]
+        );
+    }
+
+    #[test]
+    fn questions_wait_for_the_users_choice_and_a_cancel_or_freetext_ends_the_turn() {
+        let ask = |id: &str, arguments: Value| {
+            let events = fixture::call_events(&arguments.to_string(), fixture::known_usage());
+            let text = serde_json::to_string(&events).unwrap();
+            let text = text
+                .replace("\"inert\"", &format!("\"{}\"", question::NAME))
+                .replace("call_1", id);
+            serde_json::from_str::<Vec<Value>>(&text).unwrap()
+        };
+        let select = json!({"type":"select","message":"Which?","recommended":1,
+            "options":[{"value":"a","label":"Alpha","description":"first"},{"value":"b","label":"Beta"}]});
+        let confirm = json!({"type":"confirm","message":"Go on?"});
+        let (endpoint, server) = serve(vec![
+            stream(&ask("call_1", select.clone())),
+            stream(&ask("call_2", json!({"type":"select","message":"Which?"}))),
+            stream(&ask("call_3", confirm.clone())),
+            stream(&fixture::text_events("chose", fixture::known_usage())),
+            // Cancelled: no request follows within the turn.
+            stream(&ask("call_4", confirm)),
+            stream(&ask("call_5", json!({"type":"freetext","message":"Why?"}))),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "question");
+        let mut ui = Recorder {
+            choices: vec![Some(0), Some(1)],
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        agent.turn("pick", &mut ui, &cancel).unwrap();
+        agent.turn("again", &mut ui, &cancel).unwrap();
+        agent.turn("explain", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 6);
+        let tools = bodies[0]["tools"].as_array().unwrap();
+        assert_eq!(tools.last().unwrap()["name"], question::NAME);
+        let instructions = bodies[0]["instructions"].as_str().unwrap();
+        assert!(instructions.contains(&format!("- {}: {}\n", question::NAME, question::SNIPPET)));
+        let outputs: Vec<_> = agent
+            .conversation()
+            .iter()
+            .filter_map(|item| item["output"].as_str())
+            .collect();
+        assert_eq!(
+            outputs,
+            [
+                r#"{"selected":"a"}"#,
+                "Validation error: 'options' is required and must be a non-empty array for \
+select type.",
+                r#"{"confirmed":false}"#,
+                r#"{"cancelled":true}"#,
+                r#"{"parked":false}"#,
+            ]
+        );
+        let first = [
+            "call get_scramjet_user_input ",
+            "question Which?",
+            "choose Choose an option [\"Alpha\", \"Beta\"] Some(1)",
+            "result get_scramjet_user_input {\"selected\":\"a\"} Answer(\"→ Alpha — first\\n  Beta\")",
+        ];
+        assert_eq!(ui.shown[..4], first);
+        assert_eq!(
+            ui.shown[5],
+            "result get_scramjet_user_input Validation error: 'options' is required and must be \
+a non-empty array for select type. failed"
+        );
+        assert_eq!(ui.shown[8], "choose Confirm [\"Yes\", \"No\"] None");
+        assert_eq!(ui.replies, ["chose"]);
+        // A resumed session shows each question with its answer.
+        let mut replay = Recorder::default();
+        agent.show_conversation(&mut replay);
+        let asked: Vec<_> = replay
+            .shown
+            .iter()
+            .filter(|shown| shown.starts_with("question") || shown.starts_with("result"))
+            .map(|shown| shown.split(" {").next().unwrap())
+            .collect();
+        assert_eq!(
+            asked,
+            [
+                "question Which?",
+                "result get_scramjet_user_input",
+                "result get_scramjet_user_input Validation error: 'options' is required and must \
+be a non-empty array for select type. failed",
+                "question Go on?",
+                "result get_scramjet_user_input",
+                "question Go on?",
+                "result get_scramjet_user_input",
+                "question Why?",
+                "result get_scramjet_user_input",
+            ]
+        );
+        assert!(
+            replay
+                .shown
+                .last()
+                .unwrap()
+                .ends_with("Answer(\"Reply at the prompt\")")
         );
     }
 
@@ -2774,7 +2964,7 @@ response is incomplete; retry the request."});
         assert_eq!(lines[7], r#"{"name":"Parser work","type":"session_info"}"#);
         assert_eq!(lines[8], r#"{"parent":4,"type":"branch"}"#);
         let bodies = server.join().unwrap();
-        assert!(!bodies[3].to_string().contains("_scramjet_"));
+        assert!(!bodies[3].to_string().contains("\"_scramjet_"));
 
         // Counted over the current branch (one, call, result, A, !ls, three, C), as saved.
         let stats = Stats {
@@ -2938,7 +3128,7 @@ response is incomplete; retry the request."});
         assert_eq!(input.len(), 4, "{input:?}");
         assert_eq!(input[1]["content"][0]["text"], "first");
         assert_eq!(input[3], json!({"role":"user","content":"two again"}));
-        assert!(!bodies[0].to_string().contains("_scramjet_"));
+        assert!(!bodies[0].to_string().contains("\"_scramjet_"));
 
         // A compaction before the prompt is copied, and later model changes are not.
         agent.resume_session(&original).unwrap();

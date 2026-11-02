@@ -51,3 +51,8 @@ pub const SEARCH_CURSOR: &str = "\x1b[7m";
 pub const COMPLETION_SELECTED: &str = "\x1b[36m";
 /// The mark after the current session or model in a selector.
 pub const CURRENT: &str = "\x1b[32m";
+/// The rules above and below the list of a question the model asks, its title, and the rows of
+/// the selected option, as Scramjet's border and accent colors show them.
+pub const QUESTION_BORDER: &str = "\x1b[34m";
+pub const QUESTION_TITLE: &str = "\x1b[1;36m";
+pub const QUESTION_SELECTED: &str = "\x1b[36m";

@@ -14,7 +14,7 @@ use rustix::{
     termios::{self, LocalModes, OptionalActions, QueueSelector, SpecialCodeIndex, Termios},
 };
 use scramjet_rs::agent::{
-    Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Compaction, Navigated,
+    Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Choice, Compaction, Navigated,
     Purpose, SessionChoice, SessionInfo, StreamProgress, ToolDetail,
 };
 use std::{
@@ -1152,6 +1152,15 @@ impl Terminal {
                 Shown::First(WRITE_LINES),
                 width,
             )),
+            // The user's own answer, not dimmed as tool output is.
+            (_, Some(ToolDetail::Answer(answer))) => answer
+                .lines()
+                .flat_map(|line| {
+                    let mut wrap = Wrap::new(width);
+                    let rows = wrap.push(&printable(line)) + &wrap.finish();
+                    rows.split('\n').map(str::to_owned).collect::<Vec<_>>()
+                })
+                .collect(),
             ("bash", None) => styled(preview(
                 &bash_shown(output, failed),
                 Shown::Last(bash_lines),
@@ -1567,6 +1576,83 @@ impl AgentUi for Terminal {
         self.type_ahead = reading.map(type_ahead::TypeAhead::start);
         answer
     }
+    /// As Scramjet shows the message in the tool's row: markdown, under the call line.
+    fn question(&mut self, message: &str) {
+        self.clear();
+        let width = match self.color {
+            true => editor::terminal_size().0.saturating_sub(2).max(20),
+            false => 0,
+        };
+        let mut markdown = markdown::Markdown::new(self.color, "");
+        let text = markdown.push(visible(message).trim_end()) + &markdown.finish();
+        let mut wrap = Wrap::new(width);
+        for line in (wrap.push(&text) + &wrap.finish()).lines() {
+            match line.is_empty() {
+                true => eprintln!(),
+                false => eprintln!("  {line}"),
+            }
+        }
+        eprintln!();
+    }
+    fn choose(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+    ) -> Option<usize> {
+        self.clear();
+        let stdin = std::io::stdin();
+        if !stdin.is_terminal() {
+            return numbered_choice(title, options, recommended);
+        }
+        // Text typed before the list is shown waits for the next prompt, and chooses nothing.
+        let reading = self
+            .type_ahead
+            .take()
+            .map(|typed| (typed.cancel(), typed.finish()));
+        let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
+        let chosen = select::question(title, options, recommended).unwrap_or(None);
+        self.type_ahead =
+            reading.map(|(cancel, typed)| type_ahead::TypeAhead::resume(cancel, typed));
+        chosen
+    }
+}
+
+/// A question's options for piped input: numbered, answered by a line with a number, or an empty
+/// one for the recommended (else the first) option; anything else cancels.
+fn numbered_choice(title: &str, options: &[Choice], recommended: Option<usize>) -> Option<usize> {
+    let initial = recommended.unwrap_or(0);
+    let mut text = format!("{title}\n");
+    for (index, option) in options.iter().enumerate() {
+        text += &format!("  {}. {}", index + 1, visible(&option.label));
+        if let Some(description) = &option.description {
+            text += &format!(" — {}", visible(description));
+        }
+        if recommended == Some(index) {
+            text += " [recommended]";
+        }
+        text += "\n";
+    }
+    eprint!(
+        "{text}Choice [1-{}, Enter = {}]: ",
+        options.len(),
+        initial + 1
+    );
+    let mut typed = String::new();
+    let read = std::io::stdin().lock().read_line(&mut typed).unwrap_or(0);
+    // Piped input is not echoed.
+    eprintln!();
+    if read == 0 {
+        return None;
+    }
+    match typed.trim() {
+        "" => Some(initial),
+        typed => typed
+            .parse::<usize>()
+            .ok()
+            .filter(|number| (1..=options.len()).contains(number))
+            .map(|number| number - 1),
+    }
 }
 
 impl Terminal {
@@ -1730,7 +1816,10 @@ fn printable(line: &str) -> String {
 /// As Scramjet shows a call, with every line of a command; later lines go under the first.
 fn call_line(name: &str, summary: &str) -> String {
     let summary = visible(summary.trim_end_matches('\n'));
-    format!("● {name} {}", summary.replace('\n', "\n  "))
+    match summary.is_empty() {
+        true => format!("● {name}"),
+        false => format!("● {name} {}", summary.replace('\n', "\n  ")),
+    }
 }
 
 /// Shows control and invisible formatting characters (other than newlines and tabs) as escapes,

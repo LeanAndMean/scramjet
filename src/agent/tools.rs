@@ -25,7 +25,7 @@ const MAX_TIMEOUT: u64 = 3600;
 const DIFF_CONTEXT: usize = 4;
 
 pub(super) fn definitions() -> Value {
-    json!([
+    let mut tools = json!([
         {"type":"function","name":"read","strict":false,
          "description":"Read a text file. Output is truncated to 2000 lines or 50KB; use offset/limit (1-based line numbers) to read large files in parts.",
          "parameters":{"type":"object","properties":{
@@ -55,7 +55,12 @@ pub(super) fn definitions() -> Value {
             "command":{"type":"string","description":"Bash command to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
           "required":["command"]}}
-    ])
+    ]);
+    tools
+        .as_array_mut()
+        .unwrap()
+        .push(super::question::definition());
+    tools
 }
 
 /// What the user is asked to approve before a tool runs, if anything, when approvals are on.

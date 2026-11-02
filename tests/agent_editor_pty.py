@@ -250,8 +250,9 @@ def item_events(index, item):
     return events + [{'type': 'response.output_item.done', 'output_index': index, 'item': item}]
 
 
-def serve_items(responses):
-    """Answers the requests in turn with a response streaming the complete items in `responses`."""
+def serve_items(responses, gate=None):
+    """Answers the requests in turn with a response streaming the complete items in `responses`,
+    the first once `gate`, if given, is set."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -264,12 +265,14 @@ def serve_items(responses):
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
     def answer():
-        for stream in streams:
+        for number, stream in enumerate(streams):
             connection, _ = listener.accept()
             while connection.recv(65536).startswith(b'GET'):
                 connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
                 connection.close()
                 connection, _ = listener.accept()
+            if gate and number == 0:
+                gate.wait(10)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
                                b'connection: close\r\n\r\n%s' % (len(stream), stream))
             connection.close()
@@ -1262,4 +1265,57 @@ assert users == [
     {'role': 'user', '_scramjet_typed': '/tools:echo a  b',
      'content': '<scramjet-command name="tools:echo">\nEcho a b\n</scramjet-command>'},
 ], users
+
+
+def questions(read, until, send, output):
+    mark = until(b'> ')
+    send(b'pick\r')
+    # Typed before the question is shown: kept for the next prompt, and it chooses nothing.
+    read(.3)
+    send(b'later')
+    read(.3)
+    question_gate.set()
+    mark = until(b'Which ', mark)
+    mark = until(b'\x1b[1mone', mark)
+    mark = until('\u2192 Beta'.encode(), until(b'Choose an option', mark))
+    mark = until(b'[recommended] the second', mark)
+    send(b'\x1b[A')
+    mark = until('\u2192 Alpha'.encode(), mark)
+    send(b'\r')
+    mark = until('\u2192 Alpha \u2014 the first'.encode(), mark)
+    mark = until(b'Chose alpha.', mark)
+    mark = until(b'> later', mark)
+    send(b'\x7f' * 5 + b'go\r')
+    mark = until(b'Confirm', until(b'Commit now?', mark))
+    send(b'\x1b')
+    # The turn ends without another request; the server has no response for one.
+    mark = until(b'Cancelled', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+def questions_resumed(read, until, send, output):
+    mark = until(b'> pick')
+    mark = until('\u2192 Alpha \u2014 the first'.encode(), until(b'Which ', mark))
+    mark = until(b'Cancelled', until(b'Commit now?', until(b'> go', mark)))
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+question_gate = threading.Event()
+asking = serve_items([
+    [tool_call('call_1', 'get_scramjet_user_input', {
+        'type': 'select', 'message': 'Which **one**?', 'recommended': 1,
+        'options': [{'value': 'a', 'label': 'Alpha', 'description': 'the first'},
+                    {'value': 'b', 'label': 'Beta', 'description': 'the second'}]})],
+    [{'type': 'message', 'id': 'msg_1', 'role': 'assistant', 'status': 'completed',
+      'content': [{'type': 'output_text', 'text': 'Chose alpha.', 'annotations': []}]}],
+    [tool_call('call_2', 'get_scramjet_user_input', {'type': 'confirm', 'message': 'Commit now?'})],
+], question_gate)
+known = set(session_files())
+run([], questions, asking)
+run(['--continue'], questions_resumed)
+(asked,) = set(session_files()) - known
+outputs = [line['output'] for line in map(json.loads, open(asked)) if line.get('type') == 'function_call_output']
+assert outputs == ['{"selected":"a"}', '{"cancelled":true}'], outputs
 print('agent editor journeys passed')
