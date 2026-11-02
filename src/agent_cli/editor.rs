@@ -7,12 +7,16 @@ use rustix::{
 };
 use std::{
     fmt::Write as _,
+    fs::{self, File, OpenOptions},
     io::{self, Write},
+    os::unix::fs::OpenOptionsExt,
+    path::PathBuf,
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -47,6 +51,7 @@ enum Key {
     Interrupt,
     EndOfInput,
     ToggleThinking,
+    External,
     Idle,
     Ignored,
 }
@@ -72,6 +77,7 @@ fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> io::Result<
         4 => Key::EndOfInput,
         5 => Key::LineEnd,
         6 => Key::Right,
+        7 => Key::External,
         11 => Key::KillEnd,
         14 => Key::Down,
         16 => Key::Up,
@@ -415,19 +421,31 @@ struct RawMode {
 impl RawMode {
     fn enter() -> io::Result<Self> {
         let original = termios::tcgetattr(io::stdin())?;
-        let mut raw = original.clone();
+        let mode = Self { original };
+        mode.resume()?;
+        Ok(mode)
+    }
+
+    /// Raw mode with bracketed paste on.
+    fn resume(&self) -> io::Result<()> {
+        let mut raw = self.original.clone();
         raw.make_raw();
         termios::tcsetattr(io::stdin(), OptionalActions::Now, &raw)?;
         eprint!("\x1b[?2004h");
-        Ok(Self { original })
+        Ok(())
+    }
+
+    /// The terminal as the shell left it, for an external editor.
+    fn suspend(&self) {
+        eprint!("\x1b[?2004l");
+        let _ = io::stderr().flush();
+        let _ = termios::tcsetattr(io::stdin(), OptionalActions::Now, &self.original);
     }
 }
 
 impl Drop for RawMode {
     fn drop(&mut self) {
-        eprint!("\x1b[?2004l");
-        let _ = io::stderr().flush();
-        let _ = termios::tcsetattr(io::stdin(), OptionalActions::Now, &self.original);
+        self.suspend();
     }
 }
 
@@ -496,6 +514,18 @@ pub(super) fn terminal_size() -> (usize, usize) {
 }
 
 impl Screen {
+    /// Clears the drawn rows and leaves the cursor where the first one starts.
+    fn erase(&mut self) -> io::Result<()> {
+        let mut stderr = io::stderr().lock();
+        if self.cursor_row > 0 {
+            write!(stderr, "\x1b[{}A", self.cursor_row)?;
+        }
+        stderr.write_all(b"\r\x1b[J")?;
+        self.cursor_row = 0;
+        self.top = 0;
+        stderr.flush()
+    }
+
     /// Redraws the editor. `done` draws every row and leaves the cursor below them.
     fn draw(&mut self, buffer: &Buffer, hint: Option<&str>, done: bool) -> io::Result<()> {
         let (width, height) = terminal_size();
@@ -567,14 +597,14 @@ impl Editor {
 
     /// Reads one prompt. `None` means the user asked to exit.
     pub fn read(&mut self) -> io::Result<Option<String>> {
-        let _raw = RawMode::enter()?;
+        let raw = RawMode::enter()?;
         let mut source = Stdin::default();
         let mut screen = Screen::default();
         let mut buffer = Buffer::default();
         let mut browsing = self.history.len();
         let mut draft = String::new();
         let mut exit_armed = false;
-        let mut note = None;
+        let mut note: Option<String> = None;
         let mut dirty = false;
         screen.draw(&buffer, None, false)?;
         loop {
@@ -597,7 +627,25 @@ impl Editor {
                 }
                 Key::ToggleThinking => {
                     let hidden = !self.hide_thinking.fetch_xor(true, Ordering::Relaxed);
-                    note = Some(thinking_note(hidden));
+                    note = Some(thinking_note(hidden).to_owned());
+                    true
+                }
+                Key::External => {
+                    if let Some(command) = editor_command() {
+                        // A full-screen editor gives the screen back as it was, so the prompt
+                        // is drawn again in its place.
+                        screen.erase()?;
+                        raw.suspend();
+                        let edited = run_editor(&command, &buffer.text);
+                        raw.resume()?;
+                        match edited {
+                            Ok(Some(text)) => buffer.set(text),
+                            Ok(None) => {}
+                            Err(error) => note = Some(error),
+                        }
+                    } else {
+                        note = Some(NO_EDITOR.to_owned());
+                    }
                     true
                 }
                 Key::Enter if buffer.text[..buffer.cursor].ends_with('\\') => {
@@ -658,7 +706,7 @@ impl Editor {
             };
             dirty |= changed;
             if dirty && !source.pending() {
-                let hint = exit_armed.then_some(EXIT_HINT).or(note);
+                let hint = exit_armed.then_some(EXIT_HINT).or(note.as_deref());
                 screen.draw(&buffer, hint, false)?;
                 dirty = false;
             }
@@ -667,6 +715,73 @@ impl Editor {
 }
 
 const EXIT_HINT: &str = "(Ctrl-C again or Ctrl-D to exit)";
+const NO_EDITOR: &str = "No editor configured. Set $VISUAL or $EDITOR environment variable.";
+
+/// `$VISUAL`, else `$EDITOR`, as Scramjet reads them.
+fn editor_command() -> Option<String> {
+    ["VISUAL", "EDITOR"].iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    })
+}
+
+/// Runs the editor on a temporary file holding `text`. `Ok(None)` when it exits with another
+/// status than 0, which keeps the prompt text. Its file's text, without one trailing newline,
+/// replaces the prompt text.
+fn run_editor(command: &str, text: &str) -> Result<Option<String>, String> {
+    let mut parts = command.split(' ').filter(|part| !part.is_empty());
+    let Some(program) = parts.next() else {
+        return Err(NO_EDITOR.to_owned());
+    };
+    let (path, mut file) = create_prompt_file()
+        .map_err(|error| format!("cannot create a file for the prompt: {error}"))?;
+    let outcome = file
+        .write_all(text.as_bytes())
+        .map_err(|error| error.to_string())
+        .and_then(|()| {
+            drop(file);
+            let status = Command::new(program)
+                .args(parts)
+                .arg(&path)
+                .status()
+                .map_err(|error| format!("cannot start {program}: {error}"))?;
+            if !status.success() {
+                return Ok(None);
+            }
+            fs::read_to_string(&path)
+                .map(Some)
+                .map_err(|error| error.to_string())
+        });
+    let _ = fs::remove_file(&path);
+    outcome.map(|edited| edited.map(|text| text.strip_suffix('\n').unwrap_or(&text).to_owned()))
+}
+
+/// Creates a new file in the temporary directory; an existing file is never opened.
+fn create_prompt_file() -> io::Result<(PathBuf, File)> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let mut attempt = 0;
+    loop {
+        let path = std::env::temp_dir().join(format!(
+            "scramjet-rs-prompt-{}-{nanos}-{attempt}.md",
+            std::process::id()
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+        {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && attempt < 100 => {
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
 
 /// As Scramjet reports a Ctrl+T.
 pub(super) fn thinking_note(hidden: bool) -> &'static str {
@@ -751,6 +866,14 @@ mod tests {
                 Key::Ignored,
                 Key::Ignored
             ]
+        );
+    }
+
+    #[test]
+    fn ctrl_g_opens_the_external_editor() {
+        assert_eq!(
+            keys(b"ab\x07"),
+            [Key::Text("a".into()), Key::Text("b".into()), Key::External]
         );
     }
 

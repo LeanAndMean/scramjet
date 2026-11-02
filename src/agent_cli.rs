@@ -42,7 +42,8 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
                          calls run without asking, as in Scramjet. Bash is not sandboxed.
   -p PROMPT              run one prompt and exit (`-p -` reads it from stdin)
 In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing \\ starts
-a new line; pasted text is inserted without sending. Up/Down recall earlier prompts.
+a new line; pasted text is inserted without sending. Up/Down recall earlier prompts. Ctrl-G
+edits the prompt in $VISUAL or $EDITOR; its text replaces the prompt when the editor exits with 0.
 `!command` runs a bash command in the project directory without a model turn and adds its output
 to the conversation for the next prompt; `!!command` runs it without adding it. Ctrl-C cancels it.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.

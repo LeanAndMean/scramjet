@@ -226,9 +226,25 @@ talking = serve_call('echo first; sleep 1.5; echo second; sleep 30')
 # A command whose raw text would show only `echo hello` on a terminal.
 disguised = serve_call('rm -rf scratch\r\x1b[2Kecho hello')
 env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'))
+env.pop('VISUAL', None)
+env.pop('EDITOR', None)
+# Temporary files of the external editor go here, so the journeys can check they are removed.
+scratch = os.path.join(work, 'tmp')
+os.mkdir(scratch)
+# Checks its argument, the prompt file's mode and text, then writes a new text; exits 0.
+edit_script = os.path.join(work, 'edit.sh')
+with open(edit_script, 'w') as script_file:
+    script_file.write('#!/bin/sh\n[ "$1" = --wait ] && [ "$(stat -c %a "$2")" = 600 ] || exit 1\n'
+                      'printf draft | cmp -s - "$2" || exit 1\nprintf \'edited\\nline two\\n\' > "$2"\n')
+os.chmod(edit_script, 0o755)
+# Writes a text and exits with status 1, which keeps the prompt.
+failing_script = os.path.join(work, 'fail.sh')
+with open(failing_script, 'w') as script_file:
+    script_file.write('#!/bin/sh\nprintf lost > "$1"\nexit 1\n')
+os.chmod(failing_script, 0o755)
 
 
-def run(arguments, script, endpoint=closed, status=0):
+def run(arguments, script, endpoint=closed, status=0, variables={}):
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 60, 0, 0))
     before = termios.tcgetattr(slave)
@@ -237,7 +253,7 @@ def run(arguments, script, endpoint=closed, status=0):
         os.setsid()
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
-    child = subprocess.Popen([BINARY, 'agent', '--endpoint', endpoint, *arguments], cwd=project, env=env,
+    child = subprocess.Popen([BINARY, 'agent', '--endpoint', endpoint, *arguments], cwd=project, env=dict(env, **variables),
                              stdin=slave, stdout=slave, stderr=slave, close_fds=True, preexec_fn=own_terminal)
     output = bytearray()
 
@@ -490,6 +506,48 @@ def final_texts_replace_lost_deltas(read, until, send, output):
     send(b'\x04')
 
 
+def edited_in_editor(read, until, send, output):
+    mark = until(b'> ')
+    send(b'draft')
+    mark = until(b'draft', mark)
+    send(b'\x07')
+    mark = until(b'. line two', mark)
+    assert b'error' not in output[mark:], bytes(output[mark:])
+    send(b'\r')
+    mark = until(b'error: provider: cannot connect', mark)
+    mark = until(b'> ', mark)
+    send(b'\x04')
+
+
+def kept_when_editor_fails(read, until, send, output):
+    mark = until(b'> ')
+    send(b'kept')
+    mark = until(b'kept', mark)
+    send(b'\x07')
+    mark = until(b'> kept', mark)
+    read(.3)
+    assert b'lost' not in output[mark:], bytes(output[mark:])
+    send(b'\x15\x04')
+
+
+def editor_cannot_start(read, until, send, output):
+    mark = until(b'> ')
+    send(b'kept')
+    mark = until(b'kept', mark)
+    send(b'\x07')
+    until(b'cannot start /nonexistent/scramjet-editor', mark)
+    send(b'\x15\x04')
+
+
+def no_editor_configured(read, until, send, output):
+    mark = until(b'> ')
+    send(b'kept')
+    mark = until(b'kept', mark)
+    send(b'\x07')
+    mark = until(b'No editor configured. Set $VISUAL or $EDITOR environment variable.', mark)
+    send(b'\x15\x04')
+
+
 def session_files():
     return glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
 
@@ -527,4 +585,15 @@ run(['--ask'], cancel_at_approval, calling)
 (cancelled,) = set(session_files()) - known
 outputs = [item['output'] for item in map(json.loads, open(cancelled)) if item.get('type') == 'function_call_output']
 assert outputs == ['The user cancelled the turn before this tool call ran.'], outputs
+known = set(session_files())
+run(['--retries', '0'], edited_in_editor,
+    variables={'VISUAL': edit_script + ' --wait', 'EDITOR': failing_script, 'TMPDIR': scratch})
+(edited,) = set(session_files()) - known
+prompts = [item['content'] for item in map(json.loads, open(edited)) if item.get('role') == 'user']
+assert prompts == ['edited\nline two'], prompts
+assert os.listdir(scratch) == [], os.listdir(scratch)
+run([], kept_when_editor_fails, variables={'EDITOR': failing_script, 'TMPDIR': scratch})
+run([], editor_cannot_start, variables={'VISUAL': '/nonexistent/scramjet-editor', 'TMPDIR': scratch})
+run([], no_editor_configured)
+assert os.listdir(scratch) == [], os.listdir(scratch)
 print('agent editor journeys passed')
