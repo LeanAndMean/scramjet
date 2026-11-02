@@ -596,6 +596,9 @@ impl Screen {
 pub struct Editor {
     history: Vec<String>,
     hide_thinking: Arc<AtomicBool>,
+    /// Reads one text for a question, as Scramjet's dialog editor: Escape or Ctrl-C cancels, and
+    /// the text is erased when it returns.
+    dialog: bool,
     /// Keys typed during the last turn, read before the terminal.
     typed: Vec<u8>,
     /// The text the next prompt starts with.
@@ -608,8 +611,17 @@ impl Editor {
         Self {
             history,
             hide_thinking,
+            dialog: false,
             typed: Vec::new(),
             text: String::new(),
+        }
+    }
+
+    /// An editor for one answer without history, as `dialog` says.
+    pub fn dialog(hide_thinking: Arc<AtomicBool>) -> Self {
+        Self {
+            dialog: true,
+            ..Self::new(Vec::new(), hide_thinking)
         }
     }
 
@@ -676,6 +688,14 @@ impl Editor {
                     note = noted;
                     true
                 }
+                Key::Escape | Key::Interrupt if self.dialog => {
+                    screen.erase()?;
+                    return Ok(None);
+                }
+                Key::EndOfInput if self.dialog && buffer.text.is_empty() => {
+                    screen.erase()?;
+                    return Ok(None);
+                }
                 Key::Ignored | Key::Escape | Key::PageUp | Key::PageDown => {
                     exit_armed = armed;
                     note = noted;
@@ -710,6 +730,10 @@ impl Editor {
                     true
                 }
                 Key::Enter if buffer.text.trim().is_empty() => true,
+                Key::Enter if self.dialog && !buffer.text.trim().is_empty() => {
+                    screen.erase()?;
+                    return Ok(Some(buffer.text.trim().to_owned()));
+                }
                 Key::Enter => {
                     // As in Scramjet, the prompt is sent trimmed, and shown as sent.
                     buffer.set(buffer.text.trim().to_owned());

@@ -14,7 +14,7 @@ use rustix::{
 };
 use scramjet_rs::agent::{
     Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Compaction, Navigated,
-    SessionChoice, SessionInfo, StreamProgress, ToolDetail,
+    Purpose, SessionChoice, SessionInfo, StreamProgress, ToolDetail,
 };
 use std::{
     ffi::OsString,
@@ -57,7 +57,9 @@ next one on; it works while a turn runs too. /new starts a new session; /resume 
 this project's sessions to switch to. /fork chooses one of this session's prompts and continues
 in a new session from before it, with it in the prompt for editing. /tree shows this session's
 branches and continues from the entry chosen, in the same session: from before a prompt, which
-is put in the prompt for editing, or from after a reply or tool result. /model chooses a model.
+is put in the prompt for editing, or from after a reply or tool result. When that leaves part of
+the conversation, it asks whether the model should summarize that branch, also with your own
+instructions, for the conversation to continue with. /model chooses a model.
 Their lists take Up/Down, Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; with
 piped input they are printed numbered instead, for /resume N, /fork N, /tree N and /model ID.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
@@ -389,55 +391,90 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             .strip_prefix("/tree")
             .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
-            let session_tree = match agent.tree() {
-                Ok(tree) => tree,
-                Err(error) => {
-                    eprintln!("error: {error}");
-                    continue;
-                }
-            };
-            let (rows, current) = tree::rows(&session_tree);
-            let chosen = match wanted.trim() {
-                "" if rows.is_empty() => {
-                    eprintln!("No entries in session");
-                    None
-                }
-                "" if editor.is_some() => {
-                    // As Scramjet's tree, half the terminal.
-                    let visible = (editor::terminal_size().1 / 2).max(5);
-                    select::select(
-                        "Session Tree",
-                        visible,
-                        rows.len(),
-                        current.unwrap_or(rows.len() - 1),
-                        None,
-                        |index, width| clip(&rows[index].1, width),
-                    )
-                    .map_err(|e| e.to_string())?
-                }
-                "" => {
-                    let digits = rows.len().to_string().len();
-                    let width = editor::terminal_size().0.saturating_sub(digits + 1);
-                    for (index, (_, row)) in rows.iter().enumerate() {
-                        eprintln!("{:>digits$} {}", index + 1, clip(row, width.max(2)));
+            let mut wanted = wanted.trim();
+            // The row the tree shows again at after its summary question or summary is cancelled.
+            let mut reopen = None;
+            loop {
+                let session_tree = match agent.tree() {
+                    Ok(tree) => tree,
+                    Err(error) => {
+                        eprintln!("error: {error}");
+                        break;
                     }
-                    None
-                }
-                wanted => match wanted.parse::<usize>() {
-                    Err(_) | Ok(0) => {
-                        eprintln!("error: /tree requires a positive entry number");
+                };
+                let (rows, current) = tree::rows(&session_tree);
+                let chosen = match wanted {
+                    "" if rows.is_empty() => {
+                        eprintln!("No entries in session");
                         None
                     }
-                    Ok(number) if number > rows.len() => {
-                        eprintln!("error: no entry numbered {number} (/tree lists them)");
+                    "" if editor.is_some() => {
+                        // As Scramjet's tree, half the terminal.
+                        let visible = (editor::terminal_size().1 / 2).max(5);
+                        select::select(
+                            "Session Tree",
+                            visible,
+                            rows.len(),
+                            reopen.or(current).unwrap_or(rows.len() - 1),
+                            None,
+                            |index, width| clip(&rows[index].1, width),
+                        )
+                        .map_err(|e| e.to_string())?
+                    }
+                    "" => {
+                        let digits = rows.len().to_string().len();
+                        let width = editor::terminal_size().0.saturating_sub(digits + 1);
+                        for (index, (_, row)) in rows.iter().enumerate() {
+                            eprintln!("{:>digits$} {}", index + 1, clip(row, width.max(2)));
+                        }
                         None
                     }
-                    Ok(number) => Some(number - 1),
-                },
-            };
-            if let Some(index) = chosen {
+                    wanted => match wanted.parse::<usize>() {
+                        Err(_) | Ok(0) => {
+                            eprintln!("error: /tree requires a positive entry number");
+                            None
+                        }
+                        Ok(number) if number > rows.len() => {
+                            eprintln!("error: no entry numbered {number} (/tree lists them)");
+                            None
+                        }
+                        Ok(number) => Some(number - 1),
+                    },
+                };
+                let Some(index) = chosen else {
+                    break;
+                };
                 let line = session_tree.entries[rows[index].0].line;
-                match agent.navigate(line) {
+                // As Scramjet asks when the editor is in use; piped input moves without one.
+                let summary = match editor.is_some().then(|| agent.leaves_branch(line)) {
+                    Some(Ok(true)) => {
+                        match ask_branch_summary(&hide_thinking).map_err(|e| e.to_string())? {
+                            Some(summary) => summary,
+                            None => {
+                                (wanted, reopen) = ("", Some(index));
+                                continue;
+                            }
+                        }
+                    }
+                    None | Some(Ok(false)) => None,
+                    Some(Err(error)) => {
+                        eprintln!("error: {error}");
+                        break;
+                    }
+                };
+                let result = match summary.as_deref() {
+                    Some(focus) => {
+                        cancel.store(false, Ordering::Relaxed);
+                        let result = during_turn(&mut ui, &cancel, editor.as_mut(), |ui| {
+                            agent.navigate(line, Some(focus), ui, &cancel)
+                        });
+                        ui.clear();
+                        cancel.store(false, Ordering::Relaxed);
+                        result
+                    }
+                    None => agent.navigate(line, None, &mut ui, &cancel),
+                };
+                match result {
                     Ok(Navigated::AlreadyThere) => eprintln!("Already at this point"),
                     Ok(Navigated::Moved { prompt }) => {
                         eprintln!("✓ Navigated to selected point");
@@ -446,8 +483,14 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                             editor.set_text(prompt);
                         }
                     }
+                    Err(AgentError::Cancelled) => {
+                        eprintln!("Branch summarization cancelled");
+                        (wanted, reopen) = ("", Some(index));
+                        continue;
+                    }
                     Err(error) => eprintln!("error: {error}"),
                 }
+                break;
             }
             continue;
         }
@@ -558,6 +601,45 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         }
         cancel.store(false, Ordering::Relaxed);
         ui.usage(&agent, window);
+    }
+}
+
+/// Asks whether to summarize the branch `/tree` leaves, as Scramjet does. `None`: cancelled;
+/// otherwise no summary, or one with the additional focus given (empty for none).
+fn ask_branch_summary(hide_thinking: &Arc<AtomicBool>) -> std::io::Result<Option<Option<String>>> {
+    const CHOICES: [&str; 3] = ["No summary", "Summarize", "Summarize with custom prompt"];
+    const TITLE: &str = "Custom summarization instructions";
+    loop {
+        let chosen = select::select(
+            "Summarize branch?",
+            select::VISIBLE,
+            CHOICES.len(),
+            0,
+            None,
+            |index, width| clip(CHOICES[index], width),
+        )?;
+        match chosen {
+            None => return Ok(None),
+            Some(0) => return Ok(Some(None)),
+            Some(1) => return Ok(Some(Some(String::new()))),
+            Some(_) => {
+                let room = editor::terminal_size().0.saturating_sub(TITLE.width() + 3);
+                eprintln!(
+                    "{}{TITLE}{}  {}{}{}",
+                    style::SELECTOR_TITLE,
+                    style::RESET,
+                    style::MUTED,
+                    clip("Enter submit · Esc cancel", room),
+                    style::RESET
+                );
+                let focus = editor::Editor::dialog(hide_thinking.clone()).read()?;
+                // The title's row, above the erased editor.
+                eprint!("\x1b[1A\r\x1b[J");
+                if let Some(focus) = focus {
+                    return Ok(Some(Some(focus)));
+                }
+            }
+        }
     }
 }
 
@@ -1222,12 +1304,16 @@ impl Terminal {
 }
 
 impl AgentUi for Terminal {
-    fn waiting(&mut self, compacting: bool) {
+    fn waiting(&mut self, purpose: Purpose) {
         self.clear();
         self.streamed.clear();
         self.consumed = 0;
         self.text_rows = None;
-        let activity = if compacting { "compacting" } else { "thinking" };
+        let activity = match purpose {
+            Purpose::Reply => "thinking",
+            Purpose::Compaction => "compacting",
+            Purpose::BranchSummary => "summarizing branch",
+        };
         self.show(activity.into(), true);
     }
     fn progress(&mut self, update: &StreamProgress) {
@@ -1370,6 +1456,14 @@ impl AgentUi for Terminal {
         eprintln!(
             "{}\n\n{}\n",
             self.wrapped("✓ Compacted: the earlier conversation is summarized"),
+            self.summary_block(summary)
+        );
+    }
+    fn branch_summary(&mut self, summary: &str) {
+        self.clear();
+        eprintln!(
+            "{}\n\n{}\n",
+            self.wrapped("✓ Summarized the branch this conversation came back from"),
             self.summary_block(summary)
         );
     }

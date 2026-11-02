@@ -63,10 +63,20 @@ pub enum SessionChoice {
     Open(PathBuf),
 }
 
+/// What a model request asks for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Purpose {
+    /// The next step of a turn, whose text streams as progress.
+    Reply,
+    Compaction,
+    /// The summary of a branch that `/tree` leaves.
+    BranchSummary,
+}
+
 /// How the agent presents progress and asks for approval.
 pub trait AgentUi {
-    /// A model request is sent; `compacting` when it asks for a compaction summary.
-    fn waiting(&mut self, compacting: bool);
+    /// A model request is sent.
+    fn waiting(&mut self, purpose: Purpose);
     /// Text or reasoning summary as it streams; may never be called for a response.
     fn progress(&mut self, update: &StreamProgress);
     /// A model request failed transiently and will be sent again after `delay`.
@@ -90,6 +100,8 @@ pub trait AgentUi {
     fn user_prompt(&mut self, prompt: &str);
     /// The summary of a compaction in a resumed conversation.
     fn compaction_summary(&mut self, summary: &str);
+    /// The summary of a branch the conversation came back from, in a resumed conversation.
+    fn branch_summary(&mut self, summary: &str);
     /// Asks whether a tool call may run; returns `Deny` without an answer once `cancel` is set.
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer;
 }
@@ -181,6 +193,7 @@ pub enum TreeItem {
     /// A tool call's result, or the call itself, by the call's name and its call line's summary.
     Tool(String, String),
     Compaction(Option<u64>),
+    BranchSummary(String),
     /// Listed only when it is the current entry, as are the two below.
     Reasoning,
     Model(String),
@@ -191,6 +204,15 @@ pub struct SessionTree {
     pub entries: Vec<TreeEntry>,
     /// The listed entry nearest the current one, on its path.
     pub current: Option<usize>,
+}
+
+/// Where continuing from an entry of the session tree ends the conversation.
+struct Destination {
+    leaf: Option<usize>,
+    /// The prompt chosen, to be edited and sent again.
+    prompt: Option<String>,
+    /// The entries of the branch it leaves.
+    left: Vec<Value>,
 }
 
 /// Where `Agent::navigate` left the conversation.
@@ -328,8 +350,8 @@ impl Agent {
     }
 
     /// The current session's entries, as Scramjet's `/tree` lists them by default: prompts,
-    /// replies with text, tool results, `!` commands and compactions, and the current entry
-    /// whatever it is.
+    /// replies with text, tool results, `!` commands, compactions and branch summaries, and the
+    /// current entry whatever it is.
     pub fn tree(&self) -> Result<SessionTree, AgentError> {
         let entries = self.session.entries()?;
         let leaf = self.session.leaf();
@@ -374,6 +396,9 @@ impl Agent {
                 Some("message") => Some(TreeItem::Reply(message_text(value))),
                 Some("function_call_output") => Some(tool(value)),
                 Some("compaction") => Some(TreeItem::Compaction(value["tokens_before"].as_u64())),
+                Some("branch_summary") => Some(TreeItem::BranchSummary(
+                    value["summary"].as_str().unwrap_or_default().to_owned(),
+                )),
                 Some("function_call") if is_leaf => Some(tool(value)),
                 Some("reasoning") if is_leaf => Some(TreeItem::Reasoning),
                 Some("model_change") if is_leaf => Some(TreeItem::Model(
@@ -413,13 +438,56 @@ impl Agent {
         })
     }
 
+    /// Whether continuing from the session's entry on `line` leaves a branch with anything for
+    /// a summary to tell.
+    pub fn leaves_branch(&self, line: usize) -> Result<bool, AgentError> {
+        Ok(self
+            .destination(line)?
+            .is_some_and(|destination| !compaction::Branch::of(&destination.left).is_empty()))
+    }
+
     /// Continues the conversation from the session's entry on `line`, in the same session, as
     /// Scramjet's `/tree` does: from before it if it is a prompt, which is returned to be edited
-    /// and sent again, otherwise from after it. The model stays as it is. On failure nothing
-    /// changes.
-    pub fn navigate(&mut self, line: usize) -> Result<Navigated, AgentError> {
-        if self.session.leaf() == Some(line) {
+    /// and sent again, otherwise from after it. The model stays as it is. With `summary`, a
+    /// branch left behind is summarized there first, as Scramjet's branch summary, with
+    /// `summary` as an additional focus unless empty. On failure or cancellation nothing changes.
+    pub fn navigate(
+        &mut self,
+        line: usize,
+        summary: Option<&str>,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<Navigated, AgentError> {
+        let Some(destination) = self.destination(line)? else {
             return Ok(Navigated::AlreadyThere);
+        };
+        let branch = compaction::Branch::of(&destination.left);
+        let summary = match summary {
+            Some(focus) if !branch.is_empty() => {
+                Some(self.summarize_branch(&branch, focus, ui, cancel)?)
+            }
+            _ => None,
+        };
+        self.conversation = self.session.move_to(destination.leaf)?;
+        self.usage.context_tokens = self.session.context_tokens();
+        self.answer_interrupted_calls()?;
+        if let Some((summary, files)) = summary {
+            self.session
+                .append(&json!({"type":"branch_summary", "summary":summary,
+                "read_files":files.read, "modified_files":files.modified}))?;
+            self.conversation
+                .push(compaction::branch_summary_message(&summary));
+        }
+        Ok(Navigated::Moved {
+            prompt: destination.prompt,
+        })
+    }
+
+    /// Where continuing from the entry on `line` ends the conversation; `None` if it already
+    /// ends there.
+    fn destination(&self, line: usize) -> Result<Option<Destination>, AgentError> {
+        if self.session.leaf() == Some(line) {
+            return Ok(None);
         }
         let entries = self.session.entries()?;
         let Some(entry) = entries.iter().find(|entry| entry.line == line) else {
@@ -443,13 +511,42 @@ impl Agent {
                 leaf = Some(next.line);
             }
             if leaf == self.session.leaf() {
-                return Ok(Navigated::AlreadyThere);
+                return Ok(None);
             }
         }
-        self.conversation = self.session.move_to(leaf)?;
-        self.usage.context_tokens = self.session.context_tokens();
-        self.answer_interrupted_calls()?;
-        Ok(Navigated::Moved { prompt })
+        // As in Scramjet, a prompt chosen to be sent again is not part of the branch left.
+        let kept = if prompt.is_some() { Some(line) } else { leaf };
+        Ok(Some(Destination {
+            leaf,
+            prompt,
+            left: self.session.left_behind(kept)?,
+        }))
+    }
+
+    /// Scramjet's branch summary of `branch` (its `generateBranchSummary`), and the files read
+    /// and modified there.
+    fn summarize_branch(
+        &mut self,
+        branch: &compaction::Branch,
+        focus: &str,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<(String, compaction::FileLists), AgentError> {
+        let budget = self
+            .info
+            .window
+            .unwrap_or(128_000)
+            .saturating_sub(compaction::RESERVE_TOKENS)
+            .max(1);
+        let files = branch.files();
+        let summary = match branch.prompt(budget, focus) {
+            Some(prompt) => {
+                let text = self.summarize(prompt, Purpose::BranchSummary, ui, cancel)?;
+                compaction::branch_summary_text(&text, &files)
+            }
+            None => "No content to summarize".to_owned(),
+        };
+        Ok((summary, files))
     }
 
     fn switch_session(
@@ -515,12 +612,12 @@ impl Agent {
             _ if history.is_empty() => "No prior history.".into(),
             previous => {
                 let prompt = compaction::prompt(history, previous.as_deref(), focus);
-                self.summarize(prompt, ui, cancel)?
+                self.summarize(prompt, Purpose::Compaction, ui, cancel)?
             }
         };
         if let Some(turn) = turn {
             let prompt = compaction::turn_prefix_prompt(&self.conversation[turn..cut]);
-            let prefix = self.summarize(prompt, ui, cancel)?;
+            let prefix = self.summarize(prompt, Purpose::Compaction, ui, cancel)?;
             summary = compaction::split_turn_summary(&summary, &prefix);
         }
         summary.push_str(&files.format());
@@ -548,6 +645,7 @@ impl Agent {
     fn summarize(
         &mut self,
         prompt: String,
+        purpose: Purpose,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<String, AgentError> {
@@ -566,7 +664,7 @@ impl Agent {
         if let Some(tokens) = self.config.max_output_tokens {
             request["max_output_tokens"] = json!(tokens);
         }
-        let reply = self.respond(&request, true, ui, cancel)?;
+        let reply = self.respond(&request, purpose, ui, cancel)?;
         let summary = reply
             .items
             .iter()
@@ -745,7 +843,7 @@ impl Agent {
                 return Err(AgentError::Cancelled);
             }
             let request = self.request();
-            let reply = match self.respond(&request, false, ui, cancel) {
+            let reply = match self.respond(&request, Purpose::Reply, ui, cancel) {
                 Ok(reply) => reply,
                 Err(AgentError::ContextOverflow(message)) if !overflow_recovered => {
                     overflow_recovered = true;
@@ -911,7 +1009,7 @@ to a larger-context model)"
     fn respond(
         &mut self,
         request: &Value,
-        compacting: bool,
+        purpose: Purpose,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<client::Reply, AgentError> {
@@ -931,7 +1029,7 @@ to a larger-context model)"
         let body = body.map_err(std::io::Error::from)?;
         let mut attempt = 0;
         loop {
-            ui.waiting(compacting);
+            ui.waiting(purpose);
             self.usage.requests += 1;
             let failure = match self.executor.block_on(client::respond(
                 self.config.endpoint,
@@ -940,7 +1038,7 @@ to a larger-context model)"
                 interleaved,
                 cancel,
                 &mut |update| {
-                    if !compacting {
+                    if purpose == Purpose::Reply {
                         ui.progress(&update)
                     }
                 },
@@ -1106,6 +1204,8 @@ fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                     .and_then(|typed| typed.strip_prefix('!'));
                 if let Some(summary) = compaction::previous_summary(std::slice::from_ref(item)) {
                     ui.compaction_summary(summary);
+                } else if let Some(summary) = compaction::branch_summary(item) {
+                    ui.branch_summary(summary);
                 } else if let Some(command) = command {
                     ui.tool_call("bash", command);
                     let output = content
@@ -1233,8 +1333,8 @@ mod tests {
         calls: Vec<String>,
         compactions: Vec<(u64, usize, Option<AutoCompaction>)>,
         failed_compactions: Vec<String>,
-        /// Whether each request asked for a compaction summary.
-        waits: Vec<bool>,
+        /// What each request asked for.
+        waits: Vec<Purpose>,
         /// Answers to give, in order; questions beyond them are denied.
         answers: Vec<Answer>,
         questions: usize,
@@ -1242,8 +1342,8 @@ mod tests {
         shown: Vec<String>,
     }
     impl AgentUi for Recorder {
-        fn waiting(&mut self, compacting: bool) {
-            self.waits.push(compacting);
+        fn waiting(&mut self, purpose: Purpose) {
+            self.waits.push(purpose);
         }
         fn progress(&mut self, update: &StreamProgress) {
             if let StreamProgress::Reasoning(text) = update {
@@ -1292,6 +1392,9 @@ mod tests {
         }
         fn compaction_summary(&mut self, summary: &str) {
             self.shown.push(format!("summary {summary}"));
+        }
+        fn branch_summary(&mut self, summary: &str) {
+            self.shown.push(format!("branch {summary}"));
         }
         fn approve(&mut self, _: &str, _: &AtomicBool) -> Answer {
             self.questions += 1;
@@ -1727,7 +1830,7 @@ mod tests {
             ui.compactions,
             [(10_000, 3, Some(AutoCompaction::Threshold))]
         );
-        assert_eq!(ui.waits, [false, true]);
+        assert_eq!(ui.waits, [Purpose::Reply, Purpose::Compaction]);
         // The turn ends after compacting: no further request is sent.
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 2);
@@ -1810,7 +1913,16 @@ mod tests {
             ui.compactions,
             [(25_000, 3, Some(AutoCompaction::Threshold))]
         );
-        assert_eq!(ui.waits, [false, true, false, true, false]);
+        assert_eq!(
+            ui.waits,
+            [
+                Purpose::Reply,
+                Purpose::Compaction,
+                Purpose::Reply,
+                Purpose::Compaction,
+                Purpose::Reply
+            ]
+        );
         let requests = server.join().unwrap();
         assert_eq!(requests[0]["input"].as_array().unwrap().len(), 6);
         assert_eq!(requests[2]["input"].as_array().unwrap().len(), 6);
@@ -2561,13 +2673,16 @@ response is incomplete; retry the request."});
                 Some(4)
             )
         );
-        assert_eq!(agent.navigate(4).unwrap(), Navigated::AlreadyThere);
-        assert!(agent.navigate(9).is_err());
+        assert_eq!(
+            agent.navigate(4, None, &mut ui, &cancel).unwrap(),
+            Navigated::AlreadyThere
+        );
+        assert!(agent.navigate(9, None, &mut ui, &cancel).is_err());
 
         // A prompt is edited and sent again from before it; nothing is written until then.
         let saved = std::fs::read_to_string(agent.session_path()).unwrap();
         assert_eq!(
-            agent.navigate(3).unwrap(),
+            agent.navigate(3, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: Some("two".into())
             }
@@ -2599,14 +2714,14 @@ response is incomplete; retry the request."});
 
         // From after a reply, its branch continues.
         assert_eq!(
-            agent.navigate(4).unwrap(),
+            agent.navigate(4, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved { prompt: None }
         );
         agent.turn("three", &mut ui, &cancel).unwrap();
 
         // From before the first prompt, a conversation starts anew in the same file.
         assert_eq!(
-            agent.navigate(1).unwrap(),
+            agent.navigate(1, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: Some("one".into())
             }
@@ -2669,6 +2784,8 @@ response is incomplete; retry the request."});
     fn the_tree_lists_tool_results_and_ends_after_a_reply_s_last_one() {
         let (endpoint, _server) = serve(vec![]);
         let (mut agent, scratch) = agent(endpoint, "tree-calls");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
         let path = scratch.0.join("calls.jsonl");
         let call = |id: &str, name: &str, arguments: Value| {
             json!({"type":"function_call","call_id":id,"name":name,
@@ -2717,7 +2834,7 @@ response is incomplete; retry the request."});
 
         let saved = std::fs::read_to_string(&path).unwrap();
         assert_eq!(
-            agent.navigate(6).unwrap(),
+            agent.navigate(6, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved { prompt: None }
         );
         assert_eq!(agent.conversation().len(), 6);
@@ -2728,8 +2845,140 @@ response is incomplete; retry the request."});
         let tree = agent.tree().unwrap();
         assert_eq!(tree.current, Some(7));
         assert_eq!(tree.entries.len(), 6);
-        assert_eq!(agent.navigate(7).unwrap(), Navigated::AlreadyThere);
-        assert_eq!(agent.navigate(6).unwrap(), Navigated::AlreadyThere);
+        assert_eq!(
+            agent.navigate(7, None, &mut ui, &cancel).unwrap(),
+            Navigated::AlreadyThere
+        );
+        assert_eq!(
+            agent.navigate(6, None, &mut ui, &cancel).unwrap(),
+            Navigated::AlreadyThere
+        );
+    }
+
+    #[test]
+    fn a_branch_left_by_tree_navigation_is_summarized_where_it_continues() {
+        let (endpoint, server) = serve(vec![
+            b"HTTP/1.1 400 Bad Request\r\ncontent-length: 15\r\n\r\ninvalid request".to_vec(),
+            stream(&fixture::text_events(
+                "## Goal\nlook",
+                fixture::known_usage(),
+            )),
+            stream(&fixture::text_events("next reply", fixture::known_usage())),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "tree-summary");
+        let path = scratch.0.join("branch.jsonl");
+        let reply = |text: &str| {
+            json!({"type":"message","role":"assistant",
+                "content":[{"type":"output_text","text":text}],"_scramjet_model":"m"})
+        };
+        write_session(
+            &path,
+            &[
+                json!({"type":"session","version":1}),
+                json!({"type":"model_change","model":"m"}),
+                json!({"role":"user","content":"start"}),
+                reply("ready"),
+                json!({"role":"user","content":"explore"}),
+                json!({"type":"function_call","call_id":"c1","name":"read",
+                    "arguments":r#"{"path":"x.rs"}"#,"_scramjet_model":"m"}),
+                json!({"type":"function_call_output","call_id":"c1","output":"tool output"}),
+                reply("found it"),
+                json!({"type":"branch_summary","summary":"earlier",
+                    "read_files":["old.rs"],"modified_files":["m.rs"]}),
+                json!({"role":"user","content":"more"}),
+                reply("done"),
+            ],
+            std::time::SystemTime::now(),
+        );
+        agent.resume_session(&path).unwrap();
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        assert!(!agent.leaves_branch(10).unwrap());
+        assert!(agent.leaves_branch(4).unwrap());
+
+        // A failed summary leaves everything as it was.
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(matches!(
+            agent.navigate(4, Some("focus"), &mut ui, &cancel),
+            Err(AgentError::Provider(_))
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        assert_eq!(agent.conversation().len(), 9);
+
+        // From before the prompt chosen, which is not part of the branch summarized.
+        assert_eq!(
+            agent.navigate(4, Some("focus"), &mut ui, &cancel).unwrap(),
+            Navigated::Moved {
+                prompt: Some("explore".into())
+            }
+        );
+        assert_eq!(ui.waits.last(), Some(&Purpose::BranchSummary));
+        let summary = "The user explored a different conversation branch before returning here.\n\
+Summary of that exploration:\n\n## Goal\nlook\n\n<read-files>\nold.rs\nx.rs\n</read-files>\n\n\
+<modified-files>\nm.rs\n</modified-files>";
+        let message = compaction::branch_summary_message(summary);
+        assert_eq!(agent.conversation().len(), 3);
+        assert_eq!(agent.conversation()[2], message);
+        let lines: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines[11], json!({"type":"branch","parent":3}));
+        assert_eq!(
+            lines[12],
+            json!({"type":"branch_summary","summary":summary,
+                "read_files":["old.rs","x.rs"],"modified_files":["m.rs"]})
+        );
+        agent.turn("next", &mut ui, &cancel).unwrap();
+
+        // Going back to before a prompt leaves its reply; moving on along a path leaves nothing.
+        assert!(agent.leaves_branch(13).unwrap());
+        assert_eq!(
+            agent.navigate(3, None, &mut ui, &cancel).unwrap(),
+            Navigated::Moved { prompt: None }
+        );
+        assert!(!agent.leaves_branch(14).unwrap());
+        let tree = agent.tree().unwrap();
+        let summarized = tree
+            .entries
+            .iter()
+            .find(|entry| matches!(entry.item, TreeItem::BranchSummary(_)))
+            .map(|entry| (entry.line, entry.parent));
+        assert_eq!(summarized, Some((8, Some(7))));
+        assert!(tree.entries.iter().any(|entry| entry.line == 12
+            && entry.parent == Some(3)
+            && entry.item == TreeItem::BranchSummary(summary.into())));
+
+        // A resume sends the summary as a message where it was written, and shows it there.
+        let (_, resumed, _) = Session::open(&path).unwrap();
+        assert_eq!(resumed[2], message);
+        let mut shown = Recorder::default();
+        show_items(&resumed, &mut shown);
+        assert_eq!(
+            shown.shown,
+            [
+                "prompt start".to_owned(),
+                "reply ready".into(),
+                format!("branch {summary}"),
+                "prompt next".into(),
+                "reply next reply".into(),
+            ]
+        );
+
+        let bodies = server.join().unwrap();
+        let request = &bodies[1];
+        assert_eq!(request["instructions"], compaction::SYSTEM_PROMPT);
+        assert!(request.get("tools").is_none());
+        let prompt = request["input"][0]["content"].as_str().unwrap();
+        let conversation = "<conversation>\n[Assistant tool calls]: read(path=\"x.rs\")\n\n\
+[Assistant]: found it\n\n[User]: The following is a summary of a branch that this conversation \
+came back from:\n\n<summary>\nearlier</summary>\n\n[User]: more\n\n[Assistant]: done\n\
+</conversation>\n\nCreate a structured summary of this conversation branch";
+        assert!(prompt.starts_with(conversation), "{prompt}");
+        assert!(prompt.ends_with("error messages.\n\nAdditional focus: focus"));
+        assert_eq!(bodies[2]["input"][2], message);
+        assert_eq!(bodies[2]["input"][3]["content"], "next");
     }
 
     #[test]

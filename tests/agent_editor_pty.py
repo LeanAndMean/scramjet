@@ -877,10 +877,34 @@ def tree_session(read, until, send, output):
     mark = until(b'Session Tree', mark)
     send(b'\x1b[A')
     mark = until(SELECTED + '\u2022 user: second'.encode(), mark)
+    # Leaving the reply, it asks about a summary; Escape goes back to the tree at the same row.
     send(b'\r')
+    mark = until(b'Summarize branch?', mark)
+    mark = until(SELECTED + b'No summary', mark)
+    send(b'\x1b')
+    mark = until(b'Session Tree', mark)
+    mark = until(SELECTED + '\u2022 user: second'.encode(), mark)
+    send(b'\r')
+    mark = until(b'Summarize branch?', mark)
+    send(b'\x1b[B\x1b[B')
+    mark = until(SELECTED + b'Summarize with custom prompt', mark)
+    # Escape in the instructions goes back to the question.
+    send(b'\r')
+    mark = until(b'Custom summarization instructions', mark)
+    mark = until(b'> ', mark)
+    send(b'\x1b')
+    mark = until(b'Summarize branch?', mark)
+    send(b'\x1b[B\x1b[B\r')
+    mark = until(b'Custom summarization instructions', mark)
+    mark = until(b'> ', mark)
+    send(b'keep names\r')
     mark = until('\u2713 Navigated to selected point'.encode(), mark)
-    # The conversation before that prompt is shown again, and the prompt waits in the editor.
+    # The conversation before that prompt is shown again with the summary, and the prompt waits in
+    # the editor.
     mark = until(b'\r\n\r\n> first\r\n\r\nReply one.', mark)
+    mark = until('\u2713 Summarized the branch this conversation came back from'.encode(), mark)
+    mark = until(b'Summary of that exploration:', mark)
+    mark = until(b'The branch said two.', mark)
     shown = until(b'> second', mark)
     assert b'Reply two.' not in output[mark:shown], bytes(output[mark:shown])
     send(b' again\r')
@@ -888,9 +912,10 @@ def tree_session(read, until, send, output):
     mark = until(b'> ', mark)
     send(b'/tree\r')
     mark = until(b'Session Tree', mark)
-    for row in ['\u2022 assistant: Reply one.', '\u251c\u2500 \u2022 user: second again',
-                '\u2502     ', '\u2022 assistant: Reply three.', '\u2514\u2500 user: second',
-                '      assistant: Reply two.']:
+    for row in ['\u2022 assistant: Reply one.',
+                '\u251c\u2500 \u2022 [branch summary]: The user explored a different',
+                '\u2502     \u2022 user: second again', '\u2022 assistant: Reply three.',
+                '\u2514\u2500 user: second', '      assistant: Reply two.']:
         mark = until(row.encode(), mark)
     send(b'\x1b')
     mark = until(b'> ', mark)
@@ -970,11 +995,15 @@ assert prompts == [['first', 'second'], ['first', 'second again']], prompts
 assert json.loads(open(started[0]).readlines()[-1]) == {'type': 'model_change', 'model': 'claude-haiku-5-5'}
 known = set(session_files())
 branching = serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.'),
+                           (['The branch said two.'], 'The branch said two.'),
                            (['Reply three.'], 'Reply three.')])
 run([], tree_session, branching)
 (branched,) = set(session_files()) - known
 lines = [json.loads(line) for line in open(branched)]
 assert {'type': 'branch', 'parent': 3} in lines, lines
+(summary,) = [line['summary'] for line in lines if line.get('type') == 'branch_summary']
+assert summary.startswith('The user explored a different conversation branch before returning here.\n'), summary
+assert summary.endswith('\n\nThe branch said two.'), summary
 prompts = [item['content'] for item in lines if item.get('role') == 'user']
 assert prompts == ['first', 'second', 'second again'], prompts
 print('agent editor journeys passed')

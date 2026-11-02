@@ -16,9 +16,10 @@ pub struct SessionInfo {
     pub modified: SystemTime,
 }
 
-/// An append-only JSON-lines log: a header, then each input item, each model change and each
+/// An append-only JSON-lines log: a header, then each input item, each model change, each
 /// compaction, which replaces the items before `first_kept` with its summary and lists the files
-/// read and modified before then. Entries form a tree (see `Entries`); the conversation is the
+/// read and modified before then, and each branch summary, a message summarizing a branch the
+/// conversation came back from, with the files read and modified there. Entries form a tree (see `Entries`); the conversation is the
 /// path from the start to the current entry, the leaf, which each appended entry continues.
 pub struct Session {
     path: PathBuf,
@@ -36,21 +37,6 @@ pub struct Session {
     lines: usize,
 }
 
-fn compacted_files(compaction: &Value) -> FileLists {
-    let paths = |key: &str| {
-        compaction[key]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|path| path.as_str().map(str::to_owned))
-            .collect()
-    };
-    FileLists {
-        read: paths("read_files"),
-        modified: paths("modified_files"),
-    }
-}
-
 fn invalid(path: &Path, reason: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
@@ -59,7 +45,7 @@ fn invalid(path: &Path, reason: &str) -> io::Error {
 }
 
 /// A line of a session file after its header, other than a branch line: a conversation item, a
-/// model change or a compaction.
+/// model change, a compaction or a branch summary.
 pub struct Entry {
     /// Its line number in the file, where the header is line 0.
     pub line: usize,
@@ -195,8 +181,13 @@ impl Entries {
                     .ok_or_else(|| invalid(path, "missing compaction summary"))?;
                 items.drain(..cut);
                 items.insert(0, super::compaction::summary_message(summary));
-                context.files = compacted_files(value);
+                context.files = FileLists::of(value);
                 context.context_tokens = None;
+            } else if value["type"] == "branch_summary" {
+                let summary = value["summary"]
+                    .as_str()
+                    .ok_or_else(|| invalid(path, "missing branch summary"))?;
+                items.push(super::compaction::branch_summary_message(summary));
             } else if value["type"] == "model_change" {
                 let changed = value["model"]
                     .as_str()
@@ -438,6 +429,23 @@ impl Session {
         Ok(context.items)
     }
 
+    /// The entries on the path to the leaf after the last one it shares with the path to
+    /// `target`: the branch a move to `target` leaves, as Scramjet collects it for a summary.
+    pub fn left_behind(&self, target: Option<usize>) -> io::Result<Vec<Value>> {
+        let entries = read(&self.path)?;
+        let from = entries.path(self.leaf);
+        let to = entries.path(target);
+        let shared = from
+            .iter()
+            .zip(&to)
+            .take_while(|(from, to)| from.line == to.line)
+            .count();
+        Ok(from[shared..]
+            .iter()
+            .map(|entry| entry.value.clone())
+            .collect())
+    }
+
     /// Whether `path` is this session's file, however it is named.
     pub fn is_file(&self, path: &Path) -> bool {
         use std::os::unix::fs::MetadataExt;
@@ -498,7 +506,7 @@ impl Session {
         if item["type"] == "model_change" {
             self.model = item["model"].as_str().map(str::to_owned);
         } else if item["type"] == "compaction" {
-            self.files = compacted_files(item);
+            self.files = FileLists::of(item);
             self.context_tokens = None;
         } else if let Some(producer) = item[super::PRODUCER].as_str() {
             self.model = Some(producer.to_owned());

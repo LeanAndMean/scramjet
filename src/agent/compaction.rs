@@ -4,6 +4,12 @@ use std::collections::{BTreeSet, HashSet};
 
 pub(super) const SUMMARY_PREFIX: &str = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
 pub(super) const SUMMARY_SUFFIX: &str = "\n</summary>";
+/// How a branch summary is sent: Scramjet's `BRANCH_SUMMARY_PREFIX`/`SUFFIX`.
+const BRANCH_PREFIX: &str =
+    "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n";
+const BRANCH_SUFFIX: &str = "</summary>";
+/// Begins every branch summary the model writes, as Scramjet's `BRANCH_SUMMARY_PREAMBLE`.
+const BRANCH_PREAMBLE: &str = "The user explored a different conversation branch before returning here.\nSummary of that exploration:\n\n";
 pub(super) const SYSTEM_PROMPT: &str = "You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.";
 
 const PROMPT: &str = r#"The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
@@ -93,6 +99,35 @@ Summarize the prefix to provide context for the retained suffix:
 
 Be concise. Focus on what's needed to understand the kept suffix."#;
 
+const BRANCH_PROMPT: &str = r#"Create a structured summary of this conversation branch for context when returning later.
+
+Use this EXACT format:
+
+## Goal
+[What was the user trying to accomplish in this branch?]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned]
+- [Or "(none)" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Work that was started but not finished]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [What should happen next to continue this work]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages."#;
+
 /// Scramjet's `reserveTokens`: automatic compaction runs once the context passes what is left
 /// of the model's window after this much is kept for the next response.
 pub(super) const RESERVE_TOKENS: u64 = 16_384;
@@ -112,6 +147,22 @@ pub(super) struct FileLists {
 }
 
 impl FileLists {
+    /// The lists a compaction or branch summary entry saved.
+    pub fn of(entry: &Value) -> Self {
+        let paths = |key: &str| {
+            entry[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|path| path.as_str().map(str::to_owned))
+                .collect()
+        };
+        Self {
+            read: paths("read_files"),
+            modified: paths("modified_files"),
+        }
+    }
+
     /// Scramjet's `computeFileLists`: `self` (an earlier compaction's lists) and the paths of
     /// the calls in `items` as given, each list sorted.
     pub fn with_calls(&self, items: &[Value]) -> Self {
@@ -164,6 +215,103 @@ impl FileLists {
 
 pub(super) fn summary_message(summary: &str) -> Value {
     json!({"role":"user", "content":format!("{SUMMARY_PREFIX}{summary}{SUMMARY_SUFFIX}")})
+}
+
+pub(super) fn branch_summary_message(summary: &str) -> Value {
+    json!({"role":"user", "content":format!("{BRANCH_PREFIX}{summary}{BRANCH_SUFFIX}")})
+}
+
+/// The summary in a branch summary's message.
+pub(super) fn branch_summary(item: &Value) -> Option<&str> {
+    item["content"]
+        .as_str()?
+        .strip_prefix(BRANCH_PREFIX)?
+        .strip_suffix(BRANCH_SUFFIX)
+}
+
+/// A branch left by a move in the session tree, as Scramjet's `prepareBranchEntries` collects
+/// it for its summary.
+pub(super) struct Branch {
+    /// Its conversation items without tool results (the calls tell enough), with compaction and
+    /// branch summaries as they are sent.
+    items: Vec<Value>,
+    /// The file lists its branch summaries saved.
+    files: FileLists,
+}
+
+impl Branch {
+    /// The branch of the session entries `entries`.
+    pub fn of(entries: &[Value]) -> Self {
+        let mut files = FileLists::default();
+        let mut items = Vec::new();
+        for entry in entries {
+            match entry["type"].as_str() {
+                Some("function_call_output" | "model_change") => {}
+                Some("compaction") => items.push(summary_message(
+                    entry["summary"].as_str().unwrap_or_default(),
+                )),
+                Some("branch_summary") => {
+                    let saved = FileLists::of(entry);
+                    files.read.extend(saved.read);
+                    files.modified.extend(saved.modified);
+                    items.push(branch_summary_message(
+                        entry["summary"].as_str().unwrap_or_default(),
+                    ));
+                }
+                _ => items.push(entry.clone()),
+            }
+        }
+        Self { items, files }
+    }
+
+    /// Whether it has anything for a summary to tell.
+    pub fn is_empty(&self) -> bool {
+        serialize(&self.items).is_empty()
+    }
+
+    /// The files it read and modified, its branch summaries' lists included.
+    pub fn files(&self) -> FileLists {
+        self.files.with_calls(&self.items)
+    }
+
+    /// The prompt for its summary, with its latest items that fit in `budget` tokens, as Scramjet
+    /// keeps a summary that does not fit if the rest leaves a tenth of the budget; `None` when
+    /// not even the last item fits.
+    pub fn prompt(&self, budget: u64, focus: &str) -> Option<String> {
+        let items = &self.items;
+        let mut start = items.len();
+        let mut tokens = 0;
+        while start > 0 {
+            let item = &items[start - 1];
+            let size = estimate(std::slice::from_ref(item));
+            if tokens + size > budget {
+                let summary = previous_summary(std::slice::from_ref(item)).is_some()
+                    || branch_summary(item).is_some();
+                if summary && tokens * 10 < budget * 9 {
+                    start -= 1;
+                }
+                break;
+            }
+            tokens += size;
+            start -= 1;
+        }
+        if start == items.len() {
+            return None;
+        }
+        let mut prompt = format!(
+            "<conversation>\n{}\n</conversation>\n\n{BRANCH_PROMPT}",
+            serialize(&items[start..])
+        );
+        if !focus.is_empty() {
+            prompt.push_str(&format!("\n\nAdditional focus: {focus}"));
+        }
+        Some(prompt)
+    }
+}
+
+/// The branch summary saved for a branch, from the model's `text`, as Scramjet writes it.
+pub(super) fn branch_summary_text(text: &str, files: &FileLists) -> String {
+    format!("{BRANCH_PREAMBLE}{text}{}", files.format())
 }
 
 /// The summary of an earlier compaction, which is always the first item.
@@ -441,6 +589,47 @@ mod tests {
             modified_only.format(),
             "\n\n<modified-files>\ne.rs\n</modified-files>"
         );
+    }
+
+    #[test]
+    fn a_branch_keeps_its_latest_items_within_the_budget_and_squeezes_in_summaries() {
+        let reply =
+            |text: &str| json!({"type":"message","role":"assistant","content":[{"text":text}]});
+        let user = json!({"role":"user","content":"a".repeat(400)});
+        let compaction = json!({"type":"compaction","summary":"s".repeat(400),"first_kept":0});
+        let entries = [
+            json!({"type":"model_change","model":"m"}),
+            user.clone(),
+            json!({"type":"function_call_output","call_id":"c","output":"hidden"}),
+            reply(&"b".repeat(40)),
+        ];
+        let branch = Branch::of(&entries);
+        let conversation = |prompt: Option<String>| {
+            prompt.map(|prompt| prompt.split("\n</conversation>").next().unwrap().to_owned())
+        };
+        assert_eq!(
+            conversation(branch.prompt(50, "")),
+            Some(format!("<conversation>\n[Assistant]: {}", "b".repeat(40)))
+        );
+        assert!(
+            conversation(branch.prompt(110, ""))
+                .unwrap()
+                .contains("[User]: aaa")
+        );
+        assert_eq!(branch.prompt(5, ""), None);
+        let summarized = Branch::of(&[compaction, reply(&"b".repeat(40))]);
+        assert!(
+            conversation(summarized.prompt(50, ""))
+                .unwrap()
+                .contains("<summary>\nsss")
+        );
+        assert!(
+            !conversation(summarized.prompt(11, ""))
+                .unwrap()
+                .contains("sss")
+        );
+        assert!(Branch::of(&entries[..1]).is_empty());
+        assert!(!Branch::of(&entries[1..2]).is_empty());
     }
 
     #[test]

@@ -160,6 +160,7 @@ fn label(item: &TreeItem) -> String {
             format!("[compaction: {}k tokens]", (tokens + 500) / 1000)
         }
         TreeItem::Compaction(None) => "[compaction]".into(),
+        TreeItem::BranchSummary(summary) => format!("[branch summary]: {summary}"),
         TreeItem::Model(model) => format!("[model: {model}]"),
     };
     super::one_line(&super::visible(&text))
@@ -260,6 +261,10 @@ mod tests {
             "[compaction: 53k tokens]"
         );
         assert_eq!(label(TreeItem::Compaction(None)), "[compaction]");
+        assert_eq!(
+            label(TreeItem::BranchSummary("Went\nthere".into())),
+            "[branch summary]: Went there"
+        );
         assert_eq!(label(TreeItem::Command("ls".into())), "[bash]: ls");
         assert_eq!(
             label(TreeItem::Prompt("a\u{202e}b".into())),
