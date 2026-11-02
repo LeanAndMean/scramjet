@@ -173,8 +173,9 @@ def serve_thoughts(gates):
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
-def serve_replies(replies):
-    """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`."""
+def serve_replies(replies, models=()):
+    """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`,
+    and lists `models` at `/v1/models`."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -197,15 +198,22 @@ def serve_replies(replies):
         ]
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
+    listing = json.dumps({'data': [{'id': model} for model in models]}).encode()
+
     def answer():
-        for stream in streams:
+        pending = iter(streams)
+        while True:
             connection, _ = listener.accept()
-            while connection.recv(65536).startswith(b'GET'):
+            request = connection.recv(65536)
+            if request.startswith(b'GET /v1/models') and models:
+                connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n'
+                                   b'connection: close\r\n\r\n%s' % (len(listing), listing))
+            elif request.startswith(b'GET'):
                 connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
-                connection.close()
-                connection, _ = listener.accept()
-            connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
-                               b'connection: close\r\n\r\n%s' % (len(stream), stream))
+            else:
+                stream = next(pending)
+                connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
+                                   b'connection: close\r\n\r\n%s' % (len(stream), stream))
             connection.close()
 
     threading.Thread(target=answer, daemon=True).start()
@@ -276,7 +284,7 @@ thoughts = serve_thoughts(gates)
 replies = serve_replies([([' of the reply.'], 'The start of the reply.'), ([], 'Only at the end.'),
                          (['Streamed ', 'whole.'], 'Streamed whole.')])
 forking = serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.'),
-                         (['Reply three.'], 'Reply three.')])
+                         (['Reply three.'], 'Reply three.')], ['gpt-6-luna', 'claude-haiku-5-5'])
 # The command's output pipe outlives the killed process group, so a cancellation stays pending for
 # about two seconds.
 calling = serve_call('setsid sleep 5 & sleep 30')
@@ -350,6 +358,7 @@ def run(arguments, script, endpoint=closed, status=0, variables={}):
     read(.2)
     assert termios.tcgetattr(slave) == before, 'terminal mode was not restored'
     assert output.rfind(b'\x1b[?2004l') > output.rfind(b'\x1b[?2004h'), 'bracketed paste left enabled'
+    assert output.rfind(b'\x1b[?25h') >= output.rfind(b'\x1b[?25l'), 'cursor left hidden'
     os.close(master)
     os.close(slave)
 
@@ -805,13 +814,22 @@ def fork_session(read, until, send, output):
     send(b'second\r')
     mark = until(b'Reply two.', mark)
     mark = until(b'> ', mark)
+    # The selector starts at the last prompt; Escape leaves it as it was.
     send(b'/fork\r')
-    mark = until(b'\x1b[?2004l1 first\r\n2 second\r\n', mark)
+    mark = until(b'Fork from message', mark)
+    mark = until(SELECTED + b'second', mark)
+    send(b'\x1b')
     mark = until(b'> ', mark)
     send(b'/fork 3\r')
     mark = until(b'error: no message numbered 3 (/fork lists them)', mark)
     mark = until(b'> ', mark)
-    send(b'/fork 2\r')
+    send(b'/fork\r')
+    mark = until(b'Fork from message', mark)
+    send(b'\x1b[B')
+    mark = until(SELECTED + b'first', mark)
+    send(b'\x1b[A')
+    mark = until(SELECTED + b'second', mark)
+    send(b'\r')
     mark = until('\u2713 Forked to new session \u00b7 gpt-6-luna\r\nsession '.encode(), mark)
     # The conversation before the second prompt is shown, then that prompt waits in the editor.
     mark = until(b'.jsonl\r\n\r\n> first\r\n\r\nReply one.', mark)
@@ -819,8 +837,27 @@ def fork_session(read, until, send, output):
     assert b'Reply two.' not in output[mark:shown], bytes(output[mark:shown])
     send(b' again\r')
     mark = until(b'Reply three.', shown)
+    mark = until(b'> ', mark)
+    # The fork is the newest and current session, so the selector starts at the original.
+    send(b'/resume\r')
+    mark = until(b'Resume session', mark)
+    mark = until(b'first (4 items, now) \x1b[32m\xe2\x9c\x93', mark)
+    mark = until(SELECTED + b'first (4 items, now)\x1b[0m\r\n', mark)
+    send(b'\r')
+    mark = until('\u2713 Resumed session \u00b7 gpt-6-luna'.encode(), mark)
+    mark = until(b'Reply two.', mark)
+    mark = until(b'> ', mark)
+    send(b'/model\r')
+    mark = until(b'Select model', mark)
+    mark = until(SELECTED + b'gpt-6-luna\x1b[0m \x1b[32m', mark)
+    send(b'\x1b[B\r')
+    mark = until('\u2713 Model set to claude-haiku-5-5'.encode(), mark)
     until(b'> ', mark)
     send(b'\x04')
+
+
+# A selector's selected row.
+SELECTED = '\x1b[36m\u203a\x1b[0m \x1b[1m'.encode()
 
 
 def session_files():
@@ -886,4 +923,5 @@ run([], fork_session, forking)
 started = sorted(set(session_files()) - known)
 prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
 assert prompts == [['first', 'second'], ['first', 'second again']], prompts
+assert json.loads(open(started[0]).readlines()[-1]) == {'type': 'model_change', 'model': 'claude-haiku-5-5'}
 print('agent editor journeys passed')

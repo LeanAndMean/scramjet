@@ -24,12 +24,12 @@ use unicode_width::UnicodeWidthStr;
 /// How long the rest of an escape sequence may take to arrive before Escape counts as a lone key.
 pub(super) const ESCAPE_WAIT: Duration = Duration::from_millis(30);
 /// How often an idle editor checks for a terminal resize.
-const RESIZE_CHECK: Duration = Duration::from_millis(250);
+pub(super) const RESIZE_CHECK: Duration = Duration::from_millis(250);
 const TAB: &str = "    ";
 const INDENT: usize = 2;
 
 #[derive(Debug, PartialEq)]
-enum Key {
+pub(super) enum Key {
     Text(String),
     Paste(String),
     Enter,
@@ -42,6 +42,8 @@ enum Key {
     WordRight,
     Up,
     Down,
+    PageUp,
+    PageDown,
     LineStart,
     LineEnd,
     DeleteWordBack,
@@ -53,16 +55,18 @@ enum Key {
     ToggleThinking,
     External,
     Suspend,
+    /// A lone Escape.
+    Escape,
     Idle,
     Ignored,
 }
 
-trait ByteSource {
+pub(super) trait ByteSource {
     /// The next input byte; `None` when `wait` elapses first. `wait: None` blocks.
     fn byte(&mut self, wait: Option<Duration>) -> io::Result<Option<u8>>;
 }
 
-fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> io::Result<Key> {
+pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> io::Result<Key> {
     let Some(byte) = source.byte(wait)? else {
         return Ok(Key::Idle);
     };
@@ -113,7 +117,7 @@ fn escape(source: &mut impl ByteSource) -> io::Result<Key> {
         next = source.byte(Some(ESCAPE_WAIT))?;
     }
     Ok(match next {
-        None => Key::Ignored,
+        None => Key::Escape,
         Some(b'[') => csi(source)?,
         Some(b'O') => match source.byte(Some(ESCAPE_WAIT))? {
             Some(b'A') => Key::Up,
@@ -159,6 +163,8 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         (b'H', _) | (b'~', "1" | "7") => Key::LineStart,
         (b'F', _) | (b'~', "4" | "8") => Key::LineEnd,
         (b'~', "3") => Key::Delete,
+        (b'~', "5") => Key::PageUp,
+        (b'~', "6") => Key::PageDown,
         (b'~', "3;3" | "3;5") => Key::DeleteWordForward,
         (b'~', "200") => paste(source)?,
         (b'~', "27;2;13" | "27;3;13") | (b'u', "13;2" | "13;3") => Key::NewLine,
@@ -416,12 +422,12 @@ impl Layout {
     }
 }
 
-struct RawMode {
+pub(super) struct RawMode {
     original: Termios,
 }
 
 impl RawMode {
-    fn enter() -> io::Result<Self> {
+    pub(super) fn enter() -> io::Result<Self> {
         let original = termios::tcgetattr(io::stdin())?;
         let mode = Self { original };
         mode.resume()?;
@@ -429,7 +435,7 @@ impl RawMode {
     }
 
     /// Raw mode with bracketed paste on.
-    fn resume(&self) -> io::Result<()> {
+    pub(super) fn resume(&self) -> io::Result<()> {
         let mut raw = self.original.clone();
         raw.make_raw();
         termios::tcsetattr(io::stdin(), OptionalActions::Now, &raw)?;
@@ -438,7 +444,7 @@ impl RawMode {
     }
 
     /// The terminal as the shell left it, for an external editor or the shell itself.
-    fn suspend(&self) {
+    pub(super) fn suspend(&self) {
         eprint!("\x1b[?2004l");
         let _ = io::stderr().flush();
         let _ = termios::tcsetattr(io::stdin(), OptionalActions::Now, &self.original);
@@ -452,13 +458,13 @@ impl Drop for RawMode {
 }
 
 #[derive(Default)]
-struct Stdin {
+pub(super) struct Stdin {
     buffer: Vec<u8>,
     start: usize,
 }
 
 impl Stdin {
-    fn pending(&self) -> bool {
+    pub(super) fn pending(&self) -> bool {
         self.start < self.buffer.len()
     }
 }
@@ -670,7 +676,7 @@ impl Editor {
                     note = noted;
                     true
                 }
-                Key::Ignored => {
+                Key::Ignored | Key::Escape | Key::PageUp | Key::PageDown => {
                     exit_armed = armed;
                     note = noted;
                     false
@@ -908,15 +914,17 @@ mod tests {
             ]
         );
         assert_eq!(
-            keys(b"\x03\x04\x14\x1b\x1b[D\x1b[99;5u\x1b[5~\x1b"),
+            keys(b"\x03\x04\x14\x1b\x1b[D\x1b[99;5u\x1b[5~\x1b[6~\x1bx\x1b"),
             [
                 Key::Interrupt,
                 Key::EndOfInput,
                 Key::ToggleThinking,
                 Key::Left,
                 Key::Ignored,
+                Key::PageUp,
+                Key::PageDown,
                 Key::Ignored,
-                Key::Ignored
+                Key::Escape
             ]
         );
     }

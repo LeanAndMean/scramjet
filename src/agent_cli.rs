@@ -2,6 +2,8 @@ mod diff;
 mod editor;
 mod job;
 mod markdown;
+mod select;
+mod style;
 mod type_ahead;
 
 use rustix::{
@@ -50,10 +52,11 @@ edits the prompt in $VISUAL or $EDITOR; its text replaces the prompt when the ed
 to the conversation for the next prompt; `!!command` runs it without adding it.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
 Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
-next one on; it works while a turn runs too. /new starts a new session; /resume lists this
-project's sessions and /resume N switches to one. /fork lists this session's prompts and
-/fork N continues in a new session from before the Nth, with it in the prompt for editing.
-/model lists the models and /model ID switches to one.
+next one on; it works while a turn runs too. /new starts a new session; /resume chooses one of
+this project's sessions to switch to. /fork chooses one of this session's prompts and continues
+in a new session from before it, with it in the prompt for editing. /model chooses a model.
+Their lists take Up/Down, Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; with
+piped input they are printed numbered instead, for /resume N, /fork N and /model ID.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
 While a turn, /compact or a `!` command runs, typed text is kept for the next prompt without
@@ -232,57 +235,79 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             .strip_prefix("/resume")
             .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
-            let wanted = wanted.trim();
-            match agent.sessions() {
-                Err(error) => eprintln!("error: {error}"),
-                Ok(sessions) if wanted.is_empty() => {
+            let sessions = match agent.sessions() {
+                Ok(sessions) => sessions,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    continue;
+                }
+            };
+            let current = sessions
+                .iter()
+                .position(|session| agent.is_session(&session.path));
+            let chosen = match wanted.trim() {
+                "" if sessions.is_empty() => {
+                    eprintln!("No sessions to resume");
+                    None
+                }
+                "" if editor.is_some() => {
+                    // Newest first, so the first other than the current one is the likely choice.
+                    let initial = usize::from(current == Some(0));
+                    select::select(
+                        "Resume session",
+                        sessions.len(),
+                        initial,
+                        current,
+                        |index, width| session_line(&sessions[index], width),
+                    )
+                    .map_err(|e| e.to_string())?
+                }
+                "" => {
                     let width = editor::terminal_size().0;
                     for (index, session) in sessions.iter().take(20).enumerate() {
-                        let number = format!(
-                            "{}{}",
-                            index + 1,
-                            if agent.is_session(&session.path) {
-                                "*"
-                            } else {
-                                " "
-                            }
-                        );
+                        let mark = if current == Some(index) { "*" } else { " " };
+                        let number = format!("{}{mark}", index + 1);
                         let line = session_line(session, width.saturating_sub(number.len() + 1));
                         eprintln!("{number} {line}");
                     }
                     if sessions.len() > 20 {
                         eprintln!("({} older sessions not shown)", sessions.len() - 20);
                     }
+                    None
                 }
-                Ok(sessions) => match wanted.parse::<usize>() {
+                wanted => match wanted.parse::<usize>() {
                     Err(_) | Ok(0) => {
-                        eprintln!("error: /resume requires a positive session number")
+                        eprintln!("error: /resume requires a positive session number");
+                        None
                     }
-                    Ok(number) => match sessions.get(number - 1) {
-                        None => {
-                            eprintln!("error: no session numbered {number} (/resume lists them)")
-                        }
-                        Some(session) if agent.is_session(&session.path) => {
-                            eprintln!("error: session {number} is the current one")
-                        }
-                        Some(session) => match agent.resume_session(&session.path) {
-                            Ok(()) => {
-                                window = agent.load_model_card();
-                                if let Some(editor) = &mut editor {
-                                    for prompt in agent.prompts() {
-                                        editor.remember(prompt);
-                                    }
-                                }
-                                eprintln!(
-                                    "✓ Resumed session · {}\nsession {}",
-                                    agent.model(),
-                                    agent.session_path().display(),
-                                );
-                                spaced = show_resumed(&agent, &mut ui);
+                    Ok(number) if number > sessions.len() => {
+                        eprintln!("error: no session numbered {number} (/resume lists them)");
+                        None
+                    }
+                    Ok(number) => Some(number - 1),
+                },
+            };
+            match chosen {
+                None => {}
+                Some(index) if current == Some(index) => {
+                    eprintln!("error: session {} is the current one", index + 1)
+                }
+                Some(index) => match agent.resume_session(&sessions[index].path) {
+                    Ok(()) => {
+                        window = agent.load_model_card();
+                        if let Some(editor) = &mut editor {
+                            for prompt in agent.prompts() {
+                                editor.remember(prompt);
                             }
-                            Err(error) => eprintln!("error: {error}"),
-                        },
-                    },
+                        }
+                        eprintln!(
+                            "✓ Resumed session · {}\nsession {}",
+                            agent.model(),
+                            agent.session_path().display(),
+                        );
+                        spaced = show_resumed(&agent, &mut ui);
+                    }
+                    Err(error) => eprintln!("error: {error}"),
                 },
             }
             continue;
@@ -291,44 +316,67 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             .strip_prefix("/fork")
             .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
-            let wanted = wanted.trim();
-            match agent.fork_prompts() {
-                Err(error) => eprintln!("error: {error}"),
-                Ok(prompts) if prompts.is_empty() => eprintln!("No messages to fork from"),
-                Ok(prompts) if wanted.is_empty() => {
+            let prompts = match agent.fork_prompts() {
+                Ok(prompts) => prompts,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    continue;
+                }
+            };
+            let chosen = match wanted.trim() {
+                "" if prompts.is_empty() => {
+                    eprintln!("No messages to fork from");
+                    None
+                }
+                "" if editor.is_some() => select::select(
+                    "Fork from message",
+                    prompts.len(),
+                    prompts.len() - 1,
+                    None,
+                    |index, width| clip(&one_line(&prompts[index]), width),
+                )
+                .map_err(|e| e.to_string())?,
+                "" => {
                     let digits = prompts.len().to_string().len();
                     let width = editor::terminal_size().0.saturating_sub(digits + 1);
                     for (index, prompt) in prompts.iter().enumerate() {
                         let line = clip(&one_line(prompt), width.max(2));
                         eprintln!("{:>digits$} {line}", index + 1);
                     }
+                    None
                 }
-                Ok(prompts) => match wanted.parse::<usize>() {
+                wanted => match wanted.parse::<usize>() {
                     Err(_) | Ok(0) => {
-                        eprintln!("error: /fork requires a positive message number")
+                        eprintln!("error: /fork requires a positive message number");
+                        None
                     }
                     Ok(number) if number > prompts.len() => {
-                        eprintln!("error: no message numbered {number} (/fork lists them)")
+                        eprintln!("error: no message numbered {number} (/fork lists them)");
+                        None
                     }
-                    Ok(number) => match agent.fork(number - 1) {
-                        Ok(Some(prompt)) => {
-                            window = agent.load_model_card();
-                            eprintln!(
-                                "✓ Forked to new session · {}\nsession {}",
-                                agent.model(),
-                                agent.session_path().display(),
-                            );
-                            spaced = show_resumed(&agent, &mut ui);
-                            if let Some(editor) = &mut editor {
-                                editor.set_text(prompt);
-                            }
-                        }
-                        Ok(None) => {
-                            eprintln!("error: no message numbered {number} (/fork lists them)")
-                        }
-                        Err(error) => eprintln!("error: {error}"),
-                    },
+                    Ok(number) => Some(number - 1),
                 },
+            };
+            if let Some(index) = chosen {
+                match agent.fork(index) {
+                    Ok(Some(prompt)) => {
+                        window = agent.load_model_card();
+                        eprintln!(
+                            "✓ Forked to new session · {}\nsession {}",
+                            agent.model(),
+                            agent.session_path().display(),
+                        );
+                        spaced = show_resumed(&agent, &mut ui);
+                        if let Some(editor) = &mut editor {
+                            editor.set_text(prompt);
+                        }
+                    }
+                    Ok(None) => eprintln!(
+                        "error: no message numbered {} (/fork lists them)",
+                        index + 1
+                    ),
+                    Err(error) => eprintln!("error: {error}"),
+                }
             }
             continue;
         }
@@ -336,25 +384,46 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             .strip_prefix("/model")
             .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
-            let wanted = wanted.trim();
-            match agent.models() {
-                None => eprintln!("error: could not list the endpoint's models"),
-                Some(models) if wanted.is_empty() => {
-                    for model in models {
-                        let current = if model == agent.model() { "*" } else { " " };
-                        eprintln!("{current} {model}");
-                    }
+            let Some(models) = agent.models() else {
+                eprintln!("error: could not list the endpoint's models");
+                continue;
+            };
+            let current = models.iter().position(|model| model == agent.model());
+            let chosen = match wanted.trim() {
+                "" if models.is_empty() => {
+                    eprintln!("The endpoint lists no models");
+                    None
                 }
-                Some(models) if models.iter().any(|model| model == wanted) => {
-                    match agent.set_model(wanted) {
-                        Ok(()) => {
-                            window = agent.load_model_card();
-                            eprintln!("✓ Model set to {wanted}");
-                        }
-                        Err(error) => eprintln!("error: {error}"),
+                "" if editor.is_some() => select::select(
+                    "Select model",
+                    models.len(),
+                    current.unwrap_or(0),
+                    current,
+                    |index, width| clip(&visible(&models[index]), width),
+                )
+                .map_err(|e| e.to_string())?
+                .map(|index| models[index].clone()),
+                "" => {
+                    for (index, model) in models.iter().enumerate() {
+                        let mark = if current == Some(index) { "*" } else { " " };
+                        eprintln!("{mark} {model}");
                     }
+                    None
                 }
-                Some(_) => eprintln!("error: no model {wanted} (/model lists them)"),
+                wanted if models.iter().any(|model| model == wanted) => Some(wanted.to_owned()),
+                wanted => {
+                    eprintln!("error: no model {wanted} (/model lists them)");
+                    None
+                }
+            };
+            if let Some(model) = chosen {
+                match agent.set_model(&model) {
+                    Ok(()) => {
+                        window = agent.load_model_card();
+                        eprintln!("✓ Model set to {model}");
+                    }
+                    Err(error) => eprintln!("error: {error}"),
+                }
             }
             continue;
         }
@@ -573,9 +642,9 @@ impl Status {
         let mut block: String = self
             .output
             .iter()
-            .map(|line| format!("  \x1b[2m{line}\x1b[0m\n"))
+            .map(|line| format!("  {}{line}{}\n", style::STATUS, style::RESET))
             .collect();
-        block += &format!("\x1b[2m{}\x1b[0m", clip(&text, width));
+        block += &format!("{}{}{}", style::STATUS, clip(&text, width), style::RESET);
         if self.drawn.as_deref() == Some(&block) {
             return;
         }
@@ -827,10 +896,10 @@ impl Terminal {
         let took = self.tool_started.take().map(|started| started.elapsed());
         let style = match () {
             _ if !self.color => "",
-            _ if failed => "\x1b[31m",
-            _ => "\x1b[2m",
+            _ if failed => style::TOOL_FAILED,
+            _ => style::TOOL_OUTPUT,
         };
-        let reset = if style.is_empty() { "" } else { "\x1b[0m" };
+        let reset = if style.is_empty() { "" } else { style::RESET };
         let styled = |lines: Vec<String>| -> Vec<String> {
             let row = |line| format!("{style}{line}{reset}");
             lines.into_iter().map(row).collect()
@@ -938,7 +1007,7 @@ impl Terminal {
     }
     fn dim(&self, text: &str) -> String {
         if self.color {
-            format!("\x1b[2m{text}\x1b[0m")
+            format!("{}{text}{}", style::MUTED, style::RESET)
         } else {
             text.to_owned()
         }
@@ -959,7 +1028,7 @@ impl Terminal {
                 _ => self.color,
             };
             let base = if kind == Streaming::Reasoning {
-                "\x1b[2m"
+                style::REASONING
             } else {
                 ""
             };
@@ -1017,8 +1086,8 @@ impl Terminal {
             (true, false) => {
                 self.clear();
                 let marker = match self.color {
-                    true => "\x1b[2;3mThinking...\x1b[0m",
-                    false => "Thinking...",
+                    true => format!("{}Thinking...{}", style::THINKING_HIDDEN, style::RESET),
+                    false => "Thinking...".into(),
                 };
                 eprint!("{marker}\n\n");
                 self.streaming = Streaming::Reasoning;
@@ -1051,7 +1120,7 @@ impl Terminal {
             Streaming::None => {}
             Streaming::Reasoning => eprint!(
                 "{}{}",
-                if self.color { "\x1b[0m" } else { "" },
+                if self.color { style::RESET } else { "" },
                 "\n".repeat(2 - self.printed_newlines)
             ),
             Streaming::Text => {
@@ -1109,7 +1178,7 @@ impl AgentUi for Terminal {
             delay.as_secs_f64().ceil()
         );
         if self.color {
-            eprintln!("\x1b[33m{text}\x1b[0m");
+            eprintln!("{}{text}{}", style::WARNING, style::RESET);
         } else {
             eprintln!("{text}");
         }
@@ -1248,9 +1317,9 @@ impl AgentUi for Terminal {
 impl Terminal {
     /// A compaction's summary as Scramjet shows it: dim markdown, wrapped to the terminal.
     fn summary_block(&self, summary: &str) -> String {
-        let mut markdown = markdown::Markdown::new(self.color, "\x1b[2m");
+        let mut markdown = markdown::Markdown::new(self.color, style::SUMMARY);
         let text = markdown.reopen() + &markdown.push(summary.trim_end()) + &markdown.finish();
-        let reset = if self.color { "\x1b[0m" } else { "" };
+        let reset = if self.color { style::RESET } else { "" };
         format!("{}{reset}", self.wrapped(&text))
     }
     fn ask(&mut self, question: &str, cancel: &AtomicBool) -> Answer {

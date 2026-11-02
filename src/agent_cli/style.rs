@@ -38,3 +38,10 @@ pub const CODE_FENCE: &str = "\x1b[2m";
 /// Markdown headings: level 1, then the others.
 pub const TITLE: &str = "\x1b[1;4;33m";
 pub const HEADING: &str = "\x1b[1;33m";
+
+/// A selector's title, its selected row and the mark before that row.
+pub const SELECTOR_TITLE: &str = "\x1b[1m";
+pub const SELECTED: &str = "\x1b[1m";
+pub const SELECTOR_MARK: &str = "\x1b[36m";
+/// The mark after the current session or model in a selector.
+pub const CURRENT: &str = "\x1b[32m";
