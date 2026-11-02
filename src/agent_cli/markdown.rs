@@ -2,13 +2,7 @@
 //! code spans, headings and fenced code blocks. A marker is shown as typed unless its span closes
 //! on the same line, so text after an opening marker waits until the span closes or the line ends.
 
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const CODE: &str = "\x1b[36m";
-const CODE_BLOCK: &str = "\x1b[32m";
-const FENCE: &str = "\x1b[2m";
-const HEADING: &str = "\x1b[1;33m";
-const TITLE: &str = "\x1b[1;4;33m";
+use super::style::{CODE, CODE_BLOCK, CODE_FENCE, HEADING, RESET, STRONG, TITLE};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Line {
@@ -94,7 +88,7 @@ impl Markdown {
                     Some(_) => None,
                     None => Some((c, run)),
                 };
-                out += &format!("{FENCE}{fence}{RESET}{}", self.base);
+                out += &format!("{CODE_FENCE}{fence}{RESET}{}", self.base);
             }
             Line::Text("") => {}
             Line::Text(_) | Line::Code => out += &format!("{RESET}{}", self.base),
@@ -208,8 +202,8 @@ impl Markdown {
                 }
                 Span::Bold { inner, end } => {
                     out.extend(&chars[plain..i]);
-                    let bold = format!("{restore}{BOLD}");
-                    out += BOLD;
+                    let bold = format!("{restore}{STRONG}");
+                    out += STRONG;
                     out += &codes(&chars[inner.0..inner.1], &bold);
                     out += &restore;
                     i = end;

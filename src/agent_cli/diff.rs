@@ -2,19 +2,13 @@
 //! with the changed words of a line replaced by one other line in inverse. Unchanged lines are
 //! only context, so they are cut to the width.
 
+use super::style::{DIFF_ADDED, DIFF_CHANGED, DIFF_CHANGED_END, DIFF_CONTEXT, DIFF_REMOVED, RESET};
 use super::{Wrap, clip, printable};
 use scramjet_rs::agent::sequence_diff;
 use unicode_width::UnicodeWidthStr;
 
 /// Screen rows a diff may take, besides the note about the lines left out.
 const DIFF_ROWS: usize = 40;
-
-const REMOVED: &str = "\x1b[31m";
-const ADDED: &str = "\x1b[32m";
-const CONTEXT: &str = "\x1b[2m";
-const RESET: &str = "\x1b[0m";
-const INVERSE: &str = "\x1b[7m";
-const INVERSE_OFF: &str = "\x1b[27m";
 
 /// The rows showing `diff`, whose lines are `{mark}{number} {text}` as the edit tool writes them,
 /// in `width` columns, styled when `color` is set.
@@ -41,14 +35,18 @@ pub(super) fn rows(diff: &str, width: usize, color: bool) -> Vec<String> {
                     }
                     None => printable(text),
                 };
-                let style = if changed == '-' { REMOVED } else { ADDED };
+                let style = if changed == '-' {
+                    DIFF_REMOVED
+                } else {
+                    DIFF_ADDED
+                };
                 wrapped(gutter, &text, width, style, color)
             }
-            _ => vec![styled(CONTEXT, &clip(&printable(line), width), color)],
+            _ => vec![styled(DIFF_CONTEXT, &clip(&printable(line), width), color)],
         };
         if !rows.is_empty() && rows.len() + line_rows.len() > DIFF_ROWS {
             let note = format!("… ({} more lines, {} total)", lines.len() - i, lines.len());
-            rows.push(styled(CONTEXT, &note, color));
+            rows.push(styled(DIFF_CONTEXT, &note, color));
             break;
         }
         rows.extend(line_rows);
@@ -79,14 +77,14 @@ fn wrapped(gutter: &str, text: &str, width: usize, style: &str, color: bool) -> 
     }) {
         // A highlight that a break interrupts continues after the next row's indentation.
         let (indent, rest) = line.split_at(line.len() - line.trim_start_matches(' ').len());
-        let reopen = if inverse { INVERSE } else { "" };
+        let reopen = if inverse { DIFF_CHANGED } else { "" };
         let gutter = if k == 0 { gutter } else { &blank };
         rows.push(styled(
             style,
             &format!("{gutter}{indent}{reopen}{rest}"),
             color,
         ));
-        inverse = match (line.rfind(INVERSE), line.rfind(INVERSE_OFF)) {
+        inverse = match (line.rfind(DIFF_CHANGED), line.rfind(DIFF_CHANGED_END)) {
             (Some(on), off) => off.is_none_or(|off| off < on),
             (None, off) => inverse && off.is_none(),
         };
@@ -122,13 +120,17 @@ fn highlighted(old: &str, new: &str) -> (String, String) {
         let mut on = false;
         for (word, changed) in words {
             if changed != on {
-                out.push_str(if changed { INVERSE } else { INVERSE_OFF });
+                out.push_str(if changed {
+                    DIFF_CHANGED
+                } else {
+                    DIFF_CHANGED_END
+                });
                 on = changed;
             }
             out.push_str(word);
         }
         if on {
-            out.push_str(INVERSE_OFF);
+            out.push_str(DIFF_CHANGED_END);
         }
         out
     };

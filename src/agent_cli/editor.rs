@@ -557,7 +557,13 @@ impl Screen {
         out.push_str("\r\x1b[J");
         out.push_str(&layout.rows[self.top..self.top + visible].join("\r\n"));
         if let Some(hint) = hint {
-            write!(out, "\r\n\x1b[2m{hint}\x1b[0m").unwrap();
+            write!(
+                out,
+                "\r\n{}{hint}{}",
+                super::style::MUTED,
+                super::style::RESET
+            )
+            .unwrap();
         }
         if done {
             out.push_str("\r\n");
