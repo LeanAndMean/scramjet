@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.js";
 import { streamSimpleOpenAICompletions } from "../src/providers/openai-completions.js";
 import { buildBaseOptions, clampReasoning } from "../src/providers/simple-options.js";
+import { streamSimple } from "../src/stream.js";
 import type { AssistantMessage, Context, Model, ToolResultMessage } from "../src/types.js";
 
 const copilotHeaders = {
@@ -215,6 +216,70 @@ describe("GitHub Copilot Completions request contracts", () => {
 		expect(requests[0].headers.get("openai-intent")).toBe("conversation-edits");
 		expect(requests[0].headers.get("x-initiator")).toBe("user");
 		expect(requests[1].headers.get("x-initiator")).toBe("agent");
+	});
+});
+
+describe("built-in OpenRouter Terra public Chat dispatch", () => {
+	it.each(["off", "minimal", "low", "medium", "high", "xhigh", "max", undefined] as const)(
+		"serializes effort %s",
+		async (reasoning) => {
+			const requests = stubFetch([completedChatResponse()]);
+			const result = await streamSimple(getModel("openrouter", "openai/gpt-6.1-terra"), toolContext, {
+				apiKey,
+				reasoning,
+			}).result();
+			expect(result.stopReason).toBe("stop");
+			expect(requests[0].url).toBe("https://openrouter.ai/api/v1/chat/completions");
+			expect(requests[0].headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+			const body = await requestBody(requests[0]);
+			expect(body.model).toBe("openai/gpt-6.1-terra");
+			expect(body.reasoning).toEqual({
+				effort:
+					reasoning === "minimal" ? "low" : reasoning === "off" || reasoning === undefined ? "none" : reasoning,
+			});
+			expect(body.tools).toContainEqual(
+				expect.objectContaining({
+					type: "function",
+					function: expect.objectContaining({
+						name: "read",
+						parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+					}),
+				}),
+			);
+			expect(body).not.toHaveProperty("max_tokens");
+			expect(body).not.toHaveProperty("max_completion_tokens");
+		},
+	);
+
+	it("continues a streamed tool call with matching result IDs", async () => {
+		const requests = stubFetch([toolCallChatResponse(), completedChatResponse("continued")]);
+		const model = getModel("openrouter", "openai/gpt-6.1-terra");
+		const first = await streamSimple(model, toolContext, { apiKey, reasoning: "low" }).result();
+		expect(first.stopReason).toBe("toolUse");
+		expect(first.content).toContainEqual({
+			type: "toolCall",
+			id: "call_read_1",
+			name: "read",
+			arguments: { path: "README.md" },
+		});
+		const second = await streamSimple(model, continuationContext(first), { apiKey, reasoning: "max" }).result();
+		expect(second.stopReason).toBe("stop");
+		expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "continued" }));
+		for (const request of requests) {
+			expect(request.url).toBe("https://openrouter.ai/api/v1/chat/completions");
+			expect((await requestBody(request.clone())).model).toBe(model.id);
+		}
+		expect((await requestBody(requests[1])).messages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					role: "assistant",
+					tool_calls: [
+						expect.objectContaining({ id: "call_read_1", function: expect.objectContaining({ name: "read" }) }),
+					],
+				}),
+				expect.objectContaining({ role: "tool", tool_call_id: "call_read_1", content: "file contents" }),
+			]),
+		);
 	});
 });
 

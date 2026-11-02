@@ -62,6 +62,14 @@ function feedModel(id: string, context: number, overrides: Record<string, unknow
 }
 
 const copilotAdditions = {
+	"gpt-6.1-terra": {
+		api: "openai-responses",
+		contextWindow: 1000000,
+		maxInputTokens: 1000000,
+		maxTokens: 128000,
+		cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	},
 	"gpt-6.1-sol": {
 		api: "openai-responses",
 		contextWindow: 1050000,
@@ -272,7 +280,7 @@ async function generate(
 				}),
 			};
 		}
-		if (url === "https://ai-gateway.vercel.sh/v1/models/openai/gpt-5.4/endpoints") {
+		if (url.startsWith("https://ai-gateway.vercel.sh/v1/models/") && url.endsWith("/endpoints")) {
 			return {
 				ok: !options.endpointError,
 				status: options.endpointError ? 503 : 200,
@@ -463,6 +471,115 @@ afterEach(() => {
 	else process.env.SCRAMJET_MODEL_CANDIDATE = initialCandidatePath;
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
+});
+
+describe("Terra gateway generator contracts", () => {
+	it.each([false, true])(
+		"preserves route metadata and normalizes binding=%s endpoint declarations",
+		async (binding) => {
+			const endpoints = [
+				{
+					context_length: 1050000,
+					max_prompt_tokens: 922000,
+					max_completion_tokens: 128000,
+					supported_parameters: ["tools"],
+				},
+				{
+					context_length: 1050000,
+					max_completion_tokens: binding ? 64000 : 128000,
+					supported_parameters: ["tools"],
+				},
+			];
+			const addLookalike = (items: any[]) =>
+				items.push({
+					...items.find((item) => item.id === "openai/gpt-6.1-terra"),
+					id: "openai/gpt-6.1-terra-mini",
+					name: "GPT-6.1 Terra Mini",
+				});
+			const models = (await generate(true, {
+				expectedFetchCount: 12,
+				openRouterEndpoints: endpoints,
+				openRouterEndpointFor: "openai/gpt-6.1-terra",
+				vercelEndpoints: [
+					{ context_length: 1050000, max_completion_tokens: 128000, supported_parameters: ["tools"] },
+				],
+				openRouterChange: (items) => {
+					items.push({
+						id: "openai/gpt-6.1-terra",
+						name: "GPT-6.1 Terra",
+						context_length: 1050000,
+						top_provider: { max_completion_tokens: 128000 },
+						architecture: { modality: "text+image->text" },
+						pricing: {
+							prompt: "0.000001",
+							completion: "0.000005",
+							input_cache_read: "0.00000005",
+							input_cache_write: "0.00000125",
+						},
+						supported_parameters: ["tools", "reasoning"],
+					});
+					addLookalike(items);
+				},
+				vercelChange: (items) => {
+					for (const [id, multiplier] of [
+						["openai/gpt-6.1-terra", 1],
+						["openai/gpt-6.1-terra-fast", 2],
+					] as const) {
+						items.push({
+							id,
+							name: multiplier === 2 ? "GPT-6.1 Terra Fast" : "GPT-6.1 Terra",
+							context_window: 200000,
+							max_tokens: 128000,
+							pricing: {
+								input: String(multiplier / 1000000),
+								output: String((5 * multiplier) / 1000000),
+								input_cache_read: String((0.05 * multiplier) / 1000000),
+								input_cache_write: String((1.25 * multiplier) / 1000000),
+							},
+							tags: ["tool-use", "vision", "reasoning"],
+						});
+					}
+					addLookalike(items);
+				},
+			}))!;
+			for (const [provider, id, multiplier] of [
+				["openrouter", "openai/gpt-6.1-terra", 1],
+				["vercel-ai-gateway", "openai/gpt-6.1-terra", 1],
+				["vercel-ai-gateway", "openai/gpt-6.1-terra-fast", 2],
+			] as const) {
+				const model = models[provider][id];
+				expect(model).toMatchObject({
+					id,
+					provider,
+					api: provider === "openrouter" ? "openai-completions" : "openai-responses",
+					baseUrl: provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://ai-gateway.vercel.sh/v1",
+					contextWindow: 1050000,
+					maxTokens: 128000,
+					reasoning: true,
+					input: ["text", "image"],
+					cost: { input: multiplier, output: 5 * multiplier, cacheWrite: 1.25 * multiplier },
+					thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh", max: "max" },
+				});
+				expect(model.cost.cacheRead).toBeCloseTo(0.05 * multiplier);
+				expect(model).not.toHaveProperty("maxInputTokens");
+				if (provider === "openrouter" && binding) {
+					expect(model.requestLimits).toEqual([
+						{ maxTotalTokens: 1050000, maxInputTokens: 922000, maxOutputTokens: 128000, supportsTools: true },
+						{ maxTotalTokens: 1050000, maxOutputTokens: 64000, supportsTools: true },
+					]);
+				} else expect(model).not.toHaveProperty("requestLimits");
+			}
+			expect(models["vercel-ai-gateway"]["openai/gpt-5.4"]).toMatchObject({
+				api: "anthropic-messages",
+				baseUrl: "https://ai-gateway.vercel.sh",
+			});
+			expect(models.openrouter["openai/gpt-5.4"].api).toBe("openai-completions");
+			const vercelLookalike = models["vercel-ai-gateway"]["openai/gpt-6.1-terra-mini"];
+			expect(vercelLookalike).toMatchObject({ api: "anthropic-messages", baseUrl: "https://ai-gateway.vercel.sh" });
+			expect(vercelLookalike).not.toHaveProperty("thinkingLevelMap");
+			expect(models.openrouter["openai/gpt-6.1-terra-mini"]).not.toHaveProperty("thinkingLevelMap");
+		},
+	);
 });
 
 describe("real generator context corrections", () => {
@@ -1001,6 +1118,65 @@ describe("real generator context corrections", () => {
 		expect(models["azure-openai-responses"]["gpt-realtime-2.1"]).toBeUndefined();
 	});
 
+	it.each(["absent", "valid", "conflicting"] as const)("pins Terra direct metadata with %s feed", async (state) => {
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				data.openai.models["gpt-6.1-terra-neighbor"] = feedModel("gpt-6.1-terra-neighbor", 240000);
+				if (state !== "absent") {
+					data.openai.models["gpt-6.1-terra"] = feedModel(
+						"gpt-6.1-terra",
+						state === "valid" ? 1050000 : 240000,
+						state === "valid"
+							? {
+									name: "GPT-6.1 Terra",
+									reasoning: true,
+									modalities: { input: ["text", "image"] },
+									limit: { context: 1050000, output: 128000 },
+									cost: { input: 1, output: 5, cache_read: 0.05, cache_write: 1.25 },
+								}
+							: {
+									name: "Conflicting feed name",
+									reasoning: false,
+									modalities: { input: ["text"] },
+									limit: { context: 240000, input: 200000, output: 4000 },
+									cost: { input: 99, output: 99, cache_read: 99, cache_write: 99 },
+								},
+					);
+				}
+			},
+		}))!;
+		for (const provider of ["openai", "openai-codex"] as const) {
+			const model = models[provider]["gpt-6.1-terra"];
+			expect(model).toMatchObject({
+				id: "gpt-6.1-terra",
+				name: "GPT-6.1 Terra",
+				provider,
+				api: provider === "openai" ? "openai-responses" : "openai-codex-responses",
+				baseUrl: provider === "openai" ? "https://api.openai.com/v1" : "https://chatgpt.com/backend-api",
+				reasoning: true,
+				input: ["text", "image"],
+				contextWindow: provider === "openai" ? 1050000 : 872000,
+				maxTokens: 128000,
+				cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+				thinkingLevelMap: { off: provider === "openai" ? "none" : null, minimal: null, xhigh: "xhigh", max: "max" },
+			});
+			expect(model).not.toHaveProperty("maxInputTokens");
+			expect(model).not.toHaveProperty("requestLimits");
+			expect(Object.keys(models[provider]).filter((id) => id === "gpt-6.1-terra")).toHaveLength(1);
+		}
+		expect(models.openai["gpt-6.1-terra-neighbor"].contextWindow).toBe(240000);
+		expect(models.openai["gpt-6.1-terra-neighbor"].thinkingLevelMap).not.toEqual(
+			models.openai["gpt-6.1-terra"].thinkingLevelMap,
+		);
+		expect(models["openai-codex"]["gpt-6-sol"].thinkingLevelMap).toEqual({
+			off: null,
+			minimal: "low",
+			xhigh: "xhigh",
+			max: "max",
+		});
+		expect(models["azure-openai-responses"]["gpt-6.1-terra"]).toBeUndefined();
+	});
+
 	it.each([true, false])("pins GPT-6.1 Sol direct metadata with feed-present=%s", async (feedPresent) => {
 		const models = (await generate(true, {
 			modelsDevChange: (data) => {
@@ -1201,6 +1377,52 @@ describe("real generator context corrections", () => {
 		},
 	);
 
+	it("pins Copilot Terra against inherited public limits and preserves neighboring routing", async () => {
+		const models = (await generate(true, {
+			modelsDevChange: (data) => {
+				data["github-copilot"].models["gpt-6.1-terra"] = feedModel("gpt-6.1-terra", 1050000, {
+					name: "Conflicting feed name",
+					reasoning: false,
+					modalities: { input: ["text", "image", "pdf"] },
+					limit: { context: 1050000, input: 922000, output: 4000 },
+				});
+				data["github-copilot"].models["gpt-6.1-terra-neighbor"] = feedModel("gpt-6.1-terra-neighbor", 240000);
+			},
+		}))!["github-copilot"];
+		expect(models["gpt-6.1-terra"]).toMatchObject({
+			id: "gpt-6.1-terra",
+			name: "gpt-6.1-terra",
+			...copilotAdditions["gpt-6.1-terra"],
+			reasoning: true,
+			input: ["text", "image"],
+		});
+		expect(models["gpt-6.1-terra"].thinkingLevelMap).toEqual(copilotAdditions["gpt-6.1-terra"].thinkingLevelMap);
+		expect(Object.keys(models).filter((id) => id === "gpt-6.1-terra")).toHaveLength(1);
+		expect(models["gpt-6.1-terra-neighbor"]).toMatchObject({ contextWindow: 240000, api: "openai-completions" });
+	});
+
+	it.each(["missing", "deprecated", "no-tools"])("rejects %s Copilot Terra before writing", async (state) => {
+		await generate(true, {
+			modelsDevChange: (data) => {
+				const models = data["github-copilot"].models;
+				if (state === "missing") delete models["gpt-6.1-terra"];
+				else
+					models["gpt-6.1-terra"][state === "deprecated" ? "status" : "tool_call"] =
+						state === "deprecated" ? "deprecated" : false;
+			},
+			expectFailure: true,
+			expectedError: "Missing corrected GitHub Copilot candidates: gpt-6.1-terra",
+		});
+	});
+
+	it("preserves the exact-loss guard for an unrecognized committed Terra neighbor", async () => {
+		await generate(true, {
+			committedModels: { "github-copilot": { "gpt-6.1-terra-neighbor": {} } },
+			expectFailure: true,
+			expectedError: "Unreviewed catalog losses: github-copilot/gpt-6.1-terra-neighbor",
+		});
+	});
+
 	it("rejects a missing corrected GitHub Copilot candidate before writing", async () => {
 		await generate(true, {
 			omittedCopilotCorrection: "kimi-k3",
@@ -1299,6 +1521,7 @@ describe("real generator context corrections", () => {
 			"gpt-6-sol": 872000,
 			"gpt-6-luna": 872000,
 			"gpt-6.1-sol": 872000,
+			"gpt-6.1-terra": 872000,
 		};
 		for (const model of Object.values(models["openai-codex"])) {
 			expect(model.contextWindow, model.id).toBe(codexContexts[model.id]);

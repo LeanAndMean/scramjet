@@ -14,7 +14,9 @@ import {
 	createResponsesSdkRequestObserver,
 	normalizeResponsesFailure,
 } from "../src/providers/openai-responses-shared.js";
+import { streamSimple } from "../src/stream.js";
 import type { AssistantMessage, Context, Model, ModelThinkingLevel, ToolResultMessage } from "../src/types.js";
+import { githubCopilotOAuthProvider } from "../src/utils/oauth/github-copilot.js";
 import { isContextOverflow } from "../src/utils/overflow.js";
 
 const CATEGORY_PREFIX_MAX = "OpenAI Responses request failed without recognized details: ".length;
@@ -207,9 +209,9 @@ function continuationContext(assistant: AssistantMessage): Context {
 	return { messages: [...context.messages, assistant, result], tools: toolContext.tools };
 }
 
-async function assertToolContinuation(model: Model<"openai-responses">) {
+async function assertToolContinuation(model: Model<"openai-responses">, streamFn = streamSimpleOpenAIResponses) {
 	const requests = stubFetch([toolCallResponse(), completedResponse("continued")]);
-	const first = await streamSimpleOpenAIResponses(model, toolContext, { apiKey, reasoning: "low" }).result();
+	const first = await streamFn(model, toolContext, { apiKey, reasoning: "low" }).result();
 	expect(first.stopReason).toBe("toolUse");
 	expect(first.content).toContainEqual({
 		type: "toolCall",
@@ -218,14 +220,14 @@ async function assertToolContinuation(model: Model<"openai-responses">) {
 		arguments: { path: "README.md" },
 	});
 
-	const second = await streamSimpleOpenAIResponses(model, continuationContext(first), {
+	const second = await streamFn(model, continuationContext(first), {
 		apiKey,
 		reasoning: "low",
 	}).result();
 	expect(second.stopReason).toBe("stop");
 	expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "continued" }));
 
-	const continuation = await requestBody(requests[1]);
+	const continuation = await requestBody(requests[1].clone());
 	expect(continuation.input).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({
@@ -298,6 +300,173 @@ describe.each([
 
 	it("streams a tool call and continues after its result", async () => {
 		await assertToolContinuation(model);
+	});
+});
+
+describe("built-in GPT-6.1 Terra through public Responses dispatch", () => {
+	it.each([...efforts, "off", "minimal", undefined] as const)("serializes effort %s", async (reasoning) => {
+		const requests = stubFetch([completedResponse()]);
+		const result = await streamSimple(getModel("openai", "gpt-6.1-terra"), toolContext, {
+			apiKey,
+			reasoning,
+		}).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests[0].url).toBe("https://api.openai.com/v1/responses");
+		expect(requests[0].headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+		const body = await requestBody(requests[0]);
+		expect(body.model).toBe("gpt-6.1-terra");
+		expect(body.reasoning).toEqual(
+			expect.objectContaining({
+				effort:
+					reasoning === "minimal" ? "low" : reasoning === "off" || reasoning === undefined ? "none" : reasoning,
+			}),
+		);
+		expect(body.tools).toContainEqual(
+			expect.objectContaining({
+				type: "function",
+				name: "read",
+				parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+			}),
+		);
+	});
+
+	it("streams a tool call and continues using the catalog-selected adapter", async () => {
+		const requests = await assertToolContinuation(getModel("openai", "gpt-6.1-terra"), streamSimple);
+		for (const request of requests) {
+			expect(request.url).toBe("https://api.openai.com/v1/responses");
+			expect((await requestBody(request)).model).toBe("gpt-6.1-terra");
+		}
+	});
+});
+
+describe.each(["openai/gpt-6.1-terra", "openai/gpt-6.1-terra-fast"] as const)(
+	"built-in Vercel %s public Responses dispatch",
+	(id) => {
+		it.each([...efforts, "off", "minimal", undefined] as const)("serializes effort %s", async (reasoning) => {
+			const requests = stubFetch([completedResponse()]);
+			const result = await streamSimple(getModel("vercel-ai-gateway", id), toolContext, {
+				apiKey,
+				reasoning,
+			}).result();
+			expect(result.stopReason).toBe("stop");
+			expect(requests[0].url).toBe("https://ai-gateway.vercel.sh/v1/responses");
+			expect(requests[0].headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+			const body = await requestBody(requests[0]);
+			expect(body.model).toBe(id);
+			expect(body.reasoning).toEqual(
+				expect.objectContaining({
+					effort:
+						reasoning === "minimal" ? "low" : reasoning === "off" || reasoning === undefined ? "none" : reasoning,
+				}),
+			);
+			expect(body.tools).toContainEqual(
+				expect.objectContaining({
+					type: "function",
+					name: "read",
+					parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+				}),
+			);
+		});
+
+		it("continues a streamed tool result through the catalog-selected adapter", async () => {
+			const requests = stubFetch([toolCallResponse(), completedResponse("continued")]);
+			const model = getModel("vercel-ai-gateway", id);
+			const first = await streamSimple(model, toolContext, { apiKey, reasoning: "low" }).result();
+			expect(first.stopReason).toBe("toolUse");
+			const call = first.content.find((block) => block.type === "toolCall");
+			expect(call).toMatchObject({ name: "read", arguments: { path: "README.md" } });
+			const second = await streamSimple(model, continuationContext(first), { apiKey, reasoning: "max" }).result();
+			expect(second.stopReason).toBe("stop");
+			expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "continued" }));
+			for (const request of requests) {
+				expect(request.url).toBe("https://ai-gateway.vercel.sh/v1/responses");
+				expect((await requestBody(request.clone())).model).toBe(id);
+			}
+			const body = await requestBody(requests[1]);
+			expect(body.input).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ type: "function_call", call_id: "call_read_1", name: "read" }),
+					expect.objectContaining({
+						type: "function_call_output",
+						call_id: "call_read_1",
+						output: "file contents",
+					}),
+				]),
+			);
+		});
+	},
+);
+
+describe("built-in Copilot Terra through public Responses dispatch", () => {
+	it.each([...efforts, "off", "minimal", undefined] as const)("serializes effort %s", async (reasoning) => {
+		const requests = stubFetch([completedResponse()]);
+		const model = getModel("github-copilot", "gpt-6.1-terra");
+		const result = await streamSimple(model, toolContext, { apiKey, reasoning }).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests[0].url).toBe("https://api.individual.githubcopilot.com/responses");
+		expect(requests[0].headers.get("authorization")).toBe(`Bearer ${apiKey}`);
+		for (const [name, value] of Object.entries(model.headers ?? {}))
+			expect(requests[0].headers.get(name)).toBe(value);
+		const body = await requestBody(requests[0]);
+		expect(body.model).toBe("gpt-6.1-terra");
+		if (reasoning === undefined) expect(body).not.toHaveProperty("reasoning");
+		else
+			expect(body.reasoning).toEqual(
+				expect.objectContaining({ effort: reasoning === "off" || reasoning === "minimal" ? "low" : reasoning }),
+			);
+		expect(body.tools).toContainEqual(
+			expect.objectContaining({
+				type: "function",
+				name: "read",
+				parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+			}),
+		);
+	});
+
+	it("continues a streamed tool call with matching IDs and user-to-agent initiator headers", async () => {
+		const model = getModel("github-copilot", "gpt-6.1-terra");
+		const requests = await assertToolContinuation(model, streamSimple);
+		for (const request of requests) {
+			expect(request.url).toBe("https://api.individual.githubcopilot.com/responses");
+			for (const [name, value] of Object.entries(model.headers ?? {})) expect(request.headers.get(name)).toBe(value);
+			expect(request.headers.get("openai-intent")).toBe("conversation-edits");
+			const body = await requestBody(request);
+			expect(body.model).toBe("gpt-6.1-terra");
+			expect(body.reasoning).toEqual(expect.objectContaining({ effort: "low" }));
+			expect(body.tools).toContainEqual(expect.objectContaining({ type: "function", name: "read" }));
+		}
+		expect(requests[0].headers.get("x-initiator")).toBe("user");
+		expect(requests[1].headers.get("x-initiator")).toBe("agent");
+	});
+
+	it("keeps the OAuth-derived account host and dynamic vision header", async () => {
+		const model = getModel("github-copilot", "gpt-6.1-terra");
+		const [accountModel] = githubCopilotOAuthProvider.modifyModels!([model], {
+			access: "tid=synthetic;proxy-ep=proxy.business.githubcopilot.com;exp=9999999999",
+			refresh: "synthetic-refresh",
+			expires: 9999999999000,
+		});
+		const requests = stubFetch([completedResponse()]);
+		const result = await streamSimple(
+			accountModel,
+			{
+				messages: [
+					{
+						role: "user",
+						timestamp: 0,
+						content: [
+							{ type: "text", text: "inspect" },
+							{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+						],
+					},
+				],
+			},
+			{ apiKey },
+		).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests[0].url).toBe("https://api.business.githubcopilot.com/responses");
+		expect(requests[0].headers.get("copilot-vision-request")).toBe("true");
+		expect(requests[0].headers.get("x-initiator")).toBe("user");
 	});
 });
 

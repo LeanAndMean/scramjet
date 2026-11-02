@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	clampThinkingLevel,
+	getEndpointOutputLimit,
 	getModel,
 	getModels,
 	getProviders,
@@ -785,6 +786,110 @@ describe("generated catalog - GPT-6 Astra", () => {
 			expect(getSupportedThinkingLevels(model)).toEqual(["off", "low", "medium", "high"]);
 		},
 	);
+});
+
+describe("generated catalog - GPT-6.1 Terra gateway contracts", () => {
+	it.each([
+		["openrouter", "openai/gpt-6.1-terra", "openai-completions", "https://openrouter.ai/api/v1", 1],
+		["vercel-ai-gateway", "openai/gpt-6.1-terra", "openai-responses", "https://ai-gateway.vercel.sh/v1", 1],
+		["vercel-ai-gateway", "openai/gpt-6.1-terra-fast", "openai-responses", "https://ai-gateway.vercel.sh/v1", 2],
+	] as const)("pins %s/%s", (provider, id, api, baseUrl, multiplier) => {
+		const matches = getModels(provider).filter((model) => model.id === id);
+		expect(matches).toHaveLength(1);
+		const model = matches[0];
+		expect(getModel(provider, id)).toBe(model);
+		expect(model).toEqual({
+			id,
+			name: multiplier === 2 ? "GPT-6.1 Terra Fast" : "GPT-6.1 Terra",
+			provider,
+			api,
+			baseUrl,
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 1050000,
+			maxTokens: 128000,
+			cost: {
+				input: multiplier,
+				output: 5 * multiplier,
+				cacheRead: 0.05 * multiplier,
+				cacheWrite: 1.25 * multiplier,
+			},
+			thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh", max: "max" },
+		});
+		expect(getSupportedThinkingLevels(model)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+		expect(clampThinkingLevel(model, "minimal")).toBe("low");
+		if (provider === "openrouter") {
+			expect(model.maxInputTokens).toBeUndefined();
+			expect(
+				Math.min(model.maxTokens, model.contextWindow - 950000, getEndpointOutputLimit(model, 950000, true)),
+			).toBe(100000);
+		}
+	});
+});
+
+describe("generated catalog - GPT-6.1 Terra route contracts", () => {
+	it("pins the account-qualified Copilot contract without inherited none support", () => {
+		const matches = getModels("github-copilot").filter((model) => model.id === "gpt-6.1-terra");
+		expect(matches).toHaveLength(1);
+		const model = matches[0];
+		expect(getModel("github-copilot", "gpt-6.1-terra")).toBe(model);
+		expect(model).toEqual({
+			id: "gpt-6.1-terra",
+			name: "gpt-6.1-terra",
+			provider: "github-copilot",
+			api: "openai-responses",
+			baseUrl: "https://api.individual.githubcopilot.com",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+			contextWindow: 1000000,
+			maxInputTokens: 1000000,
+			maxTokens: 128000,
+			thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+			headers: {
+				"User-Agent": "GitHubCopilotChat/0.35.0",
+				"Editor-Version": "vscode/1.107.0",
+				"Editor-Plugin-Version": "copilot-chat/0.35.0",
+				"Copilot-Integration-Id": "vscode-chat",
+				"X-GitHub-Api-Version": "2026-06-01",
+			},
+		});
+		expect(getSupportedThinkingLevels(model)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+		for (const level of ["off", "minimal"] as const) expect(clampThinkingLevel(model, level)).toBe("low");
+	});
+
+	it.each([
+		["openai", "openai-responses", "https://api.openai.com/v1", 1050000],
+		["openai-codex", "openai-codex-responses", "https://chatgpt.com/backend-api", 872000],
+	] as const)("pins %s metadata and supported efforts", (provider, api, baseUrl, contextWindow) => {
+		const matches = getModels(provider).filter((model) => model.id === "gpt-6.1-terra");
+		expect(matches).toHaveLength(1);
+		const model = matches[0];
+		expect(model).toEqual({
+			id: "gpt-6.1-terra",
+			name: "GPT-6.1 Terra",
+			provider,
+			api,
+			baseUrl,
+			contextWindow,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+			maxTokens: 128000,
+			thinkingLevelMap: { off: provider === "openai" ? "none" : null, minimal: null, xhigh: "xhigh", max: "max" },
+		});
+		expect(getModel(provider, "gpt-6.1-terra")).toBe(model);
+		expect(getSupportedThinkingLevels(model)).toEqual([
+			...(provider === "openai" ? ["off"] : []),
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		]);
+		expect(clampThinkingLevel(model, "minimal")).toBe("low");
+		expect(clampThinkingLevel(model, "off")).toBe(provider === "openai" ? "off" : "low");
+	});
 });
 
 describe("generated catalog - GPT-6.1 Sol route contracts", () => {

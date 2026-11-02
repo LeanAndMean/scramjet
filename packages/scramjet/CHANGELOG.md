@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.117.0 — Add GPT-6.1 Terra
+
+### Added
+
+- Add six GPT-6.1 Terra model records across OpenAI, Codex sign-in, GitHub Copilot, OpenRouter and Vercel AI Gateway, including Vercel Terra Fast, with route-specific transports, reasoning levels, limits and scalar usage estimates. Fixes [#639](https://github.com/LeanAndMean/scramjet/issues/639); unresolved Azure, Bedrock and Cloudflare routes remain tracked in #640.
+- Document account-qualified Copilot metadata, Codex's user-approved provisional output allowance, gateway routing limitations and pricing qualifications. Preserve existing custom-model transport defaults.
+
+### Tests
+
+- Cover catalog metadata, mocked generation, public dispatch and tool continuation, effort serialization, synthetic-auth registry visibility, custom-model defaults and exact-ID gateway matching. Offline checks do not establish provider acceptance, entitlement, backend maxima or billing.
+
 ## 0.116.2 — Synchronize VTE paste-consent verification
 
 ### Fixed
