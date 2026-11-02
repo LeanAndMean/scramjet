@@ -160,6 +160,48 @@ pub struct Compaction {
     pub summary: String,
 }
 
+/// An entry of the session as `/tree` lists it.
+#[derive(Debug, PartialEq)]
+pub struct TreeEntry {
+    /// Its line in the session file, which `Agent::navigate` takes.
+    pub line: usize,
+    /// The nearest listed entry it continues; `None` at the start of a conversation.
+    pub parent: Option<usize>,
+    pub item: TreeItem,
+    /// Whether it is on the path to the current entry.
+    pub active: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum TreeItem {
+    Prompt(String),
+    /// A `!` command's text.
+    Command(String),
+    Reply(String),
+    /// A tool call's result, or the call itself, by the call's name and its call line's summary.
+    Tool(String, String),
+    Compaction(Option<u64>),
+    /// Listed only when it is the current entry, as are the two below.
+    Reasoning,
+    Model(String),
+}
+
+/// The session's entries as `/tree` lists them, in file order.
+pub struct SessionTree {
+    pub entries: Vec<TreeEntry>,
+    /// The listed entry nearest the current one, on its path.
+    pub current: Option<usize>,
+}
+
+/// Where `Agent::navigate` left the conversation.
+#[derive(Debug, PartialEq)]
+pub enum Navigated {
+    /// The conversation already ended at that entry.
+    AlreadyThere,
+    /// It now ends there; `prompt`, if the entry was one, is to be edited and sent again.
+    Moved { prompt: Option<String> },
+}
+
 /// Why compaction ran without `/compact`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AutoCompaction {
@@ -285,6 +327,131 @@ impl Agent {
         Ok(Some(prompt))
     }
 
+    /// The current session's entries, as Scramjet's `/tree` lists them by default: prompts,
+    /// replies with text, tool results, `!` commands and compactions, and the current entry
+    /// whatever it is.
+    pub fn tree(&self) -> Result<SessionTree, AgentError> {
+        let entries = self.session.entries()?;
+        let leaf = self.session.leaf();
+        let mut calls = std::collections::HashMap::new();
+        for entry in &entries {
+            if entry.value["type"] == "function_call"
+                && let (Some(id), Ok(call)) =
+                    (entry.value["call_id"].as_str(), Call::parse(&entry.value))
+            {
+                calls.insert(id, (call.name.to_owned(), call.summary()));
+            }
+        }
+        let tool = |value: &Value| {
+            let (name, summary) = value["call_id"]
+                .as_str()
+                .and_then(|id| calls.get(id))
+                .cloned()
+                .unwrap_or_else(|| {
+                    (
+                        value["name"].as_str().unwrap_or("tool").to_owned(),
+                        String::new(),
+                    )
+                });
+            TreeItem::Tool(name, summary)
+        };
+        let mut active = std::collections::HashSet::new();
+        let parents: std::collections::HashMap<_, _> = entries
+            .iter()
+            .map(|entry| (entry.line, entry.parent))
+            .collect();
+        let mut at = leaf;
+        while let Some(line) = at {
+            active.insert(line);
+            at = parents.get(&line).copied().flatten();
+        }
+        let mut listed = std::collections::HashSet::new();
+        let mut tree = Vec::new();
+        for entry in &entries {
+            let value = &entry.value;
+            let is_leaf = leaf == Some(entry.line);
+            let item = match value["type"].as_str() {
+                Some("message") => Some(TreeItem::Reply(message_text(value))),
+                Some("function_call_output") => Some(tool(value)),
+                Some("compaction") => Some(TreeItem::Compaction(value["tokens_before"].as_u64())),
+                Some("function_call") if is_leaf => Some(tool(value)),
+                Some("reasoning") if is_leaf => Some(TreeItem::Reasoning),
+                Some("model_change") if is_leaf => Some(TreeItem::Model(
+                    value["model"].as_str().unwrap_or_default().to_owned(),
+                )),
+                _ if session::is_prompt(value) => Some(TreeItem::Prompt(
+                    value["content"].as_str().unwrap_or_default().to_owned(),
+                )),
+                _ if value["role"] == "user" => value[TYPED]
+                    .as_str()
+                    .and_then(|typed| typed.strip_prefix('!'))
+                    .map(|command| TreeItem::Command(command.to_owned())),
+                _ => None,
+            };
+            let Some(item) = item else {
+                continue;
+            };
+            let mut parent = entry.parent;
+            while let Some(line) = parent.filter(|line| !listed.contains(line)) {
+                parent = parents.get(&line).copied().flatten();
+            }
+            listed.insert(entry.line);
+            tree.push(TreeEntry {
+                line: entry.line,
+                parent,
+                item,
+                active: active.contains(&entry.line),
+            });
+        }
+        let mut current = leaf;
+        while let Some(line) = current.filter(|line| !listed.contains(line)) {
+            current = parents.get(&line).copied().flatten();
+        }
+        Ok(SessionTree {
+            entries: tree,
+            current,
+        })
+    }
+
+    /// Continues the conversation from the session's entry on `line`, in the same session, as
+    /// Scramjet's `/tree` does: from before it if it is a prompt, which is returned to be edited
+    /// and sent again, otherwise from after it. The model stays as it is. On failure nothing
+    /// changes.
+    pub fn navigate(&mut self, line: usize) -> Result<Navigated, AgentError> {
+        if self.session.leaf() == Some(line) {
+            return Ok(Navigated::AlreadyThere);
+        }
+        let entries = self.session.entries()?;
+        let Some(entry) = entries.iter().find(|entry| entry.line == line) else {
+            return Err(AgentError::Session(std::io::Error::other(
+                "no such entry in the session",
+            )));
+        };
+        let (mut leaf, prompt) = if session::is_prompt(&entry.value) {
+            let prompt = entry.value["content"].as_str().unwrap_or_default();
+            (entry.parent, Some(prompt.to_owned()))
+        } else {
+            (Some(line), None)
+        };
+        // The results of one reply's calls continue one another; ending at one before the last
+        // would leave a call without its result.
+        if entry.value["type"] == "function_call_output" {
+            while let Some(next) = entries
+                .iter()
+                .find(|next| next.parent == leaf && next.value["type"] == "function_call_output")
+            {
+                leaf = Some(next.line);
+            }
+            if leaf == self.session.leaf() {
+                return Ok(Navigated::AlreadyThere);
+            }
+        }
+        self.conversation = self.session.move_to(leaf)?;
+        self.usage.context_tokens = self.session.context_tokens();
+        self.answer_interrupted_calls()?;
+        Ok(Navigated::Moved { prompt })
+    }
+
     fn switch_session(
         &mut self,
         (session, conversation, prompts): (Session, Vec<Value>, Vec<String>),
@@ -362,7 +529,8 @@ impl Agent {
             .unwrap_or_else(|| compaction::estimate(&self.conversation));
         self.session.append(
             &json!({"type":"compaction", "summary":summary, "first_kept":cut,
-                "read_files":files.read, "modified_files":files.modified}),
+                "read_files":files.read, "modified_files":files.modified,
+                "tokens_before":tokens_before}),
         )?;
         let kept = self.conversation.split_off(cut);
         self.conversation = vec![compaction::summary_message(&summary)];
@@ -2349,6 +2517,219 @@ response is incomplete; retry the request."});
         assert_eq!(agent.model(), "c");
         let reopened = Session::open(agent.session_path()).unwrap().0;
         assert_eq!(reopened.model(), Some("c"));
+    }
+
+    #[test]
+    fn tree_navigation_branches_the_session_in_place() {
+        let replies = ["A", "B", "C", "D", "E"];
+        let (endpoint, server) = serve(
+            replies
+                .iter()
+                .map(|text| stream(&fixture::text_events(text, fixture::known_usage())))
+                .collect(),
+        );
+        let (mut agent, _scratch) = agent(endpoint, "tree");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("one", &mut ui, &cancel).unwrap();
+        agent.turn("two", &mut ui, &cancel).unwrap();
+        let shape = |agent: &Agent| {
+            let tree = agent.tree().unwrap();
+            let entries: Vec<_> = tree
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    let text = match entry.item {
+                        TreeItem::Prompt(text) | TreeItem::Reply(text) => text,
+                        item => format!("{item:?}"),
+                    };
+                    (entry.line, entry.parent, text, entry.active)
+                })
+                .collect();
+            (entries, tree.current)
+        };
+        let line = |line, parent, text: &str, active| (line, parent, text.to_owned(), active);
+        assert_eq!(
+            shape(&agent),
+            (
+                vec![
+                    line(1, None, "one", true),
+                    line(2, Some(1), "A", true),
+                    line(3, Some(2), "two", true),
+                    line(4, Some(3), "B", true),
+                ],
+                Some(4)
+            )
+        );
+        assert_eq!(agent.navigate(4).unwrap(), Navigated::AlreadyThere);
+        assert!(agent.navigate(9).is_err());
+
+        // A prompt is edited and sent again from before it; nothing is written until then.
+        let saved = std::fs::read_to_string(agent.session_path()).unwrap();
+        assert_eq!(
+            agent.navigate(3).unwrap(),
+            Navigated::Moved {
+                prompt: Some("two".into())
+            }
+        );
+        assert_eq!(agent.conversation().len(), 2);
+        assert_eq!(
+            std::fs::read_to_string(agent.session_path()).unwrap(),
+            saved
+        );
+        agent.turn("two again", &mut ui, &cancel).unwrap();
+        let (entries, current) = shape(&agent);
+        assert_eq!(entries[3], line(4, Some(3), "B", false));
+        assert_eq!(entries[4], line(6, Some(2), "two again", true));
+        assert_eq!((entries.len(), current), (6, Some(7)));
+        let text = std::fs::read_to_string(agent.session_path()).unwrap();
+        assert_eq!(text.lines().nth(5), Some(r#"{"parent":2,"type":"branch"}"#));
+
+        // A resume continues the branch written last.
+        let (_, resumed, _) = Session::open(agent.session_path()).unwrap();
+        let texts: Vec<_> = resumed
+            .iter()
+            .map(|item| {
+                item["content"]
+                    .as_str()
+                    .map_or_else(|| message_text(item), str::to_owned)
+            })
+            .collect();
+        assert_eq!(texts, ["one", "A", "two again", "C"]);
+
+        // From after a reply, its branch continues.
+        assert_eq!(
+            agent.navigate(4).unwrap(),
+            Navigated::Moved { prompt: None }
+        );
+        agent.turn("three", &mut ui, &cancel).unwrap();
+
+        // From before the first prompt, a conversation starts anew in the same file.
+        assert_eq!(
+            agent.navigate(1).unwrap(),
+            Navigated::Moved {
+                prompt: Some("one".into())
+            }
+        );
+        assert!(agent.conversation().is_empty());
+        agent.turn("first again", &mut ui, &cancel).unwrap();
+        let (entries, current) = shape(&agent);
+        assert_eq!(entries[8], line(12, None, "first again", true));
+        assert_eq!(current, Some(13));
+        assert!(!entries[0].3);
+
+        let bodies = server.join().unwrap();
+        let inputs: Vec<Vec<String>> = bodies
+            .iter()
+            .map(|body| {
+                body["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|item| {
+                        item["content"]
+                            .as_str()
+                            .map_or_else(|| message_text(item), str::to_owned)
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            inputs,
+            [
+                vec!["one"],
+                vec!["one", "A", "two"],
+                vec!["one", "A", "two again"],
+                vec!["one", "A", "two", "B", "three"],
+                vec!["first again"],
+            ]
+        );
+
+        // /fork lists the prompts of every branch and copies only the path to the one chosen.
+        assert_eq!(
+            agent.fork_prompts().unwrap(),
+            ["one", "two", "two again", "three", "first again"]
+        );
+        let source: Vec<String> = std::fs::read_to_string(agent.session_path())
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(agent.fork(3).unwrap().as_deref(), Some("three"));
+        let forked: Vec<String> = std::fs::read_to_string(agent.session_path())
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(forked[1..], source[1..5]);
+        assert_eq!(agent.conversation().len(), 4);
+    }
+
+    #[test]
+    fn the_tree_lists_tool_results_and_ends_after_a_reply_s_last_one() {
+        let (endpoint, _server) = serve(vec![]);
+        let (mut agent, scratch) = agent(endpoint, "tree-calls");
+        let path = scratch.0.join("calls.jsonl");
+        let call = |id: &str, name: &str, arguments: Value| {
+            json!({"type":"function_call","call_id":id,"name":name,
+                "arguments":arguments.to_string(),"_scramjet_model":"a"})
+        };
+        write_session(
+            &path,
+            &[
+                json!({"type":"session","version":1}),
+                json!({"type":"model_change","model":"a"}),
+                json!({"role":"user","content":"go"}),
+                json!({"type":"reasoning","summary":[],"_scramjet_model":"a"}),
+                call("c1", "read", json!({"path":"x","offset":3,"limit":2})),
+                call("c2", "bash", json!({"command":"ls"})),
+                json!({"type":"function_call_output","call_id":"c1","output":"x"}),
+                json!({"type":"function_call_output","call_id":"c2","output":"y"}),
+                json!({"type":"message","role":"assistant",
+                    "content":[{"type":"output_text","text":"done"}],"_scramjet_model":"a"}),
+                json!({"type":"compaction","first_kept":0,"summary":"s","tokens_before":1200}),
+                json!({"role":"user","content":"Ran `ls`","_scramjet_typed":"!ls"}),
+                json!({"type":"model_change","model":"b"}),
+            ],
+            std::time::SystemTime::now(),
+        );
+        agent.resume_session(&path).unwrap();
+        let tree = agent.tree().unwrap();
+        let listed: Vec<_> = tree
+            .entries
+            .iter()
+            .map(|entry| (entry.line, entry.parent, &entry.item))
+            .collect();
+        let tool = |name: &str, summary: &str| TreeItem::Tool(name.into(), summary.into());
+        assert_eq!(
+            listed,
+            [
+                (2, None, &TreeItem::Prompt("go".into())),
+                (6, Some(2), &tool("read", "x:3-4")),
+                (7, Some(6), &tool("bash", "ls")),
+                (8, Some(7), &TreeItem::Reply("done".into())),
+                (9, Some(8), &TreeItem::Compaction(Some(1200))),
+                (10, Some(9), &TreeItem::Command("ls".into())),
+                (11, Some(10), &TreeItem::Model("b".into())),
+            ]
+        );
+        assert_eq!(tree.current, Some(11));
+
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            agent.navigate(6).unwrap(),
+            Navigated::Moved { prompt: None }
+        );
+        assert_eq!(agent.conversation().len(), 6);
+        assert_eq!(agent.conversation()[5]["call_id"], "c2");
+        assert_eq!(agent.last_model(), Some("a"));
+        assert_eq!(agent.model(), "b");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        let tree = agent.tree().unwrap();
+        assert_eq!(tree.current, Some(7));
+        assert_eq!(tree.entries.len(), 6);
+        assert_eq!(agent.navigate(7).unwrap(), Navigated::AlreadyThere);
+        assert_eq!(agent.navigate(6).unwrap(), Navigated::AlreadyThere);
     }
 
     #[test]

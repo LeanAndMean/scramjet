@@ -4,6 +4,7 @@ mod job;
 mod markdown;
 mod select;
 mod style;
+mod tree;
 mod type_ahead;
 
 use rustix::{
@@ -12,8 +13,8 @@ use rustix::{
     termios::{self, LocalModes, OptionalActions, QueueSelector, SpecialCodeIndex, Termios},
 };
 use scramjet_rs::agent::{
-    Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Compaction, SessionChoice,
-    SessionInfo, StreamProgress, ToolDetail,
+    Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Compaction, Navigated,
+    SessionChoice, SessionInfo, StreamProgress, ToolDetail,
 };
 use std::{
     ffi::OsString,
@@ -54,9 +55,11 @@ Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type 
 Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
 next one on; it works while a turn runs too. /new starts a new session; /resume chooses one of
 this project's sessions to switch to. /fork chooses one of this session's prompts and continues
-in a new session from before it, with it in the prompt for editing. /model chooses a model.
+in a new session from before it, with it in the prompt for editing. /tree shows this session's
+branches and continues from the entry chosen, in the same session: from before a prompt, which
+is put in the prompt for editing, or from after a reply or tool result. /model chooses a model.
 Their lists take Up/Down, Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; with
-piped input they are printed numbered instead, for /resume N, /fork N and /model ID.
+piped input they are printed numbered instead, for /resume N, /fork N, /tree N and /model ID.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
 While a turn, /compact or a `!` command runs, typed text is kept for the next prompt without
@@ -255,6 +258,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     let initial = usize::from(current == Some(0));
                     select::select(
                         "Resume session",
+                        select::VISIBLE,
                         sessions.len(),
                         initial,
                         current,
@@ -330,6 +334,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 }
                 "" if editor.is_some() => select::select(
                     "Fork from message",
+                    select::VISIBLE,
                     prompts.len(),
                     prompts.len() - 1,
                     None,
@@ -381,6 +386,72 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             continue;
         }
         if let Some(wanted) = prompt
+            .strip_prefix("/tree")
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let session_tree = match agent.tree() {
+                Ok(tree) => tree,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    continue;
+                }
+            };
+            let (rows, current) = tree::rows(&session_tree);
+            let chosen = match wanted.trim() {
+                "" if rows.is_empty() => {
+                    eprintln!("No entries in session");
+                    None
+                }
+                "" if editor.is_some() => {
+                    // As Scramjet's tree, half the terminal.
+                    let visible = (editor::terminal_size().1 / 2).max(5);
+                    select::select(
+                        "Session Tree",
+                        visible,
+                        rows.len(),
+                        current.unwrap_or(rows.len() - 1),
+                        None,
+                        |index, width| clip(&rows[index].1, width),
+                    )
+                    .map_err(|e| e.to_string())?
+                }
+                "" => {
+                    let digits = rows.len().to_string().len();
+                    let width = editor::terminal_size().0.saturating_sub(digits + 1);
+                    for (index, (_, row)) in rows.iter().enumerate() {
+                        eprintln!("{:>digits$} {}", index + 1, clip(row, width.max(2)));
+                    }
+                    None
+                }
+                wanted => match wanted.parse::<usize>() {
+                    Err(_) | Ok(0) => {
+                        eprintln!("error: /tree requires a positive entry number");
+                        None
+                    }
+                    Ok(number) if number > rows.len() => {
+                        eprintln!("error: no entry numbered {number} (/tree lists them)");
+                        None
+                    }
+                    Ok(number) => Some(number - 1),
+                },
+            };
+            if let Some(index) = chosen {
+                let line = session_tree.entries[rows[index].0].line;
+                match agent.navigate(line) {
+                    Ok(Navigated::AlreadyThere) => eprintln!("Already at this point"),
+                    Ok(Navigated::Moved { prompt }) => {
+                        eprintln!("✓ Navigated to selected point");
+                        spaced = show_resumed(&agent, &mut ui);
+                        if let (Some(editor), Some(prompt)) = (&mut editor, prompt) {
+                            editor.set_text(prompt);
+                        }
+                    }
+                    Err(error) => eprintln!("error: {error}"),
+                }
+            }
+            continue;
+        }
+        if let Some(wanted) = prompt
             .strip_prefix("/model")
             .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
@@ -396,6 +467,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 }
                 "" if editor.is_some() => select::select(
                     "Select model",
+                    select::VISIBLE,
                     models.len(),
                     current.unwrap_or(0),
                     current,

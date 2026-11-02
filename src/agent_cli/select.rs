@@ -6,15 +6,17 @@ use super::style;
 use std::io::{self, Write};
 use unicode_width::UnicodeWidthStr;
 
-/// Rows shown at once, as in Scramjet's selectors.
-const VISIBLE: usize = 10;
+/// Rows shown at once, as in Scramjet's selectors other than its tree.
+pub(super) const VISIBLE: usize = 10;
 const HINT: &str = "↑↓ move · Enter select · Esc cancel";
 
-/// Shows `title` over `count` rows, `row(index, width)` giving each one's text in at most `width`
-/// columns, and returns the index chosen with Enter, starting at `initial`; `None` when cancelled
-/// with Escape or Ctrl-C. The `current` row is marked. The rows are erased when it returns.
+/// Shows `title` over `count` rows, at most `visible` at once, `row(index, width)` giving each
+/// one's text in at most `width` columns, and returns the index chosen with Enter, starting at
+/// `initial`; `None` when cancelled with Escape or Ctrl-C. The `current` row is marked. The rows
+/// are erased when it returns.
 pub(super) fn select(
     title: &str,
+    visible: usize,
     count: usize,
     initial: usize,
     current: Option<usize>,
@@ -28,6 +30,7 @@ pub(super) fn select(
     let mut list = List {
         count,
         selected: initial.min(count - 1),
+        visible,
     };
     let mut source = Stdin::default();
     let mut drawn = 0;
@@ -61,7 +64,7 @@ pub(super) fn select(
                 eprint!("\x1b[?25l");
                 (drawn, redraw) = (0, true);
             }
-            key => match list.key(&key, VISIBLE) {
+            key => match list.key(&key) {
                 Some(chosen) => {
                     eprint!("{}", erase(drawn));
                     return Ok(chosen);
@@ -99,12 +102,15 @@ impl Drop for HiddenCursor {
 struct List {
     count: usize,
     selected: usize,
+    /// Rows shown at once, and moved by a page.
+    visible: usize,
 }
 
 impl List {
     /// Moves the selection, or returns what was chosen: `Some(None)` when cancelled.
-    fn key(&mut self, key: &Key, page: usize) -> Option<Option<usize>> {
+    fn key(&mut self, key: &Key) -> Option<Option<usize>> {
         let last = self.count - 1;
+        let page = self.visible;
         self.selected = match key {
             Key::Up if self.selected == 0 => last,
             Key::Up => self.selected - 1,
@@ -134,7 +140,10 @@ fn lines(
     use style::{CURRENT, MUTED, RESET, SELECTED, SELECTOR_MARK, SELECTOR_TITLE};
     // The last column stays empty, so that a full row does not move the cursor to the next.
     let width = width.saturating_sub(1).max(8);
-    let visible = VISIBLE.min(list.count).min(height.saturating_sub(3).max(1));
+    let visible = list
+        .visible
+        .min(list.count)
+        .min(height.saturating_sub(3).max(1));
     // As in Scramjet, the selected row stays in the middle where it can.
     let top = list
         .selected
@@ -185,6 +194,7 @@ mod tests {
         let mut list = List {
             count: 25,
             selected: 0,
+            visible: 10,
         };
         let mut moved = Vec::new();
         for key in [
@@ -199,13 +209,13 @@ mod tests {
             Key::LineEnd,
             Key::Text("j".into()),
         ] {
-            assert_eq!(list.key(&key, 10), None);
+            assert_eq!(list.key(&key), None);
             moved.push(list.selected);
         }
         assert_eq!(moved, [24, 23, 24, 0, 0, 0, 10, 0, 24, 24]);
-        assert_eq!(list.key(&Key::Enter, 10), Some(Some(24)));
-        assert_eq!(list.key(&Key::Escape, 10), Some(None));
-        assert_eq!(list.key(&Key::Interrupt, 10), Some(None));
+        assert_eq!(list.key(&Key::Enter), Some(Some(24)));
+        assert_eq!(list.key(&Key::Escape), Some(None));
+        assert_eq!(list.key(&Key::Interrupt), Some(None));
     }
 
     #[test]
@@ -214,6 +224,7 @@ mod tests {
         let list = |selected| List {
             count: 25,
             selected,
+            visible: 10,
         };
         let shown = plain(lines("Pick", &list(12), Some(9), (50, 24), &row));
         assert_eq!(
@@ -248,6 +259,7 @@ mod tests {
         let few = List {
             count: 2,
             selected: 1,
+            visible: 10,
         };
         assert_eq!(
             plain(lines("Pick", &few, None, (50, 24), &row)),

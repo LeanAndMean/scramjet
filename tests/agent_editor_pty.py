@@ -856,6 +856,50 @@ def fork_session(read, until, send, output):
     send(b'\x04')
 
 
+def tree_session(read, until, send, output):
+    mark = until(b'> ')
+    send(b'first\r')
+    mark = until(b'Reply one.', mark)
+    mark = until(b'> ', mark)
+    send(b'second\r')
+    mark = until(b'Reply two.', mark)
+    mark = until(b'> ', mark)
+    # The tree starts at the current entry, with its path marked.
+    send(b'/tree\r')
+    mark = until(b'Session Tree', mark)
+    for row in ['\u2022 user: first', '\u2022 assistant: Reply one.', '\u2022 user: second']:
+        mark = until(row.encode(), mark)
+    mark = until(SELECTED + '\u2022 assistant: Reply two.'.encode(), mark)
+    send(b'\r')
+    mark = until(b'Already at this point', mark)
+    mark = until(b'> ', mark)
+    send(b'/tree\r')
+    mark = until(b'Session Tree', mark)
+    send(b'\x1b[A')
+    mark = until(SELECTED + '\u2022 user: second'.encode(), mark)
+    send(b'\r')
+    mark = until('\u2713 Navigated to selected point'.encode(), mark)
+    # The conversation before that prompt is shown again, and the prompt waits in the editor.
+    mark = until(b'\r\n\r\n> first\r\n\r\nReply one.', mark)
+    shown = until(b'> second', mark)
+    assert b'Reply two.' not in output[mark:shown], bytes(output[mark:shown])
+    send(b' again\r')
+    mark = until(b'Reply three.', shown)
+    mark = until(b'> ', mark)
+    send(b'/tree\r')
+    mark = until(b'Session Tree', mark)
+    for row in ['\u2022 assistant: Reply one.', '\u251c\u2500 \u2022 user: second again',
+                '\u2502     ', '\u2022 assistant: Reply three.', '\u2514\u2500 user: second',
+                '      assistant: Reply two.']:
+        mark = until(row.encode(), mark)
+    send(b'\x1b')
+    mark = until(b'> ', mark)
+    send(b'/tree 9\r')
+    mark = until(b'error: no entry numbered 9 (/tree lists them)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
 # A selector's selected row.
 SELECTED = '\x1b[36m\u203a\x1b[0m \x1b[1m'.encode()
 
@@ -924,4 +968,13 @@ started = sorted(set(session_files()) - known)
 prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
 assert prompts == [['first', 'second'], ['first', 'second again']], prompts
 assert json.loads(open(started[0]).readlines()[-1]) == {'type': 'model_change', 'model': 'claude-haiku-5-5'}
+known = set(session_files())
+branching = serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.'),
+                           (['Reply three.'], 'Reply three.')])
+run([], tree_session, branching)
+(branched,) = set(session_files()) - known
+lines = [json.loads(line) for line in open(branched)]
+assert {'type': 'branch', 'parent': 3} in lines, lines
+prompts = [item['content'] for item in lines if item.get('role') == 'user']
+assert prompts == ['first', 'second', 'second again'], prompts
 print('agent editor journeys passed')
