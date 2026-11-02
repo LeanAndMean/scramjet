@@ -225,6 +225,7 @@ calling = serve_call('setsid sleep 5 & sleep 30')
 talking = serve_call('echo first; sleep 1.5; echo second; sleep 30')
 # A command whose raw text would show only `echo hello` on a terminal.
 disguised = serve_call('rm -rf scratch\r\x1b[2Kecho hello')
+approved = serve_call('echo approved-$((6*7)); sleep 30')
 env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'))
 env.pop('VISUAL', None)
 env.pop('EDITOR', None)
@@ -423,6 +424,51 @@ def typed_during_turn(read, until, send, output):
     assert b'typed ahead' not in output[:mark], 'keys typed during a turn were echoed'
     until(b'> typed ahead', mark)
     send(b'\x03\x04')
+
+
+def escape_cancels_and_keeps_typed_ahead(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'thinking', mark)
+    send(b'kept\x1b')
+    mark = until(b'(cancelled)', mark)
+    until(b'> kept', mark)
+    send(b'\x03\x04')
+
+
+def escape_sequence_does_not_cancel(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'thinking', mark)
+    send(b'\x1b[A')
+    read(.3)
+    assert b'(cancelled)' not in output[mark:], 'an arrow key cancelled the turn'
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+def escape_cancels_command(read, until, send, output):
+    mark = until(b'> ')
+    send(b'!sleep 30\r')
+    mark = until(b'running 1s', mark)
+    send(b'\x1b')
+    mark = until(b'Command cancelled by the user', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+def escape_after_approval(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'Allow? [y/N, a = allow all until exit] ', mark)
+    send(b'y\r')
+    mark = until(b'approved-42', mark)
+    send(b'\x1b')
+    mark = until(b'(cancelled)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
 
 
 def exit_during_turn(read, until, send, output):
@@ -665,6 +711,10 @@ run([], suspend_without_job_control, hanging)
 run_in_shell(suspend_in_shell, talking)
 run(['--retries', '0'], typed_during_turn, delayed)
 run([], cancel_retry)
+run([], escape_cancels_and_keeps_typed_ahead, hanging)
+run([], escape_sequence_does_not_cancel, hanging)
+run([], escape_cancels_command)
+run(['--ask'], escape_after_approval, approved)
 run([], thinking_counts_seconds, hanging)
 run([], quiet_after_reasoning_shows_thinking, quiet_reasoning)
 run([], ctrl_t_hides_reasoning, thoughts)

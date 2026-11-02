@@ -41,8 +41,9 @@ pub(super) fn continued() -> bool {
 }
 
 /// Stops with SIGTSTP's default action, so the kernel still discards it in an orphaned process
-/// group, where no shell could continue the agent. Typed-ahead text is dropped as the default
-/// Ctrl-Z drops it; the turn's `NOFLSH` would otherwise give it to the shell to run.
+/// group, where no shell could continue the agent. Keys the agent has not read yet are dropped
+/// as the default Ctrl-Z drops them; the turn's `NOFLSH` would otherwise give them to the shell
+/// to run.
 fn stop(startup: Option<&Termios>) {
     // SAFETY: fd 0 stays open for the life of the process.
     let stdin = unsafe { BorrowedFd::borrow_raw(0) };

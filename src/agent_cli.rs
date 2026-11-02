@@ -2,6 +2,7 @@ mod diff;
 mod editor;
 mod job;
 mod markdown;
+mod type_ahead;
 
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -46,7 +47,7 @@ In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trai
 a new line; pasted text is inserted without sending. Up/Down recall earlier prompts. Ctrl-G
 edits the prompt in $VISUAL or $EDITOR; its text replaces the prompt when the editor exits with 0.
 `!command` runs a bash command in the project directory without a model turn and adds its output
-to the conversation for the next prompt; `!!command` runs it without adding it. Ctrl-C cancels it.
+to the conversation for the next prompt; `!!command` runs it without adding it.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
 Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
 next one on; it works while a turn runs too. /new starts a new session; /resume lists this
@@ -54,8 +55,9 @@ project's sessions and /resume N switches to one. /model lists the models and /m
 switches to one.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
-While a turn runs, typed text is kept for the next prompt without being shown; Ctrl-C cancels
-the turn (and discards that text); press it twice to quit.";
+While a turn, /compact or a `!` command runs, typed text is kept for the next prompt without
+being shown. Escape cancels it and keeps that text; Ctrl-C cancels it and discards that text;
+press Ctrl-C twice to quit.";
 
 pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
     let mut project = None;
@@ -151,7 +153,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 }
                 signal_hook::low_level::exit(130);
             }
-            // The kernel keeps text typed during a turn (`InputMode::turn`); a cancel drops it.
+            // A cancel drops the text typed during the turn, read or not.
+            type_ahead::DISCARD.store(true, Ordering::Relaxed);
             let _ = termios::tcflush(BorrowedFd::borrow_raw(0), QueueSelector::IFlush);
         })
     }
@@ -319,9 +322,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
             cancel.store(false, Ordering::Relaxed);
-            let mode = InputMode::turn();
-            let result = agent.compact(focus.trim(), &mut ui, &cancel);
-            drop(mode);
+            let result = during_turn(&mut ui, &cancel, editor.as_mut(), |ui| {
+                agent.compact(focus.trim(), ui, &cancel)
+            });
             ui.clear();
             match result {
                 Ok(Some(compaction)) => ui.compacted(&compaction, None),
@@ -345,9 +348,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     eprintln!();
                 }
                 cancel.store(false, Ordering::Relaxed);
-                let mode = InputMode::turn();
-                let result = agent.shell(command, include, &mut ui, &cancel);
-                drop(mode);
+                let result = during_turn(&mut ui, &cancel, editor.as_mut(), |ui| {
+                    agent.shell(command, include, ui, &cancel)
+                });
                 ui.clear();
                 match result {
                     Ok(()) => spaced = true,
@@ -362,9 +365,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             eprintln!();
         }
         cancel.store(false, Ordering::Relaxed);
-        let mode = InputMode::turn();
-        let result = agent.turn(prompt, &mut ui, &cancel);
-        drop(mode);
+        let result = during_turn(&mut ui, &cancel, editor.as_mut(), |ui| {
+            agent.turn(prompt, ui, &cancel)
+        });
         ui.clear();
         match result {
             Ok(()) => {}
@@ -401,22 +404,50 @@ fn read_lines() -> Result<Option<String>, String> {
     }
 }
 
+/// Runs a model turn, `/compact` or a `!` command with the terminal in its turn mode, while keys
+/// typed meanwhile are read for `editor`'s next prompt (`type_ahead`).
+fn during_turn<T>(
+    ui: &mut Terminal,
+    cancel: &Arc<AtomicBool>,
+    editor: Option<&mut editor::Editor>,
+    run: impl FnOnce(&mut Terminal) -> T,
+) -> T {
+    let mode = InputMode::turn();
+    ui.type_ahead = editor
+        .is_some()
+        .then(|| type_ahead::TypeAhead::start(cancel.clone()));
+    let result = run(ui);
+    let typed = ui.type_ahead.take().map(type_ahead::TypeAhead::finish);
+    drop(mode);
+    if let (Some(editor), Some(typed)) = (editor, typed) {
+        editor.type_ahead(typed);
+    }
+    result
+}
+
 /// Changes the terminal's input settings until dropped.
 struct InputMode(Option<Termios>);
 
 impl InputMode {
-    /// While a turn runs, typed keys are not echoed and stay queued for the prompt editor.
-    /// Ctrl+T becomes the quit character, so the kernel sends SIGQUIT for it without the agent
-    /// reading the queue, and `NOFLSH` keeps the queue when it does.
+    /// While a turn runs, typed keys are not echoed, and each is readable at once, so a lone
+    /// Escape can be told from the start of a sequence. Ctrl+T becomes the quit character, so
+    /// the kernel sends SIGQUIT for it, and `NOFLSH` keeps unread keys when it does.
     fn turn() -> Self {
         Self::change(|mode| {
-            mode.local_modes.remove(LocalModes::ECHO);
+            mode.local_modes
+                .remove(LocalModes::ECHO | LocalModes::ICANON);
             mode.local_modes.insert(LocalModes::NOFLSH);
             mode.special_codes[SpecialCodeIndex::VQUIT] = 0x14;
+            mode.special_codes[SpecialCodeIndex::VMIN] = 1;
+            mode.special_codes[SpecialCodeIndex::VTIME] = 0;
         })
     }
-    fn echo(on: bool) -> Self {
-        Self::change(|mode| mode.local_modes.set(LocalModes::ECHO, on))
+    /// An approval answer: an echoed line, edited by the terminal.
+    fn answer() -> Self {
+        Self::change(|mode| {
+            mode.local_modes
+                .insert(LocalModes::ECHO | LocalModes::ICANON)
+        })
     }
     fn change(change: impl FnOnce(&mut Termios)) -> Self {
         let Ok(previous) = termios::tcgetattr(std::io::stdin()) else {
@@ -724,6 +755,8 @@ struct Terminal {
     /// The reasoning streamed in the current block, and whether only its marker is shown.
     reasoning: String,
     reasoning_hidden: bool,
+    /// Reads the keys typed during a turn on a terminal.
+    type_ahead: Option<type_ahead::TypeAhead>,
 }
 
 impl Terminal {
@@ -819,6 +852,7 @@ impl Terminal {
             hide_thinking,
             reasoning: String::new(),
             reasoning_hidden: false,
+            type_ahead: None,
         }
     }
     /// Shows `activity` on the status line now, or only once it lasts a second.
@@ -1130,6 +1164,20 @@ impl AgentUi for Terminal {
         );
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
+        // Only an answer typed after the question is shown may approve it.
+        let reading = self.type_ahead.take().map(|typed| {
+            let cancel = typed.cancel();
+            typed.finish();
+            cancel
+        });
+        let answer = self.ask(question, cancel);
+        self.type_ahead = reading.map(type_ahead::TypeAhead::start);
+        answer
+    }
+}
+
+impl Terminal {
+    fn ask(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         self.clear();
         let question = visible(question);
         let stdin = std::io::stdin();
@@ -1142,10 +1190,9 @@ impl AgentUi for Terminal {
             }
             typed
         } else {
-            // Only an answer typed after the question is shown may approve it.
             let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
             eprint!("{ask}");
-            let _echo = InputMode::echo(true);
+            let _answer = InputMode::answer();
             // SIGINT does not interrupt a blocking read, so wait in poll and watch for Ctrl-C.
             loop {
                 if cancel.load(Ordering::Relaxed) {

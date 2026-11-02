@@ -22,7 +22,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// How long the rest of an escape sequence may take to arrive before Escape counts as a lone key.
-const ESCAPE_WAIT: Duration = Duration::from_millis(30);
+pub(super) const ESCAPE_WAIT: Duration = Duration::from_millis(30);
 /// How often an idle editor checks for a terminal resize.
 const RESIZE_CHECK: Duration = Duration::from_millis(250);
 const TAB: &str = "    ";
@@ -579,6 +579,8 @@ impl Screen {
 pub struct Editor {
     history: Vec<String>,
     hide_thinking: Arc<AtomicBool>,
+    /// Keys typed during the last turn, read before the terminal.
+    typed: Vec<u8>,
 }
 
 impl Editor {
@@ -587,7 +589,12 @@ impl Editor {
         Self {
             history,
             hide_thinking,
+            typed: Vec::new(),
         }
+    }
+
+    pub fn type_ahead(&mut self, typed: Vec<u8>) {
+        self.typed = typed;
     }
 
     /// Makes `prompt` the most recent entry that Up recalls.
@@ -600,7 +607,10 @@ impl Editor {
     /// Reads one prompt. `None` means the user asked to exit.
     pub fn read(&mut self) -> io::Result<Option<String>> {
         let raw = RawMode::enter()?;
-        let mut source = Stdin::default();
+        let mut source = Stdin {
+            buffer: std::mem::take(&mut self.typed),
+            start: 0,
+        };
         let mut screen = Screen::default();
         let mut buffer = Buffer::default();
         let mut browsing = self.history.len();
