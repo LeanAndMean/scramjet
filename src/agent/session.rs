@@ -162,7 +162,24 @@ fn find(entries: &[Entry], line: usize) -> Option<&Entry> {
 
 /// Whether `entry` is a prompt the user sent to the model, which a branch can start before.
 pub(super) fn is_prompt(entry: &Value) -> bool {
-    entry["role"] == "user" && entry.get(super::TYPED).is_none() && entry["content"].is_string()
+    entry["role"] == "user" && !is_bang(entry) && entry["content"].is_string()
+}
+
+/// Whether `entry` is a `!` command, which is typed as `!...` and is not a prompt.
+pub(super) fn is_bang(entry: &Value) -> bool {
+    entry[super::TYPED]
+        .as_str()
+        .is_some_and(|typed| typed.starts_with('!'))
+}
+
+/// The prompt as the user typed it: a command's expansion is sent as its content, and what was
+/// typed is saved with it. Empty for a message without text.
+pub(super) fn prompt_text(entry: &Value) -> &str {
+    entry[super::TYPED]
+        .as_str()
+        .filter(|_| !is_bang(entry))
+        .or(entry["content"].as_str())
+        .unwrap_or_default()
 }
 
 impl Entries {
@@ -250,7 +267,7 @@ impl Entries {
         for entry in &self.entries {
             let value = &entry.value;
             if is_prompt(value) {
-                text.extend(value["content"].as_str());
+                text.push(prompt_text(value));
             } else if value["type"] == "message" && value["role"] == "assistant" {
                 let parts = value["content"].as_array().into_iter().flatten();
                 text.extend(parts.filter_map(|part| part["text"].as_str()));
@@ -405,12 +422,7 @@ impl Session {
     pub fn fork_prompts(&self) -> io::Result<Vec<String>> {
         Ok(read(&self.path)?
             .fork_points()
-            .map(|entry| {
-                entry.value["content"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_owned()
-            })
+            .map(|entry| prompt_text(&entry.value).to_owned())
             .collect())
     }
 
@@ -423,10 +435,7 @@ impl Session {
         let Some(fork) = entries.fork_points().nth(index) else {
             return Ok(None);
         };
-        let prompt = fork.value["content"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
+        let prompt = prompt_text(&fork.value).to_owned();
         let source = std::fs::read(&self.path)?;
         let mut history = Vec::new();
         for entry in entries.path(fork.parent) {

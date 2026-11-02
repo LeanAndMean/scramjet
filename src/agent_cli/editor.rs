@@ -636,7 +636,7 @@ struct Suggestion {
     /// What replaces the completed text.
     value: String,
     label: String,
-    description: &'static str,
+    description: String,
 }
 
 /// The list under the prompt that completes a slash command or a path, as Scramjet's editor
@@ -649,19 +649,26 @@ struct Completion {
 }
 
 impl Completion {
-    /// The commands whose names start with what follows a `/` that begins the prompt.
-    fn slash(before: &str) -> Option<Self> {
+    /// The commands whose names start with what follows a `/` that begins the prompt: the
+    /// built-in ones, then `loaded` (names and descriptions).
+    fn slash(before: &str, loaded: &[(String, String)]) -> Option<Self> {
         let typed = before.strip_prefix('/')?;
         if typed.contains(char::is_whitespace) {
             return None;
         }
-        let items = SLASH_COMMANDS
+        let builtin = SLASH_COMMANDS
             .iter()
+            .map(|&(name, description)| (name, description));
+        let loaded = loaded
+            .iter()
+            .map(|(name, description)| (&**name, &**description));
+        let items = builtin
+            .chain(loaded)
             .filter(|(name, _)| name.starts_with(typed))
-            .map(|&(name, description)| Suggestion {
+            .map(|(name, description)| Suggestion {
                 value: format!("/{name} "),
                 label: format!("/{name}"),
-                description,
+                description: description.to_owned(),
             })
             .collect();
         Self::new(0, true, items)
@@ -702,7 +709,7 @@ impl Completion {
                     Suggestion {
                         value: format!("{shown}{label}"),
                         label,
-                        description: "",
+                        description: String::new(),
                     },
                 ))
             })
@@ -757,7 +764,7 @@ impl Completion {
                     String::new()
                 } else {
                     let pad = " ".repeat(column.saturating_sub(label.width()));
-                    format!("{pad}{}", super::clip(item.description, room))
+                    format!("{pad}{}", super::clip(&item.description, room))
                 };
                 if index == self.selected {
                     format!("{COMPLETION_SELECTED}→ {label}{description}{RESET}")
@@ -781,6 +788,8 @@ pub struct Editor {
     hide_thinking: Arc<AtomicBool>,
     /// Where Tab completes relative paths from.
     root: PathBuf,
+    /// The commands listed after the built-in ones: names and descriptions.
+    commands: Vec<(String, String)>,
     /// Reads one text for a question, as Scramjet's dialog editor: Escape or Ctrl-C cancels, and
     /// the text is erased when it returns.
     dialog: bool,
@@ -792,11 +801,17 @@ pub struct Editor {
 
 impl Editor {
     /// Ctrl+T flips `hide_thinking`.
-    pub fn new(history: Vec<String>, hide_thinking: Arc<AtomicBool>, root: PathBuf) -> Self {
+    pub fn new(
+        history: Vec<String>,
+        hide_thinking: Arc<AtomicBool>,
+        root: PathBuf,
+        commands: Vec<(String, String)>,
+    ) -> Self {
         Self {
             history,
             hide_thinking,
             root,
+            commands,
             dialog: false,
             typed: Vec::new(),
             text: String::new(),
@@ -807,7 +822,7 @@ impl Editor {
     pub fn dialog(hide_thinking: Arc<AtomicBool>) -> Self {
         Self {
             dialog: true,
-            ..Self::new(Vec::new(), hide_thinking, PathBuf::new())
+            ..Self::new(Vec::new(), hide_thinking, PathBuf::new(), Vec::new())
         }
     }
 
@@ -991,8 +1006,8 @@ impl Editor {
                 // there is completed when no command matches.
                 Key::Text(_) if tab && !self.dialog => {
                     let before = &buffer.text[..buffer.cursor];
-                    completion =
-                        Completion::slash(before).or_else(|| Completion::path(before, &self.root));
+                    completion = Completion::slash(before, &self.commands)
+                        .or_else(|| Completion::path(before, &self.root));
                     if let Some(list) =
                         completion.take_if(|list| list.items.len() == 1 && !list.slash)
                     {
@@ -1008,7 +1023,7 @@ impl Editor {
                     completion = match completion.take() {
                         Some(list) if !list.slash => Completion::path(before, &self.root)
                             .filter(|next| next.start == list.start),
-                        _ => Completion::slash(before),
+                        _ => Completion::slash(before, &self.commands),
                     };
                     true
                 }
@@ -1331,7 +1346,7 @@ mod tests {
 
     #[test]
     fn slash_commands_filter_and_complete_with_a_trailing_space() {
-        let list = Completion::slash("/").unwrap();
+        let list = Completion::slash("/", &[]).unwrap();
         assert_eq!(
             labels(&list),
             [
@@ -1377,14 +1392,45 @@ mod tests {
             text: "/re rest".into(),
             cursor: 3,
         };
-        let list = Completion::slash(&buffer.text[..buffer.cursor]).unwrap();
+        let list = Completion::slash(&buffer.text[..buffer.cursor], &[]).unwrap();
         assert_eq!(labels(&list), ["/resume"]);
         list.apply(&mut buffer);
         assert_eq!((buffer.text.as_str(), buffer.cursor), ("/resume  rest", 8));
 
-        assert!(Completion::slash("/x").is_none());
-        assert!(Completion::slash("/model ").is_none());
-        assert!(Completion::slash("a /model").is_none());
+        assert!(Completion::slash("/x", &[]).is_none());
+        assert!(Completion::slash("/model ", &[]).is_none());
+        assert!(Completion::slash("a /model", &[]).is_none());
+    }
+
+    #[test]
+    fn loaded_commands_are_listed_after_the_built_in_ones() {
+        let loaded = [
+            (
+                "rs:loop".to_owned(),
+                "[focus] — Build one increment".to_owned(),
+            ),
+            ("rs:review".to_owned(), "Review".to_owned()),
+        ];
+        let list = Completion::slash("/", &loaded).unwrap();
+        assert_eq!(labels(&list)[9..], ["/rs:loop", "/rs:review"]);
+        let mut list = Completion::slash("/r", &loaded).unwrap();
+        assert_eq!(labels(&list), ["/resume", "/rs:loop", "/rs:review"]);
+        list.select(false);
+        assert_eq!(
+            plain(list.rows(60)),
+            [
+                "  /resume     Resume a different session",
+                "→ /rs:loop    [focus] — Build one increment",
+                "  /rs:review  Review",
+            ]
+        );
+        let mut buffer = Buffer {
+            text: "/rs:l".into(),
+            cursor: 5,
+        };
+        let list = Completion::slash("/rs:l", &loaded).unwrap();
+        list.apply(&mut buffer);
+        assert_eq!(buffer.text, "/rs:loop ");
     }
 
     #[test]

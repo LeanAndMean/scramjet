@@ -70,6 +70,9 @@ written). With piped input they are printed numbered instead, for /resume N, /fo
 and /model ID.
 /name NAME names the session, which /resume then lists by its name; /name alone shows it.
 /session shows the session's file, the messages in its context and the tokens they used.
+As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: the file
+.scramjet/SET/commands/SET:COMMAND.md of the project, or under $XDG_DATA_HOME/scramjet
+(~/.local/share/scramjet), is sent with the arguments substituted, inside <scramjet-command>.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
 While a turn, /compact or a `!` command runs, typed text is kept for the next prompt without
@@ -220,6 +223,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 agent.prompts().to_vec(),
                 hide_thinking.clone(),
                 agent.root().to_path_buf(),
+                agent.commands().list().iter().map(command_entry).collect(),
             )
         });
     loop {
@@ -695,6 +699,17 @@ fn ask_branch_summary(hide_thinking: &Arc<AtomicBool>) -> std::io::Result<Option
             }
         }
     }
+}
+
+/// A loaded command's row in the `/` list: the argument hint before the description, as
+/// Scramjet's autocomplete shows them.
+fn command_entry(command: &scramjet_rs::agent::Command) -> (String, String) {
+    let description = match (&command.argument_hint, command.description.as_str()) {
+        (Some(hint), "") => hint.clone(),
+        (Some(hint), description) => format!("{hint} — {description}"),
+        (None, description) => description.to_owned(),
+    };
+    (command.name.clone(), description)
 }
 
 /// The model, and the reasoning effort when one is set, as Scramjet's footer shows them.

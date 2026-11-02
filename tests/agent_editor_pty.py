@@ -308,7 +308,7 @@ editing = serve_items([
     [{'type': 'message', 'id': 'msg_1', 'role': 'assistant', 'status': 'completed',
       'content': [{'type': 'output_text', 'text': '**Done**, it says two.', 'annotations': []}]}],
 ])
-env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'))
+env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACHE=os.path.join(work, 'commands'))
 env.pop('VISUAL', None)
 env.pop('EDITOR', None)
 # Temporary files of the external editor go here, so the journeys can check they are removed.
@@ -1213,4 +1213,53 @@ def search_selectors(read, until, send, output):
 
 run([], search_selectors, serve_replies([(['Reply one.'], 'Reply one.'), (['Striped reply.'], 'Striped reply.')],
                                         ['gpt-6-luna', 'claude-haiku-5-5', 'gpt-6.1-sol']))
+
+def command_sets(read, until, send, output):
+    mark = until(b'> ')
+    # Loaded commands are listed after the built-in ones, the argument hint before the description.
+    send(b'/demo:g')
+    mark = until('\u2192 /demo:greet  <name> \u2014 Greet someone'.encode(), mark)
+    send(b'\t')
+    mark = until(b'> /demo:greet ', mark)
+    send(b'Ada "the reader"\r')
+    mark = until(b'Greeted.', until(b'> /demo:greet Ada "the reader"', mark))
+    mark = until(b'> ', mark)
+    send(b'/tools:echo a  b\r')
+    mark = until(b'Echoed.', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+def command_sets_resumed(read, until, send, output):
+    # The resumed conversation and Up show the prompts as typed.
+    mark = until(b'> /demo:greet Ada "the reader"')
+    mark = until(b'> ', until(b'Echoed.', mark))
+    send(b'\x1b[A')
+    mark = until(b'> /tools:echo a  b', mark)
+    send(b'\x1b[A')
+    until(b'> /demo:greet Ada "the reader"', mark)
+    send(b'\x03\x04')
+
+
+greet = os.path.join(project, '.scramjet', 'demo', 'commands')
+os.makedirs(greet)
+with open(os.path.join(greet, 'demo:greet.md'), 'w') as file:
+    file.write('---\ndescription: Greet someone\nargument-hint: "<name>"\n---\n'
+               'Greet $1 warmly.\n\n<user-context>\n$ARGUMENTS\n</user-context>\n')
+echo = os.path.join(work, 'commands', 'tools', 'commands')
+os.makedirs(echo)
+with open(os.path.join(echo, 'tools:echo.md'), 'w') as file:
+    file.write('Echo $@')
+known = set(session_files())
+run([], command_sets, serve_replies([(['Greeted.'], 'Greeted.'), (['Echoed.'], 'Echoed.')]))
+run(['--continue'], command_sets_resumed)
+(commanded,) = set(session_files()) - known
+users = [line for line in map(json.loads, open(commanded)) if line.get('role') == 'user']
+assert users == [
+    {'role': 'user', '_scramjet_typed': '/demo:greet Ada "the reader"',
+     'content': '<scramjet-command name="demo:greet">\nGreet Ada warmly.\n\n<user-context>\nAda the reader\n'
+                '</user-context>\n</scramjet-command>'},
+    {'role': 'user', '_scramjet_typed': '/tools:echo a  b',
+     'content': '<scramjet-command name="tools:echo">\nEcho a b\n</scramjet-command>'},
+], users
 print('agent editor journeys passed')
