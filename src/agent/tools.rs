@@ -86,7 +86,7 @@ impl<'a> Call<'a> {
         match self.name {
             "bash" => self.arguments["command"].as_str().unwrap_or("").to_owned(),
             "read" => {
-                let path = self.arguments["path"].as_str().unwrap_or("");
+                let path = &shortened(self.arguments["path"].as_str().unwrap_or(""));
                 let (offset, limit) = (
                     self.arguments["offset"].as_u64(),
                     self.arguments["limit"].as_u64(),
@@ -98,7 +98,7 @@ impl<'a> Call<'a> {
                     None => format!("{path}:{start}"),
                 }
             }
-            _ => self.arguments["path"].as_str().unwrap_or("").to_owned(),
+            _ => shortened(self.arguments["path"].as_str().unwrap_or("")),
         }
     }
     pub fn approval(&self, root: &Path) -> Approval {
@@ -154,6 +154,19 @@ pub(super) struct Output {
 
 /// Resolves `path` against the project root without following symlinks. A leading `~` is the
 /// home directory, as in Scramjet.
+/// A path in the home directory as `~/...`, as Scramjet shows tool paths.
+fn shortened(path: &str) -> String {
+    let home = std::env::home_dir().filter(|home| home.parent().is_some());
+    match home
+        .as_ref()
+        .and_then(|home| home.to_str())
+        .map(|home| path.strip_prefix(home))
+    {
+        Some(Some(rest)) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_owned(),
+    }
+}
+
 fn resolve(root: &Path, path: &str) -> PathBuf {
     let joined = match (path.strip_prefix('~'), std::env::home_dir()) {
         (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
@@ -724,6 +737,17 @@ disjoint regions."
             "f:40-59"
         );
         assert_eq!(summary(json!({"path":"f","limit":20})), "f:1-20");
+        let home = std::env::home_dir().unwrap();
+        let home = home.to_str().unwrap();
+        assert_eq!(
+            summary(json!({"path":format!("{home}/repos/a.rs"),"offset":3,"limit":2})),
+            "~/repos/a.rs:3-4"
+        );
+        assert_eq!(
+            summary(json!({"path":format!("{home}x/a.rs")})),
+            format!("{home}x/a.rs")
+        );
+        assert_eq!(call("write", json!({"path":home})).summary(), "~");
         let bash = |command: &str| {
             let output = call("bash", json!({"command":command,"timeout":1}))
                 .run(&root, &cancel, &mut |_| {})
