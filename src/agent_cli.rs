@@ -51,8 +51,9 @@ to the conversation for the next prompt; `!!command` runs it without adding it.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
 Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
 next one on; it works while a turn runs too. /new starts a new session; /resume lists this
-project's sessions and /resume N switches to one. /model lists the models and /model ID
-switches to one.
+project's sessions and /resume N switches to one. /fork lists this session's prompts and
+/fork N continues in a new session from before the Nth, with it in the prompt for editing.
+/model lists the models and /model ID switches to one.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
 While a turn, /compact or a `!` command runs, typed text is kept for the next prompt without
@@ -281,6 +282,51 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                             }
                             Err(error) => eprintln!("error: {error}"),
                         },
+                    },
+                },
+            }
+            continue;
+        }
+        if let Some(wanted) = prompt
+            .strip_prefix("/fork")
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let wanted = wanted.trim();
+            match agent.fork_prompts() {
+                Err(error) => eprintln!("error: {error}"),
+                Ok(prompts) if prompts.is_empty() => eprintln!("No messages to fork from"),
+                Ok(prompts) if wanted.is_empty() => {
+                    let digits = prompts.len().to_string().len();
+                    let width = editor::terminal_size().0.saturating_sub(digits + 1);
+                    for (index, prompt) in prompts.iter().enumerate() {
+                        let line = clip(&one_line(prompt), width.max(2));
+                        eprintln!("{:>digits$} {line}", index + 1);
+                    }
+                }
+                Ok(prompts) => match wanted.parse::<usize>() {
+                    Err(_) | Ok(0) => {
+                        eprintln!("error: /fork requires a positive message number")
+                    }
+                    Ok(number) if number > prompts.len() => {
+                        eprintln!("error: no message numbered {number} (/fork lists them)")
+                    }
+                    Ok(number) => match agent.fork(number - 1) {
+                        Ok(Some(prompt)) => {
+                            window = agent.load_model_card();
+                            eprintln!(
+                                "✓ Forked to new session · {}\nsession {}",
+                                agent.model(),
+                                agent.session_path().display(),
+                            );
+                            spaced = show_resumed(&agent, &mut ui);
+                            if let Some(editor) = &mut editor {
+                                editor.set_text(prompt);
+                            }
+                        }
+                        Ok(None) => {
+                            eprintln!("error: no message numbered {number} (/fork lists them)")
+                        }
+                        Err(error) => eprintln!("error: {error}"),
                     },
                 },
             }
@@ -1390,15 +1436,18 @@ fn session_line(session: &SessionInfo, width: usize) -> String {
         count => format!("{count} items"),
     };
     let suffix = format!(" ({items}, {})", age_label(age));
-    let prompt: String = session
-        .first_prompt
-        .as_deref()
-        .unwrap_or("(no messages)")
+    let prompt = one_line(session.first_prompt.as_deref().unwrap_or("(no messages)"));
+    let prompt = clip(&prompt, width.saturating_sub(suffix.width()).max(2));
+    format!("{prompt}{suffix}")
+}
+
+/// A prompt on one line for a list: line breaks and other control characters as spaces.
+fn one_line(prompt: &str) -> String {
+    let line: String = prompt
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
-    let prompt = clip(prompt.trim(), width.saturating_sub(suffix.width()).max(2));
-    format!("{prompt}{suffix}")
+    line.trim().to_owned()
 }
 
 /// Scramjet's session age: `now`, `5m`, `3h`, `2d`, `1w`, `4mo`, `1y`.

@@ -586,6 +586,8 @@ pub struct Editor {
     hide_thinking: Arc<AtomicBool>,
     /// Keys typed during the last turn, read before the terminal.
     typed: Vec<u8>,
+    /// The text the next prompt starts with.
+    text: String,
 }
 
 impl Editor {
@@ -595,11 +597,17 @@ impl Editor {
             history,
             hide_thinking,
             typed: Vec::new(),
+            text: String::new(),
         }
     }
 
     pub fn type_ahead(&mut self, typed: Vec<u8>) {
         self.typed = typed;
+    }
+
+    /// Starts the next prompt with `text`, the cursor at its end.
+    pub fn set_text(&mut self, text: String) {
+        self.text = text;
     }
 
     /// Makes `prompt` the most recent entry that Up recalls.
@@ -618,6 +626,7 @@ impl Editor {
         };
         let mut screen = Screen::default();
         let mut buffer = Buffer::default();
+        buffer.set(std::mem::take(&mut self.text));
         let mut browsing = self.history.len();
         let mut draft = String::new();
         let mut exit_armed = false;

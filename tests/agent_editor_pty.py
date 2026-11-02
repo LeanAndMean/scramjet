@@ -275,6 +275,8 @@ thoughts = serve_thoughts(gates)
 # As from Proxy's DeepSeek route: the first delta lost, then a text sent only in its done event.
 replies = serve_replies([([' of the reply.'], 'The start of the reply.'), ([], 'Only at the end.'),
                          (['Streamed ', 'whole.'], 'Streamed whole.')])
+forking = serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.'),
+                         (['Reply three.'], 'Reply three.')])
 # The command's output pipe outlives the killed process group, so a cancellation stays pending for
 # about two seconds.
 calling = serve_call('setsid sleep 5 & sleep 30')
@@ -795,6 +797,32 @@ def edit_turn_resumed(read, until, send, output):
     send(b'\x04')
 
 
+def fork_session(read, until, send, output):
+    mark = until(b'> ')
+    send(b'first\r')
+    mark = until(b'Reply one.', mark)
+    mark = until(b'> ', mark)
+    send(b'second\r')
+    mark = until(b'Reply two.', mark)
+    mark = until(b'> ', mark)
+    send(b'/fork\r')
+    mark = until(b'\x1b[?2004l1 first\r\n2 second\r\n', mark)
+    mark = until(b'> ', mark)
+    send(b'/fork 3\r')
+    mark = until(b'error: no message numbered 3 (/fork lists them)', mark)
+    mark = until(b'> ', mark)
+    send(b'/fork 2\r')
+    mark = until('\u2713 Forked to new session \u00b7 gpt-6-luna\r\nsession '.encode(), mark)
+    # The conversation before the second prompt is shown, then that prompt waits in the editor.
+    mark = until(b'.jsonl\r\n\r\n> first\r\n\r\nReply one.', mark)
+    shown = until(b'> second', mark)
+    assert b'Reply two.' not in output[mark:shown], bytes(output[mark:shown])
+    send(b' again\r')
+    mark = until(b'Reply three.', shown)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
 def session_files():
     return glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
 
@@ -853,4 +881,9 @@ with open(os.path.join(project, 'a.txt'), 'w') as file:
     file.write('one\n')
 run([], edit_turn, editing)
 run(['--continue'], edit_turn_resumed)
+known = set(session_files())
+run([], fork_session, forking)
+started = sorted(set(session_files()) - known)
+prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
+assert prompts == [['first', 'second'], ['first', 'second again']], prompts
 print('agent editor journeys passed')

@@ -251,7 +251,44 @@ impl Agent {
                 "that is the current session",
             )));
         }
-        let (session, conversation, prompts) = Session::open(path)?;
+        self.switch_session(Session::open(path)?)
+    }
+
+    /// The prompts the current session can be forked before, oldest first, compacted ones too.
+    pub fn fork_prompts(&self) -> Result<Vec<String>, AgentError> {
+        Ok(self.session.fork_prompts()?)
+    }
+
+    /// Continues in a new session saved next to the current one, with the conversation before
+    /// the current session's prompt `index` (0-based, as `fork_prompts` lists them) and the model
+    /// it used then, as Scramjet's `/fork` does; the current session stays as it is. Returns the
+    /// prompt, for editing before it is sent again; `None`: no such prompt. On failure nothing
+    /// changes. Approvals given with `a` still apply.
+    pub fn fork(&mut self, index: usize) -> Result<Option<String>, AgentError> {
+        let Some((path, prompt)) = self.session.fork(&self.config.root, index)? else {
+            return Ok(None);
+        };
+        let opened = Session::open(&path).and_then(|(mut session, conversation, prompts)| {
+            // As in Scramjet, a fork without a conversation keeps the current model.
+            if conversation.is_empty() {
+                session.record_model(&self.config.model)?;
+            }
+            Ok((session, conversation, prompts))
+        });
+        match opened {
+            Ok(opened) => self.switch_session(opened)?,
+            Err(error) => {
+                let _ = std::fs::remove_file(&path);
+                return Err(error.into());
+            }
+        }
+        Ok(Some(prompt))
+    }
+
+    fn switch_session(
+        &mut self,
+        (session, conversation, prompts): (Session, Vec<Value>, Vec<String>),
+    ) -> Result<(), AgentError> {
         let model = session.model().map(str::to_owned);
         let context_tokens = session.context_tokens();
         self.session = session;
@@ -2229,6 +2266,89 @@ response is incomplete; retry the request."});
                 .unwrap()
                 .contains("\"call_id\":\"unfinished\",\"output\"")
         );
+    }
+
+    #[test]
+    fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "again",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, scratch) = agent(endpoint, "fork");
+        let reply = |text: &str, model: &str| {
+            json!({"type":"message","role":"assistant",
+                "content":[{"type":"output_text","text":text}],"_scramjet_model":model})
+        };
+        let mut answered = reply("first", "a");
+        answered["_scramjet_context_tokens"] = json!(100);
+        let original = scratch.0.join("1700000000000-1.jsonl");
+        write_session(
+            &original,
+            &[
+                json!({"type":"session","version":1}),
+                json!({"type":"model_change","model":"a"}),
+                json!({"role":"user","content":"one"}),
+                answered,
+                json!({"role":"user","content":"Ran `ls`","_scramjet_typed":"!ls"}),
+                json!({"role":"user","content":"two"}),
+                reply("second", "a"),
+                json!({"type":"model_change","model":"b"}),
+                json!({"type":"compaction","first_kept":2,"summary":"s"}),
+                json!({"role":"user","content":"three"}),
+                reply("third", "b"),
+            ],
+            std::time::SystemTime::now(),
+        );
+        let saved = std::fs::read_to_string(&original).unwrap();
+        agent.resume_session(&original).unwrap();
+        assert_eq!(agent.fork_prompts().unwrap(), ["one", "two", "three"]);
+        assert_eq!(agent.fork(3).unwrap(), None);
+        assert_eq!(agent.session_path(), original);
+
+        assert_eq!(agent.fork(1).unwrap().as_deref(), Some("two"));
+        let forked = agent.session_path().to_owned();
+        assert_ne!(forked, original);
+        assert_eq!(forked.parent(), original.parent());
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), saved);
+        let lines: Vec<String> = std::fs::read_to_string(&forked)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(lines[1..], saved.lines().collect::<Vec<_>>()[1..5]);
+        assert_eq!(agent.model(), "a");
+        assert_eq!(agent.prompts(), ["one", "!ls"]);
+        assert_eq!(agent.usage.context_tokens, Some(100));
+        let mut ui = Recorder::default();
+        agent
+            .turn("two again", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies[0]["model"], "a");
+        let input = bodies[0]["input"].as_array().unwrap();
+        assert_eq!(input.len(), 4, "{input:?}");
+        assert_eq!(input[1]["content"][0]["text"], "first");
+        assert_eq!(input[3], json!({"role":"user","content":"two again"}));
+        assert!(!bodies[0].to_string().contains("_scramjet_"));
+
+        // A compaction before the prompt is copied, and later model changes are not.
+        agent.resume_session(&original).unwrap();
+        assert_eq!(agent.fork(2).unwrap().as_deref(), Some("three"));
+        assert_eq!(agent.model(), "b");
+        let conversation = agent.conversation();
+        assert_eq!(conversation.len(), 4);
+        assert_eq!(compaction::previous_summary(conversation), Some("s"));
+        assert_eq!(conversation[2]["content"], "two");
+        assert_eq!(agent.usage.context_tokens, None);
+
+        // Before the first prompt the conversation is empty, and the current model stays.
+        agent.resume_session(&original).unwrap();
+        agent.set_model("c").unwrap();
+        assert_eq!(agent.fork(0).unwrap().as_deref(), Some("one"));
+        assert!(agent.conversation().is_empty());
+        assert_eq!(agent.model(), "c");
+        let reopened = Session::open(agent.session_path()).unwrap().0;
+        assert_eq!(reopened.model(), Some("c"));
     }
 
     #[test]

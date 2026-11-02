@@ -2,7 +2,7 @@ use super::compaction::FileLists;
 use serde_json::{Value, json};
 use std::{
     fs::{File, OpenOptions},
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -52,6 +52,13 @@ fn invalid(path: &Path, reason: &str) -> io::Error {
     )
 }
 
+/// A prompt sent to the model, which the session can be forked before.
+struct ForkPoint {
+    /// Where its line starts in the file.
+    offset: u64,
+    prompt: String,
+}
+
 /// What a session file holds once read.
 struct Loaded {
     items: Vec<Value>,
@@ -59,17 +66,34 @@ struct Loaded {
     model: Option<String>,
     files: FileLists,
     context_tokens: Option<u64>,
+    /// Where the line after the header starts.
+    header_end: u64,
+    /// Every prompt in the file, including those a compaction summarized; not `!` commands.
+    forks: Vec<ForkPoint>,
 }
 
 fn load(path: &Path) -> io::Result<Loaded> {
-    let reader = BufReader::new(File::open(path)?);
+    let mut reader = BufReader::new(File::open(path)?);
     let mut items = Vec::new();
     let mut prompts = Vec::new();
     let mut model = None;
     let mut files = FileLists::default();
     let mut context_tokens = None;
-    for (index, line) in reader.lines().enumerate() {
-        let line = line?;
+    let mut header_end = 0;
+    let mut forks = Vec::new();
+    let mut line = String::new();
+    let mut end = 0;
+    for index in 0.. {
+        line.clear();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            break;
+        }
+        let start = end;
+        end += read as u64;
+        if index == 0 {
+            header_end = end;
+        }
         if line.trim().is_empty() {
             continue;
         }
@@ -102,10 +126,18 @@ fn load(path: &Path) -> io::Result<Loaded> {
                 model = Some(producer.to_owned());
                 context_tokens = value[super::CONTEXT].as_u64();
             }
-            if value["role"] == "user"
-                && let Some(prompt) = value[super::TYPED].as_str().or(value["content"].as_str())
-            {
-                prompts.push(prompt.to_owned());
+            if value["role"] == "user" {
+                if let Some(prompt) = value[super::TYPED].as_str().or(value["content"].as_str()) {
+                    prompts.push(prompt.to_owned());
+                }
+                if value.get(super::TYPED).is_none()
+                    && let Some(prompt) = value["content"].as_str()
+                {
+                    forks.push(ForkPoint {
+                        offset: start,
+                        prompt: prompt.to_owned(),
+                    });
+                }
             }
             items.push(value);
         }
@@ -119,6 +151,8 @@ fn load(path: &Path) -> io::Result<Loaded> {
         model,
         files,
         context_tokens,
+        header_end,
+        forks,
     })
 }
 
@@ -168,15 +202,19 @@ impl Session {
     /// Starts a session for the project `root` in `directory`.
     pub fn create(directory: &Path, root: &Path) -> io::Result<Self> {
         std::fs::create_dir_all(directory)?;
-        let created = std::time::SystemTime::now()
+        let mut created = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        let path = directory.join(format!("{created}-{}.jsonl", std::process::id()));
-        let file = OpenOptions::new()
-            .append(true)
-            .create_new(true)
-            .open(&path)?;
+        // A session created in the same millisecond (a quick `/new` or `/fork`) has that name.
+        let (path, file) = loop {
+            let path = directory.join(format!("{created}-{}.jsonl", std::process::id()));
+            match OpenOptions::new().append(true).create_new(true).open(&path) {
+                Ok(file) => break (path, file),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => created += 1,
+                Err(error) => return Err(error),
+            }
+        };
         let mut session = Self {
             path,
             file,
@@ -233,6 +271,39 @@ impl Session {
             loaded.items,
             loaded.prompts,
         ))
+    }
+
+    /// The prompts this session can be forked before, oldest first, including those a compaction
+    /// summarized, as Scramjet's `/fork` lists its user messages.
+    pub fn fork_prompts(&self) -> io::Result<Vec<String>> {
+        Ok(load(&self.path)?
+            .forks
+            .into_iter()
+            .map(|fork| fork.prompt)
+            .collect())
+    }
+
+    /// Saves a session for the project `root` next to this one with everything this one recorded
+    /// before its prompt `index` (0-based, as `fork_prompts` lists them), as Scramjet's `/fork`
+    /// copies a session's path. Returns the new file and that prompt; `None`: no such prompt.
+    pub fn fork(&self, root: &Path, index: usize) -> io::Result<Option<(PathBuf, String)>> {
+        let loaded = load(&self.path)?;
+        let Some(fork) = loaded.forks.into_iter().nth(index) else {
+            return Ok(None);
+        };
+        let mut source = File::open(&self.path)?;
+        source.seek(SeekFrom::Start(loaded.header_end))?;
+        let mut history = Vec::new();
+        source
+            .take(fork.offset - loaded.header_end)
+            .read_to_end(&mut history)?;
+        let directory = self.path.parent().unwrap_or(Path::new("."));
+        let mut forked = Self::create(directory, root)?;
+        if let Err(error) = forked.file.write_all(&history) {
+            let _ = std::fs::remove_file(&forked.path);
+            return Err(error);
+        }
+        Ok(Some((forked.path, fork.prompt)))
     }
 
     /// Whether `path` is this session's file, however it is named.
