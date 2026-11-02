@@ -6,6 +6,7 @@ import glob
 import json
 import os
 import pty
+import re
 import select
 import shutil
 import socket
@@ -173,9 +174,9 @@ def serve_thoughts(gates):
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
-def serve_replies(replies, models=(), cards=None):
-    """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`,
-    lists `models` at `/v1/models` and `cards` at `/api/model-cards`."""
+def serve_replies(replies, models=(), cards=None, usage=None):
+    """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`
+    (and `usage`, when given), lists `models` at `/v1/models` and `cards` at `/api/model-cards`."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -194,7 +195,8 @@ def serve_replies(replies, models=(), cards=None):
             dict(where, type='response.output_text.done', text=text),
             dict(where, type='response.content_part.done', part=dict(part, text=text)),
             {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
-            {'type': 'response.completed', 'response': {'id': 'resp_1', 'status': 'completed', 'output': [item]}},
+            {'type': 'response.completed', 'response': {'id': 'resp_1', 'status': 'completed', 'output': [item],
+                                                        **({'usage': usage} if usage else {})}},
         ]
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
@@ -734,7 +736,7 @@ def completes_paths_and_commands(read, until, send, output):
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     mark = until(b'> ', mark)
     send(b'/')
-    mark = until(b'(1/7)', mark)
+    mark = until(b'(1/9)', mark)
     send(b're')
     mark = until('\u2192 /resume'.encode(), mark)
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -1127,4 +1129,49 @@ run(['--continue'], shift_tab_resumed, serve_replies([], cards=effort_cards))
 assert saved_levels(effort) == ['high', 'xhigh', 'max'], saved_levels(effort)
 run(['--continue', '--effort', 'low'], explicit_effort_wins, serve_replies([], cards=effort_cards))
 assert saved_levels(effort) == ['high', 'xhigh', 'max', 'low'], saved_levels(effort)
+
+
+def name_and_session(read, until, send, output):
+    mark = until(b'> ')
+    send(b'/name\r')
+    mark = until(b'Usage: /name <name>', mark)
+    send(b'hello\r')
+    mark = until(b'Reply one.', mark)
+    mark = until(b'> ', mark)
+    send(b'/name  Parser work \r')
+    mark = until(b'Session name set: Parser work', mark)
+    send(b'/session\r')
+    end = until(b'Total:', until(b'Tokens', mark))
+    end = until(b'\r\n', end)
+    shown = re.sub(rb'\x1b\[[0-9;]*m', b'', bytes(output[mark:end])).decode()
+    shown = shown[shown.index('Session Info'):]
+    (path,) = set(session_files()) - known
+    expected = ['Session Info', '', 'Name: Parser work', 'File: ' + path,
+                'ID: ' + os.path.basename(path)[:-len('.jsonl')], '', 'Messages', 'User: 1', 'Assistant: 1',
+                'Tool Calls: 0', 'Tool Results: 0', 'Total: 2', '', 'Tokens', 'Input: 200', 'Output: 34',
+                'Cache Read: 1,000', 'Total: 1,234']
+    assert shown.split('\r\n')[:-1] == expected, shown
+    send(b'\x04')
+
+
+def name_resumed(read, until, send, output):
+    mark = until(b'> ')
+    send(b'/name\r')
+    mark = until(b'Session name: Parser work', mark)
+    send(b'/resume\r')
+    mark = until(b'Resume session', mark)
+    mark = until(b'Parser work (2 items, now) \x1b[32m\xe2\x9c\x93', mark)
+    send(b'\x1b')
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+known = set(session_files())
+usage = {'input_tokens': 1200, 'output_tokens': 34, 'total_tokens': 1234,
+         'input_tokens_details': {'cached_tokens': 1000}}
+run([], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], usage=usage))
+run(['--continue'], name_resumed)
+(named,) = set(session_files()) - known
+infos = [line for line in map(json.loads, open(named)) if line.get('type') == 'session_info']
+assert infos == [{'type': 'session_info', 'name': 'Parser work'}], infos
 print('agent editor journeys passed')

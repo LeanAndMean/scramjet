@@ -65,6 +65,8 @@ instructions, for the conversation to continue with. Escape twice on an empty pr
 /tree too. /model chooses a model.
 Their lists take Up/Down, Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; with
 piped input they are printed numbered instead, for /resume N, /fork N, /tree N and /model ID.
+/name NAME names the session, which /resume then lists by its name; /name alone shows it.
+/session shows the session's file, the messages in its context and the tokens they used.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
 While a turn, /compact or a `!` command runs, typed text is kept for the next prompt without
@@ -255,6 +257,28 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 ),
                 Err(error) => eprintln!("error: {error}"),
             }
+            continue;
+        }
+        if let Some(name) = prompt
+            .strip_prefix("/name")
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let name = name.trim();
+            if name.is_empty() {
+                match agent.session_name() {
+                    Some(current) => eprintln!("{}", ui.dim(&format!("Session name: {current}"))),
+                    None => eprintln!("Usage: /name <name>"),
+                }
+            } else {
+                match agent.set_session_name(name) {
+                    Ok(()) => eprintln!("{}", ui.dim(&format!("Session name set: {name}"))),
+                    Err(error) => eprintln!("error: {error}"),
+                }
+            }
+            continue;
+        }
+        if prompt == "/session" {
+            eprint!("{}", session_info(&agent, &ui));
             continue;
         }
         if let Some(wanted) = prompt
@@ -1201,8 +1225,11 @@ impl Terminal {
         wrap.push(text) + &wrap.finish()
     }
     fn dim(&self, text: &str) -> String {
+        self.styled(style::MUTED, text)
+    }
+    fn styled(&self, style: &str, text: &str) -> String {
         if self.color {
-            format!("{}{text}{}", style::MUTED, style::RESET)
+            format!("{style}{text}{}", style::RESET)
         } else {
             text.to_owned()
         }
@@ -1702,7 +1729,52 @@ fn visible(text: &str) -> String {
         .collect()
 }
 
-/// A `/resume` line: the first prompt, cut to `width` with its item count and age kept.
+/// `/session`: the session's name, file and id, its messages and token usage over the current
+/// conversation, as Scramjet's `/session` shows them. Ends with a newline.
+fn session_info(agent: &Agent, ui: &Terminal) -> String {
+    let stats = agent.stats();
+    let row = |label: &str, value: String| format!("{} {value}\n", ui.dim(label));
+    let heading = |text: &str| format!("{}\n", ui.styled(style::INFO_HEADING, text));
+    let mut info = heading("Session Info") + "\n";
+    if let Some(name) = agent.session_name() {
+        info += &row("Name:", name.to_owned());
+    }
+    info += &row("File:", agent.session_path().display().to_string());
+    info += &row("ID:", agent.session_id());
+    info += "\n";
+    info += &heading("Messages");
+    info += &row("User:", stats.user.to_string());
+    info += &row("Assistant:", stats.assistant.to_string());
+    info += &row("Tool Calls:", stats.tool_calls.to_string());
+    info += &row("Tool Results:", stats.tool_results.to_string());
+    info += &row("Total:", stats.total.to_string());
+    info += "\n";
+    info += &heading("Tokens");
+    info += &row("Input:", grouped(stats.input));
+    info += &row("Output:", grouped(stats.output));
+    if stats.cache_read > 0 {
+        info += &row("Cache Read:", grouped(stats.cache_read));
+    }
+    let total = stats.input + stats.output + stats.cache_read;
+    info += &row("Total:", grouped(total));
+    info
+}
+
+/// A count with thousands separators, as Scramjet's `toLocaleString` writes it.
+fn grouped(count: u64) -> String {
+    let digits = count.to_string();
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+/// A `/resume` line: the session's name or first prompt, cut to `width` with its item count and
+/// age kept.
 fn session_line(session: &SessionInfo, width: usize) -> String {
     let age = std::time::SystemTime::now()
         .duration_since(session.modified)
@@ -1712,7 +1784,12 @@ fn session_line(session: &SessionInfo, width: usize) -> String {
         count => format!("{count} items"),
     };
     let suffix = format!(" ({items}, {})", age_label(age));
-    let prompt = one_line(session.first_prompt.as_deref().unwrap_or("(no messages)"));
+    let label = session
+        .name
+        .as_deref()
+        .or(session.first_prompt.as_deref())
+        .unwrap_or("(no messages)");
+    let prompt = one_line(label);
     let prompt = clip(&prompt, width.saturating_sub(suffix.width()).max(2));
     format!("{prompt}{suffix}")
 }
@@ -1780,6 +1857,7 @@ mod tests {
         let session = SessionInfo {
             path: PathBuf::new(),
             first_prompt: Some("Fix\tthe parser\nthen run the tests".into()),
+            name: None,
             item_count: 12,
             modified: std::time::SystemTime::now() - Duration::from_secs(7200),
         };
@@ -1788,12 +1866,26 @@ mod tests {
             session_line(&session, 80),
             "Fix the parser then run the tests (12 items, 2h)"
         );
+        let named = SessionInfo {
+            path: PathBuf::new(),
+            first_prompt: session.first_prompt.clone(),
+            name: Some("Parser\nwork".into()),
+            item_count: 12,
+            modified: session.modified,
+        };
+        assert_eq!(session_line(&named, 80), "Parser work (12 items, 2h)");
         let empty = SessionInfo {
             first_prompt: None,
             item_count: 1,
             ..session
         };
         assert_eq!(session_line(&empty, 80), "(no messages) (1 item, 2h)");
+    }
+
+    #[test]
+    fn token_counts_are_grouped_by_thousands() {
+        let counts = [0, 999, 1_000, 15_224, 1_234_567].map(grouped);
+        assert_eq!(counts, ["0", "999", "1,000", "15,224", "1,234,567"]);
     }
 
     #[test]

@@ -617,8 +617,10 @@ pub enum Input {
 }
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
-const SLASH_COMMANDS: [(&str, &str); 7] = [
+const SLASH_COMMANDS: [(&str, &str); 9] = [
     ("model", "Select model (opens selector UI)"),
+    ("name", "Set session display name"),
+    ("session", "Show session info and stats"),
     ("fork", "Create a new fork from a previous user message"),
     ("tree", "Navigate session tree (switch branches)"),
     ("new", "Start a new session"),
@@ -1333,23 +1335,24 @@ mod tests {
         assert_eq!(
             labels(&list),
             [
-                "/model", "/fork", "/tree", "/new", "/compact", "/resume", "/quit"
+                "/model", "/name", "/session", "/fork", "/tree", "/new", "/compact", "/resume",
+                "/quit"
             ]
         );
         assert_eq!(
             plain(list.rows(60)),
             [
                 "→ /model      Select model (opens selector UI)",
+                "  /name       Set session display name",
+                "  /session    Show session info and stats",
                 "  /fork       Create a new fork from a previous user messa…",
                 "  /tree       Navigate session tree (switch branches)",
-                "  /new        Start a new session",
-                "  /compact    Manually compact the session context",
-                "  (1/7)",
+                "  (1/9)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
         let mut list = list;
-        for _ in 0..4 {
+        for _ in 0..6 {
             list.select(false);
         }
         assert_eq!(
@@ -1360,7 +1363,7 @@ mod tests {
                 "→ /compact",
                 "  /resume",
                 "  /quit",
-                "  (5/7)"
+                "  (7/9)"
             ]
         );
         list.select(false);

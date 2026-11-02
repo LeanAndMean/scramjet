@@ -17,6 +17,8 @@ pub const REASONING: &str = "\x1b[2m";
 pub const THINKING_HIDDEN: &str = "\x1b[2;3m";
 /// A compaction summary.
 pub const SUMMARY: &str = "\x1b[2m";
+/// A section heading in an information block such as `/session`'s.
+pub const INFO_HEADING: &str = "\x1b[1m";
 /// A provider failure that is retried.
 pub const WARNING: &str = "\x1b[33m";
 

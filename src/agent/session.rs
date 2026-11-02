@@ -11,6 +11,8 @@ use std::{
 pub struct SessionInfo {
     pub path: PathBuf,
     pub first_prompt: Option<String>,
+    /// The session's name from its latest `session_info` line, which `/resume` shows instead.
+    pub name: Option<String>,
     /// Conversation items after the latest compaction, as a resume restores them.
     pub item_count: usize,
     pub modified: SystemTime,
@@ -26,6 +28,8 @@ pub struct Session {
     file: File,
     /// The latest model change or response item producer on the path, as Scramjet restores it.
     model: Option<String>,
+    /// The latest `session_info` name in the file, which applies to the whole session.
+    name: Option<String>,
     /// The latest thinking level change on the path, which a resume restores.
     effort: Option<String>,
     /// The file lists of the latest compaction on the path, which the next one carries on.
@@ -64,6 +68,8 @@ pub struct Entry {
 /// of a conversation) makes the entry after it continue entry `N` instead of the one before.
 struct Entries {
     entries: Vec<Entry>,
+    /// The latest `session_info` name in the file; an empty one clears it.
+    name: Option<String>,
     /// The entry a line appended without a branch line continues, where a resume continues.
     tail: Option<usize>,
     /// Lines in the file, the header and blank ones included.
@@ -83,6 +89,7 @@ fn read(path: &Path) -> io::Result<Entries> {
     let mut reader = BufReader::new(File::open(path)?);
     let mut entries: Vec<Entry> = Vec::new();
     let mut tail = None;
+    let mut name = None;
     let mut line = String::new();
     let mut end = 0;
     let mut lines = 0;
@@ -105,6 +112,12 @@ fn read(path: &Path) -> io::Result<Entries> {
             if value["type"] != "session" {
                 return Err(invalid(path, "not a scramjet-rs session"));
             }
+        } else if value["type"] == "session_info" {
+            name = value["name"]
+                .as_str()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned);
         } else if value["type"] == "branch" {
             tail = match &value["parent"] {
                 Value::Null => None,
@@ -131,6 +144,7 @@ fn read(path: &Path) -> io::Result<Entries> {
     }
     Ok(Entries {
         entries,
+        name,
         tail,
         lines,
     })
@@ -267,6 +281,7 @@ impl Session {
             sessions.push(SessionInfo {
                 path,
                 first_prompt: entries.prompts().into_iter().next(),
+                name: entries.name.clone(),
                 item_count: context.items.len(),
                 modified,
             });
@@ -304,6 +319,7 @@ impl Session {
             path,
             file,
             model: None,
+            name: None,
             effort: None,
             files: FileLists::default(),
             context_tokens: None,
@@ -352,6 +368,7 @@ impl Session {
                 path: path.to_owned(),
                 file,
                 model: context.model,
+                name: entries.name.clone(),
                 effort: context.effort,
                 files: context.files,
                 context_tokens: context.context_tokens,
@@ -477,6 +494,23 @@ impl Session {
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_default()
+    }
+
+    /// The session's name, as `/name` sets it; `None` when unnamed.
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// Saves `name` (trimmed; empty clears it) as the session's name, as Scramjet's `/name` does.
+    /// It is a line of its own, not an entry: the conversation and its branches stay as they are.
+    pub fn set_name(&mut self, name: &str) -> io::Result<()> {
+        let name = name.trim();
+        let mut line = serde_json::to_vec(&json!({"type":"session_info","name":name}))?;
+        line.push(b'\n');
+        self.file.write_all(&line)?;
+        self.lines += 1;
+        self.name = Some(name.to_owned()).filter(|name| !name.is_empty());
+        Ok(())
     }
 
     pub fn model(&self) -> Option<&str> {

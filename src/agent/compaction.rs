@@ -217,6 +217,14 @@ pub(super) fn summary_message(summary: &str) -> Value {
     json!({"role":"user", "content":format!("{SUMMARY_PREFIX}{summary}{SUMMARY_SUFFIX}")})
 }
 
+/// Whether a user message is a compaction or branch summary, which Scramjet does not count as a
+/// user message.
+pub(super) fn is_summary(item: &Value) -> bool {
+    item["content"]
+        .as_str()
+        .is_some_and(|text| text.starts_with(SUMMARY_PREFIX) || text.starts_with(BRANCH_PREFIX))
+}
+
 pub(super) fn branch_summary_message(summary: &str) -> Value {
     json!({"role":"user", "content":format!("{BRANCH_PREFIX}{summary}{BRANCH_SUFFIX}")})
 }

@@ -34,6 +34,10 @@ const PRODUCER: &str = "_scramjet_model";
 /// resumed session knows how full the context is before its first reply, as Scramjet reads it
 /// from saved usage. Never sent.
 const CONTEXT: &str = "_scramjet_context_tokens";
+/// Stored with a response's last item when the response reported its usage: the tokens it counted
+/// (`input` not read from the cache, `output`, `cache_read`), which `/session` sums over the
+/// conversation as Scramjet sums its assistant messages' usage. Never sent.
+const USAGE: &str = "_scramjet_usage";
 /// Stored with a user message whose text is not its prompt: the `!command` it ran, which is recalled
 /// as typed. Never sent to the endpoint.
 pub(super) const TYPED: &str = "_scramjet_typed";
@@ -162,6 +166,20 @@ pub struct Usage {
     /// The input and output tokens of the last response, when it reported them: how full the
     /// context was, as Scramjet's footer shows it.
     pub context_tokens: Option<u64>,
+}
+
+/// `/session`'s counts over the current conversation, as Scramjet's session stats count them.
+#[derive(Debug, Default, PartialEq)]
+pub struct Stats {
+    pub user: usize,
+    pub assistant: usize,
+    pub tool_calls: usize,
+    pub tool_results: usize,
+    /// Every message: the counts above, and the `!` commands and summaries.
+    pub total: usize,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
 }
 
 pub struct Compaction {
@@ -317,6 +335,57 @@ impl Agent {
             )));
         }
         self.switch_session(Session::open(path)?)
+    }
+
+    /// The current session's name, as `/name` sets it.
+    pub fn session_name(&self) -> Option<&str> {
+        self.session.name()
+    }
+
+    /// Names the current session `name`, saved at once; empty clears the name.
+    pub fn set_session_name(&mut self, name: &str) -> Result<(), AgentError> {
+        Ok(self.session.set_name(name)?)
+    }
+
+    /// The current session's id, its file name without the extension.
+    pub fn session_id(&self) -> String {
+        self.session.id()
+    }
+
+    /// The counts over the current conversation, as `/session` shows them. Assistant messages
+    /// are the runs of model output between prompts and tool results, as Scramjet has one message
+    /// per response; the usage is what each response saved.
+    pub fn stats(&self) -> Stats {
+        let mut stats = Stats::default();
+        let mut other = 0;
+        let mut in_reply = false;
+        for item in &self.conversation {
+            let reply = item["role"] == "assistant"
+                || matches!(item["type"].as_str(), Some("reasoning" | "function_call"));
+            if reply && !in_reply {
+                stats.assistant += 1;
+            }
+            in_reply = reply;
+            match item["type"].as_str() {
+                Some("function_call") => stats.tool_calls += 1,
+                Some("function_call_output") => stats.tool_results += 1,
+                _ if item["role"] == "user"
+                    && item.get(TYPED).is_none()
+                    && !compaction::is_summary(item) =>
+                {
+                    stats.user += 1
+                }
+                _ if item["role"] == "user" => other += 1,
+                _ => {}
+            }
+            if let Some(usage) = item.get(USAGE) {
+                stats.input += usage["input"].as_u64().unwrap_or(0);
+                stats.output += usage["output"].as_u64().unwrap_or(0);
+                stats.cache_read += usage["cache_read"].as_u64().unwrap_or(0);
+            }
+        }
+        stats.total = stats.user + stats.assistant + stats.tool_results + other;
+        stats
     }
 
     /// The prompts the current session can be forked before, oldest first, compacted ones too.
@@ -915,11 +984,15 @@ to a larger-context model)"
             self.usage.context_tokens = reply.usage.as_ref().and_then(|usage| usage.total_tokens);
             let mut calls = Vec::new();
             let last = reply.items.len().saturating_sub(1);
+            let saved = reply.usage.as_ref().map(saved_usage);
             for (index, mut item) in reply.items.into_iter().enumerate() {
                 if let Some(object) = item.as_object_mut() {
                     object.insert(PRODUCER.into(), json!(self.config.model));
                     if let Some(tokens) = self.usage.context_tokens.filter(|_| index == last) {
                         object.insert(CONTEXT.into(), json!(tokens));
+                    }
+                    if let Some(usage) = saved.as_ref().filter(|_| index == last) {
+                        object.insert(USAGE.into(), usage.clone());
                     }
                 }
                 match item["type"].as_str() {
@@ -1282,6 +1355,17 @@ fn command_output(message: &str) -> String {
         Some((output, ending)) => format!("{output}{ending}"),
         None => message.to_owned(),
     }
+}
+
+/// A response's usage as saved with its last item: input tokens not read from the cache, output
+/// tokens and cache reads, as Scramjet's usage counts them.
+fn saved_usage(usage: &crate::ProviderUsage) -> Value {
+    let cached = usage.cached_input_tokens.unwrap_or(0);
+    json!({
+        "input": usage.input_tokens.unwrap_or(0).saturating_sub(cached),
+        "output": usage.output_tokens.unwrap_or(0),
+        "cache_read": cached,
+    })
 }
 
 fn message_text(item: &Value) -> String {
@@ -2533,6 +2617,74 @@ response is incomplete; retry the request."});
             ]
         );
         assert_eq!(Session::latest(&directory.0).unwrap(), Some(written_last));
+    }
+
+    #[test]
+    fn a_session_name_and_stats_stay_out_of_the_conversation() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::call_events("{}", fixture::known_usage())),
+            stream(&fixture::text_events("A", fixture::known_usage())),
+            stream(&fixture::text_events("B", fixture::known_usage())),
+            stream(&fixture::text_events("C", fixture::known_usage())),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "name");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("one", &mut ui, &cancel).unwrap();
+        agent.turn("two", &mut ui, &cancel).unwrap();
+        assert_eq!(agent.session_name(), None);
+
+        // Named while a move waits for the next entry, the branch still starts at the reply.
+        agent.navigate(4, None, &mut ui, &cancel).unwrap();
+        agent.set_session_name("  Parser work ").unwrap();
+        assert_eq!(agent.session_name(), Some("Parser work"));
+        agent
+            .add(json!({"role":"user","content":"Ran `ls`","_scramjet_typed":"!ls"}))
+            .unwrap();
+        agent.turn("three", &mut ui, &cancel).unwrap();
+        let text = std::fs::read_to_string(agent.session_path()).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[7], r#"{"name":"Parser work","type":"session_info"}"#);
+        assert_eq!(lines[8], r#"{"parent":4,"type":"branch"}"#);
+        let bodies = server.join().unwrap();
+        assert!(!bodies[3].to_string().contains("_scramjet_"));
+
+        // Counted over the current branch (one, call, result, A, !ls, three, C), as saved.
+        let stats = Stats {
+            user: 2,
+            assistant: 3,
+            tool_calls: 1,
+            tool_results: 1,
+            total: 7,
+            input: 21,
+            output: 15,
+            cache_read: 9,
+        };
+        assert_eq!(agent.stats(), stats);
+        assert_eq!(agent.session_id(), "session");
+        let path = agent.session_path().to_owned();
+        let config = AgentConfig {
+            endpoint,
+            model: "m".into(),
+            root: scratch.0.clone(),
+            effort: None,
+            max_output_tokens: None,
+            ask: false,
+            retries: 3,
+        };
+        let resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
+        assert_eq!(resumed.session_name(), Some("Parser work"));
+        assert_eq!(resumed.stats(), stats);
+        let listed = Session::list(&scratch.0).unwrap();
+        assert_eq!(listed[0].name.as_deref(), Some("Parser work"));
+        assert_eq!(listed[0].first_prompt.as_deref(), Some("one"));
+
+        // The latest name wins; an empty one clears it.
+        agent.set_session_name("").unwrap();
+        assert_eq!(agent.session_name(), None);
+        let (session, _, _) = Session::open(&path).unwrap();
+        assert_eq!(session.name(), None);
+        assert_eq!(Session::list(&scratch.0).unwrap()[0].name, None);
     }
 
     #[test]
