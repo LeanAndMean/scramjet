@@ -162,6 +162,7 @@ fn label(item: &TreeItem) -> String {
         TreeItem::Compaction(None) => "[compaction]".into(),
         TreeItem::BranchSummary(summary) => format!("[branch summary]: {summary}"),
         TreeItem::Model(model) => format!("[model: {model}]"),
+        TreeItem::Effort(level) => format!("[thinking: {level}]"),
     };
     super::one_line(&super::visible(&text))
 }

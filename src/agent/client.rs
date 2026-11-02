@@ -195,6 +195,10 @@ pub(super) struct ModelInfo {
     pub output: Option<u64>,
     /// Whether the model reasons; Proxy's cards give `reasoning: null` for those that do not.
     pub reasoning: bool,
+    /// The reasoning effort levels the card lists, in order; empty when it lists none.
+    pub levels: Vec<String>,
+    /// The card's default reasoning effort.
+    pub default_level: Option<String>,
 }
 
 impl ModelInfo {
@@ -208,6 +212,25 @@ impl ModelInfo {
             window: None,
             output: None,
             reasoning: true,
+            levels: Vec::new(),
+            default_level: None,
+        }
+    }
+
+    /// `effort`, or when the card lists levels without it, the nearest higher level it lists, else
+    /// the nearest lower one, as Scramjet clamps a thinking level. An effort not in Scramjet's
+    /// order is left for the endpoint to judge.
+    pub(super) fn fit<'a>(&'a self, effort: &'a str) -> &'a str {
+        const ORDER: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+        let listed = |level: &str| self.levels.iter().any(|listed| listed == level);
+        match ORDER.iter().position(|level| *level == effort) {
+            Some(wanted) if !self.levels.is_empty() && !listed(effort) => ORDER[wanted..]
+                .iter()
+                .chain(ORDER[..wanted].iter().rev())
+                .copied()
+                .find(|level| listed(level))
+                .unwrap_or(effort),
+            _ => effort,
         }
     }
 
@@ -226,6 +249,16 @@ impl ModelInfo {
             window: card["limits"]["context"].as_u64(),
             output: card["limits"]["output"].as_u64(),
             reasoning: !card["reasoning"].is_null(),
+            levels: card["reasoning"]["levels"]
+                .as_array()
+                .map(|levels| {
+                    levels
+                        .iter()
+                        .filter_map(|l| l.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            default_level: card["reasoning"]["default"].as_str().map(str::to_owned),
         }
     }
 }

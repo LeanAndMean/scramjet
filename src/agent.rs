@@ -194,9 +194,10 @@ pub enum TreeItem {
     Tool(String, String),
     Compaction(Option<u64>),
     BranchSummary(String),
-    /// Listed only when it is the current entry, as are the two below.
+    /// Listed only when it is the current entry, as are the three below.
     Reasoning,
     Model(String),
+    Effort(String),
 }
 
 /// The session's entries as `/tree` lists them, in file order.
@@ -404,6 +405,9 @@ impl Agent {
                 Some("model_change") if is_leaf => Some(TreeItem::Model(
                     value["model"].as_str().unwrap_or_default().to_owned(),
                 )),
+                Some("thinking_level_change") if is_leaf => Some(TreeItem::Effort(
+                    value["level"].as_str().unwrap_or_default().to_owned(),
+                )),
                 _ if session::is_prompt(value) => Some(TreeItem::Prompt(
                     value["content"].as_str().unwrap_or_default().to_owned(),
                 )),
@@ -555,6 +559,7 @@ impl Agent {
     ) -> Result<(), AgentError> {
         let model = session.model().map(str::to_owned);
         let context_tokens = session.context_tokens();
+        let effort = session.effort().map(str::to_owned);
         self.session = session;
         self.conversation = conversation;
         self.prompts = prompts;
@@ -566,6 +571,9 @@ impl Agent {
             self.info = ModelInfo::guess(&model);
             self.config.model = model;
         }
+        if let Some(level) = effort {
+            self.config.effort = Some(level);
+        }
         self.answer_interrupted_calls()?;
         Ok(())
     }
@@ -576,6 +584,9 @@ impl Agent {
         let directory = self.session.path().parent().unwrap_or(Path::new("."));
         let mut session = Session::create(directory, &self.config.root)?;
         session.record_model(&self.config.model)?;
+        if let Some(effort) = &self.config.effort {
+            session.record_effort(effort)?;
+        }
         self.session = session;
         self.conversation.clear();
         self.prompts.clear();
@@ -658,7 +669,7 @@ impl Agent {
             "prompt_cache_key": self.session.id(),
             "reasoning": {"summary": "auto"},
         });
-        if let Some(effort) = &self.config.effort {
+        if let Some(effort) = self.effort() {
             request["reasoning"]["effort"] = json!(effort);
         }
         if let Some(tokens) = self.config.max_output_tokens {
@@ -703,6 +714,45 @@ impl Agent {
         self.info = ModelInfo::guess(&model);
         self.config.model = model;
         Ok(())
+    }
+
+    /// The reasoning effort requests ask for: the one set, fitted to the levels the model's card
+    /// lists as Scramjet clamps a thinking level; `None` leaves it to the model.
+    pub fn effort(&self) -> Option<&str> {
+        let effort = self.config.effort.as_deref()?;
+        Some(self.info.fit(effort))
+    }
+
+    /// The reasoning effort the session last recorded.
+    pub fn last_effort(&self) -> Option<&str> {
+        self.session.effort()
+    }
+
+    /// Changes the reasoning effort of subsequent requests and records it in the session, so a
+    /// resume continues with it; on failure nothing changes.
+    pub fn set_effort(&mut self, effort: impl Into<String>) -> Result<(), AgentError> {
+        let effort = effort.into();
+        self.session.record_effort(&effort)?;
+        self.config.effort = Some(effort);
+        Ok(())
+    }
+
+    /// Shift+Tab: moves the reasoning effort to the next level the model's card lists, after the
+    /// current one (the card's default when none is set), wrapping around as Scramjet's thinking
+    /// level cycle does, and records the change in the session. Returns the new level; `None`
+    /// when the card lists no levels, which keeps the effort.
+    pub fn cycle_effort(&mut self) -> Result<Option<String>, AgentError> {
+        let levels = &self.info.levels;
+        if levels.is_empty() {
+            return Ok(None);
+        }
+        let current = self.effort().or(self.info.default_level.as_deref());
+        let next = current
+            .and_then(|current| levels.iter().position(|level| level == current))
+            .map_or(0, |index| (index + 1) % levels.len());
+        let level = levels[next].clone();
+        self.set_effort(level.clone())?;
+        Ok(Some(level))
     }
 
     /// The window automatic compaction checks; `None` skips the check.
@@ -787,7 +837,7 @@ impl Agent {
             "prompt_cache_key": self.session.id(),
         });
         request["reasoning"] = json!({"summary": "auto"});
-        if let Some(effort) = &self.config.effort {
+        if let Some(effort) = self.effort() {
             request["reasoning"]["effort"] = json!(effort);
         }
         if let Some(tokens) = self.config.max_output_tokens {
@@ -3135,6 +3185,8 @@ came back from:\n\n<summary>\nearlier</summary>\n\n[User]: more\n\n[Assistant]: 
             window: Some(1_000_000),
             output: Some(128_000),
             reasoning: true,
+            levels: vec!["high".into()],
+            default_level: None,
         };
         assert_eq!(agent.info, expected);
         agent.set_model("both").unwrap();
@@ -3144,6 +3196,100 @@ came back from:\n\n<summary>\nearlier</summary>\n\n[User]: more\n\n[Assistant]: 
         server.join().unwrap();
         assert_eq!(ModelInfo::guess("claude-new").protocol, Protocol::Messages);
         assert_eq!(ModelInfo::guess("gpt-new").protocol, Protocol::Responses);
+    }
+
+    #[test]
+    fn shift_tab_cycles_the_card_levels_and_the_effort_is_sent_fitted_saved_and_restored() {
+        let card = json!({"models": [
+            {"requestId": "gpt-6-luna", "supportedProtocols": ["openai-responses"],
+             "reasoning": {"levels": ["none","low","medium","high","xhigh","max"], "default": "medium"}},
+            {"requestId": "flash", "supportedProtocols": ["openai-responses"],
+             "reasoning": {"levels": ["none","low","high","xhigh","max"]}},
+            {"requestId": "plain", "supportedProtocols": ["openai-responses"], "reasoning": {}},
+        ]})
+        .to_string();
+        let (endpoint, server) = serve_gets(vec![("200 OK", card); 4]);
+        let (mut agent, scratch) = agent(endpoint, "effort-cycle");
+        let saved = |path: &Path| -> Vec<String> {
+            std::fs::read_to_string(path)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|line| line["type"] == "thinking_level_change")
+                .map(|line| line["level"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        agent.set_model("gpt-6-luna").unwrap();
+        agent.load_model_card();
+        // No effort is set: the cycle starts after the card's default, medium.
+        let cycled: Vec<_> = (0..5)
+            .map(|_| agent.cycle_effort().unwrap().unwrap())
+            .collect();
+        assert_eq!(cycled, ["high", "xhigh", "max", "none", "low"]);
+        assert_eq!(agent.request()["reasoning"]["effort"], "low");
+        assert_eq!(saved(agent.session_path()), cycled);
+
+        // A level the next model's card lacks is sent as the nearest higher one it lists, and
+        // the cycle goes on from that one.
+        agent.set_effort("medium").unwrap();
+        agent.set_model("flash").unwrap();
+        agent.load_model_card();
+        assert_eq!(agent.effort(), Some("high"));
+        assert_eq!(agent.request()["reasoning"]["effort"], "high");
+        assert_eq!(agent.cycle_effort().unwrap().as_deref(), Some("xhigh"));
+
+        // A resumed session restores the level its last change recorded.
+        let path = scratch.0.join("resumed.jsonl");
+        write_session(
+            &path,
+            &[
+                json!({"type":"session","version":1}),
+                json!({"type":"model_change","model":"gpt-6-luna"}),
+                json!({"type":"thinking_level_change","level":"max"}),
+            ],
+            std::time::SystemTime::now(),
+        );
+        agent.resume_session(&path).unwrap();
+        agent.load_model_card();
+        assert_eq!(agent.effort(), Some("max"));
+        assert_eq!(agent.cycle_effort().unwrap().as_deref(), Some("none"));
+        assert_eq!(saved(&path), ["max", "none"]);
+        // `/tree` lists the change while it is the current entry, as Scramjet does.
+        let tree = agent.tree().unwrap();
+        let current = tree
+            .entries
+            .iter()
+            .find(|entry| Some(entry.line) == tree.current);
+        assert_eq!(current.unwrap().item, TreeItem::Effort("none".into()));
+
+        // A model whose card lists no levels keeps its effort and writes nothing.
+        agent.set_model("plain").unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        agent.load_model_card();
+        assert_eq!(agent.cycle_effort().unwrap(), None);
+        assert_eq!(agent.effort(), Some("none"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        // A new session starts with the effort recorded, as with the model.
+        agent.new_session().unwrap();
+        assert_eq!(saved(agent.session_path()), ["none"]);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn an_effort_the_card_lacks_becomes_the_nearest_level_it_lists() {
+        let info = |levels: &[&str]| ModelInfo {
+            levels: levels.iter().map(|level| level.to_string()).collect(),
+            ..ModelInfo::guess("m")
+        };
+        let opus = info(&["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(opus.fit("none"), "low");
+        assert_eq!(opus.fit("high"), "high");
+        assert_eq!(info(&["none", "low", "high"]).fit("medium"), "high");
+        assert_eq!(info(&["none", "low", "medium", "high"]).fit("max"), "high");
+        // A level not in Scramjet's order is left for the endpoint to judge.
+        assert_eq!(opus.fit("hgih"), "hgih");
+        assert_eq!(info(&[]).fit("minimal"), "minimal");
     }
 
     #[test]

@@ -38,7 +38,8 @@ Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses AP
 the Messages API for Claude models (those whose Proxy model card lists only Messages).
   --project DIR          project directory (default: current directory)
   --model ID             model (default: gpt-6-luna, or the one a resumed session last used)
-  --effort LEVEL         reasoning effort, e.g. low, medium, high
+  --effort LEVEL         reasoning effort, e.g. low, medium, high (default: the model's, or the
+                         one a resumed session last used)
   --retries N            resend a request that failed transiently up to N times (default 3)
   --continue             resume the session for this project written to last
   --session FILE         resume a specific session file
@@ -53,7 +54,8 @@ edits the prompt in $VISUAL or $EDITOR; its text replaces the prompt when the ed
 to the conversation for the next prompt; `!!command` runs it without adding it.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
 Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
-next one on; it works while a turn runs too. /new starts a new session; /resume chooses one of
+next one on; it works while a turn runs too. Shift+Tab sets the reasoning effort to the next
+level the model's Proxy card lists. /new starts a new session; /resume chooses one of
 this project's sessions to switch to. /fork chooses one of this session's prompts and continues
 in a new session from before it, with it in the prompt for editing. /tree shows this session's
 branches and continues from the entry chosen, in the same session: from before a prompt, which
@@ -127,6 +129,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Err(format!("{} is not a directory", root.display()));
     }
     let chosen = model.is_some();
+    let chosen_effort = effort.clone();
     let config = AgentConfig {
         endpoint,
         model: model.unwrap_or_else(|| "gpt-6-luna".to_owned()),
@@ -142,6 +145,10 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         _ => agent.model().to_owned(),
     };
     agent.set_model(model).map_err(|e| e.to_string())?;
+    // As with the model, an explicit --effort wins over the one a resumed session last used.
+    if let Some(effort) = chosen_effort.or_else(|| agent.last_effort().map(str::to_owned)) {
+        agent.set_effort(effort).map_err(|e| e.to_string())?;
+    }
     let mut window = agent.load_model_card();
 
     let cancel = Arc::new(AtomicBool::new(false));
@@ -196,7 +203,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
 
     eprintln!(
         "scramjet-rs agent · {} · {}\nsession {}",
-        agent.model(),
+        model_line(&agent),
         agent.root().display(),
         agent.session_path().display(),
     );
@@ -212,7 +219,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 if !std::mem::take(&mut spaced) {
                     eprintln!();
                 }
-                match editor.read().map_err(|e| e.to_string())? {
+                let read = editor.read(&mut || effort_note(agent.cycle_effort()));
+                match read.map_err(|e| e.to_string())? {
                     Some(editor::Input::Prompt(prompt)) => prompt,
                     Some(editor::Input::Tree) => {
                         escaped = true;
@@ -315,7 +323,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                         }
                         eprintln!(
                             "✓ Resumed session · {}\nsession {}",
-                            agent.model(),
+                            model_line(&agent),
                             agent.session_path().display(),
                         );
                         spaced = show_resumed(&agent, &mut ui);
@@ -377,7 +385,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                         window = agent.load_model_card();
                         eprintln!(
                             "✓ Forked to new session · {}\nsession {}",
-                            agent.model(),
+                            model_line(&agent),
                             agent.session_path().display(),
                         );
                         spaced = show_resumed(&agent, &mut ui);
@@ -545,7 +553,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 match agent.set_model(&model) {
                     Ok(()) => {
                         window = agent.load_model_card();
-                        eprintln!("✓ Model set to {model}");
+                        eprintln!("✓ Model set to {}", model_line(&agent));
                     }
                     Err(error) => eprintln!("error: {error}"),
                 }
@@ -642,7 +650,7 @@ fn ask_branch_summary(hide_thinking: &Arc<AtomicBool>) -> std::io::Result<Option
                     clip("Enter submit · Esc cancel", room),
                     style::RESET
                 );
-                let focus = editor::Editor::dialog(hide_thinking.clone()).read()?;
+                let focus = editor::Editor::dialog(hide_thinking.clone()).read(&mut String::new)?;
                 // The title's row, above the erased editor.
                 eprint!("\x1b[1A\r\x1b[J");
                 if let Some(editor::Input::Prompt(focus)) = focus {
@@ -650,6 +658,23 @@ fn ask_branch_summary(hide_thinking: &Arc<AtomicBool>) -> std::io::Result<Option
                 }
             }
         }
+    }
+}
+
+/// The model, and the reasoning effort when one is set, as Scramjet's footer shows them.
+fn model_line(agent: &Agent) -> String {
+    match agent.effort() {
+        Some(effort) => format!("{} · thinking {effort}", agent.model()),
+        None => agent.model().to_owned(),
+    }
+}
+
+/// What a Shift+Tab says under the prompt, as Scramjet reports it.
+fn effort_note(cycled: Result<Option<String>, AgentError>) -> String {
+    match cycled {
+        Ok(Some(level)) => format!("Thinking level: {level}"),
+        Ok(None) => "Thinking level unchanged: this model's card lists no levels".to_owned(),
+        Err(error) => format!("error: {error}"),
     }
 }
 

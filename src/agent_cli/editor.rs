@@ -55,6 +55,8 @@ pub(super) enum Key {
     Interrupt,
     EndOfInput,
     ToggleThinking,
+    /// Shift+Tab, `ESC [ Z`.
+    BackTab,
     External,
     Suspend,
     /// A lone Escape.
@@ -171,6 +173,7 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         (b'~', "200") => paste(source)?,
         (b'~', "27;2;13" | "27;3;13") | (b'u', "13;2" | "13;3") => Key::NewLine,
         (b'u', "13") => Key::Enter,
+        (b'Z', _) | (b'~', "27;2;9") | (b'u', "9;2") => Key::BackTab,
         _ => Key::Ignored,
     })
 }
@@ -651,8 +654,10 @@ impl Editor {
         }
     }
 
-    /// Reads one prompt. `None` means the user asked to exit, or cancelled a dialog.
-    pub fn read(&mut self) -> io::Result<Option<Input>> {
+    /// Reads one prompt. `None` means the user asked to exit, or cancelled a dialog. Shift+Tab
+    /// calls `cycle_effort` (never in a dialog) and shows the note it returns, as Ctrl+T shows
+    /// its own.
+    pub fn read(&mut self, cycle_effort: &mut dyn FnMut() -> String) -> io::Result<Option<Input>> {
         let raw = RawMode::enter()?;
         let mut source = Stdin {
             buffer: std::mem::take(&mut self.typed),
@@ -718,7 +723,11 @@ impl Editor {
                     note = noted;
                     false
                 }
-                Key::Ignored | Key::Escape | Key::PageUp | Key::PageDown => {
+                Key::BackTab if !self.dialog => {
+                    note = Some(cycle_effort());
+                    true
+                }
+                Key::Ignored | Key::BackTab | Key::Escape | Key::PageUp | Key::PageDown => {
                     exit_armed = armed;
                     note = noted;
                     false
@@ -972,6 +981,14 @@ mod tests {
                 Key::Ignored,
                 Key::Escape
             ]
+        );
+    }
+
+    #[test]
+    fn shift_tab_is_back_tab() {
+        assert_eq!(
+            keys(b"\x1b[Z\x1b[27;2;9~\x1b[9;2u"),
+            [Key::BackTab, Key::BackTab, Key::BackTab]
         );
     }
 

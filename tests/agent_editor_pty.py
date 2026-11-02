@@ -173,9 +173,9 @@ def serve_thoughts(gates):
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
-def serve_replies(replies, models=()):
+def serve_replies(replies, models=(), cards=None):
     """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`,
-    and lists `models` at `/v1/models`."""
+    lists `models` at `/v1/models` and `cards` at `/api/model-cards`."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -199,6 +199,7 @@ def serve_replies(replies, models=()):
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
     listing = json.dumps({'data': [{'id': model} for model in models]}).encode()
+    card_listing = json.dumps({'models': cards or []}).encode()
 
     def answer():
         pending = iter(streams)
@@ -208,6 +209,9 @@ def serve_replies(replies, models=()):
             if request.startswith(b'GET /v1/models') and models:
                 connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n'
                                    b'connection: close\r\n\r\n%s' % (len(listing), listing))
+            elif request.startswith(b'GET /api/model-cards') and cards:
+                connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n'
+                                   b'connection: close\r\n\r\n%s' % (len(card_listing), card_listing))
             elif request.startswith(b'GET'):
                 connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
             else:
@@ -502,7 +506,8 @@ def typed_during_turn(read, until, send, output):
     mark = until(b'> ')
     send(b'go\r')
     mark = until(b'thinking', mark)
-    send(b'typed ahead')
+    # A Shift+Tab among them acts at the next prompt and keeps the keys after it.
+    send(b'typed\x1b[Z ahead')
     mark = until(b'HTTP 500', mark)
     assert b'typed ahead' not in output[:mark], 'keys typed during a turn were echoed'
     until(b'> typed ahead', mark)
@@ -1028,4 +1033,49 @@ assert summary.startswith('The user explored a different conversation branch bef
 assert summary.endswith('\n\nThe branch said two.'), summary
 prompts = [item['content'] for item in lines if item.get('role') == 'user']
 assert prompts == ['first', 'second', 'second again'], prompts
+
+
+def shift_tab_cycles_effort(read, until, send, output):
+    mark = until(b'> ')
+    send(b'\x1b[Z')
+    mark = until(b'Thinking level: high', mark)
+    # Inside a prompt it keeps the text and the cursor.
+    send(b'ab\x1b[D\x1b[Z')
+    mark = until(b'Thinking level: xhigh', mark)
+    send(b'X\r')
+    mark = until(b'Reply.', mark)
+    mark = until(b'> ', mark)
+    send(b'\x04')
+
+
+def shift_tab_resumed(read, until, send, output):
+    mark = until(b'gpt-6-luna \xc2\xb7 thinking xhigh \xc2\xb7 ')
+    mark = until(b'> ', mark)
+    send(b'\x1b[Z')
+    until(b'Thinking level: max', mark)
+    send(b'\x04')
+
+
+def explicit_effort_wins(read, until, send, output):
+    mark = until(b'gpt-6-luna \xc2\xb7 thinking low \xc2\xb7 ')
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+def saved_levels(path):
+    return [json.loads(line)['level'] for line in open(path) if 'thinking_level_change' in line]
+
+
+known = set(session_files())
+effort_cards = [{'requestId': 'gpt-6-luna', 'supportedProtocols': ['openai-responses'],
+                 'reasoning': {'levels': ['none', 'low', 'medium', 'high', 'xhigh', 'max'], 'default': 'medium'}}]
+run([], shift_tab_cycles_effort, serve_replies([(['Reply.'], 'Reply.')], cards=effort_cards))
+(effort,) = set(session_files()) - known
+assert saved_levels(effort) == ['high', 'xhigh'], saved_levels(effort)
+prompts = [item['content'] for item in map(json.loads, open(effort)) if item.get('role') == 'user']
+assert prompts == ['aXb'], prompts
+run(['--continue'], shift_tab_resumed, serve_replies([], cards=effort_cards))
+assert saved_levels(effort) == ['high', 'xhigh', 'max'], saved_levels(effort)
+run(['--continue', '--effort', 'low'], explicit_effort_wins, serve_replies([], cards=effort_cards))
+assert saved_levels(effort) == ['high', 'xhigh', 'max', 'low'], saved_levels(effort)
 print('agent editor journeys passed')

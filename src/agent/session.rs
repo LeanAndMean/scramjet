@@ -26,6 +26,8 @@ pub struct Session {
     file: File,
     /// The latest model change or response item producer on the path, as Scramjet restores it.
     model: Option<String>,
+    /// The latest thinking level change on the path, which a resume restores.
+    effort: Option<String>,
     /// The file lists of the latest compaction on the path, which the next one carries on.
     files: FileLists,
     /// The context size the latest response on the path reported, unless a compaction followed.
@@ -72,6 +74,7 @@ struct Entries {
 struct Context {
     items: Vec<Value>,
     model: Option<String>,
+    effort: Option<String>,
     files: FileLists,
     context_tokens: Option<u64>,
 }
@@ -164,6 +167,7 @@ impl Entries {
         let mut context = Context {
             items: Vec::new(),
             model: None,
+            effort: None,
             files: FileLists::default(),
             context_tokens: None,
         };
@@ -193,6 +197,11 @@ impl Entries {
                     .as_str()
                     .ok_or_else(|| invalid(path, "missing model in a model change"))?;
                 context.model = Some(changed.to_owned());
+            } else if value["type"] == "thinking_level_change" {
+                let level = value["level"]
+                    .as_str()
+                    .ok_or_else(|| invalid(path, "missing level in a thinking level change"))?;
+                context.effort = Some(level.to_owned());
             } else {
                 if let Some(producer) = value[super::PRODUCER].as_str() {
                     context.model = Some(producer.to_owned());
@@ -295,6 +304,7 @@ impl Session {
             path,
             file,
             model: None,
+            effort: None,
             files: FileLists::default(),
             context_tokens: None,
             leaf: None,
@@ -342,6 +352,7 @@ impl Session {
                 path: path.to_owned(),
                 file,
                 model: context.model,
+                effort: context.effort,
                 files: context.files,
                 context_tokens: context.context_tokens,
                 leaf: entries.tail,
@@ -424,6 +435,7 @@ impl Session {
         let context = entries.context(&self.path, leaf)?;
         self.leaf = leaf;
         self.model = context.model;
+        self.effort = context.effort;
         self.files = context.files;
         self.context_tokens = context.context_tokens;
         Ok(context.items)
@@ -471,6 +483,11 @@ impl Session {
         self.model.as_deref()
     }
 
+    /// The thinking level the latest change on the path set, if any.
+    pub fn effort(&self) -> Option<&str> {
+        self.effort.as_deref()
+    }
+
     pub fn context_tokens(&self) -> Option<u64> {
         self.context_tokens
     }
@@ -483,6 +500,14 @@ impl Session {
     pub fn record_model(&mut self, model: &str) -> io::Result<()> {
         if self.model.as_deref() != Some(model) {
             self.append(&json!({"type":"model_change","model":model}))?;
+        }
+        Ok(())
+    }
+
+    /// Records that later requests use reasoning effort `level`, unless the file already says so.
+    pub fn record_effort(&mut self, level: &str) -> io::Result<()> {
+        if self.effort.as_deref() != Some(level) {
+            self.append(&json!({"type":"thinking_level_change","level":level}))?;
         }
         Ok(())
     }
@@ -505,6 +530,8 @@ impl Session {
         self.tail = self.leaf;
         if item["type"] == "model_change" {
             self.model = item["model"].as_str().map(str::to_owned);
+        } else if item["type"] == "thinking_level_change" {
+            self.effort = item["level"].as_str().map(str::to_owned);
         } else if item["type"] == "compaction" {
             self.files = FileLists::of(item);
             self.context_tokens = None;
