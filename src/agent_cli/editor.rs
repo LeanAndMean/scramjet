@@ -506,6 +506,11 @@ struct Screen {
     width: usize,
 }
 
+/// The rows a prompt takes on screen as the editor shows it, wrapped to `width`.
+pub(super) fn prompt_rows(text: &str, width: usize) -> Vec<String> {
+    Layout::new(text, width).rows
+}
+
 pub(super) fn terminal_size() -> (usize, usize) {
     termios::tcgetwinsize(io::stderr())
         .ok()

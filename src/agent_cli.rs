@@ -185,20 +185,15 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     }
 
     eprintln!(
-        "scramjet-rs agent · {} · {}\nsession {}{}",
+        "scramjet-rs agent · {} · {}\nsession {}",
         agent.model(),
         agent.root().display(),
         agent.session_path().display(),
-        if agent.conversation().is_empty() {
-            String::new()
-        } else {
-            format!(" ({} items resumed)", agent.conversation().len())
-        }
     );
+    // A tool block ends with a blank line; other output gets one before the prompt.
+    let mut spaced = show_resumed(&agent, &mut ui);
     let mut editor = (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
         .then(|| editor::Editor::new(agent.prompts().to_vec(), hide_thinking.clone()));
-    // A tool block ends with a blank line; other output gets one before the prompt.
-    let mut spaced = false;
     loop {
         let prompt = match &mut editor {
             Some(editor) => {
@@ -278,11 +273,11 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                                     }
                                 }
                                 eprintln!(
-                                    "✓ Resumed session · {}\nsession {} ({} items resumed)",
+                                    "✓ Resumed session · {}\nsession {}",
                                     agent.model(),
                                     agent.session_path().display(),
-                                    agent.conversation().len()
                                 );
+                                spaced = show_resumed(&agent, &mut ui);
                             }
                             Err(error) => eprintln!("error: {error}"),
                         },
@@ -377,6 +372,18 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         cancel.store(false, Ordering::Relaxed);
         ui.usage(&agent, window);
     }
+}
+
+/// Shows a resumed conversation under its header, as Scramjet redraws it. Returns whether it
+/// showed any, which then ends with a blank line.
+fn show_resumed(agent: &Agent, ui: &mut Terminal) -> bool {
+    if agent.conversation().is_empty() {
+        return false;
+    }
+    eprintln!();
+    agent.show_conversation(ui);
+    ui.clear();
+    true
 }
 
 /// Reads a prompt from non-terminal input, where a line ending in \ continues on the next line.
@@ -1142,14 +1149,10 @@ impl AgentUi for Terminal {
         let reason = automatic
             .map(|reason| format!("\n{}", self.dim(&self.wrapped(reason.reason()))))
             .unwrap_or_default();
-        let mut markdown = markdown::Markdown::new(self.color, "\x1b[2m");
-        let summary =
-            markdown.reopen() + &markdown.push(compaction.summary.trim_end()) + &markdown.finish();
-        let reset = if self.color { "\x1b[0m" } else { "" };
         eprintln!(
-            "{}{reason}\n\n{}{reset}",
+            "{}{reason}\n\n{}",
             self.wrapped(&heading),
-            self.wrapped(&summary)
+            self.summary_block(&compaction.summary)
         );
         // During a turn, as after a tool block; after `/compact` the prompt's blank line follows.
         if automatic.is_some() {
@@ -1161,6 +1164,26 @@ impl AgentUi for Terminal {
         eprintln!(
             "{}\n",
             self.wrapped(&format!("error: automatic compaction failed: {error}"))
+        );
+    }
+    fn user_prompt(&mut self, prompt: &str) {
+        self.clear();
+        // As the editor left it on screen; output to a pipe is not wrapped.
+        let width = match self.color {
+            true => editor::terminal_size().0,
+            false => usize::MAX,
+        };
+        for row in editor::prompt_rows(prompt, width) {
+            eprintln!("{row}");
+        }
+        eprintln!();
+    }
+    fn compaction_summary(&mut self, summary: &str) {
+        self.clear();
+        eprintln!(
+            "{}\n\n{}\n",
+            self.wrapped("✓ Compacted: the earlier conversation is summarized"),
+            self.summary_block(summary)
         );
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
@@ -1177,6 +1200,13 @@ impl AgentUi for Terminal {
 }
 
 impl Terminal {
+    /// A compaction's summary as Scramjet shows it: dim markdown, wrapped to the terminal.
+    fn summary_block(&self, summary: &str) -> String {
+        let mut markdown = markdown::Markdown::new(self.color, "\x1b[2m");
+        let text = markdown.reopen() + &markdown.push(summary.trim_end()) + &markdown.finish();
+        let reset = if self.color { "\x1b[0m" } else { "" };
+        format!("{}{reset}", self.wrapped(&text))
+    }
     fn ask(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         self.clear();
         let question = visible(question);

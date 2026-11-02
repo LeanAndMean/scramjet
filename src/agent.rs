@@ -19,7 +19,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
-use tools::{Approval, Call};
+use tools::{Approval, Call, Output};
 
 /// Guards against a model that never stops calling tools.
 const MAX_STEPS: usize = 200;
@@ -33,6 +33,11 @@ const PRODUCER: &str = "_scramjet_model";
 /// Stored with a user message whose text is not its prompt: the `!command` it ran, which is recalled
 /// as typed. Never sent to the endpoint.
 pub(super) const TYPED: &str = "_scramjet_typed";
+/// Stored, as `true`, with a tool result or `!` command that failed, so a resumed conversation
+/// shows it as it ran. Never sent, as no `_scramjet_` field is.
+const FAILED: &str = "_scramjet_failed";
+/// Stored with an edit's result: the diff shown for it.
+const DIFF: &str = "_scramjet_diff";
 /// Compaction keeps about this much of the latest conversation, as Scramjet does.
 const KEEP_RECENT_TOKENS: u64 = 20_000;
 
@@ -77,6 +82,10 @@ pub trait AgentUi {
     fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>);
     /// An automatic compaction before a prompt failed; the prompt is sent anyway.
     fn compaction_failed(&mut self, error: &AgentError);
+    /// A prompt of a resumed conversation, shown as the user typed it.
+    fn user_prompt(&mut self, prompt: &str);
+    /// The summary of a compaction in a resumed conversation.
+    fn compaction_summary(&mut self, summary: &str);
     /// Asks whether a tool call may run; returns `Deny` without an answer once `cancel` is set.
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer;
 }
@@ -400,6 +409,11 @@ impl Agent {
         &self.conversation
     }
 
+    /// Shows the conversation as a resumed session has it, as its turns showed when they ran.
+    pub fn show_conversation(&self, ui: &mut dyn AgentUi) {
+        show_items(&self.conversation, ui);
+    }
+
     /// Reads the current model's Proxy model card: which protocol its requests use, its output
     /// limit and its context window, which is returned. Without a card the model's name decides
     /// the protocol, and the window is unknown (`None`).
@@ -431,7 +445,8 @@ impl Agent {
             .collect();
         for call_id in missing {
             self.add(json!({"type":"function_call_output","call_id":call_id,
-                "output":"Error: the previous session ended before this tool call reported a result. It may or may not have taken effect, and it was not re-run."}))?;
+                "output":"Error: the previous session ended before this tool call reported a result. It may or may not have taken effect, and it was not re-run.",
+                FAILED:true}))?;
         }
         Ok(())
     }
@@ -474,8 +489,9 @@ impl Agent {
             .map(|item| {
                 let mut item = item.clone();
                 let producer = item.as_object_mut().and_then(|object| {
-                    object.remove(TYPED);
-                    object.remove(PRODUCER)
+                    let producer = object.remove(PRODUCER);
+                    object.retain(|key, _| !key.starts_with("_scramjet_"));
+                    producer
                 });
                 if producer.is_some_and(|producer| producer != self.config.model.as_str()) {
                     if item["type"] == "reasoning" {
@@ -550,7 +566,14 @@ to a larger-context model)"
             }
             for item in calls {
                 let output = self.call(&item, ui, cancel);
-                self.add(json!({"type":"function_call_output","call_id":item["call_id"],"output":output}))?;
+                let mut result = json!({"type":"function_call_output","call_id":item["call_id"],"output":output.text});
+                if output.failed {
+                    result[FAILED] = json!(true);
+                }
+                if let Some(ToolDetail::Diff(diff)) = output.detail {
+                    result[DIFF] = json!(diff);
+                }
+                self.add(result)?;
                 if cancel.load(Ordering::Relaxed) {
                     return Err(AgentError::Cancelled);
                 }
@@ -584,7 +607,11 @@ to a larger-context model)"
         ui.command_result(&shown.text, shown.failed);
         if include {
             let prompt = format!("!{command}");
-            self.add(json!({"role":"user","content":ran.message(command),TYPED:prompt}))?;
+            let mut message = json!({"role":"user","content":ran.message(command),TYPED:prompt});
+            if shown.failed {
+                message[FAILED] = json!(true);
+            }
+            self.add(message)?;
             self.prompts.push(prompt);
         }
         Ok(())
@@ -742,13 +769,18 @@ to a larger-context model)"
         }
     }
 
-    fn call(&mut self, item: &Value, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> String {
+    fn call(&mut self, item: &Value, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> Output {
+        let failure = |text: String| Output {
+            text,
+            detail: None,
+            failed: true,
+        };
         let call = match Call::parse(item) {
             Ok(call) => call,
             Err(error) => {
                 let output = format!("Error: {error}");
                 ui.tool_result(item["name"].as_str().unwrap_or(""), &output, None, true);
-                return output;
+                return failure(output);
             }
         };
         ui.tool_call(call.name, &call.summary());
@@ -766,27 +798,118 @@ to a larger-context model)"
                 "The user denied this tool call."
             };
             ui.tool_result(call.name, output, None, true);
-            return output.to_owned();
+            return failure(output.to_owned());
         }
         ui.tool_running();
-        match call.run(&self.config.root, cancel, &mut |output| {
-            ui.tool_output(output)
-        }) {
-            Ok(output) => {
-                ui.tool_result(
-                    call.name,
-                    &output.text,
-                    output.detail.as_ref(),
-                    output.failed,
-                );
-                output.text
-            }
-            Err(error) => {
-                let output = format!("Error: {error}");
-                ui.tool_result(call.name, &output, None, true);
-                output
+        let output = call
+            .run(&self.config.root, cancel, &mut |output| {
+                ui.tool_output(output)
+            })
+            .unwrap_or_else(|error| failure(format!("Error: {error}")));
+        ui.tool_result(
+            call.name,
+            &output.text,
+            output.detail.as_ref(),
+            output.failed,
+        );
+        output
+    }
+}
+
+/// Shows stored items as their turns showed them, as Scramjet redraws a resumed session: each
+/// prompt, reply, reasoning summary, tool call with its result, `!` command and compaction summary.
+fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
+    // A reply's calls are stored before their results, but each ran, and showed, in turn.
+    let mut calls: Vec<(&str, &str, Option<Call>)> = Vec::new();
+    let unanswered = |calls: &mut Vec<(&str, &str, Option<Call>)>, ui: &mut dyn AgentUi| {
+        for (_, _, call) in calls.drain(..) {
+            if let Some(call) = call {
+                ui.tool_call(call.name, &call.summary());
             }
         }
+    };
+    for item in items {
+        let failed = item[FAILED] == true;
+        if !matches!(
+            item["type"].as_str(),
+            Some("function_call" | "function_call_output")
+        ) {
+            unanswered(&mut calls, ui);
+        }
+        match item["type"].as_str() {
+            Some("message") => ui.assistant(&message_text(item)),
+            Some("reasoning") => {
+                // Each part ends with a paragraph break, as it streamed.
+                let parts = item["summary"].as_array().into_iter().flatten();
+                for text in parts.filter_map(|part| part["text"].as_str()) {
+                    if !text.trim().is_empty() {
+                        ui.progress(&StreamProgress::Reasoning(text.to_owned()));
+                        ui.progress(&StreamProgress::Reasoning("\n\n".into()));
+                    }
+                }
+            }
+            Some("function_call") => calls.push((
+                item["call_id"].as_str().unwrap_or_default(),
+                item["name"].as_str().unwrap_or_default(),
+                Call::parse(item).ok(),
+            )),
+            Some("function_call_output") => {
+                let id = item["call_id"].as_str().unwrap_or_default();
+                let (name, call) = match calls.iter().position(|(call_id, ..)| *call_id == id) {
+                    Some(index) => {
+                        let (_, name, call) = calls.remove(index);
+                        (name, call)
+                    }
+                    None => ("", None),
+                };
+                // A call whose arguments do not parse had no call line, only its error.
+                if let Some(call) = &call {
+                    ui.tool_call(call.name, &call.summary());
+                }
+                let detail = match item[DIFF].as_str() {
+                    Some(diff) => Some(ToolDetail::Diff(diff.to_owned())),
+                    // A write's preview is the content it was given.
+                    None if name == "write" && !failed => call
+                        .as_ref()
+                        .and_then(|call| call.arguments["content"].as_str())
+                        .map(|content| ToolDetail::Written(content.to_owned())),
+                    None => None,
+                };
+                let output = item["output"].as_str().unwrap_or_default();
+                ui.tool_result(name, output, detail.as_ref(), failed);
+            }
+            _ if item["role"] == "user" => {
+                let content = item["content"].as_str().unwrap_or_default();
+                let command = item[TYPED]
+                    .as_str()
+                    .and_then(|typed| typed.strip_prefix('!'));
+                if let Some(summary) = compaction::previous_summary(std::slice::from_ref(item)) {
+                    ui.compaction_summary(summary);
+                } else if let Some(command) = command {
+                    ui.tool_call("bash", command);
+                    let output = content
+                        .strip_prefix(&format!("Ran `{command}`\n"))
+                        .map_or_else(|| content.to_owned(), command_output);
+                    ui.command_result(&output, failed);
+                } else {
+                    ui.user_prompt(content);
+                }
+            }
+            _ => {}
+        }
+    }
+    unanswered(&mut calls, ui);
+}
+
+/// The output of a `!` command from its stored message, which fences the output and ends with
+/// how the command ended, as the live result shows it.
+fn command_output(message: &str) -> String {
+    match message
+        .strip_prefix("```\n")
+        .and_then(|rest| rest.rsplit_once("\n```"))
+    {
+        Some((output, ending)) => format!("{output}{ending}"),
+        None => message.to_owned(),
     }
 }
 
@@ -894,30 +1017,60 @@ mod tests {
         /// Answers to give, in order; questions beyond them are denied.
         answers: Vec<Answer>,
         questions: usize,
+        /// What a replay showed, in order, with the results of calls.
+        shown: Vec<String>,
     }
     impl AgentUi for Recorder {
         fn waiting(&mut self, compacting: bool) {
             self.waits.push(compacting);
         }
-        fn progress(&mut self, _: &StreamProgress) {}
+        fn progress(&mut self, update: &StreamProgress) {
+            if let StreamProgress::Reasoning(text) = update {
+                self.shown.push(format!("thinking {text}"));
+            }
+        }
         fn retrying(&mut self, error: &str, attempt: u32, _: u32, delay: Duration) {
             self.retries.push((error.to_owned(), attempt, delay));
         }
         fn assistant(&mut self, text: &str) {
+            self.shown.push(format!("reply {text}"));
             self.replies.push(text.to_owned());
         }
-        fn tool_call(&mut self, name: &str, _: &str) {
+        fn tool_call(&mut self, name: &str, summary: &str) {
+            self.shown.push(format!("call {name} {summary}"));
             self.calls.push(name.to_owned());
         }
         fn tool_running(&mut self) {}
-        fn tool_result(&mut self, _: &str, _: &str, _: Option<&ToolDetail>, _: bool) {}
-        fn command_result(&mut self, _: &str, _: bool) {}
+        fn tool_result(
+            &mut self,
+            name: &str,
+            output: &str,
+            detail: Option<&ToolDetail>,
+            failed: bool,
+        ) {
+            let failed = if failed { " failed" } else { "" };
+            let detail = detail
+                .map(|detail| format!(" {detail:?}"))
+                .unwrap_or_default();
+            self.shown
+                .push(format!("result {name} {output}{failed}{detail}"));
+        }
+        fn command_result(&mut self, output: &str, failed: bool) {
+            let failed = if failed { " failed" } else { "" };
+            self.shown.push(format!("command {output}{failed}"));
+        }
         fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>) {
             self.compactions
                 .push((compaction.tokens_before, compaction.kept_items, automatic));
         }
         fn compaction_failed(&mut self, error: &AgentError) {
             self.failed_compactions.push(error.to_string());
+        }
+        fn user_prompt(&mut self, prompt: &str) {
+            self.shown.push(format!("prompt {prompt}"));
+        }
+        fn compaction_summary(&mut self, summary: &str) {
+            self.shown.push(format!("summary {summary}"));
         }
         fn approve(&mut self, _: &str, _: &AtomicBool) -> Answer {
             self.questions += 1;
@@ -1728,7 +1881,10 @@ response is incomplete; retry the request."});
         let message = "Ran `echo hi; exit 3`\n```\nhi\n```\n\nCommand exited with code 3";
         assert_eq!(
             agent.conversation(),
-            [json!({"role":"user","content":message,"_scramjet_typed":"!echo hi; exit 3"})]
+            [
+                json!({"role":"user","content":message,"_scramjet_typed":"!echo hi; exit 3",
+                "_scramjet_failed":true})
+            ]
         );
         assert_eq!(agent.prompts(), ["!echo hi; exit 3"]);
         agent.turn("next", &mut ui, &cancel).unwrap();
@@ -1737,7 +1893,7 @@ response is incomplete; retry the request."});
             bodies[0]["input"],
             json!([{"role":"user","content":message},{"role":"user","content":"next"}])
         );
-        assert!(!bodies[0].to_string().contains("_scramjet_typed"));
+        assert!(!bodies[0].to_string().contains("_scramjet_"));
         let path = agent.session_path().to_owned();
         let (_, _, prompts) = Session::open(&path).unwrap();
         assert_eq!(prompts, ["!echo hi; exit 3", "next"]);
@@ -1760,6 +1916,124 @@ response is incomplete; retry the request."});
         assert_eq!(
             agent.conversation()[0]["content"],
             "Ran `sleep 30`\n(no output)\n\n(command cancelled)"
+        );
+    }
+
+    #[test]
+    fn resumed_conversation_is_shown_as_its_turns_ran() {
+        let call = |id: &str, name: &str, arguments: Value| json!({"type":"function_call","call_id":id,"name":name,"arguments":arguments.to_string()});
+        let output = |id: &str, output: &str| json!({"type":"function_call_output","call_id":id,"output":output});
+        let summary = |text: &str| json!({"type":"summary_text","text":text});
+        let items = [
+            compaction::summary_message("old work"),
+            json!({"role":"user","content":"fix it"}),
+            json!({"type":"reasoning","summary":[summary("look"), summary("then fix")],"encrypted_content":"x"}),
+            json!({"type":"reasoning","summary":[],"encrypted_content":"y"}),
+            json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"Reading."}]}),
+            call("c1", "read", json!({"path":"a.rs"})),
+            output("c1", "fn main() {}"),
+            call("c2", "edit", json!({"path":"a.rs","edits":[]})),
+            json!({"type":"function_call_output","call_id":"c2","output":"Edited","_scramjet_diff":"-1 a"}),
+            call("c3", "write", json!({"path":"b.rs","content":"b\n"})),
+            output("c3", "Wrote"),
+            json!({"role":"user","content":"Ran `ls`\n```\na.rs\n```\n\nCommand exited with code 2",
+                "_scramjet_typed":"!ls","_scramjet_failed":true}),
+            json!({"type":"function_call","call_id":"c4","name":"bash","arguments":"not json"}),
+            json!({"type":"function_call_output","call_id":"c4","output":"Error: invalid","_scramjet_failed":true}),
+            call("c5", "write", json!({"path":"/","content":"c"})),
+            json!({"type":"function_call_output","call_id":"c5","output":"Error: dir","_scramjet_failed":true}),
+            // Claude calls two tools in one reply; they ran one after the other.
+            call("c6", "bash", json!({"command":"one"})),
+            call("c7", "bash", json!({"command":"two"})),
+            output("c6", "1"),
+            output("c7", "2"),
+            // Its turn cancelled, this call has no result here.
+            call("c8", "read", json!({"path":"x"})),
+            json!({"role":"user","content":"next"}),
+        ];
+        let mut recorder = Recorder::default();
+        show_items(&items, &mut recorder);
+        assert_eq!(
+            recorder.shown,
+            [
+                "summary old work",
+                "prompt fix it",
+                "thinking look",
+                "thinking \n\n",
+                "thinking then fix",
+                "thinking \n\n",
+                "reply Reading.",
+                "call read a.rs",
+                "result read fn main() {}",
+                "call edit a.rs",
+                "result edit Edited Diff(\"-1 a\")",
+                "call write b.rs",
+                "result write Wrote Written(\"b\\n\")",
+                "call bash ls",
+                "command a.rs\n\nCommand exited with code 2 failed",
+                "result bash Error: invalid failed",
+                "call write /",
+                "result write Error: dir failed",
+                "call bash one",
+                "result bash 1",
+                "call bash two",
+                "result bash 2",
+                "call read x",
+                "prompt next",
+            ]
+        );
+        assert_eq!(command_output("(no output)"), "(no output)");
+        assert_eq!(command_output("```\n\n```"), "");
+    }
+
+    #[test]
+    fn results_keep_what_was_shown_for_a_resume_but_not_for_the_model() {
+        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
+        let call = |id: &str, name: &str, arguments: Value| {
+            let events = fixture::call_events(&arguments.to_string(), fixture::known_usage());
+            let text = serde_json::to_string(&events).unwrap();
+            let text = text
+                .replace("\"inert\"", &format!("\"{name}\""))
+                .replace("call_1", id);
+            stream(&serde_json::from_str::<Vec<Value>>(&text).unwrap())
+        };
+        let (endpoint, server) = serve(vec![
+            call(
+                "call_1",
+                "edit",
+                json!({"path":"a.txt","edits":[{"oldText":"one","newText":"two"}]}),
+            ),
+            call("call_2", "bash", json!({"command":"exit 2"})),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "shown-results");
+        std::fs::write(agent.root().join("a.txt"), "one\n").unwrap();
+        let mut ui = Recorder::default();
+        agent
+            .turn("change it", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        let bodies = server.join().unwrap();
+        assert!(
+            !bodies[2].to_string().contains("_scramjet_"),
+            "{}",
+            bodies[2]
+        );
+        let (_, resumed, _) = Session::open(agent.session_path()).unwrap();
+        assert_eq!(resumed, agent.conversation());
+        let mut replay = Recorder::default();
+        agent.show_conversation(&mut replay);
+        let results: Vec<_> = replay
+            .shown
+            .iter()
+            .filter(|shown| shown.starts_with("result "))
+            .collect();
+        let edited = format!(
+            "result edit Applied 1 edit(s) to {} Diff(\"-1 one\\n+1 two\\n\")",
+            agent.root().join("a.txt").display()
+        );
+        assert_eq!(
+            results,
+            [&edited, "result bash Command exited with code 2 failed"]
         );
     }
 

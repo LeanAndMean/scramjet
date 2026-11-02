@@ -212,6 +212,63 @@ def serve_replies(replies):
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
+def item_events(index, item):
+    """The events that stream `item` at `index`, each text in one delta."""
+    where = {'output_index': index, 'item_id': item['id']}
+    if item['type'] == 'function_call':
+        return [{'type': 'response.output_item.added', 'output_index': index,
+                 'item': dict(item, arguments='', status='in_progress')},
+                dict(where, type='response.function_call_arguments.delta', delta=item['arguments']),
+                dict(where, type='response.function_call_arguments.done', arguments=item['arguments']),
+                {'type': 'response.output_item.done', 'output_index': index, 'item': item}]
+    key, kind, prefix = {'reasoning': ('summary', 'summary_text', 'reasoning_summary_'),
+                         'message': ('content', 'output_text', '')}[item['type']]
+    events = [{'type': 'response.output_item.added', 'output_index': index,
+               'item': dict(item, **{key: []}, status='in_progress')}]
+    for number, part in enumerate(item[key]):
+        at = dict(where, **({'summary_index': number} if key == 'summary' else {'content_index': number}))
+        empty = dict(part, text='')
+        part_events = 'response.%spart.' % ('reasoning_summary_' if key == 'summary' else 'content_')
+        events += [dict(at, type=part_events + 'added', part=empty),
+                   dict(at, type='response.%s%s.delta' % (prefix, 'text' if prefix else 'output_text'), delta=part['text']),
+                   dict(at, type='response.%s%s.done' % (prefix, 'text' if prefix else 'output_text'), text=part['text']),
+                   dict(at, type=part_events + 'done', part=part)]
+    return events + [{'type': 'response.output_item.done', 'output_index': index, 'item': item}]
+
+
+def serve_items(responses):
+    """Answers the requests in turn with a response streaming the complete items in `responses`."""
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+    streams = []
+    for items in responses:
+        events = [{'type': 'response.created', 'response': {'id': 'resp_1', 'status': 'in_progress', 'output': []}}]
+        for index, item in enumerate(items):
+            events += item_events(index, item)
+        events.append({'type': 'response.completed', 'response': {'id': 'resp_1', 'status': 'completed', 'output': items}})
+        streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
+
+    def answer():
+        for stream in streams:
+            connection, _ = listener.accept()
+            while connection.recv(65536).startswith(b'GET'):
+                connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
+                connection.close()
+                connection, _ = listener.accept()
+            connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
+                               b'connection: close\r\n\r\n%s' % (len(stream), stream))
+            connection.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    return '127.0.0.1:%d' % listener.getsockname()[1]
+
+
+def tool_call(call_id, name, arguments):
+    return {'type': 'function_call', 'id': 'fc_' + call_id, 'call_id': call_id, 'name': name, 'status': 'completed',
+            'arguments': json.dumps(arguments)}
+
+
 quiet_reasoning = serve_quiet_reasoning()
 gates = [threading.Event(), threading.Event()]
 thoughts = serve_thoughts(gates)
@@ -226,6 +283,15 @@ talking = serve_call('echo first; sleep 1.5; echo second; sleep 30')
 # A command whose raw text would show only `echo hello` on a terminal.
 disguised = serve_call('rm -rf scratch\r\x1b[2Kecho hello')
 approved = serve_call('echo approved-$((6*7)); sleep 30')
+# A turn that edits a file, runs a failing command and replies.
+editing = serve_items([
+    [{'type': 'reasoning', 'id': 'rs_1', 'status': 'completed',
+      'summary': [{'type': 'summary_text', 'text': 'Changing the file.'}]},
+     tool_call('call_1', 'edit', {'path': 'a.txt', 'edits': [{'oldText': 'one', 'newText': 'two'}]})],
+    [tool_call('call_2', 'bash', {'command': 'echo checked; exit 2'})],
+    [{'type': 'message', 'id': 'msg_1', 'role': 'assistant', 'status': 'completed',
+      'content': [{'type': 'output_text', 'text': '**Done**, it says two.', 'annotations': []}]}],
+])
 env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'))
 env.pop('VISUAL', None)
 env.pop('EDITOR', None)
@@ -407,7 +473,10 @@ def first(read, until, send, output):
 
 
 def resumed(read, until, send, output):
-    mark = until(b'> ')
+    # The resumed conversation comes first: its one prompt, whose request failed.
+    mark = until(b'.jsonl\r\n\r\n> one\r\n. two\r\n. three\r\n\r\n')
+    mark = until(b'\x1b[?2004h', mark)
+    mark = until(b'> ', mark)
     send(b'\x1b[A')
     mark = until(b'. three', mark)
     send(b'\x03first\\\rsecond')
@@ -697,6 +766,32 @@ def no_editor_configured(read, until, send, output):
     send(b'\x15\x04')
 
 
+def edit_turn(read, until, send, output):
+    mark = until(b'> ')
+    send(b'change a.txt\r')
+    mark = until(b'it says two.', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+def edit_turn_resumed(read, until, send, output):
+    """The turn is shown as it ran: reasoning, the edit's diff, the failed command in red, the reply."""
+    mark = until(b'.jsonl\r\n\r\n> change a.txt\r\n\r\n')
+    mark = until(b'Changing the file.', mark)
+    mark = until(b'edit a.txt', mark)
+    for row in [b'-1 ', b'one', b'+1 ', b'two']:
+        mark = until(row, mark)
+    mark = until(b'bash echo checked; exit 2', mark)
+    mark = until(b'\x1b[31mchecked', mark)
+    mark = until(b'Command exited with code 2', mark)
+    mark = until(b'\x1b[1mDone', mark)
+    shown = until(b'it says two.', mark)
+    prompt = until(b'\x1b[?2004h', shown)
+    assert output[shown:prompt].count(b'\r\n') == 2, bytes(output[shown:prompt])
+    until(b'> ', prompt)
+    send(b'\x04')
+
+
 def session_files():
     return glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
 
@@ -751,4 +846,8 @@ run([], kept_when_editor_fails, variables={'EDITOR': failing_script, 'TMPDIR': s
 run([], editor_cannot_start, variables={'VISUAL': '/nonexistent/scramjet-editor', 'TMPDIR': scratch})
 run([], no_editor_configured)
 assert os.listdir(scratch) == [], os.listdir(scratch)
+with open(os.path.join(project, 'a.txt'), 'w') as file:
+    file.write('one\n')
+run([], edit_turn, editing)
+run(['--continue'], edit_turn_resumed)
 print('agent editor journeys passed')
