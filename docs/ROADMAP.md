@@ -72,7 +72,7 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 **Demonstration:** a project tab runs the headless runtime through the retained TUI, including parallel subagents and representative command-driven work.
 
 - Integrate through bounded typed projections, not direct transcript mutation or a token-to-repaint dependency.
-- Provide essential editing, live browsing, expansion, agent summaries/detail, selection, model/effort choice, and structured interaction.
+- Provide essential editing, live browsing, expansion, agent summaries/detail, selection, model/effort choice, and structured interaction. Keep the presentation easy to restyle ([design](DESIGN.md#native-interaction)).
 - Add representative command/agent/skill discovery, composition, explicit completion, continuation/autonomy, and approval. Preserve user outcomes, not every Pi parser or legacy mode.
 - Add useful session resume/compaction and selected history navigation; decide legacy import only from a real need.
 - Repeat native copy/paste, focus, resize, hidden-control approval, external-editor, suspend/resume, and exit journeys against the integrated application. Include failure/negative controls that catch no-op Copy and intercepted-but-not-inserted Paste.
