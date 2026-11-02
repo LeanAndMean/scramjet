@@ -4,7 +4,17 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
+    time::SystemTime,
 };
+
+/// A saved session as `/resume` lists it.
+pub struct SessionInfo {
+    pub path: PathBuf,
+    pub first_prompt: Option<String>,
+    /// Conversation items after the latest compaction, as a resume restores them.
+    pub item_count: usize,
+    pub modified: SystemTime,
+}
 
 /// An append-only JSON-lines log: a header, then each input item, each model change and each
 /// compaction, which replaces the items before `first_kept` with its summary and lists the files
@@ -40,6 +50,71 @@ fn invalid(path: &Path, reason: &str) -> io::Error {
     )
 }
 
+/// What a session file holds once read.
+struct Loaded {
+    items: Vec<Value>,
+    prompts: Vec<String>,
+    model: Option<String>,
+    files: FileLists,
+}
+
+fn load(path: &Path) -> io::Result<Loaded> {
+    let reader = BufReader::new(File::open(path)?);
+    let mut items = Vec::new();
+    let mut prompts = Vec::new();
+    let mut model = None;
+    let mut files = FileLists::default();
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value =
+            serde_json::from_str(&line).map_err(|_| invalid(path, "malformed line"))?;
+        if index == 0 {
+            if value["type"] != "session" {
+                return Err(invalid(path, "not a scramjet-rs session"));
+            }
+        } else if value["type"] == "compaction" {
+            let cut = value["first_kept"]
+                .as_u64()
+                .and_then(|cut| usize::try_from(cut).ok())
+                .filter(|&cut| cut <= items.len())
+                .ok_or_else(|| invalid(path, "invalid compaction cut point"))?;
+            let summary = value["summary"]
+                .as_str()
+                .ok_or_else(|| invalid(path, "missing compaction summary"))?;
+            items.drain(..cut);
+            items.insert(0, super::compaction::summary_message(summary));
+            files = compacted_files(&value);
+        } else if value["type"] == "model_change" {
+            let changed = value["model"]
+                .as_str()
+                .ok_or_else(|| invalid(path, "missing model in a model change"))?;
+            model = Some(changed.to_owned());
+        } else {
+            if let Some(producer) = value[super::PRODUCER].as_str() {
+                model = Some(producer.to_owned());
+            }
+            if value["role"] == "user"
+                && let Some(prompt) = value[super::TYPED].as_str().or(value["content"].as_str())
+            {
+                prompts.push(prompt.to_owned());
+            }
+            items.push(value);
+        }
+    }
+    if items.is_empty() && std::fs::metadata(path)?.len() == 0 {
+        return Err(invalid(path, "empty session file"));
+    }
+    Ok(Loaded {
+        items,
+        prompts,
+        model,
+        files,
+    })
+}
+
 /// `$XDG_STATE_HOME/scramjet-rs/sessions/<project path with / as ->`.
 pub fn directory(root: &Path) -> io::Result<PathBuf> {
     let state = std::env::var_os("XDG_STATE_HOME")
@@ -52,6 +127,37 @@ pub fn directory(root: &Path) -> io::Result<PathBuf> {
 }
 
 impl Session {
+    /// The sessions saved in `directory`, newest first. Unreadable and invalid files are skipped.
+    pub fn list(directory: &Path) -> io::Result<Vec<SessionInfo>> {
+        let entries = match std::fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut sessions = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(loaded) = load(&path) else {
+                continue;
+            };
+            let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+                continue;
+            };
+            sessions.push(SessionInfo {
+                path,
+                first_prompt: loaded.prompts.into_iter().next(),
+                item_count: loaded.items.len(),
+                modified,
+            });
+        }
+        sessions.sort_by(|a, b| {
+            b.modified
+                .cmp(&a.modified)
+                .then_with(|| b.path.cmp(&a.path))
+        });
+        Ok(sessions)
+    }
+
     /// Starts a session for the project `root` in `directory`.
     pub fn create(directory: &Path, root: &Path) -> io::Result<Self> {
         std::fs::create_dir_all(directory)?;
@@ -75,17 +181,17 @@ impl Session {
         Ok(session)
     }
 
-    /// The most recently created session for `root`, if any.
-    pub fn latest(root: &Path) -> io::Result<Option<PathBuf>> {
-        let directory = directory(root)?;
-        let entries = match std::fs::read_dir(&directory) {
+    /// The session in `directory` written to last, as Scramjet's `--continue` picks it, if any.
+    pub fn latest(directory: &Path) -> io::Result<Option<PathBuf>> {
+        let entries = match std::fs::read_dir(directory) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
         };
-        let mut latest: Option<(u128, PathBuf)> = None;
+        let mut latest: Option<((SystemTime, u128), PathBuf)> = None;
         for entry in entries {
-            let path = entry?.path();
+            let entry = entry?;
+            let path = entry.path();
             let Some(created) = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -95,8 +201,9 @@ impl Session {
             else {
                 continue;
             };
-            if latest.as_ref().is_none_or(|(best, _)| created > *best) {
-                latest = Some((created, path));
+            let key = (entry.metadata()?.modified()?, created);
+            if latest.as_ref().is_none_or(|(best, _)| key > *best) {
+                latest = Some((key, path));
             }
         }
         Ok(latest.map(|(_, path)| path))
@@ -105,65 +212,27 @@ impl Session {
     /// Opens an existing session for appending and returns its conversation items and every
     /// prompt the user gave in it, including those a compaction summarized.
     pub fn open(path: &Path) -> io::Result<(Self, Vec<Value>, Vec<String>)> {
-        let reader = BufReader::new(File::open(path)?);
-        let mut items = Vec::new();
-        let mut prompts = Vec::new();
-        let mut model = None;
-        let mut files = FileLists::default();
-        for (index, line) in reader.lines().enumerate() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let value: Value =
-                serde_json::from_str(&line).map_err(|_| invalid(path, "malformed line"))?;
-            if index == 0 {
-                if value["type"] != "session" {
-                    return Err(invalid(path, "not a scramjet-rs session"));
-                }
-            } else if value["type"] == "compaction" {
-                let cut = value["first_kept"]
-                    .as_u64()
-                    .and_then(|cut| usize::try_from(cut).ok())
-                    .filter(|&cut| cut <= items.len())
-                    .ok_or_else(|| invalid(path, "invalid compaction cut point"))?;
-                let summary = value["summary"]
-                    .as_str()
-                    .ok_or_else(|| invalid(path, "missing compaction summary"))?;
-                items.drain(..cut);
-                items.insert(0, super::compaction::summary_message(summary));
-                files = compacted_files(&value);
-            } else if value["type"] == "model_change" {
-                let changed = value["model"]
-                    .as_str()
-                    .ok_or_else(|| invalid(path, "missing model in a model change"))?;
-                model = Some(changed.to_owned());
-            } else {
-                if let Some(producer) = value[super::PRODUCER].as_str() {
-                    model = Some(producer.to_owned());
-                }
-                if value["role"] == "user"
-                    && let Some(prompt) = value[super::TYPED].as_str().or(value["content"].as_str())
-                {
-                    prompts.push(prompt.to_owned());
-                }
-                items.push(value);
-            }
-        }
-        if items.is_empty() && std::fs::metadata(path)?.len() == 0 {
-            return Err(invalid(path, "empty session file"));
-        }
+        let loaded = load(path)?;
         let file = OpenOptions::new().append(true).open(path)?;
         Ok((
             Self {
                 path: path.to_owned(),
                 file,
-                model,
-                files,
+                model: loaded.model,
+                files: loaded.files,
             },
-            items,
-            prompts,
+            loaded.items,
+            loaded.prompts,
         ))
+    }
+
+    /// Whether `path` is this session's file, however it is named.
+    pub fn is_file(&self, path: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        match (self.file.metadata(), std::fs::metadata(path)) {
+            (Ok(own), Ok(other)) => own.dev() == other.dev() && own.ino() == other.ino(),
+            _ => false,
+        }
     }
 
     pub fn path(&self) -> &Path {

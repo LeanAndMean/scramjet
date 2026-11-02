@@ -9,7 +9,7 @@ use rustix::{
 };
 use scramjet_rs::agent::{
     Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Compaction, SessionChoice,
-    StreamProgress, ToolDetail,
+    SessionInfo, StreamProgress, ToolDetail,
 };
 use std::{
     ffi::OsString,
@@ -35,7 +35,7 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   --model ID             model (default: gpt-6-luna, or the one a resumed session last used)
   --effort LEVEL         reasoning effort, e.g. low, medium, high
   --retries N            resend a request that failed transiently up to N times (default 3)
-  --continue             resume the most recent session for this project
+  --continue             resume the session for this project written to last
   --session FILE         resume a specific session file
   --ask                  ask before each bash command and each write or edit outside the
                          project (answer `a` to stop asking until exit); by default tool
@@ -47,7 +47,9 @@ a new line; pasted text is inserted without sending. Up/Down recall earlier prom
 to the conversation for the next prompt; `!!command` runs it without adding it. Ctrl-C cancels it.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
 Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
-next one on; it works while a turn runs too. /new starts a new session. /model lists the models and /model ID switches to one.
+next one on; it works while a turn runs too. /new starts a new session; /resume lists this
+project's sessions and /resume N switches to one. /model lists the models and /model ID
+switches to one.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
 While a turn runs, typed text is kept for the next prompt without being shown; Ctrl-C cancels
@@ -221,6 +223,65 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     agent.session_path().display()
                 ),
                 Err(error) => eprintln!("error: {error}"),
+            }
+            continue;
+        }
+        if let Some(wanted) = prompt
+            .strip_prefix("/resume")
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let wanted = wanted.trim();
+            match agent.sessions() {
+                Err(error) => eprintln!("error: {error}"),
+                Ok(sessions) if wanted.is_empty() => {
+                    let width = editor::terminal_size().0;
+                    for (index, session) in sessions.iter().take(20).enumerate() {
+                        let number = format!(
+                            "{}{}",
+                            index + 1,
+                            if agent.is_session(&session.path) {
+                                "*"
+                            } else {
+                                " "
+                            }
+                        );
+                        let line = session_line(session, width.saturating_sub(number.len() + 1));
+                        eprintln!("{number} {line}");
+                    }
+                    if sessions.len() > 20 {
+                        eprintln!("({} older sessions not shown)", sessions.len() - 20);
+                    }
+                }
+                Ok(sessions) => match wanted.parse::<usize>() {
+                    Err(_) | Ok(0) => {
+                        eprintln!("error: /resume requires a positive session number")
+                    }
+                    Ok(number) => match sessions.get(number - 1) {
+                        None => {
+                            eprintln!("error: no session numbered {number} (/resume lists them)")
+                        }
+                        Some(session) if agent.is_session(&session.path) => {
+                            eprintln!("error: session {number} is the current one")
+                        }
+                        Some(session) => match agent.resume_session(&session.path) {
+                            Ok(()) => {
+                                window = agent.load_model_card();
+                                if let Some(editor) = &mut editor {
+                                    for prompt in agent.prompts() {
+                                        editor.remember(prompt);
+                                    }
+                                }
+                                eprintln!(
+                                    "✓ Resumed session · {}\nsession {} ({} items resumed)",
+                                    agent.model(),
+                                    agent.session_path().display(),
+                                    agent.conversation().len()
+                                );
+                            }
+                            Err(error) => eprintln!("error: {error}"),
+                        },
+                    },
+                },
             }
             continue;
         }
@@ -1232,6 +1293,42 @@ fn visible(text: &str) -> String {
         .collect()
 }
 
+/// A `/resume` line: the first prompt, cut to `width` with its item count and age kept.
+fn session_line(session: &SessionInfo, width: usize) -> String {
+    let age = std::time::SystemTime::now()
+        .duration_since(session.modified)
+        .unwrap_or_default();
+    let items = match session.item_count {
+        1 => "1 item".to_owned(),
+        count => format!("{count} items"),
+    };
+    let suffix = format!(" ({items}, {})", age_label(age));
+    let prompt: String = session
+        .first_prompt
+        .as_deref()
+        .unwrap_or("(no messages)")
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let prompt = clip(prompt.trim(), width.saturating_sub(suffix.width()).max(2));
+    format!("{prompt}{suffix}")
+}
+
+/// Scramjet's session age: `now`, `5m`, `3h`, `2d`, `1w`, `4mo`, `1y`.
+fn age_label(age: Duration) -> String {
+    let minutes = age.as_secs() / 60;
+    let days = minutes / 1440;
+    match minutes {
+        0 => "now".into(),
+        1..60 => format!("{minutes}m"),
+        60..1440 => format!("{}h", minutes / 60),
+        _ if days < 7 => format!("{days}d"),
+        _ if days < 30 => format!("{}w", days / 7),
+        _ if days < 365 => format!("{}mo", days / 30),
+        _ => format!("{}y", days / 365),
+    }
+}
+
 fn clip(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_owned();
@@ -1253,6 +1350,39 @@ fn clip(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resume_lines_cut_the_prompt_and_keep_its_count_and_age() {
+        let ages = [
+            0, 59, 60, 3599, 3600, 86399, 86400, 604800, 2592000, 31536000,
+        ];
+        let labels: Vec<_> = ages
+            .map(|secs| age_label(Duration::from_secs(secs)))
+            .to_vec();
+        assert_eq!(
+            labels,
+            [
+                "now", "now", "1m", "59m", "1h", "23h", "1d", "1w", "1mo", "1y"
+            ]
+        );
+        let session = SessionInfo {
+            path: PathBuf::new(),
+            first_prompt: Some("Fix\tthe parser\nthen run the tests".into()),
+            item_count: 12,
+            modified: std::time::SystemTime::now() - Duration::from_secs(7200),
+        };
+        assert_eq!(session_line(&session, 30), "Fix the parser… (12 items, 2h)");
+        assert_eq!(
+            session_line(&session, 80),
+            "Fix the parser then run the tests (12 items, 2h)"
+        );
+        let empty = SessionInfo {
+            first_prompt: None,
+            item_count: 1,
+            ..session
+        };
+        assert_eq!(session_line(&empty, 80), "(no messages) (1 item, 2h)");
+    }
 
     #[test]
     fn previews_keep_the_end_of_bash_output_and_are_safe_to_print() {

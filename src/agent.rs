@@ -8,7 +8,7 @@ mod session;
 mod tools;
 
 pub use client::StreamProgress;
-pub use session::Session;
+pub use session::{Session, SessionInfo};
 pub use tools::sequence_diff;
 
 use client::{ClientError, ModelInfo, Protocol};
@@ -182,7 +182,7 @@ impl Agent {
     pub fn start(config: AgentConfig, choice: SessionChoice) -> Result<Self, AgentError> {
         let opened = match choice {
             SessionChoice::New => None,
-            SessionChoice::Continue => Session::latest(&config.root)?,
+            SessionChoice::Continue => Session::latest(&session::directory(&config.root)?)?,
             SessionChoice::Open(path) => Some(path),
         };
         let (session, conversation, prompts) = match opened {
@@ -208,6 +208,44 @@ impl Agent {
         };
         agent.answer_interrupted_calls()?;
         Ok(agent)
+    }
+
+    /// The sessions saved next to the current one that have a conversation, and the current one,
+    /// newest first. Scramjet writes no session file before the first reply, so it lists no
+    /// empty ones.
+    pub fn sessions(&self) -> Result<Vec<SessionInfo>, AgentError> {
+        let directory = self.session.path().parent().unwrap_or(Path::new("."));
+        let mut sessions = Session::list(directory)?;
+        sessions.retain(|session| session.item_count > 0 || self.session.is_file(&session.path));
+        Ok(sessions)
+    }
+
+    /// Whether `path` is the current session's file.
+    pub fn is_session(&self, path: &Path) -> bool {
+        self.session.is_file(path)
+    }
+
+    /// Continues in the saved session `path` with the model it last used, as starting with
+    /// `--session` does; on a failure to open it nothing changes. Approvals given with `a` still
+    /// apply.
+    pub fn resume_session(&mut self, path: &Path) -> Result<(), AgentError> {
+        if self.session.is_file(path) {
+            return Err(AgentError::Session(std::io::Error::other(
+                "that is the current session",
+            )));
+        }
+        let (session, conversation, prompts) = Session::open(path)?;
+        let model = session.model().map(str::to_owned);
+        self.session = session;
+        self.conversation = conversation;
+        self.prompts = prompts;
+        self.usage = Usage::default();
+        if let Some(model) = model {
+            self.info = ModelInfo::guess(&model);
+            self.config.model = model;
+        }
+        self.answer_interrupted_calls()?;
+        Ok(())
     }
 
     /// Continues in an empty session saved next to the current one; on failure nothing changes.
@@ -1722,6 +1760,124 @@ response is incomplete; retry the request."});
         assert_eq!(
             agent.conversation()[0]["content"],
             "Ran `sleep 30`\n(no output)\n\n(command cancelled)"
+        );
+    }
+
+    fn write_session(path: &Path, lines: &[Value], modified: std::time::SystemTime) {
+        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        std::fs::write(path, text).unwrap();
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(modified).unwrap();
+    }
+
+    #[test]
+    fn sessions_are_listed_and_continued_by_their_last_write() {
+        let directory = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-agent-list-{}", std::process::id())),
+        );
+        let now = std::time::SystemTime::now();
+        let header = json!({"type":"session","version":1});
+        let written_last = directory.0.join("1000-1.jsonl");
+        write_session(
+            &written_last,
+            &[
+                header.clone(),
+                json!({"role":"user","content":"first prompt"}),
+                json!({"type":"message","role":"assistant","content":[]}),
+                json!({"type":"compaction","first_kept":1,"summary":"s"}),
+                json!({"role":"user","content":"later"}),
+            ],
+            now,
+        );
+        let created_last = directory.0.join("2000-1.jsonl");
+        write_session(
+            &created_last,
+            &[header, json!({"role":"user","content":"second\nsession"})],
+            now - Duration::from_secs(3600),
+        );
+        std::fs::write(directory.0.join("1500-1.jsonl"), "not a session\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(directory.0.join("1500-1.jsonl"))
+            .unwrap()
+            .set_modified(now - Duration::from_secs(7200))
+            .unwrap();
+
+        let sessions = Session::list(&directory.0).unwrap();
+        let listed: Vec<_> = sessions
+            .iter()
+            .map(|s| (&s.path, s.first_prompt.as_deref(), s.item_count))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (&written_last, Some("first prompt"), 3),
+                (&created_last, Some("second\nsession"), 1)
+            ]
+        );
+        assert_eq!(Session::latest(&directory.0).unwrap(), Some(written_last));
+    }
+
+    #[test]
+    fn resume_lists_sessions_with_a_conversation_and_switches_to_one() {
+        let (endpoint, _server) = serve(vec![]);
+        let (mut agent, scratch) = agent(endpoint, "resume-session");
+        agent.usage.requests = 7;
+        let current = agent.session_path().to_owned();
+        let later = std::time::SystemTime::now() + Duration::from_secs(60);
+        let header = json!({"type":"session","version":1});
+        write_session(
+            &scratch.0.join("empty.jsonl"),
+            &[
+                header.clone(),
+                json!({"type":"model_change","model":"other"}),
+            ],
+            later,
+        );
+        let path = scratch.0.join("resumed.jsonl");
+        write_session(
+            &path,
+            &[
+                header,
+                json!({"type":"model_change","model":"restored"}),
+                json!({"role":"user","content":"Ran `ls`","_scramjet_typed":"!ls"}),
+                json!({"type":"function_call","call_id":"unfinished","name":"bash","arguments":"{}"}),
+            ],
+            later,
+        );
+        let listed: Vec<_> = agent
+            .sessions()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.path)
+            .collect();
+        assert_eq!(listed, [path.clone(), current.clone()]);
+
+        assert!(agent.is_session(&scratch.0.join(".").join("session.jsonl")));
+        assert!(
+            agent
+                .resume_session(&scratch.0.join(".").join("session.jsonl"))
+                .is_err()
+        );
+        assert!(
+            agent
+                .resume_session(&scratch.0.join("missing.jsonl"))
+                .is_err()
+        );
+        assert_eq!(agent.session_path(), current);
+        assert_eq!(agent.usage.requests, 7);
+
+        agent.resume_session(&path).unwrap();
+        assert_eq!(agent.session_path(), path);
+        assert_eq!(agent.model(), "restored");
+        assert_eq!(agent.prompts(), ["!ls"]);
+        assert_eq!(agent.usage.requests, 0);
+        assert_eq!(agent.conversation().len(), 3);
+        assert_eq!(agent.conversation()[2]["type"], "function_call_output");
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("\"call_id\":\"unfinished\",\"output\"")
         );
     }
 
