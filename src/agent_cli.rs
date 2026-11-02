@@ -1057,11 +1057,7 @@ impl AgentUi for Terminal {
     }
     fn tool_call(&mut self, name: &str, summary: &str) {
         self.clear();
-        let mut lines = summary.lines();
-        let first = lines.next().unwrap_or("");
-        let more = if lines.next().is_some() { " …" } else { "" };
-        let line = format!("● {name} {}{more}", visible(first));
-        eprintln!("{}", self.dim(&self.wrapped(&line)));
+        eprintln!("{}", self.dim(&self.wrapped(&call_line(name, summary))));
     }
     fn tool_running(&mut self) {
         self.tool_started = Some(Instant::now());
@@ -1277,6 +1273,12 @@ fn printable(line: &str) -> String {
     text
 }
 
+/// As Scramjet shows a call, with every line of a command; later lines go under the first.
+fn call_line(name: &str, summary: &str) -> String {
+    let summary = visible(summary.trim_end_matches('\n'));
+    format!("● {name} {}", summary.replace('\n', "\n  "))
+}
+
 /// Shows control and invisible formatting characters (other than newlines and tabs) as escapes,
 /// so that a command cannot make its approval question display something else.
 fn visible(text: &str) -> String {
@@ -1477,6 +1479,15 @@ mod tests {
         assert_eq!(
             wrapped(20, &["● bash cargo fmt --check && cargo clippy"]),
             "● bash cargo fmt\n  --check && cargo\n  clippy"
+        );
+        let script = call_line("bash", "python3 - <<'EOF'\nif x:\n    y()\r\nEOF\n");
+        assert_eq!(
+            script,
+            "● bash python3 - <<'EOF'\n  if x:\n      y()\\r\n  EOF"
+        );
+        assert_eq!(
+            wrapped(16, &[&script]),
+            "● bash python3 -\n  <<'EOF'\n  if x:\n      y()\\r\n  EOF"
         );
         assert_eq!(wrapped(0, &["no  wrap \n"]), "no  wrap \n");
         assert_eq!(

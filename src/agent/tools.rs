@@ -103,14 +103,8 @@ impl<'a> Call<'a> {
     }
     pub fn approval(&self, root: &Path) -> Approval {
         match self.name {
-            "bash" => {
-                let command = self.arguments["command"].as_str().unwrap_or("");
-                // The call line above the question shows the first line of the command.
-                Approval::Ask(match command.lines().nth(1) {
-                    None => format!("Run in {}", root.display()),
-                    Some(_) => format!("Run in {}:\n{command}", root.display()),
-                })
-            }
+            // The call line above the question shows the whole command.
+            "bash" => Approval::Ask(format!("Run in {}", root.display())),
             "write" | "edit" => {
                 let path = self.arguments["path"].as_str().unwrap_or("");
                 if resolve(root, path).starts_with(root) {
@@ -784,7 +778,7 @@ disjoint regions."
             };
         assert_eq!(question("make -j4\n"), "Run in ROOT");
         assert_eq!(question("git status"), "Run in ROOT");
-        assert_eq!(question("cd x\nmake"), "Run in ROOT:\ncd x\nmake");
+        assert_eq!(question("cd x\nmake"), "Run in ROOT");
         assert!(
             call("write", json!({"path":"a/b.txt","content":"hi"}))
                 .approval(&root)
