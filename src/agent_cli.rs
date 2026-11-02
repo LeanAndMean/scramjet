@@ -59,7 +59,8 @@ in a new session from before it, with it in the prompt for editing. /tree shows 
 branches and continues from the entry chosen, in the same session: from before a prompt, which
 is put in the prompt for editing, or from after a reply or tool result. When that leaves part of
 the conversation, it asks whether the model should summarize that branch, also with your own
-instructions, for the conversation to continue with. /model chooses a model.
+instructions, for the conversation to continue with. Escape twice on an empty prompt opens
+/tree too. /model chooses a model.
 Their lists take Up/Down, Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; with
 piped input they are printed numbered instead, for /resume N, /fork N, /tree N and /model ID.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
@@ -204,13 +205,19 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let mut editor = (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
         .then(|| editor::Editor::new(agent.prompts().to_vec(), hide_thinking.clone()));
     loop {
+        // A double Escape erased the prompt for the tree, which then takes its place.
+        let mut escaped = false;
         let prompt = match &mut editor {
             Some(editor) => {
                 if !std::mem::take(&mut spaced) {
                     eprintln!();
                 }
                 match editor.read().map_err(|e| e.to_string())? {
-                    Some(prompt) => prompt,
+                    Some(editor::Input::Prompt(prompt)) => prompt,
+                    Some(editor::Input::Tree) => {
+                        escaped = true;
+                        "/tree".to_owned()
+                    }
                     None => return Ok(()),
                 }
             }
@@ -442,6 +449,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     },
                 };
                 let Some(index) = chosen else {
+                    // Nothing is left where the erased prompt was, so it is drawn there again.
+                    spaced = escaped && !rows.is_empty();
                     break;
                 };
                 let line = session_tree.entries[rows[index].0].line;
@@ -485,6 +494,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     }
                     Err(AgentError::Cancelled) => {
                         eprintln!("Branch summarization cancelled");
+                        escaped = false;
                         (wanted, reopen) = ("", Some(index));
                         continue;
                     }
@@ -635,7 +645,7 @@ fn ask_branch_summary(hide_thinking: &Arc<AtomicBool>) -> std::io::Result<Option
                 let focus = editor::Editor::dialog(hide_thinking.clone()).read()?;
                 // The title's row, above the erased editor.
                 eprint!("\x1b[1A\r\x1b[J");
-                if let Some(focus) = focus {
+                if let Some(editor::Input::Prompt(focus)) = focus {
                     return Ok(Some(Some(focus)));
                 }
             }

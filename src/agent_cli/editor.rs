@@ -16,7 +16,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -25,6 +25,8 @@ use unicode_width::UnicodeWidthStr;
 pub(super) const ESCAPE_WAIT: Duration = Duration::from_millis(30);
 /// How often an idle editor checks for a terminal resize.
 pub(super) const RESIZE_CHECK: Duration = Duration::from_millis(250);
+/// The longest time between the two Escapes that open `/tree`, as in Scramjet.
+const DOUBLE_ESCAPE: Duration = Duration::from_millis(500);
 const TAB: &str = "    ";
 const INDENT: usize = 2;
 
@@ -593,6 +595,14 @@ impl Screen {
     }
 }
 
+/// What the editor read.
+#[derive(Debug, PartialEq)]
+pub enum Input {
+    Prompt(String),
+    /// Escape twice on an empty prompt, which opens `/tree` as in Scramjet. The prompt is erased.
+    Tree,
+}
+
 pub struct Editor {
     history: Vec<String>,
     hide_thinking: Arc<AtomicBool>,
@@ -641,8 +651,8 @@ impl Editor {
         }
     }
 
-    /// Reads one prompt. `None` means the user asked to exit.
-    pub fn read(&mut self) -> io::Result<Option<String>> {
+    /// Reads one prompt. `None` means the user asked to exit, or cancelled a dialog.
+    pub fn read(&mut self) -> io::Result<Option<Input>> {
         let raw = RawMode::enter()?;
         let mut source = Stdin {
             buffer: std::mem::take(&mut self.typed),
@@ -654,6 +664,7 @@ impl Editor {
         let mut browsing = self.history.len();
         let mut draft = String::new();
         let mut exit_armed = false;
+        let mut last_escape: Option<Instant> = None;
         let mut note: Option<String> = None;
         let mut dirty = false;
         screen.draw(&buffer, None, false)?;
@@ -696,6 +707,17 @@ impl Editor {
                     screen.erase()?;
                     return Ok(None);
                 }
+                Key::Escape if buffer.text.trim().is_empty() => {
+                    if last_escape.is_some_and(|at| at.elapsed() < DOUBLE_ESCAPE) {
+                        screen.erase()?;
+                        self.text = buffer.text;
+                        return Ok(Some(Input::Tree));
+                    }
+                    last_escape = Some(Instant::now());
+                    exit_armed = armed;
+                    note = noted;
+                    false
+                }
                 Key::Ignored | Key::Escape | Key::PageUp | Key::PageDown => {
                     exit_armed = armed;
                     note = noted;
@@ -732,13 +754,13 @@ impl Editor {
                 Key::Enter if buffer.text.trim().is_empty() => true,
                 Key::Enter if self.dialog && !buffer.text.trim().is_empty() => {
                     screen.erase()?;
-                    return Ok(Some(buffer.text.trim().to_owned()));
+                    return Ok(Some(Input::Prompt(buffer.text.trim().to_owned())));
                 }
                 Key::Enter => {
                     // As in Scramjet, the prompt is sent trimmed, and shown as sent.
                     buffer.set(buffer.text.trim().to_owned());
                     screen.draw(&buffer, None, true)?;
-                    return Ok(Some(buffer.text));
+                    return Ok(Some(Input::Prompt(buffer.text)));
                 }
                 Key::Interrupt if buffer.text.is_empty() => {
                     if armed {
