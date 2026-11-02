@@ -1,5 +1,6 @@
 mod diff;
 mod editor;
+mod fuzzy;
 mod job;
 mod markdown;
 mod select;
@@ -63,8 +64,10 @@ is put in the prompt for editing, or from after a reply or tool result. When tha
 the conversation, it asks whether the model should summarize that branch, also with your own
 instructions, for the conversation to continue with. Escape twice on an empty prompt opens
 /tree too. /model chooses a model.
-Their lists take Up/Down, Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; with
-piped input they are printed numbered instead, for /resume N, /fork N, /tree N and /model ID.
+Their lists take Up/Down, Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; typed
+text filters the /resume and /model lists, best match first (a \"quoted phrase\" matches as
+written). With piped input they are printed numbered instead, for /resume N, /fork N, /tree N
+and /model ID.
 /name NAME names the session, which /resume then lists by its name; /name alone shows it.
 /session shows the session's file, the messages in its context and the tokens they used.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
@@ -303,12 +306,14 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 "" if editor.is_some() => {
                     // Newest first, so the first other than the current one is the likely choice.
                     let initial = usize::from(current == Some(0));
-                    select::select(
+                    let texts: Vec<_> = sessions.iter().map(search_text).collect();
+                    select::search(
                         "Resume session",
                         select::VISIBLE,
-                        sessions.len(),
+                        &texts,
                         initial,
                         current,
+                        "No matching sessions",
                         |index, width| session_line(&sessions[index], width),
                     )
                     .map_err(|e| e.to_string())?
@@ -556,12 +561,13 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     eprintln!("The endpoint lists no models");
                     None
                 }
-                "" if editor.is_some() => select::select(
+                "" if editor.is_some() => select::search(
                     "Select model",
                     select::VISIBLE,
-                    models.len(),
+                    &models,
                     current.unwrap_or(0),
                     current,
+                    "No matching models",
                     |index, width| clip(&visible(&models[index]), width),
                 )
                 .map_err(|e| e.to_string())?
@@ -1794,6 +1800,17 @@ fn session_line(session: &SessionInfo, width: usize) -> String {
     format!("{prompt}{suffix}")
 }
 
+/// What `/resume` searches in a session, as Scramjet does: its id, name, prompts and replies.
+fn search_text(session: &SessionInfo) -> String {
+    let id = session
+        .path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let name = session.name.as_deref().unwrap_or_default();
+    format!("{id} {name} {}", session.text)
+}
+
 /// A prompt on one line for a list: line breaks and other control characters as spaces.
 fn one_line(prompt: &str) -> String {
     let line: String = prompt
@@ -1857,6 +1874,7 @@ mod tests {
         let session = SessionInfo {
             path: PathBuf::new(),
             first_prompt: Some("Fix\tthe parser\nthen run the tests".into()),
+            text: String::new(),
             name: None,
             item_count: 12,
             modified: std::time::SystemTime::now() - Duration::from_secs(7200),
@@ -1869,6 +1887,7 @@ mod tests {
         let named = SessionInfo {
             path: PathBuf::new(),
             first_prompt: session.first_prompt.clone(),
+            text: String::new(),
             name: Some("Parser\nwork".into()),
             item_count: 12,
             modified: session.modified,

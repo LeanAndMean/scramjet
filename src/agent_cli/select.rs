@@ -1,10 +1,11 @@
 //! A list to choose from with the arrow keys, drawn under the prompt, as Scramjet's selectors
-//! for `/resume`, `/fork` and `/model` are.
+//! for `/resume`, `/fork` and `/model` are; those for `/resume` and `/model` search as you type.
 
 use super::editor::{Key, RESIZE_CHECK, RawMode, Stdin, read_key, terminal_size};
+use super::fuzzy::{self, Haystack};
 use super::style;
 use std::io::{self, Write};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Rows shown at once, as in Scramjet's selectors other than its tree.
 pub(super) const VISIBLE: usize = 10;
@@ -22,16 +23,40 @@ pub(super) fn select(
     current: Option<usize>,
     row: impl Fn(usize, usize) -> String,
 ) -> io::Result<Option<usize>> {
-    if count == 0 {
+    choose(title, List::new(count, initial, visible), current, row)
+}
+
+/// As `select`, with a line to type a query on, as Scramjet's session and model selectors have:
+/// the query shows only the rows whose `texts` match it, best first (see `fuzzy`), and `none`
+/// when no row does.
+pub(super) fn search(
+    title: &str,
+    visible: usize,
+    texts: &[String],
+    initial: usize,
+    current: Option<usize>,
+    none: &str,
+    row: impl Fn(usize, usize) -> String,
+) -> io::Result<Option<usize>> {
+    choose(
+        title,
+        List::searching(texts, initial, visible, none),
+        current,
+        row,
+    )
+}
+
+fn choose(
+    title: &str,
+    mut list: List,
+    current: Option<usize>,
+    row: impl Fn(usize, usize) -> String,
+) -> io::Result<Option<usize>> {
+    if list.rows.is_empty() {
         return Ok(None);
     }
     let raw = RawMode::enter()?;
     let _cursor = HiddenCursor::new();
-    let mut list = List {
-        count,
-        selected: initial.min(count - 1),
-        visible,
-    };
     let mut source = Stdin::default();
     let mut drawn = 0;
     let mut width = 0;
@@ -100,16 +125,68 @@ impl Drop for HiddenCursor {
 }
 
 struct List {
-    count: usize,
+    /// The rows shown, in order: all of them, or those that match the query.
+    rows: Vec<usize>,
+    /// The selected row's position in `rows`.
     selected: usize,
     /// Rows shown at once, and moved by a page.
     visible: usize,
+    search: Option<Search>,
+}
+
+struct Search {
+    query: String,
+    texts: Vec<Haystack>,
+    /// Shown when no row matches.
+    none: String,
+    /// The selection without a query.
+    initial: usize,
 }
 
 impl List {
-    /// Moves the selection, or returns what was chosen: `Some(None)` when cancelled.
+    fn new(count: usize, initial: usize, visible: usize) -> Self {
+        Self {
+            rows: (0..count).collect(),
+            selected: initial.min(count.saturating_sub(1)),
+            visible,
+            search: None,
+        }
+    }
+
+    fn searching(texts: &[String], initial: usize, visible: usize, none: &str) -> Self {
+        let mut list = Self::new(texts.len(), initial, visible);
+        list.search = Some(Search {
+            query: String::new(),
+            texts: texts.iter().map(|text| Haystack::new(text)).collect(),
+            none: none.into(),
+            initial: list.selected,
+        });
+        list
+    }
+
+    /// Moves the selection or edits the query, or returns what was chosen: `Some(None)` when
+    /// cancelled.
     fn key(&mut self, key: &Key) -> Option<Option<usize>> {
-        let last = self.count - 1;
+        if let Some(search) = &mut self.search {
+            let edited = match key {
+                Key::Text(text) | Key::Paste(text) => {
+                    let text = text
+                        .chars()
+                        .map(|ch| if ch.is_whitespace() { ' ' } else { ch });
+                    search.query.extend(text.filter(|ch| !ch.is_control()));
+                    true
+                }
+                Key::Backspace => search.query.pop().is_some(),
+                _ => false,
+            };
+            if edited {
+                self.filter();
+                return None;
+            }
+        }
+        let Some(last) = self.rows.len().checked_sub(1) else {
+            return matches!(key, Key::Escape | Key::Interrupt).then_some(None);
+        };
         let page = self.visible;
         self.selected = match key {
             Key::Up if self.selected == 0 => last,
@@ -120,16 +197,32 @@ impl List {
             Key::PageDown => (self.selected + page).min(last),
             Key::LineStart => 0,
             Key::LineEnd => last,
-            Key::Enter => return Some(Some(self.selected)),
+            Key::Enter => return Some(Some(self.rows[self.selected])),
             Key::Escape | Key::Interrupt => return Some(None),
             _ => self.selected,
         };
         None
     }
+
+    /// Shows the rows that match the query, the best one selected, or all rows without one.
+    fn filter(&mut self) {
+        let Some(search) = &self.search else {
+            return;
+        };
+        let tokens = fuzzy::parse(&search.query);
+        if tokens.is_empty() {
+            self.rows = (0..search.texts.len()).collect();
+            self.selected = search.initial;
+        } else {
+            self.rows = fuzzy::filter(&tokens, &search.texts);
+            self.selected = 0;
+        }
+    }
 }
 
-/// The selector's lines for a terminal of `(width, height)`: the title, the rows around the
-/// selected one and, when some are not shown, the selected row's position.
+/// The selector's lines for a terminal of `(width, height)`: the title, the query being typed
+/// (with no row matching it, `none`), the rows around the selected one and, when some are not
+/// shown, the selected row's position.
 fn lines(
     title: &str,
     list: &List,
@@ -137,24 +230,35 @@ fn lines(
     (width, height): (usize, usize),
     row: &dyn Fn(usize, usize) -> String,
 ) -> Vec<String> {
-    use style::{CURRENT, MUTED, RESET, SELECTED, SELECTOR_MARK, SELECTOR_TITLE};
+    use style::{CURRENT, MUTED, RESET, SEARCH_CURSOR, SELECTED, SELECTOR_MARK, SELECTOR_TITLE};
     // The last column stays empty, so that a full row does not move the cursor to the next.
     let width = width.saturating_sub(1).max(8);
+    let shown = list.rows.len();
+    let search_rows = usize::from(list.search.is_some());
     let visible = list
         .visible
-        .min(list.count)
-        .min(height.saturating_sub(3).max(1));
+        .min(shown)
+        .min(height.saturating_sub(3 + search_rows).max(1));
     // As in Scramjet, the selected row stays in the middle where it can.
     let top = list
         .selected
         .saturating_sub(visible / 2)
-        .min(list.count - visible);
+        .min(shown - visible);
     let hint_room = width.saturating_sub(title.width() + 2);
     let hint = super::clip(HINT, hint_room);
     let mut lines = vec![format!(
         "{SELECTOR_TITLE}{title}{RESET}  {MUTED}{hint}{RESET}"
     )];
-    for index in top..top + visible {
+    if let Some(search) = &list.search {
+        let query = tail(&search.query, width - 3);
+        lines.push(format!("> {query}{SEARCH_CURSOR} {RESET}"));
+        if shown == 0 {
+            let none = super::clip(&search.none, width - 2);
+            lines.push(format!("  {MUTED}{none}{RESET}"));
+        }
+    }
+    for position in top..top + visible {
+        let index = list.rows[position];
         let is_current = current == Some(index);
         let text = row(index, width - 2 - if is_current { 2 } else { 0 });
         let mark = if is_current {
@@ -162,20 +266,28 @@ fn lines(
         } else {
             String::new()
         };
-        lines.push(if index == list.selected {
+        lines.push(if position == list.selected {
             format!("{SELECTOR_MARK}›{RESET} {SELECTED}{text}{RESET}{mark}")
         } else {
             format!("  {text}{mark}")
         });
     }
-    if visible < list.count {
-        lines.push(format!(
-            "  {MUTED}({}/{}){RESET}",
-            list.selected + 1,
-            list.count
-        ));
+    if visible < shown {
+        lines.push(format!("  {MUTED}({}/{shown}){RESET}", list.selected + 1));
     }
     lines
+}
+
+/// The end of `text` that fits in `width` columns, so that the end of a long query shows.
+fn tail(text: &str, width: usize) -> &str {
+    let mut used = 0;
+    for (at, ch) in text.char_indices().rev() {
+        used += ch.width().unwrap_or(0);
+        if used > width {
+            return &text[at + ch.len_utf8()..];
+        }
+    }
+    text
 }
 
 #[cfg(test)]
@@ -191,11 +303,7 @@ mod tests {
 
     #[test]
     fn keys_move_the_selection_around_and_choose_or_cancel() {
-        let mut list = List {
-            count: 25,
-            selected: 0,
-            visible: 10,
-        };
+        let mut list = List::new(25, 0, 10);
         let mut moved = Vec::new();
         for key in [
             Key::Up,
@@ -221,11 +329,7 @@ mod tests {
     #[test]
     fn shows_ten_rows_around_the_selection_with_its_position() {
         let row = |index: usize, width: usize| super::super::clip(&format!("row {index}"), width);
-        let list = |selected| List {
-            count: 25,
-            selected,
-            visible: 10,
-        };
+        let list = |selected| List::new(25, selected, 10);
         let shown = plain(lines("Pick", &list(12), Some(9), (50, 24), &row));
         assert_eq!(
             shown,
@@ -256,11 +360,7 @@ mod tests {
             short,
             ["Pick  ↑↓ m…", "  row 2", "› row 3", "  row 4", "  (4/25)"]
         );
-        let few = List {
-            count: 2,
-            selected: 1,
-            visible: 10,
-        };
+        let few = List::new(2, 1, 10);
         assert_eq!(
             plain(lines("Pick", &few, None, (50, 24), &row)),
             [
@@ -269,5 +369,56 @@ mod tests {
                 "› row 1"
             ]
         );
+    }
+
+    #[test]
+    fn typing_shows_the_matching_rows_best_first() {
+        let texts = [
+            "fix the parser",
+            "write a haiku",
+            "parser tests",
+            "release notes",
+        ]
+        .map(String::from);
+        let row = |index: usize, width: usize| super::super::clip(&texts[index], width);
+        let mut list = List::searching(&texts, 1, 10, "No matching rows");
+        let shown = |list: &List| plain(lines("Pick", list, Some(0), (50, 24), &row));
+        assert_eq!(shown(&list)[1..3], [">  ", "  fix the parser ✓"]);
+        assert_eq!(shown(&list)[3], "› write a haiku");
+        for key in [Key::Text("pa".into()), Key::Text("rs".into())] {
+            assert_eq!(list.key(&key), None);
+        }
+        assert_eq!(
+            shown(&list),
+            [
+                "Pick  ↑↓ move · Enter select · Esc cancel",
+                "> pars ",
+                "› parser tests",
+                "  fix the parser ✓"
+            ]
+        );
+        assert_eq!(list.key(&Key::Down), None);
+        assert_eq!(list.key(&Key::Enter), Some(Some(0)));
+        // Nothing matches: Enter and the arrows do nothing, Escape still cancels.
+        assert_eq!(list.key(&Key::Paste("\nzz".into())), None);
+        assert_eq!(shown(&list)[1..], ["> pars zz ", "  No matching rows"]);
+        for key in [Key::Enter, Key::Up, Key::LineEnd] {
+            assert_eq!(list.key(&key), None);
+        }
+        for _ in 0..3 {
+            assert_eq!(list.key(&Key::Backspace), None);
+        }
+        assert_eq!(list.rows, [2, 0]);
+        // Without a query every row is back, with the first selection.
+        for _ in 0..4 {
+            assert_eq!(list.key(&Key::Backspace), None);
+        }
+        assert_eq!((&list.rows[..], list.selected), (&[0, 1, 2, 3][..], 1));
+        assert_eq!(list.key(&Key::Backspace), None);
+        assert_eq!(list.key(&Key::Escape), Some(None));
+        // A query wider than the line shows its end.
+        list.key(&Key::Text("a very long query".into()));
+        let narrow = plain(lines("Pick", &list, None, (12, 24), &row));
+        assert_eq!(narrow[1], "> ng query ");
     }
 }

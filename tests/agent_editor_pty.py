@@ -1174,4 +1174,43 @@ run(['--continue'], name_resumed)
 (named,) = set(session_files()) - known
 infos = [line for line in map(json.loads, open(named)) if line.get('type') == 'session_info']
 assert infos == [{'type': 'session_info', 'name': 'Parser work'}], infos
+
+def search_selectors(read, until, send, output):
+    mark = until(b'> ')
+    send(b'zebra stripes\r')
+    mark = until(b'Reply one.', mark)
+    mark = until(b'> ', mark)
+    send(b'/new\r')
+    mark = until(b'> ', until(b'New session', mark))
+    send(b'other words\r')
+    mark = until(b'Striped reply.', mark)
+    mark = until(b'> ', mark)
+    # Typed text filters the sessions by their prompts and replies, best first.
+    send(b'/resume\r')
+    mark = until(b'Resume session', mark)
+    send(b'"striped REPLY"')
+    mark = until(b'> "striped REPLY"\x1b[7m', mark)
+    mark = until(SELECTED + b'other words (2 items, now)\x1b[0m \x1b[32m', mark)
+    send(b'x')
+    mark = until(b'No matching sessions', mark)
+    send(b'\x7f' * 16)
+    send(b'zebra')
+    mark = until(b'> zebra\x1b[7m', mark)
+    mark = until(SELECTED + b'zebra stripes (2 items, now)\x1b[0m', mark)
+    send(b'\r')
+    mark = until('\u2713 Resumed session \u00b7 gpt-6-luna'.encode(), mark)
+    mark = until(b'Reply one.', until(b'> zebra stripes', mark))
+    mark = until(b'> ', mark)
+    send(b'/model\r')
+    mark = until(b'Select model', mark)
+    send(b'haiku')
+    mark = until(SELECTED + b'claude-haiku-5-5\x1b[0m', mark)
+    send(b'\r')
+    mark = until('\u2713 Model set to claude-haiku-5-5'.encode(), mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+run([], search_selectors, serve_replies([(['Reply one.'], 'Reply one.'), (['Striped reply.'], 'Striped reply.')],
+                                        ['gpt-6-luna', 'claude-haiku-5-5', 'gpt-6.1-sol']))
 print('agent editor journeys passed')

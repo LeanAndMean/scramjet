@@ -2608,9 +2608,11 @@ response is incomplete; retry the request."});
             &[
                 header.clone(),
                 json!({"role":"user","content":"first prompt"}),
-                json!({"type":"message","role":"assistant","content":[]}),
+                json!({"type":"message","role":"assistant",
+                    "content":[{"type":"output_text","text":"the reply"}]}),
                 json!({"type":"compaction","first_kept":1,"summary":"s"}),
                 json!({"role":"user","content":"later"}),
+                json!({"role":"user","content":"Ran `ls`\nlisting","_scramjet_typed":"!ls"}),
             ],
             now,
         );
@@ -2636,10 +2638,12 @@ response is incomplete; retry the request."});
         assert_eq!(
             listed,
             [
-                (&written_last, Some("first prompt"), 3),
+                (&written_last, Some("first prompt"), 4),
                 (&created_last, Some("second\nsession"), 1)
             ]
         );
+        // `/resume` searches prompts and replies, compacted ones too, but not `!` commands.
+        assert_eq!(sessions[0].text, "first prompt the reply later");
         assert_eq!(Session::latest(&directory.0).unwrap(), Some(written_last));
     }
 

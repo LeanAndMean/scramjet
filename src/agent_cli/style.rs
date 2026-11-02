@@ -45,6 +45,8 @@ pub const HEADING: &str = "\x1b[1;33m";
 pub const SELECTOR_TITLE: &str = "\x1b[1m";
 pub const SELECTED: &str = "\x1b[1m";
 pub const SELECTOR_MARK: &str = "\x1b[36m";
+/// The cursor block after the query typed in a selector, as Scramjet's input draws it.
+pub const SEARCH_CURSOR: &str = "\x1b[7m";
 /// The selected row of the completion list under the prompt.
 pub const COMPLETION_SELECTED: &str = "\x1b[36m";
 /// The mark after the current session or model in a selector.

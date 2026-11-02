@@ -11,6 +11,9 @@ use std::{
 pub struct SessionInfo {
     pub path: PathBuf,
     pub first_prompt: Option<String>,
+    /// Its prompts and replies on every branch, which `/resume` searches as Scramjet searches
+    /// a session's messages.
+    pub text: String,
     /// The session's name from its latest `session_info` line, which `/resume` shows instead.
     pub name: Option<String>,
     /// Conversation items after the latest compaction, as a resume restores them.
@@ -241,6 +244,21 @@ impl Entries {
             .collect()
     }
 
+    /// Every prompt and reply text in the file, separated by spaces.
+    fn text(&self) -> String {
+        let mut text = Vec::new();
+        for entry in &self.entries {
+            let value = &entry.value;
+            if is_prompt(value) {
+                text.extend(value["content"].as_str());
+            } else if value["type"] == "message" && value["role"] == "assistant" {
+                let parts = value["content"].as_array().into_iter().flatten();
+                text.extend(parts.filter_map(|part| part["text"].as_str()));
+            }
+        }
+        text.join(" ")
+    }
+
     /// The prompts sent to the model, which a fork can start before; not `!` commands.
     fn fork_points(&self) -> impl Iterator<Item = &Entry> {
         self.entries.iter().filter(|entry| is_prompt(&entry.value))
@@ -281,6 +299,7 @@ impl Session {
             sessions.push(SessionInfo {
                 path,
                 first_prompt: entries.prompts().into_iter().next(),
+                text: entries.text(),
                 name: entries.name.clone(),
                 item_count: context.items.len(),
                 modified,
