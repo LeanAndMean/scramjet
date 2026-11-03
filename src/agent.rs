@@ -22,7 +22,7 @@ mod tree;
 mod turn;
 mod ui;
 
-pub use autonomy::{Edge, NextStep, NextSteps, Scope, Setting};
+pub use autonomy::{Approval, Approvals, Edge, NextStep, NextSteps, Publication, Scope, Setting};
 pub use client::StreamProgress;
 pub use commands::{Command, Commands, Origin, Set, Sets};
 pub use compaction::{AutoCompaction, Compaction};
@@ -619,6 +619,23 @@ impl Agent {
     ) -> Result<(), String> {
         let (global, root) = (self.autonomy.as_deref(), &self.config.root);
         autonomy::choose(global, root, (source, target), choice)
+    }
+
+    /// The publications of the commands whose policy can approve them, with what the user and
+    /// the commands' sets say of each, as `/settings` shows them.
+    pub fn approvals(&self) -> Approvals {
+        Approvals::load(self.autonomy.as_deref(), &self.commands)
+    }
+
+    /// Sets whether `command`'s publications with `tool` in the project's repository ask first,
+    /// for all projects; with no choice, its set decides. Used from the next publication on.
+    pub fn set_approval(
+        &self,
+        command: &str,
+        tool: &str,
+        choice: Option<Publication>,
+    ) -> Result<(), String> {
+        autonomy::choose_publication(self.autonomy.as_deref(), command, tool, choice)
     }
 
     /// `/autopilot on` or `off`, saved in the session.

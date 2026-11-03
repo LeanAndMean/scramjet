@@ -3,7 +3,8 @@
 //! (`pause`), from the project's `.scramjet/autonomy.yaml`, then the global one; the global file's
 //! `publications` say whether a command's publication with a tool asks the user first. A command
 //! set's `autonomy-defaults.yaml` gives its own commands' publication defaults. `/settings`
-//! shows the edges of each command's next steps and changes them (`NextSteps`).
+//! shows the edges of each command's next steps (`NextSteps`) and its publications
+//! (`Approvals`), and changes them.
 
 use super::commands::{Commands, Policy};
 use super::tools::{shortened, write_replacing};
@@ -22,7 +23,7 @@ pub enum Edge {
 
 /// Whether a publication asks the user to approve it first.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Publication {
+pub enum Publication {
     Ask,
     Auto,
 }
@@ -242,6 +243,91 @@ impl NextSteps {
     }
 }
 
+/// A command's publications with one tool, as `/settings` shows them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Approval {
+    pub command: String,
+    pub tool: &'static str,
+    /// The user's own setting, in the global file.
+    pub setting: Option<Publication>,
+    /// What the command's set says; with neither, the publication asks.
+    pub default: Option<Publication>,
+}
+
+impl Approval {
+    /// What applies to a publication in the project's own repository, as the publication tools
+    /// decide it: the user's setting, else the set's, else ask.
+    pub fn applies(&self) -> Publication {
+        (self.setting.or(self.default)).unwrap_or(Publication::Ask)
+    }
+}
+
+/// The publications of the commands whose policy can approve them: those run by the user (not
+/// `delegate-only`), with each publication tool their `allowed-tools` name.
+#[derive(Debug)]
+pub struct Approvals {
+    pub list: Vec<Approval>,
+    /// The file the user's settings are in, for all projects.
+    pub global: Option<PathBuf>,
+    /// Why it cannot be used, shortened; then every publication asks.
+    pub problem: Option<String>,
+}
+
+impl Approvals {
+    /// Read afresh, as the publication tools read the settings at each call.
+    pub(super) fn load(global: Option<&Path>, commands: &Commands) -> Self {
+        let (file, problem) = match global.map(|path| (path, read(path, false))) {
+            None | Some((_, Ok(None))) => (File::default(), None),
+            Some((_, Ok(Some(file)))) => (file, None),
+            Some((path, Err(message))) => (
+                File::default(),
+                Some(format!("{}: {message}", shown_path(path))),
+            ),
+        };
+        let mut list = Vec::new();
+        for command in commands
+            .list()
+            .iter()
+            .filter(|command| !command.delegate_only)
+        {
+            let declared = |tool: &str| {
+                (command.allowed_tools.iter().flatten()).any(|allowed| allowed == tool)
+            };
+            for tool in PUBLICATION_TOOLS.into_iter().filter(|tool| declared(tool)) {
+                list.push(Approval {
+                    command: command.name.clone(),
+                    tool,
+                    setting: lookup(&file.publications, &command.name, tool),
+                    default: commands.publication_default(&command.name, tool),
+                });
+            }
+        }
+        Self {
+            list,
+            global: global.map(Path::to_path_buf),
+            problem,
+        }
+    }
+}
+
+/// Sets whether `command`'s publications with `tool` ask first, in the global file; with no
+/// choice, the user's setting goes and the command's set decides.
+pub(super) fn choose_publication(
+    global: Option<&Path>,
+    command: &str,
+    tool: &str,
+    choice: Option<Publication>,
+) -> Result<(), String> {
+    let global = global.ok_or("no file for all projects: HOME is not set")?;
+    update(global, false, |file| {
+        if lookup(&file.publications, command, tool) == choice {
+            return false;
+        }
+        set(&mut file.publications, command, tool, choice);
+        true
+    })
+}
+
 /// The setting `file` has for `source` → `target` itself.
 fn exact(file: &File, source: &str, target: &str) -> Option<Edge> {
     let (_, targets) = file.edges.iter().find(|(name, _)| name == source)?;
@@ -277,8 +363,7 @@ pub(super) fn choose(
     }
 }
 
-/// Sets `source` → `target` to `edge` in the file at `path`, or takes it out. A file that would
-/// not change is not written, and one left with no settings is removed, as Scramjet removes it.
+/// Sets `source` → `target` to `edge` in the file at `path`, or takes it out.
 fn change(
     path: &Path,
     in_project: bool,
@@ -286,27 +371,48 @@ fn change(
     target: &str,
     edge: Option<Edge>,
 ) -> Result<(), String> {
+    update(path, in_project, |file| {
+        if exact(file, source, target) == edge {
+            return false;
+        }
+        set(&mut file.edges, source, target, edge);
+        true
+    })
+}
+
+/// Sets `name`'s setting for `key` among `entries` to `value`, or takes it out, with a command
+/// left with none.
+fn set<T>(entries: &mut Vec<(String, Vec<(String, T)>)>, name: &str, key: &str, value: Option<T>) {
+    let at = match entries.iter().position(|(known, _)| known == name) {
+        Some(at) => at,
+        None => {
+            entries.push((name.to_owned(), Vec::new()));
+            entries.len() - 1
+        }
+    };
+    let settings = &mut entries[at].1;
+    match (settings.iter_mut().find(|(known, _)| known == key), value) {
+        (Some((_, known)), Some(value)) => *known = value,
+        (None, Some(value)) => settings.push((key.to_owned(), value)),
+        (_, None) => settings.retain(|(known, _)| known != key),
+    }
+    entries.retain(|(_, settings)| !settings.is_empty());
+}
+
+/// Changes the file at `path` as `change` does, when it says it changed it. A file that would
+/// not change is not written, and one left with no settings is removed, as Scramjet removes it.
+fn update(
+    path: &Path,
+    in_project: bool,
+    change: impl FnOnce(&mut File) -> bool,
+) -> Result<(), String> {
     let shown = shown_path(path);
     let mut file = read(path, in_project)
         .map_err(|message| format!("{shown}: {message}"))?
         .unwrap_or_default();
-    if exact(&file, source, target) == edge {
+    if !change(&mut file) {
         return Ok(());
     }
-    let at = match file.edges.iter().position(|(name, _)| name == source) {
-        Some(at) => at,
-        None => {
-            file.edges.push((source.to_owned(), Vec::new()));
-            file.edges.len() - 1
-        }
-    };
-    let targets = &mut file.edges[at].1;
-    match (targets.iter_mut().find(|(name, _)| name == target), edge) {
-        (Some((_, known)), Some(edge)) => *known = edge,
-        (None, Some(edge)) => targets.push((target.to_owned(), edge)),
-        (_, None) => targets.retain(|(name, _)| name != target),
-    }
-    file.edges.retain(|(_, targets)| !targets.is_empty());
     let written = match file.edges.is_empty() && file.publications.is_empty() {
         true => std::fs::remove_file(path),
         false => write_replacing(path, &serialized(&file)),
@@ -820,6 +926,146 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
         );
         assert_eq!(
             without_home.unwrap_err(),
+            "no file for all projects: HOME is not set"
+        );
+    }
+
+    #[test]
+    fn approvals_list_each_publishing_commands_tools_with_who_says_what() {
+        let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
+            "scramjet-autonomy-approvals-{}",
+            std::process::id()
+        )));
+        let root = &scratch.0;
+        let file = |path: &str, text: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        file(
+            "sets/rs/commands/rs:post.md",
+            "---\nallowed-tools: [add_pr_comment, read, create_issue]\n---\nPost",
+        );
+        file(
+            "sets/rs/commands/rs:helper.md",
+            "---\ndelegate-only: true\nallowed-tools: [create_pr]\n---\nHelp",
+        );
+        file("sets/rs/commands/rs:plain.md", "Plain");
+        file(
+            "sets/rs/autonomy-defaults.yaml",
+            "publications:\n  rs:post:\n    create_issue: require-approval\n    add_pr_comment: auto-approve\n",
+        );
+        let commands = Commands::discover(&super::super::Sets::find(&[], None, &root.join("sets")));
+        let global = root.join("autonomy.yaml");
+        let approval = |tool, setting, default| Approval {
+            command: "rs:post".into(),
+            tool,
+            setting,
+            default,
+        };
+        // Without the user's file the set decides, in the tools' order; a delegate-only command
+        // and one that names no publication tool have none.
+        let approvals = Approvals::load(Some(&global), &commands);
+        assert_eq!(
+            (approvals.list.as_slice(), approvals.problem),
+            (
+                [
+                    approval("create_issue", None, Some(Publication::Ask)),
+                    approval("add_pr_comment", None, Some(Publication::Auto)),
+                ]
+                .as_slice(),
+                None
+            )
+        );
+        assert_eq!(
+            approvals
+                .list
+                .iter()
+                .map(Approval::applies)
+                .collect::<Vec<_>>(),
+            [Publication::Ask, Publication::Auto]
+        );
+        // The user's setting comes first; with neither, it asks.
+        assert_eq!(
+            approval("create_pr", None, None).applies(),
+            Publication::Ask
+        );
+        std::fs::write(
+            &global,
+            "publications:\n  rs:post:\n    create_issue: auto-approve\n    add_pr_comment: always-ask\n",
+        )
+        .unwrap();
+        let approvals = Approvals::load(Some(&global), &commands);
+        assert_eq!(
+            approvals
+                .list
+                .iter()
+                .map(Approval::applies)
+                .collect::<Vec<_>>(),
+            [Publication::Auto, Publication::Ask]
+        );
+        // A file that cannot be used says why; the publication tools then ask.
+        std::fs::write(&global, "publications: [\n").unwrap();
+        let approvals = Approvals::load(Some(&global), &commands);
+        assert!(
+            approvals
+                .list
+                .iter()
+                .all(|approval| approval.setting.is_none())
+        );
+        let problem = approvals.problem.unwrap();
+        assert!(
+            problem.starts_with(&format!("{}: autonomy.yaml:", global.display())),
+            "{problem}"
+        );
+    }
+
+    #[test]
+    fn choosing_a_publication_setting_writes_the_global_file_the_tools_read() {
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-autonomy-approve-{}", std::process::id())),
+        );
+        let global = scratch.0.join("config/scramjet/autonomy.yaml");
+        let choose =
+            |tool, choice| choose_publication(Some(&global), "rs:post", tool, choice).unwrap();
+        let text = || std::fs::read_to_string(&global).ok();
+        choose("create_issue", Some(Publication::Auto));
+        assert_eq!(
+            text().as_deref(),
+            Some("publications:\n  rs:post:\n    create_issue: auto-approve\n")
+        );
+        assert_eq!(
+            publication_override(Some(&global), "rs:post", "create_issue"),
+            Ok(Some(Publication::Auto))
+        );
+        // The set decides again: the setting goes, and so does the emptied file.
+        choose("create_issue", None);
+        assert_eq!(text(), None);
+        std::fs::write(
+            &global,
+            "# mine\nedges:\n  rs:post:\n    rs:post: chain\npublications:\n  rs:post:\n    create_pr: always-ask\n",
+        )
+        .unwrap();
+        // A change that changes nothing leaves the file as it is, comments and all.
+        choose("create_pr", Some(Publication::Ask));
+        choose("add_pr_comment", None);
+        assert!(text().unwrap().starts_with("# mine\n"));
+        choose("create_pr", Some(Publication::Auto));
+        choose("add_pr_comment", Some(Publication::Ask));
+        assert_eq!(
+            text().as_deref(),
+            Some(
+                "edges:\n  rs:post:\n    rs:post: chain\npublications:\n  rs:post:\n    \
+create_pr: auto-approve\n    add_pr_comment: always-ask\n"
+            )
+        );
+        // A file that cannot be read is not overwritten.
+        std::fs::write(&global, "publications: [\n").unwrap();
+        let error = choose_publication(Some(&global), "rs:post", "create_pr", None).unwrap_err();
+        assert!(error.starts_with(&global.display().to_string()), "{error}");
+        assert_eq!(text().as_deref(), Some("publications: [\n"));
+        assert_eq!(
+            choose_publication(None, "rs:post", "create_pr", Some(Publication::Ask)).unwrap_err(),
             "no file for all projects: HOME is not set"
         );
     }

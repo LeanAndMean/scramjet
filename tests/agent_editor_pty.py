@@ -1723,7 +1723,7 @@ def next_step_settings(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[A')
+    send(b'\x1b[A\x1b[A')
     rows = on_screen('\u203a ' + setting('Next steps', 'continue automatically: 1 \u00b7 ask me: 2'))
     assert '  ' + setting('Autopilot', 'off') in rows, rows
     # Each command's steps under it: what follows each, and where that is set.
@@ -1985,7 +1985,32 @@ def publications(read, until, send, output):
     send(b'\r')
     rows = on_screen('Filed.')
     assert '  Create issue publication verified:\n  https://github.com/o/r/issues/5' in '\n'.join(rows), rows
-    # A command whose policy approves the tool publishes without asking.
+    # /settings: each publishing command's tools under it, whether each asks and who says so.
+    send(b'/settings\r')
+    on_screen('Settings  \u2191\u2193 move')
+    send(b'\x1b[A')
+    on_screen('\u203a ' + setting('Publishing', 'ask me: 1'))
+    send(b'\r')
+    rows = on_screen('Publishing  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc back')
+    at = rows.index('  /pub:post')
+    assert rows[at + 1] == '\u203a   create an issue  ask me \u00b7 as pub says', rows
+    note = ' '.join(row.strip() for row in rows[at + 2:])
+    assert 'When /pub:post creates an issue in the project\'s own repository, it shows you what it will ' \
+        'publish and waits for your approval. As pub says, in its autonomy-defaults.yaml.' in note, rows
+    send(b'\r')
+    rows = on_screen('When /pub:post creates an issue  \u2191\u2193 move')
+    assert '\u203a As pub says (ask me) \u2713' in rows, rows
+    send(b'\x1b[A')
+    rows = on_screen('\u203a Publish without asking')
+    note = ' '.join(row.strip() for row in rows)
+    assert "in the project's own repository only. Saved for all projects in" in note, rows
+    send(b'\r')
+    on_screen('\u203a   create an issue  publish without asking \u00b7 your setting')
+    send(b'\x1b')
+    on_screen('\u203a ' + setting('Publishing', 'publish without asking: 1'))
+    send(b'\x1b')
+    ending(read, output, EMPTY, rows=40)
+    # The command now publishes without asking.
     send(b'/pub:post\r')
     rows = on_screen('Posted.')
     assert 'Approve publication' not in '\n'.join(rows), rows
@@ -2025,10 +2050,9 @@ post = os.path.join(project, '.scramjet', 'pub', 'commands')
 os.makedirs(post)
 with open(os.path.join(post, 'pub:post.md'), 'w') as file:
     file.write('---\nallowed-tools: [create_issue]\n---\nPost the issue.\n')
+with open(os.path.join(project, '.scramjet', 'pub', 'autonomy-defaults.yaml'), 'w') as file:
+    file.write('publications:\n  pub:post:\n    create_issue: require-approval\n')
 publishing = config_home('publish')
-os.makedirs(os.path.join(publishing, 'scramjet'))
-with open(os.path.join(publishing, 'scramjet', 'autonomy.yaml'), 'w') as file:
-    file.write('publications:\n  pub:post:\n    create_issue: auto-approve\n')
 filed = tool_call('call_1', 'create_issue', {'title': 'Fix the parser', 'body': 'It **breaks** on tabs.'})
 known = set(session_files())
 run([], publications, serve_items([
@@ -2043,6 +2067,8 @@ assert outputs[:2] == [verified, verified], outputs
 assert outputs[3] == 'Add issue comment publication cancelled. No remote write was performed.', outputs
 posts = [data for args, data in map(json.loads, open(forge_log)) if data is not None]
 assert posts == ['{"body":"It **breaks** on tabs.","title":"Fix the parser"}'] * 2, posts
+assert open(os.path.join(publishing, 'scramjet', 'autonomy.yaml')).read() == \
+    'publications:\n  pub:post:\n    create_issue: auto-approve\n'
 # In piped input the choice is a numbered line, and an empty one cancels: it may only separate prompts.
 for piped, outcome in [(b'file it\n\nthanks\n', 'cancelled'), (b'file it\n1\n', 'verified')]:
     logged = len(open(forge_log).readlines())

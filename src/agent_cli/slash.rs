@@ -7,8 +7,8 @@ use super::terminal::Terminal;
 use super::text::{clip, one_line, visible};
 use super::{editor, select, style, tree};
 use scramjet_rs::agent::{
-    Agent, AgentError, CODING_TOOLS, Edge, Navigated, NextStep, NextSteps, Scope, SessionInfo,
-    Setting, search_program, shortened,
+    Agent, AgentError, Approval, Approvals, CODING_TOOLS, Edge, Navigated, NextStep, NextSteps,
+    Publication, Scope, SessionInfo, Setting, search_program, shortened,
 };
 use std::{sync::atomic::Ordering, time::Duration};
 use unicode_width::UnicodeWidthStr;
@@ -17,7 +17,7 @@ const SETTINGS_KEYS: &str = "↑↓ move · Enter change · Esc close";
 const NO_LEVELS: &str = "The model's card lists no thinking levels to choose from.";
 const BACK_KEYS: &str = "↑↓ move · Enter select · Esc back";
 const TOOLS_KEYS: &str = "↑↓ move · Enter switch on or off · Esc back";
-const STEPS_KEYS: &str = "↑↓ move · Enter change · Esc back";
+const CHANGE_KEYS: &str = "↑↓ move · Enter change · Esc back";
 /// What a next step can be set to, in the order `/settings` offers them.
 const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
     (
@@ -209,11 +209,15 @@ impl Interactive {
             let rows = self.setting_rows();
             let levels = !self.agent.effort_levels().is_empty();
             let problems = self.agent.next_steps().problems;
+            let publishing = self.agent.approvals().problem;
             let notes = (ROWS.iter())
                 .map(|row| match row {
                     Row::ThinkingLevel if !levels => NO_LEVELS.to_owned(),
                     Row::NextSteps if !problems.is_empty() => {
                         format!("{} {}", row.description(), not_used(&problems))
+                    }
+                    Row::Publishing if let Some(problem) = &publishing => {
+                        format!("{} {}", row.description(), every_one_asks(problem))
                     }
                     row => row.description().to_owned(),
                 })
@@ -235,6 +239,7 @@ impl Interactive {
                 Row::ThinkingLevel => self.choose_thinking_level(),
                 Row::Tools => self.choose_tools(),
                 Row::NextSteps => self.choose_next_steps(),
+                Row::Publishing => self.choose_approvals(),
                 Row::Autopilot => {
                     if let Err(error) = self.agent.set_autopilot(!self.agent.autopilot()) {
                         self.say(&format!("error: {error}"));
@@ -265,6 +270,7 @@ impl Interactive {
             Row::Autopilot if self.agent.autopilot() => "on".into(),
             Row::Autopilot => "off".into(),
             Row::NextSteps => steps_summary(&self.agent.next_steps()),
+            Row::Publishing => approvals_summary(&self.agent.approvals()),
             row => self.settings.shown(row),
         };
         (ROWS.iter())
@@ -395,7 +401,7 @@ impl Interactive {
                 None,
                 |index, width| clip(&rows[index], width),
             );
-            let picker = picker.headed(headings).noting(STEPS_KEYS, notes).held();
+            let picker = picker.headed(headings).noting(CHANGE_KEYS, notes).held();
             let Some(index) = screen.pick(picker) else {
                 return;
             };
@@ -484,6 +490,132 @@ impl Interactive {
         let chosen = STEP_CHOICES[index].1;
         if let Err(error) = self.agent.set_next_step(&step.source, target, chosen) {
             self.say(&format!("error: next step not saved: {error}"));
+        }
+    }
+
+    /// The publications of each command whose policy can approve them, under the command, with
+    /// whether each asks first and who says so; Enter changes one. The next publication uses
+    /// the file as changed.
+    fn choose_approvals(&mut self) {
+        let mut at = 0;
+        loop {
+            let Some(screen) = &self.screen else {
+                return;
+            };
+            let approvals = self.agent.approvals();
+            if approvals.list.is_empty() {
+                return;
+            }
+            let width = (approvals.list.iter())
+                .map(|approval| publishes(approval.tool).0.width())
+                .max()
+                .unwrap_or(0);
+            // A heading before each command's publications: `None` in `shown`.
+            let mut rows = Vec::new();
+            let mut shown = Vec::new();
+            let mut notes = Vec::new();
+            for (index, approval) in approvals.list.iter().enumerate() {
+                if index == 0 || approvals.list[index - 1].command != approval.command {
+                    rows.push(format!("/{}", approval.command));
+                    shown.push(None);
+                    notes.push(String::new());
+                }
+                let value = approval_value(approval, approvals.problem.is_some());
+                rows.push(format!("  {:width$}  {value}", publishes(approval.tool).0));
+                shown.push(Some(index));
+                notes.push(approval_note(approval, &approvals));
+            }
+            let headings = shown.iter().map(Option::is_none).collect();
+            let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
+            let picker = select::Picker::select(
+                "Publishing",
+                visible,
+                rows.len(),
+                at,
+                None,
+                |index, width| clip(&rows[index], width),
+            );
+            let picker = picker.headed(headings).noting(CHANGE_KEYS, notes).held();
+            let Some(index) = screen.pick(picker) else {
+                return;
+            };
+            at = index;
+            if let Some(approval) = shown[index].map(|index| &approvals.list[index]) {
+                self.choose_approval(&approvals, approval);
+            }
+        }
+    }
+
+    /// Whether `approval`'s publications ask first, publish without asking, or go as its set
+    /// says; saved at once, for all projects.
+    fn choose_approval(&mut self, approvals: &Approvals, approval: &Approval) {
+        let Some(screen) = &self.screen else {
+            return;
+        };
+        let set = set_of(&approval.command);
+        let default = asks(approval.default.unwrap_or(Publication::Ask));
+        let choices = [
+            ("Ask me".to_owned(), Some(Publication::Ask)),
+            ("Publish without asking".to_owned(), Some(Publication::Auto)),
+            (format!("As {set} says ({default})"), None),
+        ];
+        let current = match approval.setting {
+            Some(Publication::Ask) => 0,
+            Some(Publication::Auto) => 1,
+            None => 2,
+        };
+        let global = (approvals.global.as_ref()).map(|path| shortened(&path.display().to_string()));
+        let saved = |what: &str| match &global {
+            Some(global) => format!("{what} Saved for all projects in {global}."),
+            None => "Not available: HOME is not set.".to_owned(),
+        };
+        let notes = (choices.iter())
+            .map(|(_, choice)| match choice {
+                Some(Publication::Ask) => {
+                    saved("It shows you what it will publish and waits for your approval.")
+                }
+                Some(Publication::Auto) => saved(
+                    "Published without showing it to you first, in the project's own repository \
+                     only.",
+                ),
+                None => {
+                    let says = match approval.default {
+                        None => format!("{set} says nothing about it, so it asks."),
+                        Some(Publication::Ask) => {
+                            format!("{set} has it ask, in its autonomy-defaults.yaml.")
+                        }
+                        Some(Publication::Auto) => format!(
+                            "{set} has it publish without asking, in its autonomy-defaults.yaml."
+                        ),
+                    };
+                    match (&global, approval.setting) {
+                        (Some(global), Some(_)) => {
+                            format!("{says} Takes your setting out of {global}.")
+                        }
+                        _ => says,
+                    }
+                }
+            })
+            .collect();
+        let (_, does) = publishes(approval.tool);
+        let title = format!("When /{} {does}", approval.command);
+        let picker = select::Picker::select(
+            &title,
+            select::VISIBLE,
+            choices.len(),
+            current,
+            Some(current),
+            |index, width| clip(&choices[index].0, width),
+        );
+        let Some(index) = screen.pick(picker.noting(BACK_KEYS, notes).held()) else {
+            return;
+        };
+        let chosen = choices[index].1;
+        if let Err(error) = self
+            .agent
+            .set_approval(&approval.command, approval.tool, chosen)
+        {
+            self.say(&format!("error: publishing not saved: {error}"));
         }
     }
 
@@ -959,6 +1091,100 @@ fn not_used(problems: &[String]) -> String {
         "Not used now, as {}; until that is fixed, autopilot decides every step.",
         problems.join("; ")
     )
+}
+
+/// What a publication tool does: as a row names it, and in a sentence.
+fn publishes(tool: &str) -> (&'static str, &'static str) {
+    match tool {
+        "create_issue" => ("create an issue", "creates an issue"),
+        "create_pr" => ("create a pull request", "creates a pull request"),
+        "add_issue_comment" => ("comment on an issue", "comments on an issue"),
+        _ => ("comment on a pull request", "comments on a pull request"),
+    }
+}
+
+/// The command set a command is from, which its name begins with.
+fn set_of(command: &str) -> &str {
+    command.split_once(':').map_or(command, |(set, _)| set)
+}
+
+fn asks(publication: Publication) -> &'static str {
+    match publication {
+        Publication::Ask => "ask me",
+        Publication::Auto => "publish without asking",
+    }
+}
+
+/// Whether a command's publications with a tool ask first, and who says so.
+fn approval_value(approval: &Approval, problem: bool) -> String {
+    if problem {
+        return "ask me · the file has an error".into();
+    }
+    let from = match (approval.setting, approval.default) {
+        (Some(_), _) => "your setting".to_owned(),
+        (None, Some(_)) => format!("as {} says", set_of(&approval.command)),
+        (None, None) => "by default".to_owned(),
+    };
+    format!("{} · {from}", asks(approval.applies()))
+}
+
+/// The note under a command's publications with a tool: what happens, and who says so.
+fn approval_note(approval: &Approval, approvals: &Approvals) -> String {
+    let (_, does) = publishes(approval.tool);
+    let when = format!(
+        "When /{} {does} in the project's own repository",
+        approval.command
+    );
+    if let Some(problem) = &approvals.problem {
+        return format!(
+            "{when}, it waits for your approval. {}",
+            every_one_asks(problem)
+        );
+    }
+    let what = match approval.applies() {
+        Publication::Ask => {
+            format!("{when}, it shows you what it will publish and waits for your approval.")
+        }
+        Publication::Auto => format!(
+            "{when}, it publishes without showing it to you first; what was written is still \
+             checked."
+        ),
+    };
+    let set = set_of(&approval.command);
+    let global = (approvals.global.as_ref()).map(|path| shortened(&path.display().to_string()));
+    let from = match (approval.setting, approval.default) {
+        (Some(_), _) => format!(" Your setting, in {}.", global.unwrap_or_default()),
+        (None, Some(_)) => format!(" As {set} says, in its autonomy-defaults.yaml."),
+        (None, None) => format!(" {set} says nothing about it, so it asks."),
+    };
+    what + &from
+}
+
+/// Why the file with the publication settings is not used.
+fn every_one_asks(problem: &str) -> String {
+    format!("Not used now, as {problem}; until that is fixed, every publication asks.")
+}
+
+/// The value of `/settings`' row for publishing: how many ask first and how many do not.
+fn approvals_summary(approvals: &Approvals) -> String {
+    if approvals.problem.is_some() {
+        return "ask me: the file has an error".into();
+    }
+    if approvals.list.is_empty() {
+        return "no command publishes".into();
+    }
+    let count = |publication| {
+        (approvals.list.iter())
+            .filter(|approval| approval.applies() == publication)
+            .count()
+    };
+    [Publication::Ask, Publication::Auto]
+        .into_iter()
+        .map(|publication| (asks(publication), count(publication)))
+        .filter(|(_, count)| *count > 0)
+        .map(|(words, count)| format!("{words}: {count}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// The value of `/settings`' row for the next steps: how many go which way.
