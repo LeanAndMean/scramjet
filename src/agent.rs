@@ -7,8 +7,10 @@ mod commands;
 mod compaction;
 mod messages;
 mod question;
+mod sandbox;
 mod session;
 mod status;
+mod subagent;
 mod tools;
 
 pub use client::StreamProgress;
@@ -151,6 +153,8 @@ pub enum ToolDetail {
     Written(String),
     /// What the user answered a question, as Scramjet's result row shows it.
     Answer(String),
+    /// The subagents' token usage, shown under their result.
+    Subagents(String),
 }
 
 #[derive(Debug)]
@@ -191,6 +195,23 @@ pub struct Usage {
     /// The input and output tokens of the last response, when it reported them: how full the
     /// context was, as Scramjet's footer shows it.
     pub context_tokens: Option<u64>,
+}
+
+impl Usage {
+    /// Counts a response's tokens.
+    fn count(&mut self, usage: &crate::ProviderUsage) {
+        self.input_tokens += usage.input_tokens.unwrap_or(0);
+        self.cached_input_tokens += usage.cached_input_tokens.unwrap_or(0);
+        self.output_tokens += usage.output_tokens.unwrap_or(0);
+    }
+
+    /// Adds another agent's requests and tokens, not its context.
+    fn add(&mut self, other: &Usage) {
+        self.requests += other.requests;
+        self.input_tokens += other.input_tokens;
+        self.cached_input_tokens += other.cached_input_tokens;
+        self.output_tokens += other.output_tokens;
+    }
 }
 
 /// `/session`'s counts over the current conversation, as Scramjet's session stats count them.
@@ -300,6 +321,10 @@ pub struct Agent {
     /// Scramjet's global `autonomy.yaml`, and what was last said about the files.
     autonomy: Option<PathBuf>,
     autonomy_diagnostics: Vec<String>,
+    /// Where subagents are found: the user's agent directory and Scramjet's global root of
+    /// command sets.
+    agents_directory: Option<PathBuf>,
+    sets_root: Option<PathBuf>,
     session: Session,
     executor: tokio::runtime::Runtime,
     /// The current model's protocol and limits, from its name until `load_model_card`.
@@ -327,12 +352,19 @@ impl Agent {
         let executor = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        let commands = Commands::discover(
-            commands::global_root().as_deref(),
-            &config.root.join(".scramjet"),
-        );
+        let sets_root = commands::global_root();
+        let commands = Commands::discover(sets_root.as_deref(), &config.root.join(".scramjet"));
+        let agents_directory = subagent::user_directory();
+        let sources = subagent::Sources {
+            user: agents_directory.as_deref(),
+            sets: sets_root.as_deref(),
+        };
+        let agents =
+            subagent::discover(&sources, &config.root, &config.root, subagent::Scope::User).agents;
         let mut agent = Self {
-            instructions: instructions(&config.root, &commands),
+            instructions: instructions(&config.root, &commands, &agents),
+            agents_directory,
+            sets_root,
             commands,
             lifecycle,
             completed: None,
@@ -1279,8 +1311,7 @@ to a larger-context model)"
         }
     }
 
-    /// Sends `request`, sending it again after transient failures, and counts its usage. A failed
-    /// response's items are discarded, so a retry never runs a tool call from it.
+    /// Sends `request` as `send` does, and counts its usage.
     fn respond(
         &mut self,
         request: &Value,
@@ -1288,79 +1319,31 @@ to a larger-context model)"
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<client::Reply, AgentError> {
-        let (body, interleaved) = match self.info.protocol {
-            Protocol::Responses => (serde_json::to_vec(request), false),
-            Protocol::Messages => {
-                let body = messages::request(
-                    request,
-                    self.info.output.unwrap_or(messages::DEFAULT_MAX_TOKENS),
-                    self.info.reasoning,
-                )
-                .map_err(AgentError::Provider)?;
-                let interleaved = messages::budget_thinking(&body);
-                (serde_json::to_vec(&body), interleaved)
-            }
-        };
-        let body = body.map_err(std::io::Error::from)?;
-        let mut attempt = 0;
-        loop {
-            ui.waiting(purpose);
-            self.usage.requests += 1;
-            let failure = match self.executor.block_on(client::respond(
-                self.config.endpoint,
-                self.info.protocol,
-                body.clone(),
-                interleaved,
-                cancel,
-                &mut |update| {
-                    if purpose == Purpose::Reply {
-                        ui.progress(&update)
-                    }
-                },
-            )) {
-                Ok(reply) => {
-                    if let Some(usage) = &reply.usage {
-                        self.usage.input_tokens += usage.input_tokens.unwrap_or(0);
-                        self.usage.cached_input_tokens += usage.cached_input_tokens.unwrap_or(0);
-                        self.usage.output_tokens += usage.output_tokens.unwrap_or(0);
-                    }
-                    return Ok(reply);
+        let retries = self.config.retries;
+        let requests = &mut self.usage.requests;
+        let reply = send(
+            &self.executor,
+            self.config.endpoint,
+            &self.info,
+            retries,
+            request,
+            cancel,
+            &mut |event| match event {
+                Sending::Attempt => {
+                    ui.waiting(purpose);
+                    *requests += 1;
                 }
-                Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
-                Err(ClientError::Failed(failure)) => failure,
-            };
-            let backoff = RETRY_DELAY * 2u32.pow(attempt.min(5));
-            let delay = backoff
-                .min(MAX_RETRY_WAIT)
-                .max(failure.wait.unwrap_or_default());
-            // A context overflow is not retried as is: only compaction can let the request through.
-            if !failure.transient
-                || failure.overflow
-                || attempt == self.config.retries
-                || delay > MAX_RETRY_WAIT
-            {
-                let message = match attempt {
-                    0 => failure.message,
-                    n => format!("{} (after {n} retries)", failure.message),
-                };
-                return Err(match failure.overflow {
-                    true => AgentError::ContextOverflow(message),
-                    false => AgentError::Provider(message),
-                });
-            }
-            attempt += 1;
-            ui.retrying(&failure.message, attempt, self.config.retries, delay);
-            let interrupted = self.executor.block_on(async {
-                tokio::select! {
-                    biased;
-                    () = client::cancelled(cancel) => true,
-                    () = tokio::time::sleep(delay) => false,
+                Sending::Progress(update) if purpose == Purpose::Reply => ui.progress(update),
+                Sending::Progress(_) => {}
+                Sending::Retrying(error, attempt, delay) => {
+                    ui.retrying(error, attempt, retries, delay)
                 }
-            });
-            if interrupted {
-                return Err(AgentError::Cancelled);
-            }
+            },
+        )?;
+        if let Some(usage) = &reply.usage {
+            self.usage.count(usage);
         }
+        Ok(reply)
     }
 
     /// Runs a tool call, after any approval; also says whether the turn ends after it, as a
@@ -1382,6 +1365,33 @@ to a larger-context model)"
         ui.tool_call(call.name, &call.summary());
         if call.name == question::NAME {
             return ask(&call.arguments, &mut self.lifecycle, ui);
+        }
+        if call.name == subagent::NAME {
+            let (output, usage) = {
+                let parent = subagent::Parent {
+                    endpoint: self.config.endpoint,
+                    retries: self.config.retries,
+                    model: &self.config.model,
+                    info: &self.info,
+                    effort: self.effort().or(self.info.default_level.as_deref()),
+                    max_output_tokens: self.config.max_output_tokens,
+                    root: &self.config.root,
+                    cache_key: self.session.id(),
+                    sources: subagent::Sources {
+                        user: self.agents_directory.as_deref(),
+                        sets: self.sets_root.as_deref(),
+                    },
+                };
+                subagent::run(&call.arguments, &parent, ui, cancel)
+            };
+            self.usage.add(&usage);
+            ui.tool_result(
+                call.name,
+                &output.text,
+                output.detail.as_ref(),
+                output.failed,
+            );
+            return (output, false);
         }
         if call.name == status::NAME {
             let (text, failed, ends) = self.lifecycle.report(&call.arguments);
@@ -1422,6 +1432,85 @@ to a larger-context model)"
             output.failed,
         );
         (output, false)
+    }
+}
+
+/// What happens while a request is sent.
+enum Sending<'a> {
+    /// An attempt starts.
+    Attempt,
+    Progress(&'a StreamProgress),
+    /// An attempt failed transiently; the next one, the given attempt, starts after the delay.
+    Retrying(&'a str, u32, Duration),
+}
+
+/// Sends `request` to the model `info` describes, sending it again after transient failures. A
+/// failed response's items are discarded, so a retry never runs a tool call from it.
+fn send(
+    executor: &tokio::runtime::Runtime,
+    endpoint: SocketAddr,
+    info: &ModelInfo,
+    retries: u32,
+    request: &Value,
+    cancel: &AtomicBool,
+    on: &mut dyn FnMut(Sending),
+) -> Result<client::Reply, AgentError> {
+    let (body, interleaved) = match info.protocol {
+        Protocol::Responses => (serde_json::to_vec(request), false),
+        Protocol::Messages => {
+            let body = messages::request(
+                request,
+                info.output.unwrap_or(messages::DEFAULT_MAX_TOKENS),
+                info.reasoning,
+            )
+            .map_err(AgentError::Provider)?;
+            let interleaved = messages::budget_thinking(&body);
+            (serde_json::to_vec(&body), interleaved)
+        }
+    };
+    let body = body.map_err(std::io::Error::from)?;
+    let mut attempt = 0;
+    loop {
+        on(Sending::Attempt);
+        let failure = match executor.block_on(client::respond(
+            endpoint,
+            info.protocol,
+            body.clone(),
+            interleaved,
+            cancel,
+            &mut |update| on(Sending::Progress(&update)),
+        )) {
+            Ok(reply) => return Ok(reply),
+            Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
+            Err(ClientError::Failed(failure)) => failure,
+        };
+        let backoff = RETRY_DELAY * 2u32.pow(attempt.min(5));
+        let delay = backoff
+            .min(MAX_RETRY_WAIT)
+            .max(failure.wait.unwrap_or_default());
+        // A context overflow is not retried as is: only compaction can let the request through.
+        if !failure.transient || failure.overflow || attempt == retries || delay > MAX_RETRY_WAIT {
+            let message = match attempt {
+                0 => failure.message,
+                n => format!("{} (after {n} retries)", failure.message),
+            };
+            return Err(match failure.overflow {
+                true => AgentError::ContextOverflow(message),
+                false => AgentError::Provider(message),
+            });
+        }
+        attempt += 1;
+        on(Sending::Retrying(&failure.message, attempt, delay));
+        let interrupted = executor.block_on(async {
+            tokio::select! {
+                biased;
+                () = client::cancelled(cancel) => true,
+                () = tokio::time::sleep(delay) => false,
+            }
+        });
+        if interrupted {
+            return Err(AgentError::Cancelled);
+        }
     }
 }
 
@@ -1613,12 +1702,13 @@ provisional unless an authority requires an exact method; user decisions, trust 
 consumer contracts, and required side effects remain controlling.
 "#;
 
-fn instructions(root: &Path, commands: &Commands) -> String {
-    let catalog = match commands.catalog() {
-        catalog if catalog.is_empty() => catalog,
-        catalog => catalog + "\n\n",
-    };
-    let mut text = format!(
+fn instructions(root: &Path, commands: &Commands, agents: &[subagent::Definition]) -> String {
+    let catalog: String = [subagent::catalog(agents), commands.catalog()]
+        .into_iter()
+        .filter(|catalog| !catalog.is_empty())
+        .map(|catalog| catalog + "\n\n")
+        .collect();
+    let text = format!(
         "You are scramjet-rs, a coding agent. You help the user with software engineering tasks \
 in the project directory {root}, using tools to read, write and edit files and to run bash commands.
 
@@ -1629,6 +1719,7 @@ Available tools:
 - write: Create or overwrite files
 - {status}: {status_snippet}
 - {question}: {snippet}
+- {subagent}: {subagent_snippet}
 
 Guidelines:
 - Use bash for file operations like ls, rg, find, and for git, builds and tests
@@ -1655,7 +1746,64 @@ Current working directory: {root}
         status_snippet = status::SNIPPET,
         question = question::NAME,
         snippet = question::SNIPPET,
+        subagent = subagent::NAME,
+        subagent_snippet = subagent::SNIPPET,
     );
+    text + &project_context(root)
+}
+
+/// A subagent's instructions, as Pi builds a child's: its tools and guidelines, the agent's own
+/// text, the project's context files from `cwd`, then the date and directory.
+fn child_instructions(cwd: &Path, tools: &[&str], prompt: &str) -> String {
+    let listed: Vec<&str> = tools
+        .iter()
+        .map(|tool| match *tool {
+            "read" => "- read: Read file contents",
+            "ls" => "- ls: List directory contents",
+            _ => "- bash: Execute bash commands (ls, grep, find, etc.) in a read-only sandbox",
+        })
+        .collect();
+    let mut guidelines = Vec::new();
+    if tools.contains(&"bash") {
+        guidelines.push(
+            "- Use bash for file operations like ls, rg, find, and for git; it runs in a \
+read-only sandbox without network, whose only writable directory is a private /tmp discarded \
+after each command",
+        );
+    }
+    guidelines.push("- No file can be changed: you only read and report");
+    guidelines.push("- Be concise in your responses");
+    guidelines.push("- Show file paths clearly when working with files");
+    let mut text = format!(
+        "You are a subagent of scramjet-rs, a coding agent: you are given a task, and your final \
+reply is its result.
+
+Available tools:
+{}
+
+Guidelines:
+{}",
+        match listed.is_empty() {
+            true => "(none)".to_owned(),
+            false => listed.join("\n"),
+        },
+        guidelines.join("\n")
+    );
+    if !prompt.trim().is_empty() {
+        text += &format!("\n\n{prompt}");
+    }
+    text += &project_context(cwd);
+    text + &format!(
+        "\nCurrent date: {}\nCurrent working directory: {}",
+        today(),
+        cwd.display()
+    )
+}
+
+/// The `AGENTS.md` and `CLAUDE.md` files of `root` and the directories above it, outermost
+/// first, as Pi's `# Project Context`; empty without any.
+fn project_context(root: &Path) -> String {
+    let mut text = String::new();
     let mut files = Vec::new();
     for directory in root.ancestors() {
         for name in ["AGENTS.md", "CLAUDE.md"] {
@@ -1849,11 +1997,22 @@ mod tests {
     fn serve_requests(
         responses: Vec<Vec<u8>>,
     ) -> (SocketAddr, std::thread::JoinHandle<Vec<(String, Value)>>) {
+        let count = responses.len();
+        let mut responses = responses.into_iter();
+        serve_answering(count, move |_| responses.next().unwrap())
+    }
+
+    /// Answers `count` connections, one at a time, with what `answer` makes of each request's
+    /// body; returns the requests in the order they were answered.
+    fn serve_answering(
+        count: usize,
+        mut answer: impl FnMut(&Value) -> Vec<u8> + Send + 'static,
+    ) -> (SocketAddr, std::thread::JoinHandle<Vec<(String, Value)>>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let mut requests = Vec::new();
-            for response in responses {
+            for _ in 0..count {
                 let (connection, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(connection);
                 let mut length = 0;
@@ -1871,7 +2030,9 @@ mod tests {
                 }
                 let mut body = vec![0; length];
                 reader.read_exact(&mut body).unwrap();
-                requests.push((head, serde_json::from_slice(&body).unwrap()));
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                let response = answer(&body);
+                requests.push((head, body));
                 reader.get_mut().write_all(&response).unwrap();
             }
             requests
@@ -1894,10 +2055,242 @@ mod tests {
             ask: false,
             retries: 3,
         };
-        (
-            Agent::start(config, SessionChoice::Open(path)).unwrap(),
-            scratch,
+        let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
+        // The user's own agents stay out of the tests.
+        agent.agents_directory = None;
+        agent.instructions = instructions(&root, &agent.commands, &[]);
+        (agent, scratch)
+    }
+
+    /// The events of a reply that calls tool `name` once.
+    fn tool_call(id: &str, name: &str, arguments: Value) -> Vec<u8> {
+        let events = fixture::call_events(&arguments.to_string(), fixture::known_usage());
+        let text = serde_json::to_string(&events).unwrap();
+        let text = text
+            .replace("\"inert\"", &format!("\"{name}\""))
+            .replace("call_1", id);
+        stream(&serde_json::from_str::<Vec<Value>>(&text).unwrap())
+    }
+
+    fn last_output(body: &Value) -> String {
+        let input = body["input"].as_array().unwrap();
+        input.last().unwrap()["output"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn a_subagent_runs_its_task_read_only_and_returns_its_last_reply() {
+        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let (endpoint, server) = serve(vec![
+            tool_call(
+                "call_1",
+                subagent::NAME,
+                json!({"agent":"reviewer","task":"Check kept.txt\nCarefully."}),
+            ),
+            tool_call(
+                "call_2",
+                "bash",
+                json!({"command":"cat kept.txt; echo changed > kept.txt"}),
+            ),
+            tool_call(
+                "call_3",
+                "write",
+                json!({"path":"kept.txt","content":"changed"}),
+            ),
+            reply("kept.txt says original"),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "subagent");
+        let agents = agent.root().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Reviews\ntools: read, ls, bash, write\n---\n\n\
+You review code.\n",
         )
+        .unwrap();
+        let kept = agent.root().join("kept.txt");
+        std::fs::write(&kept, "original\n").unwrap();
+        agent.agents_directory = Some(agents);
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("review", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 5);
+        let parent = bodies[0]["instructions"].as_str().unwrap();
+        assert!(parent.contains(&format!("- subagent: {}\n", subagent::SNIPPET)));
+        let child = &bodies[1];
+        let tools: Vec<_> = child["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| &t["name"])
+            .collect();
+        assert_eq!(tools, ["read", "ls", "bash"]);
+        let instructions = child["instructions"].as_str().unwrap();
+        assert!(instructions.starts_with("You are a subagent of scramjet-rs"));
+        assert!(instructions.contains("\n\nYou review code.\nCurrent date: "));
+        assert_eq!(
+            child["input"],
+            json!([{"role":"user","content":"Task: Check kept.txt\nCarefully."}])
+        );
+        assert_eq!(child["model"], "m");
+        let key = format!("{}:reviewer", agent.session_id());
+        assert_eq!(child["prompt_cache_key"], key.as_str());
+        let bash = last_output(&bodies[2]);
+        assert!(bash.starts_with("original\n"), "{bash}");
+        assert!(bash.contains("Read-only file system"), "{bash}");
+        assert_eq!(last_output(&bodies[3]), "Tool write not found");
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "original\n");
+        let result = "Agent invocation warnings:\n- write: left out, as subagents run read-only \
+here\n\nkept.txt says original";
+        assert_eq!(last_output(&bodies[4]), result);
+        assert_eq!(agent.usage.requests, 5);
+        assert_eq!(ui.replies, ["done"]);
+        assert!(
+            ui.shown
+                .contains(&"call subagent reviewer [user]\nCheck kept.txt …".to_owned())
+        );
+        let shown = ui
+            .shown
+            .iter()
+            .find(|line| line.starts_with("result subagent"))
+            .unwrap();
+        assert!(shown.starts_with(&format!("result subagent {result} Subagents(\"3 turns ")));
+        assert!(shown.ends_with(" m\")"), "{shown}");
+    }
+
+    #[test]
+    fn parallel_and_chained_subagents_share_out_tasks_at_most_at_the_parents_effort() {
+        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let mut parent_requests = 0;
+        let (endpoint, server) = serve_answering(8, move |body| {
+            let instructions = body["instructions"].as_str().unwrap();
+            if instructions.starts_with("You are a subagent") {
+                let task = body["input"][0]["content"].as_str().unwrap();
+                let effort = body["reasoning"]["effort"].as_str().unwrap_or("default");
+                return reply(&format!("{task} at {effort}"));
+            }
+            parent_requests += 1;
+            match parent_requests {
+                1 => tool_call(
+                    "call_1",
+                    subagent::NAME,
+                    json!({"tasks":[{"agent":"a","task":"one","effort":"high"},
+                        {"agent":"nope","task":"two"},{"agent":"b","task":"three"}]}),
+                ),
+                3 => tool_call(
+                    "call_2",
+                    subagent::NAME,
+                    json!({"chain":[{"agent":"a","task":"first"},
+                        {"agent":"b","task":"after {previous}","effort":"minimal"}]}),
+                ),
+                _ => reply("ok"),
+            }
+        });
+        let (mut agent, _scratch) = agent(endpoint, "subagents");
+        let agents = agent.root().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        for name in ["a", "b"] {
+            let file = format!("---\nname: {name}\ndescription: Agent {name}\ntools: read\n---\n");
+            std::fs::write(agents.join(format!("{name}.md")), file).unwrap();
+        }
+        agent.agents_directory = Some(agents);
+        agent.config.effort = Some("low".into());
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("split", &mut ui, &cancel).unwrap();
+        agent.turn("chain", &mut ui, &cancel).unwrap();
+        let bodies: Vec<Value> = server
+            .join()
+            .unwrap()
+            .into_iter()
+            .map(|(_, body)| body)
+            .collect();
+        let parents: Vec<&Value> = bodies
+            .iter()
+            .filter(|body| {
+                body["instructions"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("You are scramjet-rs")
+            })
+            .collect();
+        assert_eq!(parents.len(), 4);
+        assert_eq!(
+            last_output(parents[1]),
+            "Parallel: 2/3 succeeded\n\n[a] completed: Task: one at low\n\n[nope] failed: \
+Unknown agent: \"nope\". Available agents: \"a\", \"b\".\n\n[b] completed: Task: three at low"
+        );
+        assert_eq!(
+            last_output(parents[3]),
+            "Task: after Task: first at low at minimal"
+        );
+        assert_eq!(agent.usage.requests, 8);
+    }
+
+    #[test]
+    fn subagent_calls_are_checked_and_project_agents_need_the_users_approval() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let (endpoint, server) = serve(vec![
+            tool_call(
+                "call_1",
+                subagent::NAME,
+                json!({"tasks":[{"agent":"a"}],"effort":"huge"}),
+            ),
+            tool_call("call_2", subagent::NAME, json!({"agent":"a","task":""})),
+            tool_call(
+                "call_3",
+                subagent::NAME,
+                json!({"agent":"p","task":"go","agentScope":"both"}),
+            ),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "subagent-checks");
+        let agents = agent.root().join("agents");
+        let project = agent.root().join(".scramjet/agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(agents.join("a.md"), "---\nname: a\ndescription: A\n---\n").unwrap();
+        std::fs::write(project.join("p.md"), "---\nname: p\ndescription: P\n---\n").unwrap();
+        agent.agents_directory = Some(agents);
+        let mut ui = Recorder {
+            choices: vec![Some(1)],
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        agent.turn("go", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        let received =
+            serde_json::to_string_pretty(&json!({"tasks":[{"agent":"a"}],"effort":"huge"}))
+                .unwrap();
+        assert_eq!(
+            last_output(&bodies[1]),
+            format!(
+                "Validation failed for tool \"subagent\":\n  - tasks/0/task: must have required \
+property\n  - effort: must be one of off, minimal, low, medium, high, xhigh, max\n\nReceived \
+arguments:\n{received}"
+            )
+        );
+        assert_eq!(
+            last_output(&bodies[2]),
+            "Invalid parameters. Provide exactly one mode.\nAvailable agents: a (user)"
+        );
+        assert_eq!(
+            last_output(&bodies[3]),
+            "Canceled: project-local agents not approved."
+        );
+        let asked = format!(
+            "question Agents: p\nSource: {}\n\nProject agents are repo-controlled. Only continue \
+for trusted repositories.",
+            project.display()
+        );
+        assert!(ui.shown.contains(&asked), "{:?}", ui.shown);
+        assert!(
+            ui.shown
+                .contains(&"choose Run project-local agents? [\"Yes\", \"No\"] None".to_owned())
+        );
     }
 
     #[test]
@@ -2750,6 +3143,7 @@ response is incomplete; retry the request."});
             retries: 3,
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
+        agent.instructions = instructions(&root, &agent.commands, &[]);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         let typed = "/sjrstest:echo hi 'the user'";
@@ -2959,7 +3353,7 @@ response is incomplete; retry the request."});
         let bodies = server.join().unwrap();
         assert_eq!(bodies.len(), 6);
         let tools = bodies[0]["tools"].as_array().unwrap();
-        assert_eq!(tools.last().unwrap()["name"], question::NAME);
+        assert!(tools.iter().any(|tool| tool["name"] == question::NAME));
         let instructions = bodies[0]["instructions"].as_str().unwrap();
         assert!(instructions.contains(&format!("- {}: {}\n", question::NAME, question::SNIPPET)));
         let outputs: Vec<_> = agent

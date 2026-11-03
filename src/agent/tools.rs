@@ -20,6 +20,8 @@ const OUTPUT_UPDATE: Duration = Duration::from_millis(100);
 /// How much of the end of a running command's output is passed on.
 const OUTPUT_TAIL_BYTES: usize = 8 << 10;
 const DEFAULT_TIMEOUT: u64 = 120;
+/// Pi's default number of entries `ls` lists.
+const LS_LIMIT: usize = 500;
 const MAX_TIMEOUT: u64 = 3600;
 /// Unchanged lines shown around each change in an edit diff, as in Scramjet.
 const DIFF_CONTEXT: usize = 4;
@@ -59,7 +61,36 @@ pub(super) fn definitions() -> Value {
     let list = tools.as_array_mut().unwrap();
     list.push(super::status::definition());
     list.push(super::question::definition());
+    list.push(super::subagent::definition());
     tools
+}
+
+/// The definitions of a subagent's tools, `names` among `read`, `ls` and `bash`.
+pub(super) fn child_definitions(names: &[&str]) -> Value {
+    let all = definitions();
+    let read = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "read")
+        .cloned();
+    let ls = json!({"type":"function","name":"ls","strict":false,
+        "description":format!("List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to {LS_LIMIT} entries or {}KB (whichever is hit first).", MAX_BYTES / 1024),
+        "parameters":{"type":"object","properties":{
+            "path":{"type":"string","description":"Directory to list (default: current directory)"},
+            "limit":{"type":"integer","description":format!("Maximum number of entries to return (default: {LS_LIMIT})")}}}});
+    let bash = json!({"type":"function","name":"bash","strict":false,
+        "description":"Run a bash command in the working directory, in a read-only sandbox without network: no file can be changed, except in a private /tmp that is discarded when the command ends. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
+        "parameters":{"type":"object","properties":{
+            "command":{"type":"string","description":"Bash command to execute"},
+            "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
+          "required":["command"]}});
+    let tools: Vec<Value> = [read, Some(ls), Some(bash)]
+        .into_iter()
+        .flatten()
+        .filter(|tool| names.iter().any(|name| tool["name"] == *name))
+        .collect();
+    Value::Array(tools)
 }
 
 /// What the user is asked to approve before a tool runs, if anything, when approvals are on.
@@ -89,6 +120,8 @@ impl<'a> Call<'a> {
     pub fn summary(&self) -> String {
         match self.name {
             "bash" => self.arguments["command"].as_str().unwrap_or("").to_owned(),
+            "ls" => shortened(self.arguments["path"].as_str().unwrap_or(".")),
+            super::subagent::NAME => super::subagent::summary(&self.arguments),
             super::status::NAME => self.arguments["status"].as_str().unwrap_or("").to_owned(),
             "read" => {
                 let path = &shortened(self.arguments["path"].as_str().unwrap_or(""));
@@ -140,6 +173,31 @@ impl<'a> Call<'a> {
             other => Err(format!("unknown tool `{other}`")),
         }
     }
+
+    /// As `run` for a subagent's tools, none of which changes a file: bash runs in the read-only
+    /// sandbox.
+    pub fn run_read_only(&self, root: &Path, cancel: &AtomicBool) -> Result<Output, String> {
+        let text = match self.name {
+            "read" => read(root, self)?,
+            "ls" => ls(root, self)?,
+            "bash" => {
+                let ran = run_sandboxed(
+                    root,
+                    self.str("command")?,
+                    Some(timeout(self)),
+                    cancel,
+                    &mut |_| {},
+                )?;
+                return Ok(ran.tool_output());
+            }
+            other => return Err(format!("unknown tool `{other}`")),
+        };
+        Ok(Output {
+            text,
+            detail: None,
+            failed: false,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -166,7 +224,7 @@ fn shortened(path: &str) -> String {
     }
 }
 
-fn resolve(root: &Path, path: &str) -> PathBuf {
+pub(super) fn resolve(root: &Path, path: &str) -> PathBuf {
     let joined = match (path.strip_prefix('~'), std::env::home_dir()) {
         (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
             home.join(rest.trim_start_matches('/'))
@@ -448,6 +506,15 @@ pub fn sequence_diff<'a>(old: &[&'a str], new: &[&'a str], ops: &mut Vec<(char, 
     ops.extend(old[old.len() - suffix..].iter().map(|line| (' ', *line)));
 }
 
+fn timeout(call: &Call) -> Duration {
+    Duration::from_secs(
+        call.arguments["timeout"]
+            .as_u64()
+            .unwrap_or(DEFAULT_TIMEOUT)
+            .clamp(1, MAX_TIMEOUT),
+    )
+}
+
 fn bash(
     root: &Path,
     call: &Call,
@@ -455,13 +522,71 @@ fn bash(
     progress: &mut dyn FnMut(&str),
 ) -> Result<Output, String> {
     let command = call.str("command")?;
-    let timeout = Duration::from_secs(
-        call.arguments["timeout"]
-            .as_u64()
-            .unwrap_or(DEFAULT_TIMEOUT)
-            .clamp(1, MAX_TIMEOUT),
-    );
-    Ok(run_command(root, command, Some(timeout), cancel, progress)?.tool_output())
+    Ok(run_command(root, command, Some(timeout(call)), cancel, progress)?.tool_output())
+}
+
+/// Pi's `ls`: the entries of a directory, sorted case-insensitively, directories with `/`.
+fn ls(root: &Path, call: &Call) -> Result<String, String> {
+    let path = resolve(root, call.arguments["path"].as_str().unwrap_or("."));
+    let limit = call.arguments["limit"]
+        .as_u64()
+        .map_or(LS_LIMIT, |n| n as usize);
+    let metadata =
+        std::fs::metadata(&path).map_err(|_| format!("Path not found: {}", path.display()))?;
+    if !metadata.is_dir() {
+        return Err(format!("Not a directory: {}", path.display()));
+    }
+    let entries = std::fs::read_dir(&path).map_err(|e| format!("Cannot read directory: {e}"))?;
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort_by_key(|name| name.to_lowercase());
+    let mut listed = Vec::new();
+    let mut limited = false;
+    for name in names {
+        if listed.len() == limit {
+            limited = true;
+            break;
+        }
+        // Entries that cannot be examined are left out, as Pi leaves them out.
+        let Ok(metadata) = std::fs::metadata(path.join(&name)) else {
+            continue;
+        };
+        listed.push(if metadata.is_dir() {
+            format!("{name}/")
+        } else {
+            name
+        });
+    }
+    if listed.is_empty() {
+        return Ok("(empty directory)".into());
+    }
+    let mut output = String::new();
+    let mut cut = false;
+    for entry in &listed {
+        if output.len() + entry.len() + 1 > MAX_BYTES {
+            cut = true;
+            break;
+        }
+        output.push_str(entry);
+        output.push('\n');
+    }
+    output.pop();
+    let mut notices = Vec::new();
+    if limited {
+        notices.push(format!(
+            "{limit} entries limit reached. Use limit={} for more",
+            limit * 2
+        ));
+    }
+    if cut {
+        notices.push(format!("{}KB limit reached", MAX_BYTES / 1024));
+    }
+    if !notices.is_empty() {
+        output += &format!("\n\n[{}]", notices.join(". "));
+    }
+    Ok(output)
 }
 
 /// Runs `command` with bash in `root` until it ends, `cancel` is set or, if given, `timeout` passes.
@@ -473,21 +598,42 @@ pub(super) fn run_command(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
+    let mut process = Command::new("bash");
+    process.arg("-c").arg(command).current_dir(root);
+    run_process(process, "bash", timeout, cancel, progress)
+}
+
+/// As `run_command`, inside the read-only sandbox.
+pub(super) fn run_sandboxed(
+    root: &Path,
+    command: &str,
+    timeout: Option<Duration>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&str),
+) -> Result<Ran, String> {
+    let process = super::sandbox::command(root, command);
+    run_process(process, super::sandbox::PROGRAM, timeout, cancel, progress)
+}
+
+fn run_process(
+    mut process: Command,
+    program: &str,
+    timeout: Option<Duration>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&str),
+) -> Result<Ran, String> {
     use std::os::unix::process::CommandExt;
     let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
     let mut child = {
-        let mut process = Command::new("bash");
         process
-            .arg("-c")
-            .arg(command)
-            .current_dir(root)
             .stdin(Stdio::null())
             .stdout(writer.try_clone().map_err(|e| e.to_string())?)
             .stderr(writer)
             .process_group(0);
-        process
-            .spawn()
-            .map_err(|e| format!("cannot start bash: {e}"))?
+        let spawned = process.spawn();
+        // It holds the pipe's write ends, which must close for the output to end.
+        drop(process);
+        spawned.map_err(|e| format!("cannot start {program}: {e}"))?
     };
     let output = Arc::new(Mutex::new(Vec::new()));
     let total = Arc::new(std::sync::atomic::AtomicUsize::new(0));

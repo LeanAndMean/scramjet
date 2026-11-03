@@ -145,7 +145,7 @@ and 'label'."
 }
 
 impl Choice {
-    fn plain(label: &str) -> Self {
+    pub(super) fn plain(label: &str) -> Self {
         Self {
             label: label.into(),
             description: None,

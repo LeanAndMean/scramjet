@@ -331,7 +331,7 @@ editing = serve_items([
       'content': [{'type': 'output_text', 'text': '**Done**, it says two.', 'annotations': []}]}],
 ])
 env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACHE=os.path.join(work, 'commands'),
-           XDG_CONFIG_HOME=os.path.join(work, 'config'))
+           XDG_CONFIG_HOME=os.path.join(work, 'config'), SCRAMJET_CODING_AGENT_DIR=os.path.join(work, 'agent'))
 env.pop('VISUAL', None)
 env.pop('EDITOR', None)
 # Temporary files of the external editor go here, so the journeys can check they are removed.

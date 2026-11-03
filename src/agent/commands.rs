@@ -182,7 +182,7 @@ impl Commands {
 
 /// The set directories under `root`, by name, except the bundled ones. Links count as what they
 /// point to.
-fn sets(root: &Path) -> Vec<String> {
+pub(super) fn sets(root: &Path) -> Vec<String> {
     let Ok(entries) = fs::read_dir(root) else {
         return Vec::new();
     };
@@ -387,7 +387,7 @@ fn optional_text(value: &Yaml) -> Result<Option<String>, String> {
 /// The frontmatter and the body after it, trimmed, as Scramjet's `parseFrontmatter` splits
 /// them: the text must start with `---` and the frontmatter ends at the next line starting with
 /// `---`. Otherwise the whole text is the body, as it is.
-fn split_frontmatter(content: &str) -> (String, String) {
+pub(super) fn split_frontmatter(content: &str) -> (String, String) {
     let content = content.replace("\r\n", "\n").replace('\r', "\n");
     match content.get(3..).and_then(|rest| rest.find("\n---")) {
         Some(end) if content.starts_with("---") => {

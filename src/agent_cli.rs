@@ -1285,6 +1285,13 @@ impl Terminal {
                     rows.split('\n').map(str::to_owned).collect::<Vec<_>>()
                 })
                 .collect(),
+            (_, Some(ToolDetail::Subagents(usage))) => {
+                let mut rows = styled(preview(output, Shown::First(RESULT_LINES), width));
+                if !usage.is_empty() {
+                    rows.push(self.dim(&clip(usage, width)));
+                }
+                rows
+            }
             ("bash", None) => styled(preview(
                 &bash_shown(output, failed),
                 Shown::Last(bash_lines),
