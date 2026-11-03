@@ -67,7 +67,7 @@ impl Agent {
         self.compact_before_prompt(ui, cancel)?;
         self.completed = None;
         self.delegated.clear();
-        let message = self.user_message(prompt);
+        let message = self.user_message(prompt, ui);
         self.add(message)?;
         self.save_command()?;
         self.prompts.push(prompt.to_owned());
@@ -75,12 +75,24 @@ impl Agent {
     }
 
     /// The message `prompt` sends, typed or queued during a turn, starting the command it names
-    /// as Scramjet's input handling does: a command prompt sends its expansion, and the prompt
-    /// as typed is kept for recall and display.
-    fn user_message(&mut self, prompt: &str) -> Value {
+    /// as Scramjet's input handling does: a command or skill prompt sends its expansion, and the
+    /// prompt as typed is kept for recall and display. A skill whose file cannot be read now is
+    /// said so, and the prompt sent as typed, as Pi does.
+    fn user_message(&mut self, prompt: &str, ui: &mut dyn AgentUi) -> Value {
         let command = (self.commands.named(prompt)).map(|command| command.name.clone());
         self.lifecycle.prompted(prompt, command.as_deref());
-        match self.commands.expand(prompt) {
+        let sent = match self.commands.expand(prompt) {
+            Some(sent) => Some(sent),
+            None => match self.skills.expand(prompt) {
+                Some(Ok(sent)) => Some(sent),
+                Some(Err(error)) => {
+                    ui.notice(&error);
+                    None
+                }
+                None => None,
+            },
+        };
+        match sent {
             Some(sent) => json!({"role":"user","content":sent,TYPED:prompt}),
             None => json!({"role":"user","content":prompt}),
         }
@@ -270,7 +282,7 @@ to a larger-context model)"
             return Ok(());
         }
         for prompt in messages {
-            let message = self.user_message(&prompt);
+            let message = self.user_message(&prompt, ui);
             match message.get(TYPED) {
                 Some(_) => {
                     ui.command_prompt(&prompt, message["content"].as_str().unwrap_or_default())
@@ -353,6 +365,7 @@ to a larger-context model)"
                         user: self.agents_directory.as_deref(),
                         sets: &self.sets,
                     },
+                    skills: &self.skills,
                 };
                 subagent::run(&call.arguments, &parent, ui, cancel)
             };
@@ -1070,8 +1083,13 @@ for trusted repositories.",
         ]);
         let (mut agent, _scratch) = agent(endpoint, "configured-tools");
         agent.config.tools = ["ls", "grep", "read"].map(String::from).to_vec();
-        agent.instructions =
-            instructions::agent(agent.root(), &agent.config.tools, &agent.commands, &[]);
+        agent.instructions = instructions::agent(
+            agent.root(),
+            &agent.config.tools,
+            &agent.commands,
+            &[],
+            &agent.skills,
+        );
         std::fs::create_dir(agent.root().join("src")).unwrap();
         std::fs::write(agent.root().join("src/a.txt"), "a needle\n").unwrap();
         let mut ui = Recorder::default();
@@ -1246,9 +1264,16 @@ for trusted repositories.",
             retries: 3,
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             command_sets: Vec::new(),
+            skills: Vec::new(),
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
-        agent.instructions = instructions::agent(&root, &agent.config.tools, &agent.commands, &[]);
+        agent.instructions = instructions::agent(
+            &root,
+            &agent.config.tools,
+            &agent.commands,
+            &[],
+            &agent.skills,
+        );
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         let typed = "/sjrstest:echo hi 'the user'";
@@ -1286,6 +1311,72 @@ for trusted repositories.",
         show_items(&conversation, &mut shown);
         assert_eq!(shown.shown[0], format!("command {typed} sent {expansion}"));
         assert!(shown.shown.contains(&"prompt /sjrstest:other x".to_owned()));
+    }
+
+    #[test]
+    fn a_skill_prompt_sends_its_instructions_which_the_model_is_told_where_to_read() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("one", fixture::known_usage())),
+            stream(&fixture::text_events("two", fixture::known_usage())),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "skill");
+        let file = scratch.0.join("skills/pdf/SKILL.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            "---\nname: pdf\ndescription: Fills PDF forms.\n---\nUse ./fill.sh\n",
+        )
+        .unwrap();
+        agent.skills = super::super::Skills::in_directory(&scratch.0.join("skills"));
+        agent.instructions = instructions::agent(
+            agent.root(),
+            &agent.config.tools,
+            &agent.commands,
+            &[],
+            &agent.skills,
+        );
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let typed = "/skill:pdf fill form.pdf";
+        agent.turn(typed, &mut ui, &cancel).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        agent.turn("/skill:pdf again", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        let sent = format!(
+            "<skill name=\"pdf\" location=\"{}\">\nReferences are relative to {}.\n\nUse \
+./fill.sh\n</skill>\n\nfill form.pdf",
+            file.display(),
+            file.parent().unwrap().display()
+        );
+        assert_eq!(bodies[0]["input"], json!([{"role":"user","content":sent}]));
+        let instructions = bodies[0]["instructions"].as_str().unwrap();
+        let listed = "\n\nThe following skills provide specialized instructions for specific \
+tasks.\nUse the read tool to load a skill's file when the task matches its description.\n";
+        assert!(instructions.contains(listed), "{instructions}");
+        assert!(instructions.ends_with(&format!(
+            "<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>Fills PDF \
+forms.</description>\n    <location>{}</location>\n  </skill>\n</available_skills>\n",
+            file.display()
+        )));
+        // Gone since, it is said so and sent as typed; neither is a command, so no status check.
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(
+            bodies[1]["input"][2],
+            json!({"role":"user","content":"/skill:pdf again"})
+        );
+        let notice = format!("notice skill pdf: cannot read {}", file.display());
+        assert!(
+            ui.shown.iter().any(|shown| shown.starts_with(&notice)),
+            "{:?}",
+            ui.shown
+        );
+        assert_eq!(agent.prompts(), [typed, "/skill:pdf again"]);
+        let mut shown = Recorder::default();
+        agent.show_conversation(&mut shown);
+        assert_eq!(shown.shown[0], format!("command {typed} sent {sent}"));
+        // Without the read tool the model is not told to read them.
+        let text = instructions::agent(agent.root(), &[], &agent.commands, &[], &agent.skills);
+        assert!(!text.contains("<available_skills>"));
     }
 
     #[test]
@@ -1454,6 +1545,7 @@ be a non-empty array for select type. failed",
                 retries: 0,
                 tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
                 command_sets: Vec::new(),
+                skills: Vec::new(),
             };
             let path = agent.session_path().to_owned();
             drop(agent);

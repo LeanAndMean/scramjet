@@ -796,10 +796,16 @@ impl Completion {
         let mut rows: Vec<String> = (top..top + visible)
             .map(|index| {
                 let item = &self.items[index];
-                // File names and command descriptions come from the project.
-                let label = text::clip(&text::visible(&item.label), width.saturating_sub(2));
                 let room = width.saturating_sub(2 + column);
-                let description = if item.description.is_empty() || room <= 10 {
+                let described = !item.description.is_empty() && room > 10;
+                // As Scramjet's, a name before a description keeps 2 cells of its column free.
+                let label_room = match described {
+                    true => column - 2,
+                    false => width.saturating_sub(2),
+                };
+                // File names and command descriptions come from the project.
+                let label = text::clip(&text::visible(&item.label), label_room);
+                let description = if !described {
                     String::new()
                 } else {
                     let pad = " ".repeat(column.saturating_sub(label.width()));
@@ -1625,6 +1631,17 @@ mod tests {
         let list = Completion::slash("/rs:l", &loaded).unwrap();
         list.apply(&mut buffer);
         assert_eq!(buffer.text, "/rs:loop ");
+        // A name too long for the column is cut before its description.
+        let long = [(
+            "skill:writing-scramjet-commands".to_owned(),
+            "Use when creating commands".to_owned(),
+        )];
+        let list = Completion::slash("/skill:", &long).unwrap();
+        assert_eq!(
+            plain(list.rows(80)),
+            ["→ /skill:writing-scramjet-comma…  Use when creating commands"]
+        );
+        assert_eq!(plain(list.rows(40)), ["→ /skill:writing-scramjet-commands"]);
     }
 
     #[test]

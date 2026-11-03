@@ -65,6 +65,8 @@ pub(super) struct Settings {
     /// `commandSets`: the directories of the installed command sets; a relative one is relative
     /// to the settings file's directory.
     pub(super) command_sets: Vec<PathBuf>,
+    /// `skills`: skill files and directories besides those found by default, as `commandSets`'.
+    pub(super) skills: Vec<PathBuf>,
     /// What is wrong in the file; those keys keep their defaults.
     pub(super) warnings: Vec<String>,
 }
@@ -91,6 +93,7 @@ impl Settings {
             steering_mode: Delivery::All,
             follow_up_mode: Delivery::OneAtATime,
             command_sets: Vec::new(),
+            skills: Vec::new(),
             warnings: Vec::new(),
         };
         let Some(path) = &settings.path else {
@@ -179,10 +182,24 @@ impl Settings {
                 "{path}: commandSets must be a list of directories; ignored"
             )),
         }
+        match paths(object, "skills") {
+            Ok(entries) => {
+                self.skills = (entries.iter()).map(|entry| self.resolve(entry)).collect()
+            }
+            Err(()) => self.warnings.push(format!(
+                "{path}: skills must be a list of files and directories; ignored"
+            )),
+        }
     }
 
-    /// `entry` of `commandSets` as a directory.
+    /// A path in the settings, as Pi resolves one: `~` is the home directory, and a relative one
+    /// is relative to the settings file's directory.
     fn resolve(&self, entry: &str) -> PathBuf {
+        let entry = entry.trim();
+        let home = std::env::home_dir().filter(|_| entry == "~" || entry.starts_with("~/"));
+        if let Some(home) = home {
+            return home.join(entry[1..].trim_start_matches('/'));
+        }
         let directory = self.path.as_deref().and_then(Path::parent);
         directory.unwrap_or(Path::new("/")).join(entry)
     }
@@ -325,7 +342,12 @@ impl Settings {
 
 /// `commandSets`' entries; an error when it is not a list of strings.
 fn command_sets(object: &Map<String, Value>) -> Result<Vec<String>, ()> {
-    match object.get("commandSets") {
+    paths(object, "commandSets")
+}
+
+/// The entries of the list of paths `key`; an error when it is not a list of strings.
+fn paths(object: &Map<String, Value>, key: &str) -> Result<Vec<String>, ()> {
+    match object.get(key) {
         None => Ok(Vec::new()),
         Some(Value::Array(entries)) => (entries.iter())
             .map(|entry| entry.as_str().map(str::to_owned).ok_or(()))
@@ -432,6 +454,7 @@ mod tests {
         assert_eq!(settings.hide_credentials, HideCredentials::Unattended);
         assert_eq!(settings.steering_mode, Delivery::All);
         assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
+        assert!(settings.skills.is_empty());
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
     }
 
@@ -507,6 +530,35 @@ mod tests {
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
         let none = settings_with(&scratch, r#"{"doubleEscapeAction": "none"}"#);
         assert_eq!(none.double_escape, DoubleEscape::Nothing);
+    }
+
+    #[test]
+    fn skills_are_paths_from_home_or_the_settings_directory() {
+        let scratch = Scratch::new("skills");
+        let settings = settings_with(
+            &scratch,
+            r#"{"skills": ["~/.claude/skills", "~", "own", "/abs/one.md"]}"#,
+        );
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(
+            settings.skills,
+            [
+                home.join(".claude/skills"),
+                home.clone(),
+                scratch.0.join("own"),
+                PathBuf::from("/abs/one.md"),
+            ]
+        );
+        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+        let wrong = settings_with(&scratch, r#"{"skills": "~/.claude/skills"}"#);
+        assert!(wrong.skills.is_empty());
+        let path = shown(&scratch.0.join("settings.json"));
+        assert_eq!(
+            wrong.warnings,
+            [format!(
+                "{path}: skills must be a list of files and directories; ignored"
+            )]
+        );
     }
 
     #[test]

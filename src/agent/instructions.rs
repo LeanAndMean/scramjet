@@ -1,9 +1,9 @@
 //! The system instructions of the agent and of its subagents.
-use super::{Commands, publish, question, status, subagent};
+use super::{Commands, Skills, publish, question, status, subagent};
 use std::path::Path;
 
 const CONTEXT_FILE_BYTES: u64 = 256 << 10;
-/// Scramjet's explanation of its command framing, the first part of its `# Command framing`.
+/// Scramjet's explanation of its command framing, the start of its `# Command framing`.
 const COMMAND_FRAMING: &str = r#"# Command framing
 
 Commands injected by the Scramjet harness are wrapped in `<scramjet-command name="...">` tags.
@@ -17,14 +17,19 @@ A harness-delivered `<scramjet-command>` is an actively invoked executable task.
 `## Goals` are its controlling outcomes. Actions and plans serve those Goals and remain
 provisional unless an authority requires an exact method; user decisions, trust boundaries,
 consumer contracts, and required side effects remain controlling.
+
+Skills may provide capabilities, workflows, setup guidance, or reference material, but they do
+not carry Scramjet command framing.
 "#;
 
-/// The agent's instructions, with Pi's list of its coding `tools` and the guidelines for them.
+/// The agent's instructions, with Pi's list of its coding `tools` and the guidelines for them,
+/// and its list of `skills` after the project's context files.
 pub(super) fn agent(
     root: &Path,
     tools: &[String],
     commands: &Commands,
     agents: &[subagent::Definition],
+    skills: &Skills,
 ) -> String {
     let catalog: String = [subagent::catalog(agents), commands.catalog()]
         .into_iter()
@@ -113,12 +118,20 @@ Current working directory: {root}
         guidelines = guidelines.join("\n"),
         date = today(),
     );
-    text + &project_context(root)
+    text + &project_context(root) + &skills_section(has("read"), skills)
+}
+
+/// Pi's list of skills, only for a model that has `read` to load them.
+fn skills_section(read: bool, skills: &Skills) -> String {
+    match (read, skills.catalog()) {
+        (true, catalog) if !catalog.is_empty() => format!("\n{catalog}"),
+        _ => String::new(),
+    }
 }
 
 /// A subagent's instructions, as Pi builds a child's: its tools and guidelines, the agent's own
-/// text, the project's context files from `cwd`, then the date and directory.
-pub(super) fn child(cwd: &Path, tools: &[&str], prompt: &str) -> String {
+/// text, the project's context files from `cwd` and the `skills`, then the date and directory.
+pub(super) fn child(cwd: &Path, tools: &[&str], prompt: &str, skills: &Skills) -> String {
     let listed: Vec<&str> = tools
         .iter()
         .map(|tool| match *tool {
@@ -168,6 +181,11 @@ Guidelines:
         text += &format!("\n\n{prompt}");
     }
     text += &project_context(cwd);
+    let listed = skills_section(tools.contains(&"read"), skills);
+    if !listed.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text += &listed;
     text + &format!(
         "\nCurrent date: {}\nCurrent working directory: {}",
         today(),
@@ -231,7 +249,7 @@ mod tests {
         let root = Path::new("/nonexistent/scramjet-rs-instructions");
         let commands = Commands::default();
         let tools = super::super::tools::DEFAULT_TOOLS.map(String::from);
-        let text = agent(root, &tools, &commands, &[]);
+        let text = agent(root, &tools, &commands, &[], &Skills::default());
         let listed = "Available tools:\n- read: Read file contents\n- bash: Execute bash commands \
 (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including \
 multiple disjoint edits in one call\n- write: Create or overwrite files\n- report_scramjet_command_status:";
@@ -243,14 +261,36 @@ git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use
             text.contains("- Use write only for new files or complete rewrites.\n- Prefer editing")
         );
 
-        let text = agent(root, &[], &commands, &[]);
+        let text = agent(root, &[], &commands, &[], &Skills::default());
         assert!(text.contains("Available tools:\n- report_scramjet_command_status:"));
         assert!(text.contains("Guidelines:\n- Be concise in your responses\n"));
         let all = super::super::tools::CODING_TOOLS.map(String::from);
-        let text = agent(root, &all, &commands, &[]);
+        let text = agent(root, &all, &commands, &[], &Skills::default());
         assert!(text.contains(
             "Guidelines:\n- Prefer grep/find/ls tools over bash for file exploration (faster, \
 respects .gitignore)\n- Use read"
         ));
+    }
+
+    #[test]
+    fn children_that_can_read_are_told_of_the_skills() {
+        let scratch =
+            std::env::temp_dir().join(format!("sjrs-child-skills-{}", std::process::id()));
+        let _scratch = super::super::tests::ScratchDir::new(scratch.clone());
+        let file = scratch.join("pdf/SKILL.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "---\ndescription: PDFs.\n---\nBody").unwrap();
+        let skills = Skills::in_directory(&scratch);
+        let cwd = Path::new("/nonexistent/scramjet-rs-child");
+        let text = child(cwd, &["read", "bash"], "Be brief.", &skills);
+        let listed = "Be brief.\n\nThe following skills provide specialized instructions for \
+specific tasks.\n";
+        assert!(text.contains(listed), "{text}");
+        let end = format!(
+            "<location>{}</location>\n  </skill>\n</available_skills>\n\nCurrent date: ",
+            file.display()
+        );
+        assert!(text.contains(&end), "{text}");
+        assert!(!child(cwd, &["bash"], "", &skills).contains("<available_skills>"));
     }
 }

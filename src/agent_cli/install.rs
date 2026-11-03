@@ -1,5 +1,6 @@
 //! `scramjet-rs install`, `remove` and `list`: command sets installed by reference, recorded in
-//! the settings' `commandSets` without being copied, as Pi installs a local path.
+//! the settings' `commandSets` without being copied, as Pi installs a local path; `list` also
+//! shows the skills.
 use super::settings::Settings;
 use scramjet_rs::agent::{Inventory, Set, inventory, shortened};
 use std::path::Path;
@@ -44,7 +45,8 @@ fn remove(reference: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The sets a session in the current directory loads, in their order, and what is wrong.
+/// The sets and skills a session in the current directory loads, in their order, and what is
+/// wrong.
 fn list() -> Result<(), String> {
     let settings = Settings::load();
     for warning in &settings.warnings {
@@ -76,14 +78,30 @@ fn list() -> Result<(), String> {
     if let Some(path) = settings.shown_path() {
         println!("Installed sets are listed in {path} (commandSets).");
     }
-    print_warnings(&found.warnings.iter().collect::<Vec<_>>());
+    let skills = found.skills.list();
+    if !skills.is_empty() {
+        println!("\nSkills:");
+        let width = (skills.iter())
+            .map(|skill| skill.name.chars().count())
+            .max();
+        for skill in skills {
+            let only_typed = match skill.listed {
+                true => "",
+                false => " (not offered to the model)",
+            };
+            let (name, path) = (&skill.name, shown(&skill.path));
+            println!("  {name:<0$}  {path}{only_typed}", width.unwrap_or(0));
+        }
+    }
+    let warnings = found.warnings.iter().chain(found.skills.warnings());
+    print_warnings(&warnings.collect::<Vec<_>>());
     Ok(())
 }
 
 /// What a session in the current directory would load.
 fn here(settings: &Settings) -> Result<Inventory, String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
-    Ok(inventory(&settings.command_sets, &root))
+    Ok(inventory(&settings.command_sets, &settings.skills, &root))
 }
 
 /// How many of `found`'s commands and agents come from `set`.

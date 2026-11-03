@@ -6,7 +6,7 @@
 
 use super::{
     AgentError, AgentUi, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation,
-    MAX_STEPS, ToolDetail, Usage,
+    MAX_STEPS, Skills, ToolDetail, Usage,
     client::{self, ModelInfo},
     commands::{self, Sets},
     instructions,
@@ -602,6 +602,9 @@ pub(super) struct Parent<'a> {
     /// Shared by children of an agent, so that their requests can reuse cached prefixes.
     pub cache_key: String,
     pub sources: Sources<'a>,
+    /// The agent's skills, which children with `read` are told of, as Scramjet's children load
+    /// them.
+    pub skills: &'a Skills,
 }
 
 /// A task given to an agent, ready to run.
@@ -1142,7 +1145,7 @@ fn run_child(
             .unwrap_or_else(|| ModelInfo::guess(&job.model)),
     };
     let effort = &job.effort;
-    let instructions = instructions::child(&job.cwd, tools, &agent.prompt);
+    let instructions = instructions::child(&job.cwd, tools, &agent.prompt, parent.skills);
     let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];
     for _ in 0..MAX_STEPS {
         if cancel.load(Ordering::Relaxed) {

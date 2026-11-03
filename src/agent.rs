@@ -14,6 +14,7 @@ mod question;
 mod request;
 mod sandbox;
 mod session;
+mod skills;
 mod status;
 mod subagent;
 mod tools;
@@ -28,6 +29,7 @@ pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
 pub use session::{Session, SessionInfo};
+pub use skills::{Skill, Skills};
 pub use status::{Completed, Next, Routing, Step, record as next_step_record};
 pub use tools::{
     CODING_TOOLS, DEFAULT_TOOLS, search_program, sequence_diff, shortened, terminal_line,
@@ -86,6 +88,8 @@ pub struct AgentConfig {
     pub tools: Vec<String>,
     /// The directories of the installed command sets, in their order.
     pub command_sets: Vec<PathBuf>,
+    /// The skill files and directories the settings list, besides those found by default.
+    pub skills: Vec<PathBuf>,
 }
 
 /// The reasoning effort levels a model's card lists, and the current one, as Shift+Tab cycles
@@ -196,6 +200,7 @@ pub struct Agent {
     conversation: Vec<Value>,
     prompts: Vec<String>,
     commands: Commands,
+    skills: Skills,
     /// The command the last command prompt ran, until it is reported or left.
     lifecycle: status::Lifecycle,
     /// The command the last turn reported completed, until its next step is routed.
@@ -219,9 +224,10 @@ pub struct Agent {
     pub usage: Usage,
 }
 
-/// What a session in `root` with the `installed` command sets would load from them and from the
-/// agent directories, and what is wrong there, loose project agents included.
-pub fn inventory(installed: &[PathBuf], root: &Path) -> Inventory {
+/// What a session in `root` with the `installed` command sets and the `listed` skills would load
+/// from them and from the agent and skill directories, and what is wrong there, loose project
+/// agents included.
+pub fn inventory(installed: &[PathBuf], listed: &[PathBuf], root: &Path) -> Inventory {
     let sets = Sets::for_project(installed, root);
     let commands = Commands::discover(&sets);
     let user = subagent::user_directory();
@@ -240,6 +246,7 @@ pub fn inventory(installed: &[PathBuf], root: &Path) -> Inventory {
         commands,
         agents,
         warnings,
+        skills: Skills::discover(listed, root),
     }
 }
 
@@ -251,6 +258,7 @@ pub struct Inventory {
     pub agents: Vec<(String, PathBuf)>,
     /// Why sets, commands and agent files were skipped.
     pub warnings: Vec<String>,
+    pub skills: Skills,
 }
 
 impl Agent {
@@ -277,11 +285,19 @@ impl Agent {
         let sets = Sets::for_project(&config.command_sets, &config.root);
         let commands = Commands::discover(&sets);
         let agents = subagent::registered(&sets, &mut Vec::new());
+        let skills = Skills::discover(&config.skills, &config.root);
         let mut agent = Self {
-            instructions: instructions::agent(&config.root, &config.tools, &commands, &agents),
+            instructions: instructions::agent(
+                &config.root,
+                &config.tools,
+                &commands,
+                &agents,
+                &skills,
+            ),
             agents_directory: subagent::user_directory(),
             sets,
             commands,
+            skills,
             lifecycle,
             completed: None,
             delegated: Vec::new(),
@@ -461,6 +477,16 @@ impl Agent {
     /// The commands this session's prompts can run, as discovered when the session started.
     pub fn commands(&self) -> &Commands {
         &self.commands
+    }
+
+    /// The skills found when the session started, which `/skill:<name>` runs.
+    pub fn skills(&self) -> &Skills {
+        &self.skills
+    }
+
+    /// The text `prompt` sends when it runs a command or a skill, `None` when it is sent as typed.
+    pub fn expand(&self, prompt: &str) -> Option<String> {
+        (self.commands.expand(prompt)).or_else(|| self.skills.expand(prompt)?.ok())
     }
 
     /// The user's prompts in this session, oldest first, including those compacted away.

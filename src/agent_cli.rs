@@ -97,6 +97,7 @@ fn start(options: Options, settings: &Settings) -> Result<Agent, String> {
         retries: options.retries,
         tools: settings.tools.clone(),
         command_sets: settings.command_sets.clone(),
+        skills: settings.skills.clone(),
     };
     let mut agent = Agent::start(config, options.choice).map_err(|e| e.to_string())?;
     let model = match agent.last_model() {

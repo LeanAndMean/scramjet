@@ -76,6 +76,9 @@ impl Interactive {
                     (agent.commands().list().iter())
                         .filter(|command| !command.delegate_only)
                         .map(command_entry)
+                        .chain(agent.skills().list().iter().map(|skill| {
+                            (format!("skill:{}", skill.name), skill.description.clone())
+                        }))
                         .collect(),
                     settings.double_escape != DoubleEscape::Nothing,
                 );
@@ -124,6 +127,9 @@ impl Interactive {
             .chain(
                 (self.agent.commands().warnings().iter())
                     .map(|warning| format!("scramjet: {warning}")),
+            )
+            .chain(
+                (self.agent.skills().warnings().iter()).map(|warning| format!("skills: {warning}")),
             )
             .collect();
         if !warnings.is_empty() {
@@ -205,7 +211,7 @@ impl Interactive {
     /// completed with one.
     fn send(&mut self, prompt: &str, start: Start) -> Option<(String, Start)> {
         if let Some(screen) = &self.screen {
-            screen.event(match self.agent.commands().expand(prompt) {
+            screen.event(match self.agent.expand(prompt) {
                 Some(sent) => Event::CommandPrompt(prompt.to_owned(), sent),
                 None => Event::UserPrompt(prompt.to_owned()),
             });

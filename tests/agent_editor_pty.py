@@ -1432,6 +1432,24 @@ def command_sets_resumed(read, until, send, output):
     send(b'\x03\x04')
 
 
+def skills(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    # Skills are listed after the commands, as `skill:<name>` with their description.
+    send(b'/skill:p')
+    on_screen('\u2192 /skill:pdf  Fills PDF forms.')
+    send(b'\t')
+    ending(read, output, ['> /skill:pdf'])
+    send(b'form.pdf\r')
+    rows = on_screen('Filled.')
+    # Shown as typed, as a command is, with what it sent behind Ctrl+O.
+    assert '> /skill:pdf form.pdf\n\u2026 (sent as 7 lines, Ctrl+O to expand)' in '\n'.join(rows), rows
+    send(b'\x0f')
+    rows = on_screen('Use ./fill.sh')
+    assert 'form.pdf' in rows, rows
+    send(b'\x04')
+
+
 def questions(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -1637,6 +1655,20 @@ assert users == [
     {'role': 'user', '_scramjet_typed': '/tools:echo a  b',
      'content': '<scramjet-command name="tools:echo">\nEcho a b\n</scramjet-command>'},
 ], users
+pdf = os.path.join(project, '.scramjet', 'skills', 'pdf', 'SKILL.md')
+os.makedirs(os.path.dirname(pdf))
+with open(pdf, 'w') as file:
+    file.write('---\nname: pdf\ndescription: Fills PDF forms.\n---\n\nUse ./fill.sh\n')
+bodies = []
+known = set(session_files())
+run([], skills, serve_items([[message('Filled.')]], bodies=bodies))
+(skilled,) = set(session_files()) - known
+users = [line for line in map(json.loads, open(skilled)) if line.get('role') == 'user']
+assert users == [{'role': 'user', '_scramjet_typed': '/skill:pdf form.pdf',
+                  'content': '<skill name="pdf" location="%s">\nReferences are relative to %s.\n\n'
+                             'Use ./fill.sh\n</skill>\n\nform.pdf' % (pdf, os.path.dirname(pdf))}], users
+assert '<location>%s</location>' % pdf in bodies[0]['instructions'], bodies[0]['instructions']
+shutil.rmtree(os.path.join(project, '.scramjet', 'skills'))
 question_gate = threading.Event()
 asking = serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {

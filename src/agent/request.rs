@@ -321,6 +321,7 @@ response is incomplete; retry the request."});
             retries: 3,
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             command_sets: Vec::new(),
+            skills: Vec::new(),
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
         let replay = agent.replay_conversation();
@@ -537,6 +538,7 @@ response is incomplete; retry the request."});
             retries: 3,
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             command_sets: Vec::new(),
+            skills: Vec::new(),
         };
         let agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
         assert_eq!(agent.request()["prompt_cache_key"], "1700000000000-42");
