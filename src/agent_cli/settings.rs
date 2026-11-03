@@ -127,8 +127,8 @@ impl Row {
             }
             Self::NextSteps => {
                 "What follows a command that finishes and recommends a next one: continue \
-                 automatically, ask you, or let autopilot decide. Kept in Scramjet's autonomy.yaml \
-                 files, which Scramjet reads too."
+                 automatically, ask you, or let autopilot decide; command sets can suggest which. \
+                 Kept in Scramjet's autonomy.yaml files, which Scramjet reads too."
             }
             Self::Publishing => {
                 "Whether the issues, pull requests and comments a command publishes on GitHub wait \

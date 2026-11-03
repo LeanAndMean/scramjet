@@ -22,7 +22,9 @@ mod tree;
 mod turn;
 mod ui;
 
-pub use autonomy::{Approval, Approvals, Edge, NextStep, NextSteps, Publication, Scope, Setting};
+pub use autonomy::{
+    Approval, Approvals, Edge, NextStep, NextSteps, Publication, Scope, Setting, Suggestion,
+};
 pub use client::StreamProgress;
 pub use commands::{Command, Commands, Origin, Set, Sets};
 pub use compaction::{AutoCompaction, Compaction};
@@ -700,6 +702,14 @@ impl Agent {
     ) -> Result<(), String> {
         let (global, root) = (self.autonomy.as_deref(), &self.config.root);
         autonomy::choose(global, root, (source, target), choice)
+    }
+
+    /// Saves what the command sets suggest for the next steps without a setting of their own,
+    /// for this project or all projects; how many it saved. Used from the next routing on.
+    pub fn apply_suggestions(&self, scope: Scope) -> Result<usize, String> {
+        let steps = self.next_steps();
+        let (global, root) = (self.autonomy.as_deref(), &self.config.root);
+        autonomy::apply(global, root, &steps.suggested(), scope)
     }
 
     /// The publications of the commands whose policy can approve them, with what the user and

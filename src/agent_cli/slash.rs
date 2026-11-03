@@ -367,9 +367,16 @@ impl Interactive {
     }
 
     /// Each command's next steps under the command, with what follows each and where that is
-    /// set; Enter changes one. The routing after the next command uses the files as changed.
+    /// set, after a row applying what the command sets suggest when they suggest a change;
+    /// Enter changes one. The routing after the next command uses the files as changed.
     fn choose_next_steps(&mut self) {
-        let mut at = 0;
+        enum Line {
+            Apply,
+            Heading,
+            Step(usize),
+        }
+        // The step chosen last, which stays selected when the rows above it change.
+        let mut chosen: Option<(String, Option<String>)> = None;
         loop {
             let Some(screen) = &self.screen else {
                 return;
@@ -382,23 +389,39 @@ impl Interactive {
                 .map(|step| target_name(step).width())
                 .max()
                 .unwrap_or(0);
-            // A heading before each command's steps: `None` in `shown`.
             let mut rows = Vec::new();
-            let mut shown = Vec::new();
+            let mut lines = Vec::new();
             let mut notes = Vec::new();
+            let suggested = steps.suggested();
+            if !suggested.is_empty() {
+                rows.push(apply_label(suggested.len()));
+                lines.push(Line::Apply);
+                notes.push(
+                    "What the command sets suggest, in their autonomy-defaults.yaml, for the \
+                     steps marked \"suggested\" below, which you have not set yourself. Enter \
+                     chooses this project or all projects."
+                        .to_owned(),
+                );
+            }
+            let mut at = 0;
             for (index, step) in steps.steps.iter().enumerate() {
                 if index == 0 || steps.steps[index - 1].source != step.source {
                     rows.push(format!("After /{}", step.source));
-                    shown.push(None);
+                    lines.push(Line::Heading);
                     notes.push(String::new());
+                }
+                if chosen.as_ref() == Some(&(step.source.clone(), step.target.clone())) {
+                    at = rows.len();
                 }
                 let target = target_name(step);
                 let pad = " ".repeat(width - target.width());
                 rows.push(format!("  → {target}{pad}  {}", step_value(step)));
-                shown.push(Some(index));
+                lines.push(Line::Step(index));
                 notes.push(step_note(step, &steps, self.agent.autopilot()));
             }
-            let headings = shown.iter().map(Option::is_none).collect();
+            let headings = (lines.iter())
+                .map(|line| matches!(line, Line::Heading))
+                .collect();
             let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
             let picker = select::Picker::select(
                 "Next steps",
@@ -412,12 +435,80 @@ impl Interactive {
             let Some(index) = screen.pick(picker) else {
                 return;
             };
-            at = index;
-            if let Some(step) = shown[index].map(|index| &steps.steps[index])
-                && !step.forced
-            {
-                self.choose_next_step(&steps, step);
+            chosen = None;
+            match lines[index] {
+                Line::Apply => self.choose_suggestions(&steps),
+                Line::Step(index) => {
+                    let step = &steps.steps[index];
+                    chosen = Some((step.source.clone(), step.target.clone()));
+                    if !step.forced {
+                        self.choose_next_step(&steps, step);
+                    }
+                }
+                Line::Heading => {}
             }
+        }
+    }
+
+    /// Saves what the command sets suggest for the steps without a setting of their own, for
+    /// this project or all projects.
+    fn choose_suggestions(&mut self, steps: &NextSteps) {
+        let Some(screen) = &self.screen else {
+            return;
+        };
+        let suggested = steps.suggested();
+        let list = (suggested.iter())
+            .filter_map(|step| {
+                let suggestion = step.suggestion()?;
+                let words = edge_words(suggestion.edge);
+                Some(format!("/{} → {}: {words}", step.source, target_name(step)))
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let choices = [
+            ("In all projects", Scope::Global),
+            ("In this project", Scope::Project),
+        ];
+        let project = shortened(&steps.project.display().to_string());
+        let global = (steps.global.as_ref()).map(|path| shortened(&path.display().to_string()));
+        let mut masked: Vec<String> = Vec::new();
+        for step in &suggested {
+            let source = format!("/{}", step.source);
+            let by_project = Some(Scope::Project) == step.setting.map(|setting| setting.scope);
+            if by_project && !masked.contains(&source) {
+                masked.push(source);
+            }
+        }
+        let held = match masked.is_empty() {
+            true => String::new(),
+            false => format!(
+                " Here, this project's setting for any other command after {} still holds.",
+                masked.join(", ")
+            ),
+        };
+        let notes = (choices.iter())
+            .map(|(_, scope)| match (scope, &global) {
+                (Scope::Global, None) => "Not available: HOME is not set.".to_owned(),
+                (Scope::Global, Some(global)) => {
+                    format!("Saved for all projects in {global}: {list}.{held}")
+                }
+                (Scope::Project, _) => format!("Saved for this project in {project}: {list}."),
+            })
+            .collect();
+        let title = apply_label(suggested.len());
+        let picker = select::Picker::select(
+            &title,
+            select::VISIBLE,
+            choices.len(),
+            0,
+            None,
+            |index, width| clip(choices[index].0, width),
+        );
+        let Some(index) = screen.pick(picker.noting(BACK_KEYS, notes).held()) else {
+            return;
+        };
+        if let Err(error) = self.agent.apply_suggestions(choices[index].1) {
+            self.say(&format!("error: suggested settings not saved: {error}"));
         }
     }
 
@@ -441,6 +532,12 @@ impl Interactive {
         let wildcard =
             (steps.steps.iter()).any(|other| other.source == step.source && other.target.is_none());
         let source = format!("/{}", step.source);
+        let suggests = |choice: &Option<(Edge, Scope)>| match (&step.suggested, choice) {
+            (Some(suggested), Some((edge, _))) if suggested.edge == *edge => {
+                format!(" {} suggests this.", suggested.set)
+            }
+            _ => String::new(),
+        };
         let notes = (STEP_CHOICES.iter())
             .map(|(_, choice)| match choice {
                 Some((edge, Scope::Project)) => {
@@ -480,6 +577,8 @@ impl Interactive {
                     format!("{AUTOPILOT_DECIDES}{out}{still}")
                 }
             })
+            .zip(STEP_CHOICES.iter())
+            .map(|(note, (_, choice))| note + &suggests(choice))
             .collect();
         let title = format!("After {source} → {}", target_name(step));
         let picker = select::Picker::select(
@@ -1036,22 +1135,40 @@ impl Interactive {
     }
 }
 
-/// What follows a command's next step, as the list of next steps shows it.
+/// What follows a command's next step, as the list of next steps shows it, with what its set
+/// suggests when that would change it.
 fn step_value(step: &NextStep) -> String {
-    let Some(setting) = step.setting else {
-        return match step.forced {
-            true => "always continues".into(),
-            false => "autopilot decides".into(),
-        };
+    let value = match step.setting {
+        None if step.forced => "always continues".to_owned(),
+        None => "autopilot decides".to_owned(),
+        Some(setting) => {
+            let edge = edge_words(setting.edge);
+            match (setting.any_other, setting.scope) {
+                (true, _) => format!("{edge} · as any other command"),
+                (false, Scope::Project) => format!("{edge} · this project"),
+                (false, Scope::Global) => format!("{edge} · all projects"),
+            }
+        }
     };
-    let edge = match setting.edge {
+    match step.suggestion() {
+        Some(suggestion) => format!("{value} · suggested: {}", edge_words(suggestion.edge)),
+        None => value,
+    }
+}
+
+/// What follows a step that goes by `edge`, as the next steps' rows and choices word it.
+fn edge_words(edge: Edge) -> &'static str {
+    match edge {
         Edge::Chain => "continue automatically",
         Edge::Pause => "ask me",
-    };
-    match (setting.any_other, setting.scope) {
-        (true, _) => format!("{edge} · as any other command"),
-        (false, Scope::Project) => format!("{edge} · this project"),
-        (false, Scope::Global) => format!("{edge} · all projects"),
+    }
+}
+
+/// The row that saves what the command sets suggest for `count` steps.
+fn apply_label(count: usize) -> String {
+    match count {
+        1 => "Apply 1 suggested setting".into(),
+        count => format!("Apply {count} suggested settings"),
     }
 }
 
@@ -1125,9 +1242,17 @@ fn step_note(step: &NextStep, steps: &NextSteps, autopilot: bool) -> String {
             ..
         }) => format!(" Set for all projects in {}.", file(Scope::Global)),
     };
+    let suggests = match &step.suggested {
+        Some(suggested) => format!(
+            " {} suggests: {}.",
+            suggested.set,
+            edge_words(suggested.edge)
+        ),
+        None => String::new(),
+    };
     match steps.problems.is_empty() {
-        true => what + &from,
-        false => format!("{what} {}", not_used(&steps.problems)),
+        true => what + &from + &suggests,
+        false => format!("{what}{suggests} {}", not_used(&steps.problems)),
     }
 }
 
@@ -1254,9 +1379,13 @@ fn steps_summary(steps: &NextSteps) -> String {
     .filter(|(_, count)| *count > 0)
     .map(|(words, count)| format!("{words}: {count}"))
     .collect();
-    match parts.is_empty() {
-        true => "autopilot decides all".into(),
+    let summary = match parts.is_empty() {
+        true => "autopilot decides all".to_owned(),
         false => parts.join(" · "),
+    };
+    match steps.suggested().len() {
+        0 => summary,
+        suggested => format!("{summary} · suggested: {suggested}"),
     }
 }
 

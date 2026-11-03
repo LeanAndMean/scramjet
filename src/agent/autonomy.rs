@@ -2,9 +2,9 @@
 //! completed command's recommended next command runs at once (`chain`) or waits for the user
 //! (`pause`), from the project's `.scramjet/autonomy.yaml`, then the global one; the global file's
 //! `publications` say whether a command's publication with a tool asks the user first. A command
-//! set's `autonomy-defaults.yaml` gives its own commands' publication defaults. `/settings`
-//! shows the edges of each command's next steps (`NextSteps`) and its publications
-//! (`Approvals`), and changes them.
+//! set's `autonomy-defaults.yaml` gives its own commands' publication defaults, and edges it
+//! suggests, which hold once the user applies them. `/settings` shows the edges of each
+//! command's next steps (`NextSteps`) and its publications (`Approvals`), and changes them.
 
 use super::commands::{Commands, Policy};
 use super::tools::{shortened, write_replacing};
@@ -29,7 +29,16 @@ pub enum Publication {
 }
 
 /// One file's edges: each source command with its targets' settings, in the file's order.
-type Layer = Vec<(String, Vec<(String, Edge)>)>;
+pub(super) type Layer = Vec<(String, Vec<(String, Edge)>)>;
+
+/// What a command set suggests to follow one of its commands' next steps, in its
+/// `autonomy-defaults.yaml`. It holds only once the user applies it, as in Scramjet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Suggestion {
+    pub edge: Edge,
+    /// The set whose file suggests it.
+    pub set: String,
+}
 
 /// Publication settings: each command with its tools' settings, in the file's order.
 pub(super) type Publications = Vec<(String, Vec<(String, Publication)>)>;
@@ -156,6 +165,19 @@ pub struct NextStep {
     pub in_project: bool,
     /// The global file has a setting of its own for it.
     pub in_global: bool,
+    /// What a command set suggests for it.
+    pub suggested: Option<Suggestion>,
+}
+
+impl NextStep {
+    /// What its set suggests, when applying that would change what follows: neither file has a
+    /// setting of its own for it, and what applies now is not that.
+    pub fn suggestion(&self) -> Option<&Suggestion> {
+        let suggested = self.suggested.as_ref()?;
+        let own = self.forced || self.in_project || self.in_global;
+        let applies = self.setting.map(|setting| setting.edge);
+        (!own && applies != Some(suggested.edge)).then_some(suggested)
+    }
 }
 
 /// The next steps of the commands that have them, and the files their settings are in.
@@ -170,7 +192,8 @@ pub struct NextSteps {
 
 impl NextSteps {
     /// Each candidate of each command's `next:` policy (its target when forced) and, where a
-    /// file sets one, its `*`, with the setting that applies to it, read afresh.
+    /// file sets or a set suggests one, its `*`, with the setting that applies to it, read
+    /// afresh.
     pub(super) fn load(global: Option<&Path>, root: &Path, commands: &Commands) -> Self {
         let project = root.join(PROJECT_FILE);
         let mut problems = Vec::new();
@@ -195,6 +218,7 @@ impl NextSteps {
                         setting: None,
                         in_project: false,
                         in_global: false,
+                        suggested: None,
                     });
                     continue;
                 }
@@ -210,6 +234,7 @@ impl NextSteps {
             if [in_project, in_global]
                 .iter()
                 .any(|file| exact(file, source, "*").is_some())
+                || commands.suggested(source, "*").is_some()
             {
                 targets.push(None);
             }
@@ -236,6 +261,7 @@ impl NextSteps {
                     setting: setting.flatten(),
                     in_project: exact(in_project, source, key).is_some(),
                     in_global: exact(in_global, source, key).is_some(),
+                    suggested: commands.suggested(source, key).cloned(),
                 });
             }
         }
@@ -244,6 +270,17 @@ impl NextSteps {
             project,
             global: global.map(Path::to_path_buf),
             problems,
+        }
+    }
+
+    /// The steps whose suggestion would change what follows them, none while a file cannot be
+    /// used.
+    pub fn suggested(&self) -> Vec<&NextStep> {
+        match self.problems.is_empty() {
+            true => (self.steps.iter())
+                .filter(|step| step.suggestion().is_some())
+                .collect(),
+            false => Vec::new(),
         }
     }
 }
@@ -366,6 +403,37 @@ pub(super) fn choose(
             }
         }
     }
+}
+
+/// Saves the suggestions of `steps` in the file of `scope` where it has no setting of its own
+/// for them, as Scramjet's `applyRecommendations` adds only what is missing; how many it saved.
+pub(super) fn apply(
+    global: Option<&Path>,
+    root: &Path,
+    steps: &[&NextStep],
+    scope: Scope,
+) -> Result<usize, String> {
+    let (path, in_project) = match scope {
+        Scope::Project => (root.join(PROJECT_FILE), true),
+        Scope::Global => {
+            let global = global.ok_or("no file for all projects: HOME is not set")?;
+            (global.to_path_buf(), false)
+        }
+    };
+    let mut applied = 0;
+    update(&path, in_project, |file| {
+        for step in steps {
+            let target = step.target.as_deref().unwrap_or("*");
+            if let Some(suggestion) = step.suggestion()
+                && exact(file, &step.source, target).is_none()
+            {
+                set(&mut file.edges, &step.source, target, Some(suggestion.edge));
+                applied += 1;
+            }
+        }
+        applied > 0
+    })?;
+    Ok(applied)
 }
 
 /// Sets `source` → `target` to `edge` in the file at `path`, or takes it out.
@@ -499,24 +567,51 @@ pub(super) fn lookup(
         .map(|(_, setting)| *setting)
 }
 
-/// The publication defaults of an `autonomy-defaults.yaml` file, as Scramjet's
-/// `parseAutonomyRecommendations` reads them: what it cannot use is skipped with a warning.
-pub(super) fn publication_defaults(
+/// The edges an `autonomy-defaults.yaml` file suggests and its publication defaults, as
+/// Scramjet's `parseAutonomyRecommendations` reads them: what it cannot use is skipped, with a
+/// warning where Scramjet gives one.
+pub(super) fn defaults(
     text: &str,
     warnings: &mut Vec<String>,
-) -> Result<Publications, String> {
+) -> Result<(Layer, Publications), String> {
     let document = load(text)?;
     if !matches!(document, Yaml::Hash(_)) {
-        return Ok(Vec::new());
+        return Ok(Default::default());
+    }
+    let mut edges = Vec::new();
+    if let Yaml::Hash(sources) = &document["edges"] {
+        for (source, targets) in sources {
+            let Yaml::Hash(targets) = targets else {
+                continue;
+            };
+            let source = yaml_key(source);
+            let mut settings = Vec::new();
+            for (target, setting) in targets {
+                let target = yaml_key(target);
+                match setting.as_str() {
+                    Some("chain") => settings.push((target, Edge::Chain)),
+                    Some("pause") => settings.push((target, Edge::Pause)),
+                    Some("default") | None => {}
+                    Some(value) => warnings.push(format!(
+                        "unknown autonomy recommendation value \"{value}\" for edge {source} → \
+                         {target} (expected: chain, pause, default)"
+                    )),
+                }
+            }
+            if !settings.is_empty() {
+                edges.push((source, settings));
+            }
+        }
     }
     let values = [
         ("require-approval", Publication::Ask),
         ("auto-approve", Publication::Auto),
     ];
-    publications(&document["publications"], values, &mut |message| {
+    let publications = publications(&document["publications"], values, &mut |message| {
         warnings.push(message);
         Ok(())
-    })
+    })?;
+    Ok((edges, publications))
 }
 
 /// The file at `path`, `None` when there is none, or why it cannot be used.
@@ -530,9 +625,20 @@ fn read(path: &Path, project: bool) -> Result<Option<File>, String> {
 
 /// The commands a file names that are not registered, as Scramjet's `validateConfig` words them.
 fn unknown_commands(file: &File, commands: &Commands) -> Vec<String> {
+    let mut warnings = unknown_in_edges(&file.edges, commands);
+    for (command, _) in &file.publications {
+        if commands.get(command).is_none() {
+            warnings.push(format!("unknown publication command \"{command}\""));
+        }
+    }
+    warnings
+}
+
+/// The commands `edges` name that are not registered.
+pub(super) fn unknown_in_edges(edges: &Layer, commands: &Commands) -> Vec<String> {
     let unknown = |name: &str| commands.get(name).is_none();
     let mut warnings = Vec::new();
-    for (source, targets) in &file.edges {
+    for (source, targets) in edges {
         if unknown(source) {
             warnings.push(format!("unknown source command \"{source}\""));
         }
@@ -540,11 +646,6 @@ fn unknown_commands(file: &File, commands: &Commands) -> Vec<String> {
             if target != "*" && unknown(target) {
                 warnings.push(format!("unknown target command \"{target}\" (in {source})"));
             }
-        }
-    }
-    for (command, _) in &file.publications {
-        if unknown(command) {
-            warnings.push(format!("unknown publication command \"{command}\""));
         }
     }
     warnings
@@ -782,6 +883,7 @@ rs:loop; edge settings ignored this dispatch",
                 setting,
                 in_project,
                 in_global,
+                suggested: None,
             };
         let set = |edge, scope, any_other| {
             Some(Setting {
@@ -933,6 +1035,117 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
             without_home.unwrap_err(),
             "no file for all projects: HOME is not set"
         );
+    }
+
+    #[test]
+    fn sets_suggest_next_steps_which_hold_once_applied_where_nothing_is_set() {
+        let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
+            "scramjet-autonomy-suggested-{}",
+            std::process::id()
+        )));
+        let root = &scratch.0;
+        let file = |path: &str, text: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        file(
+            "sets/rs/commands/rs:loop.md",
+            "---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:loop\n    - name: rs:steer\n    \
+             - name: rs:review\n---\nLoop",
+        );
+        file("sets/rs/commands/rs:steer.md", "Steer");
+        file("sets/rs/commands/rs:review.md", "Review");
+        file(
+            "sets/rs/autonomy-defaults.yaml",
+            "edges:\n  rs:loop:\n    rs:steer: chain\n    rs:loop: chain\n    rs:review: pause\n    \
+             '*': pause\n  rs:gone:\n    rs:loop: chain\n",
+        );
+        // A set before it suggests first.
+        file("sets/a/commands/a:x.md", "X");
+        file(
+            "sets/a/autonomy-defaults.yaml",
+            "edges:\n  rs:loop:\n    rs:steer: pause\n",
+        );
+        let commands = Commands::discover(&super::super::Sets::find(&[], None, &root.join("sets")));
+        let defaults = root.join("sets/rs/autonomy-defaults.yaml");
+        assert_eq!(
+            commands.warnings(),
+            [format!(
+                "{}: unknown source command \"rs:gone\"",
+                defaults.display()
+            )]
+        );
+        let global = root.join("config/autonomy.yaml");
+        let project = root.join(".scramjet/autonomy.yaml");
+        file(
+            "config/autonomy.yaml",
+            "edges:\n  rs:loop:\n    rs:review: chain\n",
+        );
+        file(
+            ".scramjet/autonomy.yaml",
+            "edges:\n  rs:loop:\n    '*': chain\n",
+        );
+        let steps = || NextSteps::load(Some(&global), root, &commands);
+        let suggested = |edge, set: &str| {
+            Some(Suggestion {
+                edge,
+                set: set.into(),
+            })
+        };
+        let loaded = steps();
+        assert_eq!(
+            (loaded.steps.iter())
+                .map(|step| (step.target.as_deref(), step.suggested.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (Some("rs:loop"), suggested(Edge::Chain, "rs")),
+                (Some("rs:steer"), suggested(Edge::Pause, "a")),
+                (Some("rs:review"), suggested(Edge::Pause, "rs")),
+                (None, suggested(Edge::Pause, "rs")),
+            ]
+        );
+        // Only rs:steer would change: rs:loop goes by the project's `*` as suggested, and the
+        // user has set rs:review and `*` themselves.
+        let pending = |steps: &NextSteps| {
+            (steps.suggested().iter())
+                .map(|step| step.target.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(pending(&loaded), [Some("rs:steer".to_owned())]);
+        let text = |path: &Path| std::fs::read_to_string(path).unwrap();
+        assert_eq!(
+            apply(Some(&global), root, &loaded.suggested(), Scope::Project),
+            Ok(1)
+        );
+        assert_eq!(
+            text(&project),
+            "edges:\n  rs:loop:\n    \"*\": chain\n    rs:steer: pause\n"
+        );
+        let edges = Edges::load(Some(&global), root, &commands);
+        assert_eq!(edges.resolve("rs:loop", "rs:steer"), Some(Edge::Pause));
+        assert!(pending(&steps()).is_empty());
+        // For all projects, without a project file: what the global file sets stays.
+        std::fs::remove_file(&project).unwrap();
+        let loaded = steps();
+        assert_eq!(
+            pending(&loaded),
+            [Some("rs:loop".into()), Some("rs:steer".into()), None]
+        );
+        assert_eq!(
+            apply(Some(&global), root, &loaded.suggested(), Scope::Global),
+            Ok(3)
+        );
+        assert_eq!(
+            text(&global),
+            "edges:\n  rs:loop:\n    rs:review: chain\n    rs:loop: chain\n    rs:steer: pause\n    \
+             \"*\": pause\n"
+        );
+        assert!(pending(&steps()).is_empty());
+        assert_eq!(apply(Some(&global), root, &[], Scope::Global), Ok(0));
+        // A file that cannot be used offers nothing to apply.
+        file(".scramjet/autonomy.yaml", "edges: [\n");
+        assert!(steps().suggested().is_empty());
     }
 
     #[test]
@@ -1214,11 +1427,12 @@ publications:\n  rs:old:\n    create_pr: auto-approve\n",
     }
 
     #[test]
-    fn publication_defaults_skip_what_they_cannot_use_with_a_warning() {
+    fn defaults_skip_what_they_cannot_use_with_a_warning() {
         let mut warnings = Vec::new();
-        let defaults = publication_defaults(
+        let (edges, publications) = defaults(
             &[
-                "edges:\n  a:\n    b: chain\npublications:\n  a:",
+                "edges:\n  a:\n    b: chain\n    c: default\n    d: always\n    e: 1\n    '*': pause",
+                "  b: chain\n  c:\n    d: default\npublications:\n  a:",
                 "    create_issue: require-approval\n    add_issue_comment: auto-approve",
                 "    merge_pr: auto-approve\n    create_pr: always-ask\n  b: auto-approve",
             ]
@@ -1227,7 +1441,14 @@ publications:\n  rs:old:\n    create_pr: auto-approve\n",
         )
         .unwrap();
         assert_eq!(
-            defaults,
+            edges,
+            [(
+                "a".to_owned(),
+                vec![("b".to_owned(), Edge::Chain), ("*".to_owned(), Edge::Pause)]
+            )]
+        );
+        assert_eq!(
+            publications,
             [(
                 "a".to_owned(),
                 vec![
@@ -1239,12 +1460,14 @@ publications:\n  rs:old:\n    create_pr: auto-approve\n",
         assert_eq!(
             warnings,
             [
+                "unknown autonomy recommendation value \"always\" for edge a → d (expected: \
+                 chain, pause, default)",
                 "unknown publication tool merge_pr for a",
                 "invalid publication setting always-ask for a → create_pr",
                 "publication settings for b must be a tool map",
             ]
         );
-        assert_eq!(publication_defaults("- a", &mut warnings), Ok(Vec::new()));
-        assert!(publication_defaults("a: [", &mut warnings).is_err());
+        assert_eq!(defaults("- a", &mut warnings), Ok(Default::default()));
+        assert!(defaults("a: [", &mut warnings).is_err());
     }
 }

@@ -3,7 +3,7 @@
 //! directory. A prompt `/<set>:<command> args` runs one of their commands as Scramjet sends it:
 //! the arguments are substituted into the body and the result is wrapped in `<scramjet-command>`.
 
-use super::autonomy::{self, Publication, Publications};
+use super::autonomy::{self, Publication, Publications, Suggestion};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -195,6 +195,9 @@ pub struct Commands {
     warnings: Vec<String>,
     /// Whether their publications ask first, from their sets' `autonomy-defaults.yaml`.
     publications: Publications,
+    /// What follows their next steps as their sets suggest it there: source, target (`*`: any
+    /// other) and the suggestion, the first set's for each.
+    suggestions: Vec<(String, String, Suggestion)>,
 }
 
 /// Scramjet's global root for command sets: `$SCRAMJET_CACHE`, else `$XDG_DATA_HOME/scramjet`,
@@ -219,6 +222,7 @@ impl Commands {
             list: Vec::new(),
             warnings: sets.warnings.clone(),
             publications: Vec::new(),
+            suggestions: Vec::new(),
         };
         for set in &sets.list {
             let directory = set.directory.join("commands");
@@ -246,14 +250,16 @@ impl Commands {
         }
         found.list.sort_by(|a, b| a.name.cmp(&b.name));
         for set in &sets.list {
-            found.add_publication_defaults(set);
+            found.add_defaults(set);
         }
         found
     }
 
-    /// The publication defaults of `set`'s `autonomy-defaults.yaml`, as Scramjet keeps them: only
-    /// for the set's own top-level commands and the tools their `allowed-tools` name.
-    fn add_publication_defaults(&mut self, set: &Set) {
+    /// The suggested edges and publication defaults of `set`'s `autonomy-defaults.yaml`, as
+    /// Scramjet keeps them: edges for any command, a set before it suggesting one first, and
+    /// publication defaults only for the set's own top-level commands and the tools their
+    /// `allowed-tools` name.
+    fn add_defaults(&mut self, set: &Set) {
         let path = set.directory.join("autonomy-defaults.yaml");
         let text = match fs::read_to_string(&path) {
             Ok(text) => text,
@@ -264,7 +270,7 @@ impl Commands {
             }
         };
         let mut warnings = Vec::new();
-        let defaults = match autonomy::publication_defaults(&text, &mut warnings) {
+        let (edges, defaults) = match autonomy::defaults(&text, &mut warnings) {
             Ok(defaults) => defaults,
             Err(error) => {
                 (self.warnings).push(format!("could not parse {}: {error}", path.display()));
@@ -272,11 +278,21 @@ impl Commands {
             }
         };
         let shown = path.display();
+        warnings.extend(autonomy::unknown_in_edges(&edges, self));
         self.warnings.extend(
             warnings
                 .into_iter()
                 .map(|warning| format!("{shown}: {warning}")),
         );
+        for (source, targets) in edges {
+            for (target, edge) in targets {
+                if self.suggested(&source, &target).is_none() {
+                    let set = set.name.clone();
+                    let suggestion = Suggestion { edge, set };
+                    (self.suggestions).push((source.clone(), target, suggestion));
+                }
+            }
+        }
         for (name, tools) in defaults {
             let command = self.get(&name).filter(|command| {
                 !command.delegate_only && command.path.starts_with(&set.directory)
@@ -301,6 +317,16 @@ impl Commands {
                 self.publications.push((name, kept));
             }
         }
+    }
+
+    /// What a set suggests to follow `source` when it recommends `target` (`*`: any other).
+    pub(super) fn suggested(&self, source: &str, target: &str) -> Option<&Suggestion> {
+        let suggested =
+            |(known, to, _): &&(String, String, Suggestion)| known == source && to == target;
+        self.suggestions
+            .iter()
+            .find(suggested)
+            .map(|(_, _, suggestion)| suggestion)
     }
 
     /// Whether `command`'s publications with `tool` ask first by its set's default.
@@ -354,6 +380,7 @@ impl Commands {
             list: list.collect(),
             warnings: Vec::new(),
             publications: Vec::new(),
+            suggestions: Vec::new(),
         }
     }
 
