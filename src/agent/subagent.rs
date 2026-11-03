@@ -5,9 +5,11 @@
 //! the user's credential stores.
 
 use super::{
-    AgentError, AgentUi, MAX_STEPS, Sending, ToolDetail, Usage,
+    AgentError, AgentUi, MAX_STEPS, ToolDetail, Usage,
     client::{self, ModelInfo},
-    commands, sandbox,
+    commands, instructions,
+    request::{self, Sending},
+    sandbox,
     tools::{self, Call, Output},
 };
 use serde_json::{Value, json};
@@ -1090,7 +1092,7 @@ fn run_child(
             .unwrap_or_else(|| ModelInfo::guess(&run.model)),
     };
     let effort = child_effort(job.effort.as_deref(), parent.effort);
-    let instructions = super::child_instructions(&job.cwd, &tools, &agent.prompt);
+    let instructions = instructions::child(&job.cwd, &tools, &agent.prompt);
     let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];
     for _ in 0..MAX_STEPS {
         if cancel.load(Ordering::Relaxed) {
@@ -1117,7 +1119,7 @@ fn run_child(
             request["max_output_tokens"] = json!(tokens);
         }
         let requests = &mut run.usage.requests;
-        let sent = super::send(
+        let sent = request::send(
             &executor,
             parent.endpoint,
             &info,
