@@ -27,6 +27,8 @@ pub(super) struct Recorder {
     pub(super) follow_ups: Vec<Vec<String>>,
     /// What each call of `effort` gives, in order; then nothing.
     pub(super) efforts: Vec<Option<String>>,
+    /// What each call of `pause` gives, in order; then no pause.
+    pub(super) pauses: Vec<bool>,
 }
 impl AgentUi for Recorder {
     fn waiting(&mut self, purpose: Purpose) {
@@ -107,6 +109,9 @@ impl AgentUi for Recorder {
             true => None,
             false => self.efforts.remove(0),
         }
+    }
+    fn pause(&mut self) -> bool {
+        !self.pauses.is_empty() && self.pauses.remove(0)
     }
     fn choose(
         &mut self,

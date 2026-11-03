@@ -14,6 +14,7 @@ use super::interactive::effort_note;
 use super::record::{self, Event};
 use super::select::Picker;
 use super::settings::Delivery;
+use super::slash::Builtin;
 use super::terminal::{Terminal, elapsed};
 use super::text::{Wrap, clip, one_line, visible};
 use super::{clipboard, editor, job, selection, style, view};
@@ -105,6 +106,8 @@ pub(super) enum Input {
     CycleEffort,
     /// A `!` command run during a turn ended: `Link::take_shells` has it.
     Shells,
+    /// A built-in command typed during a turn waits: `Link::take_commands` has it.
+    Commands,
     /// Ctrl-C twice or Ctrl-D on an empty prompt, or the screen is gone.
     End,
 }
@@ -119,6 +122,8 @@ struct Queue {
     /// `!` commands run during a turn, as typed, until the session adds them to the
     /// conversation; at most the last one still runs.
     shells: Vec<Side>,
+    /// Built-in commands typed during a turn, until the session runs them.
+    commands: Vec<String>,
 }
 
 /// A `!` command run apart from the session.
@@ -192,6 +197,18 @@ impl Link {
             .count();
         let sides = queue.shells.drain(..ended);
         sides.filter_map(|side| side.ended).collect()
+    }
+    /// The built-in commands typed during a turn, in order; `paused`: those before the first
+    /// that stops the turn, which goes on.
+    pub(super) fn take_commands(&self, paused: bool) -> Vec<String> {
+        let mut queue = self.queue();
+        let count = match paused {
+            true => (queue.commands.iter())
+                .take_while(|command| !stops_turn(command))
+                .count(),
+            false => queue.commands.len(),
+        };
+        queue.commands.drain(..count).collect()
     }
     /// The effort level Shift+Tab chose during a turn that no request took.
     pub(super) fn take_effort(&self) -> Option<String> {
@@ -377,6 +394,9 @@ impl AgentUi for Link {
     }
     fn effort(&mut self) -> Option<String> {
         self.take_effort()
+    }
+    fn pause(&mut self) -> bool {
+        (self.queue().commands.first()).is_some_and(|command| !stops_turn(command))
     }
     fn choose(
         &mut self,
@@ -723,6 +743,11 @@ impl App {
                 self.ready = false;
                 let _ = self.inputs.send(Input::Shells);
             }
+            // Typed as the turn ended, after the session took those typed during it.
+            if self.ready && !self.queue().commands.is_empty() {
+                self.ready = false;
+                let _ = self.inputs.send(Input::Commands);
+            }
             self.editor.poll(&mut self.draft);
             if let Some(Open {
                 shown: Shown::Text(text),
@@ -934,11 +959,15 @@ impl App {
     }
 
     /// Queues the draft's text while a turn runs: for the model's next request, or, as a
-    /// follow-up, for when the turn would end. A `!` command runs at once, and a command waits
-    /// in the editor.
+    /// follow-up, for when the turn would end. A `!` command runs at once, a built-in command
+    /// goes to the session (`command`), and a command set's command waits in the editor.
     fn enqueue(&mut self, follow_up: bool) {
         let text = self.draft.text().trim().to_owned();
         if text.is_empty() || self.shell(&text) {
+            return;
+        }
+        if Builtin::parse(&text).is_some() {
+            self.command(text);
             return;
         }
         if self.editor.is_command(&text) {
@@ -952,6 +981,21 @@ impl App {
             false => queue.steering.push(text),
         }
         drop(queue);
+        self.draft = self.editor.draft(String::new());
+        self.top = None;
+    }
+
+    /// Takes the built-in command `text` typed while a turn runs, as Scramjet runs it at once:
+    /// `/quit` exits, a command that replaces or rewrites the conversation stops the turn and
+    /// runs once it has, and the others run before the turn's next request (`AgentUi::pause`).
+    fn command(&mut self, text: String) {
+        match Builtin::parse(&text) {
+            Some(Builtin::Quit) => return self.exit(),
+            Some(builtin) if builtin.interrupts() => self.cancel.store(true, Ordering::Relaxed),
+            _ => {}
+        }
+        self.editor.remember(&text);
+        self.queue().commands.push(text);
         self.draft = self.editor.draft(String::new());
         self.top = None;
     }
@@ -1567,6 +1611,13 @@ impl App {
                 rows.push(format!("{}{line}{}", style::MUTED, style::RESET));
             }
         }
+        for command in &queue.commands {
+            let line = clip(
+                &format!("Command: {}", one_line(command)),
+                width.saturating_sub(1),
+            );
+            rows.push(format!("{}{line}{}", style::MUTED, style::RESET));
+        }
         if !queue.is_empty() {
             let hint = clip(
                 "↳ Alt+Up to edit all queued messages",
@@ -1678,6 +1729,11 @@ impl App {
         self.drawn_at = Instant::now();
         Ok(())
     }
+}
+
+/// Whether the built-in command `command`, typed during a turn, waits for the turn to stop.
+fn stops_turn(command: &str) -> bool {
+    Builtin::parse(command).is_none_or(Builtin::interrupts)
 }
 
 /// What Alt+Up or Escape says once it put `count` queued messages back in the editor.

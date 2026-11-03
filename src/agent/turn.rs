@@ -57,6 +57,7 @@ impl Agent {
     /// As Scramjet does, the conversation is compacted before the prompt and after the reply if
     /// its context passed the model's window minus `compaction::RESERVE_TOKENS`. A request that
     /// fails because its input exceeded the window is compacted and sent again, once per turn.
+    /// When `ui` asks for a pause, the turn returns `AgentError::Paused` for `resume_turn`.
     pub fn turn(
         &mut self,
         prompt: &str,
@@ -78,6 +79,16 @@ impl Agent {
         self.add(message)?;
         self.save_command()?;
         self.prompts.push(prompt.to_owned());
+        self.resume_turn(ui, cancel)
+    }
+
+    /// Goes on with the turn that `turn` or this returned `AgentError::Paused` from, before its
+    /// next request.
+    pub fn resume_turn(
+        &mut self,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<(), AgentError> {
         let mut ran = self.run(ui, cancel);
         // As Scramjet's lifecycle: a command's turn that ends without a report gets a status check.
         loop {
@@ -143,6 +154,9 @@ impl Agent {
             self.add_queued(steering, ui)?;
             if let Some(level) = ui.effort() {
                 self.set_effort(level)?;
+            }
+            if ui.pause() {
+                return Err(AgentError::Paused);
             }
             let request = self.request();
             let reply = match self.respond(&request, Purpose::Reply, ui, cancel) {
@@ -463,6 +477,54 @@ mod tests {
         assert_eq!(efforts, ["low", "high"]);
         assert_eq!(agent.effort(), Some("high"));
         assert_eq!(agent.last_effort(), Some("high"));
+    }
+
+    #[test]
+    fn a_paused_turn_goes_on_where_it_stopped_with_what_the_session_changed() {
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", "bash", json!({"command":"true"})),
+            stream(&fixture::text_events("worked", fixture::known_usage())),
+            tool_call(
+                "call_2",
+                status::NAME,
+                json!({"summary":"Done.","status":"completed"}),
+            ),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "paused");
+        let commands = agent.root().join(".scramjet/rs/commands");
+        std::fs::create_dir_all(&commands).unwrap();
+        std::fs::write(commands.join("rs:work.md"), "Work on $1.\n").unwrap();
+        agent.commands = Commands::discover(None, &agent.root().join(".scramjet"));
+        agent.autonomy = None;
+        // Before the second request, and before the status check's.
+        let mut ui = Recorder {
+            pauses: vec![false, true, false, true],
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        let paused = agent.turn("/rs:work go", &mut ui, &cancel);
+        assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
+        agent.set_model("other").unwrap();
+        let paused = agent.resume_turn(&mut ui, &cancel);
+        assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
+        agent.resume_turn(&mut ui, &cancel).unwrap();
+        assert!(agent.take_completed().is_some());
+        let bodies = server.join().unwrap();
+        let models: Vec<_> = bodies.iter().map(|body| body["model"].clone()).collect();
+        assert_eq!(models, ["m", "other", "other"]);
+        assert_eq!(last_output(&bodies[1]), "(no output)");
+        let check = bodies[2]["input"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        assert!(
+            (check["content"].as_str().unwrap())
+                .starts_with("Scramjet status check for `rs:work`.")
+        );
+        assert_eq!(ui.replies, ["worked"]);
+        assert_eq!(agent.prompts(), ["/rs:work go"]);
     }
 
     #[test]

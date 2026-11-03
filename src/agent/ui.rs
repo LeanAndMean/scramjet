@@ -68,6 +68,12 @@ pub trait AgentUi {
     fn effort(&mut self) -> Option<String> {
         None
     }
+    /// Whether the user gave the session something to do with the agent while the turn runs,
+    /// such as a command: the turn then returns `AgentError::Paused` before its next request,
+    /// and `Agent::resume_turn` goes on with it.
+    fn pause(&mut self) -> bool {
+        false
+    }
     /// Lets the user choose one of `options` under `title`, `recommended` selected at first;
     /// `None` when they cancel.
     fn choose(

@@ -3,6 +3,7 @@
 use super::record::Event;
 use super::screen::{self, Handle};
 use super::settings::{DoubleEscape, Settings};
+use super::slash::Builtin;
 use super::terminal::{InputMode, Terminal, usage_line};
 use super::{editor, record, select, style, type_ahead, view};
 use scramjet_rs::agent::{
@@ -134,6 +135,7 @@ impl Interactive {
         let mut queued: Option<(String, Start)> = None;
         loop {
             self.save_hide_thinking();
+            self.typed_during_turn(false)?;
             let (dispatched, start) = queued.take().unzip();
             let (prompt, escaped) = match self.read(dispatched)? {
                 Read::Prompt(prompt) => (prompt, false),
@@ -148,7 +150,7 @@ impl Interactive {
             if prompt.is_empty() {
                 continue;
             }
-            if matches!(prompt, "/exit" | "/quit") {
+            if Builtin::parse(prompt) == Some(Builtin::Quit) {
                 return Ok(());
             }
             if !self.builtin(prompt, escaped)? {
@@ -174,6 +176,7 @@ impl Interactive {
                         screen.note(cycle_effort(&mut self.agent, &mut self.settings));
                     }
                     screen::Input::Shells => add_shells(&mut self.agent, screen),
+                    screen::Input::Commands => return Ok(Read::Again),
                     screen::Input::End => return Ok(Read::End),
                 }
             }
@@ -234,9 +237,12 @@ impl Interactive {
         }
         let hide = (self.settings.hide_credentials).hides(start == Start::Unattended);
         self.agent.set_hide_credentials(hide);
-        let result = self.during_turn(Some(prompt), |agent, ui, cancel| {
-            agent.turn(prompt, ui, cancel)
-        });
+        let result = match self.screen.is_some() {
+            true => self.turn_on_screen(prompt)?,
+            false => self.during_turn(Some(prompt), |agent, ui, cancel| {
+                agent.turn(prompt, ui, cancel)
+            }),
+        };
         match result {
             Ok(()) => {}
             Err(AgentError::Cancelled) => self.say(&self.ui.dim("(cancelled)")),
@@ -247,6 +253,73 @@ impl Interactive {
             Some(completed) => self.next_step(&completed),
             None => Ok(None),
         }
+    }
+
+    /// Runs `prompt` as a model turn on the full screen, as `during_turn` does. Where the turn
+    /// pauses, the built-in commands typed meanwhile that do not stop it run, and it goes on;
+    /// Escape or Ctrl-C meanwhile stop it.
+    fn turn_on_screen(&mut self, prompt: &str) -> Result<Result<(), AgentError>, String> {
+        self.cancel.store(false, Ordering::Relaxed);
+        let effort = self.agent.effort().map(str::to_owned);
+        let mut result = self.on_screen(|agent, ui, cancel| agent.turn(prompt, ui, cancel));
+        while let Err(AgentError::Paused) = result {
+            if let Err(error) = self.typed_during_turn(true) {
+                self.ended_on_screen(effort);
+                return Err(error);
+            }
+            result = self.on_screen(Agent::resume_turn);
+        }
+        self.ended_on_screen(effort);
+        Ok(result)
+    }
+
+    /// Runs `run` with the full screen showing that a turn runs, Shift+Tab cycling the current
+    /// model's levels; without it, on the inline terminal.
+    fn on_screen<T>(
+        &mut self,
+        run: impl FnOnce(&mut Agent, &mut dyn AgentUi, &AtomicBool) -> T,
+    ) -> T {
+        match &mut self.screen {
+            Some(screen) => {
+                screen.turn(Some(self.agent.effort_cycle()));
+                run(&mut self.agent, &mut screen.link, &self.cancel)
+            }
+            None => run(&mut self.agent, &mut self.ui, &self.cancel),
+        }
+    }
+
+    /// Shows on the full screen that what `on_screen` ran has ended. Sets an effort Shift+Tab
+    /// chose meanwhile that no request took, and saves the effort as the settings' default if
+    /// it changed from `effort`.
+    fn ended_on_screen(&mut self, effort: Option<String>) {
+        let Some(screen) = &self.screen else {
+            return;
+        };
+        screen.turn(None);
+        self.cancel.store(false, Ordering::Relaxed);
+        let unset = (screen.take_effort()).and_then(|level| self.agent.set_effort(level).err());
+        let changed = (self.agent.effort()).filter(|level| effort.as_deref() != Some(level));
+        let unsaved =
+            changed.and_then(|level| self.settings.set_default_thinking_level(level).err());
+        if let Some(error) = unset {
+            self.say(&format!("error: {error}"));
+        }
+        if let Some(error) = unsaved {
+            self.say(&format!("error: settings not saved: {error}"));
+        }
+    }
+
+    /// Runs the built-in commands typed in the full screen while a turn ran, in order;
+    /// `paused`: the turn paused for them, and those from the first that stops it on wait for
+    /// it to end.
+    fn typed_during_turn(&mut self, paused: bool) -> Result<(), String> {
+        let Some(screen) = &self.screen else {
+            return Ok(());
+        };
+        for command in screen.take_commands(paused) {
+            self.builtin(&command, false)?;
+        }
+        Ok(())
     }
 
     /// Runs a model turn, `/compact`, a branch summary or a `!` command with the terminal in its
@@ -260,22 +333,10 @@ impl Interactive {
         run: impl FnOnce(&mut Agent, &mut dyn AgentUi, &AtomicBool) -> T,
     ) -> T {
         self.cancel.store(false, Ordering::Relaxed);
-        if let Some(screen) = &mut self.screen {
+        if self.screen.is_some() {
             let effort = self.agent.effort().map(str::to_owned);
-            screen.turn(Some(self.agent.effort_cycle()));
-            let result = run(&mut self.agent, &mut screen.link, &self.cancel);
-            screen.turn(None);
-            self.cancel.store(false, Ordering::Relaxed);
-            let unset = (screen.take_effort()).and_then(|level| self.agent.set_effort(level).err());
-            let changed = (self.agent.effort()).filter(|level| effort.as_deref() != Some(level));
-            let unsaved =
-                changed.and_then(|level| self.settings.set_default_thinking_level(level).err());
-            if let Some(error) = unset {
-                self.say(&format!("error: {error}"));
-            }
-            if let Some(error) = unsaved {
-                self.say(&format!("error: settings not saved: {error}"));
-            }
+            let result = self.on_screen(run);
+            self.ended_on_screen(effort);
             return result;
         }
         let shown = self.editor.as_ref().map(|_| {

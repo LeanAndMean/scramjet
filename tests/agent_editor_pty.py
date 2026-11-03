@@ -1922,7 +1922,8 @@ def fullscreen_queue(read, until, send, output):
     # Alt+Enter, as terminals send it.
     send(b'after that\x1b\r')
     on_screen('Follow-up: after that')
-    send(b'/model\r')
+    # A command set's command waits in the editor.
+    send(b'/demo:greet Ann\r')
     on_screen('Commands wait for the turn to end')
     send(b'\x15')
     rows = on_screen('Followed.')
@@ -1939,6 +1940,38 @@ def fullscreen_queue(read, until, send, output):
     assert rows[-2] == '> kept', rows
     on_screen('(cancelled)')
     send(b'\x03\x04')
+
+
+def fullscreen_commands_during_turn(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('running 1s')
+    # `/session` and `/model` run before the turn's next request, which goes to the model chosen.
+    send(b'/session\r/model\r')
+    rows = on_screen('Command: /model')
+    assert 'Command: /session' in '\n'.join(rows), rows
+    rows = on_screen('Select model')
+    text = '\n'.join(rows)
+    assert 'Tool Results: 1' in text and 'Switched.' not in text, text
+    assert 'Command: ' not in text, text
+    send(b'\x1b[B\r')
+    rows = on_screen('Switched.')
+    text = '\n'.join(rows)
+    assert text.index('\u2713 Model set to gpt-6-terra') < text.index('Switched.') < text.index('[2 requests'), text
+    # `/new` stops the turn first; what it did not take goes back in the editor.
+    send(b'again\r')
+    on_screen('running 1s')
+    send(b'kept\r')
+    on_screen('Steering: kept')
+    send(b'/new\r')
+    rows = on_screen('\u2713 New session started')
+    assert 'Restored 1 queued message to editor' in '\n'.join(rows), rows
+    assert rows[-2] == '> kept', rows
+    send(b'\x15more\r')
+    on_screen('running 1s')
+    # `/quit` leaves at once.
+    send(b'/quit\r')
 
 
 def fullscreen_shell_and_effort_during_turn(read, until, send, output):
@@ -2089,6 +2122,19 @@ run(['--fullscreen'], left_the_screen(fullscreen_queue), serve_items([
 (queued,) = set(session_files()) - known
 prompts = [line['content'] for line in map(json.loads, open(queued)) if line.get('role') == 'user']
 assert prompts == ['go', 'steer this', 'after that', 'again'], prompts
+bodies = []
+known = set(session_files())
+run(['--fullscreen'], left_the_screen(fullscreen_commands_during_turn), serve_items([
+    [tool_call('call_1', 'bash', {'command': 'sleep 2'})],
+    [message('Switched.')],
+    [tool_call('call_2', 'bash', {'command': 'sleep 30'})],
+    [tool_call('call_3', 'bash', {'command': 'sleep 30'})],
+], models=['gpt-6-luna', 'gpt-6-terra'], bodies=bodies))
+assert [body['model'] for body in bodies] == ['gpt-6-luna', 'gpt-6-terra', 'gpt-6-terra', 'gpt-6-terra'], bodies
+first, second = sorted(set(session_files()) - known)
+prompts = lambda path: [line['content'] for line in map(json.loads, open(path)) if line.get('role') == 'user']
+assert prompts(first) == ['go', 'again'], prompts(first)
+assert prompts(second) == ['more'], prompts(second)
 bodies = []
 during = config_home('during')
 known = set(session_files())

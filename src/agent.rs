@@ -107,6 +107,8 @@ pub enum SessionChoice {
 #[derive(Debug)]
 pub enum AgentError {
     Cancelled,
+    /// The turn stopped before a request for the session to use the agent (`AgentUi::pause`).
+    Paused,
     Provider(String),
     /// A request failed because its input exceeded the model's context window.
     ContextOverflow(String),
@@ -119,6 +121,7 @@ impl std::fmt::Display for AgentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Cancelled => f.write_str("cancelled"),
+            Self::Paused => f.write_str("paused"),
             Self::Provider(message) => write!(f, "provider: {message}"),
             Self::ContextOverflow(message) => write!(f, "context overflow: {message}"),
             Self::CompactionFailed(error) => write!(f, "automatic compaction failed: {error}"),

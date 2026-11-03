@@ -9,31 +9,69 @@ use scramjet_rs::agent::{Agent, AgentError, Navigated, SessionInfo};
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
-impl Interactive {
-    /// Runs `prompt` if it is a built-in command; returns whether it was. `escaped`: a double
-    /// Escape erased the prompt for `/tree` or `/fork`.
-    pub(super) fn builtin(&mut self, prompt: &str, escaped: bool) -> Result<bool, String> {
-        if let Some(command) = prompt.strip_prefix('!') {
-            return Ok(self.bang(prompt, command));
-        }
+/// A built-in command as typed, with its argument.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Builtin<'a> {
+    New,
+    Name(&'a str),
+    Session,
+    Resume(&'a str),
+    Fork(&'a str),
+    Tree(&'a str),
+    Model(&'a str),
+    Compact(&'a str),
+    Quit,
+}
+
+impl<'a> Builtin<'a> {
+    /// The built-in command `prompt` runs, if any; `!` commands are not among them.
+    pub(super) fn parse(prompt: &'a str) -> Option<Self> {
+        let prompt = prompt.trim();
         let (name, argument) = prompt
             .split_once(char::is_whitespace)
             .unwrap_or((prompt, ""));
         let argument = argument.trim();
-        match name {
-            "/new" if argument.is_empty() => {
+        Some(match name {
+            "/new" if argument.is_empty() => Self::New,
+            "/name" => Self::Name(argument),
+            "/session" if argument.is_empty() => Self::Session,
+            "/resume" => Self::Resume(argument),
+            "/fork" => Self::Fork(argument),
+            "/tree" => Self::Tree(argument),
+            "/model" => Self::Model(argument),
+            "/compact" => Self::Compact(argument),
+            "/exit" | "/quit" if argument.is_empty() => Self::Quit,
+            _ => return None,
+        })
+    }
+
+    /// Whether, typed during a turn, it stops the turn and runs once it has: it replaces or
+    /// rewrites the conversation, as Scramjet's `/compact` and `/new` abort the turn first and
+    /// a session switch disposes of it. The others run between the turn's requests.
+    pub(super) fn interrupts(self) -> bool {
+        !matches!(self, Self::Name(_) | Self::Session | Self::Model(_))
+    }
+}
+
+impl Interactive {
+    /// Runs `prompt` if it is a built-in command other than `/quit`, or a `!` command; returns
+    /// whether it was. `escaped`: a double Escape erased the prompt for `/tree` or `/fork`.
+    pub(super) fn builtin(&mut self, prompt: &str, escaped: bool) -> Result<bool, String> {
+        if let Some(command) = prompt.strip_prefix('!') {
+            return Ok(self.bang(prompt, command));
+        }
+        match Builtin::parse(prompt) {
+            Some(Builtin::New) => {
                 self.new_session();
             }
-            "/name" => self.name(argument),
-            "/session" if argument.is_empty() => {
-                self.say(session_info(&self.agent, &self.ui).trim_end())
-            }
-            "/resume" => self.resume(argument)?,
-            "/fork" => self.fork(argument, escaped)?,
-            "/tree" => self.tree(argument, escaped)?,
-            "/model" => self.model(argument)?,
-            "/compact" => self.compact(argument),
-            _ => return Ok(false),
+            Some(Builtin::Name(name)) => self.name(name),
+            Some(Builtin::Session) => self.say(session_info(&self.agent, &self.ui).trim_end()),
+            Some(Builtin::Resume(wanted)) => self.resume(wanted)?,
+            Some(Builtin::Fork(wanted)) => self.fork(wanted, escaped)?,
+            Some(Builtin::Tree(wanted)) => self.tree(wanted, escaped)?,
+            Some(Builtin::Model(wanted)) => self.model(wanted)?,
+            Some(Builtin::Compact(focus)) => self.compact(focus),
+            Some(Builtin::Quit) | None => return Ok(false),
         }
         Ok(true)
     }
@@ -547,6 +585,46 @@ fn age_label(age: Duration) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn builtins_typed_during_a_turn_stop_it_when_they_replace_the_conversation() {
+        let stops = |prompt| Builtin::parse(prompt).map(Builtin::interrupts);
+        for prompt in [
+            "/session",
+            "/name",
+            "/name  my work ",
+            "/model",
+            "/model gpt-6-terra",
+        ] {
+            assert_eq!(stops(prompt), Some(false), "{prompt}");
+        }
+        for prompt in [
+            "/new",
+            "/compact keep tests",
+            "/resume 2",
+            "/fork",
+            "/tree",
+            "/quit",
+        ] {
+            assert_eq!(stops(prompt), Some(true), "{prompt}");
+        }
+        // These go to the model as they are, as before a turn.
+        for prompt in [
+            "/session now",
+            "/new one",
+            "/exit now",
+            "/sessions",
+            "/rs:loop",
+            "!ls",
+        ] {
+            assert_eq!(stops(prompt), None, "{prompt}");
+        }
+        assert_eq!(
+            Builtin::parse("/name  my work "),
+            Some(Builtin::Name("my work"))
+        );
+        assert_eq!(Builtin::parse("/exit"), Some(Builtin::Quit));
+    }
 
     #[test]
     fn resume_lines_cut_the_prompt_and_keep_its_count_and_age() {
