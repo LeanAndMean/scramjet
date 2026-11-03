@@ -31,12 +31,12 @@ $ARGUMENTS
 
 ## Brief
 
-Follow `CLAUDE.md`. Read `docs/DESIGN.md`, `docs/ROADMAP.md`, `docs/TASKS.md`, recent Git history and enough of the code and its behavior to report truthfully. Then give the user a short brief:
+Follow `CLAUDE.md`. Read `docs/DESIGN.md`, `docs/ROADMAP.md`, `docs/TASKS.md`, `README.md`, the commits since the one named by `Last steer:` in `docs/TASKS.md` with their `Choice:` trailers, and enough of the code and its behavior to report truthfully. Then give the user a short brief:
 
 - what works now and how it was verified;
 - the current focus and next candidates;
 - recorded obstacles;
-- the open questions and assumptions the loop recorded;
+- the open questions the loop recorded and the product choices in `Choice:` trailers since the last steer;
 - anything in the code or history that diverges from the design.
 
 If feedback was given above, lead with what bears on it.
@@ -52,7 +52,7 @@ The discussion runs over several exchanges. End each turn with `get_scramjet_use
 Write what the user agreed, not what was merely discussed:
 
 - goal, scope, invariants and stages in `docs/DESIGN.md` and `docs/ROADMAP.md`;
-- focus, next candidates and resolved or remaining open questions in `docs/TASKS.md`;
+- focus, next candidates and resolved or remaining open questions in `docs/TASKS.md`, keeping choices the user leaves undecided there as open questions, one line each, and setting `Last steer:` to the last commit the brief covered;
 - changes to approvals, references, checks or safety properties in `CLAUDE.md`.
 
 Remove or revise anything those changes make stale. Preserve unrelated uncommitted work and commit only the files you changed. Building belongs to `/rs:loop`.

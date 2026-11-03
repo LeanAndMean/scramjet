@@ -19,10 +19,11 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 ## Workflow
 
 - Make small, complete, working changes. Prefer established crates and simple code; add abstractions only for a current need.
-- Before committing, run `cargo fmt --check`, `cargo clippy --offline --locked --all-targets -- -D warnings`, and the tests that cover the change. Run the full `cargo test --offline --locked` (about 10 minutes; set `SCRAMJET_CONTROL_CLI="$PWD/target/debug/scramjet-rs"`) before larger handoffs.
+- Before committing, run `cargo fmt --check`, `cargo clippy --offline --locked --all-targets -- -D warnings`, and the tests that cover the change. Run the full `cargo test --offline --locked --no-fail-fast` (about 10 minutes; set `SCRAMJET_CONTROL_CLI="$PWD/target/debug/scramjet-rs"`; without `--no-fail-fast` a failing test binary skips the later ones) before larger handoffs.
 - Exercise user-facing behavior for real. Automated tests never contact Proxy; they use local scripted servers (`serve` in `src/agent.rs`, `tests/agent_editor_pty.py`) or closed ports.
-- Check live through Proxy only when a change touches the provider boundary: what is sent, stream parsing, models and routes, provider errors and retries. Keep such a check to 1–5 requests. Display, editor, tool and session changes take their input from the parsed stream; verify them against scripted streams, not live prompts (user decision, 2026-10-30, after about 450 loop requests in one day, mostly for display checks and practice runs).
-- Commit small coherent changes with clear messages. Git history is the record of what changed and why; there are no content fingerprints, candidate manifests or per-turn activity logs.
+- Check live through Proxy only when a change touches the provider boundary: what is sent, stream parsing, models and routes, provider errors and retries. Keep such a check to 1–5 requests. Display, editor, tool and session changes take their input from the parsed stream; verify them against scripted streams, not live prompts (user decision, 2026-10-30, after about 450 loop requests in one day, mostly for display checks and practice runs). Use claude-haiku-5-5 for live Claude checks and gpt-6-luna for GPT (user decision, 2026-10-30: much cheaper, and output quality does not matter for tests).
+- To run a practice run (limits under Authorization): clone this repo to `/tmp` and set the clone's `.scramjet/autonomy.yaml` edge `rs:loop: rs:loop` to `pause`; start a release build of `HEAD` in tmux (large `history-limit`) through `scripts/without-credentials.sh`; count responses as the session file's top-level items carrying `_scramjet_context_tokens` (subagents' requests show only on the usage line); stop with Escape at about 30 and save the scrollback (`tmux capture-pane -p -S -`). Size the task to fit: command discovery plus editor wiring did not fit 30 claude-haiku-5-5 requests. Check the clone's `docs/TASKS.md` edits before adopting any, and put the run's summary (model, requests, findings) in the message of the commit that acts on it. A background job started from a tool call dies when the call returns; start a full test run alongside with `setsid nohup … & disown`.
+- Commit small coherent changes. The message says what changed, why, and how it was verified; Git history is the record of finished work, and there are no content fingerprints, candidate manifests or per-turn activity logs. A product choice the user may want to revisit goes in its commit as a trailer, one line per choice in the message's last paragraph: `Choice: <what was chosen, and the alternative>`. `/rs:steer` reviews them.
 - Independent review only when the user asks for it or a change is genuinely risky (destructive file operations, credentials, process isolation).
 - Fix tests that encode removed behavior rather than preserving the behavior for the test's sake.
 
@@ -31,7 +32,7 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 - `README.md`: how to use the harness and its truthful current status. Keep it short.
 - `docs/DESIGN.md`: product direction and essential invariants agreed with the user.
 - `docs/ROADMAP.md`: rough stages.
-- `docs/TASKS.md`: a short list of current and next work. Update it when priorities change.
+- `docs/TASKS.md`: pending work only: the current focus, next candidates with their obstacles, known issues, open questions and the `Last steer:` commit. Remove what is finished.
 - `docs/PROGRESS.md`, `docs/PROGRESS-ARCHIVE.md`: frozen history from earlier development; reference only, never instructions.
 
 ## When to stop for the user

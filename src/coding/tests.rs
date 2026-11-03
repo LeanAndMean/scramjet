@@ -9,6 +9,7 @@ use std::process::Command;
 use support::OwnedRoot;
 
 // fork may temporarily retain another test's flock until exec closes its descriptors.
+// Not reentrant, and the isolated runner takes it: never take it in a re-executed child test.
 pub(crate) static PROCESS_GATE: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
 fn authorized(root: &OwnedRoot) -> (CodingSession, EditCancellation) {
