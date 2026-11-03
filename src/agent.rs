@@ -454,6 +454,11 @@ impl Agent {
         self.info.window = window;
     }
 
+    /// The current model's context window, from its card, or `None` when unknown.
+    pub fn context_window(&self) -> Option<u64> {
+        self.info.window
+    }
+
     /// The model the session last recorded: its latest switch or response item's producer.
     pub fn last_model(&self) -> Option<&str> {
         self.session.model()

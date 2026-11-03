@@ -1,7 +1,8 @@
 //! A turn's display calls, kept as they pass to the terminal, so that the conversation view can
 //! show the turn so far, rendered again at its own width, while the turn runs.
 
-use super::{Status, Terminal, view};
+use super::terminal::{Status, Terminal};
+use super::view;
 use scramjet_rs::agent::{
     self, AgentError, AgentUi, Answer, AutoCompaction, Choice, Compaction, Purpose, StreamProgress,
     ToolDetail,

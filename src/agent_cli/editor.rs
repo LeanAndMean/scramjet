@@ -1,6 +1,7 @@
 //! Prompt editor for the interactive agent: raw-mode editing, bracketed paste and history.
 
 use super::file_search;
+use super::text;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -863,7 +864,7 @@ impl Completion {
             Kind::Slash => self
                 .items
                 .iter()
-                .map(|item| super::visible(&item.label).width() + 2)
+                .map(|item| text::visible(&item.label).width() + 2)
                 .max(),
             _ => None,
         };
@@ -872,7 +873,7 @@ impl Completion {
             .map(|index| {
                 let item = &self.items[index];
                 // File names and command descriptions come from the project.
-                let label = super::clip(&super::visible(&item.label), width.saturating_sub(2));
+                let label = text::clip(&text::visible(&item.label), width.saturating_sub(2));
                 let room = width.saturating_sub(2 + column);
                 let description = if item.description.is_empty() || room <= 10 {
                     String::new()
@@ -880,7 +881,7 @@ impl Completion {
                     let pad = " ".repeat(column.saturating_sub(label.width()));
                     format!(
                         "{pad}{}",
-                        super::clip(&super::visible(&item.description), room)
+                        text::clip(&text::visible(&item.description), room)
                     )
                 };
                 if index == self.selected {
@@ -894,7 +895,7 @@ impl Completion {
             .collect();
         if visible < count {
             let position = format!("  ({}/{count})", self.selected + 1);
-            rows.push(format!("{MUTED}{}{RESET}", super::clip(&position, width)));
+            rows.push(format!("{MUTED}{}{RESET}", text::clip(&position, width)));
         }
         rows
     }

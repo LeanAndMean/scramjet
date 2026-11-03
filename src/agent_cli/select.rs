@@ -4,6 +4,7 @@
 use super::editor::{Key, RESIZE_CHECK, RawMode, Stdin, read_key, terminal_size};
 use super::fuzzy::{self, Haystack};
 use super::style;
+use super::text;
 use scramjet_rs::agent::Choice;
 use std::io::{self, Write};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -261,7 +262,7 @@ fn lines(
         .saturating_sub(visible / 2)
         .min(shown - visible);
     let hint_room = width.saturating_sub(title.width() + 2);
-    let hint = super::clip(HINT, hint_room);
+    let hint = text::clip(HINT, hint_room);
     let mut lines = vec![format!(
         "{SELECTOR_TITLE}{title}{RESET}  {MUTED}{hint}{RESET}"
     )];
@@ -269,7 +270,7 @@ fn lines(
         let query = tail(&search.query, width - 3);
         lines.push(format!("> {query}{SEARCH_CURSOR} {RESET}"));
         if shown == 0 {
-            let none = super::clip(&search.none, width - 2);
+            let none = text::clip(&search.none, width - 2);
             lines.push(format!("  {MUTED}{none}{RESET}"));
         }
     }
@@ -339,7 +340,7 @@ fn question_lines(
     if hidden {
         lines.push(format!("  {MUTED}({}/{count}){RESET}", selected + 1));
     }
-    lines.push(format!("{MUTED}{}{RESET}", super::clip(HINT, width)));
+    lines.push(format!("{MUTED}{}{RESET}", text::clip(HINT, width)));
     lines.push(rule);
     lines
 }
@@ -378,14 +379,14 @@ fn option_rows(option: &Choice, selected: bool, recommended: bool, width: usize)
 fn wrapped(text: &str, width: usize) -> Vec<String> {
     let mut rows = Vec::new();
     for line in text.lines() {
-        let mut wrap = super::Wrap::new(width.max(1));
-        let line = wrap.push(&super::printable(line)) + &wrap.finish();
+        let mut wrap = text::Wrap::new(width.max(1));
+        let line = wrap.push(&text::printable(line)) + &wrap.finish();
         rows.extend(line.split('\n').map(str::to_owned));
     }
     if rows.len() > OPTION_ROWS {
         rows.truncate(OPTION_ROWS);
         let last = &mut rows[OPTION_ROWS - 1];
-        *last = super::clip(&format!("{last}…"), width);
+        *last = text::clip(&format!("{last}…"), width);
     }
     rows
 }
@@ -409,7 +410,7 @@ mod tests {
     fn plain(lines: Vec<String>) -> Vec<String> {
         lines
             .into_iter()
-            .map(|line| super::super::printable(&line))
+            .map(|line| text::printable(&line))
             .collect()
     }
 
@@ -440,7 +441,7 @@ mod tests {
 
     #[test]
     fn shows_ten_rows_around_the_selection_with_its_position() {
-        let row = |index: usize, width: usize| super::super::clip(&format!("row {index}"), width);
+        let row = |index: usize, width: usize| text::clip(&format!("row {index}"), width);
         let list = |selected| List::new(25, selected, 10);
         let shown = plain(lines("Pick", &list(12), Some(9), (50, 24), &row));
         assert_eq!(
@@ -538,7 +539,7 @@ mod tests {
             "release notes",
         ]
         .map(String::from);
-        let row = |index: usize, width: usize| super::super::clip(&texts[index], width);
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
         let mut list = List::searching(&texts, 1, 10, "No matching rows");
         let shown = |list: &List| plain(lines("Pick", list, Some(0), (50, 24), &row));
         assert_eq!(shown(&list)[1..3], [">  ", "  fix the parser ✓"]);

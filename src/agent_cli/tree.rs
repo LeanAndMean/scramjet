@@ -2,6 +2,7 @@
 //! stays in one column, each branch point indents its children under `├─`/`└─` connectors with
 //! `│` gutters, the branch with the current entry comes first, and `• ` marks that entry's path.
 
+use super::text;
 use scramjet_rs::agent::{SessionTree, TreeItem};
 
 /// Where an ancestor's connector was drawn, and whether its line continues there (`│`).
@@ -143,13 +144,13 @@ fn prefix(row: &Row, multiple_roots: bool) -> String {
 
 /// An entry's text as Scramjet's tree shows it, on one line.
 fn label(item: &TreeItem) -> String {
-    let text = match item {
+    let label = match item {
         TreeItem::Prompt(text) => format!("user: {text}"),
         TreeItem::Reply(text) => format!("assistant: {text}"),
         TreeItem::Reasoning => "assistant: (no content)".into(),
         TreeItem::Command(command) => format!("[bash]: {command}"),
         TreeItem::Tool(name, summary) if name == "bash" => {
-            let command = super::one_line(summary);
+            let command = text::one_line(summary);
             match command.char_indices().nth(50) {
                 Some((end, _)) => format!("[bash: {}...]", &command[..end]),
                 None => format!("[bash: {command}]"),
@@ -164,7 +165,7 @@ fn label(item: &TreeItem) -> String {
         TreeItem::Model(model) => format!("[model: {model}]"),
         TreeItem::Effort(level) => format!("[thinking: {level}]"),
     };
-    super::one_line(&super::visible(&text))
+    text::one_line(&text::visible(&label))
 }
 
 #[cfg(test)]

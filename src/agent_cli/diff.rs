@@ -3,7 +3,7 @@
 //! only context, so they are cut to the width.
 
 use super::style::{DIFF_ADDED, DIFF_CHANGED, DIFF_CHANGED_END, DIFF_CONTEXT, DIFF_REMOVED, RESET};
-use super::{Wrap, clip, printable};
+use super::text::{Wrap, clip, printable};
 use scramjet_rs::agent::sequence_diff;
 use unicode_width::UnicodeWidthStr;
 

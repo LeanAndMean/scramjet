@@ -3,7 +3,8 @@
 //! during a turn, following the turn while its inline output waits.
 
 use super::editor::{Key, RESIZE_CHECK, RawMode, Stdin, read_key, terminal_size};
-use super::{clip, editor, job, style};
+use super::text::clip;
+use super::{editor, job, style};
 use std::io::{self, Write};
 use std::sync::{
     Mutex, PoisonError,
