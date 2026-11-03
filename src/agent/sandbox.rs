@@ -63,14 +63,41 @@ pub(super) struct Hidden {
     directories: Vec<PathBuf>,
     /// Device and inode of each, which another mount of the same filesystem shares.
     identities: Vec<(u64, u64)>,
+    /// The `TMUX_TMPDIR` of tmux servers that commands with the stores hidden start.
+    tmux: Option<PathBuf>,
 }
 
 impl Hidden {
-    /// Those of this user's home directory, and Scramjet's `auth.json` wherever
-    /// `SCRAMJET_CODING_AGENT_DIR` puts it.
+    /// Those of this user's home directory, Scramjet's `auth.json` wherever
+    /// `SCRAMJET_CODING_AGENT_DIR` puts it, and this user's tmux servers.
     pub(super) fn current() -> Hidden {
         let auth = super::subagent::agent_directory().map(|dir| dir.join("auth.json"));
-        std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, auth))
+        let mut hidden =
+            std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, auth));
+        let base = std::env::var_os("TMUX_TMPDIR").filter(|base| !base.is_empty());
+        let base = base.map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+        let own = super::session::state_directory().map(|directory| directory.join("tmux"));
+        hidden.keep_tmux_apart(&base, own.ok());
+        hidden
+    }
+
+    /// Hides the sockets of tmux servers under `base` (as `TMUX_TMPDIR`), which run what a client
+    /// asks with everything visible, and has hidden commands start their own under `own`, so that
+    /// sessions the user opens on a server of `base` never have the stores hidden.
+    fn keep_tmux_apart(&mut self, base: &Path, own: Option<PathBuf>) {
+        use std::os::unix::fs::DirBuilderExt;
+        let sockets = base.join(format!("tmux-{}", rustix::process::getuid().as_raw()));
+        // Made as tmux makes it: bubblewrap would leave a mount point it made open to others,
+        // which tmux then refuses to use.
+        let _ = std::fs::DirBuilder::new().mode(0o700).create(&sockets);
+        if let Some(real) = std::fs::canonicalize(&sockets)
+            .ok()
+            .filter(|real| real.is_dir())
+        {
+            self.identities.extend(identity(&real));
+            self.directories.push(real);
+        }
+        self.tmux = own.filter(|own| std::fs::create_dir_all(own).is_ok());
     }
 
     pub(super) fn under(home: &Path, auth: Option<PathBuf>) -> Hidden {
@@ -96,6 +123,7 @@ impl Hidden {
             identities: identities.collect(),
             files,
             directories,
+            tmux: None,
         }
     }
 
@@ -135,6 +163,9 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Command {
     let mut process = Command::new(PROGRAM);
     process.args(["--dev-bind", "/", "/", "--die-with-parent"]);
     hide(&mut process, hidden);
+    if let Some(own) = &hidden.tmux {
+        process.env("TMUX_TMPDIR", own);
+    }
     if Path::new(WSLG_DISTRO).is_dir() {
         process.args(["--tmpfs", WSLG_DISTRO, "--remount-ro", WSLG_DISTRO]);
     }
@@ -189,13 +220,15 @@ fn confined(root: &Path, also: Option<&Path>, hidden: &Hidden) -> Command {
 }
 
 /// Mounts an empty file over each hidden file and an empty directory over each hidden directory,
-/// both read-only, and leaves out the environment variables that hold credentials.
+/// both read-only, and leaves out the environment variables that hold credentials and those
+/// that lead tmux to the server the agent runs in.
 fn hide(process: &mut Command, hidden: &Hidden) {
     for (name, _) in std::env::vars_os() {
         if holds_credential(&name.to_string_lossy()) {
             process.env_remove(name);
         }
     }
+    process.env_remove("TMUX").env_remove("TMUX_PANE");
     if !hidden.files.is_empty() {
         let empty = empty_file();
         for file in &hidden.files {
@@ -452,6 +485,98 @@ setsid sleep {marker} > /dev/null 2>&1 & echo done"
             left.success(),
             "the background command did not outlive the command"
         );
+    }
+
+    /// Ends the tmux servers of these `TMUX_TMPDIR`s, also when a test fails.
+    struct TmuxServers(Vec<std::path::PathBuf>);
+
+    impl TmuxServers {
+        fn run(base: &std::path::Path, args: &[&str]) -> std::process::Output {
+            let mut tmux = std::process::Command::new("tmux");
+            tmux.env("TMUX_TMPDIR", base).env_remove("TMUX");
+            tmux.args(args).output().unwrap()
+        }
+    }
+
+    impl Drop for TmuxServers {
+        fn drop(&mut self) {
+            for base in &self.0 {
+                Self::run(base, &["kill-server"]);
+            }
+        }
+    }
+
+    #[test]
+    fn tmux_servers_outside_and_those_hidden_commands_start_stay_apart() {
+        if std::process::Command::new("tmux")
+            .arg("-V")
+            .output()
+            .is_err()
+        {
+            return eprintln!("tmux is not installed; skipped");
+        }
+        let home = std::env::temp_dir().join(format!("scramjet-tmux-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let (outside, own, fresh) = (home.join("out"), home.join("own"), home.join("fresh"));
+        for directory in [&outside, &fresh, &home.join("project")] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let netrc = home.join(".netrc");
+        std::fs::write(&netrc, "SECRET-netrc\n").unwrap();
+        let _servers = TmuxServers(vec![outside.clone(), own.clone()]);
+        let run = TmuxServers::run;
+        let cat = format!("cat {}", netrc.display());
+        assert!(
+            run(&outside, &["new-session", "-d", "-s", "out", "sleep 300"])
+                .status
+                .success()
+        );
+        // A server outside runs a client's command with everything visible.
+        let shown = run(&outside, &["run-shell", &cat]);
+        assert_eq!(String::from_utf8_lossy(&shown.stdout), "SECRET-netrc\n");
+
+        let mut hidden = super::Hidden::under(&home, None);
+        hidden.keep_tmux_apart(&outside, Some(own.clone()));
+        let socket = outside.join(format!(
+            "tmux-{}/default",
+            rustix::process::getuid().as_raw()
+        ));
+        let script = format!(
+            "tmux ls; TMUX_TMPDIR={out} tmux run-shell '{cat}'; tmux -S {socket} run-shell '{cat}'; \
+TMUX={socket},1,0 tmux run-shell '{cat}'; tmux new-session -d -s own 'sleep 300' && echo started",
+            out = outside.display(),
+            socket = socket.display(),
+        );
+        let mut process = super::hiding(&home.join("project"), &script, &hidden);
+        let envs: Vec<_> = process.get_envs().collect();
+        assert!(envs.contains(&("TMUX".as_ref(), None)), "{envs:?}");
+        assert!(envs.contains(&("TMUX_TMPDIR".as_ref(), Some(own.as_ref()))));
+        let output = process.output().unwrap();
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "started\n",
+            "{errors}"
+        );
+        assert!(!errors.contains("SECRET"), "{errors}");
+
+        // The server a hidden command started is apart from the one outside, and keeps the
+        // stores hidden from what the user runs on it.
+        let sessions =
+            |base| String::from_utf8_lossy(&run(base, &["ls", "-F", "#S"]).stdout).into_owned();
+        assert_eq!(sessions(&outside), "out\n");
+        assert_eq!(sessions(&own), "own\n");
+        let shown = run(&own, &["run-shell", &cat]);
+        assert!(
+            shown.status.success() && shown.stdout.is_empty(),
+            "{shown:?}"
+        );
+
+        // Made as tmux makes it, so that tmux outside can use it afterwards.
+        super::Hidden::default().keep_tmux_apart(&fresh, None);
+        let made = std::fs::read_dir(&fresh).unwrap().next().unwrap().unwrap();
+        let mode = std::os::unix::fs::PermissionsExt::mode(&made.metadata().unwrap().permissions());
+        assert_eq!(mode & 0o777, 0o700);
     }
 
     #[test]

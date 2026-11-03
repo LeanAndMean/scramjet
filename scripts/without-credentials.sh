@@ -23,5 +23,13 @@ for name in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p'); do
 done
 # WSL2 mounts / again here, where the stores above would still show.
 if [ -d /mnt/wslg/distro ]; then args="$args --tmpfs /mnt/wslg/distro --remount-ro /mnt/wslg/distro"; fi
+# A tmux server outside runs what a client asks with everything visible, and one started here would
+# keep the stores hidden from sessions opened on it later: tmux gets a directory of its own. The
+# outside one is made as tmux makes it (0700), as bwrap would leave it open to others.
+sockets="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
+mkdir -m 700 "$sockets" 2>/dev/null || true
+if [ -d "$sockets" ]; then args="$args --tmpfs $sockets --remount-ro $sockets"; fi
+own=$(mktemp -d "${TMPDIR:-/tmp}/without-credentials-tmux.XXXXXX")
+args="$args --unsetenv TMUX --unsetenv TMUX_PANE --setenv TMUX_TMPDIR $own"
 # shellcheck disable=SC2086
 exec bwrap $args -- "$@"
