@@ -1,6 +1,6 @@
 //! The system instructions of the agent and of its subagents.
 use super::{Commands, Skills, publish, question, status, subagent};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const CONTEXT_FILE_BYTES: u64 = 256 << 10;
 /// Scramjet's explanation of its command framing, the start of its `# Command framing`.
@@ -194,9 +194,8 @@ Guidelines:
 }
 
 /// The `AGENTS.md` and `CLAUDE.md` files of `root` and the directories above it, outermost
-/// first, as Pi's `# Project Context`; empty without any.
-fn project_context(root: &Path) -> String {
-    let mut text = String::new();
+/// first, with their contents.
+pub(super) fn context_files(root: &Path) -> Vec<(PathBuf, String)> {
     let mut files = Vec::new();
     for directory in root.ancestors() {
         for name in ["AGENTS.md", "CLAUDE.md"] {
@@ -208,9 +207,17 @@ fn project_context(root: &Path) -> String {
             }
         }
     }
+    files.reverse();
+    files
+}
+
+/// The context files of `root`, as Pi's `# Project Context`; empty without any.
+fn project_context(root: &Path) -> String {
+    let mut text = String::new();
+    let files = context_files(root);
     if !files.is_empty() {
         text.push_str("\n# Project Context\n\nProject-specific instructions and guidelines:\n");
-        for (path, contents) in files.iter().rev() {
+        for (path, contents) in &files {
             text.push_str(&format!(
                 "\n## {}\n\n{}\n",
                 path.display(),

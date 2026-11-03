@@ -817,3 +817,66 @@ fn an_effort_the_card_lacks_becomes_the_nearest_level_it_lists() {
     assert_eq!(opus.fit("hgih"), "hgih");
     assert_eq!(info(&[]).fit("minimal"), "minimal");
 }
+
+#[test]
+fn installed_says_where_each_comes_from_and_what_is_wrong() {
+    let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "installed");
+    let root = scratch.0.clone();
+    let write = |path: &Path, text: &str| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    let agent_file =
+        |name: &str| format!("---\nname: {name}\ndescription: Does {name}.\n---\nBe.\n");
+    let set = root.join(".scramjet/demo");
+    write(&set.join("commands/demo:go.md"), "Go.\n");
+    write(
+        &set.join("agents/demo:helper.md"),
+        &agent_file("demo:helper"),
+    );
+    let user = root.join("user");
+    write(&user.join("mine.md"), &agent_file("mine"));
+    std::os::unix::fs::symlink(root.join("gone.md"), user.join("demo:old.md")).unwrap();
+    write(&root.join(".scramjet/agents/ours.md"), &agent_file("ours"));
+    write(
+        &root.join(".scramjet/autonomy.yaml"),
+        "edges:\n  demo:gone:\n    demo:go: chain\n",
+    );
+    write(&root.join("AGENTS.md"), "Be careful.\n");
+    agent.agents_directory = Some(user.clone());
+    agent.autonomy = None;
+    project_sets(&mut agent);
+    agent.instruct();
+    let found = agent.installed();
+    assert_eq!(found.sets, agent.sets.list());
+    let agents: Vec<(&str, &AgentSource)> = (found.agents.iter())
+        .map(|agent| (agent.name.as_str(), &agent.source))
+        .collect();
+    assert_eq!(
+        agents,
+        [
+            ("mine", &AgentSource::User),
+            ("ours", &AgentSource::Project),
+            ("demo:helper", &AgentSource::Set("demo".into())),
+        ]
+    );
+    assert_eq!(found.context_files, [root.join("AGENTS.md")]);
+    assert_eq!(found.autonomy, (root.join(".scramjet/autonomy.yaml"), None));
+    let autonomy = root.join(".scramjet/autonomy.yaml");
+    assert_eq!(
+        found.problems,
+        [
+            format!(
+                "agents: skipping user agent {} (a broken link to {}): names starting with \
+                 \"demo:\" belong to the project command set {}",
+                user.join("demo:old.md").display(),
+                root.join("gone.md").display(),
+                set.display()
+            ),
+            format!(
+                "scramjet: project ({}): unknown source command \"demo:gone\"",
+                autonomy.display()
+            ),
+        ]
+    );
+}

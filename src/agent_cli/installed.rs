@@ -1,0 +1,430 @@
+//! `/settings`' Installed: what the session loaded, each with where it comes from, and what is
+//! wrong there, so that the user can find and fix it. Launch says at most one line about it.
+use scramjet_rs::agent::{AgentSource, Command, Installed, Origin, Skill, shortened};
+use std::path::Path;
+use unicode_width::UnicodeWidthStr;
+
+/// What is loaded besides `Installed`: the commands, the skills, and the settings file with
+/// what is wrong in it.
+pub(super) struct Loaded<'a> {
+    pub installed: &'a Installed,
+    pub commands: &'a [Command],
+    pub skills: &'a [Skill],
+    pub settings: Option<&'a Path>,
+    /// Every problem, the settings' first, as `problems` gives them.
+    pub problems: &'a [String],
+}
+
+/// Rows under headings, with a note for each row.
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct Listing {
+    pub rows: Vec<String>,
+    pub headings: Vec<bool>,
+    pub notes: Vec<String>,
+}
+
+impl Listing {
+    /// `heading` over `rows` (each its columns and note), the columns but the last as wide as
+    /// the widest of the section; nothing without rows.
+    fn section(&mut self, heading: &str, rows: Vec<(Vec<String>, String)>) {
+        if rows.is_empty() {
+            return;
+        }
+        self.rows.push(heading.to_owned());
+        self.headings.push(true);
+        self.notes.push(String::new());
+        let columns = rows.iter().map(|(columns, _)| columns.len()).max();
+        let widths: Vec<usize> = (0..columns.unwrap_or(0).saturating_sub(1))
+            .map(|at| {
+                let width =
+                    |(columns, _): &(Vec<String>, String)| columns.get(at).map(|c| c.width());
+                rows.iter().filter_map(width).max().unwrap_or(0)
+            })
+            .collect();
+        for (columns, note) in rows {
+            let mut row = String::from(" ");
+            for (at, column) in columns.iter().enumerate() {
+                row.push(' ');
+                row.push_str(column);
+                if let Some(width) = widths.get(at) {
+                    row.push_str(&" ".repeat(width - column.width() + 1));
+                }
+            }
+            self.rows.push(row.trim_end().to_owned());
+            self.headings.push(false);
+            self.notes.push(note);
+        }
+    }
+}
+
+/// The problems, the command sets, commands, agents, skills, context files and settings files.
+pub(super) fn listing(loaded: &Loaded) -> Listing {
+    let installed = loaded.installed;
+    let mut listing = Listing::default();
+    let problems = (loaded.problems.iter())
+        .map(|problem| (vec![home_shortened(problem)], home_shortened(problem)))
+        .collect();
+    listing.section("Needs attention", problems);
+    let settings = loaded.settings.map(shown);
+    let sets = (installed.sets.iter())
+        .map(|set| {
+            let commands = (loaded.commands.iter())
+                .filter(|command| command.path.starts_with(&set.directory))
+                .count();
+            let agents = (installed.agents.iter())
+                .filter(|agent| agent.source == AgentSource::Set(set.name.clone()))
+                .count();
+            let contents = format!(
+                "{}, {}.",
+                count(commands, "command"),
+                count(agents, "agent")
+            );
+            let directory = shown(&set.directory);
+            let found = match set.origin {
+                Origin::Installed => match &settings {
+                    Some(settings) => format!(
+                        "Installed by reference, listed in {settings} (commandSets); `scramjet-rs \
+                         remove {}` takes it out.",
+                        set.name
+                    ),
+                    None => "Installed by reference.".to_owned(),
+                },
+                Origin::Global => "Found in Scramjet's directory of command sets.".to_owned(),
+                Origin::Project => "Found in this project's .scramjet directory.".to_owned(),
+            };
+            let columns = vec![
+                set.name.clone(),
+                set.origin.name().to_owned(),
+                directory.clone(),
+            ];
+            (columns, format!("{directory}\n{contents} {found}"))
+        })
+        .collect();
+    listing.section("Command sets", sets);
+    let commands = (loaded.commands.iter())
+        .map(|command| {
+            let delegated = match command.delegate_only {
+                true => "Run by other commands, so not in the / list; typed in full, it runs.\n",
+                false => "",
+            };
+            let note = format!(
+                "{}\n{delegated}{}",
+                shown(&command.path),
+                command.description
+            );
+            let columns = vec![format!("/{}", command.name), command.description.clone()];
+            (columns, note)
+        })
+        .collect();
+    listing.section("Commands", commands);
+    let agents = (installed.agents.iter())
+        .map(|agent| {
+            let (source, from) = match &agent.source {
+                AgentSource::Set(name) => (name.clone(), format!("From the command set {name}.")),
+                AgentSource::User => ("user".to_owned(), "In your agent directory.".to_owned()),
+                AgentSource::Project => (
+                    "project".to_owned(),
+                    "In this project's .scramjet/agents; a subagent call asks before it runs one."
+                        .to_owned(),
+                ),
+            };
+            let note = format!("{}\n{from} {}", shown(&agent.path), agent.description);
+            (vec![agent.name.clone(), source], note)
+        })
+        .collect();
+    listing.section("Agents", agents);
+    let skills = (loaded.skills.iter())
+        .map(|skill| {
+            let offered = match skill.listed {
+                true => "Offered to the model",
+                false => "Not offered to the model (disable-model-invocation)",
+            };
+            let path = shown(&skill.path);
+            let note = format!(
+                "{path}\n{offered}; /skill:{} runs it. {}",
+                skill.name, skill.description
+            );
+            (vec![skill.name.clone(), path], note)
+        })
+        .collect();
+    listing.section("Skills", skills);
+    let context = (installed.context_files.iter())
+        .map(|path| {
+            let note = "In the instructions as the project's context, outermost first; /reload \
+                        reads them again.";
+            (vec![shown(path)], note.to_owned())
+        })
+        .collect();
+    listing.section("Context files", context);
+    let (project, global) = &installed.autonomy;
+    let mut files = Vec::new();
+    if let Some(path) = loaded.settings {
+        let what = "scramjet-rs's settings: those in this list, saved as you change them.";
+        files.push((path, "settings", what, "a setting"));
+    }
+    if let Some(path) = global {
+        let what = "Scramjet's, which it reads too: what follows each command, and whether its \
+                    publications ask first, in all projects.";
+        let label = "next steps and publishing, all projects";
+        files.push((
+            path,
+            label,
+            what,
+            "a next step or publishing for all projects",
+        ));
+    }
+    let what = "Scramjet's, which it reads too: what follows each command in this project.";
+    files.push((
+        project,
+        "next steps, this project",
+        what,
+        "a next step for this project",
+    ));
+    let files = (files.into_iter())
+        .map(|(path, label, what, change)| {
+            let missing = match path.exists() {
+                true => String::new(),
+                false => format!(" Not there yet: changing {change} writes it."),
+            };
+            let note = format!("{}\n{what}{missing}", shown(path));
+            (vec![shown(path), label.to_owned()], note)
+        })
+        .collect();
+    listing.section("Settings files", files);
+    listing
+}
+
+/// `/settings`' row: how many problems, sets, commands, agents and skills.
+pub(super) fn summary(loaded: &Loaded) -> String {
+    let parts: Vec<String> = [
+        (loaded.installed.sets.len(), "command set"),
+        (loaded.commands.len(), "command"),
+        (loaded.installed.agents.len(), "agent"),
+        (loaded.skills.len(), "skill"),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, what)| count(n, what))
+    .collect();
+    let contents = match parts.is_empty() {
+        true => "no command sets, agents or skills".to_owned(),
+        false => parts.join(", "),
+    };
+    match loaded.problems.len() {
+        0 => contents,
+        n => format!("{} · {contents}", count(n, "problem")),
+    }
+}
+
+/// What the full screen says about `problems` at start and after `/reload`: the problem when
+/// there is one, else how many there are and where they are listed.
+pub(super) fn attention(problems: &[String]) -> Option<String> {
+    match problems {
+        [] => None,
+        [problem] => Some(problem.clone()),
+        problems => Some(format!(
+            "{} problems in what was loaded: see Installed in /settings",
+            problems.len()
+        )),
+    }
+}
+
+fn count(n: usize, what: &str) -> String {
+    match n {
+        1 => format!("1 {what}"),
+        n => format!("{n} {what}s"),
+    }
+}
+
+fn shown(path: &Path) -> String {
+    shortened(&path.display().to_string())
+}
+
+/// `text` with the home directory shown as `~` wherever a path in it starts with it.
+fn home_shortened(text: &str) -> String {
+    match std::env::home_dir().map(|home| format!("{}/", home.display())) {
+        Some(home) if home != "/" => text.replace(&home, "~/"),
+        _ => text.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scramjet_rs::agent::{AgentFile, Commands, Sets, Skills};
+    use std::{fs, path::PathBuf};
+
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write(path: &Path, text: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn lists_what_is_loaded_with_its_source_under_headings_problems_first() {
+        let base = std::env::temp_dir().join(format!("scramjet-installed-{}", std::process::id()));
+        let _scratch = Scratch(base.clone());
+        let set = base.join("sets/demo");
+        write(
+            &set.join("commands/demo:greet.md"),
+            "---\ndescription: Greet someone\n---\nHi $ARGUMENTS\n",
+        );
+        write(
+            &set.join("commands/demo:inner.md"),
+            "---\ndescription: Help\ndelegate-only: true\n---\nHelp\n",
+        );
+        write(&set.join("agents/demo:helper.md"), "");
+        let root = base.join("project");
+        write(
+            &root.join(".scramjet/skills/pdf/SKILL.md"),
+            "---\nname: pdf\ndescription: Fills PDF forms.\n---\nUse ./fill.sh\n",
+        );
+        let settings = base.join("config/settings.json");
+        write(&settings, "{}");
+        let sets = Sets::find(std::slice::from_ref(&set), None, &root.join(".scramjet"));
+        let commands = Commands::discover(&sets);
+        let skills = Skills::discover(&[], &root);
+        let agent = |name: &str, path: PathBuf, source| AgentFile {
+            name: name.to_owned(),
+            description: format!("Does {name}."),
+            path,
+            source,
+        };
+        let found = Installed {
+            sets: sets.list().to_vec(),
+            agents: vec![
+                agent("mine", base.join("user/mine.md"), AgentSource::User),
+                agent(
+                    "demo:helper",
+                    set.join("agents/demo:helper.md"),
+                    AgentSource::Set("demo".into()),
+                ),
+            ],
+            context_files: vec![root.join("AGENTS.md")],
+            autonomy: (
+                root.join(".scramjet/autonomy.yaml"),
+                Some(base.join("config/autonomy.yaml")),
+            ),
+            problems: Vec::new(),
+        };
+        let problems = ["settings: x: wrong".to_owned(), "skills: y".to_owned()];
+        let loaded = Loaded {
+            installed: &found,
+            commands: commands.list(),
+            skills: skills.list(),
+            settings: Some(&settings),
+            problems: &problems,
+        };
+        let shown = |path: &Path| path.display().to_string();
+        let list = listing(&loaded);
+        let project_file = shown(&root.join(".scramjet/autonomy.yaml"));
+        let width = project_file.len();
+        assert_eq!(
+            list.rows,
+            [
+                "Needs attention".to_owned(),
+                "  settings: x: wrong".into(),
+                "  skills: y".into(),
+                "Command sets".into(),
+                format!("  demo  installed  {}", shown(&set)),
+                "Commands".into(),
+                "  /demo:greet  Greet someone".into(),
+                "  /demo:inner  Help".into(),
+                "Agents".into(),
+                "  mine         user".into(),
+                "  demo:helper  demo".into(),
+                "Skills".into(),
+                format!(
+                    "  pdf  {}",
+                    shown(&root.join(".scramjet/skills/pdf/SKILL.md"))
+                ),
+                "Context files".into(),
+                format!("  {}", shown(&root.join("AGENTS.md"))),
+                "Settings files".into(),
+                format!("  {:width$}  settings", shown(&settings)),
+                format!(
+                    "  {:width$}  next steps and publishing, all projects",
+                    shown(&base.join("config/autonomy.yaml"))
+                ),
+                format!("  {project_file}  next steps, this project"),
+            ]
+        );
+        let headings: Vec<usize> = (0..list.rows.len())
+            .filter(|&at| list.headings[at])
+            .collect();
+        assert_eq!(headings, [0, 3, 5, 8, 11, 13, 15]);
+        assert_eq!(list.notes.len(), list.rows.len());
+        assert_eq!(list.notes[1], "settings: x: wrong");
+        assert_eq!(
+            list.notes[4],
+            format!(
+                "{}\n2 commands, 1 agent. Installed by reference, listed in {} (commandSets); \
+                 `scramjet-rs remove demo` takes it out.",
+                shown(&set),
+                shown(&settings)
+            )
+        );
+        assert_eq!(
+            list.notes[7],
+            format!(
+                "{}\nRun by other commands, so not in the / list; typed in full, it runs.\nHelp",
+                shown(&set.join("commands/demo:inner.md"))
+            )
+        );
+        assert!(list.notes[9].ends_with("\nIn your agent directory. Does mine."));
+        assert!(list.notes[10].ends_with("\nFrom the command set demo. Does demo:helper."));
+        assert!(
+            list.notes[12]
+                .ends_with("\nOffered to the model; /skill:pdf runs it. Fills PDF forms.")
+        );
+        // The settings file is there; the autonomy.yaml files are not yet.
+        assert!(list.notes[16].ends_with("saved as you change them."));
+        assert!(list.notes[17].ends_with(
+            " Not there yet: changing a next step or publishing for all projects writes it."
+        ));
+        assert!(
+            list.notes[18]
+                .ends_with(" Not there yet: changing a next step for this project writes it.")
+        );
+        assert_eq!(
+            summary(&loaded),
+            "2 problems · 1 command set, 2 commands, 2 agents, 1 skill"
+        );
+        let nothing = Installed {
+            sets: Vec::new(),
+            agents: Vec::new(),
+            context_files: Vec::new(),
+            autonomy: (root.join(".scramjet/autonomy.yaml"), None),
+            problems: Vec::new(),
+        };
+        let empty = Loaded {
+            installed: &nothing,
+            commands: &[],
+            skills: &[],
+            settings: None,
+            problems: &[],
+        };
+        assert_eq!(summary(&empty), "no command sets, agents or skills");
+        assert_eq!(listing(&empty).rows.len(), 2);
+    }
+
+    #[test]
+    fn launch_says_one_line_at_most() {
+        assert_eq!(attention(&[]), None);
+        assert_eq!(
+            attention(&["skills: y".into()]).as_deref(),
+            Some("skills: y")
+        );
+        assert_eq!(
+            attention(&["a".into(), "b".into(), "c".into()]).as_deref(),
+            Some("3 problems in what was loaded: see Installed in /settings")
+        );
+    }
+}

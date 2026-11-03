@@ -5,8 +5,10 @@ use super::screen::{self, Handle};
 use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
-use super::{editor, select, style};
-use scramjet_rs::agent::{Agent, AgentError, AgentUi, Choice, Command, Completed, Next, Step};
+use super::{editor, installed, select, style};
+use scramjet_rs::agent::{
+    Agent, AgentError, AgentUi, Choice, Command, Completed, Installed, Next, Step,
+};
 use std::{
     io::{BufRead, IsTerminal},
     sync::{
@@ -114,13 +116,13 @@ impl Interactive {
         ));
         // A tool block ends with a blank line; other output gets one before the prompt.
         self.show_resumed();
-        let warnings = self.problems();
-        if !warnings.is_empty() {
+        let notices = self.problem_notices();
+        if !notices.is_empty() {
             if !std::mem::take(&mut self.spaced) {
                 self.blank();
             }
-            for warning in &warnings {
-                self.ui().notice(warning);
+            for notice in &notices {
+                self.ui().notice(notice);
             }
             self.spaced = true;
         }
@@ -362,18 +364,22 @@ impl Interactive {
         Some((command, start))
     }
 
-    /// What is wrong in the settings, the command sets and the skills, as said at start.
-    pub(super) fn problems(&self) -> Vec<String> {
+    /// What is wrong in the settings, then in what the session `found` (`Agent::installed`).
+    pub(super) fn problems(&self, found: &Installed) -> Vec<String> {
         (self.settings.warnings.iter())
             .map(|warning| format!("settings: {warning}"))
-            .chain(
-                (self.agent.commands().warnings().iter())
-                    .map(|warning| format!("scramjet: {warning}")),
-            )
-            .chain(
-                (self.agent.skills().warnings().iter()).map(|warning| format!("skills: {warning}")),
-            )
+            .chain(found.problems.iter().cloned())
             .collect()
+    }
+
+    /// What to say about the problems at start and after `/reload`: on the full screen one line
+    /// at most (`installed::attention`), else each problem.
+    pub(super) fn problem_notices(&self) -> Vec<String> {
+        let problems = self.problems(&self.agent.installed());
+        match self.screen {
+            Some(_) => installed::attention(&problems).into_iter().collect(),
+            None => problems,
+        }
     }
 
     /// Saves Ctrl+T's choice, made at the prompt or in a turn, when it changed.

@@ -230,9 +230,15 @@ fn loose(
         {
             return Some(None);
         }
+        // A stale link's target says why it is there and that it can go.
+        let link = match std::fs::read_link(path) {
+            Ok(link) if path.exists() => format!(" (a link to {})", link.display()),
+            Ok(link) => format!(" (a broken link to {})", link.display()),
+            Err(_) => String::new(),
+        };
         Some(Some(format!(
-            "skipping {source} agent {}: names starting with \"{}:\" belong to the {} command \
-set {}",
+            "skipping {source} agent {}{link}: names starting with \"{}:\" belong to the {} \
+command set {}",
             path.display(),
             set.name,
             set.origin.name(),
@@ -1331,6 +1337,7 @@ mod tests {
         write(&user.join("bad.md"), "---\nname: bad\n---\n");
         std::os::unix::fs::symlink(base.join("missing.md"), user.join("gone.md")).unwrap();
         std::os::unix::fs::symlink(base.join("missing.md"), user.join("mach12:gone.md")).unwrap();
+        std::os::unix::fs::symlink(user.join("a.md"), user.join("mach12:linked.md")).unwrap();
         write(
             &root.join(".scramjet/agents/shared.md"),
             &agent_file("shared", "tools: ls\n"),
@@ -1402,6 +1409,13 @@ command set {}",
                 shown(directory)
             )
         };
+        let broken = format!(
+            "skipping user agent {} (a broken link to {}): names starting with \"mach12:\" belong \
+to the installed command set {}",
+            shown(user.join("mach12:gone.md")),
+            shown(base.join("missing.md")),
+            shown(installed.clone())
+        );
         assert_eq!(
             diagnostics,
             [
@@ -1413,8 +1427,15 @@ command set {}",
                     "{}: failed to read agent file (No such file or directory (os error 2))",
                     shown(user.join("gone.md"))
                 ),
-                claimed("mach12:gone.md", "mach12", "installed", installed.clone()),
+                broken,
                 claimed("mach12:kept.md", "mach12", "installed", installed.clone()),
+                format!(
+                    "skipping user agent {} (a link to {}): names starting with \"mach12:\" \
+belong to the installed command set {}",
+                    shown(user.join("mach12:linked.md")),
+                    shown(user.join("a.md")),
+                    shown(installed.clone())
+                ),
                 claimed("renamed.md", "x", "global", global.join("x")),
                 format!(
                     "skipping agent {}: x:e.md: name must start with \"x:\"",

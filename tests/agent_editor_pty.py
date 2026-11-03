@@ -1546,6 +1546,48 @@ def reloads(read, until, send, output):
     send(b'\x04')
 
 
+def installed_view(read, until, send, output):
+    shown, on_screen = full_screen(120, 40)(read, output)
+    rows = on_screen('\u2500' * 20)
+    # One line about the problems, which /settings lists under Installed.
+    attention = '2 problems in what was loaded: see Installed in /settings'
+    assert attention in rows and not any('followUpMode' in row for row in rows), rows
+    send(b'/settings\r')
+    on_screen('Settings  \u2191\u2193 move')
+    send(b'\x1b[A')
+    rows = on_screen('\u203a ' + setting('Installed', '2 problems \u00b7 2 command sets, 2 commands'))
+    assert 'What this session loaded: command sets, commands, agents, skills' in rows[-2], rows
+    send(b'\r')
+    rows = on_screen('Installed  \u2191\u2193 move \u00b7 Esc back')
+    at = rows.index('  Needs attention')
+    assert rows[at + 1].startswith('\u203a   settings: '), rows
+    assert rows[at + 2].startswith('    skills: skill path does not exist: '), rows
+    assert rows[at + 3] == '  Command sets', rows
+    assert rows[at + 4:at + 6] == ['    tools  global   ' + os.path.join(work, 'commands', 'tools'),
+                                   '    demo   project  ' + os.path.join(project, '.scramjet', 'demo')], rows
+    # The note under the list says the whole problem, which the row cuts.
+    note = ' '.join(row.strip() for row in rows[-3:]).strip()
+    assert note.startswith('settings: ' + settings_path(listing)), rows
+    assert note.endswith('followUpMode must be "all" or "one-at-a-time"; ignored'), rows
+    send(b'\x1b[F')
+    project_file = os.path.join(project, '.scramjet', 'autonomy.yaml')
+    rows = on_screen('\n  ' + project_file + '\n')
+    (selected,) = [row for row in rows if row.startswith('\u203a')]
+    assert selected.split() == ['\u203a', project_file, 'next', 'steps,', 'this', 'project'], rows
+    assert '  Settings files' in rows, rows
+    note = ' '.join(row.strip() for row in rows[rows.index('  ' + project_file) + 1:])
+    assert note == "Scramjet's, which it reads too: what follows each command in this project. Not there " \
+        "yet: changing a next step for this project writes it.", rows
+    send(b'\x1b')
+    on_screen('\u203a ' + setting('Installed', '2 problems'))
+    send(b'\x1b')
+    ending(read, output, ['\u2500' * 119, '>'], columns=120, rows=40)
+    send(b'/reload\r')
+    rows = on_screen('Reloaded settings, command sets, agents, skills and context files')
+    assert rows.count(attention) == 2, rows
+    send(b'\x04')
+
+
 def questions(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -1723,7 +1765,7 @@ def next_step_settings(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[A\x1b[A')
+    send(b'\x1b[A\x1b[A\x1b[A')
     rows = on_screen('\u203a ' + setting('Next steps', 'continue automatically: 1 \u00b7 ask me: 2'))
     assert '  ' + setting('Autopilot', 'off') in rows, rows
     # Each command's steps under it: what follows each, and where that is set.
@@ -1836,6 +1878,8 @@ assert '\n- /fresh:hi: Say hi\n' in bodies[0]['instructions'], bodies[0]['instru
 assert [tool['name'] for tool in bodies[0]['tools']][:2] == ['read', 'bash'], bodies[0]['tools']
 assert not {'edit', 'write'} & {tool['name'] for tool in bodies[0]['tools']}, bodies[0]['tools']
 shutil.rmtree(os.path.join(project, '.scramjet', 'fresh'))
+listing = config_home('installed', '{"followUpMode": "each", "skills": ["missing-skill"]}')
+run([], installed_view, variables={'XDG_CONFIG_HOME': listing}, columns=120, rows=40)
 question_gate = threading.Event()
 asking = serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {
@@ -1988,7 +2032,7 @@ def publications(read, until, send, output):
     # /settings: each publishing command's tools under it, whether each asks and who says so.
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[A')
+    send(b'\x1b[A\x1b[A')
     on_screen('\u203a ' + setting('Publishing', 'ask me: 1'))
     send(b'\r')
     rows = on_screen('Publishing  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc back')

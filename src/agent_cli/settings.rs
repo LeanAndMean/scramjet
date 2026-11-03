@@ -63,9 +63,10 @@ pub(super) enum Row {
     Autopilot,
     NextSteps,
     Publishing,
+    Installed,
 }
 
-pub(super) const ROWS: [Row; 11] = [
+pub(super) const ROWS: [Row; 12] = [
     Row::ThinkingLevel,
     Row::ThinkingBlocks,
     Row::Steering,
@@ -77,6 +78,7 @@ pub(super) const ROWS: [Row; 11] = [
     Row::Autopilot,
     Row::NextSteps,
     Row::Publishing,
+    Row::Installed,
 ];
 
 impl Row {
@@ -93,6 +95,7 @@ impl Row {
             Self::Autopilot => "Autopilot",
             Self::NextSteps => "Next steps",
             Self::Publishing => "Publishing",
+            Self::Installed => "Installed",
         }
     }
 
@@ -131,6 +134,10 @@ impl Row {
                 "Whether the issues, pull requests and comments a command publishes on GitHub wait \
                  for your approval, in the project's own repository; elsewhere they always do. \
                  Kept in Scramjet's autonomy.yaml for all projects, which Scramjet reads too."
+            }
+            Self::Installed => {
+                "What this session loaded: command sets, commands, agents, skills, context and \
+                 settings files, where each comes from, and what is wrong there."
             }
         }
     }
@@ -382,6 +389,10 @@ impl Settings {
         Ok(removed)
     }
 
+    pub(super) fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
     /// The settings file, shortened for display.
     pub(super) fn shown_path(&self) -> Option<String> {
         self.path.as_deref().map(shown)
@@ -436,15 +447,19 @@ impl Settings {
         self.save("defaultThinkingLevel", json!(level))
     }
 
-    /// The value `row` shows in `/settings`; the thinking level, autopilot, the next steps and
-    /// publishing are the session's, not the settings'.
+    /// The value `row` shows in `/settings`; the thinking level, autopilot, the next steps,
+    /// publishing and what is installed are the session's, not the settings'.
     pub(super) fn shown(&self, row: Row) -> String {
         let delivery = |mode| match mode {
             Delivery::All => "all at once",
             Delivery::OneAtATime => "one at a time",
         };
         match row {
-            Row::ThinkingLevel | Row::Autopilot | Row::NextSteps | Row::Publishing => String::new(),
+            Row::ThinkingLevel
+            | Row::Autopilot
+            | Row::NextSteps
+            | Row::Publishing
+            | Row::Installed => String::new(),
             Row::ThinkingBlocks if self.hide_thinking_block => "hidden".into(),
             Row::ThinkingBlocks => "shown".into(),
             Row::Steering => delivery(self.steering_mode).into(),
@@ -484,9 +499,12 @@ impl Settings {
             Delivery::OneAtATime => "one-at-a-time",
         };
         match row {
-            Row::ThinkingLevel | Row::Tools | Row::Autopilot | Row::NextSteps | Row::Publishing => {
-                Ok(())
-            }
+            Row::ThinkingLevel
+            | Row::Tools
+            | Row::Autopilot
+            | Row::NextSteps
+            | Row::Publishing
+            | Row::Installed => Ok(()),
             Row::ThinkingBlocks => self.set_hide_thinking_block(!self.hide_thinking_block),
             Row::Steering => {
                 self.steering_mode = next(self.steering_mode);

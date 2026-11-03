@@ -6,6 +6,7 @@ mod editor;
 mod file_search;
 mod fuzzy;
 mod install;
+mod installed;
 mod interactive;
 mod job;
 mod markdown;

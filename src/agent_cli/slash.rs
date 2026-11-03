@@ -5,10 +5,10 @@ use super::screen;
 use super::settings::{ROWS, Row};
 use super::terminal::Terminal;
 use super::text::{clip, one_line, visible};
-use super::{editor, select, style, tree};
+use super::{editor, installed, select, style, tree};
 use scramjet_rs::agent::{
-    Agent, AgentError, Approval, Approvals, CODING_TOOLS, Edge, Navigated, NextStep, NextSteps,
-    Publication, Scope, SessionInfo, Setting, search_program, shortened,
+    Agent, AgentError, Approval, Approvals, CODING_TOOLS, Edge, Installed, Navigated, NextStep,
+    NextSteps, Publication, Scope, SessionInfo, Setting, search_program, shortened,
 };
 use std::{sync::atomic::Ordering, time::Duration};
 use unicode_width::UnicodeWidthStr;
@@ -18,6 +18,7 @@ const NO_LEVELS: &str = "The model's card lists no thinking levels to choose fro
 const BACK_KEYS: &str = "↑↓ move · Enter select · Esc back";
 const TOOLS_KEYS: &str = "↑↓ move · Enter switch on or off · Esc back";
 const CHANGE_KEYS: &str = "↑↓ move · Enter change · Esc back";
+const VIEW_KEYS: &str = "↑↓ move · Esc back";
 /// What a next step can be set to, in the order `/settings` offers them.
 const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
     (
@@ -240,6 +241,7 @@ impl Interactive {
                 Row::Tools => self.choose_tools(),
                 Row::NextSteps => self.choose_next_steps(),
                 Row::Publishing => self.choose_approvals(),
+                Row::Installed => self.show_installed(),
                 Row::Autopilot => {
                     if let Err(error) = self.agent.set_autopilot(!self.agent.autopilot()) {
                         self.say(&format!("error: {error}"));
@@ -271,6 +273,11 @@ impl Interactive {
             Row::Autopilot => "off".into(),
             Row::NextSteps => steps_summary(&self.agent.next_steps()),
             Row::Publishing => approvals_summary(&self.agent.approvals()),
+            Row::Installed => {
+                let found = self.agent.installed();
+                let problems = self.problems(&found);
+                installed::summary(&self.loaded(&found, &problems))
+            }
             row => self.settings.shown(row),
         };
         (ROWS.iter())
@@ -619,8 +626,47 @@ impl Interactive {
         }
     }
 
+    /// What the session loaded, each with where it comes from, under headings, the problems
+    /// first; the notes say more, and nothing changes here.
+    fn show_installed(&mut self) {
+        let mut at = 0;
+        loop {
+            let Some(screen) = &self.screen else {
+                return;
+            };
+            let found = self.agent.installed();
+            let problems = self.problems(&found);
+            let listing = installed::listing(&self.loaded(&found, &problems));
+            let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
+            let rows = &listing.rows;
+            let picker = select::Picker::select(
+                "Installed",
+                visible,
+                rows.len(),
+                at,
+                None,
+                |index, width| clip(&rows[index], width),
+            );
+            let picker = (picker.headed(listing.headings)).noting(VIEW_KEYS, listing.notes);
+            let Some(index) = screen.pick(picker.held()) else {
+                return;
+            };
+            at = index;
+        }
+    }
+
+    fn loaded<'a>(&'a self, found: &'a Installed, problems: &'a [String]) -> installed::Loaded<'a> {
+        installed::Loaded {
+            installed: found,
+            commands: self.agent.commands().list(),
+            skills: self.agent.skills().list(),
+            settings: self.settings.path(),
+            problems,
+        }
+    }
+
     /// `/reload`, as Scramjet's: the settings, the command sets with their commands and agents,
-    /// the skills and the context files read again, and what is wrong in them shown as at start.
+    /// the skills and the context files read again, and what is wrong in them said as at start.
     fn reload(&mut self) {
         self.save_hide_thinking();
         self.settings.reload();
@@ -634,8 +680,8 @@ impl Interactive {
         if let Some(screen) = &mut self.screen {
             (screen.link).reloaded(completions(&self.agent), &self.settings);
         }
-        for problem in self.problems() {
-            self.ui().notice(&problem);
+        for notice in self.problem_notices() {
+            self.ui().notice(&notice);
         }
         let done = "Reloaded settings, command sets, agents, skills and context files";
         self.say(&self.ui.dim(done));

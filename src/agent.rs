@@ -215,6 +215,8 @@ pub struct Agent {
     /// Where subagents are found: the user's agent directory and the command sets.
     agents_directory: Option<PathBuf>,
     sets: Sets,
+    /// The context files the instructions have, outermost first.
+    context_files: Vec<PathBuf>,
     session: Session,
     executor: tokio::runtime::Runtime,
     /// The current model's protocol and limits, from its name until `load_model_card`.
@@ -250,6 +252,38 @@ pub fn inventory(installed: &[PathBuf], listed: &[PathBuf], root: &Path) -> Inve
         warnings,
         skills: Skills::discover(listed, root),
     }
+}
+
+/// What a session has loaded, as `/settings` shows it, besides its commands and skills.
+pub struct Installed {
+    pub sets: Vec<Set>,
+    /// The agents a subagent call can name, found as it finds them.
+    pub agents: Vec<AgentFile>,
+    /// The context files the instructions have, outermost first.
+    pub context_files: Vec<PathBuf>,
+    /// Scramjet's `autonomy.yaml` of the project, and the one for all projects.
+    pub autonomy: (PathBuf, Option<PathBuf>),
+    /// What is wrong in the sets, commands, agents, skills and `autonomy.yaml` files, each
+    /// saying which: `scramjet: `, `agents: ` or `skills: ` first.
+    pub problems: Vec<String>,
+}
+
+/// An agent a subagent call can name.
+pub struct AgentFile {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+    pub source: AgentSource,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentSource {
+    /// The command set of this name, whose namespace the agent's name is in.
+    Set(String),
+    /// The user's agent directory.
+    User,
+    /// The project's `.scramjet/agents`.
+    Project,
 }
 
 /// What `inventory` found.
@@ -288,6 +322,7 @@ impl Agent {
             instructions: String::new(),
             agents_directory: None,
             sets: Sets::default(),
+            context_files: Vec::new(),
             commands: Commands::default(),
             skills: Skills::default(),
             lifecycle,
@@ -335,6 +370,8 @@ impl Agent {
     }
 
     fn instruct(&mut self) {
+        let context = instructions::context_files(&self.config.root);
+        self.context_files = context.into_iter().map(|(path, _)| path).collect();
         let agents = subagent::registered(&self.sets, &mut Vec::new());
         self.instructions = instructions::agent(
             &self.config.root,
@@ -514,6 +551,50 @@ impl Agent {
     /// The skills found at start or `reload`, which `/skill:<name>` runs.
     pub fn skills(&self) -> &Skills {
         &self.skills
+    }
+
+    /// The command sets, agents, context files and `autonomy.yaml` files of the session, and
+    /// what is wrong there, its commands and skills included. The agents and the files are read
+    /// afresh, as a subagent call and the next steps read them; the rest is what start or
+    /// `reload` loaded.
+    pub fn installed(&self) -> Installed {
+        let sources = subagent::Sources {
+            user: self.agents_directory.as_deref(),
+            sets: &self.sets,
+        };
+        let discovery = subagent::discover(&sources, &self.config.root, subagent::Scope::Both);
+        let agents = (discovery.agents.into_iter())
+            .map(|agent| AgentFile {
+                source: match self.sets.owner(&agent.name) {
+                    Some(set) => AgentSource::Set(set.name.clone()),
+                    None if agent.source == "user" => AgentSource::User,
+                    None => AgentSource::Project,
+                },
+                name: agent.name,
+                description: agent.description,
+                path: agent.path,
+            })
+            .collect();
+        let (global, root) = (self.autonomy.as_deref(), &self.config.root);
+        let edges = autonomy::Edges::load(global, root, &self.commands);
+        let mut problems: Vec<String> = (self.commands.warnings().iter())
+            .map(|warning| format!("scramjet: {warning}"))
+            .collect();
+        problems.extend(discovery.diagnostics.iter().map(|d| format!("agents: {d}")));
+        problems.extend(
+            self.skills
+                .warnings()
+                .iter()
+                .map(|w| format!("skills: {w}")),
+        );
+        problems.extend(edges.diagnostics);
+        Installed {
+            sets: self.sets.list().to_vec(),
+            agents,
+            context_files: self.context_files.clone(),
+            autonomy: (autonomy::project_path(root), self.autonomy.clone()),
+            problems,
+        }
     }
 
     /// The text `prompt` sends when it runs a command or a skill, `None` when it is sent as typed.

@@ -58,6 +58,11 @@ pub(super) struct Edges {
     pub diagnostics: Vec<String>,
 }
 
+/// The project's file, under its `root`.
+pub(super) fn project_path(root: &Path) -> PathBuf {
+    root.join(PROJECT_FILE)
+}
+
 /// Scramjet's global file: `$XDG_CONFIG_HOME/scramjet/autonomy.yaml`, else under `~/.config`.
 pub(super) fn global_path() -> Option<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
