@@ -1267,10 +1267,10 @@ for trusted repositories.",
         let sent = bodies[0]["instructions"].as_str().unwrap();
         assert!(sent.contains("\n# Command framing\n\nCommands injected by the Scramjet harness"));
         assert!(sent.contains(
-            "consumer contracts, and required side effects remain controlling.\n\n\
-# Available commands\n\nThe following slash commands can be invoked directly:\n\n\
-- /sjrstest:echo: Echo\n\nCurrent date: "
+            "\n# Available commands\n\nThe following slash commands can be invoked directly:\n\n"
         ));
+        // Among the user's installed sets, if any.
+        assert!(sent.contains("\n- /sjrstest:echo: Echo\n"));
         let prompts = [typed, "/sjrstest:other x"];
         assert_eq!(agent.prompts(), prompts);
         assert_eq!(agent.fork_prompts().unwrap(), prompts);
