@@ -20,10 +20,11 @@ use std::{
 pub(super) struct Interactive {
     pub(super) agent: Agent,
     pub(super) ui: Terminal,
-    /// The line editor, when stdin and stderr are terminals and the session is not shown full
-    /// screen. Without either, prompts are read as lines and lists are printed numbered.
+    /// The inline line editor (`--inline`), when stdin and stderr are terminals. Without a
+    /// terminal, prompts are read as lines and lists are printed numbered.
     pub(super) editor: Option<editor::Editor>,
-    /// The full screen (`--fullscreen`), which then shows everything and edits the prompts.
+    /// The full screen, when stdin and stderr are terminals but for `--inline`: it then shows
+    /// everything and edits the prompts.
     pub(super) screen: Option<Handle>,
     /// Whether what was shown last ends with a blank line, so the next prompt needs none.
     pub(super) spaced: bool,
@@ -61,7 +62,7 @@ impl Interactive {
         cancel: Arc<AtomicBool>,
         hide_thinking: Arc<AtomicBool>,
         settings: Settings,
-        fullscreen: bool,
+        inline: bool,
     ) -> Result<Self, String> {
         let mut editor =
             (std::io::stdin().is_terminal() && std::io::stderr().is_terminal()).then(|| {
@@ -73,7 +74,7 @@ impl Interactive {
                     settings.double_escape != DoubleEscape::Nothing,
                 )
             });
-        let screen = match editor.take_if(|_| fullscreen) {
+        let screen = match editor.take_if(|_| !inline) {
             Some(editor) => Some(
                 Handle::start(
                     editor,

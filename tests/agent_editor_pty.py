@@ -451,7 +451,7 @@ def run_in_shell(script, endpoint):
     def send(data):
         os.write(master, data)
 
-    send(b'stty -g > ../mode; %s --endpoint %s\r' % (BINARY.encode(), endpoint.encode()))
+    send(b'stty -g > ../mode; %s --inline --endpoint %s\r' % (BINARY.encode(), endpoint.encode()))
     script(read, until, send, output)
     send(b'exit\r')
     assert shell.wait(timeout=10) == 0, bytes(output[-2000:])
@@ -474,7 +474,7 @@ def suspend_in_shell(read, until, send, output):
     send(SAME_MODE)
     mark = until(b'restored-42', mark)
     send(b'fg\r')
-    mark = until(b'scramjet-rs --endpoint', mark)
+    mark = until(b'scramjet-rs --inline --endpoint', mark)
     shown = until(b'running', mark)
     assert b'A\x1b[J' not in output[mark:shown], 'redrawn over the shell\'s lines: %r' % bytes(output[mark:shown])
     send(b'hidden')
@@ -1225,78 +1225,78 @@ def hidden_from_the_start(read, until, send, output):
     send(b'\x04')
 
 
-run(['--retries', '0'], first)
+run(['--inline', '--retries', '0'], first)
 sessions = session_files()
 assert len(sessions) == 1, sessions
 prompts = [item['content'] for item in map(json.loads, open(sessions[0])) if item.get('role') == 'user']
 assert prompts == ['one\ntwo\nthree'], prompts
-run(['--continue'], resumed)
-run([], suspend_without_job_control, hanging)
+run(['--inline', '--continue'], resumed)
+run(['--inline'], suspend_without_job_control, hanging)
 run_in_shell(suspend_in_shell, talking)
 run_in_shell(suspend_in_view, talking)
-run(['--retries', '0'], typed_during_turn, delayed)
-run([], cancel_retry)
-run([], escape_cancels_and_keeps_typed_ahead, hanging)
-run([], escape_sequence_does_not_cancel, hanging)
-run([], escape_cancels_command)
-run(['--ask'], escape_after_approval, approved)
-run(['--ask'], approval_keeps_typed_ahead, pausing)
-run(['--ask'], cancel_at_approval_drops_typed_ahead, pausing)
-run([], thinking_counts_seconds, hanging)
-run([], quiet_after_reasoning_shows_thinking, quiet_reasoning)
+run(['--inline', '--retries', '0'], typed_during_turn, delayed)
+run(['--inline'], cancel_retry)
+run(['--inline'], escape_cancels_and_keeps_typed_ahead, hanging)
+run(['--inline'], escape_sequence_does_not_cancel, hanging)
+run(['--inline'], escape_cancels_command)
+run(['--inline', '--ask'], escape_after_approval, approved)
+run(['--inline', '--ask'], approval_keeps_typed_ahead, pausing)
+run(['--inline', '--ask'], cancel_at_approval_drops_typed_ahead, pausing)
+run(['--inline'], thinking_counts_seconds, hanging)
+run(['--inline'], quiet_after_reasoning_shows_thinking, quiet_reasoning)
 hiding = config_home('hiding')
-run([], ctrl_t_hides_reasoning, thoughts, variables={'XDG_CONFIG_HOME': hiding})
+run(['--inline'], ctrl_t_hides_reasoning, thoughts, variables={'XDG_CONFIG_HOME': hiding})
 # Ctrl+T's last choice, hidden, is saved and read by the next start.
 assert json.load(open(settings_path(hiding))) == {'hideThinkingBlock': True}
-run([], hidden_from_the_start, serve_quiet_reasoning(), variables={'XDG_CONFIG_HOME': hiding})
-run([], running_counts_seconds, calling)
-run([], running_shows_output, talking)
-run(['--ask'], approval_shows_hidden_characters, disguised)
-run([], final_texts_replace_lost_deltas, replies)
-run([], exit_during_turn, calling, 130)
+run(['--inline'], hidden_from_the_start, serve_quiet_reasoning(), variables={'XDG_CONFIG_HOME': hiding})
+run(['--inline'], running_counts_seconds, calling)
+run(['--inline'], running_shows_output, talking)
+run(['--inline', '--ask'], approval_shows_hidden_characters, disguised)
+run(['--inline'], final_texts_replace_lost_deltas, replies)
+run(['--inline'], exit_during_turn, calling, 130)
 known = set(session_files())
-run(['--retries', '0'], new_session)
+run(['--inline', '--retries', '0'], new_session)
 started = sorted(set(session_files()) - known)
 prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
 assert prompts == [['one'], ['two']], prompts
 known = set(session_files())
-run(['--retries', '0'], completes_paths_and_commands)
+run(['--inline', '--retries', '0'], completes_paths_and_commands)
 (completed,) = set(session_files()) - known
 prompts = [item['content'] for item in map(json.loads, open(completed)) if item.get('role') == 'user']
 assert prompts == ['see completion/alpine-file and completion/unique-file'], prompts
-run([], completes_file_references)
+run(['--inline'], completes_file_references)
 known = set(session_files())
-run([], bang_commands)
+run(['--inline'], bang_commands)
 (ran,) = set(session_files()) - known
-run([], conversation_view)
-run([], view_follows_the_turn, talking)
-run([], view_waits_at_the_turn_end, view_thoughts)
+run(['--inline'], conversation_view)
+run(['--inline'], view_follows_the_turn, talking)
+run(['--inline'], view_waits_at_the_turn_end, view_thoughts)
 items = [item for item in map(json.loads, open(ran)) if item.get('role') == 'user']
 assert [item['_scramjet_typed'] for item in items] == ['!echo hi; exit 3', '!sleep 30'], items
 assert items[1]['content'] == 'Ran `sleep 30`\n(no output)\n\n(command cancelled)', items
 assert 'secret' not in open(ran).read()
 known = set(session_files())
-run(['--ask'], cancel_at_approval, calling)
+run(['--inline', '--ask'], cancel_at_approval, calling)
 (cancelled,) = set(session_files()) - known
 outputs = [item['output'] for item in map(json.loads, open(cancelled)) if item.get('type') == 'function_call_output']
 assert outputs == ['The user cancelled the turn before this tool call ran.'], outputs
 known = set(session_files())
-run(['--retries', '0'], edited_in_editor,
+run(['--inline', '--retries', '0'], edited_in_editor,
     variables={'VISUAL': edit_script + ' --wait', 'EDITOR': failing_script, 'TMPDIR': scratch})
 (edited,) = set(session_files()) - known
 prompts = [item['content'] for item in map(json.loads, open(edited)) if item.get('role') == 'user']
 assert prompts == ['edited\nline two'], prompts
 assert os.listdir(scratch) == [], os.listdir(scratch)
-run([], kept_when_editor_fails, variables={'EDITOR': failing_script, 'TMPDIR': scratch})
-run([], editor_cannot_start, variables={'VISUAL': '/nonexistent/scramjet-editor', 'TMPDIR': scratch})
-run([], no_editor_configured)
+run(['--inline'], kept_when_editor_fails, variables={'EDITOR': failing_script, 'TMPDIR': scratch})
+run(['--inline'], editor_cannot_start, variables={'VISUAL': '/nonexistent/scramjet-editor', 'TMPDIR': scratch})
+run(['--inline'], no_editor_configured)
 assert os.listdir(scratch) == [], os.listdir(scratch)
 with open(os.path.join(project, 'a.txt'), 'w') as file:
     file.write('one\n')
-run([], edit_turn, editing)
-run(['--continue'], edit_turn_resumed)
+run(['--inline'], edit_turn, editing)
+run(['--inline', '--continue'], edit_turn_resumed)
 known = set(session_files())
-run([], fork_session, forking)
+run(['--inline'], fork_session, forking)
 started = sorted(set(session_files()) - known)
 prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
 assert prompts == [['first', 'second'], ['first', 'second again']], prompts
@@ -1305,7 +1305,7 @@ known = set(session_files())
 branching = serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.'),
                            (['The branch said two.'], 'The branch said two.'),
                            (['Reply three.'], 'Reply three.')])
-run([], tree_session, branching)
+run(['--inline'], tree_session, branching)
 (branched,) = set(session_files()) - known
 lines = [json.loads(line) for line in open(branched)]
 assert {'type': 'branch', 'parent': 4} in lines, lines
@@ -1412,32 +1412,32 @@ levels = config_home('levels')
 effort_cards = [{'requestId': 'gpt-6-luna', 'supportedProtocols': ['openai-responses'],
                  'reasoning': {'levels': ['none', 'low', 'medium', 'high', 'xhigh', 'max'], 'default': 'medium'}}]
 in_levels = {'XDG_CONFIG_HOME': levels}
-run([], shift_tab_cycles_effort, serve_replies([(['Reply.'], 'Reply.')], cards=effort_cards), variables=in_levels)
+run(['--inline'], shift_tab_cycles_effort, serve_replies([(['Reply.'], 'Reply.')], cards=effort_cards), variables=in_levels)
 (effort,) = set(session_files()) - known
 # A new session starts at Scramjet's default level, medium.
 assert saved_levels(effort) == ['medium', 'high', 'xhigh'], saved_levels(effort)
 assert json.load(open(settings_path(levels))) == {'defaultThinkingLevel': 'xhigh'}
 prompts = [item['content'] for item in map(json.loads, open(effort)) if item.get('role') == 'user']
 assert prompts == ['aXb'], prompts
-run(['--continue'], shift_tab_resumed, serve_replies([], cards=effort_cards), variables=in_levels)
+run(['--inline', '--continue'], shift_tab_resumed, serve_replies([], cards=effort_cards), variables=in_levels)
 assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max'], saved_levels(effort)
-run(['--continue', '--effort', 'low'], explicit_effort_wins, serve_replies([], cards=effort_cards),
+run(['--inline', '--continue', '--effort', 'low'], explicit_effort_wins, serve_replies([], cards=effort_cards),
     variables=in_levels)
 assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max', 'low'], saved_levels(effort)
 # --effort is not saved; a new session starts at the level Shift+Tab saved.
 assert json.load(open(settings_path(levels))) == {'defaultThinkingLevel': 'max'}
 known = set(session_files())
-run([], default_level_from_settings, serve_replies([], cards=effort_cards), variables=in_levels)
+run(['--inline'], default_level_from_settings, serve_replies([], cards=effort_cards), variables=in_levels)
 (started,) = set(session_files()) - known
 assert saved_levels(started) == ['max'], saved_levels(started)
 forking_home = config_home('forking', '{"doubleEscapeAction": "fork", "branchSummary": {"skipPrompt": true}}')
-run([], double_escape_forks, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]),
+run(['--inline'], double_escape_forks, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]),
     variables={'XDG_CONFIG_HOME': forking_home})
 quiet = config_home('quiet', '{"doubleEscapeAction": "none", "defaultThinkingLevel": "hgih"}')
 # Wide enough for the warnings in one line.
-run([], double_escape_does_nothing, variables={'XDG_CONFIG_HOME': quiet}, columns=200)
+run(['--inline'], double_escape_does_nothing, variables={'XDG_CONFIG_HOME': quiet}, columns=200)
 broken = config_home('broken', '{"hideThinkingBlock": tru')
-run([], broken_settings_are_kept, variables={'XDG_CONFIG_HOME': broken}, columns=200)
+run(['--inline'], broken_settings_are_kept, variables={'XDG_CONFIG_HOME': broken}, columns=200)
 assert open(settings_path(broken)).read() == '{"hideThinkingBlock": tru'
 
 
@@ -1479,8 +1479,8 @@ def name_resumed(read, until, send, output):
 known = set(session_files())
 usage = {'input_tokens': 1200, 'output_tokens': 34, 'total_tokens': 1234,
          'input_tokens_details': {'cached_tokens': 1000}}
-run([], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], usage=usage))
-run(['--continue'], name_resumed)
+run(['--inline'], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], usage=usage))
+run(['--inline', '--continue'], name_resumed)
 (named,) = set(session_files()) - known
 infos = [line for line in map(json.loads, open(named)) if line.get('type') == 'session_info']
 assert infos == [{'type': 'session_info', 'name': 'Parser work'}], infos
@@ -1521,7 +1521,7 @@ def search_selectors(read, until, send, output):
     send(b'\x04')
 
 
-run([], search_selectors, serve_replies([(['Reply one.'], 'Reply one.'), (['Striped reply.'], 'Striped reply.')],
+run(['--inline'], search_selectors, serve_replies([(['Reply one.'], 'Reply one.'), (['Striped reply.'], 'Striped reply.')],
                                         ['gpt-6-luna', 'claude-haiku-5-5', 'gpt-6.1-sol']))
 
 def command_sets(read, until, send, output):
@@ -1580,9 +1580,9 @@ def report(call_id, steps=None, recommended=None):
     return tool_call(call_id, 'report_scramjet_command_status', arguments)
 
 
-run([], command_sets, serve_items([[message('Greeted.')], [report('call_1')], [message('Echoed.')],
+run(['--inline'], command_sets, serve_items([[message('Greeted.')], [report('call_1')], [message('Echoed.')],
                                    [message('Still here.')]]))
-run(['--continue'], command_sets_resumed)
+run(['--inline', '--continue'], command_sets_resumed)
 (commanded,) = set(session_files()) - known
 lines = list(map(json.loads, open(commanded)))
 checks = [line['content'] for line in lines if line.get('_scramjet_probe')]
@@ -1644,8 +1644,8 @@ asking = serve_items([
     [tool_call('call_2', 'get_scramjet_user_input', {'type': 'confirm', 'message': 'Commit now?'})],
 ], question_gate)
 known = set(session_files())
-run([], questions, asking)
-run(['--continue'], questions_resumed)
+run(['--inline'], questions, asking)
+run(['--inline', '--continue'], questions_resumed)
 (asked,) = set(session_files()) - known
 outputs = [line['output'] for line in map(json.loads, open(asked)) if line.get('type') == 'function_call_output']
 assert outputs == ['{"selected":"a"}', '{"cancelled":true}'], outputs
@@ -1686,7 +1686,7 @@ with open(os.path.join(flow, 'flow:done.md'), 'w') as file:
 with open(os.path.join(project, '.scramjet', 'autonomy.yaml'), 'w') as file:
     file.write('edges:\n  flow:step:\n    flow:done: chain\n')
 known = set(session_files())
-run([], next_steps, serve_items([
+run(['--inline'], next_steps, serve_items([
     [report('call_1', [('/flow:step two', True, 'Do the second.'), ('/flow:done', False, 'Stop here.')], 0)],
     [message('Second done.')],
     [report('call_2', [('/flow:done', False, 'Finish.')], 0)],
@@ -1711,7 +1711,7 @@ def dispatched_prompt_shows_escapes(read, until, send, output):
     send(b'\x04')
 
 
-run([], dispatched_prompt_shows_escapes, serve_items([
+run(['--inline'], dispatched_prompt_shows_escapes, serve_items([
     [report('call_1', [('/flow:done \x1b]0;pwned\x07', False, 'Finish.')], 0)],
     [message('Finished hostile.'), report('call_2')],
 ]))
@@ -1739,10 +1739,10 @@ def parked_question_resumed(read, until, send, output):
 
 
 known = set(session_files())
-run([], parked_question, serve_items([
+run(['--inline'], parked_question, serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {'type': 'freetext', 'message': 'Which colour?'})],
 ]))
-run(['--continue'], parked_question_resumed, serve_items([
+run(['--inline', '--continue'], parked_question_resumed, serve_items([
     [message('Used blue.')],
     [report('call_2', [('/flow:step again', False, 'Ask again.')], 0)],
 ]))
@@ -1786,7 +1786,7 @@ in_fake_home = {'HOME': fake_home, 'FAKE_API_TOKEN': 'FAKE-env-secret'}
 peek = lambda call_id: tool_call(call_id, 'bash', {
     'command': 'cat ~/.netrc; printenv FAKE_API_TOKEN; echo ran-$((6*7)) | tee made.txt'})
 known = set(session_files())
-run([], credentials_hidden_when_unattended, serve_items([
+run(['--inline'], credentials_hidden_when_unattended, serve_items([
     [peek('call_1')],
     [report('call_2', [('/flow:step two', False, 'Choose.')], 0)],
     [peek('call_3')],
@@ -2224,16 +2224,16 @@ def left_the_screen(script):
 
 with open(os.path.join(project, 'a.txt'), 'w') as file:
     file.write('one\n')
-run(['--fullscreen'], left_the_screen(fullscreen_turn), serve_items([
+run([], left_the_screen(fullscreen_turn), serve_items([
     [{'type': 'reasoning', 'id': 'rs_1', 'status': 'completed',
       'summary': [{'type': 'summary_text', 'text': 'Changing the file.'}]},
      tool_call('call_1', 'edit', {'path': 'a.txt', 'edits': [{'oldText': 'one', 'newText': 'two'}]})],
     [tool_call('call_2', 'bash', {'command': 'echo checked; exit 2'})],
     [message('**Done**, it says two.')],
 ]))
-run(['--fullscreen'], left_the_screen(fullscreen_typed_during_turn), talking)
+run([], left_the_screen(fullscreen_typed_during_turn), talking)
 known = set(session_files())
-run(['--fullscreen'], left_the_screen(fullscreen_queue), serve_items([
+run([], left_the_screen(fullscreen_queue), serve_items([
     [tool_call('call_1', 'bash', {'command': 'echo started; sleep 2'})],
     [message('Steered.')],
     [message('Followed.')],
@@ -2247,7 +2247,7 @@ assert prompts == ['go', 'steer this', '/demo:greet Ann', 'after that', 'again']
 assert users[2]['content'].startswith('<scramjet-command name="demo:greet">\nGreet Ann warmly.'), users[2]
 bodies = []
 known = set(session_files())
-run(['--fullscreen'], left_the_screen(fullscreen_commands_during_turn), serve_items([
+run([], left_the_screen(fullscreen_commands_during_turn), serve_items([
     [tool_call('call_1', 'bash', {'command': 'sleep 2'})],
     [message('Switched.')],
     [tool_call('call_2', 'bash', {'command': 'sleep 30'})],
@@ -2261,7 +2261,7 @@ assert prompts(second) == ['more'], prompts(second)
 bodies = []
 during = config_home('during')
 known = set(session_files())
-run(['--fullscreen'], left_the_screen(fullscreen_shell_and_effort_during_turn), serve_items([
+run([], left_the_screen(fullscreen_shell_and_effort_during_turn), serve_items([
     [tool_call('call_1', 'bash', {'command': 'sleep 5'})],
     [message('Replied.')],
     [tool_call('call_2', 'bash', {'command': 'sleep 2'})],
@@ -2276,7 +2276,7 @@ said = [item['content'] if item.get('role') == 'user' else item['content'][0]['t
         for item in items if item.get('role') in ('user', 'assistant') or item.get('type') == 'message']
 assert said[:3] == ['go', 'Replied.', 'Ran `echo side$((0+1)); sleep 1; echo side$((1+1))`\n```\nside1\nside2\n```'], said
 assert said[3:5] == ['again', 'Second.'] and said[5].startswith('Ran `sleep 30`'), said
-run(['--fullscreen'], left_the_screen(fullscreen_lists), serve_items([
+run([], left_the_screen(fullscreen_lists), serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {
         'type': 'select', 'message': 'Which **one**?', 'recommended': 1,
         'options': [{'value': 'a', 'label': 'Alpha', 'description': 'the first'},
@@ -2291,18 +2291,18 @@ with open(os.path.join(clipboard_bin, 'wl-copy'), 'w') as script_file:
     script_file.write('#!/bin/sh\ncat > "$CLIPBOARD"\n')
 os.chmod(os.path.join(clipboard_bin, 'wl-copy'), 0o755)
 # Never the desktop's clipboard: a stand-in wl-copy, or no tool at all.
-run(['--fullscreen'], left_the_screen(fullscreen_mouse), serve_items([[message(rows_reply)]]), variables={
+run([], left_the_screen(fullscreen_mouse), serve_items([[message(rows_reply)]]), variables={
     'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
     'CLIPBOARD': clipboard})
-run(['--fullscreen'], left_the_screen(fullscreen_copied_by_the_terminal), serve_items([[message(rows_reply)]]))
+run([], left_the_screen(fullscreen_copied_by_the_terminal), serve_items([[message(rows_reply)]]))
 wrapped_reply = ('The tests ran with cargo test --offline --locked --no-fail-fast, and every one of them '
                  'passed; a copy of this sentence comes out as one line.')
-run(['--fullscreen'], left_the_screen(fullscreen_copy_unwrapped), serve_items([
+run([], left_the_screen(fullscreen_copy_unwrapped), serve_items([
     [tool_call('call_1', 'bash', {'command': "printf 'one\\n  two\\n'"})], [message(wrapped_reply)],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
                'CLIPBOARD': clipboard})
 full_width = 'Copied, and this reply fills every one of the sixty columns.'
-run(['--fullscreen'], left_the_screen(fullscreen_copy_into_the_dock), serve_items([
+run([], left_the_screen(fullscreen_copy_into_the_dock), serve_items([
     [tool_call('call_1', 'bash', {'command': 'for w in a b; do\n  echo $w\ndone'})], [message(full_width)],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
                'CLIPBOARD': clipboard})
@@ -2315,7 +2315,7 @@ with open(os.path.join(clipboard_bin, 'powershell.exe'), 'w') as script_file:
                       '[ "$count" -ge 1 ] && sleep 1\nprintf \'pasted\\r\\nsecond \\342\\200\\224\'\n')
 os.chmod(os.path.join(clipboard_bin, 'powershell.exe'), 0o755)
 known = set(session_files())
-run(['--fullscreen'], left_the_screen(fullscreen_paste_and_clicks), serve_items([[message(rows_reply)]]), variables={
+run([], left_the_screen(fullscreen_paste_and_clicks), serve_items([[message(rows_reply)]]), variables={
     'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WSL_DISTRO_NAME': 'Test', 'WAYLAND_DISPLAY': 'wayland-test',
     'CLIPBOARD': clipboard, 'PASTES': pastes})
 (pasted,) = set(session_files()) - known
@@ -2324,20 +2324,20 @@ assert prompts == ['x pasted\nsecond \u2014'], prompts
 assert open(pastes).read() == '2\n', open(pastes).read()
 summary = '\n'.join('Point %d of the summary.' % number for number in range(1, 15))
 long_line = "head -c 49000 /dev/zero | tr '\\0' a"
-run(['--fullscreen'], left_the_screen(fullscreen_collapsed), serve_items([
+run([], left_the_screen(fullscreen_collapsed), serve_items([
     [tool_call('call_1', 'bash', {'command': long_line})], [tool_call('call_2', 'bash', {'command': long_line})],
     [message('Printed.')], [message(summary)], [message('Greeted.')], [report('call_3')],
 ]))
-run(['--fullscreen', '--continue'], left_the_screen(fullscreen_collapsed_resumed))
+run(['--continue'], left_the_screen(fullscreen_collapsed_resumed))
 os.makedirs(os.path.join(work, 'agent', 'agents'), exist_ok=True)
 with open(os.path.join(work, 'agent', 'agents', 'scout.md'), 'w') as file:
     file.write('---\nname: scout\ndescription: Looks around\ntools: ls\n---\n\nYou look around.\n')
 subagent_gate = threading.Event()
-run(['--fullscreen', '--model', 'gpt-6-luna'], left_the_screen(fullscreen_subagent), serve_items([
+run(['--model', 'gpt-6-luna'], left_the_screen(fullscreen_subagent), serve_items([
     [tool_call('call_1', 'subagent', {'agent': 'scout', 'task': 'Look around the project.'})],
     [tool_call('call_2', 'ls', {'path': '.'})],
     [message('Found a.txt.\nLine 2\nLine 3\nLine 4\nLine 5')],
     [message('Scouted.')],
 ], gate=subagent_gate, gated=2))
-run(['--fullscreen', '--continue'], left_the_screen(fullscreen_subagent_resumed))
+run(['--continue'], left_the_screen(fullscreen_subagent_resumed))
 print('agent editor journeys passed')

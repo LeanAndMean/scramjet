@@ -1,4 +1,4 @@
-//! The full-screen interface (`--fullscreen`): the conversation in the alternate screen, scrolled
+//! The full-screen interface, the default on a terminal: the conversation in the alternate screen, scrolled
 //! by the application, with the status line, the prompt editor and lists docked under it; the
 //! editor keeps taking keys while a turn runs, and what is sent then is queued for the model, as
 //! Scramjet's steering and follow-up messages. The mouse wheel scrolls, dragging or a double or

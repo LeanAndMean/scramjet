@@ -4,7 +4,7 @@ use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model ID] \
 [--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | --session FILE] [--ask]
-[--fullscreen] [-p PROMPT]
+[--inline] [-p PROMPT]
 
 Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
 the Messages API for Claude models (those whose Proxy model card lists only Messages).
@@ -19,19 +19,24 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   --ask                  ask before each bash command and each write or edit outside the
                          project (answer `a` to stop asking until exit); by default tool
                          calls run without asking, as in Scramjet. Bash is not sandboxed.
-  --fullscreen           show the session in the alternate screen, the prompt editor under
-                         the conversation and usable while a turn runs (see below)
+  --inline               print the session inline, as before the full screen (see below;
+                         to be removed)
   -p PROMPT              run one prompt and exit (`-p -` reads it from stdin)
-In the interactive prompt, Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing \\ starts
-a new line; pasted text is inserted without sending. Up/Down recall earlier prompts. Ctrl-G
-edits the prompt in $VISUAL or $EDITOR; its text replaces the prompt when the editor exits with 0.
+The session fills the terminal's alternate screen: the conversation above a status line and the
+prompt. Page Up/Down and the mouse wheel scroll the conversation; Escape goes back to its end.
+In the prompt, Enter or Alt+Enter sends; Shift+Enter, Ctrl-J or a trailing \\ starts a new
+line; pasted text is inserted without sending. Up/Down recall earlier prompts. Ctrl-G edits the
+prompt in $VISUAL or $EDITOR; its text replaces the prompt when the editor exits with 0.
 `!command` runs a bash command in the project directory without a model turn and adds its output
 to the conversation for the next prompt; `!!command` runs it without adding it.
-Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /quit, to quit.
-Ctrl+O shows the conversation in the alternate screen with every tool result whole, from its
-end: Up/Down, Page Up/Down and Home/End scroll it; Escape, q or Ctrl+O closes it.
-Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
-next one on; it works while a turn runs too. Shift+Tab sets the reasoning effort to the next
+The prompt stays while a turn runs: Enter then queues a message for the model's next request,
+Alt+Enter one for when the turn would end (steeringMode and followUpMode: all or one-at-a-time
+at once); Escape interrupts the turn and puts them back in the editor, as Alt+Up does.
+Ctrl-C clears the prompt, and interrupts a turn; on an empty prompt press it twice, or Ctrl-D, or
+type /quit, to quit. Dragging selects text, a double click a word, a triple click the line;
+Ctrl+C or a right click copies it, and a right click without a selection pastes the clipboard
+into the prompt. Ctrl+O shows tool results whole, or cut again. Ctrl+T hides reasoning summaries
+behind a `Thinking...` line, or shows them again. Shift+Tab sets the reasoning effort to the next
 level the model's Proxy card lists. Both are saved in the settings. /new starts a new session;
 /resume chooses one of this project's sessions to switch to. /fork chooses one of this
 session's prompts and continues in a new session from before it, with it in the prompt for
@@ -40,33 +45,28 @@ session: from before a prompt, which is put in the prompt for editing, or from a
 or tool result. When that leaves part of the conversation, it asks whether the model should
 summarize that branch, also with your own instructions, for the conversation to continue
 with. Escape twice on an empty prompt opens /tree too. /model chooses a model.
-Their lists take Up/Down, Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; typed
-text filters the /resume and /model lists, best match first (a \"quoted phrase\" matches as
-written). With piped input they are printed numbered instead, for /resume N, /fork N, /tree N
-and /model ID.
+Their lists show in the prompt's place and take Up/Down, Page Up/Down, Home/End, Enter, and
+Escape or Ctrl-C to cancel; typed text filters the /resume and /model lists, best match first
+(a \"quoted phrase\" matches as written). With piped input they are printed numbered instead,
+for /resume N, /fork N, /tree N and /model ID.
 /name NAME names the session, which /resume then lists by its name; /name alone shows it.
 /session shows the session's file, the messages in its context and the tokens they used.
+Typed while a turn runs, /session, /name and /model run before its next request; the other
+commands stop it and run once it has.
 As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: the file
 .scramjet/SET/commands/SET:COMMAND.md of the project, or under $XDG_DATA_HOME/scramjet
 (~/.local/share/scramjet), is sent with the arguments substituted, inside <scramjet-command>.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
-While a turn, /compact or a `!` command runs, typed text is kept for the next prompt without
-being shown. Escape cancels it and keeps that text; Ctrl-C cancels it and discards that text;
-press Ctrl-C twice to quit.
 Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scramjet-rs/),
 with Scramjet's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary) and
 defaultThinkingLevel; and tools, the agent's coding tools among read, bash, edit, write (the
 default) and grep, find, ls.
-With --fullscreen the conversation fills the screen above the prompt, which stays while a turn
-runs: Enter then queues a message for the model's next request, Alt+Enter one for when the turn
-would end (steeringMode and followUpMode: all or one-at-a-time at once); Escape interrupts the
-turn and puts them back in the editor, as Alt+Up does. Page Up/Down and the mouse wheel scroll
-the conversation, Escape goes back to its end. Dragging selects its text, a double click a word,
-a triple click the line; Ctrl+C or a right click copies it, and a right click without a
-selection pastes the clipboard into the prompt. Ctrl+O shows tool results whole, or cut again; Ctrl+T hides
-reasoning, also that already shown. Lists and questions show in the prompt's place.";
+With --inline the session is printed inline instead, as before the full screen: Ctrl+O then
+shows the conversation in the alternate screen (Escape, q or Ctrl+O closes it), and text typed
+while a turn runs is kept for the next prompt without being shown; Escape cancels the turn and
+keeps that text, Ctrl-C cancels it and discards that text. Alt+Enter starts a new line there.";
 
 /// What the command line asks for.
 pub(super) struct Options {
@@ -77,7 +77,7 @@ pub(super) struct Options {
     pub(super) max_output_tokens: Option<u64>,
     pub(super) choice: SessionChoice,
     pub(super) ask: bool,
-    pub(super) fullscreen: bool,
+    pub(super) inline: bool,
     pub(super) retries: u32,
     /// `-p`: the one prompt to run, `-` to read it from stdin.
     pub(super) prompt: Option<String>,
@@ -96,7 +96,7 @@ impl Options {
             max_output_tokens: None,
             choice: SessionChoice::New,
             ask: false,
-            fullscreen: false,
+            inline: false,
             retries: 3,
             prompt: None,
         };
@@ -130,7 +130,7 @@ impl Options {
                 Some("--continue") => options.choice = SessionChoice::Continue,
                 Some("--session") => options.choice = SessionChoice::Open(PathBuf::from(value()?)),
                 Some("--ask") => options.ask = true,
-                Some("--fullscreen") => options.fullscreen = true,
+                Some("--inline") => options.inline = true,
                 Some("-p" | "--print") => options.prompt = Some(value()?),
                 Some("-h" | "--help") => return Ok(None),
                 _ => return Err(format!("unknown argument {argument:?}\n\n{USAGE}")),
