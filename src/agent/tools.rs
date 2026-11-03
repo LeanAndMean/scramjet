@@ -645,13 +645,15 @@ pub(super) fn search_program(tool: &str) -> Option<PathBuf> {
     })
 }
 
-/// Runs `command` to its end, or until `cancel` is set, with its standard output (at most
-/// `CAPTURE_BYTES`) and the start of its standard error.
-fn capture(
+/// Runs `command` until it ends, `cancel` is set or `line` returns false for a line of its
+/// standard output: its exit status, `None` when `line` stopped it, and the start of its
+/// standard error.
+fn run_lines(
     mut command: Command,
     cancel: &AtomicBool,
-) -> Result<(ExitStatus, Vec<u8>, String), String> {
-    use std::os::unix::process::CommandExt;
+    mut line: impl FnMut(&[u8]) -> bool,
+) -> Result<(Option<ExitStatus>, String), String> {
+    use std::{io::BufRead, os::unix::process::CommandExt, sync::mpsc};
     let program = command.get_program().to_string_lossy().into_owned();
     let mut child = command
         .stdin(Stdio::null())
@@ -660,48 +662,67 @@ fn capture(
         .process_group(0)
         .spawn()
         .map_err(|e| format!("cannot start {program}: {e}"))?;
-    // Each pipe is read to its end, so that a full one never stops the program.
-    let drain = |mut pipe: Box<dyn Read + Send>, keep: usize| {
-        std::thread::spawn(move || {
-            let (mut kept, mut buffer) = (Vec::new(), [0u8; 8192]);
-            while let Ok(n) = pipe.read(&mut buffer) {
-                if n == 0 {
-                    break;
+    let group = rustix::process::Pid::from_raw(child.id() as i32);
+    let kill = || {
+        if let Some(pid) = group {
+            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+        }
+    };
+    let mut errors = child.stderr.take().unwrap();
+    let stderr = std::thread::spawn(move || {
+        let (mut kept, mut buffer) = (Vec::new(), [0u8; 8192]);
+        while let Ok(n) = errors.read(&mut buffer) {
+            if n == 0 {
+                break;
+            }
+            let room = OUTPUT_TAIL_BYTES.saturating_sub(kept.len()).min(n);
+            kept.extend_from_slice(&buffer[..room]);
+        }
+        kept
+    });
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    let (stopped, cancelled) = std::thread::scope(|scope| {
+        let (finished, wait) = mpsc::channel::<()>();
+        let watcher = scope.spawn(move || {
+            while let Err(mpsc::RecvTimeoutError::Timeout) =
+                wait.recv_timeout(Duration::from_millis(20))
+            {
+                if cancel.load(Ordering::Relaxed) {
+                    kill();
+                    return true;
                 }
-                let room = keep.saturating_sub(kept.len()).min(n);
-                kept.extend_from_slice(&buffer[..room]);
             }
-            kept
-        })
-    };
-    let stdout = drain(Box::new(child.stdout.take().unwrap()), CAPTURE_BYTES);
-    let stderr = drain(Box::new(child.stderr.take().unwrap()), OUTPUT_TAIL_BYTES);
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        if cancel.load(Ordering::Relaxed) {
-            if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
-                let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+            false
+        });
+        let (mut buffer, mut stopped) = (Vec::new(), false);
+        while matches!(stdout.read_until(b'\n', &mut buffer), Ok(n) if n > 0) {
+            if !line(&buffer) {
+                kill();
+                stopped = true;
+                break;
             }
-            let _ = child.wait();
-            return Err("Operation aborted".into());
+            buffer.clear();
         }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    let stdout = stdout.join().unwrap_or_default();
+        drop(finished);
+        (stopped, watcher.join().unwrap_or(true))
+    });
+    let status = child.wait().map_err(|e| e.to_string())?;
     let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
-    Ok((status, stdout, stderr))
+    match () {
+        _ if cancelled || cancel.load(Ordering::Relaxed) => Err("Operation aborted".into()),
+        _ if stopped => Ok((None, stderr)),
+        _ => Ok((Some(status), stderr)),
+    }
 }
 
-/// Pi's `grep`: ripgrep's matches as `path:line: text`, context lines as `path-line- text`,
-/// paths relative to a directory searched.
+/// Pi's `grep`: ripgrep's matches as `path:line: text`, context lines read from the file as
+/// `path-line- text`, paths relative to a directory searched.
 fn grep(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String> {
     let pattern = call.str("pattern")?;
     let path = resolve(root, call.arguments["path"].as_str().unwrap_or("."));
     let metadata =
         std::fs::metadata(&path).map_err(|_| format!("Path not found: {}", path.display()))?;
-    let context = call.arguments["context"].as_u64().unwrap_or(0);
+    let context = call.arguments["context"].as_u64().unwrap_or(0) as usize;
     let limit = call.arguments["limit"]
         .as_u64()
         .map_or(GREP_LIMIT, |n| n.max(1) as usize);
@@ -717,11 +738,38 @@ fn grep(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String>
     if let Some(glob) = call.arguments["glob"].as_str() {
         command.arg("--glob").arg(glob);
     }
-    if context > 0 {
-        command.arg("--context").arg(context.to_string());
-    }
     command.arg("--").arg(pattern).arg(&path);
-    let (status, stdout, stderr) = capture(command, cancel)?;
+    let (mut found, mut limited) = (Vec::new(), false);
+    // rg stops at the match after the last one shown, which tells that there are more.
+    let (status, stderr) = run_lines(command, cancel, |line| {
+        let Ok(event) = serde_json::from_slice::<Value>(line) else {
+            return true;
+        };
+        let data = &event["data"];
+        let (true, Some(file), Some(number)) = (
+            event["type"] == "match",
+            data["path"]["text"].as_str(),
+            data["line_number"].as_u64(),
+        ) else {
+            return true;
+        };
+        if found.len() == limit {
+            limited = true;
+            return false;
+        }
+        let text = data["lines"]["text"].as_str().map(str::to_owned);
+        found.push((file.to_owned(), number as usize, text));
+        true
+    })?;
+    if found.is_empty() {
+        return match status.and_then(|status| status.code()) {
+            Some(0 | 1) => Ok("No matches found".into()),
+            code => Err(match stderr.trim() {
+                "" => format!("ripgrep exited with code {}", code.unwrap_or(-1)),
+                error => error.to_owned(),
+            }),
+        };
+    }
     let shown = |file: &str| {
         let file = Path::new(file);
         match file.strip_prefix(&path) {
@@ -735,60 +783,48 @@ fn grep(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String>
                 .into_owned(),
         }
     };
-    let (mut lines, mut pending) = (Vec::new(), Vec::new());
-    let (mut matches, mut limited, mut long) = (0, false, false);
-    let mut last: Option<(String, u64)> = None;
-    for line in stdout.split(|byte| *byte == b'\n') {
-        let Ok(event) = serde_json::from_slice::<Value>(line) else {
-            continue;
-        };
-        let data = &event["data"];
-        let (Some(file), Some(number)) =
-            (data["path"]["text"].as_str(), data["line_number"].as_u64())
-        else {
-            continue;
-        };
-        let text = data["lines"]["text"].as_str().unwrap_or_default();
-        let text = text.trim_end_matches(['\n', '\r']).replace('\r', "");
-        let text = match text.char_indices().nth(GREP_LINE_CHARS) {
-            Some((at, _)) => {
-                long = true;
-                format!("{}... [truncated]", &text[..at])
-            }
-            None => text,
-        };
-        match event["type"].as_str() {
-            Some("match") if matches == limit => {
-                limited = true;
-                break;
-            }
-            Some("match") => {
-                matches += 1;
-                lines.append(&mut pending);
-                lines.push(format!("{}:{number}: {text}", shown(file)));
-                last = Some((file.to_owned(), number));
-            }
-            // A context line after a match belongs to it; one before waits for its match.
-            Some("context") => {
-                let line = format!("{}-{number}- {text}", shown(file));
-                match &last {
-                    Some((at, matched)) if at == file && number <= matched + context => {
-                        lines.push(line)
-                    }
-                    _ => pending.push(line),
-                }
-            }
-            _ => {}
+    let mut long = false;
+    let mut cut = |text: &str| match text.char_indices().nth(GREP_LINE_CHARS) {
+        Some((at, _)) => {
+            long = true;
+            format!("{}... [truncated]", &text[..at])
         }
-    }
-    if matches == 0 {
-        return match status.code() {
-            Some(0 | 1) => Ok("No matches found".into()),
-            code => Err(match stderr.trim() {
-                "" => format!("ripgrep exited with code {}", code.unwrap_or(-1)),
-                error => error.to_owned(),
-            }),
-        };
+        None => text.to_owned(),
+    };
+    // As in Pi, a line rg gives as bytes rather than text, and context, come from the file.
+    let mut files: std::collections::HashMap<String, Vec<String>> = Default::default();
+    let mut lines = Vec::new();
+    for (file, number, text) in &found {
+        if let (0, Some(text)) = (context, text) {
+            let text = text.trim_end_matches(['\n', '\r']).replace('\r', "");
+            lines.push(format!("{}:{number}: {}", shown(file), cut(&text)));
+            continue;
+        }
+        let content = files.entry(file.clone()).or_insert_with(|| {
+            std::fs::read(file).map_or_else(
+                |_| Vec::new(),
+                |bytes| {
+                    String::from_utf8_lossy(&bytes)
+                        .replace("\r\n", "\n")
+                        .split(['\n', '\r'])
+                        .map(str::to_owned)
+                        .collect()
+                },
+            )
+        });
+        if content.is_empty() {
+            lines.push(format!("{}:{number}: (unable to read file)", shown(file)));
+            continue;
+        }
+        let start = number.saturating_sub(context).max(1);
+        let end = (number + context).min(content.len()).max(*number);
+        for current in start..=end {
+            let text = cut(content.get(current - 1).map_or("", String::as_str));
+            lines.push(match current == *number {
+                true => format!("{}:{current}: {text}", shown(file)),
+                false => format!("{}-{current}- {text}", shown(file)),
+            });
+        }
     }
     let mut notices = Vec::new();
     if limited {
@@ -835,24 +871,29 @@ fn find(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String>
         }
     }
     command.arg("--").arg(&pattern).arg(&path);
-    let (status, stdout, stderr) = capture(command, cancel)?;
-    let found: Vec<String> = String::from_utf8_lossy(&stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| match Path::new(line).strip_prefix(&path) {
-            Ok(relative) => {
-                let slash = if line.ends_with('/') { "/" } else { "" };
-                format!("{}{slash}", relative.display())
-            }
-            Err(_) => line.to_owned(),
-        })
-        .collect();
+    let mut found = Vec::new();
+    let (status, stderr) = run_lines(command, cancel, |line| {
+        let line = String::from_utf8_lossy(line);
+        let line = line.trim();
+        if !line.is_empty() {
+            found.push(match Path::new(line).strip_prefix(&path) {
+                Ok(relative) => {
+                    let slash = if line.ends_with('/') { "/" } else { "" };
+                    format!("{}{slash}", relative.display())
+                }
+                Err(_) => line.to_owned(),
+            });
+        }
+        true
+    })?;
     if found.is_empty() {
-        return match status.success() {
-            true => Ok("No files found matching pattern".into()),
-            false => Err(match stderr.trim() {
-                "" => format!("fd exited with code {}", status.code().unwrap_or(-1)),
+        return match status.filter(ExitStatus::success) {
+            Some(_) => Ok("No files found matching pattern".into()),
+            None => Err(match stderr.trim() {
+                "" => format!(
+                    "fd exited with code {}",
+                    status.and_then(|status| status.code()).unwrap_or(-1)
+                ),
                 error => error.to_owned(),
             }),
         };
@@ -1243,6 +1284,13 @@ disjoint regions."
         )
         .unwrap();
         std::fs::write(root.join("notes.txt"), "a.b\naxb\n").unwrap();
+        std::fs::write(root.join("latin1.txt"), b"caf\xe9 needle\n").unwrap();
+        std::fs::write(root.join("near.txt"), "a\nb\nm1\nm2\nc\nd\n").unwrap();
+        std::fs::write(
+            root.join("huge.min.js"),
+            format!("needle{}\n", "x".repeat(5 << 20)),
+        )
+        .unwrap();
         std::fs::write(root.join(".hidden.rs"), "fn alpha() {}\n").unwrap();
         std::fs::write(root.join(".gitignore"), "ignored.rs\n").unwrap();
         std::fs::write(root.join("ignored.rs"), "").unwrap();
@@ -1286,6 +1334,34 @@ refine pattern]"
         assert_eq!(
             text("grep", json!({"pattern":"alpha","glob":".hidden*"})),
             ".hidden.rs:1: fn alpha() {}"
+        );
+        assert_eq!(
+            text("grep", json!({"pattern":"needle","path":"latin1.txt"})),
+            "latin1.txt:1: caf\u{fffd} needle"
+        );
+        assert_eq!(
+            text(
+                "grep",
+                json!({"pattern":"^m","path":"near.txt","context":2,"limit":1})
+            ),
+            "near.txt-1- a\nnear.txt-2- b\nnear.txt:3: m1\nnear.txt-4- m2\nnear.txt-5- c\n\n[1 \
+matches limit reached. Use limit=2 for more, or refine pattern]"
+        );
+        assert_eq!(
+            text(
+                "grep",
+                json!({"pattern":"Alpha|xxx","path":"src/deep","limit":1})
+            ),
+            "b.rs:1: fn Alpha() {}\n\n[1 matches limit reached. Use limit=2 for more, or refine \
+pattern]"
+        );
+        assert_eq!(
+            text("grep", json!({"pattern":"needle","path":"huge.min.js"})),
+            format!(
+                "huge.min.js:1: needle{}... [truncated]\n\n[Some lines truncated to 500 chars. \
+Use read tool to see full lines]",
+                "x".repeat(494)
+            )
         );
         let long = text("grep", json!({"pattern":"xxx","path":"src/deep"}));
         assert_eq!(
@@ -1337,6 +1413,33 @@ to see full lines]",
         );
         assert!(run("write", json!({"path":"x","content":""})).is_err());
         assert!(!root.join("x").exists());
+    }
+
+    #[test]
+    fn a_search_stops_its_program_when_done_or_cancelled() {
+        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
+        let started = Instant::now();
+        let mut command = Command::new("sh");
+        command.args(["-c", "echo one; echo two; sleep 30"]);
+        let mut lines = Vec::new();
+        let (status, _) = run_lines(command, &AtomicBool::new(false), |line| {
+            lines.push(line.to_owned());
+            false
+        })
+        .unwrap();
+        assert_eq!((status, lines), (None, vec![b"one\n".to_vec()]));
+        let cancel = AtomicBool::new(false);
+        let stopped = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                cancel.store(true, Ordering::Relaxed);
+            });
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 30 & sleep 30"]);
+            run_lines(command, &cancel, |_| true)
+        });
+        assert_eq!(stopped.unwrap_err(), "Operation aborted");
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[test]
