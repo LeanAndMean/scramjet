@@ -262,7 +262,8 @@ impl Branch {
                     "function_call_output"
                     | "model_change"
                     | "thinking_level_change"
-                    | "command_state",
+                    | "command_state"
+                    | "autopilot",
                 ) => {}
                 Some("compaction") => items.push(summary_message(
                     entry["summary"].as_str().unwrap_or_default(),

@@ -1,5 +1,5 @@
 //! The built-in commands: `/new`, `/name`, `/session`, `/resume`, `/fork`, `/tree`, `/model`,
-//! `/compact`, and `!` commands.
+//! `/compact`, `/autopilot`, and `!` commands.
 use super::interactive::{Interactive, model_line};
 use super::screen;
 use super::terminal::Terminal;
@@ -20,6 +20,7 @@ pub(super) enum Builtin<'a> {
     Tree(&'a str),
     Model(&'a str),
     Compact(&'a str),
+    Autopilot(&'a str),
     Quit,
 }
 
@@ -40,6 +41,7 @@ impl<'a> Builtin<'a> {
             "/tree" => Self::Tree(argument),
             "/model" => Self::Model(argument),
             "/compact" => Self::Compact(argument),
+            "/autopilot" => Self::Autopilot(argument),
             "/exit" | "/quit" if argument.is_empty() => Self::Quit,
             _ => return None,
         })
@@ -49,7 +51,10 @@ impl<'a> Builtin<'a> {
     /// rewrites the conversation, as Scramjet's `/compact` and `/new` abort the turn first and
     /// a session switch disposes of it. The others run between the turn's requests.
     pub(super) fn interrupts(self) -> bool {
-        !matches!(self, Self::Name(_) | Self::Session | Self::Model(_))
+        !matches!(
+            self,
+            Self::Name(_) | Self::Session | Self::Model(_) | Self::Autopilot(_)
+        )
     }
 }
 
@@ -71,6 +76,7 @@ impl Interactive {
             Some(Builtin::Tree(wanted)) => self.tree(wanted),
             Some(Builtin::Model(wanted)) => self.model(wanted),
             Some(Builtin::Compact(focus)) => self.compact(focus),
+            Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Quit) | None => return false,
         }
         true
@@ -103,6 +109,24 @@ impl Interactive {
                 Err(error) => self.say(&format!("error: {error}")),
             }
         }
+    }
+
+    /// `/autopilot on|off|status`, as Scramjet's: on, a completed command's recommended next
+    /// step runs unless the user chooses otherwise.
+    fn autopilot(&mut self, wanted: &str) {
+        let set = match wanted.to_lowercase().as_str() {
+            "on" => Some(true),
+            "off" => Some(false),
+            "" | "status" => None,
+            _ => return self.say("Usage: /autopilot on|off|status"),
+        };
+        if let Some(on) = set
+            && let Err(error) = self.agent.set_autopilot(on)
+        {
+            return self.say(&format!("error: {error}"));
+        }
+        let state = if self.agent.autopilot() { "on" } else { "off" };
+        self.say(&self.ui.dim(&format!("Autopilot is {state}")));
     }
 
     fn resume(&mut self, wanted: &str) {
@@ -559,6 +583,7 @@ mod tests {
             "/name  my work ",
             "/model",
             "/model gpt-6-terra",
+            "/autopilot on",
         ] {
             assert_eq!(stops(prompt), Some(false), "{prompt}");
         }

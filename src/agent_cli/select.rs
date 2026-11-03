@@ -7,6 +7,7 @@ use super::fuzzy::{self, Haystack};
 use super::style;
 use super::text;
 use scramjet_rs::agent::Choice;
+use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Rows shown at once, as in Scramjet's selectors other than its tree.
@@ -27,6 +28,8 @@ fn question_visible(options: &[Choice]) -> usize {
 pub(super) struct Picker {
     list: List,
     shape: Shape,
+    /// When a question's recommended option is chosen, unless `stop` is called first.
+    deadline: Option<Instant>,
 }
 
 enum Shape {
@@ -89,7 +92,49 @@ impl Picker {
                 options: options.to_vec(),
                 recommended,
             },
+            deadline: None,
         }
+    }
+
+    /// Chooses the recommended option of a question after `wait`, unless `stop` is called first,
+    /// and says so under the options, as Scramjet's next-step selector counts down.
+    pub(super) fn counting_down(mut self, wait: Duration) -> Self {
+        if let Shape::Question {
+            recommended: Some(_),
+            ..
+        } = self.shape
+        {
+            self.deadline = Some(Instant::now() + wait);
+        }
+        self
+    }
+
+    /// Stops the countdown, as any key or click in Scramjet's selector does.
+    pub(super) fn stop(&mut self) {
+        self.deadline = None;
+    }
+
+    /// The option the countdown chose, once it has ended.
+    pub(super) fn expired(&self) -> Option<usize> {
+        let ended = self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline);
+        match &self.shape {
+            Shape::Question { recommended, .. } if ended => *recommended,
+            _ => None,
+        }
+    }
+
+    /// How long until the countdown shows another second or ends, if it runs.
+    pub(super) fn next_change(&self) -> Option<Duration> {
+        let left = self.deadline?.saturating_duration_since(Instant::now());
+        let within = (left.as_nanos() % 1_000_000_000) as u64;
+        let wait = match within {
+            0 => Duration::from_secs(1).min(left),
+            within => Duration::from_nanos(within),
+        };
+        // A poll's milliseconds would otherwise wake it just before.
+        Some(wait + Duration::from_millis(1))
     }
 
     fn rows(
@@ -110,6 +155,7 @@ impl Picker {
                 current,
                 rows,
             },
+            deadline: None,
         }
     }
 
@@ -138,7 +184,20 @@ impl Picker {
                 title,
                 options,
                 recommended,
-            } => question_lines(title, options, *recommended, &self.list, size),
+            } => {
+                let hint = match self.deadline {
+                    Some(deadline) => {
+                        let left = deadline.saturating_duration_since(Instant::now());
+                        let seconds = left.as_secs_f64().ceil() as u64;
+                        // Shorter than Scramjet's `auto-selects recommendation in 3s`, so that
+                        // the seconds show on a narrow terminal.
+                        format!("{HINT} · auto-selects in {seconds}s")
+                    }
+                    None => HINT.to_owned(),
+                };
+                let question = (title.as_str(), options.as_slice(), *recommended);
+                question_lines(question, &hint, &self.list, size)
+            }
         }
     }
 }
@@ -298,11 +357,11 @@ fn lines(
 }
 
 /// A question's lines for a terminal of `(width, height)`: a rule, the title, the options around
-/// the selected one, the selected one's position when some are not shown, the keys, a rule.
+/// the selected one, the selected one's position when some are not shown, the `hint` on the
+/// keys, a rule.
 fn question_lines(
-    title: &str,
-    options: &[Choice],
-    recommended: Option<usize>,
+    (title, options, recommended): (&str, &[Choice], Option<usize>),
+    hint: &str,
     list: &List,
     (width, height): (usize, usize),
 ) -> Vec<String> {
@@ -342,7 +401,7 @@ fn question_lines(
     if hidden {
         lines.push(format!("  {MUTED}({}/{count}){RESET}", selected + 1));
     }
-    lines.push(format!("{MUTED}{}{RESET}", text::clip(HINT, width)));
+    lines.push(format!("{MUTED}{}{RESET}", text::clip(hint, width)));
     lines.push(rule);
     lines
 }
@@ -500,7 +559,12 @@ mod tests {
         ];
         let list = List::new(3, 2, 8);
         assert_eq!(
-            plain(question_lines("Choose", &options, Some(2), &list, (31, 24))),
+            plain(question_lines(
+                ("Choose", &options, Some(2)),
+                HINT,
+                &list,
+                (31, 24)
+            )),
             [
                 "─".repeat(30).as_str(),
                 "Choose",
@@ -519,7 +583,12 @@ mod tests {
         );
         // A short terminal keeps the selected option and the ones nearest it, with its position.
         let first = List::new(3, 0, 8);
-        let short = plain(question_lines("Choose", &options, None, &first, (31, 8)));
+        let short = plain(question_lines(
+            ("Choose", &options, None),
+            HINT,
+            &first,
+            (31, 8),
+        ));
         assert_eq!(
             short[1..6],
             [
@@ -529,6 +598,41 @@ mod tests {
                 "     change now",
                 "  (1/3)"
             ]
+        );
+    }
+
+    #[test]
+    fn a_countdown_chooses_the_recommended_option_unless_stopped() {
+        let options = ["/rs:loop", "/rs:steer"].map(|label| Choice {
+            label: label.into(),
+            description: None,
+            value: String::new(),
+        });
+        let hint = |picker: &Picker| {
+            let lines = plain(picker.lines((80, 24)));
+            lines[lines.len() - 2].clone()
+        };
+        let mut picker = Picker::question("Select next step", &options, Some(1))
+            .counting_down(Duration::from_secs(3));
+        assert_eq!(
+            hint(&picker),
+            "↑↓ move · Enter select · Esc cancel · auto-selects in 3s"
+        );
+        assert_eq!(picker.expired(), None);
+        assert!(picker.next_change().unwrap() <= Duration::from_millis(1001));
+        picker.stop();
+        assert_eq!(hint(&picker), HINT);
+        assert_eq!((picker.expired(), picker.next_change()), (None, None));
+
+        let ended =
+            Picker::question("Select next step", &options, Some(1)).counting_down(Duration::ZERO);
+        assert_eq!(ended.expired(), Some(1));
+        // Without a recommendation there is nothing to count down to.
+        let unrecommended =
+            Picker::question("Select next step", &options, None).counting_down(Duration::ZERO);
+        assert_eq!(
+            (unrecommended.expired(), unrecommended.next_change()),
+            (None, None)
         );
     }
 

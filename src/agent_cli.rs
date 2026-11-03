@@ -151,7 +151,7 @@ fn handle_signals(cancel: &Arc<AtomicBool>, hide_thinking: &Arc<AtomicBool>) -> 
 }
 
 /// `-p`: runs one prompt (`-` reads it from stdin) and names the next step that would run after
-/// it instead of running it.
+/// it, with `/autopilot on` too, instead of running it.
 fn print(
     agent: &mut Agent,
     ui: &mut Terminal,
@@ -169,7 +169,7 @@ fn print(
     ui.clear();
     ui.usage(agent);
     if let Some(completed) = agent.take_completed() {
-        let routing = agent.route(&completed, false);
+        let routing = agent.route(&completed, false, true);
         let mut notices = routing.notices;
         if let Next::Run(step) = routing.next {
             let fresh = if step.fresh_session {

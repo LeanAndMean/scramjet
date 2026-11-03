@@ -183,6 +183,7 @@ impl Agent {
         };
         self.conversation = self.session.move_to(destination.leaf)?;
         self.usage.context_tokens = self.session.context_tokens();
+        self.autopilot = self.session.autopilot().unwrap_or(self.autopilot);
         self.restore_command();
         self.answer_interrupted_calls()?;
         if let Some((summary, files)) = summary {
@@ -225,11 +226,13 @@ impl Agent {
                 leaf = Some(next.line);
             }
         }
-        // The command's state saved after an entry is its state there; `/tree` does not list it.
+        // The command's state and the `/autopilot` toggles saved after an entry are the state
+        // there; `/tree` does not list them.
         if prompt.is_none() {
-            while let Some(next) = entries
-                .iter()
-                .find(|next| next.parent == leaf && next.value["type"] == "command_state")
+            let state =
+                |value: &Value| value["type"] == "command_state" || value["type"] == "autopilot";
+            while let Some(next) =
+                (entries.iter()).find(|next| next.parent == leaf && state(&next.value))
             {
                 leaf = Some(next.line);
             }

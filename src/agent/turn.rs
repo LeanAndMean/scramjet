@@ -107,7 +107,7 @@ impl Agent {
                 Err(error) => return Err(error),
                 Ok(()) => {}
             }
-            let ended = self.lifecycle.turn_ended(&self.commands);
+            let ended = self.lifecycle.turn_ended(&self.commands, self.autopilot);
             self.save_command()?;
             match ended {
                 status::Ended::Probe(check) => {
@@ -133,9 +133,11 @@ impl Agent {
     }
 
     /// The next step of a completed command, from its `next:` policy and the `autonomy.yaml`
-    /// edges; `interactive` when the user can choose from a list. What is said about the
-    /// `autonomy.yaml` files is said once, until it changes, as in Scramjet.
-    pub fn route(&mut self, completed: &Completed, interactive: bool) -> Routing {
+    /// edges; `interactive` when the user can choose from a list, `autopilot` when the
+    /// recommended command runs unless the user chooses otherwise (usually `self.autopilot()`).
+    /// What is said about the `autonomy.yaml` files is said once, until it changes, as in
+    /// Scramjet.
+    pub fn route(&mut self, completed: &Completed, interactive: bool, autopilot: bool) -> Routing {
         let mut edges =
             autonomy::Edges::load(self.autonomy.as_deref(), &self.config.root, &self.commands);
         if edges.diagnostics == self.autonomy_diagnostics {
@@ -143,7 +145,7 @@ impl Agent {
         } else {
             self.autonomy_diagnostics = edges.diagnostics.clone();
         }
-        status::route(completed, &self.commands, &edges, interactive)
+        status::route(completed, &self.commands, &edges, interactive, autopilot)
     }
 
     /// Model requests and tool calls until a final answer. As in Pi, messages the user sends
@@ -717,7 +719,7 @@ instructions are in that earlier result.";
         let shown = format!("command /rs:other now sent {expansion}");
         assert!(ui.shown.contains(&shown), "{:?}", ui.shown);
         let completed = agent.take_completed().unwrap();
-        let Next::Offer { steps, .. } = agent.route(&completed, true).next else {
+        let Next::Offer { steps, .. } = agent.route(&completed, true, false).next else {
             panic!("no next step offered");
         };
         assert_eq!(steps[0].command.as_deref(), Some("/rs:other again"));
@@ -1470,7 +1472,7 @@ be a non-empty array for select type. failed",
         let mut agent = resume(agent);
         agent.turn("blue", &mut ui, &cancel).unwrap();
         let completed = agent.take_completed().unwrap();
-        let routing = agent.route(&completed, true);
+        let routing = agent.route(&completed, true, false);
         let Next::Offer { steps, .. } = routing.next else {
             panic!("no next step offered: {routing:?}");
         };
@@ -1543,6 +1545,94 @@ be a non-empty array for select type. failed",
     }
 
     #[test]
+    fn autopilot_is_saved_restored_and_told_to_the_model() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let events = fixture::call_events(
+            &json!({"summary":"Done.","status":"completed","recommended_next_step":0,
+                "next_steps":[{"message":"/rs:work again","fresh_session":false,"reason":"More."}]})
+            .to_string(),
+            fixture::known_usage(),
+        );
+        let report = serde_json::to_string(&events)
+            .unwrap()
+            .replace("\"inert\"", &format!("\"{}\"", status::NAME));
+        let report = stream(&serde_json::from_str::<Vec<Value>>(&report).unwrap());
+        let (endpoint, server) = serve(vec![reply("worked"), report]);
+        let (mut agent, scratch) = agent(endpoint, "autopilot");
+        let commands = agent.root().join(".scramjet/rs/commands");
+        std::fs::create_dir_all(&commands).unwrap();
+        std::fs::write(
+            commands.join("rs:work.md"),
+            "---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:work\n---\nWork.\n",
+        )
+        .unwrap();
+        project_sets(&mut agent);
+        agent.autonomy = None;
+        assert!(!agent.autopilot());
+        agent.set_autopilot(true).unwrap();
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("/rs:work", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        // The toggle is not part of the conversation; the status check says what autopilot does.
+        let inputs = bodies[1]["input"].as_array().unwrap();
+        assert!(inputs.iter().all(|item| item["type"] != "autopilot"));
+        let check = inputs.last().unwrap()["content"].as_str().unwrap();
+        assert!(
+            check.contains(
+                "With `/autopilot on`, set it to highlight the selected entry; Scramjet \
+auto-dispatches it only when its message is a slash command."
+            ),
+            "{check}"
+        );
+        let completed = agent.take_completed().unwrap();
+        let routing = agent.route(&completed, false, agent.autopilot());
+        let Next::Run(step) = routing.next else {
+            panic!("{routing:?}")
+        };
+        assert_eq!(step.command.as_deref(), Some("/rs:work again"));
+
+        // A resume restores it; a session or branch without a toggle keeps it as it is.
+        let path = agent.session_path().to_owned();
+        let without = scratch.0.join("without.jsonl");
+        write_session(
+            &without,
+            &[json!({"type":"session","version":1})],
+            std::time::SystemTime::now(),
+        );
+        agent.resume_session(&without).unwrap();
+        assert!(agent.autopilot());
+        agent.set_autopilot(false).unwrap();
+        agent.resume_session(&path).unwrap();
+        assert!(agent.autopilot());
+        agent.new_session().unwrap();
+        assert!(agent.autopilot());
+        let saved = std::fs::read_to_string(agent.session_path()).unwrap();
+        assert!(!saved.contains(r#""type":"autopilot""#), "{saved}");
+        agent.resume_session(&without).unwrap();
+        assert!(!agent.autopilot());
+        // `/tree` does not list a toggle: the entry before it is where the conversation is. A
+        // move restores the toggle on the path there.
+        agent.resume_session(&path).unwrap();
+        assert!(agent.autopilot());
+        let last = agent.tree().unwrap().current.unwrap();
+        agent.set_autopilot(false).unwrap();
+        assert_eq!(agent.tree().unwrap().current, Some(last));
+        let moved = agent.navigate(last, None, &mut ui, &cancel).unwrap();
+        assert!(matches!(moved, Navigated::AlreadyThere), "{moved:?}");
+        assert!(!agent.autopilot());
+        let tree = agent.tree().unwrap();
+        let worked = tree
+            .entries
+            .iter()
+            .find(|entry| entry.item == TreeItem::Reply("worked".into()));
+        agent
+            .navigate(worked.unwrap().line, None, &mut ui, &cancel)
+            .unwrap();
+        assert!(agent.autopilot());
+    }
+
+    #[test]
     fn a_command_is_reported_inline_or_after_scramjets_status_check() {
         let call = |id: &str, name: &str, arguments: Value| {
             let events = fixture::call_events(&arguments.to_string(), fixture::known_usage());
@@ -1594,7 +1684,10 @@ be a non-empty array for select type. failed",
         let cancel = AtomicBool::new(false);
         agent.turn("/rs:work go", &mut ui, &cancel).unwrap();
         let completed = agent.take_completed().unwrap();
-        let Next::Offer { steps, recommended } = agent.route(&completed, true).next else {
+        let Next::Offer {
+            steps, recommended, ..
+        } = agent.route(&completed, true, false).next
+        else {
             panic!("no next step offered");
         };
         assert_eq!(steps[0].command.as_deref(), Some("/rs:work again"));

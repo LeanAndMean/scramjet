@@ -214,6 +214,8 @@ pub struct Agent {
     info: ModelInfo,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
+    /// Whether a completed command's recommended next step runs without the user choosing it.
+    autopilot: bool,
     pub usage: Usage,
 }
 
@@ -268,6 +270,7 @@ impl Agent {
         };
         let context_tokens = session.context_tokens();
         let lifecycle = status::Lifecycle::restored(session.command());
+        let autopilot = session.autopilot().unwrap_or(false);
         let executor = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -286,6 +289,7 @@ impl Agent {
             autonomy_diagnostics: Vec::new(),
             info: ModelInfo::guess(&config.model),
             hide_credentials: false,
+            autopilot,
             config,
             conversation,
             prompts,
@@ -417,6 +421,7 @@ impl Agent {
         let model = session.model().map(str::to_owned);
         let context_tokens = session.context_tokens();
         let effort = session.effort().map(str::to_owned);
+        self.autopilot = session.autopilot().unwrap_or(self.autopilot);
         self.session = session;
         self.conversation = conversation;
         self.prompts = prompts;
@@ -525,6 +530,20 @@ impl Agent {
             levels: self.info.levels.clone(),
             current: (self.effort().or(self.info.default_level.as_deref())).map(str::to_owned),
         }
+    }
+
+    /// Whether `/autopilot` is on. Off at start, it is what the session's latest toggle on the
+    /// conversation's path set, as Scramjet restores it; a session or branch without one keeps
+    /// the value it had.
+    pub fn autopilot(&self) -> bool {
+        self.autopilot
+    }
+
+    /// `/autopilot on` or `off`, saved in the session.
+    pub fn set_autopilot(&mut self, on: bool) -> Result<(), AgentError> {
+        self.session.record_autopilot(on)?;
+        self.autopilot = on;
+        Ok(())
     }
 
     /// Whether the coding tools of the turns that follow keep out of the user's credential

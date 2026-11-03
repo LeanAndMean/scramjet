@@ -322,15 +322,16 @@ the command. Report your actual status: completed, blocked, or incomplete."
         (text, false, true)
     }
 
-    /// After a turn: what follows it.
-    pub fn turn_ended(&mut self, commands: &Commands) -> Ended {
+    /// After a turn: what follows it; `autopilot` as `/autopilot` is, which the status check
+    /// tells the model.
+    pub fn turn_ended(&mut self, commands: &Commands, autopilot: bool) -> Ended {
         let Some((name, phase)) = &mut self.active else {
             return Ended::Nothing;
         };
         match phase {
             Phase::Running { continues } => {
                 let policy = commands.get(name).and_then(|command| command.next.as_ref());
-                let probe = probe_message(policy, name);
+                let probe = probe_message(policy, name, autopilot);
                 *phase = Phase::Probing {
                     continues: *continues,
                 };
@@ -466,9 +467,9 @@ fn clean_notice(text: &str) -> String {
     }
 }
 
-/// Scramjet's `<scramjet-next-step>` block, which describes a policy to the model; `</` of the
-/// closing tag inside the text is escaped.
-fn next_step_block(policy: &Policy, command: &str) -> String {
+/// Scramjet's `<scramjet-next-step>` block, which describes a policy to the model and what
+/// `autopilot` does with the recommendation; `</` of the closing tag inside the text is escaped.
+fn next_step_block(policy: &Policy, command: &str, autopilot: bool) -> String {
     let safe = |text: &str| escape_close_tag(text);
     let candidates = |candidates: &[Candidate]| {
         let rows = candidates.iter().enumerate().map(|(index, candidate)| {
@@ -482,10 +483,19 @@ fn next_step_block(policy: &Policy, command: &str) -> String {
         });
         rows.collect::<Vec<_>>().join("\n")
     };
-    let recommendation = "Choose the best-supported continuation from the completed work and \
-current context, construct `next_steps`, and derive any `recommended_next_step` from the selected \
-entry's zero-based runtime index. With `/autopilot off`, set it to highlight the best option for \
-the user; Scramjet will not auto-dispatch it.";
+    let choose = "Choose the best-supported continuation from the completed work and current \
+context, construct `next_steps`, and derive any `recommended_next_step` from the selected entry's \
+zero-based runtime index.";
+    let recommendation = match autopilot {
+        true => format!(
+            "{choose} With `/autopilot on`, set it to highlight the selected entry; Scramjet \
+auto-dispatches it only when its message is a slash command."
+        ),
+        false => format!(
+            "{choose} With `/autopilot off`, set it to highlight the best option for the user; \
+Scramjet will not auto-dispatch it."
+        ),
+    };
     let id = safe(command);
     let body = match policy {
         Policy::Forced { target } => format!(
@@ -567,7 +577,7 @@ fn escape_close_tag(text: &str) -> String {
 }
 
 /// Scramjet's status check, sent as a hidden message when a command's turn ends without a report.
-fn probe_message(policy: Option<&Policy>, command: &str) -> String {
+fn probe_message(policy: Option<&Policy>, command: &str, autopilot: bool) -> String {
     let id = escape_close_tag(command);
     let preamble = format!(
         "Scramjet status check for `{id}`.\n\n\
@@ -592,7 +602,10 @@ same-turn\n\
             "{preamble}\n\nThis command has no next-step policy. When reporting `completed`, omit \
 `next_steps` entirely — no chaining will occur."
         ),
-        Some(policy) => format!("{preamble}\n\n{}", next_step_block(policy, command)),
+        Some(policy) => format!(
+            "{preamble}\n\n{}",
+            next_step_block(policy, command, autopilot)
+        ),
     }
 }
 
@@ -615,10 +628,12 @@ pub enum Next {
     Nothing,
     /// Runs at once: a forced next step, or one an edge chains.
     Run(Step),
-    /// For the user to choose; `recommended` is a position in `steps`.
+    /// For the user to choose; `recommended` is a position in `steps`, which `/autopilot on`
+    /// chooses after a countdown when `autoselect`.
     Offer {
         steps: Vec<Step>,
         recommended: Option<usize>,
+        autoselect: bool,
     },
 }
 
@@ -630,13 +645,14 @@ pub struct Routing {
     pub next: Next,
 }
 
-/// Routes a completed command's next steps as Scramjet's `routeCompleted` does with autopilot
-/// off: `interactive` when the user can choose from a list.
+/// Routes a completed command's next steps as Scramjet's `routeCompleted` does: `interactive`
+/// when the user can choose from a list, `autopilot` as `/autopilot` is.
 pub(super) fn route(
     completed: &Completed,
     commands: &Commands,
     edges: &Edges,
     interactive: bool,
+    autopilot: bool,
 ) -> Routing {
     let source = completed.command.clone();
     let report = &completed.report;
@@ -659,7 +675,13 @@ for user"
         }
         Some(policy) => {
             let checked = check(report, policy, commands);
-            offered(checked, &source, edges, interactive, &mut notices)
+            offered(
+                checked,
+                &source,
+                edges,
+                (interactive, autopilot),
+                &mut notices,
+            )
         }
     };
     Routing {
@@ -823,7 +845,7 @@ fn offered(
     checked: Checked,
     source: &str,
     edges: &Edges,
-    interactive: bool,
+    (interactive, autopilot): (bool, bool),
     notices: &mut Vec<String>,
 ) -> Next {
     if checked.valid.is_empty() {
@@ -868,12 +890,16 @@ fn offered(
                 options()
             ));
         }
+        let autoselect = autopilot
+            && edge != Some(Edge::Pause)
+            && recommended.is_some_and(|step| step.command.is_some());
         return Next::Offer {
             steps: checked.valid,
             recommended: checked.recommended,
+            autoselect,
         };
     }
-    // Without a list to choose from, nothing runs unless an edge chains it.
+    // Without a list to choose from, only autopilot runs the recommended command.
     let Some(step) = recommended else {
         if let Some(reason) = &checked.recommended_reason {
             notices.push(format!(
@@ -883,19 +909,30 @@ fn offered(
         }
         return Next::Nothing;
     };
+    let message = clean_notice(&step.message);
     let fresh = if step.fresh_session {
         " (fresh session)"
     } else {
         ""
     };
-    let paused = match edge {
-        Some(Edge::Pause) => "; edge setting: pause",
-        _ => "",
+    let notice = match (step.command.is_some(), edge, autopilot) {
+        (false, _, true) => format!(
+            "scramjet: recommended next step is not a slash command ({message}); automatic \
+dispatch skipped"
+        ),
+        (false, _, false) => format!(
+            "scramjet: next would be {message}; /autopilot on only auto-dispatches command next \
+steps"
+        ),
+        (true, Some(Edge::Pause), _) => {
+            format!("scramjet: next would be {message}{fresh}; edge setting: pause")
+        }
+        (true, _, true) => return Next::Run(step.clone()),
+        (true, _, false) => {
+            format!("scramjet: next would be {message}{fresh}; /autopilot on to chain")
+        }
     };
-    notices.push(format!(
-        "scramjet: next would be {}{fresh}{paused}",
-        clean_notice(&step.message)
-    ));
+    notices.push(notice);
     Next::Nothing
 }
 
@@ -992,7 +1029,11 @@ mod tests {
             ("ask", Some(&ask), "rs:a"),
             ("none", None, "rs:n"),
         ] {
-            assert_eq!(probe_message(policy, command), reference[key], "{key}");
+            assert_eq!(
+                probe_message(policy, command, false),
+                reference[key],
+                "{key}"
+            );
         }
     }
 
@@ -1012,7 +1053,10 @@ mod tests {
         lifecycle.prompted("/rs:loop", Some("rs:loop"));
         let started = json!({"type":"command_state","command":"rs:loop"});
         assert_eq!(lifecycle.saved(), started);
-        assert!(matches!(lifecycle.turn_ended(&commands), Ended::Probe(_)));
+        assert!(matches!(
+            lifecycle.turn_ended(&commands, false),
+            Ended::Probe(_)
+        ));
         assert_eq!(lifecycle.saved(), started);
         lifecycle.report(&json!({"summary":"Done.","status":"completed"}));
         assert_eq!(lifecycle.saved(), started);
@@ -1024,9 +1068,9 @@ mod tests {
                 .contains("do NOT auto-resume")
         );
         resumed.prompted("go on", None);
-        assert_eq!(resumed.turn_ended(&commands), Ended::Nothing);
+        assert_eq!(resumed.turn_ended(&commands, false), Ended::Nothing);
         assert!(matches!(
-            lifecycle.turn_ended(&commands),
+            lifecycle.turn_ended(&commands, false),
             Ended::Completed(_)
         ));
         assert_eq!(restored(&lifecycle).active, None);
@@ -1038,13 +1082,19 @@ mod tests {
         let mut resumed = restored(&lifecycle);
         assert_eq!(resumed.dormant_notice(), None);
         resumed.prompted("blue", None);
-        assert!(matches!(resumed.turn_ended(&commands), Ended::Probe(_)));
+        assert!(matches!(
+            resumed.turn_ended(&commands, false),
+            Ended::Probe(_)
+        ));
         lifecycle.question_cancelled();
         assert_eq!(lifecycle.saved()["state"], "resumable");
         let mut resumed = restored(&lifecycle);
         assert!(resumed.dormant_notice().unwrap().contains("will resume it"));
         resumed.prompted("blue", None);
-        assert!(matches!(resumed.turn_ended(&commands), Ended::Probe(_)));
+        assert!(matches!(
+            resumed.turn_ended(&commands, false),
+            Ended::Probe(_)
+        ));
     }
 
     #[test]
@@ -1060,14 +1110,17 @@ mod tests {
             lifecycle.report(&continuing),
             error(CONTINUING_OUT_OF_PHASE_ERROR)
         );
-        let Ended::Probe(check) = lifecycle.turn_ended(&commands) else {
+        let Ended::Probe(check) = lifecycle.turn_ended(&commands, false) else {
             panic!("no status check");
         };
         assert!(check.starts_with("Scramjet status check for `rs:loop`."));
         assert!(check.contains("declares a `closed` next-step policy"));
         for _ in 0..CONTINUE_LIMIT {
             assert_eq!(lifecycle.report(&continuing), error(CONTINUING));
-            assert!(matches!(lifecycle.turn_ended(&commands), Ended::Probe(_)));
+            assert!(matches!(
+                lifecycle.turn_ended(&commands, false),
+                Ended::Probe(_)
+            ));
         }
         let (limit, _, _) = lifecycle.report(&continuing);
         assert!(limit.starts_with("You have reported \"continuing\" 3 times"));
@@ -1080,10 +1133,10 @@ mod tests {
         );
         assert_eq!(lifecycle.report(&completed), error(ALREADY_REPORTED_ERROR));
         assert!(matches!(
-            lifecycle.turn_ended(&commands),
+            lifecycle.turn_ended(&commands, false),
             Ended::Completed(_)
         ));
-        assert_eq!(lifecycle.turn_ended(&commands), Ended::Nothing);
+        assert_eq!(lifecycle.turn_ended(&commands, false), Ended::Nothing);
 
         // Blocked: the user is told; the command is dormant until the model says it continues.
         lifecycle.prompted("/rs:steer", Some("rs:steer"));
@@ -1094,7 +1147,7 @@ mod tests {
             ("status: blocked".into(), false, true)
         );
         assert_eq!(
-            lifecycle.turn_ended(&commands),
+            lifecycle.turn_ended(&commands, false),
             Ended::Notice("scramjet: command blocked — Needs a key.".into())
         );
         let notice = lifecycle.dormant_notice().unwrap();
@@ -1104,17 +1157,23 @@ mod tests {
         );
         assert!(notice.contains("Ordinary user replies do NOT auto-resume a dormant command."));
         lifecycle.prompted("why?", None);
-        assert_eq!(lifecycle.turn_ended(&commands), Ended::Nothing);
+        assert_eq!(lifecycle.turn_ended(&commands, false), Ended::Nothing);
         assert_eq!(lifecycle.report(&continuing), error(CONTINUING));
         assert_eq!(lifecycle.dormant_notice(), None);
-        assert!(matches!(lifecycle.turn_ended(&commands), Ended::Probe(_)));
+        assert!(matches!(
+            lifecycle.turn_ended(&commands, false),
+            Ended::Probe(_)
+        ));
 
         // Parked for a reply, which resumes it.
         assert!(lifecycle.park());
         assert_eq!(lifecycle.report(&completed), error(PARKED_ERROR));
-        assert_eq!(lifecycle.turn_ended(&commands), Ended::Nothing);
+        assert_eq!(lifecycle.turn_ended(&commands, false), Ended::Nothing);
         lifecycle.prompted("the answer", None);
-        assert!(matches!(lifecycle.turn_ended(&commands), Ended::Probe(_)));
+        assert!(matches!(
+            lifecycle.turn_ended(&commands, false),
+            Ended::Probe(_)
+        ));
 
         // A cancelled question: the next reply resumes it; a `/` prompt naming nothing ends it.
         lifecycle.question_cancelled();
@@ -1169,7 +1228,7 @@ Received arguments:\n{received}",
         report["summary"] = json!("Done.");
         report["status"] = json!("completed");
         assert!(lifecycle.report(&report).2);
-        match lifecycle.turn_ended(&commands()) {
+        match lifecycle.turn_ended(&commands(), false) {
             Ended::Completed(completed) => completed,
             other => panic!("{other:?}"),
         }
@@ -1188,7 +1247,7 @@ Received arguments:\n{received}",
         let commands = commands();
         let none = Edges::default();
         let route = |done: &Completed, edges: &Edges, interactive| {
-            let routing = route(done, &commands, edges, interactive);
+            let routing = route(done, &commands, edges, interactive, false);
             (routing.notices, routing.next)
         };
         let again = Step {
@@ -1215,7 +1274,8 @@ reason), plain text (non-command messages are valid only for open policies)";
                 vec![skipped.to_owned()],
                 Next::Offer {
                     steps: vec![again.clone()],
-                    recommended: Some(0)
+                    recommended: Some(0),
+                    autoselect: false,
                 }
             )
         );
@@ -1224,7 +1284,13 @@ reason), plain text (non-command messages are valid only for open policies)";
         let next = "scramjet: next would be /rs:loop more (fresh session)";
         assert_eq!(
             route(&looped, &none, false),
-            (vec![skipped.to_owned(), next.to_owned()], Next::Nothing)
+            (
+                vec![
+                    skipped.to_owned(),
+                    format!("{next}; /autopilot on to chain")
+                ],
+                Next::Nothing
+            )
         );
         let pause = Edges::parse("edges:\n  rs:loop:\n    '*': pause\n");
         assert_eq!(
@@ -1299,6 +1365,11 @@ delegate, not top-level dispatch))"
             panic!("{next:?}")
         };
         assert_eq!(steps[0].command, None);
+        assert_eq!(
+            route(&opened, &none, false).0[1],
+            "scramjet: next would be Write the tests; /autopilot on only auto-dispatches command \
+next steps"
+        );
 
         // Forced: the target runs, with the arguments of a matching first step.
         let forced = |steps: Value| {
@@ -1369,6 +1440,80 @@ for user"
             json!({"next_steps":[step("/rs:loop", Some("r"), false)]}),
         );
         assert_eq!(route(&unpoliced, &none, true), (vec![], Next::Nothing));
+    }
+
+    #[test]
+    fn autopilot_runs_the_recommended_command_as_scramjet_does() {
+        let commands = commands();
+        let none = Edges::default();
+        let pause = Edges::parse("edges:\n  rs:loop:\n    rs:loop: pause\n");
+        let route = |done: &Completed, edges: &Edges, interactive| {
+            let routing = route(done, &commands, edges, interactive, true);
+            (routing.notices, routing.next)
+        };
+        let autoselect = |next: Next| match next {
+            Next::Offer { autoselect, .. } => autoselect,
+            other => panic!("{other:?}"),
+        };
+        let looped = completed(
+            "rs:loop",
+            json!({"recommended_next_step":0,"next_steps":[
+                step("/rs:loop 2", Some("again"), false), step("/rs:steer", Some("r"), false)]}),
+        );
+        // The list chooses the recommended command after a countdown, unless its edge pauses.
+        assert!(autoselect(route(&looped, &none, true).1));
+        assert!(!autoselect(route(&looped, &pause, true).1));
+        let (notices, next) = route(&looped, &none, false);
+        assert!(notices.is_empty(), "{notices:?}");
+        let Next::Run(chosen) = next else {
+            panic!("{next:?}")
+        };
+        assert_eq!(chosen.command.as_deref(), Some("/rs:loop 2"));
+        assert_eq!(
+            route(&looped, &pause, false),
+            (
+                vec!["scramjet: next would be /rs:loop 2; edge setting: pause".to_owned()],
+                Next::Nothing
+            )
+        );
+        // Without a recommendation, or with text recommended, nothing is chosen.
+        let unrecommended = completed(
+            "rs:loop",
+            json!({"next_steps":[step("/rs:loop", Some("again"), false)]}),
+        );
+        assert!(!autoselect(route(&unrecommended, &none, true).1));
+        assert_eq!(route(&unrecommended, &none, false).1, Next::Nothing);
+        let text = completed(
+            "rs:open",
+            json!({"recommended_next_step":0,"next_steps":[
+                step("Write the tests", Some("next"), false)]}),
+        );
+        assert!(!autoselect(route(&text, &none, true).1));
+        assert_eq!(
+            route(&text, &none, false),
+            (
+                vec![
+                    "scramjet: recommended next step is not a slash command (Write the tests); \
+automatic dispatch skipped"
+                        .to_owned()
+                ],
+                Next::Nothing
+            )
+        );
+        // The status check tells the model.
+        let policy = commands.get("rs:loop").and_then(|c| c.next.as_ref());
+        let on = probe_message(policy, "rs:loop", true);
+        let off = probe_message(policy, "rs:loop", false);
+        assert_eq!(
+            on,
+            off.replace(
+                "With `/autopilot off`, set it to highlight the best option for the user; \
+Scramjet will not auto-dispatch it.",
+                "With `/autopilot on`, set it to highlight the selected entry; Scramjet \
+auto-dispatches it only when its message is a slash command."
+            )
+        );
+        assert_ne!(on, off);
     }
 
     #[test]

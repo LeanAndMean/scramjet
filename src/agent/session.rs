@@ -26,7 +26,7 @@ pub struct SessionInfo {
 /// compaction, which replaces the items before `first_kept` with its summary and lists the files
 /// read and modified before then, and each branch summary, a message summarizing a branch the
 /// conversation came back from, with the files read and modified there, and each change of the
-/// active command (`status::Lifecycle::saved`). Entries form a tree (see `Entries`); the
+/// active command (`status::Lifecycle::saved`), and each `/autopilot` toggle. Entries form a tree (see `Entries`); the
 /// conversation is the path from the start to the current entry, the leaf, which each appended
 /// entry continues.
 pub struct Session {
@@ -44,6 +44,8 @@ pub struct Session {
     context_tokens: Option<u64>,
     /// The latest `command_state` line on the path, which a resume restores.
     command: Option<Value>,
+    /// The latest `/autopilot` toggle on the path, which a resume restores.
+    autopilot: Option<bool>,
     leaf: Option<usize>,
     /// The entry a line appended without a branch line would continue.
     tail: Option<usize>,
@@ -92,6 +94,7 @@ struct Context {
     files: FileLists,
     context_tokens: Option<u64>,
     command: Option<Value>,
+    autopilot: Option<bool>,
 }
 
 fn read(path: &Path) -> io::Result<Entries> {
@@ -214,6 +217,7 @@ impl Entries {
             files: FileLists::default(),
             context_tokens: None,
             command: None,
+            autopilot: None,
         };
         let items = &mut context.items;
         for entry in self.path(leaf) {
@@ -248,6 +252,8 @@ impl Entries {
                 context.effort = Some(level.to_owned());
             } else if value["type"] == "command_state" {
                 context.command = Some(value.clone());
+            } else if value["type"] == "autopilot" {
+                context.autopilot = value["on"].as_bool();
             } else {
                 if let Some(producer) = value[super::PRODUCER].as_str() {
                     context.model = Some(producer.to_owned());
@@ -382,6 +388,7 @@ impl Session {
             files: FileLists::default(),
             context_tokens: None,
             command: None,
+            autopilot: None,
             leaf: None,
             tail: None,
             lines: 1,
@@ -432,6 +439,7 @@ impl Session {
                 files: context.files,
                 context_tokens: context.context_tokens,
                 command: context.command,
+                autopilot: context.autopilot,
                 leaf: entries.tail,
                 tail: entries.tail,
                 lines: entries.lines,
@@ -508,6 +516,7 @@ impl Session {
         self.files = context.files;
         self.context_tokens = context.context_tokens;
         self.command = context.command;
+        self.autopilot = context.autopilot;
         Ok(context.items)
     }
 
@@ -597,6 +606,16 @@ impl Session {
         Ok(())
     }
 
+    /// Whether the latest `/autopilot` toggle on the path turned it on; `None` without one.
+    pub fn autopilot(&self) -> Option<bool> {
+        self.autopilot
+    }
+
+    /// Saves an `/autopilot` toggle.
+    pub fn record_autopilot(&mut self, on: bool) -> io::Result<()> {
+        self.append(&json!({"type":"autopilot","on":on}))
+    }
+
     pub(super) fn compacted_files(&self) -> &FileLists {
         &self.files
     }
@@ -639,6 +658,8 @@ impl Session {
             self.effort = item["level"].as_str().map(str::to_owned);
         } else if item["type"] == "command_state" {
             self.command = Some(item.clone());
+        } else if item["type"] == "autopilot" {
+            self.autopilot = item["on"].as_bool();
         } else if item["type"] == "compaction" {
             self.files = FileLists::of(item);
             self.context_tokens = None;

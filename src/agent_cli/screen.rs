@@ -93,6 +93,8 @@ pub(super) enum Dialog {
 
 pub(super) enum Answer {
     Picked(Option<usize>),
+    /// The row a picker's countdown chose.
+    Expired(usize),
     Text(Option<String>),
     Approved(agent::Answer),
 }
@@ -242,8 +244,14 @@ impl Link {
     }
     /// The row chosen from `picker`, `None` when cancelled.
     pub(super) fn pick(&self, picker: Picker) -> Option<usize> {
+        self.pick_timed(picker).map(|(row, _)| row)
+    }
+
+    /// As `pick`, and whether the picker's countdown chose the row rather than the user.
+    pub(super) fn pick_timed(&self, picker: Picker) -> Option<(usize, bool)> {
         match self.ask(Dialog::Pick(picker), None) {
-            Some(Answer::Picked(chosen)) => chosen,
+            Some(Answer::Picked(chosen)) => chosen.map(|row| (row, false)),
+            Some(Answer::Expired(row)) => Some((row, true)),
             _ => None,
         }
     }
@@ -799,6 +807,14 @@ impl App {
             {
                 text.editor.poll(&mut text.draft);
             }
+            if let Some(Open {
+                shown: Shown::Pick(picker),
+                ..
+            }) = &self.dialog
+                && let Some(row) = picker.expired()
+            {
+                self.answer(Some(Answer::Expired(row)));
+            }
             self.copied()?;
             self.pasted();
             if self
@@ -818,6 +834,14 @@ impl App {
             }
             if self.copying.is_some() || self.pasting.is_some() {
                 wait = wait.min(FRAME);
+            }
+            if let Some(Open {
+                shown: Shown::Pick(picker),
+                ..
+            }) = &self.dialog
+                && let Some(change) = picker.next_change()
+            {
+                wait = wait.min(change);
             }
             if !source.pending() {
                 if since >= FRAME {
@@ -1494,6 +1518,14 @@ impl App {
     fn key(&mut self, key: Key, pending: bool) -> Flow {
         if self.exiting {
             return Flow::Go;
+        }
+        if key != Key::Idle
+            && let Some(Open {
+                shown: Shown::Pick(picker),
+                ..
+            }) = &mut self.dialog
+        {
+            picker.stop();
         }
         if let Key::Mouse(mouse) = key {
             self.mouse(mouse);

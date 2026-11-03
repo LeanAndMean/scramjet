@@ -910,7 +910,7 @@ def completes_paths_and_commands(read, until, send, output):
     on_screen('error: provider: cannot connect')
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     send(b'/')
-    on_screen('(1/9)')
+    on_screen('(1/10)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -1550,6 +1550,51 @@ def credentials_hidden_when_unattended(read, until, send, output):
     send(b'\x04')
 
 
+def autopilot(read, until, send, output):
+    shown, on_screen = full_screen(rows=50)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/autopilot maybe\r')
+    on_screen('Usage: /autopilot on|off|status')
+    send(b'/autopilot\r')
+    on_screen('Autopilot is off')
+    send(b'/autopilot on\r')
+    on_screen('Autopilot is on')
+    send(b'/flow:step one\r')
+    # The recommended step is chosen when nothing is pressed, and runs unattended.
+    rows = on_screen('auto-selects in 3s')
+    assert '\u2192 0: /flow:step two' in rows, rows
+    on_screen('auto-selects in 2s')
+    rows = on_screen('Stepped.')
+    chosen = rows.index('\u2192 /flow:step two \u2014 Go on.')
+    assert '> /flow:step two' in rows[chosen:] and '  ran-42' in rows[chosen:], rows
+    assert 'FAKE-' not in '\n'.join(rows[chosen:]), rows
+    # A key stops the countdown: the list waits for the user.
+    on_screen('auto-selects in 3s')
+    send(b'\x1b[B')
+    rows = on_screen('\u2192 1: /flow:step four')
+    assert 'auto-selects' not in '\n'.join(rows), rows
+    read(3.5)
+    assert 'Select next step' in '\n'.join(shown()), shown()
+    send(b'\x1b')
+    on_screen('Cancelled')
+    send(b'/autopilot off\r')
+    on_screen('Autopilot is off')
+    send(b'/autopilot on\r')
+    end = time.monotonic() + 10
+    while '\n'.join(shown()).count('Autopilot is on') < 2:
+        assert time.monotonic() < end, shown()
+        read(.05)
+    send(b'\x04')
+
+
+def autopilot_resumed(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/autopilot status\r')
+    on_screen('Autopilot is on')
+    send(b'\x04')
+
+
 def printed_hides_credentials(read, until, send, output):
     mark = until(b'Peeked.', until(b'ran-42'))
     assert b'FAKE-' not in output, bytes(output)
@@ -1667,6 +1712,20 @@ outputs = [line['output'] for line in map(json.loads, open(peeked))
            if line.get('type') == 'function_call_output' and line['call_id'] in ('call_1', 'call_3', 'call_5')]
 assert outputs == ['FAKE-netrc-secret\nFAKE-env-secret\nran-42\n'] * 2 + ['ran-42\n'], outputs
 assert open(os.path.join(project, 'made.txt')).read() == 'ran-42\n'
+os.remove(os.path.join(project, 'made.txt'))
+known = set(session_files())
+run([], autopilot, serve_items([
+    [report('call_1', [('/flow:step two', False, 'Go on.'), ('/flow:done', False, 'Stop.')], 0)],
+    [peek('call_2')],
+    [message('Stepped.'), report('call_3', [('/flow:step three', False, 'Again.'),
+                                           ('/flow:step four', False, 'Or this.')], 0)],
+]), variables=in_fake_home, rows=50)
+run(['--continue'], autopilot_resumed)
+(piloted,) = set(session_files()) - known
+lines = list(map(json.loads, open(piloted)))
+assert [line['on'] for line in lines if line.get('type') == 'autopilot'] == [True, False, True], lines
+outputs = [line['output'] for line in lines if line.get('call_id') == 'call_2' and 'output' in line]
+assert outputs == ['ran-42\n'], outputs
 os.remove(os.path.join(project, 'made.txt'))
 # `-p` runs unattended: hidden by default, unless the settings say never.
 run(['-p', 'peek'], printed_hides_credentials, serve_items([[peek('call_1')], [message('Peeked.')]]),

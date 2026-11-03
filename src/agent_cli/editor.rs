@@ -569,7 +569,7 @@ pub(super) fn terminal_size() -> (usize, usize) {
 }
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
-const SLASH_COMMANDS: [(&str, &str); 9] = [
+const SLASH_COMMANDS: [(&str, &str); 10] = [
     ("model", "Select model (opens selector UI)"),
     ("name", "Set session display name"),
     ("session", "Show session info and stats"),
@@ -578,6 +578,10 @@ const SLASH_COMMANDS: [(&str, &str); 9] = [
     ("new", "Start a new session"),
     ("compact", "Manually compact the session context"),
     ("resume", "Resume a different session"),
+    (
+        "autopilot",
+        "Toggle command auto-continuation: /autopilot on|off|status",
+    ),
     ("quit", "Quit scramjet-rs"),
 ];
 
@@ -1522,8 +1526,16 @@ mod tests {
         assert_eq!(
             labels(&list),
             [
-                "/model", "/name", "/session", "/fork", "/tree", "/new", "/compact", "/resume",
-                "/quit"
+                "/model",
+                "/name",
+                "/session",
+                "/fork",
+                "/tree",
+                "/new",
+                "/compact",
+                "/resume",
+                "/autopilot",
+                "/quit",
             ]
         );
         assert_eq!(
@@ -1534,7 +1546,7 @@ mod tests {
                 "  /session    Show session info and stats",
                 "  /fork       Create a new fork from a previous user messa…",
                 "  /tree       Navigate session tree (switch branches)",
-                "  (1/9)",
+                "  (1/10)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -1549,13 +1561,13 @@ mod tests {
                 "  /new",
                 "→ /compact",
                 "  /resume",
-                "  /quit",
-                "  (7/9)"
+                "  /autopilot",
+                "  (7/10)"
             ]
         );
-        list.select(false);
-        list.select(false);
-        list.select(false);
+        for _ in 0..4 {
+            list.select(false);
+        }
         assert_eq!(list.selected, 0);
         list.select(true);
         assert_eq!(list.items[list.selected].label, "/quit");
@@ -1595,7 +1607,7 @@ mod tests {
             ("rs:review".to_owned(), "Review".to_owned()),
         ];
         let list = Completion::slash("/", &loaded).unwrap();
-        assert_eq!(labels(&list)[9..], ["/rs:loop", "/rs:review"]);
+        assert_eq!(labels(&list)[10..], ["/rs:loop", "/rs:review"]);
         let mut list = Completion::slash("/rs:", &loaded).unwrap();
         assert_eq!(labels(&list), ["/rs:loop", "/rs:review"]);
         list.select(false);

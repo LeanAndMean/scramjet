@@ -15,7 +15,11 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
+
+/// How long `/autopilot on` waits before it chooses the recommended next step, as Scramjet.
+const AUTOSELECT: Duration = Duration::from_secs(3);
 
 pub(super) struct Interactive {
     pub(super) agent: Agent,
@@ -38,7 +42,8 @@ enum Start {
     Typed,
     /// A next step the user chose from those offered.
     Chosen,
-    /// A next step run at once: forced, or an edge chains it.
+    /// A next step run at once (forced, an edge chains it, or `/autopilot on` without a list),
+    /// or one `/autopilot on` chose when the user did not.
     Unattended,
 }
 
@@ -304,11 +309,14 @@ impl Interactive {
         result
     }
 
-    /// The next step of a completed command, as Scramjet routes it with autopilot off: an edge
-    /// set to `chain` or a forced step runs at once; otherwise the user chooses from the steps
-    /// the model offered. Returns the prompt to run; a text step goes into the editor instead.
+    /// The next step of a completed command, as Scramjet routes it: an edge set to `chain` or a
+    /// forced step runs at once; otherwise the user chooses from the steps the model offered,
+    /// and with `/autopilot on` the recommended command is chosen unless the user acts within
+    /// `AUTOSELECT`. Without a list, `/autopilot on` runs the recommended command at once.
+    /// Returns the prompt to run; a text step goes into the editor instead.
     fn next_step(&mut self, completed: &Completed) -> Option<(String, Start)> {
-        let routing = self.agent.route(completed, self.interactive());
+        let autopilot = self.agent.autopilot();
+        let routing = self.agent.route(completed, self.interactive(), autopilot);
         if routing.notices.is_empty() && routing.next == Next::Nothing {
             return None;
         }
@@ -328,7 +336,11 @@ impl Interactive {
                 self.show_record(&record);
                 (step, Start::Unattended)
             }
-            Next::Offer { steps, recommended } => {
+            Next::Offer {
+                steps,
+                recommended,
+                autoselect,
+            } => {
                 let choices: Vec<_> = steps
                     .iter()
                     .map(|step| Choice {
@@ -337,15 +349,21 @@ impl Interactive {
                         value: String::new(),
                     })
                     .collect();
-                let chosen = (self.screen.as_ref()).and_then(|screen| {
-                    screen.pick(select::Picker::question(
-                        "Select next step",
-                        &choices,
-                        recommended,
-                    ))
-                });
-                self.show_record(&next_step_record(&routing.source, &steps, chosen));
-                (steps[chosen?].clone(), Start::Chosen)
+                let mut picker =
+                    select::Picker::question("Select next step", &choices, recommended);
+                if autoselect {
+                    picker = picker.counting_down(AUTOSELECT);
+                }
+                let chosen = (self.screen.as_ref()).and_then(|screen| screen.pick_timed(picker));
+                let at = chosen.map(|(at, _)| at);
+                self.show_record(&next_step_record(&routing.source, &steps, at));
+                let (at, timed) = chosen?;
+                let start = if timed {
+                    Start::Unattended
+                } else {
+                    Start::Chosen
+                };
+                (steps[at].clone(), start)
             }
         };
         let Some(command) = step.command else {
