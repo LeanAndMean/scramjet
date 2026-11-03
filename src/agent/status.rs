@@ -192,6 +192,11 @@ impl Lifecycle {
         Self { active }
     }
 
+    /// The active command's name, whatever its phase.
+    pub fn active(&self) -> Option<&str> {
+        self.active.as_ref().map(|(name, _)| name.as_str())
+    }
+
     /// Before a prompt is sent: a prompt running `command` starts it; as in Scramjet, a reply
     /// resumes a command parked for it or whose question was cancelled, and a `/` prompt that
     /// names no command ends the active one.

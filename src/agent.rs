@@ -5,6 +5,7 @@ mod autonomy;
 mod client;
 mod commands;
 mod compaction;
+mod delegate;
 mod instructions;
 mod messages;
 mod question;
@@ -21,6 +22,7 @@ mod ui;
 pub use client::StreamProgress;
 pub use commands::{Command, Commands, Origin, Set, Sets};
 pub use compaction::{AutoCompaction, Compaction};
+pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use question::Choice;
 pub use session::{Session, SessionInfo};
 pub use status::{Completed, Next, Routing, Step, record as next_step_record};
@@ -195,6 +197,8 @@ pub struct Agent {
     lifecycle: status::Lifecycle,
     /// The command the last turn reported completed, until its next step is routed.
     completed: Option<Completed>,
+    /// The commands delegated in this turn, with their arguments.
+    delegated: Vec<(String, String)>,
     /// Scramjet's global `autonomy.yaml`, and what was last said about the files.
     autonomy: Option<PathBuf>,
     autonomy_diagnostics: Vec<String>,
@@ -274,6 +278,7 @@ impl Agent {
             commands,
             lifecycle,
             completed: None,
+            delegated: Vec::new(),
             autonomy: autonomy::global_path(),
             autonomy_diagnostics: Vec::new(),
             info: ModelInfo::guess(&config.model),

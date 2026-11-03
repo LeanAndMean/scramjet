@@ -4,7 +4,7 @@ use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, CONTEXT, Completed, DIFF, FAILED,
     MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, TYPED, ToolDetail, USAGE, autonomy,
-    message_text, question, sandbox, status, subagent,
+    delegate, message_text, question, sandbox, status, subagent,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -66,6 +66,7 @@ impl Agent {
     ) -> Result<(), AgentError> {
         self.compact_before_prompt(ui, cancel)?;
         self.completed = None;
+        self.delegated.clear();
         let message = self.user_message(prompt);
         self.add(message)?;
         self.save_command()?;
@@ -361,6 +362,13 @@ to a larger-context model)"
             );
             return (output, false);
         }
+        if call.name == delegate::NAME {
+            let active = self.lifecycle.active();
+            let output =
+                delegate::run(&call.arguments, &self.commands, active, &mut self.delegated);
+            ui.tool_result(call.name, &output.text, None, output.failed);
+            return (output, false);
+        }
         if call.name == status::NAME {
             let (text, failed, ends) = self.lifecycle.report(&call.arguments);
             ui.tool_result(call.name, &text, None, failed);
@@ -542,6 +550,67 @@ mod tests {
         );
         assert_eq!(ui.replies, ["worked"]);
         assert_eq!(agent.prompts(), ["/rs:work go"]);
+    }
+
+    #[test]
+    fn a_command_delegates_to_another_once_per_turn_for_the_same_arguments() {
+        let delegate = |id: &str, args: &str| {
+            let arguments = json!({"command":"rs:read","args":args});
+            tool_call(id, delegate::NAME, arguments)
+        };
+        let done = || stream(&fixture::text_events("done", fixture::known_usage()));
+        let (endpoint, server) = serve(vec![
+            delegate("call_1", "42"),
+            delegate("call_2", "43"),
+            delegate("call_3", "42"),
+            tool_call(
+                "call_4",
+                status::NAME,
+                json!({"summary":"Read.","status":"completed"}),
+            ),
+            delegate("call_5", "42"),
+            done(),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "delegate");
+        let commands = agent.root().join(".scramjet/rs/commands");
+        std::fs::create_dir_all(&commands).unwrap();
+        std::fs::write(commands.join("rs:top.md"), "Read the issues.\n").unwrap();
+        let helper = "---\ndelegate-only: true\n---\nRead issue $1.\n";
+        std::fs::write(commands.join("rs:read.md"), helper).unwrap();
+        project_sets(&mut agent);
+        agent.autonomy = None;
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("/rs:top", &mut ui, &cancel).unwrap();
+        // The next prompt starts a turn in which the command runs again.
+        agent.turn("again", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        let read = |issue| {
+            format!("<scramjet-command name=\"rs:read\">\nRead issue {issue}.\n</scramjet-command>")
+        };
+        let outputs: Vec<_> = [1, 2, 3, 5].map(|at| last_output(&bodies[at])).into();
+        assert_eq!(bodies.len(), 6);
+        let refused = "ERROR: cycle detected in delegation chain rs:read -> rs:read -> rs:read: \
+'rs:read' was already delegated with these arguments in this turn. Refusing to recurse; its \
+instructions are in that earlier result.";
+        assert_eq!(outputs, [read(42), read(43), refused.into(), read(42)]);
+        let shown: Vec<_> = (ui.shown.iter())
+            .filter(|shown| shown.contains("delegate"))
+            .map(|shown| shown.lines().next().unwrap())
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "call delegate /rs:read 42",
+                "result delegate <scramjet-command name=\"rs:read\">",
+                "call delegate /rs:read 43",
+                "result delegate <scramjet-command name=\"rs:read\">",
+                "call delegate /rs:read 42",
+                &format!("result delegate {refused} failed"),
+                "call delegate /rs:read 42",
+                "result delegate <scramjet-command name=\"rs:read\">",
+            ]
+        );
     }
 
     #[test]
@@ -1004,6 +1073,7 @@ for trusted repositories.",
                 "ls",
                 status::NAME,
                 question::NAME,
+                delegate::NAME,
                 subagent::NAME
             ]
         );

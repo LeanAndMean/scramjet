@@ -156,6 +156,9 @@ pub struct Command {
     /// Meant to be run by another command; Scramjet neither lists it for the model nor runs it
     /// as a next step, and the `/` list leaves it out, though typed in full it runs.
     pub delegate_only: bool,
+    /// The tools its `allowed-tools` names, `None` without a non-empty list. As in Scramjet,
+    /// they are advisory: `delegate` warns when a caller's share none with the command's.
+    pub(super) allowed_tools: Option<Vec<String>>,
     body: String,
     /// What may follow it, from the frontmatter's `next:` block.
     pub(super) next: Option<Policy>,
@@ -301,21 +304,32 @@ impl Commands {
     }
 
     /// The text a prompt sends when it runs a command, `None` when it runs none: `/<name> args`
-    /// names a command, whose body takes the arguments split as Scramjet splits them.
+    /// names a command, whose body takes the arguments.
     pub fn expand(&self, prompt: &str) -> Option<String> {
         let command = self.named(prompt)?;
         let rest = &prompt[1..];
         let args = rest
             .split_once(char::is_whitespace)
             .map_or("", |(_, args)| args);
-        let body = substitute(&command.body, &split_args(args));
-        if body.starts_with("<scramjet-command") {
-            return Some(body);
+        Some(command.framed(command.body_with(args)))
+    }
+}
+
+impl Command {
+    /// Its body with `args` split as Scramjet splits them and substituted.
+    pub(super) fn body_with(&self, args: &str) -> String {
+        substitute(&self.body, &split_args(args))
+    }
+
+    /// `text` in a `<scramjet-command>` block naming it, unless it starts with one.
+    pub(super) fn framed(&self, text: String) -> String {
+        if text.starts_with("<scramjet-command") {
+            return text;
         }
-        Some(format!(
-            "<scramjet-command name=\"{}\">\n{body}\n</scramjet-command>",
-            command.name
-        ))
+        format!(
+            "<scramjet-command name=\"{}\">\n{text}\n</scramjet-command>",
+            self.name
+        )
     }
 }
 
@@ -401,6 +415,7 @@ fn parse(
             false
         }
     };
+    let allowed_tools = allowed_tools(&frontmatter["allowed-tools"], file, notices);
     Ok(Command {
         name: name.to_owned(),
         path: PathBuf::from(file),
@@ -408,9 +423,44 @@ fn parse(
         described: described.is_some(),
         argument_hint: field("argument-hint").map(|hint| hint.trim().to_owned()),
         delegate_only,
+        allowed_tools,
         body,
         next,
     })
+}
+
+/// The tools an `allowed-tools` value names, as Scramjet's `parseAllowedTools` reads a list or
+/// a comma-separated string; a list's entries that are not strings are noted and ignored.
+fn allowed_tools(raw: &Yaml, file: &str, notices: &mut Vec<String>) -> Option<Vec<String>> {
+    let tools: Vec<String> = match raw {
+        Yaml::Array(items) => {
+            let others: Vec<_> = items
+                .iter()
+                .filter(|item| item.as_str().is_none())
+                .collect();
+            if !others.is_empty() {
+                let entries = match others.len() {
+                    1 => "entry",
+                    _ => "entries",
+                };
+                let ignored = serde_json::Value::from_iter(others.iter().map(|item| json(item)));
+                notices.push(format!(
+                    "{file}: \"allowed-tools\" contains {} non-string {entries} (ignored: {ignored})",
+                    others.len()
+                ));
+            }
+            (items.iter().filter_map(Yaml::as_str))
+                .map(|tool| tool.trim().to_owned())
+                .filter(|tool| !tool.is_empty())
+                .collect()
+        }
+        Yaml::String(text) => (text.split(','))
+            .map(|tool| tool.trim().to_owned())
+            .filter(|tool| !tool.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    };
+    (!tools.is_empty()).then_some(tools)
 }
 
 /// A YAML value as JavaScript's `JSON.stringify` writes it.
@@ -904,6 +954,42 @@ or agents directory",
             "rs:x.md: malformed frontmatter — mapping values are not allowed in this context \
 at byte 14 line 1 column 15"
         );
+    }
+
+    #[test]
+    fn allowed_tools_are_a_list_or_a_comma_separated_string() {
+        let tools = |value: &str| {
+            let mut notices = Vec::new();
+            let content = format!("---\nallowed-tools: {value}\n---\nBody");
+            let command = parse("rs", "rs:x.md", &content, &mut notices).unwrap();
+            (command.allowed_tools, notices)
+        };
+        let names = |names: &[&str]| Some(names.iter().map(|name| name.to_string()).collect());
+        assert_eq!(
+            tools("\n  - bash\n  - ' read '"),
+            (names(&["bash", "read"]), vec![])
+        );
+        assert_eq!(tools("bash, ,grep"), (names(&["bash", "grep"]), vec![]));
+        assert_eq!(
+            tools("[bash, 3, {a: 1}]"),
+            (
+                names(&["bash"]),
+                vec![
+                    "rs:x.md: \"allowed-tools\" contains 2 non-string entries (ignored: \
+[3,{\"a\":1}])"
+                        .to_owned()
+                ]
+            )
+        );
+        assert_eq!(
+            tools("[7]").1,
+            ["rs:x.md: \"allowed-tools\" contains 1 non-string entry \
+(ignored: [7])"]
+        );
+        // An empty list or another value restricts nothing.
+        for value in ["[]", "' , '", "true", ""] {
+            assert_eq!(tools(value).0, None, "{value}");
+        }
     }
 
     fn policy(next: &str) -> Result<Option<Policy>, String> {

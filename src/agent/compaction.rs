@@ -602,6 +602,8 @@ impl Agent {
         let kept = self.conversation.split_off(cut);
         self.conversation = vec![summary_message(&summary)];
         self.conversation.extend(kept);
+        // A delegated command's earlier result may be summarized away, so it may run again.
+        self.delegated.clear();
         // Unknown until the next response reports it.
         self.usage.context_tokens = None;
         Ok(Some(Compaction {
