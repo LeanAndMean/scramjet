@@ -1759,16 +1759,27 @@ fn child_instructions(cwd: &Path, tools: &[&str], prompt: &str) -> String {
         .iter()
         .map(|tool| match *tool {
             "read" => "- read: Read file contents",
+            "grep" => "- grep: Search file contents for patterns (respects .gitignore)",
+            "find" => "- find: Find files by glob pattern (respects .gitignore)",
             "ls" => "- ls: List directory contents",
             _ => "- bash: Execute bash commands (ls, grep, find, etc.) in a read-only sandbox",
         })
         .collect();
     let mut guidelines = Vec::new();
+    let explores = ["grep", "find", "ls"]
+        .iter()
+        .any(|tool| tools.contains(tool));
     if tools.contains(&"bash") {
+        guidelines.push(match explores {
+            true => {
+                "- Prefer grep/find/ls tools over bash for file exploration (faster, respects \
+.gitignore)"
+            }
+            false => "- Use bash for file operations like ls, rg, find",
+        });
         guidelines.push(
-            "- Use bash for file operations like ls, rg, find, and for git; it runs in a \
-read-only sandbox without network, whose only writable directory is a private /tmp discarded \
-after each command",
+            "- bash runs in a read-only sandbox without network, whose only writable directory \
+is a private /tmp discarded after each command",
         );
     }
     guidelines.push("- No file can be changed: you only read and report");

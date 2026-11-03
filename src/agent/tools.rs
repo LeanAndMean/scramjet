@@ -20,8 +20,13 @@ const OUTPUT_UPDATE: Duration = Duration::from_millis(100);
 /// How much of the end of a running command's output is passed on.
 const OUTPUT_TAIL_BYTES: usize = 8 << 10;
 const DEFAULT_TIMEOUT: u64 = 120;
-/// Pi's default number of entries `ls` lists.
+/// Pi's default number of entries `ls` lists, of matches `grep` returns and of paths `find`
+/// returns.
 const LS_LIMIT: usize = 500;
+const GREP_LIMIT: usize = 100;
+const FIND_LIMIT: usize = 1000;
+/// Pi cuts a longer `grep` line to this many characters.
+const GREP_LINE_CHARS: usize = 500;
 const MAX_TIMEOUT: u64 = 3600;
 /// Unchanged lines shown around each change in an edit diff, as in Scramjet.
 const DIFF_CONTEXT: usize = 4;
@@ -65,7 +70,7 @@ pub(super) fn definitions() -> Value {
     tools
 }
 
-/// The definitions of a subagent's tools, `names` among `read`, `ls` and `bash`.
+/// The definitions of a subagent's tools, `names` among `read`, `grep`, `find`, `ls` and `bash`.
 pub(super) fn child_definitions(names: &[&str]) -> Value {
     let all = definitions();
     let read = all
@@ -74,6 +79,24 @@ pub(super) fn child_definitions(names: &[&str]) -> Value {
         .iter()
         .find(|tool| tool["name"] == "read")
         .cloned();
+    let grep = json!({"type":"function","name":"grep","strict":false,
+        "description":format!("Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to {GREP_LIMIT} matches or {}KB (whichever is hit first). Long lines are truncated to {GREP_LINE_CHARS} chars.", MAX_BYTES / 1024),
+        "parameters":{"type":"object","properties":{
+            "pattern":{"type":"string","description":"Search pattern (regex or literal string)"},
+            "path":{"type":"string","description":"Directory or file to search (default: current directory)"},
+            "glob":{"type":"string","description":"Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'"},
+            "ignoreCase":{"type":"boolean","description":"Case-insensitive search (default: false)"},
+            "literal":{"type":"boolean","description":"Treat pattern as literal string instead of regex (default: false)"},
+            "context":{"type":"integer","description":"Number of lines to show before and after each match (default: 0)"},
+            "limit":{"type":"integer","description":format!("Maximum number of matches to return (default: {GREP_LIMIT})")}},
+          "required":["pattern"]}});
+    let find = json!({"type":"function","name":"find","strict":false,
+        "description":format!("Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to {FIND_LIMIT} results or {}KB (whichever is hit first).", MAX_BYTES / 1024),
+        "parameters":{"type":"object","properties":{
+            "pattern":{"type":"string","description":"Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'"},
+            "path":{"type":"string","description":"Directory to search in (default: current directory)"},
+            "limit":{"type":"integer","description":format!("Maximum number of results (default: {FIND_LIMIT})")}},
+          "required":["pattern"]}});
     let ls = json!({"type":"function","name":"ls","strict":false,
         "description":format!("List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to {LS_LIMIT} entries or {}KB (whichever is hit first).", MAX_BYTES / 1024),
         "parameters":{"type":"object","properties":{
@@ -85,7 +108,7 @@ pub(super) fn child_definitions(names: &[&str]) -> Value {
             "command":{"type":"string","description":"Bash command to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
           "required":["command"]}});
-    let tools: Vec<Value> = [read, Some(ls), Some(bash)]
+    let tools: Vec<Value> = [read, Some(grep), Some(find), Some(ls), Some(bash)]
         .into_iter()
         .flatten()
         .filter(|tool| names.iter().any(|name| tool["name"] == *name))
@@ -121,6 +144,14 @@ impl<'a> Call<'a> {
         match self.name {
             "bash" => self.arguments["command"].as_str().unwrap_or("").to_owned(),
             "ls" => shortened(self.arguments["path"].as_str().unwrap_or(".")),
+            "grep" | "find" => {
+                let pattern = self.arguments["pattern"].as_str().unwrap_or("");
+                let path = shortened(self.arguments["path"].as_str().unwrap_or("."));
+                match self.name {
+                    "grep" => format!("/{pattern}/ in {path}"),
+                    _ => format!("{pattern} in {path}"),
+                }
+            }
             super::subagent::NAME => super::subagent::summary(&self.arguments),
             super::status::NAME => self.arguments["status"].as_str().unwrap_or("").to_owned(),
             "read" => {
@@ -180,6 +211,8 @@ impl<'a> Call<'a> {
         let text = match self.name {
             "read" => read(root, self)?,
             "ls" => ls(root, self)?,
+            "grep" => grep(root, self, cancel)?,
+            "find" => find(root, self, cancel)?,
             "bash" => {
                 let ran = run_sandboxed(
                     root,
@@ -562,31 +595,275 @@ fn ls(root: &Path, call: &Call) -> Result<String, String> {
     if listed.is_empty() {
         return Ok("(empty directory)".into());
     }
+    let limited = limited.then(|| {
+        format!(
+            "{limit} entries limit reached. Use limit={} for more",
+            limit * 2
+        )
+    });
+    Ok(with_notices(&listed, limited.into_iter().collect()))
+}
+
+/// The first `lines` within `MAX_BYTES`, then Pi's notices in brackets, the given ones first.
+fn with_notices(lines: &[String], mut notices: Vec<String>) -> String {
     let mut output = String::new();
-    let mut cut = false;
-    for entry in &listed {
-        if output.len() + entry.len() + 1 > MAX_BYTES {
-            cut = true;
+    for line in lines {
+        if output.len() + line.len() + 1 > MAX_BYTES {
+            notices.push(format!("{}KB limit reached", MAX_BYTES / 1024));
             break;
         }
-        output.push_str(entry);
+        output.push_str(line);
         output.push('\n');
     }
     output.pop();
-    let mut notices = Vec::new();
-    if limited {
-        notices.push(format!(
-            "{limit} entries limit reached. Use limit={} for more",
-            limit * 2
-        ));
-    }
-    if cut {
-        notices.push(format!("{}KB limit reached", MAX_BYTES / 1024));
-    }
     if !notices.is_empty() {
         output += &format!("\n\n[{}]", notices.join(". "));
     }
-    Ok(output)
+    output
+}
+
+/// Where `rg` (for `grep`) or `fd` (for `find`) is, as Pi finds them: in Scramjet's `bin`
+/// directory, else on the `PATH` (`fd` also as Debian's `fdfind`).
+pub(super) fn search_program(tool: &str) -> Option<PathBuf> {
+    let (binary, names): (&str, &[&str]) = match tool {
+        "grep" => ("rg", &["rg"]),
+        _ => ("fd", &["fd", "fdfind"]),
+    };
+    let executable = |path: &Path| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    let local = super::subagent::agent_directory().map(|dir| dir.join("bin").join(binary));
+    if let Some(local) = local.filter(|path| executable(path)) {
+        return Some(local);
+    }
+    let path = std::env::var_os("PATH")?;
+    names.iter().find_map(|name| {
+        std::env::split_paths(&path)
+            .map(|directory| directory.join(name))
+            .find(|candidate| executable(candidate))
+    })
+}
+
+/// Runs `command` to its end, or until `cancel` is set, with its standard output (at most
+/// `CAPTURE_BYTES`) and the start of its standard error.
+fn capture(
+    mut command: Command,
+    cancel: &AtomicBool,
+) -> Result<(ExitStatus, Vec<u8>, String), String> {
+    use std::os::unix::process::CommandExt;
+    let program = command.get_program().to_string_lossy().into_owned();
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("cannot start {program}: {e}"))?;
+    // Each pipe is read to its end, so that a full one never stops the program.
+    let drain = |mut pipe: Box<dyn Read + Send>, keep: usize| {
+        std::thread::spawn(move || {
+            let (mut kept, mut buffer) = (Vec::new(), [0u8; 8192]);
+            while let Ok(n) = pipe.read(&mut buffer) {
+                if n == 0 {
+                    break;
+                }
+                let room = keep.saturating_sub(kept.len()).min(n);
+                kept.extend_from_slice(&buffer[..room]);
+            }
+            kept
+        })
+    };
+    let stdout = drain(Box::new(child.stdout.take().unwrap()), CAPTURE_BYTES);
+    let stderr = drain(Box::new(child.stderr.take().unwrap()), OUTPUT_TAIL_BYTES);
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
+                let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+            }
+            let _ = child.wait();
+            return Err("Operation aborted".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
+    Ok((status, stdout, stderr))
+}
+
+/// Pi's `grep`: ripgrep's matches as `path:line: text`, context lines as `path-line- text`,
+/// paths relative to a directory searched.
+fn grep(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String> {
+    let pattern = call.str("pattern")?;
+    let path = resolve(root, call.arguments["path"].as_str().unwrap_or("."));
+    let metadata =
+        std::fs::metadata(&path).map_err(|_| format!("Path not found: {}", path.display()))?;
+    let context = call.arguments["context"].as_u64().unwrap_or(0);
+    let limit = call.arguments["limit"]
+        .as_u64()
+        .map_or(GREP_LIMIT, |n| n.max(1) as usize);
+    let program = search_program("grep").ok_or("ripgrep (rg) is not available")?;
+    let mut command = Command::new(program);
+    command.args(["--json", "--line-number", "--color=never", "--hidden"]);
+    if call.arguments["ignoreCase"] == true {
+        command.arg("--ignore-case");
+    }
+    if call.arguments["literal"] == true {
+        command.arg("--fixed-strings");
+    }
+    if let Some(glob) = call.arguments["glob"].as_str() {
+        command.arg("--glob").arg(glob);
+    }
+    if context > 0 {
+        command.arg("--context").arg(context.to_string());
+    }
+    command.arg("--").arg(pattern).arg(&path);
+    let (status, stdout, stderr) = capture(command, cancel)?;
+    let shown = |file: &str| {
+        let file = Path::new(file);
+        match file.strip_prefix(&path) {
+            Ok(relative) if metadata.is_dir() && !relative.as_os_str().is_empty() => {
+                relative.display().to_string()
+            }
+            _ => file
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        }
+    };
+    let (mut lines, mut pending) = (Vec::new(), Vec::new());
+    let (mut matches, mut limited, mut long) = (0, false, false);
+    let mut last: Option<(String, u64)> = None;
+    for line in stdout.split(|byte| *byte == b'\n') {
+        let Ok(event) = serde_json::from_slice::<Value>(line) else {
+            continue;
+        };
+        let data = &event["data"];
+        let (Some(file), Some(number)) =
+            (data["path"]["text"].as_str(), data["line_number"].as_u64())
+        else {
+            continue;
+        };
+        let text = data["lines"]["text"].as_str().unwrap_or_default();
+        let text = text.trim_end_matches(['\n', '\r']).replace('\r', "");
+        let text = match text.char_indices().nth(GREP_LINE_CHARS) {
+            Some((at, _)) => {
+                long = true;
+                format!("{}... [truncated]", &text[..at])
+            }
+            None => text,
+        };
+        match event["type"].as_str() {
+            Some("match") if matches == limit => {
+                limited = true;
+                break;
+            }
+            Some("match") => {
+                matches += 1;
+                lines.append(&mut pending);
+                lines.push(format!("{}:{number}: {text}", shown(file)));
+                last = Some((file.to_owned(), number));
+            }
+            // A context line after a match belongs to it; one before waits for its match.
+            Some("context") => {
+                let line = format!("{}-{number}- {text}", shown(file));
+                match &last {
+                    Some((at, matched)) if at == file && number <= matched + context => {
+                        lines.push(line)
+                    }
+                    _ => pending.push(line),
+                }
+            }
+            _ => {}
+        }
+    }
+    if matches == 0 {
+        return match status.code() {
+            Some(0 | 1) => Ok("No matches found".into()),
+            code => Err(match stderr.trim() {
+                "" => format!("ripgrep exited with code {}", code.unwrap_or(-1)),
+                error => error.to_owned(),
+            }),
+        };
+    }
+    let mut notices = Vec::new();
+    if limited {
+        notices.push(format!(
+            "{limit} matches limit reached. Use limit={} for more, or refine pattern",
+            limit * 2
+        ));
+    }
+    if long {
+        notices.push(format!(
+            "Some lines truncated to {GREP_LINE_CHARS} chars. Use read tool to see full lines"
+        ));
+    }
+    Ok(with_notices(&lines, notices))
+}
+
+/// Pi's `find`: fd's paths matching a glob, relative to the directory searched.
+fn find(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String> {
+    let pattern = call.str("pattern")?;
+    let path = resolve(root, call.arguments["path"].as_str().unwrap_or("."));
+    if std::fs::metadata(&path).is_err() {
+        return Err(format!("Path not found: {}", path.display()));
+    }
+    let limit = call.arguments["limit"]
+        .as_u64()
+        .map_or(FIND_LIMIT, |n| n.max(1) as usize);
+    let program = search_program("find").ok_or("fd is not available")?;
+    let mut command = Command::new(program);
+    command.args([
+        "--glob",
+        "--color=never",
+        "--hidden",
+        "--no-require-git",
+        "--max-results",
+    ]);
+    command.arg(limit.to_string());
+    // As in Pi: fd matches a glob against the base name unless `--full-path` is set, and then
+    // against the absolute path, so a pattern with a `/` gets a leading `**/`.
+    let mut pattern = pattern.to_owned();
+    if pattern.contains('/') {
+        command.arg("--full-path");
+        if !pattern.starts_with('/') && !pattern.starts_with("**/") && pattern != "**" {
+            pattern = format!("**/{pattern}");
+        }
+    }
+    command.arg("--").arg(&pattern).arg(&path);
+    let (status, stdout, stderr) = capture(command, cancel)?;
+    let found: Vec<String> = String::from_utf8_lossy(&stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| match Path::new(line).strip_prefix(&path) {
+            Ok(relative) => {
+                let slash = if line.ends_with('/') { "/" } else { "" };
+                format!("{}{slash}", relative.display())
+            }
+            Err(_) => line.to_owned(),
+        })
+        .collect();
+    if found.is_empty() {
+        return match status.success() {
+            true => Ok("No files found matching pattern".into()),
+            false => Err(match stderr.trim() {
+                "" => format!("fd exited with code {}", status.code().unwrap_or(-1)),
+                error => error.to_owned(),
+            }),
+        };
+    }
+    let limited = (found.len() >= limit).then(|| {
+        format!(
+            "{limit} results limit reached. Use limit={} for more, or refine pattern",
+            limit * 2
+        )
+    });
+    Ok(with_notices(&found, limited.into_iter().collect()))
 }
 
 /// Runs `command` with bash in `root` until it ends, `cancel` is set or, if given, `timeout` passes.
@@ -945,6 +1222,121 @@ disjoint regions."
                 .approval(&root)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn read_only_search_tools_answer_as_pis_do() {
+        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
+        assert!(search_program("grep").is_some() && search_program("find").is_some());
+        let root =
+            std::env::temp_dir().join(format!("scramjet-agent-search-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
+        std::fs::create_dir_all(root.join("src/deep")).unwrap();
+        std::fs::write(
+            root.join("src/a.rs"),
+            "fn alpha() {}\n// one\n// two\nfn beta() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/deep/b.rs"),
+            format!("fn Alpha() {{}}\n{}\n", "x".repeat(600)),
+        )
+        .unwrap();
+        std::fs::write(root.join("notes.txt"), "a.b\naxb\n").unwrap();
+        std::fs::write(root.join(".hidden.rs"), "fn alpha() {}\n").unwrap();
+        std::fs::write(root.join(".gitignore"), "ignored.rs\n").unwrap();
+        std::fs::write(root.join("ignored.rs"), "").unwrap();
+        let cancel = AtomicBool::new(false);
+        let run =
+            |name: &str, arguments: Value| call(name, arguments).run_read_only(&root, &cancel);
+        let text = |name: &str, arguments: Value| run(name, arguments).unwrap().text;
+        assert_eq!(
+            text("grep", json!({"pattern":"fn alpha","path":"src"})),
+            "a.rs:1: fn alpha() {}"
+        );
+        assert_eq!(
+            text(
+                "grep",
+                json!({"pattern":"fn alpha","path":"src","ignoreCase":true,"glob":"**/deep/*"})
+            ),
+            "deep/b.rs:1: fn Alpha() {}"
+        );
+        assert_eq!(
+            text(
+                "grep",
+                json!({"pattern":"two","path":"src/a.rs","context":1})
+            ),
+            "a.rs-2- // one\na.rs:3: // two\na.rs-4- fn beta() {}"
+        );
+        assert_eq!(
+            text(
+                "grep",
+                json!({"pattern":"a.b","literal":true,"path":"notes.txt"})
+            ),
+            "notes.txt:1: a.b"
+        );
+        assert_eq!(
+            text(
+                "grep",
+                json!({"pattern":"^fn ","path":"src/a.rs","limit":1})
+            ),
+            "a.rs:1: fn alpha() {}\n\n[1 matches limit reached. Use limit=2 for more, or \
+refine pattern]"
+        );
+        assert_eq!(
+            text("grep", json!({"pattern":"alpha","glob":".hidden*"})),
+            ".hidden.rs:1: fn alpha() {}"
+        );
+        let long = text("grep", json!({"pattern":"xxx","path":"src/deep"}));
+        assert_eq!(
+            long,
+            format!(
+                "b.rs:2: {}... [truncated]\n\n[Some lines truncated to 500 chars. Use read tool \
+to see full lines]",
+                "x".repeat(500)
+            )
+        );
+        assert_eq!(
+            text("grep", json!({"pattern":"nowhere"})),
+            "No matches found"
+        );
+        assert!(
+            run("grep", json!({"pattern":"("}))
+                .unwrap_err()
+                .contains("regex parse error")
+        );
+        assert_eq!(
+            run("grep", json!({"pattern":"x","path":"missing"})).unwrap_err(),
+            format!("Path not found: {}", root.join("missing").display())
+        );
+        let mut found: Vec<String> = text("find", json!({"pattern":"*.rs"}))
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        found.sort();
+        assert_eq!(found, [".hidden.rs", "src/a.rs", "src/deep/b.rs"]);
+        assert_eq!(
+            text("find", json!({"pattern":"deep/*.rs","path":"src"})),
+            "deep/b.rs"
+        );
+        assert_eq!(
+            text("find", json!({"pattern":"*.md"})),
+            "No files found matching pattern"
+        );
+        let limited = text("find", json!({"pattern":"*.rs","limit":1}));
+        assert!(
+            limited.ends_with(
+                "\n\n[1 results limit reached. Use limit=2 for more, or refine pattern]"
+            ),
+            "{limited}"
+        );
+        assert_eq!(text("ls", json!({"path":"src"})), "a.rs\ndeep/");
+        assert_eq!(
+            text("ls", json!({"limit":2})),
+            ".gitignore\n.hidden.rs\n\n[2 entries limit reached. Use limit=4 for more]"
+        );
+        assert!(run("write", json!({"path":"x","content":""})).is_err());
+        assert!(!root.join("x").exists());
     }
 
     #[test]

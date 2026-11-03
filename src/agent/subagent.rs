@@ -34,7 +34,7 @@ const MAX_CONCURRENCY: usize = 4;
 /// Scramjet's thinking levels, lowest first.
 const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 /// The tools a child can have; none of them changes a file.
-const READ_ONLY: [&str; 3] = ["read", "ls", "bash"];
+const READ_ONLY: [&str; 5] = ["read", "grep", "find", "ls", "bash"];
 /// Running children's latest tool calls shown above the status line.
 const ACTIVITY_LINES: usize = 5;
 
@@ -107,8 +107,9 @@ pub(super) struct Sources<'a> {
     pub sets: Option<&'a Path>,
 }
 
-/// The user's loose agent directory, as Scramjet's `getAgentDir()` joined with `agents`.
-pub(super) fn user_directory() -> Option<PathBuf> {
+/// Scramjet's agent directory, as its `getAgentDir()`: `$SCRAMJET_CODING_AGENT_DIR`, else
+/// `~/.scramjet/agent`.
+pub(super) fn agent_directory() -> Option<PathBuf> {
     match std::env::var_os("SCRAMJET_CODING_AGENT_DIR").filter(|dir| !dir.is_empty()) {
         Some(dir) => Some(super::tools::resolve(
             Path::new("/"),
@@ -116,7 +117,11 @@ pub(super) fn user_directory() -> Option<PathBuf> {
         )),
         None => std::env::home_dir().map(|home| home.join(".scramjet/agent")),
     }
-    .map(|dir| dir.join("agents"))
+}
+
+/// The user's loose agent directory.
+pub(super) fn user_directory() -> Option<PathBuf> {
+    agent_directory().map(|dir| dir.join("agents"))
 }
 
 /// The agents a call can use, and what was wrong with the files skipped.
@@ -1010,6 +1015,9 @@ fn child_tools(
     for tool in listed {
         match READ_ONLY.iter().find(|known| *known == tool) {
             Some(&"bash") if sandbox.is_err() => missing.push(tool.as_str()),
+            Some(&("grep" | "find")) if tools::search_program(tool).is_none() => {
+                missing.push(tool.as_str())
+            }
             Some(known) if !tools.contains(known) => tools.push(*known),
             Some(_) => {}
             None if matches!(tool.as_str(), "write" | "edit") => writers.push(tool.as_str()),
@@ -1030,6 +1038,12 @@ fn child_tools(
             "bash: left out, as its read-only sandbox is unavailable ({error})"
         ));
         missing.retain(|tool| *tool != "bash");
+    }
+    for (tool, program) in [("grep", "ripgrep (rg)"), ("find", "fd")] {
+        if missing.contains(&tool) {
+            warnings.push(format!("{tool}: left out, as {program} is not installed"));
+            missing.retain(|missing| *missing != tool);
+        }
     }
     if !missing.is_empty() {
         warnings.push(format!(
@@ -1430,13 +1444,13 @@ tool:\n\n- a: a agent\n- b: b agent\n- mach12:kept: mach12:kept agent\n- shared:
                 "edit, write: left out, as subagents run read-only here"
             ]
         );
-        let (tools, warnings) =
-            child_tools(&agent(Some("read, grep, find, ls, bash, read")), &sandbox);
-        assert_eq!(tools, ["read", "ls", "bash"]);
-        assert_eq!(
-            warnings,
-            ["noted", "grep, find: not available to subagents here"]
+        let (tools, warnings) = child_tools(
+            &agent(Some("read, grep, find, ls, bash, read, web")),
+            &sandbox,
         );
+        assert!(tools::search_program("grep").is_some() && tools::search_program("find").is_some());
+        assert_eq!(tools, ["read", "grep", "find", "ls", "bash"]);
+        assert_eq!(warnings, ["noted", "web: not available to subagents here"]);
         let missing = Err("no bwrap".to_owned());
         let (tools, warnings) = child_tools(&agent(Some("read, bash")), &missing);
         assert_eq!(tools, ["read"]);
