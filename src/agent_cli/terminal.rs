@@ -10,7 +10,7 @@ use rustix::{
 };
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, Compaction, DELEGATE,
-    DELEGATE_SCOPE_WARNING, Purpose, StreamProgress, ToolDetail,
+    DELEGATE_SCOPE_WARNING, PUBLICATION_TOOLS, Purpose, StreamProgress, ToolDetail,
 };
 use std::{
     io::{BufRead, IsTerminal, Write},
@@ -291,6 +291,10 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                     }
                     rows
                 }
+            }
+            // One sentence, with the URL of what was published.
+            (name, None) if PUBLICATION_TOOLS.contains(&name) => {
+                styled(preview(output, Shown::All, width))
             }
             ("bash", None) => styled(preview(
                 &bash_shown(output, failed),
@@ -1270,6 +1274,24 @@ blocked. Widen the caller scope or\n  abort delegation.\n  … (3 lines, Ctrl+O 
         );
         assert!(
             !whole.contains("WARNING: caller") && whole.contains("[scramjet/delegate] WARNING:")
+        );
+    }
+
+    #[test]
+    fn a_publications_result_is_shown_whole_with_its_url() {
+        let mut ui = Terminal::capture_shown(40, Arc::new(AtomicBool::new(false)), false);
+        ui.tool_call("create_issue", "Fix it");
+        let verified = "Create issue publication verified: https://github.com/o/r/issues/5";
+        ui.tool_result("create_issue", verified, None, false);
+        let text = ui.captured();
+        let mut plain = String::new();
+        let mut escape = Escape::None;
+        let marker = |c| [FROM, JOINED, SPACE].contains(&c);
+        plain.extend(text.chars().filter(|&c| !escape.step(c) && !marker(c)));
+        assert_eq!(
+            plain,
+            "● create_issue Fix it\n  Create issue publication verified:\n  \
+https://github.com/o/r/issues/5\n\n"
         );
     }
 

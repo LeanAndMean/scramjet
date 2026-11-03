@@ -47,6 +47,7 @@ pub(super) fn definitions(names: &[String]) -> Value {
         .map(|tool| definition(tool, false))
         .collect();
     tools.push(super::status::definition());
+    tools.extend(super::publish::definitions());
     tools.push(super::question::definition());
     tools.push(super::delegate::definition());
     tools.push(super::subagent::definition());
@@ -162,6 +163,9 @@ impl<'a> Call<'a> {
             }
             super::subagent::NAME => super::subagent::summary(&self.arguments),
             super::delegate::NAME => super::delegate::summary(&self.arguments),
+            name if super::publish::TOOLS.contains(&name) => {
+                super::publish::summary(name, &self.arguments)
+            }
             super::status::NAME => self.arguments["status"].as_str().unwrap_or("").to_owned(),
             "read" => {
                 let path = &shortened(self.arguments["path"].as_str().unwrap_or(""));

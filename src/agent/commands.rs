@@ -3,6 +3,7 @@
 //! directory. A prompt `/<set>:<command> args` runs one of their commands as Scramjet sends it:
 //! the arguments are substituted into the body and the result is wrapped in `<scramjet-command>`.
 
+use super::autonomy::{self, Publication, Publications};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -192,6 +193,8 @@ pub(super) struct Candidate {
 pub struct Commands {
     list: Vec<Command>,
     warnings: Vec<String>,
+    /// Whether their publications ask first, from their sets' `autonomy-defaults.yaml`.
+    publications: Publications,
 }
 
 /// Scramjet's global root for command sets: `$SCRAMJET_CACHE`, else `$XDG_DATA_HOME/scramjet`,
@@ -215,6 +218,7 @@ impl Commands {
         let mut found = Self {
             list: Vec::new(),
             warnings: sets.warnings.clone(),
+            publications: Vec::new(),
         };
         for set in &sets.list {
             let directory = set.directory.join("commands");
@@ -241,7 +245,67 @@ impl Commands {
             }
         }
         found.list.sort_by(|a, b| a.name.cmp(&b.name));
+        for set in &sets.list {
+            found.add_publication_defaults(set);
+        }
         found
+    }
+
+    /// The publication defaults of `set`'s `autonomy-defaults.yaml`, as Scramjet keeps them: only
+    /// for the set's own top-level commands and the tools their `allowed-tools` name.
+    fn add_publication_defaults(&mut self, set: &Set) {
+        let path = set.directory.join("autonomy-defaults.yaml");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => {
+                (self.warnings).push(format!("could not read {}: {error}", path.display()));
+                return;
+            }
+        };
+        let mut warnings = Vec::new();
+        let defaults = match autonomy::publication_defaults(&text, &mut warnings) {
+            Ok(defaults) => defaults,
+            Err(error) => {
+                (self.warnings).push(format!("could not parse {}: {error}", path.display()));
+                return;
+            }
+        };
+        let shown = path.display();
+        self.warnings.extend(
+            warnings
+                .into_iter()
+                .map(|warning| format!("{shown}: {warning}")),
+        );
+        for (name, tools) in defaults {
+            let command = self.get(&name).filter(|command| {
+                !command.delegate_only && command.path.starts_with(&set.directory)
+            });
+            let Some(command) = command else {
+                self.warnings.push(format!(
+                    "{shown}: ignored publication defaults for non-owned top-level command \"{name}\""
+                ));
+                continue;
+            };
+            let declared = |tool: &str| {
+                (command.allowed_tools.iter().flatten()).any(|allowed| allowed == tool)
+            };
+            let (kept, undeclared): (Vec<_>, Vec<_>) =
+                tools.into_iter().partition(|(tool, _)| declared(tool));
+            for (tool, _) in undeclared {
+                self.warnings.push(format!(
+                    "{shown}: ignored publication default for undeclared tool {name} → {tool}"
+                ));
+            }
+            if !kept.is_empty() {
+                self.publications.push((name, kept));
+            }
+        }
+    }
+
+    /// Whether `command`'s publications with `tool` ask first by its set's default.
+    pub(super) fn publication_default(&self, command: &str, tool: &str) -> Option<Publication> {
+        autonomy::lookup(&self.publications, command, tool)
     }
 
     pub fn list(&self) -> &[Command] {
@@ -289,6 +353,7 @@ impl Commands {
         Self {
             list: list.collect(),
             warnings: Vec::new(),
+            publications: Vec::new(),
         }
     }
 
@@ -888,6 +953,66 @@ or agents directory",
             )
         );
         assert_eq!(commands.expand("/rs:notes"), None);
+    }
+
+    #[test]
+    fn a_sets_publication_defaults_hold_for_its_own_commands_and_their_declared_tools() {
+        let scratch = Scratch::new("publication-defaults");
+        let project = scratch.0.join("project");
+        scratch.file(
+            "project/rs/commands/rs:post.md",
+            "---\nallowed-tools: [create_issue, add_issue_comment]\n---\nPost\n",
+        );
+        scratch.file(
+            "project/rs/commands/rs:helper.md",
+            "---\ndelegate-only: true\nallowed-tools: [create_pr]\n---\nHelp\n",
+        );
+        scratch.file("project/other/commands/other:x.md", "X\n");
+        scratch.file(
+            "project/rs/autonomy-defaults.yaml",
+            "publications:\n  rs:post:\n    create_issue: auto-approve\n    add_issue_comment: \
+require-approval\n    create_pr: auto-approve\n  rs:helper:\n    create_pr: auto-approve\n  \
+other:x:\n    create_pr: auto-approve\n  rs:gone:\n    create_pr: auto-approve\n",
+        );
+        scratch.file("project/other/autonomy-defaults.yaml", "publications: [\n");
+        let commands = Commands::discover(&project_sets(&project));
+        let default = |command: &str, tool: &str| commands.publication_default(command, tool);
+        assert_eq!(default("rs:post", "create_issue"), Some(Publication::Auto));
+        assert_eq!(
+            default("rs:post", "add_issue_comment"),
+            Some(Publication::Ask)
+        );
+        for (command, tool) in [
+            ("rs:post", "create_pr"),
+            ("rs:helper", "create_pr"),
+            ("other:x", "create_pr"),
+        ] {
+            assert_eq!(default(command, tool), None, "{command} {tool}");
+        }
+        let file = |set: &str| project.join(set).join("autonomy-defaults.yaml");
+        let rs = file("rs").display().to_string();
+        let (first, rest) = commands.warnings().split_at(1);
+        assert!(
+            first[0].starts_with(&format!("could not parse {}: ", file("other").display())),
+            "{first:?}"
+        );
+        assert_eq!(
+            rest,
+            [
+                format!(
+                    "{rs}: ignored publication default for undeclared tool rs:post → create_pr"
+                ),
+                format!(
+                    "{rs}: ignored publication defaults for non-owned top-level command \"rs:helper\""
+                ),
+                format!(
+                    "{rs}: ignored publication defaults for non-owned top-level command \"other:x\""
+                ),
+                format!(
+                    "{rs}: ignored publication defaults for non-owned top-level command \"rs:gone\""
+                ),
+            ]
+        );
     }
 
     #[test]

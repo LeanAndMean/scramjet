@@ -57,8 +57,9 @@ pub trait AgentUi {
     fn branch_summary(&mut self, summary: &str);
     /// Asks whether a tool call may run; returns `Deny` without an answer once `cancel` is set.
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer;
-    /// The markdown message of a question the model asks the user, shown before its options or,
-    /// in a resumed conversation, before the answer.
+    /// The markdown message of a question the model asks the user, or of a publication the user
+    /// is asked to approve, shown before its options or, in a resumed conversation, before a
+    /// question's answer.
     fn question(&mut self, message: &str);
     /// Something Scramjet would notify the user of, such as a command reported blocked.
     fn notice(&mut self, text: &str);

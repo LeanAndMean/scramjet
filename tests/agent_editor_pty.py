@@ -1688,6 +1688,81 @@ outputs = [line['output'] for line in map(json.loads, open(printed)) if line.get
 assert outputs == ['{"selected":"a"}'], outputs
 
 
+def publications(read, until, send, output):
+    # Tall enough for the whole preview.
+    shown, on_screen = full_screen(rows=40)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'file it\r')
+    # Asked first: the exact payload, then the choice, Approve selected.
+    rows = on_screen('\u2192 Approve publication')
+    text = '\n'.join(rows)
+    for expected in ['\u25cf create_issue Fix the parser', 'Provider: github', 'Repository: o/r',
+                     'Consequence: publish a new issue', 'It breaks on tabs.', 'Create issue in o/r',
+                     '  Cancel']:
+        assert expected in text, (expected, text)
+    send(b'\r')
+    rows = on_screen('Filed.')
+    assert '  Create issue publication verified:\n  https://github.com/o/r/issues/5' in '\n'.join(rows), rows
+    # A command whose policy approves the tool publishes without asking.
+    send(b'/pub:post\r')
+    rows = on_screen('Posted.')
+    assert 'Approve publication' not in '\n'.join(rows), rows
+    # Escape cancels; nothing is written, and the turn goes on.
+    send(b'chime in\r')
+    rows = on_screen('\u2192 Approve publication')
+    assert 'publish a comment on issue #41' in '\n'.join(rows), rows
+    send(b'\x1b')
+    rows = on_screen('Left it.')
+    assert 'Add issue comment publication cancelled.' in '\n'.join(rows), rows
+    send(b'\x04')
+
+
+forge = os.path.join(work, 'forge')
+os.makedirs(forge)
+forge_log = os.path.join(work, 'gh.log')
+issue = {'number': 5, 'html_url': 'https://github.com/o/r/issues/5'}
+replies = {
+    'repos/o/r': {'id': 7, 'full_name': 'o/r', 'html_url': 'https://github.com/o/r'},
+    'repos/o/r/issues/41': {'number': 41, 'html_url': 'https://github.com/o/r/issues/41'},
+    'POST repos/o/r/issues': issue,
+    'repos/o/r/issues/5': dict(issue, title='Fix the parser', body='It **breaks** on tabs.'),
+}
+with open(os.path.join(forge, 'gh'), 'w') as script_file:
+    script_file.write('#!%s\nimport json, sys\nargs = sys.argv[1:]\npost = "--method" in args\n'
+                      'data = sys.stdin.read() if post else None\n'
+                      'open(%r, "a").write(json.dumps([args, data]) + "\\n")\n'
+                      'reply = %r.get(("POST " if post else "") + args[-1])\n'
+                      'if reply is None:\n    sys.exit("gh: Not Found (HTTP 404)")\n'
+                      'print(json.dumps(reply))\n' % (sys.executable, forge_log, replies))
+with open(os.path.join(forge, 'git'), 'w') as script_file:
+    script_file.write('#!/bin/sh\n[ "$*" = "remote get-url origin" ] && echo git@github.com:o/r.git && exit 0\n'
+                      'exec %s "$@"\n' % shutil.which('git'))
+for name in ['gh', 'git']:
+    os.chmod(os.path.join(forge, name), 0o755)
+post = os.path.join(project, '.scramjet', 'pub', 'commands')
+os.makedirs(post)
+with open(os.path.join(post, 'pub:post.md'), 'w') as file:
+    file.write('---\nallowed-tools: [create_issue]\n---\nPost the issue.\n')
+publishing = config_home('publish')
+os.makedirs(os.path.join(publishing, 'scramjet'))
+with open(os.path.join(publishing, 'scramjet', 'autonomy.yaml'), 'w') as file:
+    file.write('publications:\n  pub:post:\n    create_issue: auto-approve\n')
+filed = tool_call('call_1', 'create_issue', {'title': 'Fix the parser', 'body': 'It **breaks** on tabs.'})
+known = set(session_files())
+run([], publications, serve_items([
+    [filed], [message('Filed.')],
+    [tool_call('call_2', 'create_issue', json.loads(filed['arguments']))], [message('Posted.'), report('call_3')],
+    [tool_call('call_4', 'add_issue_comment', {'number': 41, 'body': 'Me too.'})], [message('Left it.')],
+]), variables={'PATH': forge + os.pathsep + env['PATH'], 'XDG_CONFIG_HOME': publishing}, rows=40)
+(published,) = set(session_files()) - known
+outputs = [line['output'] for line in map(json.loads, open(published)) if line.get('type') == 'function_call_output']
+verified = 'Create issue publication verified: https://github.com/o/r/issues/5'
+assert outputs[:2] == [verified, verified], outputs
+assert outputs[3] == 'Add issue comment publication cancelled. No remote write was performed.', outputs
+posts = [data for args, data in map(json.loads, open(forge_log)) if data is not None]
+assert posts == ['{"body":"It **breaks** on tabs.","title":"Fix the parser"}'] * 2, posts
+
+
 # The full screen's own features.
 def fullscreen_turn(read, until, send, output):
     shown, on_screen = full_screen()(read, output)

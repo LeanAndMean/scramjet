@@ -4,7 +4,7 @@ use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, CONTEXT, Completed, DIFF, FAILED,
     MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, TYPED, ToolDetail, USAGE, autonomy,
-    delegate, message_text, question, sandbox, status, subagent,
+    delegate, forge, message_text, publish, question, sandbox, status, subagent,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -136,7 +136,8 @@ impl Agent {
     /// edges; `interactive` when the user can choose from a list. What is said about the
     /// `autonomy.yaml` files is said once, until it changes, as in Scramjet.
     pub fn route(&mut self, completed: &Completed, interactive: bool) -> Routing {
-        let mut edges = autonomy::Edges::load(self.autonomy.as_deref(), &self.config.root);
+        let mut edges =
+            autonomy::Edges::load(self.autonomy.as_deref(), &self.config.root, &self.commands);
         if edges.diagnostics == self.autonomy_diagnostics {
             edges.diagnostics.clear();
         } else {
@@ -366,6 +367,20 @@ to a larger-context model)"
             let active = self.lifecycle.active();
             let output =
                 delegate::run(&call.arguments, &self.commands, active, &mut self.delegated);
+            ui.tool_result(call.name, &output.text, None, output.failed);
+            return (output, false);
+        }
+        if publish::TOOLS.contains(&call.name) {
+            let policy = publish::Policy {
+                commands: &self.commands,
+                active: self.lifecycle.active(),
+                autonomy: self.autonomy.as_deref(),
+            };
+            let mut forge = forge::System {
+                root: &self.config.root,
+                cancel,
+            };
+            let output = publish::run(call.name, &call.arguments, &policy, ui, &mut forge, cancel);
             ui.tool_result(call.name, &output.text, None, output.failed);
             return (output, false);
         }
@@ -1072,6 +1087,10 @@ for trusted repositories.",
                 "grep",
                 "ls",
                 status::NAME,
+                "create_issue",
+                "create_pr",
+                "add_issue_comment",
+                "add_pr_comment",
                 question::NAME,
                 delegate::NAME,
                 subagent::NAME

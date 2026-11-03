@@ -1,5 +1,5 @@
 //! The system instructions of the agent and of its subagents.
-use super::{Commands, question, status, subagent};
+use super::{Commands, publish, question, status, subagent};
 use std::path::Path;
 
 const CONTEXT_FILE_BYTES: u64 = 256 << 10;
@@ -49,8 +49,9 @@ disjoint edits in one call"
         })
         .map(str::to_owned)
         .collect();
+    listed.push(format!("- {}: {}", status::NAME, status::SNIPPET));
+    listed.extend(publish::TOOLS.map(|tool| format!("- {tool}: {}", publish::snippet(tool))));
     listed.extend([
-        format!("- {}: {}", status::NAME, status::SNIPPET),
         format!("- {}: {}", question::NAME, question::SNIPPET),
         format!("- {}: {}", subagent::NAME, subagent::SNIPPET),
     ]);
