@@ -30,6 +30,7 @@ pub(super) enum Event {
     Approval(String, Answer),
     Question(String),
     Notice(String),
+    NextStep(String),
     /// A message of the session's own, such as a command's result, styled but not wrapped.
     Text(String),
 }
@@ -59,6 +60,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::Approval(question, answer) => ui.approval(question, *answer),
         Event::Question(message) => ui.question(message),
         Event::Notice(text) => ui.notice(text),
+        Event::NextStep(record) => ui.next_step(record),
         Event::Text(text) => ui.said(text),
     }
 }

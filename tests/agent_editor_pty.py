@@ -1513,6 +1513,15 @@ def next_steps(read, until, send, output):
     send(b'\x04')
 
 
+def next_steps_resumed(read, until, send, output):
+    shown, on_screen = full_screen(rows=50)(read, output)
+    # Each record shows where it showed when chosen, or when the list was dismissed.
+    text = '\n'.join(on_screen('Cancelled'))
+    chosen, chained = text.index('\u2192 /flow:done \u2014 Finish.'), text.index('> /flow:done')
+    assert chosen < chained < text.index('- /flow:step four \u2014 Again.'), text
+    send(b'\x04')
+
+
 def dispatched_prompt_shows_escapes(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -1693,18 +1702,28 @@ with open(os.path.join(flow, 'flow:done.md'), 'w') as file:
 with open(os.path.join(project, '.scramjet', 'autonomy.yaml'), 'w') as file:
     file.write('edges:\n  flow:step:\n    flow:done: chain\n')
 known = set(session_files())
+bodies = []
 run([], next_steps, serve_items([
     [report('call_1', [('/flow:step two', True, 'Do the second.'), ('/flow:done', False, 'Stop here.')], 0)],
     [message('Second done.')],
     [report('call_2', [('/flow:done', False, 'Finish.')], 0)],
     [message('All done.'), report('call_3')],
     [report('call_4', [('/flow:step four', False, 'Again.')], 0)],
-]), rows=50)
+], bodies=bodies), rows=50)
 first, second = sorted(set(session_files()) - known)
 prompts = lambda path: [line.get('_scramjet_typed') for line in map(json.loads, open(path))
                         if line.get('role') == 'user' and not line.get('_scramjet_probe')]
 assert prompts(first) == ['/flow:step one'], prompts(first)
 assert prompts(second) == ['/flow:step two', '/flow:done', '/flow:step three'], prompts(second)
+# Each choice is recorded as Scramjet records it, the one before a new session in the session left.
+records = lambda path: [(json.loads(line['arguments'])['outcome'], json.loads(line['arguments'])['selectedIndex'])
+                        for line in map(json.loads, open(path)) if line.get('name') == 'scramjet_next_step_selection']
+assert records(first) == [('selected', 0)], records(first)
+assert records(second) == [('selected', 0), ('dismissed', None)], records(second)
+# The chained command's model sees the record before the command's prompt.
+kinds = [item.get('name') or item.get('type') or item.get('role') for item in bodies[3]['input']]
+assert kinds[-3:] == ['scramjet_next_step_selection', 'function_call_output', 'user'], kinds
+run(['--continue'], next_steps_resumed, rows=50)
 run([], dispatched_prompt_shows_escapes, serve_items([
     [report('call_1', [('/flow:done \x1b]0;pwned\x07', False, 'Finish.')], 0)],
     [message('Finished hostile.'), report('call_2')],

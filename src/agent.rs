@@ -30,7 +30,7 @@ pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
 pub use session::{Session, SessionInfo};
 pub use skills::{Skill, Skills};
-pub use status::{Completed, Next, Routing, Step, record as next_step_record};
+pub use status::{Completed, Next, Routing, Step};
 pub use tools::{
     CODING_TOOLS, DEFAULT_TOOLS, search_program, sequence_diff, shortened, terminal_line,
 };

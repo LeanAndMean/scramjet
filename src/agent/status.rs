@@ -10,6 +10,10 @@ use serde_json::{Value, json};
 
 pub const NAME: &str = "report_scramjet_command_status";
 
+/// Scramjet's harness-only tool, never offered to the model: a call of it and its result record
+/// a next-step choice in the conversation, which the model sees.
+pub(super) const RECORD: &str = "scramjet_next_step_selection";
+
 /// Scramjet's `promptSnippet`, listed under the available tools.
 pub(super) const SNIPPET: &str = "You have access to `report_scramjet_command_status` for \
 reporting the status of an active Scramjet slash command. Summarize the work you performed first, \
@@ -626,8 +630,12 @@ pub struct Step {
 #[derive(Debug, PartialEq)]
 pub enum Next {
     Nothing,
-    /// Runs at once: a forced next step, or one an edge chains.
-    Run(Step),
+    /// Runs `steps[chosen]` at once: a forced next step, or the recommended one when an edge
+    /// chains it or, without a list, `/autopilot on` chooses it. `steps` are those offered.
+    Run {
+        steps: Vec<Step>,
+        chosen: usize,
+    },
     /// For the user to choose; `recommended` is a position in `steps`, which `/autopilot on`
     /// chooses after a countdown when `autoselect`.
     Offer {
@@ -734,7 +742,10 @@ fn forced(target: &str, report: &Report, commands: &Commands, notices: &mut Vec<
             ));
         }
     }
-    Next::Run(step)
+    Next::Run {
+        steps: vec![step],
+        chosen: 0,
+    }
 }
 
 /// The steps a policy allows, with why others were left out, as Scramjet's `validateNextSteps`.
@@ -870,10 +881,15 @@ fn offered(
         .and_then(|step| step.command.as_deref())
         .and_then(|command| parse_slash(command))
         .and_then(|(name, _)| edges.resolve(source, name));
-    if let Some(step) = recommended.filter(|step| step.command.is_some())
+    let run = |chosen| Next::Run {
+        steps: checked.valid.clone(),
+        chosen,
+    };
+    if let Some(at) = checked.recommended
+        && recommended.is_some_and(|step| step.command.is_some())
         && edge == Some(Edge::Chain)
     {
-        return Next::Run(step.clone());
+        return run(at);
     }
     let options = || {
         let messages: Vec<_> = checked
@@ -900,7 +916,7 @@ fn offered(
         };
     }
     // Without a list to choose from, only autopilot runs the recommended command.
-    let Some(step) = recommended else {
+    let Some(at) = checked.recommended else {
         if let Some(reason) = &checked.recommended_reason {
             notices.push(format!(
                 "scramjet: {reason}; valid option(s): {}",
@@ -909,6 +925,7 @@ fn offered(
         }
         return Next::Nothing;
     };
+    let step = &checked.valid[at];
     let message = clean_notice(&step.message);
     let fresh = if step.fresh_session {
         " (fresh session)"
@@ -927,7 +944,7 @@ steps"
         (true, Some(Edge::Pause), _) => {
             format!("scramjet: next would be {message}{fresh}; edge setting: pause")
         }
-        (true, _, true) => return Next::Run(step.clone()),
+        (true, _, true) => return run(at),
         (true, _, false) => {
             format!("scramjet: next would be {message}{fresh}; /autopilot on to chain")
         }
@@ -957,6 +974,31 @@ pub fn record(source: &str, steps: &[Step], chosen: Option<usize>) -> String {
         lines.push("Cancelled".into());
     }
     lines.join("\n")
+}
+
+/// The arguments of the `RECORD` call for `record`'s choice, as Scramjet's
+/// `NextStepRecordParams`.
+pub(super) fn record_arguments(source: &str, steps: &[Step], chosen: Option<usize>) -> Value {
+    let options: Vec<_> = (steps.iter())
+        .map(|step| match step.reason.is_empty() {
+            true => json!({"message":step.message}),
+            false => json!({"message":step.message,"reason":step.reason}),
+        })
+        .collect();
+    let outcome = match chosen {
+        Some(_) => "selected",
+        None => "dismissed",
+    };
+    json!({"outcome":outcome,"options":options,"selectedIndex":chosen,"sourceCommand":source,
+        "source":"completion"})
+}
+
+/// A `RECORD` call's line: the step chosen, or that the list was dismissed.
+pub(super) fn record_summary(arguments: &Value) -> String {
+    let chosen = (arguments["selectedIndex"].as_u64())
+        .and_then(|at| arguments["options"].get(at as usize))
+        .and_then(|option| option["message"].as_str());
+    chosen.map_or_else(|| "dismissed".into(), clean_display)
 }
 
 impl Step {
@@ -1234,6 +1276,13 @@ Received arguments:\n{received}",
         }
     }
 
+    fn run(step: Step) -> Next {
+        Next::Run {
+            steps: vec![step],
+            chosen: 0,
+        }
+    }
+
     fn step(message: &str, reason: Option<&str>, fresh: bool) -> Value {
         let mut step = json!({"message":message,"fresh_session":fresh});
         if let Some(reason) = reason {
@@ -1280,7 +1329,7 @@ reason), plain text (non-command messages are valid only for open policies)";
             )
         );
         let chain = Edges::parse("edges:\n  rs:loop:\n    rs:loop: chain\n");
-        assert_eq!(route(&looped, &chain, false).1, Next::Run(again.clone()));
+        assert_eq!(route(&looped, &chain, false).1, run(again.clone()));
         let next = "scramjet: next would be /rs:loop more (fresh session)";
         assert_eq!(
             route(&looped, &none, false),
@@ -1386,13 +1435,10 @@ next steps"
             fresh_session: fresh,
             command: Some(command.into()),
         };
-        assert_eq!(
-            forced(json!([])),
-            (vec![], Next::Run(target("/rs:steer", false)))
-        );
+        assert_eq!(forced(json!([])), (vec![], run(target("/rs:steer", false))));
         assert_eq!(
             forced(json!([step("/rs:steer 5", None, true)])),
-            (vec![], Next::Run(target("/rs:steer 5", true)))
+            (vec![], run(target("/rs:steer 5", true)))
         );
         assert_eq!(
             forced(json!([step("/rs:loop", None, true)])),
@@ -1402,7 +1448,7 @@ next steps"
 \"rs:loop\" — ignoring supplied forced handoff"
                         .to_owned()
                 ],
-                Next::Run(target("/rs:steer", false))
+                run(target("/rs:steer", false))
             )
         );
         assert_eq!(
@@ -1465,10 +1511,11 @@ for user"
         assert!(!autoselect(route(&looped, &pause, true).1));
         let (notices, next) = route(&looped, &none, false);
         assert!(notices.is_empty(), "{notices:?}");
-        let Next::Run(chosen) = next else {
+        let Next::Run { steps, chosen: 0 } = next else {
             panic!("{next:?}")
         };
-        assert_eq!(chosen.command.as_deref(), Some("/rs:loop 2"));
+        let offered: Vec<_> = steps.iter().map(|step| step.command.as_deref()).collect();
+        assert_eq!(offered, [Some("/rs:loop 2"), Some("/rs:steer")]);
         assert_eq!(
             route(&looped, &pause, false),
             (

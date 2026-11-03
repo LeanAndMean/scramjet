@@ -167,6 +167,7 @@ impl<'a> Call<'a> {
                 super::publish::summary(name, &self.arguments)
             }
             super::status::NAME => self.arguments["status"].as_str().unwrap_or("").to_owned(),
+            super::status::RECORD => super::status::record_summary(&self.arguments),
             "read" => {
                 let path = &shortened(self.arguments["path"].as_str().unwrap_or(""));
                 let (offset, limit) = (

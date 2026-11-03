@@ -3,7 +3,7 @@
 use super::tools::Call;
 use super::{
     AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, SUBAGENTS, StreamProgress,
-    TYPED, compaction, message_text, question,
+    TYPED, compaction, message_text, question, status,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -63,6 +63,9 @@ pub trait AgentUi {
     fn question(&mut self, message: &str);
     /// Something Scramjet would notify the user of, such as a command reported blocked.
     fn notice(&mut self, text: &str);
+    /// Scramjet's record of the next step chosen after a command completed, or of the list
+    /// dismissed, as `Agent::record_next_step` returns it.
+    fn next_step(&mut self, record: &str);
     /// Messages the user sent while the turn runs, for the model before its next request
     /// (Scramjet's steering).
     fn steering(&mut self) -> Vec<String> {
@@ -254,11 +257,15 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                     }
                     None => ("", None),
                 };
+                let output = item["output"].as_str().unwrap_or_default();
+                if name == status::RECORD && !failed {
+                    ui.next_step(output);
+                    continue;
+                }
                 // A call whose arguments do not parse had no call line, only its error.
                 if let Some(call) = &call {
                     ui.tool_call(call.name, &call.summary());
                 }
-                let output = item["output"].as_str().unwrap_or_default();
                 let asked = call
                     .as_ref()
                     .filter(|call| call.name == question::NAME)

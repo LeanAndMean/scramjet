@@ -6,9 +6,7 @@ use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
 use super::{editor, select, style};
-use scramjet_rs::agent::{
-    Agent, AgentError, AgentUi, Choice, Command, Completed, Next, next_step_record,
-};
+use scramjet_rs::agent::{Agent, AgentError, AgentUi, Choice, Command, Completed, Next, Step};
 use std::{
     io::{BufRead, IsTerminal},
     sync::{
@@ -336,11 +334,9 @@ impl Interactive {
                 self.spaced = true;
                 return None;
             }
-            Next::Run(step) => {
-                let record =
-                    next_step_record(&routing.source, std::slice::from_ref(&step), Some(0));
-                self.show_record(&record);
-                (step, Start::Unattended)
+            Next::Run { steps, chosen } => {
+                self.record(&routing.source, &steps, Some(chosen));
+                (steps[chosen].clone(), Start::Unattended)
             }
             Next::Offer {
                 steps,
@@ -361,8 +357,7 @@ impl Interactive {
                     picker = picker.counting_down(AUTOSELECT);
                 }
                 let chosen = (self.screen.as_ref()).and_then(|screen| screen.pick_timed(picker));
-                let at = chosen.map(|(at, _)| at);
-                self.show_record(&next_step_record(&routing.source, &steps, at));
+                self.record(&routing.source, &steps, chosen.map(|(at, _)| at));
                 let (at, timed) = chosen?;
                 let start = if timed {
                     Start::Unattended
@@ -390,8 +385,15 @@ impl Interactive {
         }
     }
 
-    fn show_record(&self, record: &str) {
-        self.say_styled(style::NEXT_STEP, record);
+    /// Records and shows the next step chosen, or that the list was dismissed.
+    fn record(&mut self, source: &str, steps: &[Step], chosen: Option<usize>) {
+        match self.agent.record_next_step(source, steps, chosen) {
+            Ok(record) => {
+                self.ui().next_step(&record);
+                self.spaced = true;
+            }
+            Err(error) => self.say(&format!("error: next step not recorded: {error}")),
+        }
     }
 
     /// Whether the user can choose from lists and answer questions as they show.

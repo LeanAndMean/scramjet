@@ -800,6 +800,12 @@ impl AgentUi for Terminal {
         let text = self.styled(style::NOTICE, &text);
         self.err(&format!("{text}\n\n"));
     }
+    fn next_step(&mut self, record: &str) {
+        self.clear();
+        let text = self.wrapped(&visible(record));
+        let text = self.styled(style::NEXT_STEP, &text);
+        self.err(&format!("{text}\n\n"));
+    }
     /// As Scramjet shows the message in the tool's row: markdown, under the call line.
     fn question(&mut self, message: &str) {
         self.clear();

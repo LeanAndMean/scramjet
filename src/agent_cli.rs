@@ -172,7 +172,8 @@ fn print(
     if let Some(completed) = agent.take_completed() {
         let routing = agent.route(&completed, false, true);
         let mut notices = routing.notices;
-        if let Next::Run(step) = routing.next {
+        if let Next::Run { steps, chosen } = routing.next {
+            let step = &steps[chosen];
             let fresh = if step.fresh_session {
                 " (fresh session)"
             } else {

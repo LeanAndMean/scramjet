@@ -103,6 +103,9 @@ impl AgentUi for Recorder {
     fn notice(&mut self, text: &str) {
         self.shown.push(format!("notice {text}"));
     }
+    fn next_step(&mut self, record: &str) {
+        self.shown.push(format!("next step {record}"));
+    }
     fn steering(&mut self) -> Vec<String> {
         match self.steering.is_empty() {
             true => Vec::new(),

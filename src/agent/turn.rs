@@ -3,8 +3,8 @@
 use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, CONTEXT, Completed, DIFF, FAILED,
-    MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, TYPED, ToolDetail, USAGE, autonomy,
-    delegate, forge, message_text, publish, question, sandbox, status, subagent,
+    MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, Step, TYPED, ToolDetail, USAGE,
+    autonomy, delegate, forge, message_text, publish, question, sandbox, status, subagent,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -158,6 +158,31 @@ impl Agent {
             self.autonomy_diagnostics = edges.diagnostics.clone();
         }
         status::route(completed, &self.commands, &edges, interactive, autopilot)
+    }
+
+    /// Adds Scramjet's record of the next step chosen from `steps` from the command `source`
+    /// (`None`: the list was dismissed) to the conversation, as Scramjet invokes its harness
+    /// tool: a call the model never made and its result, which the model sees. Returns the
+    /// record as the result has it.
+    pub fn record_next_step(
+        &mut self,
+        source: &str,
+        steps: &[Step],
+        chosen: Option<usize>,
+    ) -> Result<String, AgentError> {
+        let record = status::record(source, steps, chosen);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let call_id = format!("harness-tool-{nanos}");
+        let arguments = status::record_arguments(source, steps, chosen).to_string();
+        self.add(
+            json!({"type":"function_call","call_id":call_id,"name":status::RECORD,
+            "arguments":arguments}),
+        )?;
+        self.add(json!({"type":"function_call_output","call_id":call_id,"output":record}))?;
+        Ok(record)
     }
 
     /// Model requests and tool calls until a final answer. As in Pi, messages the user sends
@@ -507,7 +532,7 @@ mod tests {
     use crate::agent::tests::*;
     use crate::agent::{
         AgentConfig, ChildItem, ChildState, Delegation, Navigated, Next, Session, SessionChoice,
-        TreeItem, instructions, show_items,
+        TreeItem, instructions, messages, show_items,
     };
     use crate::provider_fixture as fixture;
     use std::{sync::Arc, time::Duration};
@@ -1679,10 +1704,10 @@ auto-dispatches it only when its message is a slash command."
         );
         let completed = agent.take_completed().unwrap();
         let routing = agent.route(&completed, false, agent.autopilot());
-        let Next::Run(step) = routing.next else {
+        let Next::Run { steps, chosen } = routing.next else {
             panic!("{routing:?}")
         };
-        assert_eq!(step.command.as_deref(), Some("/rs:work again"));
+        assert_eq!(steps[chosen].command.as_deref(), Some("/rs:work again"));
 
         // A resume restores it; a session or branch without a toggle keeps it as it is.
         let path = agent.session_path().to_owned();
@@ -1722,6 +1747,104 @@ auto-dispatches it only when its message is a slash command."
             .navigate(worked.unwrap().line, None, &mut ui, &cancel)
             .unwrap();
         assert!(agent.autopilot());
+    }
+
+    #[test]
+    fn a_next_step_choice_is_recorded_for_the_model_and_a_resume_as_scramjet_records_it() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "ok",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, _scratch) = agent(endpoint, "next-step-record");
+        let step = |index, message: &str, reason: &str| Step {
+            index,
+            message: message.into(),
+            reason: reason.into(),
+            fresh_session: false,
+            command: Some(message.into()),
+        };
+        let steps = [step(0, "/rs:review", "risky"), step(2, "/rs:loop", "")];
+        let shown = agent.record_next_step("rs:loop", &steps, Some(1)).unwrap();
+        assert_eq!(
+            shown,
+            "Next step (from rs:loop):\n  /rs:review — risky\n→ /rs:loop"
+        );
+        let dismissed = agent.record_next_step("rs:loop", &steps, None).unwrap();
+        let mut ui = Recorder::default();
+        agent
+            .turn("go on", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+
+        // The model sees each record as a call it did not make, and its result.
+        let input = server.join().unwrap()[0]["input"].clone();
+        let input = input.as_array().unwrap();
+        assert_eq!(input.len(), 5, "{input:#?}");
+        assert_eq!(input[0]["name"], status::RECORD);
+        let arguments: Value =
+            serde_json::from_str(input[0]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            arguments,
+            json!({"outcome":"selected","options":[{"message":"/rs:review","reason":"risky"},
+                {"message":"/rs:loop"}],"selectedIndex":1,"sourceCommand":"rs:loop",
+                "source":"completion"})
+        );
+        assert_eq!(input[1]["call_id"], input[0]["call_id"]);
+        assert_eq!(input[1]["output"].as_str(), Some(shown.as_str()));
+        assert_ne!(input[2]["call_id"], input[0]["call_id"]);
+        assert_eq!(
+            serde_json::from_str::<Value>(input[2]["arguments"].as_str().unwrap()).unwrap()["outcome"],
+            "dismissed"
+        );
+        assert_eq!(input[4]["content"], "go on");
+        // Claude's Messages: a tool use for each record, answered first in the next message.
+        let request = json!({"model":"claude-x","instructions":"i","input":input});
+        let messages = messages::request(&request, 1000, false).unwrap()["messages"].clone();
+        let shapes: Vec<_> = (messages.as_array().unwrap().iter())
+            .map(|message| {
+                let blocks = message["content"].as_array().unwrap().iter();
+                let types: Vec<_> = blocks
+                    .map(|block| block["type"].as_str().unwrap())
+                    .collect();
+                format!("{} {}", message["role"].as_str().unwrap(), types.join(" "))
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            [
+                "assistant tool_use",
+                "user tool_result",
+                "assistant tool_use",
+                "user tool_result text"
+            ]
+        );
+
+        // A resume shows each record as it showed, and `/tree` lists it with the step chosen.
+        let (_, resumed, _) = Session::open(agent.session_path()).unwrap();
+        assert_eq!(resumed, agent.conversation());
+        let mut replay = Recorder::default();
+        show_items(&resumed, &mut replay);
+        assert_eq!(
+            replay.shown[..3],
+            [
+                format!("next step {shown}"),
+                format!("next step {dismissed}"),
+                "prompt go on".to_owned()
+            ]
+        );
+        let tree = agent.tree().unwrap();
+        let items: Vec<_> = tree
+            .entries
+            .iter()
+            .map(|entry| &entry.item)
+            .take(2)
+            .collect();
+        assert_eq!(
+            items,
+            [
+                &TreeItem::Tool(status::RECORD.into(), "/rs:loop".into()),
+                &TreeItem::Tool(status::RECORD.into(), "dismissed".into())
+            ]
+        );
     }
 
     #[test]

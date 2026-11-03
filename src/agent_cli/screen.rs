@@ -400,6 +400,9 @@ impl AgentUi for Link {
     fn notice(&mut self, text: &str) {
         self.event(Event::Notice(text.to_owned()));
     }
+    fn next_step(&mut self, record: &str) {
+        self.event(Event::NextStep(record.to_owned()));
+    }
     fn steering(&mut self) -> Vec<String> {
         deliver(&mut self.queue().steering, self.modes.0)
     }
