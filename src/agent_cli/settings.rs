@@ -19,6 +19,27 @@ pub(super) enum DoubleEscape {
     Nothing,
 }
 
+/// When the agent's coding tools run with the credential stores hidden (`hideCredentials`, a
+/// key of scramjet-rs's own).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum HideCredentials {
+    /// In turns that no one started: a next step run at once, and `-p`.
+    Unattended,
+    Always,
+    Never,
+}
+
+impl HideCredentials {
+    /// Whether a turn hides them; `unattended`: it started without the user.
+    pub(super) fn hides(self, unattended: bool) -> bool {
+        match self {
+            Self::Unattended => unattended,
+            Self::Always => true,
+            Self::Never => false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct Settings {
     /// `None` without `XDG_CONFIG_HOME` and `HOME`: nothing is read or saved.
@@ -31,6 +52,7 @@ pub(super) struct Settings {
     pub(super) default_thinking_level: Option<String>,
     /// `tools`: the agent's coding tools, Scramjet's by default.
     pub(super) tools: Vec<String>,
+    pub(super) hide_credentials: HideCredentials,
     /// What is wrong in the file; those keys keep their defaults.
     pub(super) warnings: Vec<String>,
 }
@@ -53,6 +75,7 @@ impl Settings {
             skip_branch_summary_prompt: false,
             default_thinking_level: None,
             tools: DEFAULT_TOOLS.map(str::to_owned).to_vec(),
+            hide_credentials: HideCredentials::Unattended,
             warnings: Vec::new(),
         };
         let Some(path) = &settings.path else {
@@ -106,6 +129,13 @@ impl Settings {
                 "defaultThinkingLevel",
                 &LEVELS.map(|l| format!("\"{l}\"")).join(", "),
             ),
+        }
+        match object.get("hideCredentials").map(|value| value.as_str()) {
+            None => {}
+            Some(Some("unattended")) => self.hide_credentials = HideCredentials::Unattended,
+            Some(Some("always")) => self.hide_credentials = HideCredentials::Always,
+            Some(Some("never")) => self.hide_credentials = HideCredentials::Never,
+            Some(_) => wrong("hideCredentials", r#""unattended", "always" or "never""#),
         }
         match object.get("tools") {
             None => {}
@@ -261,7 +291,32 @@ mod tests {
         assert!(!settings.skip_branch_summary_prompt);
         assert_eq!(settings.default_thinking_level, None);
         assert_eq!(settings.tools, ["read", "bash", "edit", "write"]);
+        assert_eq!(settings.hide_credentials, HideCredentials::Unattended);
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+    }
+
+    #[test]
+    fn hide_credentials_says_which_turns_hide_them() {
+        let scratch = Scratch::new("credentials");
+        for (value, typed, unattended) in [
+            ("unattended", false, true),
+            ("always", true, true),
+            ("never", false, false),
+        ] {
+            let settings = settings_with(&scratch, &format!(r#"{{"hideCredentials": "{value}"}}"#));
+            assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+            let hides = settings.hide_credentials;
+            assert_eq!((hides.hides(false), hides.hides(true)), (typed, unattended));
+        }
+        let wrong = settings_with(&scratch, r#"{"hideCredentials": true}"#);
+        assert_eq!(wrong.hide_credentials, HideCredentials::Unattended);
+        let path = shown(&scratch.0.join("settings.json"));
+        assert_eq!(
+            wrong.warnings,
+            [format!(
+                r#"{path}: hideCredentials must be "unattended", "always" or "never"; ignored"#
+            )]
+        );
     }
 
     #[test]

@@ -28,6 +28,16 @@ pub(super) struct Interactive {
     pub(super) settings: Settings,
 }
 
+/// How a prompt came to run.
+#[derive(Clone, Copy, PartialEq)]
+enum Start {
+    Typed,
+    /// A next step the user chose from those offered.
+    Chosen,
+    /// A next step run at once: forced, or an edge chains it.
+    Unattended,
+}
+
 /// What the user gave at the prompt.
 enum Read {
     Prompt(String),
@@ -102,11 +112,10 @@ impl Interactive {
             self.spaced = true;
         }
         // A completed command's next step, run as if typed.
-        let mut queued: Option<String> = None;
+        let mut queued: Option<(String, Start)> = None;
         loop {
             self.save_hide_thinking();
-            let dispatched = queued.take();
-            let is_dispatched = dispatched.is_some();
+            let (dispatched, start) = queued.take().unzip();
             let (prompt, escaped) = match self.read(dispatched)? {
                 Read::Prompt(prompt) => (prompt, false),
                 Read::DoubleEscape => match self.settings.double_escape {
@@ -124,7 +133,7 @@ impl Interactive {
                 return Ok(());
             }
             if !self.builtin(prompt, escaped)? {
-                queued = self.send(prompt, is_dispatched)?;
+                queued = self.send(prompt, start.unwrap_or(Start::Typed))?;
             }
         }
     }
@@ -186,13 +195,15 @@ impl Interactive {
 
     /// Runs `prompt` as a model turn. Returns the next step to run, when the turn's command
     /// completed with one.
-    fn send(&mut self, prompt: &str, dispatched: bool) -> Result<Option<String>, String> {
+    fn send(&mut self, prompt: &str, start: Start) -> Result<Option<(String, Start)>, String> {
         if let Some(editor) = &mut self.editor {
             editor.remember(prompt);
-            if !dispatched {
+            if start == Start::Typed {
                 eprintln!();
             }
         }
+        let hide = (self.settings.hide_credentials).hides(start == Start::Unattended);
+        self.agent.set_hide_credentials(hide);
         let result = self.during_turn(Some(prompt), |agent, ui, cancel| {
             agent.turn(prompt, ui, cancel)
         });
@@ -257,7 +268,7 @@ impl Interactive {
     /// The next step of a completed command, as Scramjet routes it with autopilot off: an edge
     /// set to `chain` or a forced step runs at once; otherwise the user chooses from the steps
     /// the model offered. Returns the prompt to run; a text step goes into the editor instead.
-    fn next_step(&mut self, completed: &Completed) -> Result<Option<String>, String> {
+    fn next_step(&mut self, completed: &Completed) -> Result<Option<(String, Start)>, String> {
         let routing = self.agent.route(completed, self.editor.is_some());
         if routing.notices.is_empty() && routing.next == Next::Nothing {
             return Ok(None);
@@ -267,7 +278,7 @@ impl Interactive {
         for notice in &routing.notices {
             self.ui.notice(notice);
         }
-        let step = match routing.next {
+        let (step, start) = match routing.next {
             Next::Nothing => {
                 self.spaced = true;
                 return Ok(None);
@@ -276,7 +287,7 @@ impl Interactive {
                 let record =
                     next_step_record(&routing.source, std::slice::from_ref(&step), Some(0));
                 self.show_record(&record);
-                step
+                (step, Start::Unattended)
             }
             Next::Offer { steps, recommended } => {
                 let choices: Vec<_> = steps
@@ -291,7 +302,7 @@ impl Interactive {
                     .map_err(|e| e.to_string())?;
                 self.show_record(&next_step_record(&routing.source, &steps, chosen));
                 match chosen {
-                    Some(index) => steps[index].clone(),
+                    Some(index) => (steps[index].clone(), Start::Chosen),
                     None => return Ok(None),
                 }
             }
@@ -305,7 +316,7 @@ impl Interactive {
         if step.fresh_session && !self.new_session() {
             return Ok(None);
         }
-        Ok(Some(command))
+        Ok(Some((command, start)))
     }
 
     /// Saves Ctrl+T's choice, made at the prompt, in a turn or in the conversation view, when

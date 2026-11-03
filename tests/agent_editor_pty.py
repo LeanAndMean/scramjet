@@ -389,7 +389,8 @@ def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60):
     assert child.wait(timeout=10) == status, bytes(output[-2000:])
     read(.2)
     assert termios.tcgetattr(slave) == before, 'terminal mode was not restored'
-    assert output.rfind(b'\x1b[?2004l') > output.rfind(b'\x1b[?2004h'), 'bracketed paste left enabled'
+    # Never enabled, without an editor (`-p`), or disabled after it was.
+    assert output.rfind(b'\x1b[?2004l') >= output.rfind(b'\x1b[?2004h'), 'bracketed paste left enabled'
     assert output.rfind(b'\x1b[?25h') >= output.rfind(b'\x1b[?25l'), 'cursor left hidden'
     os.close(master)
     os.close(slave)
@@ -1732,4 +1733,59 @@ checks = [line['content'].split('\n')[0] for line in lines if line.get('_scramje
 assert checks == ['Scramjet status check for `flow:step`.'], checks
 states = [(line['command'], line.get('state')) for line in lines if line.get('type') == 'command_state']
 assert states == [('flow:step', None), ('flow:step', 'parked'), ('flow:step', None), (None, None)], states
+
+
+def credentials_hidden_when_unattended(read, until, send, output):
+    mark = until(b'> ')
+    send(b'/flow:step one\r')
+    # Typed, and then chosen from the steps offered: the user's turns see the credential stores.
+    mark = until(b'FAKE-netrc-secret', until(b'> /flow:step one', mark))
+    mark = until('\u2192 0: /flow:step two'.encode(), until(b'Select next step', mark))
+    send(b'\r')
+    mark = until(b'FAKE-netrc-secret', until(b'> /flow:step two', mark))
+    # Chained by the project's edge, no one started it: they are hidden, the rest is writable.
+    chained = until(b'> /flow:done', mark)
+    mark = until(b'> ', until(b'Finished.', until(b'ran-42', chained)))
+    assert b'FAKE-' not in output[chained:], bytes(output[chained:])
+    send(b'\x04')
+
+
+def printed_hides_credentials(read, until, send, output):
+    mark = until(b'Peeked.', until(b'ran-42'))
+    assert b'FAKE-' not in output, bytes(output)
+
+
+def printed_with_credentials(read, until, send, output):
+    until(b'Peeked.', until(b'FAKE-env-secret', until(b'FAKE-netrc-secret')))
+
+
+fake_home = os.path.join(work, 'home')
+os.makedirs(fake_home)
+with open(os.path.join(fake_home, '.netrc'), 'w') as file:
+    file.write('FAKE-netrc-secret\n')
+in_fake_home = {'HOME': fake_home, 'FAKE_API_TOKEN': 'FAKE-env-secret'}
+peek = lambda call_id: tool_call(call_id, 'bash', {
+    'command': 'cat ~/.netrc; printenv FAKE_API_TOKEN; echo ran-$((6*7)) | tee made.txt'})
+known = set(session_files())
+run([], credentials_hidden_when_unattended, serve_items([
+    [peek('call_1')],
+    [report('call_2', [('/flow:step two', False, 'Choose.')], 0)],
+    [peek('call_3')],
+    [report('call_4', [('/flow:done', False, 'Finish.')], 0)],
+    [peek('call_5')],
+    [message('Finished.'), report('call_6')],
+]), variables=in_fake_home)
+(peeked,) = set(session_files()) - known
+outputs = [line['output'] for line in map(json.loads, open(peeked))
+           if line.get('type') == 'function_call_output' and line['call_id'] in ('call_1', 'call_3', 'call_5')]
+assert outputs == ['FAKE-netrc-secret\nFAKE-env-secret\nran-42\n'] * 2 + ['ran-42\n'], outputs
+assert open(os.path.join(project, 'made.txt')).read() == 'ran-42\n'
+os.remove(os.path.join(project, 'made.txt'))
+# `-p` runs unattended: hidden by default, unless the settings say never.
+run(['-p', 'peek'], printed_hides_credentials, serve_items([[peek('call_1')], [message('Peeked.')]]),
+    variables=in_fake_home)
+never = config_home('never', '{"hideCredentials": "never"}')
+run(['-p', 'peek'], printed_with_credentials, serve_items([[peek('call_1')], [message('Peeked.')]]),
+    variables=dict(in_fake_home, XDG_CONFIG_HOME=never))
+os.remove(os.path.join(project, 'made.txt'))
 print('agent editor journeys passed')

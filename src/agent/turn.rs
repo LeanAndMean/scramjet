@@ -4,7 +4,7 @@ use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, CONTEXT, Completed, DIFF, FAILED,
     MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, TYPED, ToolDetail, USAGE, autonomy, message_text,
-    question, status, subagent,
+    question, sandbox, status, subagent,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -280,8 +280,9 @@ to a larger-context model)"
             return (failure(output.to_owned()), false);
         }
         ui.tool_running();
+        let hidden = self.hide_credentials.then(sandbox::Hidden::current);
         let output = call
-            .run(&self.config.root, cancel, &mut |output| {
+            .run(&self.config.root, hidden.as_ref(), cancel, &mut |output| {
                 ui.tool_output(output)
             })
             .unwrap_or_else(|error| failure(format!("Error: {error}")));

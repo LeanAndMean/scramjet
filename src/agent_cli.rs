@@ -49,6 +49,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     for warning in std::mem::take(&mut settings.warnings) {
         ui.notice(&format!("settings: {warning}"));
     }
+    agent.set_hide_credentials(settings.hide_credentials.hides(true));
     let result = print(&mut agent, &mut ui, prompt, &cancel);
     if let Err(error) = settings.set_hide_thinking_block(hide_thinking.load(Ordering::Relaxed)) {
         eprintln!("error: settings not saved: {error}");

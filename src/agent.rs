@@ -173,6 +173,8 @@ pub struct Agent {
     executor: tokio::runtime::Runtime,
     /// The current model's protocol and limits, from its name until `load_model_card`.
     info: ModelInfo,
+    /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
+    hide_credentials: bool,
     pub usage: Usage,
 }
 
@@ -215,6 +217,7 @@ impl Agent {
             autonomy: autonomy::global_path(),
             autonomy_diagnostics: Vec::new(),
             info: ModelInfo::guess(&config.model),
+            hide_credentials: false,
             config,
             conversation,
             prompts,
@@ -451,6 +454,13 @@ impl Agent {
         let level = levels[next].clone();
         self.set_effort(level.clone())?;
         Ok(Some(level))
+    }
+
+    /// Whether the coding tools of the turns that follow keep out of the user's credential
+    /// stores: bash runs with them hidden, and other tools refuse paths in them. Subagents
+    /// always do. A `!` command, which the user runs, never does.
+    pub fn set_hide_credentials(&mut self, hide: bool) {
+        self.hide_credentials = hide;
     }
 
     /// The window automatic compaction checks; `None` skips the check.

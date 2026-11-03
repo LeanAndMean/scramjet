@@ -1,6 +1,6 @@
 //! The read-only sandbox that subagents' commands run in: bubblewrap with the whole
 //! filesystem mounted read-only, a private `/tmp` discarded after each command, no network, and
-//! the user's credential stores hidden.
+//! the user's credential stores hidden; and the main agent's commands with only those hidden.
 
 use std::{
     os::unix::fs::MetadataExt,
@@ -10,8 +10,9 @@ use std::{
 
 pub(super) const PROGRAM: &str = "bwrap";
 
-/// Credential stores in the home directory that subagents do not see, after an agent printed
-/// `~/.scramjet/agent/auth.json` to its provider: common ones, not every secret.
+/// Credential stores in the home directory that subagents, and the main agent when its
+/// credentials are hidden, do not see, after an agent printed `~/.scramjet/agent/auth.json` to
+/// its provider: common ones, not every secret.
 const HIDDEN_FILES: [&str; 11] = [
     ".scramjet/agent/auth.json",
     ".pi/agent/auth.json",
@@ -39,8 +40,20 @@ const HIDDEN_DIRECTORIES: [&str; 11] = [
     ".password-store",
 ];
 
+/// Words that mark an environment variable as holding a credential, at the end of its name or
+/// between underscores: `ANTHROPIC_API_KEY`, `HF_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `PGPASSWORD`.
+const CREDENTIAL_WORDS: [&str; 6] = [
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIALS",
+    "KEY",
+];
+
 /// WSL2 mounts the root filesystem again here (`distro`), next to WSLg's X11 and audio sockets.
 const WSLG: &str = "/mnt/wslg";
+const WSLG_DISTRO: &str = "/mnt/wslg/distro";
 
 /// The credential stores that exist, by their real paths. In the sandbox a hidden file reads
 /// as empty and a hidden directory has no entries, both read-only.
@@ -93,7 +106,7 @@ impl Hidden {
         let mut identities = real.ancestors().filter_map(identity);
         match identities.any(|found| self.identities.contains(&found)) {
             true => Err(format!(
-                "{}: hidden from subagents, as it holds credentials",
+                "{}: hidden, as it holds credentials",
                 path.display()
             )),
             false => Ok(()),
@@ -111,6 +124,22 @@ fn identity(path: &Path) -> Option<(u64, u64)> {
 pub(super) fn command(root: &Path, command: &str, hidden: &Hidden) -> Command {
     let mut process = confined(root, None, hidden);
     process.args(["bash", "-c"]).arg(command);
+    process
+}
+
+/// `bash -c command` in `root` with everything as it is, writable and on the network, except the
+/// credential stores, hidden as in the sandbox (`scripts/without-credentials.sh`). Unlike the
+/// sandbox, it shares the process ids and session, so that a command's `setsid nohup … &` outlives
+/// it, as outside.
+pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Command {
+    let mut process = Command::new(PROGRAM);
+    process.args(["--dev-bind", "/", "/", "--die-with-parent"]);
+    hide(&mut process, hidden);
+    if Path::new(WSLG_DISTRO).is_dir() {
+        process.args(["--tmpfs", WSLG_DISTRO, "--remount-ro", WSLG_DISTRO]);
+    }
+    process.arg("--chdir").arg(root).args(["--", "bash", "-c"]);
+    process.arg(command);
     process
 }
 
@@ -154,6 +183,19 @@ fn confined(root: &Path, also: Option<&Path>, hidden: &Hidden) -> Command {
     if Path::new(WSLG).is_dir() {
         process.args(["--tmpfs", WSLG]);
     }
+    hide(&mut process, hidden);
+    process.arg("--chdir").arg(root).arg("--");
+    process
+}
+
+/// Mounts an empty file over each hidden file and an empty directory over each hidden directory,
+/// both read-only, and leaves out the environment variables that hold credentials.
+fn hide(process: &mut Command, hidden: &Hidden) {
+    for (name, _) in std::env::vars_os() {
+        if holds_credential(&name.to_string_lossy()) {
+            process.env_remove(name);
+        }
+    }
     if !hidden.files.is_empty() {
         let empty = empty_file();
         for file in &hidden.files {
@@ -164,8 +206,13 @@ fn confined(root: &Path, also: Option<&Path>, hidden: &Hidden) -> Command {
         process.arg("--tmpfs").arg(directory);
         process.arg("--remount-ro").arg(directory);
     }
-    process.arg("--chdir").arg(root).arg("--");
-    process
+}
+
+fn holds_credential(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    CREDENTIAL_WORDS
+        .iter()
+        .any(|word| name.ends_with(word) || name.split('_').any(|part| part == *word))
 }
 
 /// An empty file for hidden files to show, in scramjet-rs's state directory (emptied again if
@@ -286,6 +333,87 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             "SECRET-netrc\n"
         );
         assert_eq!(std::fs::read_dir(home.join(".ssh")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn variables_named_as_credentials_are_recognized() {
+        for name in [
+            "ANTHROPIC_API_KEY",
+            "HF_TOKEN",
+            "GH_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_ACCESS_KEY_ID",
+            "PGPASSWORD",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "openai_api_key",
+            "TAVILY_APIKEY",
+        ] {
+            assert!(super::holds_credential(name), "{name}");
+        }
+        for name in [
+            "HOME",
+            "PATH",
+            "PWD",
+            "TOKENIZERS_PARALLELISM",
+            "GIT_AUTHOR_NAME",
+            "SSH_AUTH_SOCK",
+            "KEYTIMEOUT",
+            "XAUTHORITY",
+        ] {
+            assert!(!super::holds_credential(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn hiding_hides_only_the_credential_stores() {
+        let home = std::env::temp_dir().join(format!("scramjet-hiding-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(home.join("project")).unwrap();
+        std::fs::write(home.join(".netrc"), "SECRET-netrc\n").unwrap();
+        std::fs::write(home.join(".ssh/id_x"), "SECRET-key\n").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let marker = format!("{}.{}", 200 + std::process::id() % 100, std::process::id());
+        let script = format!(
+            "pwd; cat ../.netrc; ls -A ../.ssh; echo x > ../.netrc; touch ../.ssh/new; \
+echo made > made.txt; echo private > /tmp/scramjet-hiding-{marker}; \
+(exec 3<>/dev/tcp/127.0.0.1/{port}) && echo connected; \
+setsid sleep {marker} > /dev/null 2>&1 & echo done"
+        );
+        let output = super::hiding(
+            &home.join("project"),
+            &script,
+            &super::Hidden::under(&home, None),
+        )
+        .output()
+        .unwrap();
+        let errors = String::from_utf8_lossy(&output.stderr);
+        let lines = format!("{}\nconnected\ndone\n", home.join("project").display());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), lines, "{errors}");
+        assert_eq!(
+            errors.matches("Read-only file system").count(),
+            2,
+            "{errors}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join(".netrc")).unwrap(),
+            "SECRET-netrc\n"
+        );
+        assert_eq!(std::fs::read_dir(home.join(".ssh")).unwrap().count(), 1);
+        assert!(home.join("project/made.txt").exists());
+        let shared = std::path::PathBuf::from(format!("/tmp/scramjet-hiding-{marker}"));
+        assert_eq!(std::fs::read_to_string(&shared).unwrap(), "private\n");
+        std::fs::remove_file(shared).unwrap();
+        // A command started with `setsid` goes on after the command, as it does outside.
+        let left = std::process::Command::new("pkill")
+            .args(["-f", &format!("^sleep {marker}$")])
+            .status()
+            .unwrap();
+        assert!(
+            left.success(),
+            "the background command did not outlive the command"
+        );
     }
 
     #[test]

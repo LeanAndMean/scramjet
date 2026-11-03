@@ -192,21 +192,27 @@ impl<'a> Call<'a> {
             _ => Approval::None,
         }
     }
-    /// `progress` receives the end of a running command's output as it grows.
+    /// `progress` receives the end of a running command's output as it grows. With `hidden`, the
+    /// tools do not show or change the credential stores: a path in them is refused, `grep` and
+    /// `find` run in the read-only sandbox and bash with the stores hidden.
     pub fn run(
         &self,
         root: &Path,
+        hidden: Option<&Hidden>,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(&str),
     ) -> Result<Output, String> {
+        if let Some(hidden) = hidden {
+            self.check_path(root, hidden)?;
+        }
         let text = match self.name {
             "read" => read(root, self)?,
             "ls" => ls(root, self)?,
-            "grep" => grep(root, self, None, cancel)?,
-            "find" => find(root, self, None, cancel)?,
+            "grep" => grep(root, self, hidden, cancel)?,
+            "find" => find(root, self, hidden, cancel)?,
             "write" => return write(root, self),
             "edit" => return edit(root, self),
-            "bash" => return bash(root, self, cancel, progress),
+            "bash" => return bash(root, self, hidden, cancel, progress),
             other => return Err(format!("Tool {other} not found")),
         };
         Ok(Output {
@@ -228,12 +234,7 @@ impl<'a> Call<'a> {
         hidden: &Hidden,
         cancel: &AtomicBool,
     ) -> Result<Output, String> {
-        if self.name != "bash" {
-            hidden.check(&resolve(
-                root,
-                self.arguments["path"].as_str().unwrap_or("."),
-            ))?;
-        }
+        self.check_path(root, hidden)?;
         let text = match self.name {
             "read" => read(root, self)?,
             "ls" => ls(root, self)?,
@@ -257,6 +258,17 @@ impl<'a> Call<'a> {
             detail: None,
             failed: false,
         })
+    }
+
+    /// Refuses a path argument in a hidden credential store; bash has none.
+    fn check_path(&self, root: &Path, hidden: &Hidden) -> Result<(), String> {
+        match self.name {
+            "bash" => Ok(()),
+            _ => hidden.check(&resolve(
+                root,
+                self.arguments["path"].as_str().unwrap_or("."),
+            )),
+        }
     }
 }
 
@@ -578,11 +590,22 @@ fn timeout(call: &Call) -> Duration {
 fn bash(
     root: &Path,
     call: &Call,
+    hidden: Option<&Hidden>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Output, String> {
     let command = call.str("command")?;
-    Ok(run_command(root, command, Some(timeout(call)), cancel, progress)?.tool_output())
+    let timeout = Some(timeout(call));
+    let ran = match hidden {
+        None => run_command(root, command, timeout, cancel, progress)?,
+        Some(hidden) => {
+            let process = sandbox::hiding(root, command, hidden);
+            run_process(process, sandbox::PROGRAM, timeout, cancel, progress).map_err(|error| {
+                format!("{error}; it hides the credential stores from this command")
+            })?
+        }
+    };
+    Ok(ran.tool_output())
 }
 
 /// Pi's `ls`: the entries of a directory, sorted case-insensitively, directories with `/`.
@@ -1217,7 +1240,12 @@ mod tests {
         std::fs::write(root.join("f.txt"), "alpha beta gamma beta\n").unwrap();
         let cancel = AtomicBool::new(false);
         let run = |edits: Value| {
-            call("edit", json!({"path":"f.txt","edits":edits})).run(&root, &cancel, &mut |_| {})
+            call("edit", json!({"path":"f.txt","edits":edits})).run(
+                &root,
+                None,
+                &cancel,
+                &mut |_| {},
+            )
         };
         let path = root.join("f.txt").display().to_string();
         assert_eq!(
@@ -1260,7 +1288,7 @@ disjoint regions."
             "A beta G beta\n"
         );
         let written = call("write", json!({"path":"new/g.txt","content":"é\nx\n"}))
-            .run(&root, &cancel, &mut |_| {})
+            .run(&root, None, &cancel, &mut |_| {})
             .unwrap();
         assert_eq!(
             written.text,
@@ -1281,12 +1309,12 @@ disjoint regions."
         std::fs::write(root.join("long.txt"), &text).unwrap();
         let cancel = AtomicBool::new(false);
         let first = call("read", json!({"path":"long.txt"}))
-            .run(&root, &cancel, &mut |_| {})
+            .run(&root, None, &cancel, &mut |_| {})
             .unwrap()
             .text;
         assert!(first.starts_with("line 1\n") && first.contains("Use offset=2001 to continue"));
         let page = call("read", json!({"path":"long.txt","offset":2999}))
-            .run(&root, &cancel, &mut |_| {})
+            .run(&root, None, &cancel, &mut |_| {})
             .unwrap()
             .text;
         assert_eq!(page, "line 2999\nline 3000\n");
@@ -1311,7 +1339,7 @@ disjoint regions."
         assert_eq!(call("write", json!({"path":home})).summary(), "~");
         let bash = |command: &str| {
             let output = call("bash", json!({"command":command,"timeout":1}))
-                .run(&root, &cancel, &mut |_| {})
+                .run(&root, None, &cancel, &mut |_| {})
                 .unwrap();
             (output.text, output.failed)
         };
@@ -1329,7 +1357,9 @@ disjoint regions."
             "bash",
             json!({"command":"echo first; sleep 1; echo second"}),
         )
-        .run(&root, &cancel, &mut |output| shown.push(output.to_owned()))
+        .run(&root, None, &cancel, &mut |output| {
+            shown.push(output.to_owned())
+        })
         .unwrap();
         assert_eq!(shown.first().map(String::as_str), Some("first\n"));
         assert!(shown.len() <= 2, "{shown:?}");
@@ -1513,6 +1543,104 @@ to see full lines]",
     }
 
     #[test]
+    fn tools_with_hidden_credentials_keep_out_of_their_stores() {
+        let home =
+            std::env::temp_dir().join(format!("scramjet-agent-hiding-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(home.join(".netrc"), "SECRET-netrc\n").unwrap();
+        std::os::unix::fs::symlink(home.join(".ssh"), root.join("keys")).unwrap();
+        let hidden = Hidden::under(&home, None);
+        let cancel = AtomicBool::new(false);
+        let run = |name: &str, arguments: Value| {
+            call(name, arguments)
+                .run(&root, Some(&hidden), &cancel, &mut |_| {})
+                .map(|output| output.text)
+        };
+        let refused = |path: PathBuf| {
+            Err(format!(
+                "{}: hidden, as it holds credentials",
+                path.display()
+            ))
+        };
+        let netrc = home.join(".netrc");
+        let edits = json!([{"oldText":"SECRET","newText":"x"}]);
+        assert_eq!(
+            run("read", json!({"path":"../.netrc"})),
+            refused(netrc.clone())
+        );
+        assert_eq!(
+            run("edit", json!({"path":"../.netrc","edits":edits})),
+            refused(netrc)
+        );
+        let key = root.join("keys/authorized_keys");
+        assert_eq!(
+            run(
+                "write",
+                json!({"path":"keys/authorized_keys","content":"k"})
+            ),
+            refused(key)
+        );
+        assert_eq!(std::fs::read_dir(home.join(".ssh")).unwrap().count(), 0);
+        assert!(run("write", json!({"path":"a.txt","content":"plain\n"})).is_ok());
+        assert_eq!(
+            run(
+                "bash",
+                json!({"command":"cat ../.netrc a.txt; echo more >> a.txt"})
+            ),
+            Ok("plain\n".into())
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "plain\nmore\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join(".netrc")).unwrap(),
+            "SECRET-netrc\n"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_command_with_hidden_credentials_stops_with_everything_it_started() {
+        let marker = format!("{}.{}", 400 + std::process::id() % 100, std::process::id());
+        let cancel = AtomicBool::new(false);
+        let started = Instant::now();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(300));
+                cancel.store(true, Ordering::Relaxed);
+            });
+            let command = format!("sleep {marker} & sleep {marker}");
+            let output = call("bash", json!({"command": command}))
+                .run(
+                    Path::new("/"),
+                    Some(&Hidden::default()),
+                    &cancel,
+                    &mut |_| {},
+                )
+                .unwrap();
+            assert!(
+                output.text.contains("cancelled by the user"),
+                "{}",
+                output.text
+            );
+        });
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(200));
+        let left = Command::new("pgrep")
+            .args(["-f", &format!("sleep {marker}")])
+            .output()
+            .unwrap();
+        assert!(
+            left.stdout.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&left.stdout)
+        );
+    }
+
+    #[test]
     fn subagent_tools_do_not_show_credential_stores() {
         let home =
             std::env::temp_dir().join(format!("scramjet-agent-hidden-{}", std::process::id()));
@@ -1536,8 +1664,7 @@ to see full lines]",
                 .run_hiding(&root, &hidden, &cancel)
                 .map(|output| output.text)
         };
-        let refused =
-            |path: &str| format!("{path}: hidden from subagents, as it holds credentials");
+        let refused = |path: &str| format!("{path}: hidden, as it holds credentials");
         for (name, path, shown) in [
             ("read", "../.netrc", home.join(".netrc")),
             ("read", "link", root.join("link")),
