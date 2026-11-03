@@ -3,7 +3,7 @@
 use super::tools::Call;
 use super::{
     AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, SUBAGENTS, StreamProgress,
-    TYPED, compaction, message_text, question, status,
+    TYPED, compaction, message_text, publish, question, status,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -130,6 +130,8 @@ pub enum ToolDetail {
     Answer(String),
     /// The children of a `subagent` call, as they ended.
     Subagents(Children),
+    /// What a publication call proposed, each field under a markdown heading.
+    Publication(String),
 }
 
 /// The children of a `subagent` call as the user sees them, as Scramjet's tool details keep
@@ -284,6 +286,9 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                         .as_ref()
                         .and_then(|call| call.arguments["content"].as_str())
                         .map(|content| ToolDetail::Written(content.to_owned())),
+                    (None, None, None) if publish::TOOLS.contains(&name) => call
+                        .as_ref()
+                        .and_then(|call| publish::payload(name, &call.arguments)),
                     (None, None, None) => None,
                 };
                 ui.tool_result(name, output, detail.as_ref(), failed);
@@ -365,6 +370,14 @@ mod tests {
             call("c7", "bash", json!({"command":"two"})),
             output("c6", "1"),
             output("c7", "2"),
+            call(
+                "c9",
+                "add_issue_comment",
+                json!({"number":3,"body":"Me too."}),
+            ),
+            output("c9", "Cancelled."),
+            call("c10", "add_issue_comment", json!({"number":0,"body":"No."})),
+            json!({"type":"function_call_output","call_id":"c10","output":"Invalid","_scramjet_failed":true}),
             // Its turn cancelled, this call has no result here.
             call("c8", "read", json!({"path":"x"})),
             json!({"role":"user","content":"next"}),
@@ -396,6 +409,11 @@ mod tests {
                 "result bash 1",
                 "call bash two",
                 "result bash 2",
+                "call add_issue_comment #3",
+                "result add_issue_comment Cancelled. Publication(\"## Target\\n\\n#3\\n\\n## \
+Comment\\n\\nMe too.\")",
+                "call add_issue_comment #0",
+                "result add_issue_comment Invalid failed",
                 "call read x",
                 "prompt next",
             ]

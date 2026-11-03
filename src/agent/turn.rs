@@ -421,7 +421,8 @@ to a larger-context model)"
                 cancel,
             };
             let output = publish::run(call.name, &call.arguments, &policy, ui, &mut forge, cancel);
-            ui.tool_result(call.name, &output.text, None, output.failed);
+            let detail = output.detail.as_ref();
+            ui.tool_result(call.name, &output.text, detail, output.failed);
             return (output, false);
         }
         if call.name == status::NAME {

@@ -2081,6 +2081,15 @@ def publications(read, until, send, output):
     send(b'/pub:post\r')
     rows = on_screen('Posted.')
     assert 'Approve publication' not in '\n'.join(rows), rows
+    # Published without a preview, it shows what it published once Ctrl+O expands it.
+    assert 'issues/5\n  \u2026 (the issue, 7 lines, Ctrl+O to expand)\n\nPosted.' in '\n'.join(rows), rows
+    expanded = '  It breaks on tabs.\n\n  Create issue publication verified:\n  https://github.com/o/r/issues/5\n\nPosted.'
+    send(b'\x0f')
+    rows = on_screen(expanded)
+    assert '\u25cf create_issue Fix the parser\n  Title\n\n  Fix the parser\n\n  Body\n\n' + expanded \
+        in '\n'.join(rows), rows
+    send(b'\x0f')
+    on_screen(expanded, gone=True)
     # Escape cancels; nothing is written, and the turn goes on.
     send(b'chime in\r')
     rows = on_screen('\u2192 Approve publication')

@@ -293,6 +293,28 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                     rows
                 }
             }
+            // As Scramjet's expanded call, each field whole, then how it went.
+            (name, Some(ToolDetail::Publication(payload))) => {
+                let mut rows = Vec::new();
+                if full {
+                    rows = self.markdown_rows(payload, width);
+                    rows.push(String::new());
+                }
+                rows.extend(styled(preview(output, Shown::All, width)));
+                if !full && self.expandable {
+                    let what = match name {
+                        "create_issue" => "the issue",
+                        "create_pr" => "the pull request",
+                        _ => "the comment",
+                    };
+                    let lines = match payload.lines().count() {
+                        1 => "1 line".to_owned(),
+                        count => format!("{count} lines"),
+                    };
+                    rows.push(self.dim(&format!("… ({what}, {lines}{EXPAND_HINT})")));
+                }
+                rows
+            }
             // One sentence, with the URL of what was published.
             (name, None) if PUBLICATION_TOOLS.contains(&name) => {
                 styled(preview(output, Shown::All, width))
@@ -306,7 +328,10 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         };
         let gutter = self.gutter();
         for row in rows {
-            self.err(&format!("{gutter}{row}\n"));
+            match row.is_empty() {
+                true => self.err("\n"),
+                false => self.err(&format!("{gutter}{row}\n")),
+            }
         }
         if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
             let took = self.dim(&format!("took {:.1}s", took.as_secs_f64()));
@@ -444,6 +469,14 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     }
     fn wrapper(&self, width: usize) -> Wrap {
         Wrap::new(width).marking(self.marked)
+    }
+    /// Text from the model as markdown, its hidden characters shown, wrapped to `width`.
+    fn markdown_rows(&self, text: &str, width: usize) -> Vec<String> {
+        let mut markdown = markdown::Markdown::new(self.color, "");
+        let text = markdown.push(visible(text).trim_end()) + &markdown.finish();
+        let mut wrap = self.wrapper(width);
+        let rows = wrap.push(&text) + &wrap.finish();
+        rows.lines().map(str::to_owned).collect()
     }
     /// The indent of a block under its heading, such as a tool's result under its call.
     fn gutter(&self) -> String {
@@ -813,11 +846,8 @@ impl AgentUi for Terminal {
             true => self.width().saturating_sub(2).max(20),
             false => 0,
         };
-        let mut markdown = markdown::Markdown::new(self.color, "");
-        let text = markdown.push(visible(message).trim_end()) + &markdown.finish();
-        let mut wrap = self.wrapper(width);
         let gutter = self.gutter();
-        for line in (wrap.push(&text) + &wrap.finish()).lines() {
+        for line in self.markdown_rows(message, width) {
             match line.is_empty() {
                 true => self.err("\n"),
                 false => self.err(&format!("{gutter}{line}\n")),
@@ -1299,20 +1329,39 @@ blocked. Widen the caller scope or\n  abort delegation.\n  … (3 lines, Ctrl+O 
     }
 
     #[test]
-    fn a_publications_result_is_shown_whole_with_its_url() {
-        let mut ui = Terminal::capture_shown(40, Arc::new(AtomicBool::new(false)), false);
-        ui.tool_call("create_issue", "Fix it");
+    fn a_publications_result_is_shown_whole_with_its_url_and_its_payload_once_expanded() {
         let verified = "Create issue publication verified: https://github.com/o/r/issues/5";
-        ui.tool_result("create_issue", verified, None, false);
-        let text = ui.captured();
-        let mut plain = String::new();
-        let mut escape = Escape::None;
-        let marker = |c| [FROM, JOINED, SPACE].contains(&c);
-        plain.extend(text.chars().filter(|&c| !escape.step(c) && !marker(c)));
+        let payload = "## Title\n\nFix it\n\n## Body\n\nIt **breaks**\x1b[2J.";
+        let shown = |full, detail: Option<&ToolDetail>| {
+            let mut ui = Terminal::capture_shown(40, Arc::new(AtomicBool::new(false)), full);
+            ui.tool_call("create_issue", "Fix it");
+            ui.tool_result("create_issue", verified, detail, false);
+            let text = ui.captured();
+            let mut plain = String::new();
+            let mut escape = Escape::None;
+            let marker = |c| [FROM, JOINED, SPACE].contains(&c);
+            plain.extend(text.chars().filter(|&c| !escape.step(c) && !marker(c)));
+            plain
+        };
+        let result = "  Create issue publication verified:\n  https://github.com/o/r/issues/5\n";
         assert_eq!(
-            plain,
-            "● create_issue Fix it\n  Create issue publication verified:\n  \
-https://github.com/o/r/issues/5\n\n"
+            shown(false, None),
+            format!("● create_issue Fix it\n{result}\n")
+        );
+        let detail = ToolDetail::Publication(payload.into());
+        assert_eq!(
+            shown(false, Some(&detail)),
+            format!(
+                "● create_issue Fix it\n{result}  … (the issue, 7 lines, Ctrl+O to \
+expand)\n\n"
+            )
+        );
+        assert_eq!(
+            shown(true, Some(&detail)),
+            format!(
+                "● create_issue Fix it\n  Title\n\n  Fix it\n\n  Body\n\n  It \
+breaks\\u{{1b}}[2J.\n\n{result}\n"
+            )
         );
     }
 

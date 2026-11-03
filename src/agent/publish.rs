@@ -5,7 +5,7 @@
 //! done only once read back, and one that may have happened is reported so, never retried.
 
 use super::{
-    AgentUi,
+    AgentUi, ToolDetail,
     autonomy::{self, Publication},
     commands::Commands,
     forge::{self, Exec, Posted, Repository, Request},
@@ -239,6 +239,17 @@ impl Proposal {
     /// What the user approves, as Scramjet's preview card shows it: the facts, then each field
     /// whole.
     fn preview(&self, repository: &Repository) -> String {
+        format!(
+            "**{}**\nProvider: github\nRepository: {}\nConsequence: {}\n\n{}",
+            label(self.tool),
+            repository.shown(),
+            self.consequence(),
+            self.payload()
+        )
+    }
+
+    /// Each field whole under its heading, as Scramjet's expanded call shows them.
+    fn payload(&self) -> String {
         let mut fields: Vec<(&str, String)> = Vec::new();
         if let Some(url) = &self.repository {
             fields.push(("Repository", url.clone()));
@@ -267,14 +278,15 @@ impl Proposal {
         let fields: Vec<String> = (fields.into_iter())
             .map(|(label, value)| format!("## {label}\n\n{value}"))
             .collect();
-        format!(
-            "**{}**\nProvider: github\nRepository: {}\nConsequence: {}\n\n{}",
-            label(self.tool),
-            repository.shown(),
-            self.consequence(),
-            fields.join("\n\n")
-        )
+        fields.join("\n\n")
     }
+}
+
+/// What the publication call `name` with `arguments` proposes, as its result shows it once
+/// expanded; none when the arguments are not valid.
+pub(super) fn payload(name: &str, arguments: &Value) -> Option<ToolDetail> {
+    let proposal = Proposal::parse(name, arguments).ok()?;
+    Some(ToolDetail::Publication(proposal.payload()))
 }
 
 /// How a publication ended.
@@ -341,9 +353,11 @@ pub(super) fn run(
             };
         }
     };
-    let tool = proposal.tool;
     let outcome = publish(&proposal, policy, ui, forge, cancel);
-    output(tool, outcome)
+    Output {
+        detail: Some(ToolDetail::Publication(proposal.payload())),
+        ..output(proposal.tool, outcome)
+    }
 }
 
 fn publish(
@@ -492,6 +506,11 @@ mod tests {
                 false
             )
         );
+        // What was approved stays with the result, for Ctrl+O.
+        let fields = "## Title\n\nFix it\n\n## Body\n\nIt **breaks**.";
+        assert_eq!(output.detail, Some(ToolDetail::Publication(fields.into())));
+        assert_eq!(payload("create_issue", &issue()), output.detail);
+        assert_eq!(payload("create_issue", &json!({"title":"x"})), None);
         assert_eq!(
             ui.shown,
             [
