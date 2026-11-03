@@ -2047,6 +2047,21 @@ def fullscreen_mouse(read, until, send, output):
     send(b'\x04')
 
 
+def fullscreen_copy_unwrapped(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    rows = on_screen('[2 requests')
+    one = next(index for index, text in enumerate(rows) if text == '  one')
+    end = next(index for index, text in enumerate(rows) if text.startswith('[2 requests')) - 2
+    assert rows[end - 2].startswith('The tests') and rows[end].endswith('one line.'), rows
+    # Dragged from the tool result's gutter to past the end of the reply: the copy leaves the
+    # gutter out and joins the reply's wrapped rows.
+    send(b'\x1b[<0;1;%dM\x1b[<32;60;%dM\x1b[<0;60;%dm\x03' % (one + 1, end + 1, end + 1))
+    copied('one\n  two\n\n' + wrapped_reply)
+    send(b'\x04')
+
+
 def fullscreen_copied_by_the_terminal(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -2172,6 +2187,12 @@ run(['--fullscreen'], left_the_screen(fullscreen_mouse), serve_items([[message(r
     'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
     'CLIPBOARD': clipboard})
 run(['--fullscreen'], left_the_screen(fullscreen_copied_by_the_terminal), serve_items([[message(rows_reply)]]))
+wrapped_reply = ('The tests ran with cargo test --offline --locked --no-fail-fast, and every one of them '
+                 'passed; a copy of this sentence comes out as one line.')
+run(['--fullscreen'], left_the_screen(fullscreen_copy_unwrapped), serve_items([
+    [tool_call('call_1', 'bash', {'command': "printf 'one\\n  two\\n'"})], [message(wrapped_reply)],
+]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
+               'CLIPBOARD': clipboard})
 pastes = os.path.join(work, 'pastes')
 # Checks it is asked for the clipboard's text as Scramjet asks; the second time it takes a second.
 with open(os.path.join(clipboard_bin, 'powershell.exe'), 'w') as script_file:

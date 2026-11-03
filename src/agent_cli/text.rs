@@ -2,6 +2,15 @@
 use scramjet_rs::agent::terminal_line;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+/// Marks in text rendered for the full screen, which takes them out of its lines
+/// (`selection::lines`) so that a copy holds what was written rather than how it was laid out.
+/// A line's copy starts after `FROM`, the cells before it being a gutter. A line with `JOINED`
+/// was wrapped from the one before: its copy starts after the mark and follows the untrimmed
+/// copy of the line before with a space for each `SPACE` after the mark, not a line break.
+pub(super) const FROM: char = '\x1d';
+pub(super) const JOINED: char = '\x1e';
+pub(super) const SPACE: char = '\x1f';
+
 /// Breaks streamed text into lines that fit the terminal, between words where it can, instead of
 /// leaving the terminal to split words at its edge. A word is held until it is complete.
 pub(super) struct Wrap {
@@ -20,6 +29,8 @@ pub(super) struct Wrap {
     /// the indentation of an indented line.
     indent: usize,
     escape: Escape,
+    /// The lines it starts at a break are marked with `JOINED`.
+    marked: bool,
 }
 
 /// Where the text is in an escape sequence, which takes no columns.
@@ -57,7 +68,12 @@ impl Wrap {
             line_start: true,
             indent: 0,
             escape: Escape::None,
+            marked: false,
         }
+    }
+    /// The wrap, its breaks marked for a copy (`JOINED`) if `marked`.
+    pub(super) fn marking(self, marked: bool) -> Self {
+        Self { marked, ..self }
     }
     pub(super) fn push(&mut self, text: &str) -> String {
         if self.width == 0 {
@@ -82,6 +98,7 @@ impl Wrap {
                     self.place(&mut out);
                     self.spaces += if c == '\t' { 4 } else { 1 };
                 }
+                FROM | JOINED | SPACE if self.marked => {}
                 c => {
                     self.word.push(c);
                     self.word_width += c.width().unwrap_or(0);
@@ -104,7 +121,10 @@ impl Wrap {
     pub(super) fn finish(&mut self) -> String {
         let mut out = String::new();
         self.place(&mut out);
-        *self = Self::new(self.width);
+        *self = Self {
+            marked: self.marked,
+            ..Self::new(self.width)
+        };
         out
     }
     fn place(&mut self, out: &mut String) {
@@ -124,7 +144,7 @@ impl Wrap {
         if !self.continued {
             if self.column > self.indent && self.column + self.spaces + self.word_width > self.width
             {
-                self.break_line(out);
+                self.break_line(out, self.spaces);
                 self.spaces = 0;
             }
             out.extend(std::iter::repeat_n(' ', self.spaces));
@@ -139,7 +159,7 @@ impl Wrap {
                 false => c.width().unwrap_or(0),
             };
             if self.column > self.indent && self.column + cells > self.width {
-                self.break_line(out);
+                self.break_line(out, 0);
             }
             out.push(c);
             self.column += cells;
@@ -147,9 +167,14 @@ impl Wrap {
         self.word_width = 0;
         self.continued = false;
     }
-    fn break_line(&mut self, out: &mut String) {
+    /// Starts a new line in place of `spaces` spaces.
+    fn break_line(&mut self, out: &mut String, spaces: usize) {
         out.push('\n');
         out.extend(std::iter::repeat_n(' ', self.indent));
+        if self.marked {
+            out.push(JOINED);
+            out.extend(std::iter::repeat_n(SPACE, spaces));
+        }
         self.column = self.indent;
     }
 }

@@ -13,11 +13,12 @@ use super::editor::{
 use super::interactive::effort_note;
 use super::record::{self, Event};
 use super::select::Picker;
+use super::selection::{self, Line};
 use super::settings::Delivery;
 use super::slash::Builtin;
 use super::terminal::{Terminal, elapsed};
 use super::text::{Wrap, clip, one_line, visible};
-use super::{clipboard, editor, job, selection, style, view};
+use super::{clipboard, editor, job, style};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -533,7 +534,7 @@ struct Transcript {
 struct Part {
     events: Vec<Event>,
     version: usize,
-    lines: Vec<String>,
+    lines: Vec<Line>,
     rendered: Option<(Look, usize)>,
 }
 
@@ -606,18 +607,20 @@ impl Transcript {
     }
 
     /// `count` lines from `top`, as far as there are.
-    fn window(&self, top: usize, count: usize) -> Vec<String> {
+    fn window(&self, top: usize, count: usize) -> Vec<Line> {
         let lines = self.parts.iter().flat_map(|part| &part.lines);
         lines.skip(top).take(count).cloned().collect()
+    }
+
+    /// Line `line` as drawn, empty past the end.
+    fn shown(&self, line: usize) -> String {
+        let line = self.window(line, 1).pop();
+        line.map(|line| line.shown).unwrap_or_default()
     }
 }
 
 /// The lines of `events` as the inline output shows them, rendered at the look's width.
-fn render(
-    events: &[Event],
-    (width, _, whole): Look,
-    hide_thinking: Arc<AtomicBool>,
-) -> Vec<String> {
+fn render(events: &[Event], (width, _, whole): Look, hide_thinking: Arc<AtomicBool>) -> Vec<Line> {
     let mut ui = Terminal::capture_shown(width, hide_thinking, whole);
     for event in events {
         record::replay(event, &mut ui);
@@ -625,10 +628,10 @@ fn render(
     if let Some(Event::ToolOutput(output)) = events.last() {
         ui.running_output(output);
     }
-    let mut lines = view::screen_lines(&ui.captured());
+    let mut lines = selection::lines(&ui.captured());
     // Each block ends with a blank line, which separates it from the next part.
     if !lines.is_empty() {
-        lines.push(String::new());
+        lines.push(Line::default());
     }
     lines
 }
@@ -1109,7 +1112,7 @@ impl App {
     fn mark(&self, column: usize, row: usize) -> Mark {
         let line = self.shown_top() + row.min(self.rows.saturating_sub(1));
         let line = line.min(self.transcript.len().saturating_sub(1));
-        let text = self.transcript.window(line, 1).pop().unwrap_or_default();
+        let text = self.transcript.shown(line);
         Mark {
             place: self.transcript.locate(line),
             column: selection::snap(&text, column),
@@ -1186,11 +1189,7 @@ impl App {
                     let follow = self.top.is_none();
                     self.top = Some(self.transcript.locate(top));
                     let mark = self.mark(column, row);
-                    let line = self
-                        .transcript
-                        .window(top + row, 1)
-                        .pop()
-                        .unwrap_or_default();
+                    let line = self.transcript.shown(top + row);
                     let count = match previous {
                         Some(click)
                             if click.released
@@ -1595,7 +1594,7 @@ impl App {
             ];
             let mut lines = render(&events, (width, false, false), self.hide_thinking.clone());
             lines.pop();
-            rows.extend(lines);
+            rows.extend(lines.into_iter().map(|line| line.shown));
         }
         rows.push(self.status(width));
         let queued = [
@@ -1695,7 +1694,8 @@ impl App {
         if top == last && self.selection.is_none() {
             self.top = None;
         }
-        let mut frame = self.transcript.window(top, rows);
+        let window = self.transcript.window(top, rows).into_iter();
+        let mut frame: Vec<String> = window.map(|line| line.shown).collect();
         if let Some((start, end)) = self.selected() {
             for (line, row) in (top..).zip(&mut frame) {
                 if (start.0..=end.0).contains(&line) {
@@ -1915,7 +1915,11 @@ mod tests {
         transcript.split();
         transcript.push(Event::Text("✓ done".into()));
         transcript.render((40, false, false), &hide);
-        let cut = transcript.window(0, 100);
+        let window = |transcript: &Transcript, top, count| -> Vec<String> {
+            let lines = transcript.window(top, count).into_iter();
+            lines.map(|line| line.shown).collect()
+        };
+        let cut = window(&transcript, 0, 100);
         assert!(
             cut.iter()
                 .any(|line| line.contains("earlier lines, Ctrl+O to expand")),
@@ -1926,16 +1930,50 @@ mod tests {
         transcript.render((40, false, false), &hide);
         assert!(transcript.parts[0].lines.is_empty());
         transcript.render((40, false, true), &hide);
-        let whole = transcript.window(0, 100);
+        let whole = window(&transcript, 0, 100);
         assert!(whole.len() > cut.len() && !whole.iter().any(|line| line.contains("earlier")));
         assert_eq!(transcript.len(), whole.len());
-        assert_eq!(transcript.window(2, 1), whole[2..3]);
+        assert_eq!(window(&transcript, 2, 1), whole[2..3]);
         // A line of the part after the result stays in view as the result grows.
         let done = Place { part: 1, line: 0 };
         assert_eq!(transcript.locate(whole.len() - 2), done);
         assert_eq!(transcript.line(done), whole.len() - 2);
         transcript.render((40, false, false), &hide);
         assert_eq!(transcript.line(done), cut.len() - 2);
-        assert_eq!(transcript.window(transcript.line(done), 1), ["✓ done"]);
+        assert_eq!(window(&transcript, transcript.line(done), 1), ["✓ done"]);
+    }
+
+    #[test]
+    fn a_copy_holds_what_was_written_rather_than_how_it_wrapped() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::default();
+        let prompt = "please run the tests,  then say what fails";
+        transcript.push(Event::UserPrompt(prompt.into()));
+        let reply = "Run `cargo test --offline --no-fail-fast` to see:\n\n- every failing test with its output";
+        transcript.push(Event::Progress(StreamProgress::Text(reply.into())));
+        transcript.push(Event::Assistant(reply.into()));
+        let command = "cargo test --offline --no-fail-fast";
+        transcript.push(Event::ToolCall("bash".into(), command.into()));
+        let output = "test a ... ok\ntest agent::tests::compaction ... FAILED";
+        transcript.push(Event::ToolResult("bash".into(), output.into(), None, true));
+        transcript.render((24, false, true), &hide);
+        let lines = transcript.window(0, 100);
+        assert!(lines.len() > 16, "{lines:?}");
+        assert_eq!(
+            selection::text(&lines[..lines.len() - 1], 0, usize::MAX),
+            format!(
+                "{prompt}\n\nRun cargo test --offline --no-fail-fast to see:\n\n\
+                - every failing test with its output\n\n● bash {command}\n{output}"
+            )
+        );
+        // Cut previews are copied as shown.
+        transcript.render((24, false, false), &hide);
+        let lines = transcript.window(0, 100);
+        let failed = lines.iter().position(|line| line.shown.contains("agent::"));
+        let failed = failed.expect("the failed test's line");
+        assert_eq!(
+            selection::text(&lines[failed..=failed], 0, usize::MAX),
+            "test agent::tests::co…"
+        );
     }
 }

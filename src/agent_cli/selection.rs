@@ -1,11 +1,90 @@
 //! Text selected with the mouse in the full screen's conversation, as Scramjet's retained view
 //! selects it: between the starts of the cells pressed and dragged to, shown reversed, copied
-//! as displayed. Lines are the screen's (`view::screen_lines`), which hold only style sequences
-//! besides the text.
+//! as displayed but for gutters and the line breaks of wrapping. Lines are the screen's
+//! (`lines`), which hold only style sequences besides the text.
 
 use super::style;
+use super::text::{FROM, JOINED, SPACE};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+/// A line of the screen, and what a copy of it holds.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Line {
+    /// Its text and style sequences.
+    pub(super) shown: String,
+    /// The column its copy starts at; the cells before are a gutter.
+    from: usize,
+    /// When the next line continues it, what goes between them in a copy.
+    joined: Option<String>,
+}
+
+/// The lines of rendered text, each ending its styles and starting with those still on from the
+/// lines before, so that any of them can be drawn first. Only style sequences are kept of the
+/// escape sequences, and no other control characters; the marks of `text::FROM` say what a
+/// copy holds.
+pub(super) fn lines(text: &str) -> Vec<Line> {
+    let text = text.trim_end_matches('\n');
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut active = String::new();
+    let mut lines: Vec<Line> = Vec::new();
+    for line in text.split('\n') {
+        let mut shown = active.clone();
+        let (mut column, mut from, mut joined) = (0, 0, None::<String>);
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\x1b' if chars.peek() == Some(&'[') => {
+                    chars.next();
+                    let mut sequence = String::from("\x1b[");
+                    for c in chars.by_ref() {
+                        sequence.push(c);
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                    if sequence.ends_with('m') {
+                        if sequence == style::RESET || sequence == "\x1b[m" {
+                            active.clear();
+                        } else {
+                            active += &sequence;
+                        }
+                        shown += &sequence;
+                    }
+                }
+                '\t' => {
+                    shown += "    ";
+                    column += 4;
+                }
+                FROM => from = column,
+                JOINED => {
+                    from = column;
+                    joined = Some(String::new());
+                }
+                SPACE => joined.iter_mut().for_each(|joined| joined.push(' ')),
+                c if c.is_control() => {}
+                c => {
+                    shown.push(c);
+                    column += c.width().unwrap_or(0);
+                }
+            }
+        }
+        if !active.is_empty() {
+            shown += style::RESET;
+        }
+        if let Some(previous) = lines.last_mut().filter(|_| joined.is_some()) {
+            previous.joined = joined;
+        }
+        lines.push(Line {
+            shown,
+            from,
+            joined: None,
+        });
+    }
+    lines
+}
 
 enum Piece<'a> {
     /// A style sequence, which takes no columns.
@@ -160,17 +239,26 @@ pub(super) fn highlight(line: &str, left: usize, right: usize) -> String {
 }
 
 /// The text selected in `lines`, from column `left` of the first to before column `right` of
-/// the last, a line each, without their trailing spaces.
-pub(super) fn text(lines: &[String], left: usize, right: usize) -> String {
+/// the last, without gutters: a line each, without their trailing spaces, but for a line that
+/// the next continues, which they join as it says.
+pub(super) fn text(lines: &[Line], left: usize, right: usize) -> String {
     let last = lines.len().saturating_sub(1);
-    let rows: Vec<_> = (lines.iter().enumerate())
-        .map(|(index, line)| {
-            let from = if index == 0 { left } else { 0 };
-            let to = if index == last { right } else { usize::MAX };
-            cut(line, from, to).trim_end().to_owned()
-        })
-        .collect();
-    rows.join("\n")
+    let mut text = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        let from = if index == 0 { left } else { 0 }.max(line.from);
+        let to = if index == last { right } else { usize::MAX };
+        let cut = cut(&line.shown, from, to);
+        match &line.joined {
+            Some(joined) if index < last => text += &(cut + joined),
+            _ => {
+                text += cut.trim_end();
+                if index < last {
+                    text.push('\n');
+                }
+            }
+        }
+    }
+    text
 }
 
 #[cfg(test)]
@@ -223,13 +311,35 @@ mod tests {
 
     #[test]
     fn the_text_copied_is_the_cells_selected_a_line_each() {
-        let lines = [
-            "\x1b[2m> first line  \x1b[0m".to_owned(),
-            String::new(),
-            "  indented 界 wide".to_owned(),
-        ];
+        let lines = lines("\x1b[2m> first line  \x1b[0m\n\n  indented 界 wide");
         assert_eq!(text(&lines, 2, 13), "first line\n\n  indented 界");
         assert_eq!(text(&lines[2..], 11, 12), "界");
         assert_eq!(text(&lines[..1], 2, 7), "first");
+    }
+
+    #[test]
+    fn a_copy_leaves_out_gutters_and_joins_wrapped_lines() {
+        // A wrapped paragraph, a word broken at the edge and a hanging indent.
+        let reply = lines(&format!(
+            "run \x1b[1mcargo\x1b[0m\n{JOINED}{SPACE}test --all\nsrc/a\n{JOINED}b.rs\n- item\n  {JOINED}{SPACE}{SPACE}more"
+        ));
+        assert_eq!(reply[1].shown, "test --all");
+        assert_eq!(
+            text(&reply, 0, 99),
+            "run cargo test --all\nsrc/ab.rs\n- item  more"
+        );
+        assert_eq!(text(&reply[..2], 4, 4), "cargo test");
+        assert_eq!(text(&reply[..1], 4, 9), "cargo");
+        // Gutters are left out, also where the selection starts or ends in one; the last line
+        // a copy takes is not joined.
+        let output = lines(&format!(
+            "  {FROM}first\n  {FROM}  second\n  {FROM}wrapped\n  {JOINED}on"
+        ));
+        assert_eq!(text(&output, 0, 99), "first\n  second\nwrappedon");
+        assert_eq!(text(&output, 3, 1), "irst\n  second\nwrapped");
+        // The prompt's rows keep the spaces they end with.
+        let prompt = lines(&format!("> {FROM}one two \n  {JOINED}three\n. {FROM}next"));
+        assert_eq!(prompt[1].shown, "  three");
+        assert_eq!(text(&prompt, 0, 99), "one two three\nnext");
     }
 }

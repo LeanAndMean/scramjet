@@ -1,7 +1,7 @@
 //! Prompt editor for the interactive agent: raw-mode editing, bracketed paste and history.
 
 use super::file_search;
-use super::text;
+use super::text::{self, FROM, JOINED, SPACE};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -373,21 +373,40 @@ struct WordStart {
 }
 
 impl Layout {
-    /// Wraps lines between words where it can. As in Scramjet's editor the last column stays
-    /// free for the cursor; spaces that reach it hang there instead of starting a row.
     fn new(text: &str, width: usize) -> Self {
+        Self::marked(text, width, false)
+    }
+
+    /// Wraps lines between words where it can. As in Scramjet's editor the last column stays
+    /// free for the cursor; spaces that reach it hang there instead of starting a row. With
+    /// `marked`, the rows are marked for a copy (`text::FROM`).
+    fn marked(text: &str, width: usize, marked: bool) -> Self {
+        let gutter = |first: &str| match marked {
+            true => format!("{first}{FROM}"),
+            false => first.to_owned(),
+        };
+        // A row that continues a line, in place of `hung` spaces that hung.
+        let continued = |hung: usize| match marked {
+            true => format!(
+                "{}{JOINED}{}",
+                " ".repeat(INDENT),
+                SPACE.to_string().repeat(hung)
+            ),
+            false => " ".repeat(INDENT),
+        };
         let limit = width.max(INDENT + 3) - 1;
-        let mut rows = vec!["> ".to_owned()];
+        let mut rows = vec![gutter("> ")];
         let mut stops = Vec::new();
         let mut offset = 0;
         for (number, line) in text.split('\n').enumerate() {
             if number > 0 {
-                rows.push(". ".into());
+                rows.push(gutter(". "));
             }
             let mut column = INDENT;
             let mut row_has_text = false;
             let mut after_space = false;
             let mut hanging = false;
+            let mut hung = 0;
             let mut word: Option<WordStart> = None;
             for (index, grapheme) in line.grapheme_indices(true) {
                 let escaped: String;
@@ -412,7 +431,9 @@ impl Layout {
                         row,
                         column,
                     });
-                    if !hanging {
+                    if hanging {
+                        hung += 1;
+                    } else {
                         rows[row].push_str(shown);
                         column += cells;
                     }
@@ -420,7 +441,7 @@ impl Layout {
                 }
                 let starts_word = std::mem::take(&mut after_space);
                 if hanging {
-                    rows.push(" ".repeat(INDENT));
+                    rows.push(continued(std::mem::take(&mut hung)));
                     column = INDENT;
                     hanging = false;
                 } else if starts_word && row_has_text {
@@ -445,9 +466,9 @@ impl Layout {
                             String::new()
                         }
                     };
-                    rows.push(" ".repeat(INDENT) + &tail);
+                    rows.push(continued(0) + &tail);
                     if column + cells > limit && column > INDENT {
-                        rows.push(" ".repeat(INDENT));
+                        rows.push(continued(0));
                         column = INDENT;
                     }
                 }
@@ -601,9 +622,10 @@ struct Screen {
     width: usize,
 }
 
-/// The rows a prompt takes on screen as the editor shows it, wrapped to `width`.
-pub(super) fn prompt_rows(text: &str, width: usize) -> Vec<String> {
-    Layout::new(text, width).rows
+/// The rows a prompt takes on screen as the editor shows it, wrapped to `width`, `marked` for
+/// a copy (`text::FROM`) if asked.
+pub(super) fn prompt_rows(text: &str, width: usize, marked: bool) -> Vec<String> {
+    Layout::marked(text, width, marked).rows
 }
 
 pub(super) fn terminal_size() -> (usize, usize) {

@@ -1,6 +1,6 @@
 //! The inline renderer: the agent's output printed to the terminal as it streams, with a
 //! status line under it, and the terminal modes of a turn.
-use super::text::{Wrap, call_line, clip, printable, visible};
+use super::text::{FROM, Wrap, call_line, clip, printable, visible};
 use super::{diff, editor, job, markdown, select, style, type_ahead, view};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -211,6 +211,8 @@ pub(super) struct Terminal {
     pub(super) expandable: bool,
     /// Every tool result is shown whole, as the conversation view shows them.
     full: bool,
+    /// The output marks gutters and wrapped lines for the full screen's copy (`text::FROM`).
+    marked: bool,
 }
 
 impl Terminal {
@@ -239,7 +241,8 @@ impl Terminal {
         };
         let shown = |limited: Shown| if full { Shown::All } else { limited };
         let hint = if self.expandable { EXPAND_HINT } else { "" };
-        let preview = |text: &str, shown: Shown, width| preview(text, shown, width, hint);
+        let marked = self.marked;
+        let preview = |text: &str, shown: Shown, width| preview(text, shown, width, hint, marked);
         let rows = match (name, detail) {
             (_, Some(ToolDetail::Diff(diff))) => {
                 let limit = if full { usize::MAX } else { diff::ROWS };
@@ -255,7 +258,7 @@ impl Terminal {
             (_, Some(ToolDetail::Answer(answer))) => answer
                 .lines()
                 .flat_map(|line| {
-                    let mut wrap = Wrap::new(width);
+                    let mut wrap = self.wrapper(width);
                     let rows = wrap.push(&printable(line)) + &wrap.finish();
                     rows.split('\n').map(str::to_owned).collect::<Vec<_>>()
                 })
@@ -274,12 +277,13 @@ impl Terminal {
             )),
             _ => styled(preview(output, shown(Shown::First(RESULT_LINES)), width)),
         };
+        let gutter = self.gutter();
         for row in rows {
-            self.err(&format!("  {row}\n"));
+            self.err(&format!("{gutter}{row}\n"));
         }
         if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
             let took = self.dim(&format!("took {:.1}s", took.as_secs_f64()));
-            self.err(&format!("  {took}\n"));
+            self.err(&format!("{gutter}{took}\n"));
         }
         // As in Scramjet, a blank line separates each tool block from what follows.
         self.err("\n");
@@ -297,6 +301,7 @@ impl Terminal {
         let mut terminal = Self::capture(width, hide_thinking);
         terminal.full = full;
         terminal.expandable = !full;
+        terminal.marked = true;
         terminal
     }
     /// What was rendered into the buffer, after ending any streamed block.
@@ -383,6 +388,7 @@ impl Terminal {
             capture: None,
             expandable: false,
             full: false,
+            marked: false,
         }
     }
     /// Shows `activity` on the status line now, or only once it lasts a second.
@@ -406,8 +412,18 @@ impl Terminal {
     }
     /// `text` broken between words to fit the terminal, for output to stderr.
     pub(super) fn wrapped(&self, text: &str) -> String {
-        let mut wrap = Wrap::new(if self.color { self.width() } else { 0 });
+        let mut wrap = self.wrapper(if self.color { self.width() } else { 0 });
         wrap.push(text) + &wrap.finish()
+    }
+    fn wrapper(&self, width: usize) -> Wrap {
+        Wrap::new(width).marking(self.marked)
+    }
+    /// The indent of a block under its heading, such as a tool's result under its call.
+    fn gutter(&self) -> String {
+        match self.marked {
+            true => format!("  {FROM}"),
+            false => "  ".into(),
+        }
     }
     pub(super) fn dim(&self, text: &str) -> String {
         self.styled(style::MUTED, text)
@@ -440,7 +456,7 @@ impl Terminal {
                 ""
             };
             self.markdown = markdown::Markdown::new(styled, base);
-            self.wrap = Wrap::new(if styled { self.width() } else { 0 });
+            self.wrap = self.wrapper(if styled { self.width() } else { 0 });
             self.streaming = kind;
             self.text_rows =
                 (kind == Streaming::Text && styled && self.streamed.is_empty()).then_some(0);
@@ -628,7 +644,7 @@ impl AgentUi for Terminal {
             };
             let mut markdown = markdown::Markdown::new(width > 0, "");
             let text = markdown.push(text.trim_end()) + &markdown.finish();
-            let mut wrap = Wrap::new(width);
+            let mut wrap = self.wrapper(width);
             let text = wrap.push(&text) + &wrap.finish();
             self.out(&format!("{text}\n\n"));
         }
@@ -701,7 +717,7 @@ impl AgentUi for Terminal {
             true => self.width(),
             false => usize::MAX,
         };
-        for row in editor::prompt_rows(prompt, width) {
+        for row in editor::prompt_rows(prompt, width, self.marked) {
             self.err(&format!("{row}\n"));
         }
         self.err("\n");
@@ -743,11 +759,12 @@ impl AgentUi for Terminal {
         };
         let mut markdown = markdown::Markdown::new(self.color, "");
         let text = markdown.push(visible(message).trim_end()) + &markdown.finish();
-        let mut wrap = Wrap::new(width);
+        let mut wrap = self.wrapper(width);
+        let gutter = self.gutter();
         for line in (wrap.push(&text) + &wrap.finish()).lines() {
             match line.is_empty() {
                 true => self.err("\n"),
-                false => self.err(&format!("  {line}\n")),
+                false => self.err(&format!("{gutter}{line}\n")),
             }
         }
         self.err("\n");
@@ -853,9 +870,10 @@ impl Terminal {
             true => Shown::All,
             false => Shown::Last(BASH_LINES),
         };
-        for row in preview(output.trim_end_matches('\n'), shown, width, "") {
+        let gutter = self.gutter();
+        for row in preview(output.trim_end_matches('\n'), shown, width, "", self.marked) {
             let row = self.styled(style::STATUS, &row);
-            self.err(&format!("  {row}\n"));
+            self.err(&format!("{gutter}{row}\n"));
         }
     }
     /// Removes the last `rows` rows of output, the cursor at the start of the row after them.
@@ -965,8 +983,8 @@ fn bash_shown(output: &str, failed: bool) -> String {
 }
 
 /// The lines of a tool result to show, made safe for the terminal and cut to `width` cells,
-/// with a note for lines left out that ends with `hint`.
-fn preview(text: &str, shown: Shown, width: usize, hint: &str) -> Vec<String> {
+/// with a note for lines left out that ends with `hint`; lines wrapped are `marked` for a copy.
+fn preview(text: &str, shown: Shown, width: usize, hint: &str, marked: bool) -> Vec<String> {
     let lines: Vec<&str> = text.lines().collect();
     let fit = |line: &&str| clip(&printable(line), width);
     match shown {
@@ -987,7 +1005,7 @@ fn preview(text: &str, shown: Shown, width: usize, hint: &str) -> Vec<String> {
         Shown::All => lines
             .iter()
             .flat_map(|line| {
-                let mut wrap = Wrap::new(width);
+                let mut wrap = Wrap::new(width).marking(marked);
                 let rows = wrap.push(&printable(line)) + &wrap.finish();
                 rows.split('\n').map(str::to_owned).collect::<Vec<_>>()
             })
@@ -1006,7 +1024,13 @@ mod tests {
         let output: String = (1..=20).map(|n| format!("line {n}\n")).collect();
         let failed = format!("{output}\nCommand exited with code 1");
         assert_eq!(
-            preview(&bash_shown(&failed, true), Shown::Last(5), 80, EXPAND_HINT),
+            preview(
+                &bash_shown(&failed, true),
+                Shown::Last(5),
+                80,
+                EXPAND_HINT,
+                false
+            ),
             [
                 "… (16 earlier lines, Ctrl+O to expand)",
                 "line 17",
@@ -1025,7 +1049,7 @@ mod tests {
             "Command exited with code 1"
         );
         assert_eq!(bash_shown("a\n\nb", false), "a\n\nb");
-        let head = preview(&output, Shown::First(2), 80, "");
+        let head = preview(&output, Shown::First(2), 80, "", false);
         assert_eq!(head, ["line 1", "line 2", "… (18 more lines, 20 total)"]);
         assert_eq!(
             printable("\x1b[31merror\x1b[0m:\tx\x1b]0;title\x07\x08 10%\r100%"),

@@ -4,7 +4,7 @@
 
 use super::editor::{Key, RESIZE_CHECK, RawMode, Stdin, read_key, terminal_size};
 use super::text::clip;
-use super::{editor, job, style};
+use super::{editor, job, selection, style};
 use std::io::{self, Write};
 use std::sync::{
     Mutex, PoisonError,
@@ -281,50 +281,10 @@ fn draw(
     stderr.flush()
 }
 
-/// The lines of rendered text, each ending its styles and starting with those still on from the
-/// lines before, so that any of them can be drawn first. Only style sequences are kept of the
-/// escape sequences, and no other control characters.
+/// The lines of rendered text as `selection::lines` draws them.
 pub(super) fn screen_lines(text: &str) -> Vec<String> {
-    let text = text.trim_end_matches('\n');
-    if text.is_empty() {
-        return Vec::new();
-    }
-    let mut active = String::new();
-    text.split('\n')
-        .map(|line| {
-            let mut shown = active.clone();
-            let mut chars = line.chars().peekable();
-            while let Some(c) = chars.next() {
-                match c {
-                    '\x1b' if chars.peek() == Some(&'[') => {
-                        chars.next();
-                        let mut sequence = String::from("\x1b[");
-                        for c in chars.by_ref() {
-                            sequence.push(c);
-                            if ('@'..='~').contains(&c) {
-                                break;
-                            }
-                        }
-                        if sequence.ends_with('m') {
-                            if sequence == style::RESET || sequence == "\x1b[m" {
-                                active.clear();
-                            } else {
-                                active += &sequence;
-                            }
-                            shown += &sequence;
-                        }
-                    }
-                    '\t' => shown += "    ",
-                    c if c.is_control() => {}
-                    c => shown.push(c),
-                }
-            }
-            if !active.is_empty() {
-                shown += style::RESET;
-            }
-            shown
-        })
-        .collect()
+    let lines = selection::lines(text).into_iter();
+    lines.map(|line| line.shown).collect()
 }
 
 #[cfg(test)]
