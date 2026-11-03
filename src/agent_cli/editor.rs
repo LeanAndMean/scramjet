@@ -69,8 +69,22 @@ pub(super) enum Key {
     Suspend,
     /// A lone Escape.
     Escape,
+    /// A mouse report, which only the full screen asks the terminal for.
+    Mouse(Mouse),
     Idle,
     Ignored,
+}
+
+/// An SGR mouse report (`ESC [ < button ; column ; row M`, `m` on release).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Mouse {
+    /// The button and modifier bits: 0 left, 2 right, 32 a move with the left button held, 64
+    /// and 65 the wheel up and down.
+    pub(super) button: u16,
+    /// Where, from 0.
+    pub(super) column: usize,
+    pub(super) row: usize,
+    pub(super) release: bool,
 }
 
 pub(super) trait ByteSource {
@@ -170,6 +184,16 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         }
     };
     let parameters = String::from_utf8_lossy(&parameters);
+    if let Some(report) = parameters.strip_prefix('<') {
+        return Ok(mouse(report, last).map_or(Key::Ignored, Key::Mouse));
+    }
+    // A report in the older X10 form, from a terminal without SGR reports: three bytes follow.
+    if (last, parameters.as_ref()) == (b'M', "") {
+        for _ in 0..3 {
+            source.byte(Some(ESCAPE_WAIT))?;
+        }
+        return Ok(Key::Ignored);
+    }
     let modifier = parameters.split(';').nth(1);
     let word = matches!(modifier, Some("3" | "5"));
     Ok(match (last, parameters.as_ref()) {
@@ -192,6 +216,28 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         (b'u', "13") => Key::Enter,
         (b'Z', _) | (b'~', "27;2;9") | (b'u', "9;2") => Key::BackTab,
         _ => Key::Ignored,
+    })
+}
+
+fn mouse(report: &str, last: u8) -> Option<Mouse> {
+    let mut numbers = report.split(';').map(str::parse::<usize>);
+    let (Some(Ok(button)), Some(Ok(column)), Some(Ok(row)), None) = (
+        numbers.next(),
+        numbers.next(),
+        numbers.next(),
+        numbers.next(),
+    ) else {
+        return None;
+    };
+    Some(Mouse {
+        button: u16::try_from(button).ok()?,
+        column: column.checked_sub(1)?,
+        row: row.checked_sub(1)?,
+        release: match last {
+            b'M' => false,
+            b'm' => true,
+            _ => return None,
+        },
     })
 }
 
@@ -1173,6 +1219,7 @@ impl Editor {
             Key::BackTab if !self.dialog => return Action::CycleEffort,
             Key::Expand if !self.dialog => return Action::Conversation,
             Key::Ignored
+            | Key::Mouse(_)
             | Key::BackTab
             | Key::Expand
             | Key::Escape
@@ -1581,6 +1628,33 @@ mod tests {
                 Key::PageDown,
                 Key::Ignored,
                 Key::Escape
+            ]
+        );
+    }
+
+    #[test]
+    fn decodes_sgr_mouse_reports() {
+        let mouse = |button, column, row, release| {
+            Key::Mouse(Mouse {
+                button,
+                column,
+                row,
+                release,
+            })
+        };
+        assert_eq!(
+            keys(
+                b"\x1b[<0;1;1M\x1b[<32;120;40M\x1b[<0;120;40m\x1b[<65;3;2M\x1b[<0;0;1M\x1b[<1;2M\x1b[M`!!a"
+            ),
+            [
+                mouse(0, 0, 0, false),
+                mouse(32, 119, 39, false),
+                mouse(0, 119, 39, true),
+                mouse(65, 2, 1, false),
+                Key::Ignored,
+                Key::Ignored,
+                Key::Ignored,
+                Key::Text("a".into()),
             ]
         );
     }

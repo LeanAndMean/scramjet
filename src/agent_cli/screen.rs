@@ -1,11 +1,12 @@
 //! The full-screen interface (`--fullscreen`): the conversation in the alternate screen, scrolled
 //! by the application, with the status line, the prompt editor and lists docked under it; the
 //! editor keeps taking keys while a turn runs, and what is sent then is queued for the model, as
-//! Scramjet's steering and follow-up messages. A thread owns the terminal; the session runs on
+//! Scramjet's steering and follow-up messages. The mouse wheel scrolls, and dragging selects
+//! text to copy, as in Scramjet's retained view. A thread owns the terminal; the session runs on
 //! the caller's thread and talks to it through a `Handle`.
 
 use super::editor::{
-    Action, ByteSource, Draft, ESCAPE_WAIT, Editor, Key, RESIZE_CHECK, RawMode, read_key,
+    Action, ByteSource, Draft, ESCAPE_WAIT, Editor, Key, Mouse, RESIZE_CHECK, RawMode, read_key,
     terminal_size,
 };
 use super::record::{self, Event};
@@ -13,7 +14,7 @@ use super::select::Picker;
 use super::settings::Delivery;
 use super::terminal::{Terminal, elapsed};
 use super::text::{Wrap, clip, one_line, visible};
-use super::{editor, job, style, view};
+use super::{clipboard, editor, job, selection, style, view};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -41,6 +42,15 @@ const FRAME: Duration = Duration::from_millis(16);
 /// The share of the screen's rows the prompt's text takes at most, as Scramjet's default
 /// `editorMaxHeightPercent`.
 const EDITOR_SHARE: usize = 30;
+/// The lines a notch of the mouse wheel scrolls, Scramjet's default `wheel step`.
+const WHEEL: isize = 3;
+/// How often a selection dragged to the top or bottom edge scrolls on, as in Scramjet.
+const EDGE: Duration = Duration::from_millis(80);
+const LEFT: u16 = 0;
+const RIGHT: u16 = 2;
+const DRAG: u16 = 32;
+const WHEEL_UP: u16 = 64;
+const WHEEL_DOWN: u16 = 65;
 const ALLOW: &str = "Allow? [y/N, a = allow all until exit]";
 const BUSY: &str = "Busy: the session is not ready for a prompt yet";
 const WAITS: &str = "Commands wait for the turn to end: Esc interrupts it";
@@ -391,6 +401,37 @@ struct Place {
     line: usize,
 }
 
+/// A point of the conversation between two cells: before column `column` of the line at `place`.
+#[derive(Clone, Copy, PartialEq)]
+struct Mark {
+    place: Place,
+    column: usize,
+}
+
+/// Text selected with the mouse, from where the left button was pressed to where it went.
+struct Selection {
+    anchor: Mark,
+    head: Mark,
+    /// The button is held, and moved since it was pressed.
+    held: bool,
+    dragged: bool,
+    /// The view followed the end when the selection started, and goes back to it when the
+    /// selection ends, unless the user scrolled meanwhile.
+    follow: bool,
+}
+
+/// Where the pointer is while a selection is dragged at the top (-1) or bottom (1) edge of the
+/// conversation, which then scrolls on.
+struct Edge {
+    direction: isize,
+    column: usize,
+    row: usize,
+    scrolled: Instant,
+}
+
+/// A copy under way: the terminal's sequence that copies, if any, or the failure.
+type Copying = mpsc::Receiver<Result<Option<String>, String>>;
+
 /// The conversation shown, in parts that each render on their own: a turn, or what came
 /// between turns. Each part is rendered again only when it or the look changes.
 #[derive(Default)]
@@ -519,6 +560,9 @@ struct App {
     top: Option<Place>,
     /// Tool results are shown whole (Ctrl+O).
     whole: bool,
+    selection: Option<Selection>,
+    edge: Option<Edge>,
+    copying: Option<Copying>,
     /// The user asked to exit; keys are no longer taken.
     exiting: bool,
     /// The terminal's size, the rows and the cursor drawn last.
@@ -552,6 +596,9 @@ impl App {
             dialog: None,
             top: None,
             whole: false,
+            selection: None,
+            edge: None,
+            copying: None,
             exiting: false,
             size: (0, 0),
             drawn: Vec::new(),
@@ -588,11 +635,25 @@ impl App {
             {
                 text.editor.poll(&mut text.draft);
             }
+            self.copied()?;
+            if self
+                .edge
+                .as_ref()
+                .is_some_and(|edge| edge.scrolled.elapsed() >= EDGE)
+            {
+                self.edge_scroll();
+            }
             let since = self.drawn_at.elapsed();
             let mut wait = match self.activity.is_some() || self.draft.searching() {
                 true => TICK,
                 false => RESIZE_CHECK,
             };
+            if let Some(edge) = &self.edge {
+                wait = wait.min(EDGE.saturating_sub(edge.scrolled.elapsed()));
+            }
+            if self.copying.is_some() {
+                wait = wait.min(FRAME);
+            }
             if !source.pending() {
                 if since >= FRAME {
                     self.draw()?;
@@ -612,7 +673,15 @@ impl App {
                 }
                 result => result?,
             };
-            match self.key(key, source.pending()) {
+            let flow = self.key(key, source.pending());
+            if !matches!(flow, Flow::Go) {
+                // The button's release goes to whatever has the terminal meanwhile.
+                self.edge = None;
+                if let Some(selection) = &mut self.selection {
+                    selection.held = false;
+                }
+            }
+            match flow {
                 Flow::Go => {}
                 Flow::Suspend => {
                     drop(screen);
@@ -645,6 +714,7 @@ impl App {
             ToScreen::Clear => {
                 self.transcript = Transcript::default();
                 self.top = None;
+                (self.selection, self.edge) = (None, None);
             }
             ToScreen::Turn(running) => {
                 self.transcript.split();
@@ -781,19 +851,235 @@ impl App {
         self.top = None;
     }
 
-    fn scroll(&mut self, up: bool) {
-        let page = self.rows.saturating_sub(1).max(1);
-        let top = self.top.map_or(self.last, |top| self.transcript.line(top));
-        let top = match up {
-            true => top.saturating_sub(page),
-            false => top + page,
+    /// The first line of the conversation shown: where the user scrolled to, else the end's. A
+    /// selection keeps the view where it is, also at the end.
+    fn shown_top(&self) -> usize {
+        match self.top.map(|top| self.transcript.line(top)) {
+            Some(top) if top < self.last || self.selection.is_some() => top.min(self.last),
+            _ => self.last,
+        }
+    }
+
+    /// Scrolls by `lines`, up when negative; returns whether the view moved.
+    fn scroll(&mut self, lines: isize) -> bool {
+        let top = self.shown_top();
+        let next = top.saturating_add_signed(lines).min(self.last);
+        if next != top {
+            self.top = Some(self.transcript.locate(next));
+        }
+        next != top
+    }
+
+    /// Scrolls as the user asks, which leaves the view there when a selection ends.
+    fn navigate(&mut self, lines: isize) {
+        if let Some(selection) = &mut self.selection {
+            selection.follow = false;
+        }
+        self.scroll(lines);
+    }
+
+    /// The point of the conversation at the screen's `column` and `row`, kept to the lines shown.
+    fn mark(&self, column: usize, row: usize) -> Mark {
+        let line = self.shown_top() + row.min(self.rows.saturating_sub(1));
+        let line = line.min(self.transcript.len().saturating_sub(1));
+        let text = self.transcript.window(line, 1).pop().unwrap_or_default();
+        Mark {
+            place: self.transcript.locate(line),
+            column: selection::snap(&text, column),
+        }
+    }
+
+    /// What is selected, by line and column, from its start to before its end.
+    fn selected(&self) -> Option<((usize, usize), (usize, usize))> {
+        let selection = self.selection.as_ref()?;
+        let point = |mark: Mark| (self.transcript.line(mark.place), mark.column);
+        let (anchor, head) = (point(selection.anchor), point(selection.head));
+        (anchor != head).then(|| (anchor.min(head), anchor.max(head)))
+    }
+
+    fn clear_selection(&mut self) {
+        self.edge = None;
+        if self
+            .selection
+            .take()
+            .is_some_and(|selection| selection.follow)
+        {
+            self.top = None;
+        }
+    }
+
+    /// As Scramjet's retained view: the wheel scrolls; the left button selects from where it is
+    /// pressed in the conversation to where it is dragged, a drag to an edge scrolling on; a
+    /// right click copies what is selected.
+    fn mouse(&mut self, mouse: Mouse) {
+        let Mouse {
+            button,
+            column,
+            row,
+            release,
+        } = mouse;
+        if release {
+            self.edge = None;
+            if let Some(selection) = &mut self.selection {
+                selection.held = false;
+                if selection.anchor == selection.head {
+                    self.clear_selection();
+                }
+            }
+            return;
+        }
+        match button {
+            WHEEL_UP | WHEEL_DOWN => {
+                self.navigate(if button == WHEEL_UP { -WHEEL } else { WHEEL });
+                let head = self.mark(column, row);
+                if let Some(selection) = &mut self.selection
+                    && selection.held
+                    && selection.dragged
+                {
+                    selection.head = head;
+                }
+            }
+            RIGHT => self.copy(),
+            LEFT => {
+                self.clear_selection();
+                let top = self.shown_top();
+                if row < self.rows && top + row < self.transcript.len() {
+                    let follow = self.top.is_none();
+                    self.top = Some(self.transcript.locate(top));
+                    let mark = self.mark(column, row);
+                    self.selection = Some(Selection {
+                        anchor: mark,
+                        head: mark,
+                        held: true,
+                        dragged: false,
+                        follow,
+                    });
+                }
+            }
+            DRAG => {
+                let head = self.mark(column, row);
+                let Some(selection) = self.selection.as_mut().filter(|selection| selection.held)
+                else {
+                    return;
+                };
+                selection.dragged = true;
+                selection.head = head;
+                let direction = match row {
+                    0 => -1,
+                    row if row + 1 >= self.rows => 1,
+                    _ => 0,
+                };
+                let scrolled = (self.edge.as_ref())
+                    .filter(|edge| edge.direction == direction)
+                    .map_or_else(Instant::now, |edge| edge.scrolled);
+                self.edge = (direction != 0).then_some(Edge {
+                    direction,
+                    column,
+                    row,
+                    scrolled,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// Scrolls on while a selection is dragged at an edge, until the view can go no further.
+    fn edge_scroll(&mut self) {
+        let Some(Edge {
+            direction,
+            column,
+            row,
+            ..
+        }) = self.edge
+        else {
+            return;
         };
-        self.top = Some(self.transcript.locate(top));
+        if let Some(selection) = &mut self.selection {
+            selection.follow = false;
+        }
+        if !self.scroll(direction) {
+            self.edge = None;
+            return;
+        }
+        let head = self.mark(column, row);
+        if let Some(selection) = &mut self.selection {
+            selection.head = head;
+        }
+        if let Some(edge) = &mut self.edge {
+            edge.scrolled = Instant::now();
+        }
+    }
+
+    /// Copies the text selected, as shown, on a thread of its own: a clipboard tool may take a
+    /// while.
+    fn copy(&mut self) {
+        let Some((start, end)) = self.selected().filter(|_| self.copying.is_none()) else {
+            return;
+        };
+        let lines = self.transcript.window(start.0, end.0 + 1 - start.0);
+        let text = selection::text(&lines, start.1, end.1);
+        if text.is_empty() {
+            return;
+        }
+        self.edge = None;
+        let (done, outcome) = mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("clipboard".into())
+            .spawn(move || {
+                let _ = done.send(clipboard::copy(&text));
+            });
+        match started {
+            Ok(_) => self.copying = Some(outcome),
+            Err(error) => self.draft.set_note(format!("Copy failed: {error}")),
+        }
+    }
+
+    /// Ends a copy that has finished: the selection goes once copied, and stays if not.
+    fn copied(&mut self) -> io::Result<()> {
+        let outcome = match self.copying.as_ref().map(mpsc::Receiver::try_recv) {
+            None | Some(Err(TryRecvError::Empty)) => return Ok(()),
+            Some(Ok(outcome)) => outcome,
+            Some(Err(TryRecvError::Disconnected)) => Err("the clipboard failed".to_owned()),
+        };
+        self.copying = None;
+        match outcome {
+            Ok(sequence) => {
+                if let Some(sequence) = sequence {
+                    let mut stderr = io::stderr().lock();
+                    stderr.write_all(sequence.as_bytes())?;
+                    stderr.flush()?;
+                }
+                self.clear_selection();
+            }
+            Err(error) => self.draft.set_note(format!("Copy failed: {error}")),
+        }
+        Ok(())
     }
 
     fn key(&mut self, key: Key, pending: bool) -> Flow {
         if self.exiting {
             return Flow::Go;
+        }
+        if let Key::Mouse(mouse) = key {
+            self.mouse(mouse);
+            return Flow::Go;
+        }
+        // As in Scramjet, Ctrl+C copies what is selected, Escape lets it go and goes back to the
+        // end, and other keys let it go and do what they do.
+        if self.selection.is_some() {
+            match key {
+                Key::Interrupt => {
+                    self.copy();
+                    return Flow::Go;
+                }
+                Key::Escape => {
+                    self.clear_selection();
+                    self.top = None;
+                    return Flow::Go;
+                }
+                Key::Idle | Key::PageUp | Key::PageDown => {}
+                _ => self.clear_selection(),
+            }
         }
         match key {
             Key::Idle => return Flow::Go,
@@ -811,7 +1097,8 @@ impl App {
                     })
                 ) =>
             {
-                self.scroll(key == Key::PageUp);
+                let page = self.rows.saturating_sub(1).max(1) as isize;
+                self.navigate(if key == Key::PageUp { -page } else { page });
                 return Flow::Go;
             }
             _ => {}
@@ -925,8 +1212,8 @@ impl App {
         if let Some(activity) = &self.activity {
             parts.push(activity.line());
         }
-        if let Some(top) = self.top {
-            let below = self.last.saturating_sub(self.transcript.line(top));
+        let below = self.last.saturating_sub(self.shown_top());
+        if below > 0 {
             parts.push(format!("{below} more lines below · PgDn or Esc to go back"));
         }
         let line = clip(&parts.join(" · "), width.saturating_sub(1));
@@ -1022,15 +1309,21 @@ impl App {
         );
         self.transcript.render(look, &self.hide_thinking);
         let last = self.transcript.len().saturating_sub(rows);
-        let top = match self.top.map(|top| self.transcript.line(top)) {
-            Some(top) if top < last => top,
-            _ => {
-                self.top = None;
-                last
-            }
-        };
         (self.rows, self.last) = (rows, last);
+        let top = self.shown_top();
+        if top == last && self.selection.is_none() {
+            self.top = None;
+        }
         let mut frame = self.transcript.window(top, rows);
+        if let Some((start, end)) = self.selected() {
+            for (line, row) in (top..).zip(&mut frame) {
+                if (start.0..=end.0).contains(&line) {
+                    let left = if line == start.0 { start.1 } else { 0 };
+                    let right = if line == end.0 { end.1 } else { usize::MAX };
+                    *row = selection::highlight(row, left, right);
+                }
+            }
+        }
         frame.resize(rows, String::new());
         frame.extend(dock);
         frame.truncate(height);
@@ -1086,19 +1379,20 @@ fn prompt_rows(
     Some((start + row - top, column))
 }
 
-/// The alternate screen, lines cut at the edge rather than wrapped, until dropped.
+/// The alternate screen, lines cut at the edge rather than wrapped, and the mouse's buttons,
+/// drags and wheel reported (SGR), until dropped.
 struct Screen;
 
 impl Screen {
     fn enter() -> Self {
-        eprint!("\x1b[?1049h\x1b[?7l\x1b[2J");
+        eprint!("\x1b[?1049h\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[2J");
         Self
     }
 }
 
 impl Drop for Screen {
     fn drop(&mut self) {
-        eprint!("\x1b[?7h\x1b[?25h\x1b[?1049l");
+        eprint!("\x1b[?1002l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l");
         let _ = io::stderr().flush();
     }
 }

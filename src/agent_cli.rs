@@ -1,4 +1,5 @@
 mod args;
+mod clipboard;
 mod diff;
 mod editor;
 mod file_search;
@@ -9,6 +10,7 @@ mod markdown;
 mod record;
 mod screen;
 mod select;
+mod selection;
 mod settings;
 mod slash;
 mod style;

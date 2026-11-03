@@ -1,6 +1,7 @@
 """Drives `scramjet-rs` in a pseudo-terminal: the prompt editor, and typing or quitting while
 a turn runs, against closed and scripted endpoints."""
 import atexit
+import base64
 import fcntl
 import glob
 import json
@@ -1803,7 +1804,8 @@ class Screen:
         self.row = self.column = 0
         start = output.rfind(b'\x1b[?1049h')
         text = bytes(output[start:] if start >= 0 else b'').decode('utf-8', 'replace')
-        for match in re.finditer(r'\x1b\[([?0-9;]*)([@-~])|\x1b.|([\r\n])|([^\x1b\r\n])', text):
+        for match in re.finditer(r'\x1b\[([?0-9;]*)([@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b.|([\r\n])|'
+                                 r'([^\x1b\r\n])', text):
             parameters, final, control, character = match.groups()
             if final == 'H':
                 place = (parameters or '1;1').split(';') + ['1']
@@ -1927,11 +1929,62 @@ def fullscreen_queue(read, until, send, output):
     send(b'\x03\x04')
 
 
+def fullscreen_mouse(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    rows = on_screen('[1 requests')
+    assert 'Row 40 of the reply.' in '\n'.join(rows), rows
+    # A notch of the wheel scrolls three lines, wherever the pointer is.
+    send(b'\x1b[<64;5;23M')
+    on_screen('3 more lines below')
+    send(b'\x1b[<65;5;5M')
+    on_screen('more lines below', gone=True)
+    send(b'\x1b[<64;5;5M\x1b[<64;5;5M')
+    rows = on_screen('6 more lines below')
+    row = next(index for index, text in enumerate(rows) if text.startswith('Row 20 ')) + 1
+    # A drag selects from the cell pressed to before the cell the pointer is on, shown reversed;
+    # Ctrl+C copies it with the clipboard tool and lets it go, the view staying where it is.
+    mark = len(output)
+    send(b'\x1b[<0;5;%dM\x1b[<32;7;%dM\x1b[<32;9;%dM\x1b[<0;9;%dm' % (row, row + 1, row + 2, row + 2))
+    until(b'\x1b[7m20 of the reply.', mark)
+    copied = len(output)
+    send(b'\x03')
+    end = time.monotonic() + 10
+    while not os.path.exists(clipboard) or not open(clipboard).read():
+        assert time.monotonic() < end, 'nothing copied'
+        read(.05)
+    assert open(clipboard).read() == '20 of the reply.\nRow 21 of the reply.\nRow 22 o', open(clipboard).read()
+    read(.3)
+    assert b'\x1b[7m' not in output[copied:], 'still selected'
+    rows = shown()
+    assert '6 more lines below' in '\n'.join(rows) and 'Ctrl-C again' not in '\n'.join(rows), rows
+    # A click selects nothing; Escape lets a selection go and goes back to the end.
+    send(b'\x1b[<0;3;3M\x1b[<0;3;3m\x03')
+    on_screen('Ctrl-C again')
+    send(b'\x1b[<0;1;3M\x1b[<32;4;3M\x1b[<0;4;3m\x1b')
+    on_screen('more lines below', gone=True)
+    send(b'\x04')
+
+
+def fullscreen_copied_by_the_terminal(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    rows = on_screen('[1 requests')
+    row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
+    # Without a clipboard tool, a right click copies with OSC 52.
+    send(b'\x1b[<0;1;%dM\x1b[<32;8;%dM\x1b[<0;8;%dm\x1b[<2;1;1M' % (row, row, row))
+    until(b'\x1b]52;c;%s\x07' % base64.b64encode(b'Row 30'))
+    send(b'\x04')
+
+
 def left_the_screen(script):
     def checked(read, until, send, output):
         script(read, until, send, output)
         read(.5)
         assert output.rfind(b'\x1b[?1049l') > output.rfind(b'\x1b[?1049h') > 0, 'alternate screen left on'
+        assert output.rfind(b'\x1b[?1002l') > output.rfind(b'\x1b[?1002h') > 0, 'mouse reports left on'
     return checked
 
 
@@ -1962,4 +2015,17 @@ run(['--fullscreen'], left_the_screen(fullscreen_lists), serve_items([
                     {'value': 'b', 'label': 'Beta', 'description': 'the second'}]})],
     [message('Chose alpha.')],
 ], models=['gpt-6-luna', 'gpt-6-terra']))
+rows_reply = '\n'.join('Row %d of the reply.' % number for number in range(1, 41))
+clipboard_bin = os.path.join(work, 'clipboard-bin')
+os.mkdir(clipboard_bin)
+clipboard = os.path.join(work, 'clipboard.txt')
+with open(os.path.join(clipboard_bin, 'wl-copy'), 'w') as script_file:
+    script_file.write('#!/bin/sh\ncat > "$CLIPBOARD"\n')
+os.chmod(os.path.join(clipboard_bin, 'wl-copy'), 0o755)
+# Never the desktop's clipboard: a stand-in wl-copy, or no tool at all.
+run(['--fullscreen'], left_the_screen(fullscreen_mouse), serve_items([[message(rows_reply)]]), variables={
+    'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
+    'CLIPBOARD': clipboard})
+run(['--fullscreen'], left_the_screen(fullscreen_copied_by_the_terminal), serve_items([[message(rows_reply)]]),
+    variables={'WAYLAND_DISPLAY': '', 'DISPLAY': ''})
 print('agent editor journeys passed')
