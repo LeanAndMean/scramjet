@@ -40,6 +40,13 @@ impl HideCredentials {
     }
 }
 
+/// How many queued messages go to the model at once (`steeringMode`, `followUpMode`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Delivery {
+    All,
+    OneAtATime,
+}
+
 #[derive(Debug)]
 pub(super) struct Settings {
     /// `None` without `XDG_CONFIG_HOME` and `HOME`: nothing is read or saved.
@@ -53,6 +60,8 @@ pub(super) struct Settings {
     /// `tools`: the agent's coding tools, Scramjet's by default.
     pub(super) tools: Vec<String>,
     pub(super) hide_credentials: HideCredentials,
+    pub(super) steering_mode: Delivery,
+    pub(super) follow_up_mode: Delivery,
     /// What is wrong in the file; those keys keep their defaults.
     pub(super) warnings: Vec<String>,
 }
@@ -76,6 +85,8 @@ impl Settings {
             default_thinking_level: None,
             tools: DEFAULT_TOOLS.map(str::to_owned).to_vec(),
             hide_credentials: HideCredentials::Unattended,
+            steering_mode: Delivery::All,
+            follow_up_mode: Delivery::OneAtATime,
             warnings: Vec::new(),
         };
         let Some(path) = &settings.path else {
@@ -136,6 +147,17 @@ impl Settings {
             Some(Some("always")) => self.hide_credentials = HideCredentials::Always,
             Some(Some("never")) => self.hide_credentials = HideCredentials::Never,
             Some(_) => wrong("hideCredentials", r#""unattended", "always" or "never""#),
+        }
+        for (key, mode) in [
+            ("steeringMode", &mut self.steering_mode),
+            ("followUpMode", &mut self.follow_up_mode),
+        ] {
+            match object.get(key).map(|value| value.as_str()) {
+                None => {}
+                Some(Some("all")) => *mode = Delivery::All,
+                Some(Some("one-at-a-time")) => *mode = Delivery::OneAtATime,
+                Some(_) => wrong(key, r#""all" or "one-at-a-time""#),
+            }
         }
         match object.get("tools") {
             None => {}
@@ -292,6 +314,8 @@ mod tests {
         assert_eq!(settings.default_thinking_level, None);
         assert_eq!(settings.tools, ["read", "bash", "edit", "write"]);
         assert_eq!(settings.hide_credentials, HideCredentials::Unattended);
+        assert_eq!(settings.steering_mode, Delivery::All);
+        assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
     }
 
@@ -355,9 +379,12 @@ mod tests {
             &scratch,
             r#"{"hideThinkingBlock": true, "doubleEscapeAction": "fork",
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
-                "defaultThinkingLevel": "off", "theme": "dark"}"#,
+                "defaultThinkingLevel": "off", "theme": "dark",
+                "steeringMode": "one-at-a-time", "followUpMode": "all"}"#,
         );
         assert!(settings.hide_thinking_block);
+        assert_eq!(settings.steering_mode, Delivery::OneAtATime);
+        assert_eq!(settings.follow_up_mode, Delivery::All);
         assert_eq!(settings.double_escape, DoubleEscape::Fork);
         assert!(settings.skip_branch_summary_prompt);
         assert_eq!(settings.default_thinking_level.as_deref(), Some("none"));
@@ -372,9 +399,10 @@ mod tests {
         let settings = settings_with(
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
-                "branchSummary": {"skipPrompt": 1}}"#,
+                "branchSummary": {"skipPrompt": 1}, "followUpMode": "each"}"#,
         );
         assert!(!settings.hide_thinking_block);
+        assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
         assert_eq!(settings.default_thinking_level, None);
         let path = shown(&scratch.0.join("settings.json"));
         assert_eq!(
@@ -385,6 +413,7 @@ mod tests {
                 format!(
                     r#"{path}: defaultThinkingLevel must be "off", "minimal", "low", "medium", "high", "xhigh", "max"; ignored"#
                 ),
+                format!(r#"{path}: followUpMode must be "all" or "one-at-a-time"; ignored"#),
             ]
         );
     }

@@ -74,8 +74,13 @@ impl Interactive {
             });
         let screen = match editor.take_if(|_| fullscreen) {
             Some(editor) => Some(
-                Handle::start(editor, hide_thinking.clone(), cancel.clone())
-                    .map_err(|error| format!("cannot show the full screen: {error}"))?,
+                Handle::start(
+                    editor,
+                    hide_thinking.clone(),
+                    cancel.clone(),
+                    (settings.steering_mode, settings.follow_up_mode),
+                )
+                .map_err(|error| format!("cannot show the full screen: {error}"))?,
             ),
             None => None,
         };

@@ -22,6 +22,9 @@ pub(super) struct Recorder {
     pub(super) choices: Vec<Option<usize>>,
     /// What a replay showed, in order, with the results of calls.
     pub(super) shown: Vec<String>,
+    /// What each call of `steering` and then `follow_up` gives, in order; then nothing.
+    pub(super) steering: Vec<Vec<String>>,
+    pub(super) follow_ups: Vec<Vec<String>>,
 }
 impl AgentUi for Recorder {
     fn waiting(&mut self, purpose: Purpose) {
@@ -84,6 +87,18 @@ impl AgentUi for Recorder {
     }
     fn notice(&mut self, text: &str) {
         self.shown.push(format!("notice {text}"));
+    }
+    fn steering(&mut self) -> Vec<String> {
+        match self.steering.is_empty() {
+            true => Vec::new(),
+            false => self.steering.remove(0),
+        }
+    }
+    fn follow_up(&mut self) -> Vec<String> {
+        match self.follow_ups.is_empty() {
+            true => Vec::new(),
+            false => self.follow_ups.remove(0),
+        }
     }
     fn choose(
         &mut self,

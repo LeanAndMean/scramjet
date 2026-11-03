@@ -38,6 +38,8 @@ pub(super) enum Key {
     Paste(String),
     Enter,
     NewLine,
+    /// A new line in the inline editor; the full screen queues a follow-up with it.
+    AltEnter,
     Backspace,
     Delete,
     Left,
@@ -46,6 +48,8 @@ pub(super) enum Key {
     WordRight,
     Up,
     Down,
+    /// Up in the inline editor; the full screen puts queued messages back in the editor.
+    AltUp,
     PageUp,
     PageDown,
     LineStart,
@@ -122,12 +126,17 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
 fn escape(source: &mut impl ByteSource) -> io::Result<Key> {
     let mut next = source.byte(Some(ESCAPE_WAIT))?;
     // Some terminals send Alt+key as an extra Escape before the key's own sequence.
+    let mut alt = false;
     while next == Some(0x1b) {
+        alt = true;
         next = source.byte(Some(ESCAPE_WAIT))?;
     }
     Ok(match next {
         None => Key::Escape,
-        Some(b'[') => csi(source)?,
+        Some(b'[') => match csi(source)? {
+            Key::Up if alt => Key::AltUp,
+            key => key,
+        },
         Some(b'O') => match source.byte(Some(ESCAPE_WAIT))? {
             Some(b'A') => Key::Up,
             Some(b'B') => Key::Down,
@@ -137,7 +146,8 @@ fn escape(source: &mut impl ByteSource) -> io::Result<Key> {
             Some(b'F') => Key::LineEnd,
             _ => Key::Ignored,
         },
-        Some(b'\r' | b'\n') => Key::NewLine,
+        Some(b'\r') => Key::AltEnter,
+        Some(b'\n') => Key::NewLine,
         Some(0x7f | 8) => Key::DeleteWordBack,
         Some(b'b') => Key::WordLeft,
         Some(b'f') => Key::WordRight,
@@ -163,6 +173,7 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
     let modifier = parameters.split(';').nth(1);
     let word = matches!(modifier, Some("3" | "5"));
     Ok(match (last, parameters.as_ref()) {
+        (b'A', "1;3") => Key::AltUp,
         (b'A', _) => Key::Up,
         (b'B', _) => Key::Down,
         (b'C', _) if word => Key::WordRight,
@@ -176,7 +187,8 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         (b'~', "6") => Key::PageDown,
         (b'~', "3;3" | "3;5") => Key::DeleteWordForward,
         (b'~', "200") => paste(source)?,
-        (b'~', "27;2;13" | "27;3;13") | (b'u', "13;2" | "13;3") => Key::NewLine,
+        (b'~', "27;2;13") | (b'u', "13;2") => Key::NewLine,
+        (b'~', "27;3;13") | (b'u', "13;3") => Key::AltEnter,
         (b'u', "13") => Key::Enter,
         (b'Z', _) | (b'~', "27;2;9") | (b'u', "9;2") => Key::BackTab,
         _ => Key::Ignored,
@@ -261,7 +273,7 @@ impl Buffer {
     fn apply(&mut self, key: &Key) {
         match key {
             Key::Text(text) | Key::Paste(text) => self.insert(text),
-            Key::NewLine => self.insert("\n"),
+            Key::NewLine | Key::AltEnter => self.insert("\n"),
             Key::Backspace => self.remove(self.previous(), self.cursor),
             Key::Delete => {
                 let end = self.next();
@@ -958,6 +970,23 @@ impl Editor {
         self.text = text;
     }
 
+    /// Whether `text` runs a built-in command, a command set's command or a `!` command, rather
+    /// than going to the model as it is.
+    pub(super) fn is_command(&self, text: &str) -> bool {
+        if text.starts_with('!') {
+            return true;
+        }
+        let Some(name) = text
+            .strip_prefix('/')
+            .and_then(|rest| rest.split_whitespace().next())
+        else {
+            return false;
+        };
+        name == "exit"
+            || SLASH_COMMANDS.iter().any(|(builtin, _)| *builtin == name)
+            || self.commands.iter().any(|(command, _)| command == name)
+    }
+
     /// Makes `prompt` the most recent entry that Up recalls.
     pub fn remember(&mut self, prompt: &str) {
         if self.history.last().is_none_or(|last| last != prompt) {
@@ -1078,6 +1107,11 @@ impl Editor {
     /// Edits `draft` with `key`, or says what the caller should do for it; `pending`: more keys
     /// are already typed, so an `@` search waits for them.
     pub(super) fn key(&self, draft: &mut Draft, key: Key, pending: bool) -> Action {
+        let key = match key {
+            Key::AltEnter => Key::NewLine,
+            Key::AltUp => Key::Up,
+            key => key,
+        };
         let Draft {
             buffer,
             browsing,
@@ -1501,17 +1535,23 @@ mod tests {
     #[test]
     fn decodes_keys_terminals_send() {
         assert_eq!(
-            keys("aé界\r\n\x1b\r\x1b[13;2u\x1b[27;2;13~".as_bytes()),
+            keys("aé界\r\n\x1b\r\x1b[13;2u\x1b[27;2;13~\x1b[13;3u\x1b[27;3;13~".as_bytes()),
             [
                 Key::Text("a".into()),
                 Key::Text("é".into()),
                 Key::Text("界".into()),
                 Key::Enter,
                 Key::NewLine,
+                Key::AltEnter,
                 Key::NewLine,
                 Key::NewLine,
-                Key::NewLine,
+                Key::AltEnter,
+                Key::AltEnter,
             ]
+        );
+        assert_eq!(
+            keys(b"\x1b[1;3A\x1b\x1b[A\x1b[A\x1b[1;5A"),
+            [Key::AltUp, Key::AltUp, Key::Up, Key::Up]
         );
         assert_eq!(
             keys(b"\x1b[D\x1bOC\x1b[1;5D\x1b[1;3C\x1bb\x1b[H\x1b[4~\x1b[3~\x1b[3;5~\x1b\x7f\x17"),

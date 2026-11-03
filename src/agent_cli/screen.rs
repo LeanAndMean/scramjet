@@ -1,6 +1,7 @@
 //! The full-screen interface (`--fullscreen`): the conversation in the alternate screen, scrolled
 //! by the application, with the status line, the prompt editor and lists docked under it; the
-//! editor keeps taking keys while a turn runs. A thread owns the terminal; the session runs on
+//! editor keeps taking keys while a turn runs, and what is sent then is queued for the model, as
+//! Scramjet's steering and follow-up messages. A thread owns the terminal; the session runs on
 //! the caller's thread and talks to it through a `Handle`.
 
 use super::editor::{
@@ -9,8 +10,9 @@ use super::editor::{
 };
 use super::record::{self, Event};
 use super::select::Picker;
+use super::settings::Delivery;
 use super::terminal::{Terminal, elapsed};
-use super::text::{Wrap, clip, visible};
+use super::text::{Wrap, clip, one_line, visible};
 use super::{editor, job, style, view};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -24,7 +26,7 @@ use std::{
     fmt::Write as _,
     io::{self, PipeReader, PipeWriter, Read, Write},
     sync::{
-        Arc,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError, TryRecvError},
     },
@@ -40,7 +42,8 @@ const FRAME: Duration = Duration::from_millis(16);
 /// `editorMaxHeightPercent`.
 const EDITOR_SHARE: usize = 30;
 const ALLOW: &str = "Allow? [y/N, a = allow all until exit]";
-const BUSY: &str = "A turn is running: Esc interrupts it";
+const BUSY: &str = "Busy: the session is not ready for a prompt yet";
+const WAITS: &str = "Commands wait for the turn to end: Esc interrupts it";
 
 /// What the session asks the screen to show or do.
 enum ToScreen {
@@ -86,13 +89,47 @@ pub(super) enum Input {
     End,
 }
 
+/// Messages sent while a turn runs, until the agent takes them.
+#[derive(Default)]
+struct Queue {
+    steering: Vec<String>,
+    follow_ups: Vec<String>,
+}
+
+impl Queue {
+    fn is_empty(&self) -> bool {
+        self.steering.is_empty() && self.follow_ups.is_empty()
+    }
+    /// All the messages, in the order they are sent, leaving none.
+    fn take(&mut self) -> Vec<String> {
+        let mut all = std::mem::take(&mut self.steering);
+        all.append(&mut self.follow_ups);
+        all
+    }
+}
+
+/// The messages `delivery` gives the agent at once from `queued`.
+fn deliver(queued: &mut Vec<String>, delivery: Delivery) -> Vec<String> {
+    match delivery {
+        Delivery::All => std::mem::take(queued),
+        Delivery::OneAtATime if queued.is_empty() => Vec::new(),
+        Delivery::OneAtATime => vec![queued.remove(0)],
+    }
+}
+
 /// Sends to the screen; also the agent's interface during a turn.
 pub(super) struct Link {
     to: mpsc::Sender<ToScreen>,
     wake: PipeWriter,
+    queue: Arc<Mutex<Queue>>,
+    /// `steeringMode` and `followUpMode`.
+    modes: (Delivery, Delivery),
 }
 
 impl Link {
+    fn queue(&self) -> std::sync::MutexGuard<'_, Queue> {
+        self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
     fn send(&self, message: ToScreen) {
         if self.to.send(message).is_ok() {
             // A full pipe already wakes the screen.
@@ -156,11 +193,13 @@ pub(super) struct Handle {
 
 impl Handle {
     /// Takes the terminal for the screen, `editor` editing the prompts. Escape and Ctrl-C set
-    /// `cancel` while a turn runs; Ctrl+T flips `hide_thinking`.
+    /// `cancel` while a turn runs; Ctrl+T flips `hide_thinking`. The agent takes the messages
+    /// queued during a turn as `modes` (`steeringMode`, `followUpMode`) say.
     pub(super) fn start(
         editor: Editor,
         hide_thinking: Arc<AtomicBool>,
         cancel: Arc<AtomicBool>,
+        modes: (Delivery, Delivery),
     ) -> io::Result<Self> {
         let (to, messages) = mpsc::channel();
         let (inputs, from) = mpsc::channel();
@@ -168,14 +207,21 @@ impl Handle {
         rustix::fs::fcntl_setfl(&wake, rustix::fs::OFlags::NONBLOCK)?;
         rustix::fs::fcntl_setfl(&woken, rustix::fs::OFlags::NONBLOCK)?;
         let raw = RawMode::enter()?;
-        let thread = std::thread::Builder::new()
-            .name("screen".into())
-            .spawn(move || {
-                let app = App::new(editor, hide_thinking, cancel, inputs);
+        let queue = Arc::new(Mutex::new(Queue::default()));
+        let thread = std::thread::Builder::new().name("screen".into()).spawn({
+            let queue = queue.clone();
+            move || {
+                let app = App::new(editor, hide_thinking, cancel, inputs, queue);
                 app.run(raw, &messages, woken)
-            })?;
+            }
+        })?;
         Ok(Self {
-            link: Link { to, wake },
+            link: Link {
+                to,
+                wake,
+                queue,
+                modes,
+            },
             from,
             thread: Some(thread),
         })
@@ -266,6 +312,12 @@ impl AgentUi for Link {
     }
     fn notice(&mut self, text: &str) {
         self.event(Event::Notice(text.to_owned()));
+    }
+    fn steering(&mut self) -> Vec<String> {
+        deliver(&mut self.queue().steering, self.modes.0)
+    }
+    fn follow_up(&mut self) -> Vec<String> {
+        deliver(&mut self.queue().follow_ups, self.modes.1)
     }
     fn choose(
         &mut self,
@@ -457,6 +509,7 @@ struct App {
     hide_thinking: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     inputs: mpsc::Sender<Input>,
+    queue: Arc<Mutex<Queue>>,
     /// The session waits for input.
     ready: bool,
     /// A turn runs, with what it does now.
@@ -484,6 +537,7 @@ impl App {
         hide_thinking: Arc<AtomicBool>,
         cancel: Arc<AtomicBool>,
         inputs: mpsc::Sender<Input>,
+        queue: Arc<Mutex<Queue>>,
     ) -> Self {
         Self {
             draft: editor.draft(String::new()),
@@ -492,6 +546,7 @@ impl App {
             hide_thinking,
             cancel,
             inputs,
+            queue,
             ready: false,
             activity: None,
             dialog: None,
@@ -594,7 +649,11 @@ impl App {
             ToScreen::Turn(running) => {
                 self.transcript.split();
                 self.activity = running.then(|| Activity::new("working"));
-                self.draft.clear_note(BUSY);
+                self.draft.clear_note(WAITS);
+                // What the turn did not take is not sent unasked.
+                if !running {
+                    self.restore();
+                }
             }
             ToScreen::Ready => self.ready = true,
             ToScreen::SetText(text) => self.draft = self.editor.draft(text),
@@ -680,6 +739,48 @@ impl App {
         }
     }
 
+    fn queue(&self) -> std::sync::MutexGuard<'_, Queue> {
+        self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Puts the queued messages back in the editor, before its text, as Scramjet does.
+    fn restore(&mut self) {
+        let queued = self.queue().take();
+        if queued.is_empty() {
+            return;
+        }
+        let count = queued.len();
+        let text = (queued.into_iter())
+            .chain(Some(self.draft.text().to_owned()))
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        self.draft = self.editor.draft(text);
+        self.draft.set_note(restored(count));
+    }
+
+    /// Queues the draft's text while a turn runs: for the model's next request, or, as a
+    /// follow-up, for when the turn would end. A command waits in the editor.
+    fn enqueue(&mut self, follow_up: bool) {
+        let text = self.draft.text().trim().to_owned();
+        if text.is_empty() {
+            return;
+        }
+        if self.editor.is_command(&text) {
+            self.draft.set_note(WAITS.to_owned());
+            return;
+        }
+        self.editor.remember(&text);
+        let mut queue = self.queue();
+        match follow_up {
+            true => queue.follow_ups.push(text),
+            false => queue.steering.push(text),
+        }
+        drop(queue);
+        self.draft = self.editor.draft(String::new());
+        self.top = None;
+    }
+
     fn scroll(&mut self, up: bool) {
         let page = self.rows.saturating_sub(1).max(1);
         let top = self.top.map_or(self.last, |top| self.transcript.line(top));
@@ -725,6 +826,7 @@ impl App {
                 return Flow::Go;
             }
             if running {
+                self.restore();
                 self.cancel.store(true, Ordering::Relaxed);
                 return Flow::Go;
             }
@@ -732,8 +834,29 @@ impl App {
         if key == Key::Interrupt && running {
             self.cancel.store(true, Ordering::Relaxed);
         }
+        let key = match key {
+            Key::AltUp => {
+                let empty = self.queue().is_empty();
+                match empty {
+                    true => self
+                        .draft
+                        .set_note("No queued messages to restore".to_owned()),
+                    false => self.restore(),
+                }
+                return Flow::Go;
+            }
+            Key::AltEnter if running => {
+                self.enqueue(true);
+                return Flow::Go;
+            }
+            // As Scramjet's, Alt+Enter sends between turns as Enter does.
+            Key::AltEnter => Key::Enter,
+            key => key,
+        };
         match self.editor.key(&mut self.draft, key, pending) {
             Action::Edited(_) | Action::Conversation => {}
+            // The draft holds the text sent.
+            Action::Submit(_) if running => self.enqueue(false),
             Action::Submit(text) if self.ready => {
                 self.editor.remember(&text);
                 self.ready = false;
@@ -751,7 +874,7 @@ impl App {
             Action::CycleEffort if self.ready => {
                 let _ = self.inputs.send(Input::CycleEffort);
             }
-            Action::CycleEffort => self.draft.set_note(BUSY.to_owned()),
+            Action::CycleEffort => self.draft.set_note(WAITS.to_owned()),
             Action::Suspend => return Flow::Suspend,
             Action::External => return Flow::External,
         }
@@ -813,6 +936,28 @@ impl App {
     /// The rows under the conversation, and where the cursor goes in them.
     fn dock(&self, (width, height): (usize, usize)) -> (Vec<String>, Option<(usize, usize)>) {
         let mut rows = vec![self.status(width)];
+        let queue = self.queue();
+        let queued = [
+            ("Steering", &queue.steering),
+            ("Follow-up", &queue.follow_ups),
+        ];
+        for (kind, messages) in queued {
+            for message in messages {
+                let line = clip(
+                    &format!("{kind}: {}", one_line(message)),
+                    width.saturating_sub(1),
+                );
+                rows.push(format!("{}{line}{}", style::MUTED, style::RESET));
+            }
+        }
+        if !queue.is_empty() {
+            let hint = clip(
+                "↳ Alt+Up to edit all queued messages",
+                width.saturating_sub(1),
+            );
+            rows.push(format!("{}{hint}{}", style::MUTED, style::RESET));
+        }
+        drop(queue);
         let room = height.saturating_sub(rows.len() + 1).max(1);
         let cursor = match &self.dialog {
             Some(Open {
@@ -909,6 +1054,14 @@ impl App {
         self.cursor = cursor;
         self.drawn_at = Instant::now();
         Ok(())
+    }
+}
+
+/// What Alt+Up or Escape says once it put `count` queued messages back in the editor.
+fn restored(count: usize) -> String {
+    match count {
+        1 => "Restored 1 queued message to editor".to_owned(),
+        count => format!("Restored {count} queued messages to editor"),
     }
 }
 
@@ -1032,6 +1185,23 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn queued_messages_are_delivered_as_the_modes_say() {
+        let mut queued = vec!["one".to_owned(), "two".to_owned()];
+        assert_eq!(deliver(&mut queued, Delivery::OneAtATime), ["one"]);
+        assert_eq!(deliver(&mut queued, Delivery::OneAtATime), ["two"]);
+        assert!(deliver(&mut queued, Delivery::OneAtATime).is_empty());
+        let mut queued = vec!["one".to_owned(), "two".to_owned()];
+        assert_eq!(deliver(&mut queued, Delivery::All), ["one", "two"]);
+        assert!(queued.is_empty());
+        let mut queue = Queue {
+            steering: vec!["steer".into()],
+            follow_ups: vec!["later".into()],
+        };
+        assert_eq!(queue.take(), ["steer", "later"]);
+        assert!(queue.is_empty());
     }
 
     #[test]

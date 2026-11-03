@@ -87,13 +87,17 @@ impl Agent {
         status::route(completed, &self.commands, &edges, interactive)
     }
 
-    /// Model requests and tool calls until a final answer.
+    /// Model requests and tool calls until a final answer. As in Pi, messages the user sends
+    /// meanwhile go to the model before its next request, and those queued for the end keep
+    /// the turn going when it would end.
     fn run(&mut self, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> Result<(), AgentError> {
         let mut overflow_recovered = false;
         for _ in 0..MAX_STEPS {
             if cancel.load(Ordering::Relaxed) {
                 return Err(AgentError::Cancelled);
             }
+            let steering = ui.steering();
+            self.add_queued(steering, ui)?;
             let request = self.request();
             let reply = match self.respond(&request, Purpose::Reply, ui, cancel) {
                 Ok(reply) => reply,
@@ -137,6 +141,9 @@ to a larger-context model)"
             }
             if calls.is_empty() {
                 self.compact_when_full(ui, cancel)?;
+                if self.continue_queued(ui)? {
+                    continue;
+                }
                 return Ok(());
             }
             // As in Pi, the turn ends without another request when every call ends it.
@@ -160,10 +167,39 @@ to a larger-context model)"
             self.save_command()?;
             if ends {
                 self.compact_when_full(ui, cancel)?;
+                if self.continue_queued(ui)? {
+                    continue;
+                }
                 return Ok(());
             }
         }
         Err(AgentError::TooManySteps)
+    }
+
+    /// Where the turn would end: adds the steering messages queued, else the follow-ups; returns
+    /// whether there were any, so the turn goes on.
+    fn continue_queued(&mut self, ui: &mut dyn AgentUi) -> Result<bool, AgentError> {
+        let mut messages = ui.steering();
+        if messages.is_empty() {
+            messages = ui.follow_up();
+        }
+        let any = !messages.is_empty();
+        self.add_queued(messages, ui)?;
+        Ok(any)
+    }
+
+    /// Adds messages the user queued during the turn as prompts, shown as typed.
+    fn add_queued(
+        &mut self,
+        messages: Vec<String>,
+        ui: &mut dyn AgentUi,
+    ) -> Result<(), AgentError> {
+        for message in messages {
+            ui.user_prompt(&message);
+            self.add(json!({"role":"user","content":message}))?;
+            self.prompts.push(message);
+        }
+        Ok(())
     }
 
     /// A `!` or `!!` command the user runs without a model turn: `include` adds it to the
@@ -360,6 +396,55 @@ mod tests {
     };
     use crate::provider_fixture as fixture;
     use std::{sync::Arc, time::Duration};
+
+    #[test]
+    fn queued_messages_steer_the_next_request_and_follow_ups_continue_the_turn() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", "bash", json!({"command":"echo ran"})),
+            reply("steered"),
+            reply("followed"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "queued");
+        let mut ui = Recorder {
+            // Nothing before the first request; two messages after the call.
+            steering: vec![vec![], vec!["steer one".into(), "steer two".into()]],
+            follow_ups: vec![vec!["and then this".into()]],
+            ..Recorder::default()
+        };
+        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+        let bodies = server.join().unwrap();
+        let users = |body: &Value| -> Vec<String> {
+            let input = body["input"].as_array().unwrap();
+            let users = input.iter().filter(|item| item["role"] == "user");
+            users.map(|item| item["content"].to_string()).collect()
+        };
+        assert_eq!(users(&bodies[0]), ["\"go\""]);
+        // After the call's result, in the order typed.
+        let input = bodies[1]["input"].as_array().unwrap();
+        let output = input
+            .iter()
+            .position(|item| item["type"] == "function_call_output");
+        assert_eq!(output, Some(input.len() - 3), "{input:?}");
+        assert_eq!(users(&bodies[1])[1..], ["\"steer one\"", "\"steer two\""]);
+        assert_eq!(users(&bodies[2])[3..], ["\"and then this\""]);
+        let prompts: Vec<_> = (ui.shown.iter())
+            .filter(|shown| shown.starts_with("prompt"))
+            .collect();
+        assert_eq!(
+            prompts,
+            [
+                "prompt steer one",
+                "prompt steer two",
+                "prompt and then this"
+            ]
+        );
+        assert_eq!(ui.replies, ["steered", "followed"]);
+        assert_eq!(
+            agent.prompts(),
+            ["go", "steer one", "steer two", "and then this"]
+        );
+    }
 
     #[test]
     fn a_subagent_runs_its_task_read_only_and_returns_its_last_reply() {

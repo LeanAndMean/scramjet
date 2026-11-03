@@ -54,6 +54,16 @@ pub trait AgentUi {
     fn question(&mut self, message: &str);
     /// Something Scramjet would notify the user of, such as a command reported blocked.
     fn notice(&mut self, text: &str);
+    /// Messages the user sent while the turn runs, for the model before its next request
+    /// (Scramjet's steering).
+    fn steering(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+    /// Messages the user queued for when the turn would end, for the model then instead of
+    /// ending it (Scramjet's follow-up). Asked only when no steering is queued.
+    fn follow_up(&mut self) -> Vec<String> {
+        Vec::new()
+    }
     /// Lets the user choose one of `options` under `title`, `recommended` selected at first;
     /// `None` when they cancel.
     fn choose(

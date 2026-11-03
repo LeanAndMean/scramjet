@@ -1875,8 +1875,6 @@ def fullscreen_typed_during_turn(read, until, send, output):
     send(b'next one')
     rows = on_screen('> next one')
     assert any(row.startswith('\u2026 running') for row in rows), rows
-    send(b'\r')
-    on_screen('A turn is running: Esc interrupts it')
     send(b'\x1b')
     rows = on_screen('(cancelled)')
     assert rows[-1] == '> next one', rows
@@ -1900,6 +1898,35 @@ def fullscreen_lists(read, until, send, output):
     send(b'\x03')
 
 
+def fullscreen_queue(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('running 1s')
+    send(b'steer this\r')
+    on_screen('Steering: steer this')
+    # Alt+Enter, as terminals send it.
+    send(b'after that\x1b\r')
+    on_screen('Follow-up: after that')
+    send(b'/model\r')
+    on_screen('Commands wait for the turn to end')
+    send(b'\x15')
+    rows = on_screen('Followed.')
+    text = '\n'.join(rows)
+    assert text.index('> steer this') < text.index('Steered.') < text.index('> after that'), text
+    assert 'Steering:' not in text and 'Follow-up:' not in text, text
+    send(b'again\r')
+    on_screen('running 1s')
+    send(b'kept\r')
+    on_screen('Steering: kept')
+    # Escape interrupts the turn and puts what it did not take back in the editor.
+    send(b'\x1b')
+    rows = on_screen('Restored 1 queued message to editor')
+    assert rows[-2] == '> kept', rows
+    on_screen('(cancelled)')
+    send(b'\x03\x04')
+
+
 def left_the_screen(script):
     def checked(read, until, send, output):
         script(read, until, send, output)
@@ -1918,6 +1945,16 @@ run(['--fullscreen'], left_the_screen(fullscreen_turn), serve_items([
     [message('**Done**, it says two.')],
 ]))
 run(['--fullscreen'], left_the_screen(fullscreen_typed_during_turn), talking)
+known = set(session_files())
+run(['--fullscreen'], left_the_screen(fullscreen_queue), serve_items([
+    [tool_call('call_1', 'bash', {'command': 'echo started; sleep 2'})],
+    [message('Steered.')],
+    [message('Followed.')],
+    [tool_call('call_2', 'bash', {'command': 'sleep 30'})],
+]))
+(queued,) = set(session_files()) - known
+prompts = [line['content'] for line in map(json.loads, open(queued)) if line.get('role') == 'user']
+assert prompts == ['go', 'steer this', 'after that', 'again'], prompts
 run(['--fullscreen'], left_the_screen(fullscreen_lists), serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {
         'type': 'select', 'message': 'Which **one**?', 'recommended': 1,
