@@ -215,19 +215,31 @@ fn holds_credential(name: &str) -> bool {
         .any(|word| name.ends_with(word) || name.split('_').any(|part| part == *word))
 }
 
-/// An empty file for hidden files to show, in scramjet-rs's state directory (emptied again if
-/// something wrote to it); else `/dev/null`, which reads as permission denied, so that a search
-/// reports an error for it.
+/// An empty file for hidden files to show, in scramjet-rs's state directory; else `/dev/null`,
+/// which reads as permission denied, so that a search reports an error for it.
 fn empty_file() -> PathBuf {
-    let made = || -> std::io::Result<PathBuf> {
-        let path = super::session::state_directory()?.join("empty");
-        if !std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() == 0) {
-            std::fs::create_dir_all(super::session::state_directory()?)?;
-            std::fs::write(&path, "")?;
-        }
-        Ok(path)
-    };
-    made().unwrap_or_else(|_| PathBuf::from("/dev/null"))
+    super::session::state_directory()
+        .and_then(|directory| empty_in(&directory))
+        .unwrap_or_else(|_| PathBuf::from("/dev/null"))
+}
+
+/// `directory/empty`, made again when it is anything but an empty file of its own. Commands with
+/// the stores hidden can write `directory`, so it is never written through: a link there to a
+/// credential store would have it emptied.
+fn empty_in(directory: &Path) -> std::io::Result<PathBuf> {
+    use std::io::ErrorKind;
+    let path = directory.join("empty");
+    match std::fs::symlink_metadata(&path) {
+        Ok(m) if m.is_file() && m.len() == 0 && m.nlink() == 1 => return Ok(path),
+        Ok(_) => std::fs::remove_file(&path)?,
+        Err(error) if error.kind() == ErrorKind::NotFound => std::fs::create_dir_all(directory)?,
+        Err(error) => return Err(error),
+    }
+    // Commands starting together may each make it.
+    match std::fs::File::create_new(&path) {
+        Err(error) if error.kind() != ErrorKind::AlreadyExists => Err(error),
+        _ => Ok(path),
+    }
 }
 
 /// Whether commands can run in the sandbox here; otherwise why not.
@@ -362,6 +374,32 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         ] {
             assert!(!super::holds_credential(name), "{name}");
         }
+    }
+
+    #[test]
+    fn the_empty_file_is_made_again_rather_than_written_through() {
+        let directory = std::env::temp_dir().join(format!("scramjet-empty-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(directory.clone());
+        let store = directory.join("store");
+        let empty = directory.join("empty");
+        std::fs::write(&store, "SECRET\n").unwrap();
+        let made_again = |planted: &dyn Fn()| {
+            planted();
+            assert_eq!(super::empty_in(&directory).unwrap(), empty);
+            let metadata = std::fs::symlink_metadata(&empty).unwrap();
+            assert!(metadata.is_file() && metadata.len() == 0);
+            assert_eq!(std::fs::read_to_string(&store).unwrap(), "SECRET\n");
+        };
+        made_again(&|| {});
+        made_again(&|| std::fs::write(&empty, "written").unwrap());
+        made_again(&|| {
+            std::fs::remove_file(&empty).unwrap();
+            std::os::unix::fs::symlink(&store, &empty).unwrap();
+        });
+        made_again(&|| {
+            std::fs::remove_file(&empty).unwrap();
+            std::fs::hard_link(&store, &empty).unwrap();
+        });
     }
 
     #[test]
