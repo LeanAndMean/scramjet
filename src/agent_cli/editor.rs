@@ -763,7 +763,7 @@ impl Completion {
     /// the home directory, ignoring case, directories first.
     fn path(before: &str, root: &Path) -> Option<Self> {
         let start = before
-            .rfind([' ', '\t', '"', '\'', '='])
+            .rfind([' ', '\t', '\n', '"', '\'', '='])
             .map_or(0, |at| at + 1);
         let word = &before[start..];
         let (shown, name) = match word.rfind('/') {
@@ -1665,6 +1665,8 @@ mod tests {
             })
         };
         assert_eq!(list("li").unwrap(), ["link/"]);
+        // As Scramjet completes the cursor's line, a word can start one.
+        assert_eq!(list("see\nli").unwrap(), ["link/"]);
         assert_eq!(list("x=./Alpha-dir/").unwrap(), ["./Alpha-dir/inner.rs"]);
         assert_eq!(list("'Alpha-dir/I").unwrap(), ["Alpha-dir/inner.rs"]);
         let absolute = format!("{}/b", root.display());

@@ -57,7 +57,7 @@ a new line; pasted text is inserted without sending. Up/Down recall earlier prom
 edits the prompt in $VISUAL or $EDITOR; its text replaces the prompt when the editor exits with 0.
 `!command` runs a bash command in the project directory without a model turn and adds its output
 to the conversation for the next prompt; `!!command` runs it without adding it.
-Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
+Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /quit, to quit.
 Ctrl+O shows the conversation in the alternate screen with every tool result whole, from its
 end: Up/Down, Page Up/Down and Home/End scroll it; Escape, q or Ctrl+O closes it.
 Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
