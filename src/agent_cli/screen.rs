@@ -16,7 +16,7 @@ use super::select::{Act, Picked, Picker, Spot};
 use super::selection::{self, Line};
 use super::settings::{Delivery, DoubleEscape, Settings};
 use super::slash::Builtin;
-use super::terminal::{Terminal, elapsed};
+use super::terminal::{Terminal, elapsed, waiting_for};
 use super::text::{Wrap, clip, one_line, visible};
 use super::{clipboard, editor, job, style};
 use rustix::{
@@ -89,10 +89,18 @@ enum ToScreen {
 /// A question the screen shows in place of the editor until it is answered.
 pub(super) enum Dialog {
     Pick(Box<Picker>),
-    /// A text typed under the title, starting as the second; Escape cancels.
-    Text(String, String),
+    /// A text typed under the title, starting as the second; Escape cancels. Enter on an empty
+    /// text submits it when it is optional, and else does nothing.
+    Text(String, String, Optional),
     /// An `--ask` approval question.
     Approve(String),
+}
+
+/// Whether a dialog's text may be left empty.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Optional {
+    Yes,
+    No,
 }
 
 pub(super) enum Answer {
@@ -463,23 +471,58 @@ struct Activity {
     since: Instant,
     /// Shows the seconds left of this wait instead of the elapsed seconds.
     countdown: Option<Duration>,
+    /// What Escape does meanwhile, as Scramjet's status says: `interrupt` or `cancel`.
+    escape: Option<&'static str>,
 }
 
 impl Activity {
+    /// Part of a turn, which Escape interrupts.
     fn new(what: impl Into<String>) -> Self {
         Self {
             what: what.into(),
             since: Instant::now(),
             countdown: None,
+            escape: Some("interrupt"),
         }
     }
-    fn line(&self) -> String {
+    /// A summary or a wait to retry, which Escape cancels.
+    fn cancellable(what: impl Into<String>) -> Self {
+        Self {
+            escape: Some("cancel"),
+            ..Self::new(what)
+        }
+    }
+    /// What the status line says once `event` happened, if that changes it.
+    fn after(event: &Event) -> Option<Self> {
+        Some(match event {
+            Event::Waiting(Purpose::Reply) => Self::new("thinking"),
+            Event::Waiting(purpose) => Self::cancellable(waiting_for(*purpose)),
+            Event::Progress(StreamProgress::Call(name)) => Self::new(format!("preparing {name}")),
+            Event::ToolRunning => Self::new("running"),
+            Event::ToolResult(..) | Event::CommandResult(..) => Self::new("working"),
+            Event::Retrying(_, _, _, delay) => Self {
+                countdown: Some(*delay),
+                ..Self::cancellable("retrying in")
+            },
+            _ => return None,
+        })
+    }
+    /// The status line's text, with what Escape does when `escape` says it does that now.
+    fn line(&self, escape: bool) -> String {
+        let hint = match self.escape.filter(|_| escape) {
+            Some(does) => format!(" (Esc to {does})"),
+            None => String::new(),
+        };
         match self.countdown {
             Some(wait) => {
                 let left = wait.saturating_sub(self.since.elapsed()).as_secs_f64();
-                format!("… {} {}s", self.what, left.ceil())
+                format!("… {} {}s{hint}", self.what, left.ceil())
             }
-            None => format!("… {}{}", self.what, elapsed(self.since.elapsed().as_secs())),
+            None => format!(
+                "… {}{}{hint}",
+                self.what,
+                elapsed(self.since.elapsed().as_secs())
+            ),
         }
     }
 }
@@ -494,6 +537,7 @@ struct TextDialog {
     title: String,
     editor: Editor,
     draft: Draft,
+    optional: Optional,
 }
 
 struct Open {
@@ -971,13 +1015,14 @@ impl App {
                         return;
                     }
                     Dialog::Pick(picker) => Shown::Pick(picker),
-                    Dialog::Text(title, text) => {
+                    Dialog::Text(title, text, optional) => {
                         let editor = Editor::dialog(self.hide_thinking.clone());
                         let draft = editor.draft(text);
                         Shown::Text(Box::new(TextDialog {
                             title,
                             editor,
                             draft,
+                            optional,
                         }))
                     }
                     Dialog::Approve(question) => Shown::Approve(question),
@@ -989,7 +1034,10 @@ impl App {
                 });
                 self.top = None;
                 if let Some(activity) = &mut self.activity {
-                    *activity = Activity::new("waiting for you");
+                    *activity = Activity {
+                        escape: None,
+                        ..Activity::new("waiting for you")
+                    };
                 }
                 self.replay();
             }
@@ -1006,24 +1054,11 @@ impl App {
         let Some(activity) = &mut self.activity else {
             return;
         };
-        let what = match event {
-            Event::Waiting(Purpose::Reply) => "thinking".to_owned(),
-            Event::Waiting(Purpose::Compaction) => "compacting".to_owned(),
-            Event::Waiting(Purpose::BranchSummary) => "summarizing branch".to_owned(),
-            Event::Progress(StreamProgress::Call(name)) => format!("preparing {name}"),
-            Event::ToolRunning => "running".to_owned(),
-            Event::ToolResult(..) | Event::CommandResult(..) => "working".to_owned(),
-            Event::Retrying(_, _, _, delay) => {
-                *activity = Activity {
-                    countdown: Some(*delay),
-                    ..Activity::new("retrying in")
-                };
-                return;
-            }
-            _ => return,
+        let Some(next) = Activity::after(event) else {
+            return;
         };
-        if activity.what != what || activity.countdown.is_some() {
-            *activity = Activity::new(what);
+        if activity.what != next.what || activity.countdown.is_some() || next.countdown.is_some() {
+            *activity = next;
         }
     }
 
@@ -1775,6 +1810,14 @@ impl App {
                 Key::Enter | Key::Escape => Some(Answer::Approved(agent::Answer::Deny)),
                 _ => None,
             },
+            Shown::Text(text)
+                if key == Key::Enter
+                    && text.optional == Optional::Yes
+                    && text.draft.text().trim().is_empty()
+                    && !text.draft.completing() =>
+            {
+                Some(Answer::Text(Some(String::new())))
+            }
             Shown::Text(text) => match text.editor.key(&mut text.draft, key, pending) {
                 Action::Submit(text) => Some(Answer::Text(Some(text))),
                 Action::Exit => Some(Answer::Text(None)),
@@ -1792,7 +1835,9 @@ impl App {
     fn status(&self, width: usize) -> String {
         let mut parts = Vec::new();
         if let Some(activity) = &self.activity {
-            parts.push(activity.line());
+            // Escape goes back to the end, lets a selection go or closes completion first.
+            let escape = self.top.is_none() && self.selection.is_none() && !self.draft.completing();
+            parts.push(activity.line(escape));
         }
         let below = self.last.saturating_sub(self.shown_top());
         if below > 0 {
@@ -2098,6 +2143,42 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn the_status_line_says_what_runs_and_what_escape_does() {
+        let said = |event: Event, escape| Activity::after(&event).unwrap().line(escape);
+        assert_eq!(
+            said(Event::Waiting(Purpose::Reply), true),
+            "… thinking (Esc to interrupt)"
+        );
+        assert_eq!(said(Event::Waiting(Purpose::Reply), false), "… thinking");
+        let compaction = |reason| Event::Waiting(Purpose::Compaction(reason));
+        assert_eq!(
+            [
+                said(compaction(None), true),
+                said(compaction(Some(AutoCompaction::Threshold)), true),
+                said(compaction(Some(AutoCompaction::Overflow)), true),
+                said(Event::Waiting(Purpose::BranchSummary), true),
+            ],
+            [
+                "… compacting context (Esc to cancel)",
+                "… auto-compacting (Esc to cancel)",
+                "… context overflow detected, auto-compacting (Esc to cancel)",
+                "… summarizing branch (Esc to cancel)",
+            ]
+        );
+        assert_eq!(
+            said(Event::ToolRunning, true),
+            "… running (Esc to interrupt)"
+        );
+        let retry = Event::Retrying("busy".into(), 1, 3, Duration::from_secs(2));
+        assert_eq!(said(retry, true), "… retrying in 2s (Esc to cancel)");
+        let asking = Activity {
+            escape: None,
+            ..Activity::new("waiting for you")
+        };
+        assert_eq!(asking.line(true), "… waiting for you");
     }
 
     #[test]

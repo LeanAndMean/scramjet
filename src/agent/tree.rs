@@ -5,6 +5,9 @@ use super::{Agent, AgentError, AgentUi, Purpose, TYPED, compaction, message_text
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
+/// Scramjet's cap on a branch summary's output.
+const BRANCH_SUMMARY_TOKENS: u64 = 2048;
+
 /// An entry of the session as `/tree` lists it.
 #[derive(Debug, PartialEq)]
 pub struct TreeEntry {
@@ -267,7 +270,13 @@ impl Agent {
         let files = branch.files();
         let summary = match branch.prompt(budget, focus) {
             Some(prompt) => {
-                let text = self.summarize(prompt, Purpose::BranchSummary, ui, cancel)?;
+                let text = self.summarize(
+                    prompt,
+                    Purpose::BranchSummary,
+                    BRANCH_SUMMARY_TOKENS,
+                    ui,
+                    cancel,
+                )?;
                 compaction::branch_summary_text(&text, &files)
             }
             None => "No content to summarize".to_owned(),
@@ -622,6 +631,8 @@ Summary of that exploration:\n\n## Goal\nlook\n\n<read-files>\nold.rs\nx.rs\n</r
         let request = &bodies[1];
         assert_eq!(request["instructions"], compaction::SYSTEM_PROMPT);
         assert!(request.get("tools").is_none());
+        assert_eq!(request["max_output_tokens"], 2048);
+        assert_eq!(request["reasoning"]["effort"], "none");
         let prompt = request["input"][0]["content"].as_str().unwrap();
         let conversation = "<conversation>\n[Assistant tool calls]: read(path=\"x.rs\")\n\n\
 [Assistant]: found it\n\n[User]: The following is a summary of a branch that this conversation \

@@ -916,7 +916,8 @@ impl Interactive {
             let status = match act {
                 select::Act::Rename => {
                     let name = session.name.clone().unwrap_or_default();
-                    let dialog = screen::Dialog::Text("Rename session".into(), name);
+                    let dialog =
+                        screen::Dialog::Text("Rename session".into(), name, screen::Optional::No);
                     match screen.ask(dialog, None) {
                         Some(screen::Answer::Text(Some(name))) => {
                             let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1151,7 +1152,7 @@ impl Interactive {
     }
 
     fn compact(&mut self, focus: &str) {
-        let result = self.during_turn(|agent, ui, cancel| agent.compact(focus, ui, cancel));
+        let result = self.during_turn(|agent, ui, cancel| agent.compact(focus, None, ui, cancel));
         match result {
             Ok(Some(compaction)) => self.ui().compacted(&compaction, None),
             Ok(None) => self.say("Nothing to compact: the conversation is all recent."),
@@ -1200,7 +1201,9 @@ impl Interactive {
                 0 => return Some(None),
                 1 => return Some(Some(String::new())),
                 _ => {
-                    let dialog = screen::Dialog::Text(TITLE.into(), String::new());
+                    // As in Scramjet, no instructions give the default summary.
+                    let dialog =
+                        screen::Dialog::Text(TITLE.into(), String::new(), screen::Optional::Yes);
                     if let Some(screen::Answer::Text(Some(focus))) = screen.ask(dialog, None) {
                         return Some(Some(focus));
                     }

@@ -1,6 +1,7 @@
 //! Compaction as Scramjet does it: its checkpoint prompts, a text view of Responses conversation
 //! items, and the agent replacing older history with a summary, on `/compact` or when the context
 //! fills.
+use super::client::Protocol;
 use super::{Agent, AgentError, AgentUi, PRODUCER, Purpose, message_text};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashSet};
@@ -524,6 +525,10 @@ pub(super) fn split_turn_summary(history: &str, prefix: &str) -> String {
 
 /// Compaction keeps about this much of the latest conversation, as Scramjet does.
 const KEEP_RECENT_TOKENS: u64 = 20_000;
+/// Scramjet's caps on the output of a compaction summary and of a turn-prefix summary: 0.8 and
+/// 0.5 × its `reserveTokens`.
+const SUMMARY_TOKENS: u64 = RESERVE_TOKENS * 4 / 5;
+const TURN_PREFIX_TOKENS: u64 = RESERVE_TOKENS / 2;
 
 #[derive(Clone)]
 pub struct Compaction {
@@ -556,14 +561,17 @@ impl AutoCompaction {
 impl Agent {
     /// Replaces the conversation before its last ~20k tokens with a summary the model writes, as
     /// Scramjet's compaction does, followed by the files read and modified in all compacted
-    /// history, and records that in the session. On failure or cancellation
-    /// nothing changes. `None`: nothing is old enough to summarize.
+    /// history, and records that in the session; `automatic` says why it runs without
+    /// `/compact`. On failure or cancellation nothing changes. `None`: nothing is old enough to
+    /// summarize.
     pub fn compact(
         &mut self,
         focus: &str,
+        automatic: Option<AutoCompaction>,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<Option<Compaction>, AgentError> {
+        let purpose = Purpose::Compaction(automatic);
         let previous = previous_summary(&self.conversation).map(str::to_owned);
         let start = usize::from(previous.is_some());
         let cut = cut_point(&self.conversation, start, KEEP_RECENT_TOKENS);
@@ -583,12 +591,12 @@ impl Agent {
             _ if history.is_empty() => "No prior history.".into(),
             previous => {
                 let prompt = prompt(history, previous.as_deref(), focus);
-                self.summarize(prompt, Purpose::Compaction, ui, cancel)?
+                self.summarize(prompt, purpose, SUMMARY_TOKENS, ui, cancel)?
             }
         };
         if let Some(turn) = turn {
             let prompt = turn_prefix_prompt(&self.conversation[turn..cut]);
-            let prefix = self.summarize(prompt, Purpose::Compaction, ui, cancel)?;
+            let prefix = self.summarize(prompt, purpose, TURN_PREFIX_TOKENS, ui, cancel)?;
             summary = split_turn_summary(&summary, &prefix);
         }
         summary.push_str(&files.format());
@@ -614,15 +622,22 @@ impl Agent {
         }))
     }
 
-    /// One request without tools for the text a summarization `prompt` asks for. As in Scramjet,
-    /// a summary cut off at the output token limit is kept.
+    /// One request without tools for the text a summarization `prompt` asks for, of at most
+    /// `tokens` output tokens (fewer when the model or `--max-output-tokens` allows fewer). As in
+    /// Scramjet, a branch summary is asked for without reasoning, and a summary cut off at the
+    /// output token limit is kept.
     pub(super) fn summarize(
         &mut self,
         prompt: String,
         purpose: Purpose,
+        tokens: u64,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<String, AgentError> {
+        let tokens = [self.info.output, self.config.max_output_tokens]
+            .into_iter()
+            .flatten()
+            .fold(tokens, u64::min);
         let mut request = json!({
             "model": self.config.model,
             "instructions": SYSTEM_PROMPT,
@@ -630,13 +645,19 @@ impl Agent {
             "stream": true,
             "store": false,
             "prompt_cache_key": self.session.id(),
-            "reasoning": {"summary": "auto"},
+            "max_output_tokens": tokens,
         });
-        if let Some(effort) = self.effort() {
-            request["reasoning"]["effort"] = json!(effort);
-        }
-        if let Some(tokens) = self.config.max_output_tokens {
-            request["max_output_tokens"] = json!(tokens);
+        let effort = match (purpose, self.info.protocol) {
+            // A Messages request without effort would think; `none` sends no thinking.
+            (Purpose::BranchSummary, Protocol::Messages) => Some("none"),
+            (Purpose::BranchSummary, Protocol::Responses) => Some(self.info.fit("none")),
+            _ => self.effort(),
+        };
+        if self.info.reasoning {
+            request["reasoning"] = json!({"summary": "auto"});
+            if let Some(effort) = effort {
+                request["reasoning"]["effort"] = json!(effort);
+            }
         }
         let reply = self.respond(&request, purpose, ui, cancel)?;
         let summary = reply
@@ -660,7 +681,7 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<bool, AgentError> {
-        match self.compact("", ui, cancel) {
+        match self.compact("", Some(reason), ui, cancel) {
             Ok(Some(compaction)) => {
                 ui.compacted(&compaction, Some(reason));
                 Ok(true)
@@ -916,7 +937,7 @@ mod tests {
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         let first = agent
-            .compact("file paths", &mut ui, &cancel)
+            .compact("file paths", None, &mut ui, &cancel)
             .unwrap()
             .unwrap();
         assert_eq!((first.kept_items, first.tokens_before), (1, estimate));
@@ -938,7 +959,7 @@ mod tests {
         add_call(&mut agent, "read", "b.rs");
         let newest = json!({"role":"user", "content":"newer work ".repeat(8000)});
         agent.add(newest.clone()).unwrap();
-        let second = agent.compact("", &mut ui, &cancel).unwrap().unwrap();
+        let second = agent.compact("", None, &mut ui, &cancel).unwrap().unwrap();
         assert_eq!(second.kept_items, 1);
         assert!(second.tokens_before > 20_000);
         assert_eq!(
@@ -1002,7 +1023,7 @@ mod tests {
         }
         let mut ui = Recorder::default();
         let compacted = agent
-            .compact("focus", &mut ui, &AtomicBool::new(false))
+            .compact("focus", None, &mut ui, &AtomicBool::new(false))
             .unwrap()
             .unwrap();
         assert_eq!(compacted.kept_items, 3);
@@ -1025,6 +1046,54 @@ mod tests {
         ));
         assert!(prompt(1).contains("[... 88000 more characters truncated]\n</conversation>"));
         assert!(prompt(1).ends_with("Focus on what's needed to understand the kept suffix."));
+        assert_eq!(requests[0]["max_output_tokens"], 13_107);
+        assert_eq!(requests[1]["max_output_tokens"], 8192);
+    }
+
+    #[test]
+    fn summaries_are_capped_as_scramjets_and_a_branch_summary_does_not_reason() {
+        let text = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let claude = messages_stream(&[
+            json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"s"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+            json!({"type":"message_stop"}),
+        ]);
+        let (endpoint, server) = serve(vec![text("a"), text("b"), text("c"), claude]);
+        let (mut agent, _scratch) = agent(endpoint, "summary-caps");
+        agent.set_effort("high").unwrap();
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let mut summarize = |agent: &mut Agent, purpose, tokens| {
+            agent
+                .summarize("p".into(), purpose, tokens, &mut ui, &cancel)
+                .unwrap()
+        };
+        summarize(&mut agent, Purpose::Compaction(None), SUMMARY_TOKENS);
+        agent.info.output = Some(4000);
+        summarize(&mut agent, Purpose::BranchSummary, 2048);
+        agent.config.max_output_tokens = Some(1000);
+        summarize(&mut agent, Purpose::Compaction(None), TURN_PREFIX_TOKENS);
+        agent.config.max_output_tokens = None;
+        agent.set_model("claude-opus-5-5").unwrap();
+        summarize(&mut agent, Purpose::BranchSummary, 2048);
+        let bodies = server.join().unwrap();
+        assert_eq!((SUMMARY_TOKENS, TURN_PREFIX_TOKENS), (13_107, 8192));
+        assert_eq!(bodies[0]["max_output_tokens"], 13_107);
+        assert_eq!(
+            bodies[0]["reasoning"],
+            json!({"summary":"auto","effort":"high"})
+        );
+        assert_eq!(bodies[1]["max_output_tokens"], 2048);
+        assert_eq!(
+            bodies[1]["reasoning"],
+            json!({"summary":"auto","effort":"none"})
+        );
+        assert_eq!(bodies[2]["max_output_tokens"], 1000);
+        assert_eq!(bodies[3]["max_tokens"], 2048);
+        assert!(bodies[3].get("thinking").is_none(), "{}", bodies[3]);
+        assert!(bodies[3].get("output_config").is_none());
     }
 
     #[test]
@@ -1052,7 +1121,7 @@ mod tests {
             agent.add(item).unwrap();
         }
         let compacted = agent
-            .compact("", &mut Recorder::default(), &AtomicBool::new(false))
+            .compact("", None, &mut Recorder::default(), &AtomicBool::new(false))
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -1083,12 +1152,16 @@ mod tests {
         let log = std::fs::read(agent.session_path()).unwrap();
         let mut ui = Recorder::default();
         for _ in 0..3 {
-            assert!(agent.compact("", &mut ui, &AtomicBool::new(false)).is_err());
+            assert!(
+                agent
+                    .compact("", None, &mut ui, &AtomicBool::new(false))
+                    .is_err()
+            );
             assert_eq!(agent.conversation(), before);
             assert_eq!(std::fs::read(agent.session_path()).unwrap(), log);
         }
         assert!(matches!(
-            agent.compact("", &mut ui, &AtomicBool::new(true)),
+            agent.compact("", None, &mut ui, &AtomicBool::new(true)),
             Err(AgentError::Cancelled)
         ));
         assert_eq!(agent.conversation(), before);
@@ -1103,10 +1176,10 @@ mod tests {
         let (mut agent, _scratch) = agent(([127, 0, 0, 1], 9).into(), "compact-short");
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
-        assert!(agent.compact("", &mut ui, &cancel).unwrap().is_none());
+        assert!(agent.compact("", None, &mut ui, &cancel).unwrap().is_none());
         agent.add(json!({"role":"user","content":"hi"})).unwrap();
         let log = std::fs::read(agent.session_path()).unwrap();
-        assert!(agent.compact("", &mut ui, &cancel).unwrap().is_none());
+        assert!(agent.compact("", None, &mut ui, &cancel).unwrap().is_none());
         assert_eq!(std::fs::read(agent.session_path()).unwrap(), log);
         assert_eq!(agent.usage.requests, 0);
     }
@@ -1206,7 +1279,13 @@ mod tests {
             ui.compactions,
             [(10_000, 3, Some(AutoCompaction::Threshold))]
         );
-        assert_eq!(ui.waits, [Purpose::Reply, Purpose::Compaction]);
+        assert_eq!(
+            ui.waits,
+            [
+                Purpose::Reply,
+                Purpose::Compaction(Some(AutoCompaction::Threshold))
+            ]
+        );
         // The turn ends after compacting: no further request is sent.
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 2);
@@ -1293,9 +1372,9 @@ mod tests {
             ui.waits,
             [
                 Purpose::Reply,
-                Purpose::Compaction,
+                Purpose::Compaction(Some(AutoCompaction::Threshold)),
                 Purpose::Reply,
-                Purpose::Compaction,
+                Purpose::Compaction(Some(AutoCompaction::Threshold)),
                 Purpose::Reply
             ]
         );

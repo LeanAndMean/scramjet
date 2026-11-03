@@ -715,7 +715,7 @@ def thinking_counts_seconds(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('\u2026 thinking 1s')
+    on_screen('\u2026 thinking 1s (Esc to interrupt)')
     on_screen('\u2026 thinking 2s')
     # A key's escape sequence is not an Escape.
     send(b'\x1b[C')
@@ -1105,7 +1105,8 @@ def tree_session(read, until, send, output):
     on_screen('Summarize branch?')
     send(b'\x1b[B\x1b[B\r')
     on_screen('Custom summarization instructions')
-    send(b'keep names\r')
+    # As in Scramjet, Enter without instructions gives the default summary.
+    send(b'\r')
     # The conversation before that prompt is shown again with the summary, and the prompt waits in
     # the editor.
     rows = on_screen('\u2713 Navigated to selected point')

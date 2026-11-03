@@ -14,7 +14,8 @@ use std::{sync::atomic::AtomicBool, time::Duration};
 pub enum Purpose {
     /// The next step of a turn, whose text streams as progress.
     Reply,
-    Compaction,
+    /// A summary of older history: `/compact` (`None`) or automatic, saying why.
+    Compaction(Option<AutoCompaction>),
     /// The summary of a branch that `/tree` leaves.
     BranchSummary,
 }

@@ -174,6 +174,19 @@ fn context(tokens: u64, window: Option<u64>) -> String {
     }
 }
 
+/// What the status line says while a request for `purpose` runs, in Scramjet's words.
+pub(super) fn waiting_for(purpose: Purpose) -> &'static str {
+    match purpose {
+        Purpose::Reply => "thinking",
+        Purpose::Compaction(None) => "compacting context",
+        Purpose::Compaction(Some(AutoCompaction::Threshold)) => "auto-compacting",
+        Purpose::Compaction(Some(AutoCompaction::Overflow)) => {
+            "context overflow detected, auto-compacting"
+        }
+        Purpose::BranchSummary => "summarizing branch",
+    }
+}
+
 pub(super) fn elapsed(seconds: u64) -> String {
     match seconds {
         0 => String::new(),
@@ -642,12 +655,7 @@ impl AgentUi for Terminal {
         self.streamed.clear();
         self.consumed = 0;
         self.text_rows = None;
-        let activity = match purpose {
-            Purpose::Reply => "thinking",
-            Purpose::Compaction => "compacting",
-            Purpose::BranchSummary => "summarizing branch",
-        };
-        self.show(activity.into(), true);
+        self.show(waiting_for(purpose).into(), true);
     }
     fn progress(&mut self, update: &StreamProgress) {
         match update {
