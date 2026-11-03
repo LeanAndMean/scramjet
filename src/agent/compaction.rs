@@ -254,7 +254,12 @@ impl Branch {
         let mut items = Vec::new();
         for entry in entries {
             match entry["type"].as_str() {
-                Some("function_call_output" | "model_change" | "thinking_level_change") => {}
+                Some(
+                    "function_call_output"
+                    | "model_change"
+                    | "thinking_level_change"
+                    | "command_state",
+                ) => {}
                 Some("compaction") => items.push(summary_message(
                     entry["summary"].as_str().unwrap_or_default(),
                 )),

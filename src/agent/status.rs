@@ -159,6 +159,39 @@ pub struct Completed {
 }
 
 impl Lifecycle {
+    /// The session line that keeps the active command for a resume, as Scramjet's journal keeps
+    /// what it rebuilds its lifecycle from: the command (`null`: none) and, when the user's next
+    /// reply resumes it, `state`: `parked` (a freetext question waits for the reply) or
+    /// `resumable` (a question was cancelled). A completion is saved when its turn ends, as
+    /// Scramjet records a report then.
+    pub fn saved(&self) -> Value {
+        let Some((name, phase)) = &self.active else {
+            return json!({"type":"command_state","command":null});
+        };
+        let mut line = json!({"type":"command_state","command":name});
+        match phase {
+            Phase::Parked => line["state"] = json!("parked"),
+            Phase::Dormant { resumable: true } => line["state"] = json!("resumable"),
+            _ => {}
+        }
+        line
+    }
+
+    /// The lifecycle a session's `saved` line leaves: as Scramjet rebuilds it, a command that
+    /// was working is dormant.
+    pub fn restored(saved: Option<&Value>) -> Self {
+        let active = saved.and_then(|line| {
+            let name = line["command"].as_str().filter(|name| !name.is_empty())?;
+            let phase = match line["state"].as_str() {
+                Some("parked") => Phase::Parked,
+                Some("resumable") => Phase::Dormant { resumable: true },
+                _ => Phase::Dormant { resumable: false },
+            };
+            Some((name.to_owned(), phase))
+        });
+        Self { active }
+    }
+
     /// Before a prompt is sent: a prompt running `command` starts it; as in Scramjet, a reply
     /// resumes a command parked for it or whose question was cancelled, and a `/` prompt that
     /// names no command ends the active one.
@@ -176,10 +209,6 @@ impl Lifecycle {
         {
             *phase = Phase::Running { continues: 0 };
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.active = None;
     }
 
     /// A freetext question parks the active command for the user's reply; whether one did.
@@ -960,6 +989,57 @@ mod tests {
         ] {
             assert_eq!(probe_message(policy, command), reference[key], "{key}");
         }
+    }
+
+    #[test]
+    fn a_saved_command_is_restored_as_scramjet_rebuilds_it() {
+        let commands = commands();
+        let restored = |lifecycle: &Lifecycle| Lifecycle::restored(Some(&lifecycle.saved()));
+        let mut lifecycle = Lifecycle::default();
+        assert_eq!(
+            lifecycle.saved(),
+            json!({"type":"command_state","command":null})
+        );
+        assert_eq!(restored(&lifecycle).active, None);
+        assert_eq!(Lifecycle::restored(None).active, None);
+
+        // Working, checked or reported: dormant once resumed.
+        lifecycle.prompted("/rs:loop", Some("rs:loop"));
+        let started = json!({"type":"command_state","command":"rs:loop"});
+        assert_eq!(lifecycle.saved(), started);
+        assert!(matches!(lifecycle.turn_ended(&commands), Ended::Probe(_)));
+        assert_eq!(lifecycle.saved(), started);
+        lifecycle.report(&json!({"summary":"Done.","status":"completed"}));
+        assert_eq!(lifecycle.saved(), started);
+        let mut resumed = restored(&lifecycle);
+        assert!(
+            resumed
+                .dormant_notice()
+                .unwrap()
+                .contains("do NOT auto-resume")
+        );
+        resumed.prompted("go on", None);
+        assert_eq!(resumed.turn_ended(&commands), Ended::Nothing);
+        assert!(matches!(
+            lifecycle.turn_ended(&commands),
+            Ended::Completed(_)
+        ));
+        assert_eq!(restored(&lifecycle).active, None);
+
+        // Parked for a reply, or resumable after a cancelled question: the reply resumes it.
+        lifecycle.prompted("/rs:loop", Some("rs:loop"));
+        lifecycle.park();
+        assert_eq!(lifecycle.saved()["state"], "parked");
+        let mut resumed = restored(&lifecycle);
+        assert_eq!(resumed.dormant_notice(), None);
+        resumed.prompted("blue", None);
+        assert!(matches!(resumed.turn_ended(&commands), Ended::Probe(_)));
+        lifecycle.question_cancelled();
+        assert_eq!(lifecycle.saved()["state"], "resumable");
+        let mut resumed = restored(&lifecycle);
+        assert!(resumed.dormant_notice().unwrap().contains("will resume it"));
+        resumed.prompted("blue", None);
+        assert!(matches!(resumed.turn_ended(&commands), Ended::Probe(_)));
     }
 
     #[test]

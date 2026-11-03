@@ -1411,4 +1411,42 @@ prompts = lambda path: [line.get('_scramjet_typed') for line in map(json.loads, 
                         if line.get('role') == 'user' and not line.get('_scramjet_probe')]
 assert prompts(first) == ['/flow:step one'], prompts(first)
 assert prompts(second) == ['/flow:step two', '/flow:done', '/flow:step three'], prompts(second)
+
+
+def parked_question(read, until, send, output):
+    mark = until(b'> ')
+    send(b'/flow:step ask\r')
+    mark = until(b'Parked for reply', until(b'Which colour?', mark))
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+def parked_question_resumed(read, until, send, output):
+    mark = until(b'> ', until(b'Parked for reply', until(b'Which colour?')))
+    send(b'blue\r')
+    # The reply resumes the command the session saved as waiting for it: its turn gets the
+    # status check, and the step the report offers is listed.
+    mark = until(b'Used blue.', mark)
+    mark = until(b'Select next step', until(b'report_scramjet_command_status completed', mark))
+    mark = until('\u2192 0: /flow:step again'.encode(), mark)
+    send(b'\x1b')
+    mark = until(b'Cancelled', until('- /flow:step again \u2014 Ask again.'.encode(), mark))
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+known = set(session_files())
+run([], parked_question, serve_items([
+    [tool_call('call_1', 'get_scramjet_user_input', {'type': 'freetext', 'message': 'Which colour?'})],
+]))
+run(['--continue'], parked_question_resumed, serve_items([
+    [message('Used blue.')],
+    [report('call_2', [('/flow:step again', False, 'Ask again.')], 0)],
+]))
+(parked,) = set(session_files()) - known
+lines = list(map(json.loads, open(parked)))
+checks = [line['content'].split('\n')[0] for line in lines if line.get('_scramjet_probe')]
+assert checks == ['Scramjet status check for `flow:step`.'], checks
+states = [(line['command'], line.get('state')) for line in lines if line.get('type') == 'command_state']
+assert states == [('flow:step', None), ('flow:step', 'parked'), ('flow:step', None), (None, None)], states
 print('agent editor journeys passed')

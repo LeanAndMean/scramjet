@@ -24,8 +24,10 @@ pub struct SessionInfo {
 /// An append-only JSON-lines log: a header, then each input item, each model change, each
 /// compaction, which replaces the items before `first_kept` with its summary and lists the files
 /// read and modified before then, and each branch summary, a message summarizing a branch the
-/// conversation came back from, with the files read and modified there. Entries form a tree (see `Entries`); the conversation is the
-/// path from the start to the current entry, the leaf, which each appended entry continues.
+/// conversation came back from, with the files read and modified there, and each change of the
+/// active command (`status::Lifecycle::saved`). Entries form a tree (see `Entries`); the
+/// conversation is the path from the start to the current entry, the leaf, which each appended
+/// entry continues.
 pub struct Session {
     path: PathBuf,
     file: File,
@@ -39,6 +41,8 @@ pub struct Session {
     files: FileLists,
     /// The context size the latest response on the path reported, unless a compaction followed.
     context_tokens: Option<u64>,
+    /// The latest `command_state` line on the path, which a resume restores.
+    command: Option<Value>,
     leaf: Option<usize>,
     /// The entry a line appended without a branch line would continue.
     tail: Option<usize>,
@@ -86,6 +90,7 @@ struct Context {
     effort: Option<String>,
     files: FileLists,
     context_tokens: Option<u64>,
+    command: Option<Value>,
 }
 
 fn read(path: &Path) -> io::Result<Entries> {
@@ -207,6 +212,7 @@ impl Entries {
             effort: None,
             files: FileLists::default(),
             context_tokens: None,
+            command: None,
         };
         let items = &mut context.items;
         for entry in self.path(leaf) {
@@ -239,6 +245,8 @@ impl Entries {
                     .as_str()
                     .ok_or_else(|| invalid(path, "missing level in a thinking level change"))?;
                 context.effort = Some(level.to_owned());
+            } else if value["type"] == "command_state" {
+                context.command = Some(value.clone());
             } else {
                 if let Some(producer) = value[super::PRODUCER].as_str() {
                     context.model = Some(producer.to_owned());
@@ -364,6 +372,7 @@ impl Session {
             effort: None,
             files: FileLists::default(),
             context_tokens: None,
+            command: None,
             leaf: None,
             tail: None,
             lines: 1,
@@ -413,6 +422,7 @@ impl Session {
                 effort: context.effort,
                 files: context.files,
                 context_tokens: context.context_tokens,
+                command: context.command,
                 leaf: entries.tail,
                 tail: entries.tail,
                 lines: entries.lines,
@@ -488,6 +498,7 @@ impl Session {
         self.effort = context.effort;
         self.files = context.files;
         self.context_tokens = context.context_tokens;
+        self.command = context.command;
         Ok(context.items)
     }
 
@@ -559,6 +570,24 @@ impl Session {
         self.context_tokens
     }
 
+    /// The latest `command_state` line on the path, if any.
+    pub fn command(&self) -> Option<&Value> {
+        self.command.as_ref()
+    }
+
+    /// Saves the active command's state, `line` (`status::Lifecycle::saved`), unless the path
+    /// already ends with it; a path without one has no command.
+    pub fn record_command(&mut self, line: &Value) -> io::Result<()> {
+        let unchanged = match &self.command {
+            Some(saved) => saved == line,
+            None => line["command"].is_null(),
+        };
+        if !unchanged {
+            self.append(line)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn compacted_files(&self) -> &FileLists {
         &self.files
     }
@@ -599,6 +628,8 @@ impl Session {
             self.model = item["model"].as_str().map(str::to_owned);
         } else if item["type"] == "thinking_level_change" {
             self.effort = item["level"].as_str().map(str::to_owned);
+        } else if item["type"] == "command_state" {
+            self.command = Some(item.clone());
         } else if item["type"] == "compaction" {
             self.files = FileLists::of(item);
             self.context_tokens = None;

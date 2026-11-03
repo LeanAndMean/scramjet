@@ -323,6 +323,7 @@ impl Agent {
             ),
         };
         let context_tokens = session.context_tokens();
+        let lifecycle = status::Lifecycle::restored(session.command());
         let executor = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -333,7 +334,7 @@ impl Agent {
         let mut agent = Self {
             instructions: instructions(&config.root, &commands),
             commands,
-            lifecycle: status::Lifecycle::default(),
+            lifecycle,
             completed: None,
             autonomy: autonomy::global_path(),
             autonomy_diagnostics: Vec::new(),
@@ -586,7 +587,7 @@ impl Agent {
         };
         self.conversation = self.session.move_to(destination.leaf)?;
         self.usage.context_tokens = self.session.context_tokens();
-        self.leave_command();
+        self.restore_command();
         self.answer_interrupted_calls()?;
         if let Some((summary, files)) = summary {
             self.session
@@ -624,6 +625,15 @@ impl Agent {
             while let Some(next) = entries
                 .iter()
                 .find(|next| next.parent == leaf && next.value["type"] == "function_call_output")
+            {
+                leaf = Some(next.line);
+            }
+        }
+        // The command's state saved after an entry is its state there; `/tree` does not list it.
+        if prompt.is_none() {
+            while let Some(next) = entries
+                .iter()
+                .find(|next| next.parent == leaf && next.value["type"] == "command_state")
             {
                 leaf = Some(next.line);
             }
@@ -680,7 +690,7 @@ impl Agent {
             context_tokens,
             ..Usage::default()
         };
-        self.leave_command();
+        self.restore_command();
         if let Some(model) = model {
             self.info = ModelInfo::guess(&model);
             self.config.model = model;
@@ -705,7 +715,7 @@ impl Agent {
         self.conversation.clear();
         self.prompts.clear();
         self.usage = Usage::default();
-        self.leave_command();
+        self.restore_command();
         Ok(())
     }
 
@@ -942,11 +952,17 @@ impl Agent {
         Ok(())
     }
 
-    /// A session switch leaves the command that was running, as Scramjet's lifecycle starts
-    /// again from the session it switches to.
-    fn leave_command(&mut self) {
-        self.lifecycle.clear();
+    /// A session switch or a move in the session leaves the command that was running for the
+    /// one saved there, as Scramjet rebuilds its lifecycle from the session it switches to.
+    fn restore_command(&mut self) {
+        self.lifecycle = status::Lifecycle::restored(self.session.command());
         self.completed = None;
+    }
+
+    /// Saves a change of the active command for a resume.
+    fn save_command(&mut self) -> Result<(), AgentError> {
+        self.session.record_command(&self.lifecycle.saved())?;
+        Ok(())
     }
 
     fn request(&self) -> Value {
@@ -1027,6 +1043,7 @@ impl Agent {
             None => json!({"role":"user","content":prompt}),
         };
         self.add(message)?;
+        self.save_command()?;
         self.prompts.push(prompt.to_owned());
         let mut ran = self.run(ui, cancel);
         // As Scramjet's lifecycle: a command's turn that ends without a report gets a status check.
@@ -1036,12 +1053,15 @@ impl Agent {
                     if let Some(notice) = self.lifecycle.cancelled() {
                         ui.notice(&notice);
                     }
+                    self.save_command()?;
                     return Err(AgentError::Cancelled);
                 }
                 Err(error) => return Err(error),
                 Ok(()) => {}
             }
-            match self.lifecycle.turn_ended(&self.commands) {
+            let ended = self.lifecycle.turn_ended(&self.commands);
+            self.save_command()?;
+            match ended {
                 status::Ended::Probe(check) => {
                     self.add(json!({"role":"user","content":check,PROBE:true}))?;
                     ran = self.run(ui, cancel);
@@ -1146,6 +1166,8 @@ to a larger-context model)"
                     return Err(AgentError::Cancelled);
                 }
             }
+            // After the results, so one reply's results stay a chain (see `destination`).
+            self.save_command()?;
             if ends {
                 self.compact_when_full(ui, cancel)?;
                 return Ok(());
@@ -3001,6 +3023,142 @@ be a non-empty array for select type. failed",
                 .unwrap()
                 .ends_with("Answer(\"Reply at the prompt\")")
         );
+    }
+
+    #[test]
+    fn a_resumed_session_keeps_its_command_as_scramjet_rebuilds_it() {
+        let call = |id: &str, name: &str, arguments: Value| {
+            let events = fixture::call_events(&arguments.to_string(), fixture::known_usage());
+            let text = serde_json::to_string(&events).unwrap();
+            let text = text
+                .replace("\"inert\"", &format!("\"{name}\""))
+                .replace("call_1", id);
+            stream(&serde_json::from_str::<Vec<Value>>(&text).unwrap())
+        };
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let failed = b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        let (endpoint, server) = serve(vec![
+            call(
+                "call_1",
+                question::NAME,
+                json!({"type":"freetext","message":"Which colour?"}),
+            ),
+            reply("used blue"),
+            call(
+                "call_2",
+                status::NAME,
+                json!({"summary":"Used blue.","status":"completed","recommended_next_step":0,
+                "next_steps":[{"message":"/rs:work again","fresh_session":false,"reason":"More."}]}),
+            ),
+            failed.to_vec(),
+            reply("hello"),
+            reply("hi"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "command-resume");
+        let commands = agent.root().join(".scramjet/rs/commands");
+        std::fs::create_dir_all(&commands).unwrap();
+        std::fs::write(
+            commands.join("rs:work.md"),
+            "---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:work\n---\nWork.\n",
+        )
+        .unwrap();
+        let resume = |agent: Agent| {
+            let config = AgentConfig {
+                endpoint,
+                model: "m".into(),
+                root: agent.root().to_owned(),
+                effort: None,
+                max_output_tokens: None,
+                ask: false,
+                retries: 0,
+            };
+            let path = agent.session_path().to_owned();
+            drop(agent);
+            let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
+            agent.commands = Commands::discover(None, &agent.root().join(".scramjet"));
+            agent.autonomy = None;
+            agent
+        };
+        agent.commands = Commands::discover(None, &agent.root().join(".scramjet"));
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("/rs:work", &mut ui, &cancel).unwrap();
+
+        // The question waits for the reply after a resume; the reply's turn gets the status
+        // check, and the completed command's next step is offered.
+        let mut agent = resume(agent);
+        agent.turn("blue", &mut ui, &cancel).unwrap();
+        let completed = agent.take_completed().unwrap();
+        let routing = agent.route(&completed, true);
+        let Next::Offer { steps, .. } = routing.next else {
+            panic!("no next step offered: {routing:?}");
+        };
+        assert_eq!(steps[0].command.as_deref(), Some("/rs:work again"));
+        let tree = agent.tree().unwrap();
+        assert!(matches!(
+            agent.navigate(tree.current.unwrap(), None, &mut ui, &cancel),
+            Ok(Navigated::AlreadyThere)
+        ));
+
+        // A command whose turn failed is dormant after a resume: a reply gets no status check.
+        assert!(agent.turn("/rs:work", &mut ui, &cancel).is_err());
+        let mut agent = resume(agent);
+        agent.turn("hello", &mut ui, &cancel).unwrap();
+        assert!(agent.take_completed().is_none());
+
+        // Continuing from the completed command's report leaves no command.
+        let tree = agent.tree().unwrap();
+        let report = tree
+            .entries
+            .iter()
+            .find(|entry| matches!(&entry.item, TreeItem::Tool(name, _) if name == status::NAME))
+            .unwrap()
+            .line;
+        agent.navigate(report, None, &mut ui, &cancel).unwrap();
+        agent.turn("hi", &mut ui, &cancel).unwrap();
+
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 6);
+        let last_input = |body: &Value| {
+            let input = body["input"].as_array().unwrap();
+            input.last().unwrap()["content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        };
+        assert!(last_input(&bodies[2]).starts_with("Scramjet status check for `rs:work`."));
+        let dormant: Vec<_> = bodies
+            .iter()
+            .map(|body| {
+                let instructions = body["instructions"].as_str().unwrap();
+                instructions.contains("# Dormant Scramjet Command\n\nThe command `rs:work`")
+            })
+            .collect();
+        assert_eq!(dormant, [false, false, false, false, true, false]);
+        assert_eq!(last_input(&bodies[4]), "hello");
+        assert_eq!(last_input(&bodies[5]), "hi");
+        assert!(
+            bodies
+                .iter()
+                .all(|body| !body.to_string().contains("command_state"))
+        );
+        let saved: Vec<_> = std::fs::read_to_string(agent.session_path())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|line| line["type"] == "command_state")
+            .collect();
+        let started = json!({"type":"command_state","command":"rs:work"});
+        let parked = json!({"type":"command_state","command":"rs:work","state":"parked"});
+        let ended = json!({"type":"command_state","command":null});
+        assert_eq!(
+            saved,
+            [&started, &parked, &started, &ended, &started].map(Clone::clone)
+        );
+
+        // A fork before the reply waits for it again.
+        assert_eq!(agent.fork(1).unwrap().as_deref(), Some("blue"));
+        assert_eq!(agent.lifecycle.saved()["state"], "parked");
     }
 
     #[test]

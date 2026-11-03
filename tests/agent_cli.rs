@@ -5,7 +5,7 @@ use std::process::Command;
 fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {
     let output = Command::new("timeout")
         .args([
-            "60",
+            "120",
             "python3",
             "tests/agent_editor_pty.py",
             env!("CARGO_BIN_EXE_scramjet-rs"),
