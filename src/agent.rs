@@ -144,7 +144,7 @@ pub enum Answer {
 }
 
 /// What the user sees of a successful tool call instead of the text the model receives.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ToolDetail {
     /// The lines an edit changed, each marked ` ` (unchanged), `-` or `+` and numbered, with
     /// `...` for skipped lines.
@@ -228,6 +228,7 @@ pub struct Stats {
     pub cache_read: u64,
 }
 
+#[derive(Clone)]
 pub struct Compaction {
     /// The last response's context size and an estimate of the items after it, or without a
     /// response of the current model an estimate of the whole conversation (chars/4).
@@ -1559,7 +1560,7 @@ fn ask(
 
 /// Shows stored items as their turns showed them, as Scramjet redraws a resumed session: each
 /// prompt, reply, reasoning summary, tool call with its result, `!` command and compaction summary.
-fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
+pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
     // A reply's calls are stored before their results, but each ran, and showed, in turn.
     let mut calls: Vec<(&str, &str, Option<Call>)> = Vec::new();
     let unanswered = |calls: &mut Vec<(&str, &str, Option<Call>)>, ui: &mut dyn AgentUi| {

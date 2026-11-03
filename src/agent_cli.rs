@@ -3,6 +3,7 @@ mod editor;
 mod fuzzy;
 mod job;
 mod markdown;
+mod record;
 mod select;
 mod style;
 mod tree;
@@ -21,7 +22,7 @@ use scramjet_rs::agent::{
 };
 use std::{
     ffi::OsString,
-    io::{BufRead, IsTerminal, Write},
+    io::{BufRead, IsTerminal},
     net::SocketAddr,
     os::fd::BorrowedFd,
     path::PathBuf,
@@ -294,7 +295,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                             agent.show_conversation(&mut capture);
                             capture.captured()
                         };
-                        match view::show(render, &hide_thinking, typed) {
+                        match view::show(render, None, &hide_thinking, typed) {
                             Ok(typed) => editor.type_ahead(typed),
                             Err(error) => eprintln!("error: {error}"),
                         }
@@ -582,7 +583,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 let result = match summary.as_deref() {
                     Some(focus) => {
                         cancel.store(false, Ordering::Relaxed);
-                        let result = during_turn(&mut ui, &cancel, editor.as_mut(), |ui| {
+                        let shown = turn_shown(&agent, &editor, &ui, None);
+                        let result = during_turn(&mut ui, &cancel, editor.as_mut(), shown, |ui| {
                             agent.navigate(line, Some(focus), ui, &cancel)
                         });
                         ui.clear();
@@ -666,7 +668,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
             cancel.store(false, Ordering::Relaxed);
-            let result = during_turn(&mut ui, &cancel, editor.as_mut(), |ui| {
+            let shown = turn_shown(&agent, &editor, &ui, None);
+            let result = during_turn(&mut ui, &cancel, editor.as_mut(), shown, |ui| {
                 agent.compact(focus.trim(), ui, &cancel)
             });
             ui.clear();
@@ -692,7 +695,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     eprintln!();
                 }
                 cancel.store(false, Ordering::Relaxed);
-                let result = during_turn(&mut ui, &cancel, editor.as_mut(), |ui| {
+                let shown = turn_shown(&agent, &editor, &ui, None);
+                let result = during_turn(&mut ui, &cancel, editor.as_mut(), shown, |ui| {
                     agent.shell(command, include, ui, &cancel)
                 });
                 ui.clear();
@@ -711,7 +715,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             }
         }
         cancel.store(false, Ordering::Relaxed);
-        let result = during_turn(&mut ui, &cancel, editor.as_mut(), |ui| {
+        let shown = turn_shown(&agent, &editor, &ui, Some(prompt));
+        let result = during_turn(&mut ui, &cancel, editor.as_mut(), shown, |ui| {
             agent.turn(prompt, ui, &cancel)
         });
         ui.clear();
@@ -908,19 +913,41 @@ fn read_lines() -> Result<Option<String>, String> {
     }
 }
 
+/// What the conversation view shows during a turn that `prompt`, if any, starts, when the
+/// editor reads the keys typed meanwhile.
+fn turn_shown(
+    agent: &Agent,
+    editor: &Option<editor::Editor>,
+    ui: &Terminal,
+    prompt: Option<&str>,
+) -> Option<record::Shown> {
+    editor
+        .as_ref()
+        .map(|_| record::Shown::new(agent.conversation(), prompt, ui))
+}
+
 /// Runs a model turn, `/compact` or a `!` command with the terminal in its turn mode, while keys
-/// typed meanwhile are read for `editor`'s next prompt (`type_ahead`).
+/// typed meanwhile are read for `editor`'s next prompt (`type_ahead`), and Ctrl+O shows `shown`
+/// and the turn so far.
 fn during_turn<T>(
     ui: &mut Terminal,
     cancel: &Arc<AtomicBool>,
     editor: Option<&mut editor::Editor>,
-    run: impl FnOnce(&mut Terminal) -> T,
+    shown: Option<record::Shown>,
+    run: impl FnOnce(&mut dyn AgentUi) -> T,
 ) -> T {
     let mode = InputMode::turn();
+    let shown = shown.map(Arc::new);
+    let expand = shown.clone().map(|shown| -> type_ahead::Expand {
+        Arc::new(move |typed, waiting: &AtomicBool| shown.follow(typed, waiting))
+    });
     ui.type_ahead = editor
         .is_some()
-        .then(|| type_ahead::TypeAhead::start(cancel.clone()));
-    let result = run(ui);
+        .then(|| type_ahead::TypeAhead::start(cancel.clone(), expand));
+    let result = match &shown {
+        Some(shown) => run(&mut record::Recording { ui, shown }),
+        None => run(ui),
+    };
     let typed = ui.type_ahead.take().map(type_ahead::TypeAhead::finish);
     drop(mode);
     if let (Some(editor), Some(typed)) = (editor, typed) {
@@ -998,17 +1025,21 @@ struct Status {
 
 impl Status {
     fn line(&self) -> Option<String> {
-        let (activity, since) = self.activity.as_ref()?;
         let note = match self.note {
             Some((note, at)) if at.elapsed() < NOTE_TIME => format!(" · {note}"),
             _ => String::new(),
         };
+        Some(self.activity_line()? + &note)
+    }
+    /// The line without its note.
+    fn activity_line(&self) -> Option<String> {
+        let (activity, since) = self.activity.as_ref()?;
         Some(match self.countdown {
             Some(wait) => {
                 let left = wait.saturating_sub(since.elapsed()).as_secs_f64().ceil();
-                format!("… {activity} {left}s{note}")
+                format!("… {activity} {left}s")
             }
-            None => format!("… {activity}{}{note}", elapsed(since.elapsed().as_secs())),
+            None => format!("… {activity}{}", elapsed(since.elapsed().as_secs())),
         })
     }
     fn draw(&mut self) {
@@ -1030,7 +1061,7 @@ impl Status {
         if self.drawn.as_deref() == Some(&block) {
             return;
         }
-        eprint!("{}{block}", self.erase());
+        view::print(false, &format!("{}{block}", self.erase()));
         self.rows_above = self.output.len();
         self.drawn = Some(block);
     }
@@ -1045,7 +1076,7 @@ impl Status {
     fn clear(&mut self) -> bool {
         let drawn = self.drawn.take().is_some();
         if drawn && !job::continued() {
-            eprint!("{}", self.erase());
+            view::print(false, &self.erase());
         }
         self.activity = None;
         self.countdown = None;
@@ -1358,17 +1389,14 @@ impl Terminal {
     fn err(&mut self, text: &str) {
         match &mut self.capture {
             Some((captured, _)) => captured.push_str(text),
-            None => eprint!("{text}"),
+            None => view::print(false, text),
         }
     }
     /// Writes to stdout, where replies go, or the capture buffer.
     fn out(&mut self, text: &str) {
         match &mut self.capture {
             Some((captured, _)) => captured.push_str(text),
-            None => {
-                print!("{text}");
-                let _ = std::io::stdout().flush();
-            }
+            None => view::print(true, text),
         }
     }
     fn width(&self) -> usize {
@@ -1637,11 +1665,8 @@ impl AgentUi for Terminal {
             "{error}\nretrying in {}s ({attempt}/{retries}; Ctrl-C cancels)",
             delay.as_secs_f64().ceil()
         );
-        if self.color {
-            eprintln!("{}{text}{}", style::WARNING, style::RESET);
-        } else {
-            eprintln!("{text}");
-        }
+        let text = self.styled(style::WARNING, &text);
+        self.err(&format!("{text}\n"));
         self.show_countdown("retrying in".into(), delay);
     }
     fn assistant(&mut self, text: &str) {
@@ -1657,8 +1682,12 @@ impl AgentUi for Terminal {
             // one). As Scramjet replaces the streamed block with the final text, rewrite it while
             // it is still on screen; otherwise show the final text after it.
             let height = editor::terminal_size().1;
-            if let Some(rows) = self.text_rows.filter(|&rows| rows > 0 && rows < height) {
-                print!("\r\x1b[{rows}A\x1b[J");
+            let captured = self.capture.is_some();
+            let rows = self
+                .text_rows
+                .filter(|&rows| rows > 0 && (captured || rows < height));
+            if let Some(rows) = rows {
+                self.rewind(rows);
                 text = self.streamed[..self.consumed].to_owned() + &text;
             }
             self.streamed.clear();
@@ -1724,22 +1753,19 @@ impl AgentUi for Terminal {
         let reason = automatic
             .map(|reason| format!("\n{}", self.dim(&self.wrapped(reason.reason()))))
             .unwrap_or_default();
-        eprintln!(
-            "{}{reason}\n\n{}",
+        let block = format!(
+            "{}{reason}\n\n{}\n",
             self.wrapped(&heading),
             self.summary_block(&compaction.summary)
         );
+        self.err(&block);
         // During a turn, as after a tool block; after `/compact` the prompt's blank line follows.
         if automatic.is_some() {
-            eprintln!();
+            self.err("\n");
         }
     }
     fn compaction_failed(&mut self, error: &AgentError) {
-        self.clear();
-        eprintln!(
-            "{}\n",
-            self.wrapped(&format!("error: automatic compaction failed: {error}"))
-        );
+        self.compaction_error(&error.to_string());
     }
     fn user_prompt(&mut self, prompt: &str) {
         self.clear();
@@ -1774,12 +1800,13 @@ impl AgentUi for Terminal {
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         // Only an answer typed after the question is shown may approve it.
         let reading = self.type_ahead.take().map(|typed| {
-            let cancel = typed.cancel();
+            let restart = (typed.cancel(), typed.expand());
             typed.finish();
-            cancel
+            restart
         });
         let answer = self.ask(question, cancel);
-        self.type_ahead = reading.map(type_ahead::TypeAhead::start);
+        self.type_ahead =
+            reading.map(|(cancel, expand)| type_ahead::TypeAhead::start(cancel, expand));
         answer
     }
     /// A block of its own, ending with a blank line as a tool block does.
@@ -1822,11 +1849,11 @@ impl AgentUi for Terminal {
         let reading = self
             .type_ahead
             .take()
-            .map(|typed| (typed.cancel(), typed.finish()));
+            .map(|typed| (typed.cancel(), typed.expand(), typed.finish()));
         let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
         let chosen = select::question(title, options, recommended).unwrap_or(None);
-        self.type_ahead =
-            reading.map(|(cancel, typed)| type_ahead::TypeAhead::resume(cancel, typed));
+        self.type_ahead = reading
+            .map(|(cancel, expand, typed)| type_ahead::TypeAhead::resume(cancel, expand, typed));
         chosen
     }
 }
@@ -1869,6 +1896,46 @@ fn numbered_choice(title: &str, options: &[Choice], recommended: Option<usize>) 
 }
 
 impl Terminal {
+    fn compaction_error(&mut self, error: &str) {
+        self.clear();
+        let text = self.wrapped(&format!("error: automatic compaction failed: {error}"));
+        self.err(&format!("{text}\n\n"));
+    }
+    /// An approval question as it stays on screen once answered.
+    fn approval(&mut self, question: &str, answer: Answer) {
+        self.clear();
+        let typed = match answer {
+            Answer::Allow => "y",
+            Answer::AllowAll => "a",
+            Answer::Deny => "n",
+        };
+        self.err(&format!("{}\n{ALLOW}{typed}\n", visible(question)));
+        if answer == Answer::AllowAll {
+            let note = self.dim(ALLOWED_ALL);
+            self.err(&format!("{note}\n"));
+        }
+    }
+    /// The output of the running tool so far, as the status line shows its end.
+    fn running_output(&mut self, output: &str) {
+        let width = self.width().saturating_sub(2).max(20);
+        for row in preview(output.trim_end_matches('\n'), Shown::All, width, "") {
+            let row = self.styled(style::STATUS, &row);
+            self.err(&format!("  {row}\n"));
+        }
+    }
+    /// Removes the last `rows` rows of output, the cursor at the start of the row after them.
+    fn rewind(&mut self, rows: usize) {
+        match &mut self.capture {
+            Some((captured, _)) => {
+                let keep = captured
+                    .rmatch_indices('\n')
+                    .nth(rows)
+                    .map_or(0, |(index, _)| index + 1);
+                captured.truncate(keep);
+            }
+            None => self.out(&format!("\r\x1b[{rows}A\x1b[J")),
+        }
+    }
     /// A compaction's summary as Scramjet shows it: dim markdown, wrapped to the terminal.
     fn summary_block(&self, summary: &str) -> String {
         let mut markdown = markdown::Markdown::new(self.color, style::SUMMARY);
@@ -1880,7 +1947,7 @@ impl Terminal {
         self.clear();
         let question = visible(question);
         let stdin = std::io::stdin();
-        let ask = format!("{question}\nAllow? [y/N, a = allow all until exit] ");
+        let ask = format!("{question}\n{ALLOW}");
         let typed = if !stdin.is_terminal() {
             eprint!("{ask}");
             let mut typed = String::new();
@@ -1920,14 +1987,14 @@ impl Terminal {
         };
         let answer = answer(&typed);
         if answer == Answer::AllowAll {
-            eprintln!(
-                "{}",
-                self.dim("Tool calls now run without asking until exit.")
-            );
+            eprintln!("{}", self.dim(ALLOWED_ALL));
         }
         answer
     }
 }
+
+const ALLOW: &str = "Allow? [y/N, a = allow all until exit] ";
+const ALLOWED_ALL: &str = "Tool calls now run without asking until exit.";
 
 fn answer(typed: &str) -> Answer {
     match typed.trim() {
@@ -2312,6 +2379,19 @@ mod tests {
         assert!(!text.contains("more lines") && !text.contains("earlier lines"));
         assert!(at("Counted to 12.").is_some(), "{lines:?}");
         assert!(text.contains(style::REASONING));
+    }
+
+    #[test]
+    fn a_captured_reply_missing_deltas_is_replaced_by_its_final_text() {
+        let mut ui = Terminal::capture(30, Arc::new(AtomicBool::new(false)));
+        ui.user_prompt("go");
+        ui.waiting(Purpose::Reply);
+        ui.progress(&StreamProgress::Text(" of the reply that\nwraps.".into()));
+        ui.assistant("The start of the reply that\nwraps.");
+        assert_eq!(
+            ui.captured(),
+            "> go\n\nThe start of the reply that\nwraps.\n\n"
+        );
     }
 
     #[test]

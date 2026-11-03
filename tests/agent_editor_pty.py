@@ -308,6 +308,8 @@ def tool_call(call_id, name, arguments):
 quiet_reasoning = serve_quiet_reasoning()
 gates = [threading.Event(), threading.Event()]
 thoughts = serve_thoughts(gates)
+view_gate = threading.Event()
+view_thoughts = serve_thoughts([view_gate])
 # As from Proxy's DeepSeek route: the first delta lost, then a text sent only in its done event.
 replies = serve_replies([([' of the reply.'], 'The start of the reply.'), ([], 'Only at the end.'),
                          (['Streamed ', 'whole.'], 'Streamed whole.')])
@@ -476,6 +478,31 @@ def suspend_in_shell(read, until, send, output):
     send(SAME_MODE)
     until(b'restored-42', mark)
     assert b'LEAKED' not in output, 'text typed during the turn ran in the shell'
+
+
+def suspend_in_view(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'running 1s', mark)
+    send(b'\x0f')
+    mark = until(b'\xc2\xb7 \xe2\x80\xa6 running', until(b'\x1b[?1049h', mark))
+    send(b'\x1a')
+    left = until(b'\x1b[?1049l', mark)
+    mark = until(b'Stopped', left)
+    send(SAME_MODE)
+    mark = until(b'restored-42', mark)
+    send(b'fg\r')
+    # The view again, following the turn.
+    mark = until(b'\xc2\xb7 \xe2\x80\xa6 running', until(b'\x1b[?1049h', mark))
+    send(b'q')
+    mark = until(b'running', until(b'\x1b[?1049l', mark))
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    mark = until(b'> ', mark)
+    send(b'\x04')
+    mark = until(b'$ ', mark)
+    send(SAME_MODE)
+    until(b'restored-42', mark)
 
 
 def suspend_without_job_control(read, until, send, output):
@@ -815,6 +842,45 @@ def conversation_view(read, until, send, output):
     send(b'\x03\x04')
 
 
+def view_follows_the_turn(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'running 1s', until(b'bash echo first', mark))
+    send(b'kept\x0f')
+    enter = until(b'\x1b[?1049h', mark)
+    # The prompt, the call, its output so far and what the agent does, then the output that follows.
+    mark = until(b'first', until(b'bash echo first', until(b'> go', enter)))
+    mark = until(b'\xc2\xb7 \xe2\x80\xa6 running', mark)
+    mark = until(b'second', mark)
+    send(b'\x1b')
+    left = until(b'\x1b[?1049l', mark)
+    assert b'\x1b[J' not in output[enter:left], 'inline output drawn over the view'
+    # The inline output held meanwhile, then Escape cancels the turn, keeping the text typed.
+    mark = until(b'running', until(b'second', left))
+    send(b'\x1b')
+    mark = until(b'(cancelled)', mark)
+    until(b'> kept', mark)
+    send(b'\x03\x04')
+
+
+def view_waits_at_the_turn_end(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'First thought.', mark)
+    send(b'\x0f')
+    enter = until(b'\x1b[?1049h', mark)
+    mark = until(b'First thought.', enter)
+    view_gate.set()
+    mark = until(b'waiting for you', until(b'The reply.', until(b'Second thought.', mark)))
+    read(.3)
+    assert b'requests' not in output[enter:], 'the turn went on to its usage line under the view'
+    send(b'q')
+    left = until(b'\x1b[?1049l', mark)
+    mark = until(b'requests', until(b'The reply.', until(b'Second thought.', left)))
+    until(b'> ', mark)
+    send(b'\x04')
+
+
 def final_texts_replace_lost_deltas(read, until, send, output):
     mark = until(b'> ')
     send(b'one\r')
@@ -1057,6 +1123,7 @@ assert prompts == ['one\ntwo\nthree'], prompts
 run(['--continue'], resumed)
 run([], suspend_without_job_control, hanging)
 run_in_shell(suspend_in_shell, talking)
+run_in_shell(suspend_in_view, talking)
 run(['--retries', '0'], typed_during_turn, delayed)
 run([], cancel_retry)
 run([], escape_cancels_and_keeps_typed_ahead, hanging)
@@ -1085,6 +1152,8 @@ known = set(session_files())
 run([], bang_commands)
 (ran,) = set(session_files()) - known
 run([], conversation_view)
+run([], view_follows_the_turn, talking)
+run([], view_waits_at_the_turn_end, view_thoughts)
 items = [item for item in map(json.loads, open(ran)) if item.get('role') == 'user']
 assert [item['_scramjet_typed'] for item in items] == ['!echo hi; exit 3', '!sleep 30'], items
 assert items[1]['content'] == 'Ran `sleep 30`\n(no output)\n\n(command cancelled)', items

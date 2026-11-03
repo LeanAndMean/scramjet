@@ -8,12 +8,15 @@ use rustix::{
 };
 use std::{
     io,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    time::Duration,
 };
 
 /// Set when the agent continues after a stop: the shell has written below the agent's output,
 /// so output drawn in place starts again at the cursor.
 static CONTINUED: AtomicBool = AtomicBool::new(false);
+/// Counts the stops the handler has come back from.
+static STOPS: AtomicUsize = AtomicUsize::new(0);
 
 /// Handles SIGTSTP, sent by Ctrl-Z during a turn or by `suspend`, with `startup` the terminal
 /// mode the agent started in.
@@ -30,9 +33,14 @@ pub(super) fn install(startup: Option<Termios>) -> io::Result<()> {
 /// Stops the agent's job, as Ctrl-Z does when the terminal is not in raw mode. Returns once the
 /// job is continued.
 pub(super) fn suspend() {
-    // Linux delivers the signal to the calling thread first, so the handler has stopped and
-    // continued the agent before this returns.
-    let _ = rustix::process::kill_current_process_group(Signal::TSTP);
+    let stops = STOPS.load(Ordering::SeqCst);
+    if rustix::process::kill_current_process_group(Signal::TSTP).is_err() {
+        return;
+    }
+    // The handler may run on another thread, after the signal is sent.
+    while STOPS.load(Ordering::SeqCst) == stops {
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Whether the agent was continued after a stop since the last call.
@@ -73,4 +81,5 @@ fn stop(startup: Option<&Termios>) {
         let _ = termios::tcsetattr(stdin, OptionalActions::Now, mode);
     }
     CONTINUED.store(true, Ordering::Relaxed);
+    STOPS.fetch_add(1, Ordering::SeqCst);
 }

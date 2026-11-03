@@ -1,69 +1,141 @@
 //! The conversation in the alternate screen with every tool result in full, as Scramjet's
-//! Ctrl+O expands its tool blocks, scrolled with the keys while the prompt waits underneath.
+//! Ctrl+O expands its tool blocks, scrolled with the keys while the prompt waits underneath, or
+//! during a turn, following the turn while its inline output waits.
 
 use super::editor::{Key, RESIZE_CHECK, RawMode, Stdin, read_key, terminal_size};
-use super::{clip, editor, style};
+use super::{clip, editor, job, style};
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Mutex, PoisonError,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
 
 const KEYS: &str = "↑↓ PgUp PgDn Home End scroll · Ctrl+T thinking · Esc close";
+/// How often a view of a running turn looks for more of it.
+const FOLLOW_CHECK: Duration = Duration::from_millis(100);
+
+/// A running turn that the view follows.
+pub(super) trait Turn {
+    /// Changes whenever the turn has more to show.
+    fn version(&self) -> usize;
+    /// What the turn has shown so far, `width` columns wide.
+    fn render(&self, width: usize) -> String;
+    /// What the agent does now, as the status line says it.
+    fn activity(&self) -> Option<String>;
+}
+
+pub(super) struct Live<'a> {
+    pub(super) turn: &'a dyn Turn,
+    /// Set once the agent waits for the user: the turn ended or asks something.
+    pub(super) waiting: &'a AtomicBool,
+}
+
+impl Live<'_> {
+    fn activity(&self) -> String {
+        match self.waiting.load(Ordering::Relaxed) {
+            true => "waiting for you".into(),
+            false => self.turn.activity().unwrap_or_else(|| "… working".into()),
+        }
+    }
+}
 
 /// Shows the text `render(width)` returns for the terminal's width, from its end, until Escape,
-/// `q`, Ctrl+O, Ctrl-C or Ctrl-D, taking keys from `typed` first. Ctrl+T flips `hide_thinking`
-/// and renders it again. Returns the keys typed after the one that closed it.
+/// `q`, Ctrl+O, Ctrl-C or Ctrl-D, taking keys from `typed` first. With `live`, the running
+/// turn follows that text, rendered again as it grows, and the output the turn writes meanwhile
+/// is held until the view closes. Ctrl+T flips `hide_thinking` and renders it again. Returns the
+/// keys typed after the one that closed it.
 pub(super) fn show(
     render: impl Fn(usize) -> String,
+    live: Option<Live>,
     hide_thinking: &AtomicBool,
     typed: Vec<u8>,
 ) -> io::Result<Vec<u8>> {
+    // Dropped in reverse: the screen, the terminal mode, then the held output is written.
+    let mut hold = live.as_ref().map(|_| Hold::start());
     let raw = RawMode::enter()?;
     let mut screen = Screen::enter();
     let mut source = Stdin::starting_with(typed);
     let (mut width, mut height) = terminal_size();
-    let mut lines = screen_lines(&render(width));
+    let turn_lines = |width| match &live {
+        Some(live) => screen_lines(&live.turn.render(width)),
+        None => Vec::new(),
+    };
+    let version = || live.as_ref().map(|live| live.turn.version());
+    let activity = || live.as_ref().map(Live::activity);
+    let mut shown = version();
+    let mut text = Text {
+        before: screen_lines(&render(width)),
+        turn: turn_lines(width),
+    };
+    let mut doing = activity();
+    let wait = if live.is_some() {
+        FOLLOW_CHECK
+    } else {
+        RESIZE_CHECK
+    };
     let mut top = usize::MAX;
     let mut note: Option<&str> = None;
     let mut redraw = true;
     loop {
         let rows = height.saturating_sub(1).max(1);
-        let last = lines.len().saturating_sub(rows);
+        let last = text.len().saturating_sub(rows);
         top = top.min(last);
         if redraw && !source.pending() {
-            draw(&lines, top, rows, width, note.take())?;
+            draw(&text, top, rows, width, note.take(), doing.as_deref())?;
             redraw = false;
         }
-        let key = match read_key(&mut source, Some(RESIZE_CHECK)) {
+        let key = match read_key(&mut source, Some(wait)) {
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(Vec::new()),
             result => result?,
         };
         let page = rows.saturating_sub(1).max(1);
         top = match key {
-            Key::Idle if super::job::continued() => top,
+            Key::Idle if job::continued() => top,
             Key::Idle => {
                 let size = terminal_size();
-                if size == (width, height) {
+                let now = version();
+                if size != (width, height) {
+                    let keep = position(top, last, text.len());
+                    (width, height, shown) = (size.0, size.1, now);
+                    text.before = screen_lines(&render(width));
+                    text.turn = turn_lines(width);
+                    doing = activity();
+                    keep(text.len(), height.saturating_sub(1).max(1))
+                } else if now != shown {
+                    // At the end, the view stays there as the turn grows.
+                    let end = top >= last;
+                    shown = now;
+                    text.turn = turn_lines(width);
+                    doing = activity();
+                    if end { usize::MAX } else { top }
+                } else if activity() != doing {
+                    doing = activity();
+                    top
+                } else {
                     continue;
                 }
-                let keep = position(top, last, lines.len());
-                (width, height) = size;
-                lines = screen_lines(&render(width));
-                keep(lines.len(), height.saturating_sub(1).max(1))
             }
             Key::Suspend => {
                 drop(screen);
                 raw.suspend();
-                super::job::suspend();
-                super::job::continued();
+                // The shell writes under the turn's output as far as it went.
+                drop(hold.take());
+                job::suspend();
+                job::continued();
                 raw.resume()?;
+                hold = live.as_ref().map(|_| Hold::start());
                 screen = Screen::enter();
                 top
             }
             Key::ToggleThinking => {
                 let hidden = !hide_thinking.fetch_xor(true, Ordering::Relaxed);
                 note = Some(editor::thinking_note(hidden));
-                let keep = position(top, last, lines.len());
-                lines = screen_lines(&render(width));
-                keep(lines.len(), rows)
+                let keep = position(top, last, text.len());
+                shown = version();
+                text.before = screen_lines(&render(width));
+                text.turn = turn_lines(width);
+                keep(text.len(), rows)
             }
             Key::Escape | Key::Interrupt | Key::EndOfInput | Key::Expand => {
                 return Ok(source.rest());
@@ -84,6 +156,70 @@ pub(super) fn show(
             _ => continue,
         };
         redraw = true;
+    }
+}
+
+/// The lines shown: the conversation, then a blank line and the running turn's.
+struct Text {
+    before: Vec<String>,
+    turn: Vec<String>,
+}
+
+impl Text {
+    fn gap(&self) -> usize {
+        usize::from(!self.before.is_empty() && !self.turn.is_empty())
+    }
+    fn len(&self) -> usize {
+        self.before.len() + self.gap() + self.turn.len()
+    }
+    fn get(&self, index: usize) -> Option<&str> {
+        match index.checked_sub(self.before.len() + self.gap()) {
+            Some(index) => self.turn.get(index).map(String::as_str),
+            None => Some(self.before.get(index).map_or("", String::as_str)),
+        }
+    }
+}
+
+/// Output for the inline screen, kept here while the view shows during a turn: whether it goes
+/// to stdout, and the text.
+static HELD: Mutex<Option<Vec<(bool, String)>>> = Mutex::new(None);
+
+/// Writes inline output to stdout, where replies go, or stderr, unless the view holds it.
+pub(super) fn print(stdout: bool, text: &str) {
+    let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
+    match &mut *held {
+        Some(held) => held.push((stdout, text.to_owned())),
+        None => write(stdout, text),
+    }
+}
+
+fn write(stdout: bool, text: &str) {
+    let _ = match stdout {
+        true => {
+            let mut out = io::stdout().lock();
+            out.write_all(text.as_bytes()).and_then(|()| out.flush())
+        }
+        false => io::stderr().lock().write_all(text.as_bytes()),
+    };
+}
+
+/// Holds inline output until dropped, then writes it.
+struct Hold;
+
+impl Hold {
+    fn start() -> Self {
+        *HELD.lock().unwrap_or_else(PoisonError::into_inner) = Some(Vec::new());
+        Self
+    }
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        // Written under the lock, so output printed meanwhile comes after it.
+        let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
+        for (stdout, text) in held.take().into_iter().flatten() {
+            write(stdout, &text);
+        }
     }
 }
 
@@ -115,27 +251,28 @@ impl Drop for Screen {
 }
 
 fn draw(
-    lines: &[String],
+    text: &Text,
     top: usize,
     rows: usize,
     width: usize,
     note: Option<&str>,
+    activity: Option<&str>,
 ) -> io::Result<()> {
     let mut frame = String::from("\x1b[H");
     for row in 0..rows {
-        if let Some(line) = lines.get(top + row) {
+        if let Some(line) = text.get(top + row) {
             frame += line;
         }
         frame += "\x1b[K\r\n";
     }
-    let shown = match lines.len() {
+    let mut status = match text.len() {
         0 => "No messages yet".to_owned(),
         count => format!("{}–{} of {count}", top + 1, (top + rows).min(count)),
     };
-    let status = match note {
-        Some(note) => format!("{shown} · {note}"),
-        None => format!("{shown} · {KEYS}"),
-    };
+    if let Some(activity) = activity {
+        status += &format!(" · {activity}");
+    }
+    status += &format!(" · {}", note.unwrap_or(KEYS));
     let status = clip(&status, width.saturating_sub(1));
     frame += &format!("{}{status}{}\x1b[K", style::MUTED, style::RESET);
     let mut stderr = io::stderr().lock();
@@ -206,6 +343,37 @@ mod tests {
             ]
         );
         assert!(screen_lines("\n\n").is_empty());
+    }
+
+    #[test]
+    fn a_running_turn_follows_the_conversation_after_a_blank_line() {
+        let lines = |texts: &[&str]| texts.iter().map(|text| text.to_string()).collect();
+        let text = Text {
+            before: lines(&["> one", "", "reply"]),
+            turn: lines(&["> two", "more"]),
+        };
+        let shown: Vec<_> = (0..7).map(|index| text.get(index)).collect();
+        assert_eq!(
+            shown,
+            [
+                Some("> one"),
+                Some(""),
+                Some("reply"),
+                Some(""),
+                Some("> two"),
+                Some("more"),
+                None
+            ]
+        );
+        assert_eq!(text.len(), 6);
+        let text = Text {
+            before: Vec::new(),
+            turn: lines(&["> two"]),
+        };
+        assert_eq!(
+            (text.len(), text.get(0), text.get(1)),
+            (1, Some("> two"), None)
+        );
     }
 
     #[test]
