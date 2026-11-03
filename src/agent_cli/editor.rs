@@ -649,7 +649,7 @@ struct Completion {
 }
 
 impl Completion {
-    /// The commands whose names start with what follows a `/` that begins the prompt: the
+    /// The commands whose names fuzzily match what follows a `/` that begins the prompt: the
     /// built-in ones, then `loaded` (names and descriptions).
     fn slash(before: &str, loaded: &[(String, String)]) -> Option<Self> {
         let typed = before.strip_prefix('/')?;
@@ -662,13 +662,20 @@ impl Completion {
         let loaded = loaded
             .iter()
             .map(|(name, description)| (&**name, &**description));
-        let items = builtin
-            .chain(loaded)
-            .filter(|(name, _)| name.starts_with(typed))
-            .map(|(name, description)| Suggestion {
-                value: format!("/{name} "),
-                label: format!("/{name}"),
-                description: description.to_owned(),
+        let commands: Vec<_> = builtin.chain(loaded).collect();
+        let names: Vec<_> = commands
+            .iter()
+            .map(|(name, _)| super::fuzzy::Haystack::new(name))
+            .collect();
+        let items = super::fuzzy::filter(&super::fuzzy::parse(typed), &names)
+            .into_iter()
+            .map(|index| {
+                let (name, description) = commands[index];
+                Suggestion {
+                    value: format!("/{name} "),
+                    label: format!("/{name}"),
+                    description: description.to_owned(),
+                }
             })
             .collect();
         Self::new(0, true, items)
@@ -1389,8 +1396,8 @@ mod tests {
         assert_eq!(list.items[list.selected].label, "/quit");
 
         let mut buffer = Buffer {
-            text: "/re rest".into(),
-            cursor: 3,
+            text: "/res rest".into(),
+            cursor: 4,
         };
         let list = Completion::slash(&buffer.text[..buffer.cursor], &[]).unwrap();
         assert_eq!(labels(&list), ["/resume"]);
@@ -1400,6 +1407,17 @@ mod tests {
         assert!(Completion::slash("/x", &[]).is_none());
         assert!(Completion::slash("/model ", &[]).is_none());
         assert!(Completion::slash("a /model", &[]).is_none());
+    }
+
+    #[test]
+    fn slash_commands_match_fuzzily_and_rank_best_matches_first() {
+        let list = Completion::slash("/mdl", &[]).unwrap();
+        assert_eq!(labels(&list), ["/model"]);
+
+        let list = Completion::slash("/m", &[]).unwrap();
+        assert_eq!(labels(&list)[0], "/model");
+        assert!(labels(&list).contains(&"/compact"));
+        assert!(Completion::slash("/zzz", &[]).is_none());
     }
 
     #[test]
@@ -1413,15 +1431,14 @@ mod tests {
         ];
         let list = Completion::slash("/", &loaded).unwrap();
         assert_eq!(labels(&list)[9..], ["/rs:loop", "/rs:review"]);
-        let mut list = Completion::slash("/r", &loaded).unwrap();
-        assert_eq!(labels(&list), ["/resume", "/rs:loop", "/rs:review"]);
+        let mut list = Completion::slash("/rs:", &loaded).unwrap();
+        assert_eq!(labels(&list), ["/rs:loop", "/rs:review"]);
         list.select(false);
         assert_eq!(
             plain(list.rows(60)),
             [
-                "  /resume     Resume a different session",
-                "→ /rs:loop    [focus] — Build one increment",
-                "  /rs:review  Review",
+                "  /rs:loop    [focus] — Build one increment",
+                "→ /rs:review  Review",
             ]
         );
         let mut buffer = Buffer {

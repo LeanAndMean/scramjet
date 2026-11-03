@@ -760,8 +760,8 @@ def completes_paths_and_commands(read, until, send, output):
     mark = until(b'> ', mark)
     send(b'/')
     mark = until(b'(1/9)', mark)
-    send(b're')
-    mark = until('\u2192 /resume'.encode(), mark)
+    send(b'mdl')
+    mark = until('\u2192 /model'.encode(), mark)
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
     # toward the double Escape that opens the tree.
     send(b'\x03\t')
