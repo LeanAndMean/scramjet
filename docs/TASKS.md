@@ -17,7 +17,7 @@ Order agreed with the user on 2026-11-03 (`/rs:steer`; [design](DESIGN.md#curren
 6. **Small changes agreed on 2026-11-03** (Scramjet's behavior unless stated):
    - Compaction status `Compacting context...` / `Auto-compacting...`; the branch-summary request without reasoning and with at most 2048 output tokens; an empty Enter in its instructions editor gives the default summary.
    - An unknown `--effort` level is refused at startup, listing the valid ones; the effort is shown on the usage line.
-   - Forks record `parentSession` and `/resume` marks them; rename and delete in `/resume`; a `-r`/`--resume` flag; `/tree` rows styled as Scramjet's; errors and cancellations saved and shown on resume; a restored command whose file is gone is dropped with a warning when its turn ends.
+   - `/tree` rows styled as Scramjet's; errors and cancellations saved and shown on resume; a restored command whose file is gone is dropped with a warning when its turn ends.
    - `!!` commands saved, excluded from the context; `!` commands shown as Scramjet's `$ command` block.
    - Equal fuzzy scores put the shorter name or id first; completion quotes names with spaces and completes inside an open `"`.
    - `(Esc to interrupt)` on the status line.
@@ -33,7 +33,8 @@ Practice runs (`CLAUDE.md`) find what hurts; their findings join these items, an
 Not scheduled; fix them when they matter.
 
 - `bg` after Ctrl-Z during a turn stops the agent again at once: the SIGTSTP handler restores the turn's terminal mode, which a background job may not do (Scramjet's TUI cannot run in the background either). In `-p` output on a terminal, a reply rewritten in place after a lossy stream (`text_rows`) still counts rows from before a stop.
-- Every start writes a session file before any prompt (Scramjet writes none before the first reply). `/resume` hides empty ones, but `--continue` picks one written last, which keeps the `/model`-switch-before-a-prompt behaviour agreed on 2026-10-30.
+- Every start writes a session file before any prompt (Scramjet writes none before the first reply). It goes when the session moves to another before anything was said in it (`/resume`, `/new`, `/fork`, `-r`), but stays on quitting, and `/resume` hides it while `--continue` picks it when it was written last, which keeps the `/model`-switch-before-a-prompt behaviour agreed on 2026-10-30.
+- `/resume` lacks Scramjet's scope (Tab: this folder or all), sort (Ctrl+S: threaded, recent, relevance), named-only (Ctrl+N) and path (Ctrl+P) toggles, and Ctrl+Backspace for delete; its status after a delete stays until the next key, where Scramjet's goes after 2-3 seconds.
 - Compaction and turn-prefix requests carry no output cap. Scramjet caps them at 0.8 and 0.5 × `reserveTokens` (13,107 and 8,192, reasoning included on Responses) and keeps a summary cut off there; here a cut-off Claude summary is kept, but a cut-off GPT one fails the compaction (next item), so adding the cap needs that too.
 - A GPT reply stopped at its output limit (Responses `incomplete`, `max_output_tokens`) fails and loses its text (`responses_reply` in `src/agent/client.rs`); Claude's keeps it. Scramjet keeps it when it has no function call (`openai-responses-shared.ts:1222`).
 - Scramjet's edit tool falls back to fuzzy matching (NFKC, trailing whitespace, smart quotes, Unicode dashes and spaces, CRLF) and then writes the whole file normalized. Consider it if edits fail on such differences.

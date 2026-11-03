@@ -50,6 +50,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     };
     let prompt = options.prompt.take();
+    let resume = options.resume;
     let mut settings = Settings::load();
     let mut agent = start(options, &settings)?;
     let cancel = Arc::new(AtomicBool::new(false));
@@ -59,7 +60,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let Some(prompt) = prompt else {
         let interactive =
             interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings)?;
-        return interactive.run();
+        return interactive.run(resume);
     };
     for warning in std::mem::take(&mut settings.warnings) {
         ui.notice(&format!("settings: {warning}"));

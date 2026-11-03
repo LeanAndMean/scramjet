@@ -63,6 +63,8 @@ pub(super) enum Key {
     External,
     /// Ctrl+O, Scramjet's key to expand tool output.
     Expand,
+    /// Ctrl+R, Scramjet's key to rename a session in `/resume`.
+    Rename,
     Suspend,
     /// A lone Escape.
     Escape,
@@ -110,6 +112,7 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
         14 => Key::Down,
         15 => Key::Expand,
         16 => Key::Up,
+        18 => Key::Rename,
         20 => Key::ToggleThinking,
         21 => Key::KillStart,
         23 => Key::DeleteWordBack,

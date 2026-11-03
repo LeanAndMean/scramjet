@@ -3,8 +3,8 @@ use scramjet_rs::agent::SessionChoice;
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model ID] \
-[--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | --session FILE] [--ask]
-[-p PROMPT]
+[--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | -r | --session FILE]
+[--ask] [-p PROMPT]
        scramjet-rs install DIR | remove NAME|DIR | list
 
 Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
@@ -16,6 +16,7 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
                          medium)
   --retries N            resend a request that failed transiently up to N times (default 3)
   --continue             resume the session for this project written to last
+  -r, --resume           choose one of this project's sessions to resume, as /resume does
   --session FILE         resume a specific session file
   --ask                  ask before each bash command and each write or edit outside the
                          project (answer `a` to stop asking until exit); by default tool
@@ -37,7 +38,9 @@ Ctrl+C or a right click copies it, and a right click without a selection pastes 
 into the prompt. Ctrl+O shows tool results whole, or cut again. Ctrl+T hides reasoning summaries
 behind a `Thinking...` line, or shows them again. Shift+Tab sets the reasoning effort to the next
 level the model's Proxy card lists. Both are saved in the settings. /new starts a new session;
-/resume chooses one of this project's sessions to switch to. /fork chooses one of this
+/resume chooses one of this project's sessions to switch to, forks under the session they came
+from; in its list Ctrl+R renames the selected session and Ctrl+D deletes it once Enter confirms
+(to the trash when a `trash` command is installed). /fork chooses one of this
 session's prompts and continues in a new session from before it, with it in the prompt for
 editing. /tree shows this session's branches and continues from the entry chosen, in the same
 session: from before a prompt, which is put in the prompt for editing, or from after a reply
@@ -74,6 +77,8 @@ pub(super) struct Options {
     pub(super) effort: Option<String>,
     pub(super) max_output_tokens: Option<u64>,
     pub(super) choice: SessionChoice,
+    /// `--resume`: the session starts by choosing one to resume.
+    pub(super) resume: bool,
     pub(super) ask: bool,
     pub(super) retries: u32,
     /// `-p`: the one prompt to run, `-` to read it from stdin.
@@ -92,6 +97,7 @@ impl Options {
             effort: None,
             max_output_tokens: None,
             choice: SessionChoice::New,
+            resume: false,
             ask: false,
             retries: 3,
             prompt: None,
@@ -123,13 +129,24 @@ impl Options {
                 Some("--retries") => {
                     options.retries = value()?.parse().map_err(|_| "invalid --retries")?
                 }
-                Some("--continue") => options.choice = SessionChoice::Continue,
-                Some("--session") => options.choice = SessionChoice::Open(PathBuf::from(value()?)),
+                Some("--continue") => {
+                    (options.choice, options.resume) = (SessionChoice::Continue, false)
+                }
+                Some("-r" | "--resume") => {
+                    (options.choice, options.resume) = (SessionChoice::New, true)
+                }
+                Some("--session") => {
+                    let path = PathBuf::from(value()?);
+                    (options.choice, options.resume) = (SessionChoice::Open(path), false)
+                }
                 Some("--ask") => options.ask = true,
                 Some("-p" | "--print") => options.prompt = Some(value()?),
                 Some("-h" | "--help") => return Ok(None),
                 _ => return Err(format!("unknown argument {argument:?}\n\n{USAGE}")),
             }
+        }
+        if options.resume && options.prompt.is_some() {
+            return Err(format!("--resume cannot be used with -p\n\n{USAGE}"));
         }
         Ok(Some(options))
     }

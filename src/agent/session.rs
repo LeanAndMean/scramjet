@@ -20,6 +20,16 @@ pub struct SessionInfo {
     /// Conversation items after the latest compaction, as a resume restores them.
     pub item_count: usize,
     pub modified: SystemTime,
+    /// The session it was forked from, as its header records it.
+    pub parent: Option<PathBuf>,
+}
+
+/// How `delete` removed a session file.
+#[derive(Debug, PartialEq)]
+pub enum Removal {
+    /// The `trash` command moved it to the trash.
+    Trashed,
+    Deleted,
 }
 
 /// An append-only JSON-lines log: a header, then each input item, each model change, each
@@ -51,6 +61,12 @@ pub struct Session {
     tail: Option<usize>,
     /// Lines in the file.
     lines: usize,
+    /// The file's length after the last line read or written here; another length means another
+    /// process appended lines (a name given in its `/resume`).
+    size: u64,
+    /// Created by this process with no conversation entry yet: only model and effort changes,
+    /// names and `/autopilot` toggles, which Scramjet would not have written yet.
+    unused: bool,
 }
 
 fn invalid(path: &Path, reason: &str) -> io::Error {
@@ -84,6 +100,10 @@ struct Entries {
     tail: Option<usize>,
     /// Lines in the file, the header and blank ones included.
     lines: usize,
+    /// The file's length.
+    size: u64,
+    /// The header's `parentSession`: the session this one was forked from.
+    parent: Option<PathBuf>,
 }
 
 /// The conversation on the path from the start to an entry.
@@ -102,6 +122,7 @@ fn read(path: &Path) -> io::Result<Entries> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut tail = None;
     let mut name = None;
+    let mut parent = None;
     let mut line = String::new();
     let mut end = 0;
     let mut lines = 0;
@@ -124,6 +145,7 @@ fn read(path: &Path) -> io::Result<Entries> {
             if value["type"] != "session" {
                 return Err(invalid(path, "not a scramjet-rs session"));
             }
+            parent = value["parentSession"].as_str().map(PathBuf::from);
         } else if value["type"] == "session_info" {
             name = value["name"]
                 .as_str()
@@ -159,6 +181,8 @@ fn read(path: &Path) -> io::Result<Entries> {
         name,
         tail,
         lines,
+        size: end as u64,
+        parent,
     })
 }
 
@@ -348,6 +372,7 @@ impl Session {
                 name: entries.name.clone(),
                 item_count: context.items.len(),
                 modified,
+                parent: entries.parent.clone(),
             });
         }
         sessions.sort_by(|a, b| {
@@ -358,8 +383,9 @@ impl Session {
         Ok(sessions)
     }
 
-    /// Starts a session for the project `root` in `directory`.
-    pub fn create(directory: &Path, root: &Path) -> io::Result<Self> {
+    /// Starts a session for the project `root` in `directory`; a fork names the session it came
+    /// from, `parent`, in its header, as Scramjet's `parentSession`.
+    pub fn create(directory: &Path, root: &Path, parent: Option<&Path>) -> io::Result<Self> {
         std::fs::create_dir_all(directory)?;
         let mut created = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -374,9 +400,11 @@ impl Session {
                 Err(error) => return Err(error),
             }
         };
-        let mut header = serde_json::to_vec(
-            &json!({"type":"session","version":1,"root":root,"created":created as u64}),
-        )?;
+        let mut header = json!({"type":"session","version":1,"root":root,"created":created as u64});
+        if let Some(parent) = parent {
+            header["parentSession"] = json!(std::path::absolute(parent)?);
+        }
+        let mut header = serde_json::to_vec(&header)?;
         header.push(b'\n');
         file.write_all(&header)?;
         Ok(Self {
@@ -392,6 +420,8 @@ impl Session {
             leaf: None,
             tail: None,
             lines: 1,
+            size: header.len() as u64,
+            unused: true,
         })
     }
 
@@ -443,6 +473,8 @@ impl Session {
                 leaf: entries.tail,
                 tail: entries.tail,
                 lines: entries.lines,
+                size: entries.size,
+                unused: false,
             },
             context.items,
             entries.prompts(),
@@ -480,7 +512,7 @@ impl Session {
             }
         }
         let directory = self.path.parent().unwrap_or(Path::new("."));
-        let mut forked = Self::create(directory, root)?;
+        let mut forked = Self::create(directory, root, Some(&self.path))?;
         if let Err(error) = forked.file.write_all(&history) {
             let _ = std::fs::remove_file(&forked.path);
             return Err(error);
@@ -569,9 +601,83 @@ impl Session {
         let name = name.trim();
         let mut line = serde_json::to_vec(&json!({"type":"session_info","name":name}))?;
         line.push(b'\n');
-        self.file.write_all(&line)?;
+        self.catch_up()?;
+        self.write(&line)?;
         self.lines += 1;
         self.name = Some(name.to_owned()).filter(|name| !name.is_empty());
+        Ok(())
+    }
+
+    /// Names the session saved at `path` as `set_name` names an open one. Its modification time
+    /// stays, so that `/resume` keeps it in its place and `--continue` does not take it, as
+    /// Scramjet orders sessions by their last message.
+    pub fn name_file(path: &Path, name: &str) -> io::Result<()> {
+        let mut session = Self::open(path)?.0;
+        let modified = session.file.metadata()?.modified()?;
+        session.set_name(name)?;
+        session.file.set_modified(modified)
+    }
+
+    /// Removes the session saved at `path`, as Scramjet's `/resume` deletes one: to the trash with
+    /// the `trash` command when there is one, else for good. A file that is not a session stays.
+    pub fn delete(path: &Path) -> io::Result<Removal> {
+        Self::delete_with(path, "trash")
+    }
+
+    /// As `delete`, with `trash` for the `trash` command.
+    pub(super) fn delete_with(path: &Path, trash: &str) -> io::Result<Removal> {
+        read(path)?;
+        let trash = std::process::Command::new(trash)
+            .arg(path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        if trash.as_ref().is_ok_and(|trash| trash.status.success()) || !path.exists() {
+            return Ok(Removal::Trashed);
+        }
+        std::fs::remove_file(path).map_err(|error| {
+            let said = match &trash {
+                Ok(trash) => String::from_utf8_lossy(&trash.stderr).trim().to_owned(),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+                Err(error) => error.to_string(),
+            };
+            match said.lines().next() {
+                Some(first) => io::Error::new(error.kind(), format!("{error} (trash: {first})")),
+                None => error,
+            }
+        })?;
+        Ok(Removal::Deleted)
+    }
+
+    /// Removes the file of a session this process created and left without a conversation, as
+    /// Scramjet writes none before the first reply; one another process wrote to stays.
+    pub fn discard_if_unused(self) -> io::Result<()> {
+        if self.unused && self.file.metadata()?.len() == self.size {
+            std::fs::remove_file(&self.path)?;
+        }
+        Ok(())
+    }
+
+    /// Writes `lines` at the file's end; callers count them once it returns.
+    fn write(&mut self, lines: &[u8]) -> io::Result<()> {
+        self.file.write_all(lines)?;
+        self.size += lines.len() as u64;
+        Ok(())
+    }
+
+    /// Takes in the lines another process appended to the file since this one last read or wrote
+    /// it, so that line numbers and branches stay right: its line count, where a line without a
+    /// branch line continues, and the name it may have given.
+    fn catch_up(&mut self) -> io::Result<()> {
+        if self.file.metadata()?.len() != self.size {
+            let entries = read(&self.path)?;
+            self.lines = entries.lines;
+            self.tail = entries.tail;
+            self.name = entries.name;
+            self.size = entries.size;
+            self.unused = false;
+        }
         Ok(())
     }
 
@@ -639,6 +745,7 @@ impl Session {
     /// Appends `item` as the entry after the leaf, with a branch line before it when the leaf is
     /// not the last entry, and makes it the leaf.
     pub fn append(&mut self, item: &Value) -> io::Result<()> {
+        self.catch_up()?;
         let branched = self.leaf != self.tail;
         let mut lines = Vec::new();
         if branched {
@@ -647,11 +754,18 @@ impl Session {
         }
         lines.extend(serde_json::to_vec(item)?);
         lines.push(b'\n');
-        self.file.write_all(&lines)?;
+        self.write(&lines)?;
         let line = self.lines + usize::from(branched);
         self.lines = line + 1;
         self.leaf = Some(line);
         self.tail = self.leaf;
+        let kind = item["type"].as_str();
+        if !matches!(
+            kind,
+            Some("model_change" | "thinking_level_change" | "autopilot")
+        ) {
+            self.unused = false;
+        }
         if item["type"] == "model_change" {
             self.model = item["model"].as_str().map(str::to_owned);
         } else if item["type"] == "thinking_level_change" {

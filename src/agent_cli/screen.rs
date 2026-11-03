@@ -12,7 +12,7 @@ use super::editor::{
 };
 use super::interactive::effort_note;
 use super::record::{self, Event};
-use super::select::Picker;
+use super::select::{Act, Picked, Picker, Spot};
 use super::selection::{self, Line};
 use super::settings::{Delivery, DoubleEscape, Settings};
 use super::slash::Builtin;
@@ -88,15 +88,17 @@ enum ToScreen {
 
 /// A question the screen shows in place of the editor until it is answered.
 pub(super) enum Dialog {
-    Pick(Picker),
-    /// A text typed under the title; Escape cancels.
-    Text(String),
+    Pick(Box<Picker>),
+    /// A text typed under the title, starting as the second; Escape cancels.
+    Text(String, String),
     /// An `--ask` approval question.
     Approve(String),
 }
 
 pub(super) enum Answer {
     Picked(Option<usize>),
+    /// What one of a picker's own keys asked for (`Picker::acting`).
+    Acted(Act, usize, Spot),
     /// The row a picker's countdown chose.
     Expired(usize),
     Text(Option<String>),
@@ -261,9 +263,18 @@ impl Link {
         self.pick_timed(picker).map(|(row, _)| row)
     }
 
+    /// As `pick`, or what one of the list's own keys asked for (`Picker::acting`).
+    pub(super) fn pick_or_act(&self, picker: Picker) -> Picked {
+        match self.ask(Dialog::Pick(Box::new(picker)), None) {
+            Some(Answer::Acted(act, row, place)) => Picked::Act(act, row, place),
+            Some(Answer::Picked(row)) => Picked::Row(row),
+            _ => Picked::Row(None),
+        }
+    }
+
     /// As `pick`, and whether the picker's countdown chose the row rather than the user.
     pub(super) fn pick_timed(&self, picker: Picker) -> Option<(usize, bool)> {
-        match self.ask(Dialog::Pick(picker), None) {
+        match self.ask(Dialog::Pick(Box::new(picker)), None) {
             Some(Answer::Picked(chosen)) => chosen.map(|row| (row, false)),
             Some(Answer::Expired(row)) => Some((row, true)),
             _ => None,
@@ -474,7 +485,7 @@ impl Activity {
 }
 
 enum Shown {
-    Pick(Picker),
+    Pick(Box<Picker>),
     Text(Box<TextDialog>),
     Approve(String),
 }
@@ -960,9 +971,9 @@ impl App {
                         return;
                     }
                     Dialog::Pick(picker) => Shown::Pick(picker),
-                    Dialog::Text(title) => {
+                    Dialog::Text(title, text) => {
                         let editor = Editor::dialog(self.hide_thinking.clone());
-                        let draft = editor.draft(String::new());
+                        let draft = editor.draft(text);
                         Shown::Text(Box::new(TextDialog {
                             title,
                             editor,
@@ -1747,7 +1758,10 @@ impl App {
                 self.hide_thinking.fetch_xor(true, Ordering::Relaxed);
                 None
             }
-            Shown::Pick(picker) => picker.key(&key).map(Answer::Picked),
+            Shown::Pick(picker) => picker.key(&key).map(|picked| match picked {
+                Picked::Row(row) => Answer::Picked(row),
+                Picked::Act(act, row, place) => Answer::Acted(act, row, place),
+            }),
             Shown::Approve(_) => match key {
                 Key::Text(text) if text.eq_ignore_ascii_case("y") => {
                     Some(Answer::Approved(agent::Answer::Allow))

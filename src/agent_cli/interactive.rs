@@ -47,6 +47,13 @@ enum Start {
     Unattended,
 }
 
+/// How the session ended.
+enum Ended {
+    Quit,
+    /// `--resume` resumed no session.
+    NothingResumed,
+}
+
 /// What the user gave at the prompt.
 enum Read {
     Prompt(String),
@@ -98,24 +105,43 @@ impl Interactive {
         })
     }
 
-    /// Reads and runs prompts until the user quits or the input ends.
-    pub(super) fn run(mut self) -> Result<(), String> {
-        let result = self.read_and_run();
+    /// Reads and runs prompts until the user quits or the input ends; with `resume`, after
+    /// choosing a session to resume (`--resume`), unless none is chosen on the full screen, which
+    /// ends the session without saving it, as in Scramjet.
+    pub(super) fn run(mut self, resume: bool) -> Result<(), String> {
+        let result = self.read_and_run(resume);
         // The terminal is given back first, so that an error saving the settings shows.
         self.screen = None;
         self.save_hide_thinking();
-        result
+        match result {
+            Ok(Ended::NothingResumed) => {
+                eprintln!("{}", self.ui.dim("No session selected"));
+                self.agent
+                    .discard_unused_session()
+                    .map_err(|e| e.to_string())
+            }
+            Ok(Ended::Quit) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
-    fn read_and_run(&mut self) -> Result<(), String> {
-        self.say(&format!(
-            "scramjet-rs · {} · {}\nsession {}",
-            model_line(&self.agent),
-            self.agent.root().display(),
-            self.agent.session_path().display(),
-        ));
-        // A tool block ends with a blank line; other output gets one before the prompt.
-        self.show_resumed();
+    fn read_and_run(&mut self, resume: bool) -> Result<Ended, String> {
+        // As Scramjet's `--resume` shows the sessions before the session itself.
+        let resumed = match resume && self.interactive() {
+            true if self.resume("") => true,
+            true => return Ok(Ended::NothingResumed),
+            false => false,
+        };
+        if !resumed {
+            self.say(&format!(
+                "scramjet-rs · {} · {}\nsession {}",
+                model_line(&self.agent),
+                self.agent.root().display(),
+                self.agent.session_path().display(),
+            ));
+            // A tool block ends with a blank line; other output gets one before the prompt.
+            self.show_resumed();
+        }
         let notices = self.problem_notices();
         if !notices.is_empty() {
             if !std::mem::take(&mut self.spaced) {
@@ -125,6 +151,9 @@ impl Interactive {
                 self.ui().notice(notice);
             }
             self.spaced = true;
+        }
+        if resume && !resumed {
+            self.resume("");
         }
         // A completed command's next step, run as if typed.
         let mut queued: Option<(String, Start)> = None;
@@ -139,14 +168,14 @@ impl Interactive {
                     DoubleEscape::Tree | DoubleEscape::Nothing => "/tree".to_owned(),
                 },
                 Read::Again => continue,
-                Read::End => return Ok(()),
+                Read::End => return Ok(Ended::Quit),
             };
             let prompt = prompt.trim();
             if prompt.is_empty() {
                 continue;
             }
             if Builtin::parse(prompt) == Some(Builtin::Quit) {
-                return Ok(());
+                return Ok(Ended::Quit);
             }
             if !self.builtin(prompt) {
                 queued = self.send(prompt, start.unwrap_or(Start::Typed));

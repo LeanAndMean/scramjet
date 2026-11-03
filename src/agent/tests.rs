@@ -511,7 +511,8 @@ fn resume_lists_sessions_with_a_conversation_and_switches_to_one() {
         .into_iter()
         .map(|s| s.path)
         .collect();
-    assert_eq!(listed, [path.clone(), current.clone()]);
+    // The current session has no conversation yet, so it is not listed either.
+    assert_eq!(listed, std::slice::from_ref(&path));
 
     assert!(agent.is_session(&scratch.0.join(".").join("session.jsonl")));
     assert!(
@@ -539,6 +540,152 @@ fn resume_lists_sessions_with_a_conversation_and_switches_to_one() {
             .unwrap()
             .contains("\"call_id\":\"unfinished\",\"output\"")
     );
+}
+
+#[test]
+fn sessions_are_renamed_and_deleted_and_unused_new_ones_are_not_left_behind() {
+    let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "manage-sessions");
+    let current = agent.session_path().to_owned();
+    let header = json!({"type":"session","version":1});
+    let earlier = std::time::SystemTime::now() - Duration::from_secs(3600);
+    let other = scratch.0.join("other.jsonl");
+    let prompt = json!({"role":"user","content":"hello"});
+    write_session(&other, &[header.clone(), prompt.clone()], earlier);
+
+    // Another session's name goes in its file, which keeps its time; the current one's in its own.
+    agent.rename_session(&other, "  Old work ").unwrap();
+    assert_eq!(
+        agent.sessions().unwrap()[0].name.as_deref(),
+        Some("Old work")
+    );
+    assert_eq!(
+        std::fs::metadata(&other).unwrap().modified().unwrap(),
+        earlier
+    );
+    let current_too = scratch.0.join(".").join("session.jsonl");
+    agent.rename_session(&current_too, "Mine").unwrap();
+    assert_eq!(agent.session_name(), Some("Mine"));
+    assert!(
+        agent
+            .rename_session(&scratch.0.join("missing.jsonl"), "x")
+            .is_err()
+    );
+
+    // Neither the current session nor a file that is not a session is deleted.
+    assert!(agent.delete_session(&current_too).is_err());
+    assert!(current.exists());
+    let notes = scratch.0.join("notes.jsonl");
+    std::fs::write(&notes, "not a session\n").unwrap();
+    assert!(Session::delete_with(&notes, "true").is_err());
+    assert!(notes.exists());
+
+    // `trash` moves a session away; without it, or when it fails, the file is removed.
+    let script = |name: &str, text: &str| {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch.0.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{text}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_str().unwrap().to_owned()
+    };
+    let trash = script("trash", "mv \"$1\" \"$1.trashed\"");
+    assert_eq!(
+        Session::delete_with(&other, &trash).unwrap(),
+        Removal::Trashed
+    );
+    assert!(!other.exists() && scratch.0.join("other.jsonl.trashed").exists());
+    let session = [header.clone(), prompt.clone()];
+    write_session(&other, &session, earlier);
+    let missing = "scramjet-rs-no-such-trash";
+    assert_eq!(
+        Session::delete_with(&other, missing).unwrap(),
+        Removal::Deleted
+    );
+    assert!(!other.exists());
+    let failing = script("failing", "echo 'no trash here' >&2\necho more >&2\nexit 1");
+    write_session(&other, &session, earlier);
+    assert_eq!(
+        Session::delete_with(&other, &failing).unwrap(),
+        Removal::Deleted
+    );
+    // A removal that fails says what the trash said.
+    let locked = ScratchDir::new(scratch.0.join("locked"));
+    let kept = locked.0.join("kept.jsonl");
+    write_session(&kept, &session, earlier);
+    let mode = |mode| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&locked.0, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    mode(0o555);
+    let error = Session::delete_with(&kept, &failing)
+        .unwrap_err()
+        .to_string();
+    mode(0o755);
+    assert!(error.ends_with("(trash: no trash here)"), "{error}");
+    assert!(kept.exists());
+
+    // A session started here goes when the agent moves on before it holds a conversation, as
+    // Scramjet would not have written it; model and effort changes do not count.
+    agent.new_session().unwrap();
+    let unused = agent.session_path().to_owned();
+    agent.set_model("other").unwrap();
+    agent.set_effort("high").unwrap();
+    assert!(unused.exists());
+    agent.new_session().unwrap();
+    assert!(!unused.exists());
+    let used = agent.session_path().to_owned();
+    agent
+        .add(json!({"role":"user","content":"Ran `ls`","_scramjet_typed":"!ls"}))
+        .unwrap();
+    agent.resume_session(&current).unwrap();
+    assert!(used.exists());
+    // The one opened stays, and so does one another process wrote to.
+    agent.new_session().unwrap();
+    assert!(current.exists());
+    let shared = agent.session_path().to_owned();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&shared)
+        .unwrap()
+        .write_all(b"{\"role\":\"user\",\"content\":\"elsewhere\"}\n")
+        .unwrap();
+    agent.resume_session(&current).unwrap();
+    assert!(shared.exists());
+    agent.new_session().unwrap();
+    let last = agent.session_path().to_owned();
+    agent.discard_unused_session().unwrap();
+    assert!(!last.exists());
+}
+
+#[test]
+fn lines_another_process_appends_keep_entries_and_branches_right() {
+    let scratch = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-shared-{}", std::process::id())),
+    );
+    let path = scratch.0.join("shared.jsonl");
+    std::fs::write(&path, "{\"type\":\"session\",\"version\":1}\n").unwrap();
+    let (mut session, _, _) = Session::open(&path).unwrap();
+    session
+        .append(&json!({"role":"user","content":"one"}))
+        .unwrap();
+    // `/resume` in another process names it.
+    Session::name_file(&path, "Elsewhere").unwrap();
+    session
+        .append(&json!({"role":"user","content":"two"}))
+        .unwrap();
+    assert_eq!(
+        (session.leaf(), session.name()),
+        (Some(3), Some("Elsewhere"))
+    );
+    let left = session.left_behind(Some(1)).unwrap();
+    assert_eq!(left, [json!({"role":"user","content":"two"})]);
+    session.move_to(Some(1)).unwrap();
+    session
+        .append(&json!({"role":"user","content":"again"}))
+        .unwrap();
+    let (reopened, items, _) = Session::open(&path).unwrap();
+    let prompts: Vec<_> = items.iter().map(|item| item["content"].clone()).collect();
+    assert_eq!(prompts, ["one", "again"]);
+    assert_eq!(reopened.leaf(), session.leaf());
 }
 
 #[test]
@@ -589,6 +736,14 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
         .map(str::to_owned)
         .collect();
     assert_eq!(lines[1..], saved.lines().collect::<Vec<_>>()[1..5]);
+    let header: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(header["parentSession"], json!(original));
+    let listed = agent.sessions().unwrap();
+    let fork = listed
+        .iter()
+        .find(|session| session.path == forked)
+        .unwrap();
+    assert_eq!(fork.parent.as_deref(), Some(original.as_path()));
     assert_eq!(agent.model(), "a");
     assert_eq!(agent.prompts(), ["one", "!ls"]);
     assert_eq!(agent.usage.context_tokens, Some(100));

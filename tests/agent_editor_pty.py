@@ -1052,10 +1052,11 @@ def fork_session(read, until, send, output):
     ending(read, output, ['> second'])
     send(b' again\r')
     on_screen('Reply three.')
-    # The fork is the newest and current session, so the selector starts at the original.
+    # The fork is the current session, under the original, at which the selector starts.
     send(b'/resume\r')
     rows = on_screen('Resume session')
-    assert '  first (4 items, now) \u2713' in rows and '\u203a first (4 items, now)' in rows, rows
+    at = rows.index('\u203a first (4 items, now)')
+    assert rows[at + 1] == '     \u2514\u2500 first (4 items, now) \u2713', rows
     send(b'\r')
     rows = on_screen('\u2713 Resumed session \u00b7 gpt-6-luna')
     assert 'Reply two.' in rows, rows
@@ -1400,6 +1401,83 @@ def search_selectors(read, until, send, output):
     on_screen('\u2713 Model set to claude-haiku-5-5')
     send(b'\x04')
 
+
+def manage_sessions(read, until, send, output):
+    shown, on_screen = full_screen(100)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'kiwi first\r')
+    on_screen('Kiwi reply.')
+    send(b'/new\r')
+    on_screen('New session')
+    send(b'mango second\r')
+    on_screen('Mango reply.')
+    send(b'/resume\r')
+    on_screen('Resume session  \u2191\u2193 move \u00b7 Enter select \u00b7 Ctrl+R rename \u00b7 Ctrl+D delete')
+    send(b'kiwi')
+    on_screen('\u203a kiwi first (2 items, now)')
+    # Ctrl+R renames the selected session; the list comes back with its query.
+    send(b'\x12')
+    on_screen('Rename session  Enter submit \u00b7 Esc cancel')
+    send(b'Kiwi work\r')
+    rows = on_screen('\u203a Kiwi work (2 items, now)')
+    assert '> kiwi' in rows, rows
+    # Ctrl+D asks first; Escape keeps it, Enter deletes it, to the trash.
+    send(b'\x04')
+    on_screen('Delete session? Enter confirm \u00b7 Esc cancel')
+    send(b'\x1b')
+    on_screen('Delete session?', gone=True)
+    send(b'\x04')
+    on_screen('Delete session? Enter confirm \u00b7 Esc cancel')
+    send(b'\r')
+    on_screen('Session moved to trash')
+    on_screen('No matching sessions')
+    # The current session cannot be deleted.
+    send(b'\x7f' * 4 + b'mango')
+    on_screen('\u203a mango second (2 items, now) \u2713')
+    send(b'\x04')
+    on_screen('Cannot delete the currently active session')
+    send(b'\x1b')
+    ending(read, output, ['\u2500' * 99, '>'], columns=100)
+    send(b'\x04')
+
+
+def resume_at_start(read, until, send, output):
+    shown, on_screen = full_screen(100)(read, output)
+    # The sessions show first, the newest selected: no session is current yet.
+    rows = on_screen('\u203a mango second (2 items, now)')
+    assert not any(row.startswith('scramjet-rs \u00b7') for row in rows), rows
+    send(b'\r')
+    rows = on_screen('\u2713 Resumed session \u00b7 gpt-6-luna')
+    text = '\n'.join(rows)
+    assert '> mango second\n\nMango reply.' in text and 'scramjet-rs \u00b7' not in text, rows
+    send(b'\x04')
+
+
+def nothing_resumed(read, until, send, output):
+    shown, on_screen = full_screen(100)(read, output)
+    on_screen('Resume session')
+    send(b'\x1b')
+    until(b'No session selected')
+
+
+trash = os.path.join(work, 'trash')
+os.makedirs(os.path.join(trash, 'bin'))
+with open(os.path.join(trash, 'bin', 'trash'), 'w') as trash_file:
+    trash_file.write('#!/bin/sh\nmv "$1" %s/\n' % trash)
+os.chmod(os.path.join(trash, 'bin', 'trash'), 0o755)
+with_trash = {'PATH': os.path.join(trash, 'bin') + ':' + env['PATH']}
+known = set(session_files())
+run([], manage_sessions, serve_replies([(['Kiwi reply.'], 'Kiwi reply.'), (['Mango reply.'], 'Mango reply.')]),
+    variables=with_trash, columns=100)
+(kept,) = set(session_files()) - known
+(trashed,) = glob.glob(os.path.join(trash, '*.jsonl'))
+infos = [line for line in map(json.loads, open(trashed)) if line.get('type') == 'session_info']
+assert infos == [{'type': 'session_info', 'name': 'Kiwi work'}], infos
+known = set(session_files())
+run(['-r'], resume_at_start, columns=100)
+run(['--resume'], nothing_resumed, columns=100)
+# Neither start left a session of its own.
+assert set(session_files()) == known, set(session_files()) - known
 
 known = set(session_files())
 levels = config_home('levels')

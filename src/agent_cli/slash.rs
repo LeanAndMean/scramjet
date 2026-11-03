@@ -8,7 +8,7 @@ use super::text::{clip, one_line, visible};
 use super::{editor, installed, select, style, tree};
 use scramjet_rs::agent::{
     Agent, AgentError, Approval, Approvals, CODING_TOOLS, Edge, Installed, Navigated, NextStep,
-    NextSteps, Publication, Scope, SessionInfo, Setting, search_program, shortened,
+    NextSteps, Publication, Removal, Scope, SessionInfo, Setting, search_program, shortened,
 };
 use std::{sync::atomic::Ordering, time::Duration};
 use unicode_width::UnicodeWidthStr;
@@ -19,6 +19,7 @@ const BACK_KEYS: &str = "↑↓ move · Enter select · Esc back";
 const TOOLS_KEYS: &str = "↑↓ move · Enter switch on or off · Esc back";
 const CHANGE_KEYS: &str = "↑↓ move · Enter change · Esc back";
 const VIEW_KEYS: &str = "↑↓ move · Esc back";
+const RESUME_KEYS: &str = "↑↓ move · Enter select · Ctrl+R rename · Ctrl+D delete · Esc cancel";
 /// What a next step can be set to, in the order `/settings` offers them.
 const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
     (
@@ -128,7 +129,9 @@ impl Interactive {
             }
             Some(Builtin::Name(name)) => self.name(name),
             Some(Builtin::Session) => self.say(session_info(&self.agent, &self.ui).trim_end()),
-            Some(Builtin::Resume(wanted)) => self.resume(wanted),
+            Some(Builtin::Resume(wanted)) => {
+                self.resume(wanted);
+            }
             Some(Builtin::Fork(wanted)) => self.fork(wanted),
             Some(Builtin::Tree(wanted)) => self.tree(wanted),
             Some(Builtin::Model(wanted)) => self.model(wanted),
@@ -786,43 +789,31 @@ impl Interactive {
         self.say(&self.ui.dim(done));
     }
 
-    fn resume(&mut self, wanted: &str) {
+    /// `/resume`: chooses a session to continue in, by its number with piped input. Returns
+    /// whether it switched to one.
+    pub(super) fn resume(&mut self, wanted: &str) -> bool {
         let sessions = match self.agent.sessions() {
-            Ok(sessions) => sessions,
+            Ok(sessions) => threaded(sessions),
             Err(error) => {
                 self.say(&format!("error: {error}"));
-                return;
+                return false;
             }
         };
-        let current = sessions
-            .iter()
-            .position(|session| self.agent.is_session(&session.path));
+        let current =
+            (sessions.iter()).position(|(session, _)| self.agent.is_session(&session.path));
         let chosen = match wanted {
             "" if sessions.is_empty() => {
                 self.say("No sessions to resume");
                 None
             }
-            "" if self.interactive() => {
-                // Newest first, so the first other than the current one is the likely choice.
-                let initial = usize::from(current == Some(0));
-                let texts: Vec<_> = sessions.iter().map(search_text).collect();
-                self.search(
-                    "Resume session",
-                    select::VISIBLE,
-                    &texts,
-                    initial,
-                    current,
-                    "No matching sessions",
-                    |index, width| session_line(&sessions[index], width),
-                )
-            }
+            "" if self.interactive() => self.choose_session(),
             "" => {
                 let width = editor::terminal_size().0;
-                for (index, session) in sessions.iter().take(20).enumerate() {
+                for (index, (session, tree)) in sessions.iter().take(20).enumerate() {
                     let mark = if current == Some(index) { "*" } else { " " };
-                    let number = format!("{}{mark}", index + 1);
-                    let line = session_line(session, width.saturating_sub(number.len() + 1));
-                    eprintln!("{number} {line}");
+                    let number = format!("{}{mark} {tree}", index + 1);
+                    let line = session_line(session, width.saturating_sub(number.width()));
+                    eprintln!("{number}{line}");
                 }
                 if sessions.len() > 20 {
                     eprintln!("({} older sessions not shown)", sessions.len() - 20);
@@ -840,26 +831,110 @@ impl Interactive {
                     ));
                     None
                 }
-                Ok(number) => Some(number - 1),
+                Ok(number) if current == Some(number - 1) => {
+                    self.say(&format!("error: session {number} is the current one"));
+                    None
+                }
+                Ok(number) => Some(sessions[number - 1].0.path.clone()),
             },
         };
-        match chosen {
-            None => {}
-            Some(index) if current == Some(index) => {
-                self.say(&format!("error: session {} is the current one", index + 1))
+        let Some(path) = chosen else {
+            return false;
+        };
+        match self.agent.resume_session(&path) {
+            Ok(()) => {
+                self.agent.load_model_card();
+                self.remember_prompts();
+                self.replaced(&format!(
+                    "✓ Resumed session · {}\nsession {}",
+                    model_line(&self.agent),
+                    self.agent.session_path().display(),
+                ));
+                true
             }
-            Some(index) => match self.agent.resume_session(&sessions[index].path) {
-                Ok(()) => {
-                    self.agent.load_model_card();
-                    self.remember_prompts();
-                    self.replaced(&format!(
-                        "✓ Resumed session · {}\nsession {}",
-                        model_line(&self.agent),
-                        self.agent.session_path().display(),
-                    ));
+            Err(error) => {
+                self.say(&format!("error: {error}"));
+                false
+            }
+        }
+    }
+
+    /// Chooses a session on the full screen, as Scramjet's session selector does: forks under the sessions they came from, a query matching them by their
+    /// prompts and replies, Ctrl+R renaming the selected one and Ctrl+D deleting it.
+    fn choose_session(&mut self) -> Option<std::path::PathBuf> {
+        let mut spot = None;
+        loop {
+            let sessions = match self.agent.sessions() {
+                Ok(sessions) => threaded(sessions),
+                Err(error) => {
+                    self.screen.as_ref()?.dismiss();
+                    self.say(&format!("error: {error}"));
+                    return None;
                 }
-                Err(error) => self.say(&format!("error: {error}")),
-            },
+            };
+            let screen = self.screen.as_ref()?;
+            if sessions.is_empty() {
+                screen.dismiss();
+                self.say("No sessions to resume");
+                return None;
+            }
+            let current =
+                (sessions.iter()).position(|(session, _)| self.agent.is_session(&session.path));
+            // Newest first, so the first other than the current one is the likely choice.
+            let initial = usize::from(current == Some(0));
+            let texts: Vec<_> = sessions
+                .iter()
+                .map(|(session, _)| search_text(session))
+                .collect();
+            let row = |index: usize, width| session_line(&sessions[index].0, width);
+            let tree = sessions.iter().map(|(_, tree)| tree.clone()).collect();
+            let picker = select::Picker::search(
+                "Resume session",
+                select::VISIBLE,
+                &texts,
+                initial,
+                current,
+                "No matching sessions",
+                row,
+            );
+            let picker = (picker.noting(RESUME_KEYS, Vec::new()))
+                .threaded(tree, row)
+                .acting()
+                .held();
+            let picker = match spot.take() {
+                Some((at, status)) => picker.at(at, status),
+                None => picker,
+            };
+            let (act, index, at) = match screen.pick_or_act(picker) {
+                select::Picked::Row(chosen) => {
+                    screen.dismiss();
+                    return chosen.map(|index| sessions[index].0.path.clone());
+                }
+                select::Picked::Act(act, index, at) => (act, index, at),
+            };
+            let session = &sessions[index].0;
+            let status = match act {
+                select::Act::Rename => {
+                    let name = session.name.clone().unwrap_or_default();
+                    let dialog = screen::Dialog::Text("Rename session".into(), name);
+                    match screen.ask(dialog, None) {
+                        Some(screen::Answer::Text(Some(name))) => {
+                            let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+                            match self.agent.rename_session(&session.path, &name) {
+                                Ok(()) => None,
+                                Err(error) => Some((format!("Failed to rename: {error}"), true)),
+                            }
+                        }
+                        _ => None,
+                    }
+                }
+                select::Act::Delete => Some(match self.agent.delete_session(&session.path) {
+                    Ok(Removal::Trashed) => ("Session moved to trash".to_owned(), false),
+                    Ok(Removal::Deleted) => ("Session deleted".to_owned(), false),
+                    Err(error) => (format!("Failed to delete: {error}"), true),
+                }),
+            };
+            spot = Some((at, status));
         }
     }
 
@@ -1125,7 +1200,7 @@ impl Interactive {
                 0 => return Some(None),
                 1 => return Some(Some(String::new())),
                 _ => {
-                    let dialog = screen::Dialog::Text(TITLE.into());
+                    let dialog = screen::Dialog::Text(TITLE.into(), String::new());
                     if let Some(screen::Answer::Text(Some(focus))) = screen.ask(dialog, None) {
                         return Some(Some(focus));
                     }
@@ -1454,6 +1529,64 @@ fn session_line(session: &SessionInfo, width: usize) -> String {
     format!("{prompt}{suffix}")
 }
 
+/// `sessions` (newest first) in the order of Scramjet's threaded session list, with the tree
+/// lines before each: every fork under the session it came from, newest first at each level.
+fn threaded(sessions: Vec<SessionInfo>) -> Vec<(SessionInfo, String)> {
+    let key = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or(path.to_owned());
+    let keys: Vec<_> = sessions.iter().map(|session| key(&session.path)).collect();
+    let parents: Vec<Option<usize>> = (sessions.iter().enumerate())
+        .map(|(index, session)| {
+            let parent = key(session.parent.as_deref()?);
+            keys.iter()
+                .position(|key| *key == parent)
+                .filter(|&at| at != index)
+        })
+        .collect();
+    let children = |parent: Option<usize>| -> Vec<usize> {
+        (0..sessions.len())
+            .filter(|&at| parents[at] == parent)
+            .collect()
+    };
+    // Each row's index and its tree lines; a walk from the roots, then from what a cycle of
+    // parents kept from them.
+    let mut order: Vec<(usize, String)> = Vec::new();
+    let mut seen = vec![false; sessions.len()];
+    let mut stack: Vec<(usize, Vec<bool>, bool)> = Vec::new();
+    let roots = children(None);
+    let unreached = (0..sessions.len()).filter(|&at| parents[at].is_some());
+    for root in roots.into_iter().chain(unreached) {
+        if seen[root] {
+            continue;
+        }
+        stack.push((root, Vec::new(), true));
+        while let Some((at, continues, last)) = stack.pop() {
+            if std::mem::replace(&mut seen[at], true) {
+                continue;
+            }
+            let mut tree: String = (continues.iter())
+                .map(|&continues| if continues { "│  " } else { "   " })
+                .collect();
+            if !continues.is_empty() {
+                tree.push_str(if last { "└─ " } else { "├─ " });
+            }
+            order.push((at, tree));
+            let below: Vec<usize> = (children(Some(at)).into_iter())
+                .filter(|&child| !seen[child])
+                .collect();
+            for (rank, &child) in below.iter().enumerate().rev() {
+                // As in Scramjet, a root's own line does not continue past its children.
+                let mut continues = continues.clone();
+                continues.push(!continues.is_empty() && !last);
+                stack.push((child, continues, rank + 1 == below.len()));
+            }
+        }
+    }
+    let mut sessions: Vec<Option<SessionInfo>> = sessions.into_iter().map(Some).collect();
+    (order.into_iter())
+        .filter_map(|(at, tree)| Some((sessions[at].take()?, tree)))
+        .collect()
+}
+
 /// What `/resume` searches in a session, as Scramjet does: its id, name, prompts and replies.
 fn search_text(session: &SessionInfo) -> String {
     let id = session
@@ -1549,6 +1682,7 @@ mod tests {
             name: None,
             item_count: 12,
             modified: std::time::SystemTime::now() - Duration::from_secs(7200),
+            parent: None,
         };
         assert_eq!(session_line(&session, 30), "Fix the parser… (12 items, 2h)");
         assert_eq!(
@@ -1562,6 +1696,7 @@ mod tests {
             name: Some("Parser\nwork".into()),
             item_count: 12,
             modified: session.modified,
+            parent: None,
         };
         assert_eq!(session_line(&named, 80), "Parser work (12 items, 2h)");
         let empty = SessionInfo {
@@ -1570,6 +1705,69 @@ mod tests {
             ..session
         };
         assert_eq!(session_line(&empty, 80), "(no messages) (1 item, 2h)");
+    }
+
+    #[test]
+    fn forks_are_threaded_under_the_sessions_they_came_from() {
+        let path = |name: &str| PathBuf::from(format!("/nonexistent/{name}.jsonl"));
+        // Newest first: X and Y name each other, and G's parent is not listed.
+        let sessions = [
+            ("A", None),
+            ("B", Some("D")),
+            ("C", Some("A")),
+            ("D", None),
+            ("E", Some("B")),
+            ("F", Some("A")),
+            ("G", Some("gone")),
+            ("X", Some("Y")),
+            ("Y", Some("X")),
+        ]
+        .map(|(name, parent)| SessionInfo {
+            path: path(name),
+            first_prompt: None,
+            text: String::new(),
+            name: Some(name.into()),
+            item_count: 1,
+            modified: std::time::SystemTime::now(),
+            parent: parent.map(path),
+        });
+        let rows: Vec<String> = (threaded(sessions.into()).into_iter())
+            .map(|(session, tree)| format!("{tree}{}", session.name.unwrap()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "A",
+                "   ├─ C",
+                "   └─ F",
+                "D",
+                "   └─ B",
+                "      └─ E",
+                "G",
+                "X",
+                "   └─ Y"
+            ]
+        );
+        // Deeper levels continue the line of a parent with siblings after it.
+        let deep = [
+            ("R", None),
+            ("P", Some("R")),
+            ("Q", Some("R")),
+            ("K", Some("P")),
+        ]
+        .map(|(name, parent)| SessionInfo {
+            path: path(name),
+            first_prompt: None,
+            text: String::new(),
+            name: Some(name.into()),
+            item_count: 1,
+            modified: std::time::SystemTime::now(),
+            parent: parent.map(path),
+        });
+        let rows: Vec<String> = (threaded(deep.into()).into_iter())
+            .map(|(session, tree)| format!("{tree}{}", session.name.unwrap()))
+            .collect();
+        assert_eq!(rows, ["R", "   ├─ P", "   │  └─ K", "   └─ Q"]);
     }
 
     #[test]

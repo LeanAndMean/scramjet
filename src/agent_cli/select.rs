@@ -1,6 +1,6 @@
 //! A list to choose from with the arrow keys, drawn in the prompt's place on the full screen, as
 //! Scramjet's selectors for `/resume`, `/fork` and `/model` are; those for `/resume` and `/model`
-//! search as you type.
+//! search as you type, and `/resume`'s renames and deletes sessions.
 
 use super::editor::{Key, terminal_size};
 use super::fuzzy::{self, Haystack};
@@ -13,18 +13,50 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// Rows shown at once, as in Scramjet's selectors other than its tree.
 pub(super) const VISIBLE: usize = 10;
 const HINT: &str = "↑↓ move · Enter select · Esc cancel";
+const CONFIRM_DELETE: &str = "Delete session? Enter confirm · Esc cancel";
 /// Options shown at once in a question's list, as in Scramjet.
 const QUESTION_VISIBLE: usize = 8;
 /// Rows an option's label or description takes at most, as in Scramjet.
 const OPTION_ROWS: usize = 4;
 const DESCRIPTION_INDENT: &str = "     ";
 
+/// The columns a selector's row has, the mark after the current one included, as `lines` gives
+/// them on the terminal.
+fn row_width() -> usize {
+    terminal_size().0.saturating_sub(1).max(8) - 2
+}
+
 fn question_visible(options: &[Choice]) -> usize {
     options.len().min(QUESTION_VISIBLE)
 }
 
+/// What a list's own keys ask for besides a row, as in Scramjet's session selector.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Act {
+    /// Ctrl+R.
+    Rename,
+    /// Ctrl+D, then Enter.
+    Delete,
+}
+
+/// Where a list was when one of its own keys ended it, so that it shows again there.
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct Spot {
+    pub(super) query: String,
+    /// The selected row's position among those shown.
+    pub(super) position: usize,
+}
+
+/// What a key ended a list with.
+#[derive(Debug, PartialEq)]
+pub(super) enum Picked {
+    /// The row chosen with Enter; `None`: cancelled.
+    Row(Option<usize>),
+    Act(Act, usize, Spot),
+}
+
 /// A list for a screen that draws it and passes it the keys; it returns the row chosen with
-/// Enter, or nothing when cancelled with Escape or Ctrl-C.
+/// Enter, nothing when cancelled with Escape or Ctrl-C, or what one of its own keys asks for.
 pub(super) struct Picker {
     list: List,
     shape: Shape,
@@ -32,6 +64,11 @@ pub(super) struct Picker {
     deadline: Option<Instant>,
     /// Stays shown once answered, until the session shows another list or none.
     held: bool,
+    /// Whether Ctrl+R and Ctrl+D act on the selected row (`acting`).
+    acts: bool,
+    /// Said in place of the keys' hint until the next key: what a key did, or why it could not
+    /// (`true`: a warning).
+    status: Option<(String, bool)>,
 }
 
 enum Shape {
@@ -43,6 +80,8 @@ enum Shape {
         rows: Vec<String>,
         /// Shown under the list for the selected row, when there is one for each row.
         notes: Vec<String>,
+        /// The rows shown without a query, under tree lines (`threaded`); empty: `rows`.
+        threaded: Vec<String>,
     },
     Question {
         title: String,
@@ -99,6 +138,8 @@ impl Picker {
             },
             deadline: None,
             held: false,
+            acts: false,
+            status: None,
         }
     }
 
@@ -127,6 +168,51 @@ impl Picker {
 
     pub(super) fn is_held(&self) -> bool {
         self.held
+    }
+
+    /// Makes Ctrl+R and Ctrl+D act on the selected row, as in Scramjet's session selector: Ctrl+R
+    /// ends the list to rename it; Ctrl+D asks to confirm, and Enter then ends the list to delete
+    /// it. The current row cannot be deleted.
+    pub(super) fn acting(mut self) -> Self {
+        self.acts = true;
+        self
+    }
+
+    /// Shows the rows without a query after `prefixes`, the tree lines of Scramjet's threaded
+    /// session list, `row` giving each one's text in the width left, as for `select`.
+    pub(super) fn threaded(
+        mut self,
+        prefixes: Vec<String>,
+        row: impl Fn(usize, usize) -> String,
+    ) -> Self {
+        let width = row_width();
+        if let Shape::Rows {
+            current, threaded, ..
+        } = &mut self.shape
+        {
+            *threaded = (prefixes.iter().enumerate())
+                .map(|(index, prefix)| {
+                    let mark = if *current == Some(index) { 2 } else { 0 };
+                    row(index, width.saturating_sub(prefix.width() + mark).max(1))
+                })
+                .collect();
+        }
+        self.list.tree = prefixes;
+        self
+    }
+
+    /// Shows the list at `spot`, as one of its own keys left it, saying `status` in place of the
+    /// keys' hint until the next key (`true`: a warning).
+    pub(super) fn at(mut self, spot: Spot, status: Option<(String, bool)>) -> Self {
+        if let Some(search) = &mut self.list.search {
+            search.query = spot.query;
+            self.list.filter();
+        }
+        let last = self.list.rows.len().saturating_sub(1);
+        self.list.selected = spot.position.min(last);
+        self.list.settle(true);
+        self.status = status;
+        self
     }
 
     /// Chooses the recommended option of a question after `wait`, unless `stop` is called first,
@@ -176,8 +262,7 @@ impl Picker {
         current: Option<usize>,
         row: impl Fn(usize, usize) -> String,
     ) -> Self {
-        // As wide as `lines` asks for them, the mark after the current row included.
-        let width = terminal_size().0.saturating_sub(1).max(8) - 2;
+        let width = row_width();
         let rows = (0..list.rows.len())
             .map(|index| row(index, width - if current == Some(index) { 2 } else { 0 }))
             .collect();
@@ -189,21 +274,65 @@ impl Picker {
                 current,
                 rows,
                 notes: Vec::new(),
+                threaded: Vec::new(),
             },
             deadline: None,
             held: false,
+            acts: false,
+            status: None,
         }
     }
 
-    /// Whether there is nothing to choose from: the screen then returns nothing at once.
+    /// Whether there is nothing to choose from, whatever the query: the screen then returns
+    /// nothing at once.
     pub(super) fn is_empty(&self) -> bool {
-        self.list.rows.is_empty()
+        match &self.list.search {
+            Some(search) => search.texts.is_empty(),
+            None => self.list.rows.is_empty(),
+        }
     }
 
-    /// Moves the selection or edits the query, or returns what was chosen: `Some(None)` when
-    /// cancelled.
-    pub(super) fn key(&mut self, key: &Key) -> Option<Option<usize>> {
-        self.list.key(key)
+    /// Moves the selection, edits the query or asks to confirm a deletion, or returns what the
+    /// key ended the list with.
+    pub(super) fn key(&mut self, key: &Key) -> Option<Picked> {
+        self.status = None;
+        let row = self.list.rows.get(self.list.selected).copied();
+        if self.list.warned {
+            match key {
+                Key::Enter => {
+                    self.list.warned = false;
+                    return Some(self.act(Act::Delete, row?));
+                }
+                Key::Escape | Key::Interrupt => self.list.warned = false,
+                _ => {}
+            }
+            return None;
+        }
+        match key {
+            Key::Rename if self.acts => return row.map(|row| self.act(Act::Rename, row)),
+            Key::EndOfInput if self.acts => {
+                let current = match &self.shape {
+                    Shape::Rows { current, .. } => *current,
+                    Shape::Question { .. } => None,
+                };
+                if row.is_some() && row == current {
+                    let why = "Cannot delete the currently active session";
+                    self.status = Some((why.to_owned(), true));
+                } else {
+                    self.list.warned = row.is_some();
+                }
+                return None;
+            }
+            _ => {}
+        }
+        self.list.key(key).map(Picked::Row)
+    }
+
+    fn act(&self, act: Act, row: usize) -> Picked {
+        let query =
+            (self.list.search.as_ref()).map_or_else(String::new, |search| search.query.clone());
+        let position = self.list.selected;
+        Picked::Act(act, row, Spot { query, position })
     }
 
     /// The list's lines for a screen of `(width, height)`.
@@ -215,6 +344,7 @@ impl Picker {
                 current,
                 rows,
                 notes,
+                threaded,
             } => {
                 let (width, height) = size;
                 let note =
@@ -228,7 +358,23 @@ impl Picker {
                     }
                 }
                 let room = (width, height.saturating_sub(under.len()));
-                let mut shown = lines(title, hint, &self.list, *current, room, &|index, width| {
+                let rows = match self.list.filtered || threaded.is_empty() {
+                    true => rows,
+                    false => threaded,
+                };
+                let header = match &self.status {
+                    _ if self.list.warned => {
+                        (title.as_str(), CONFIRM_DELETE, style::SELECTOR_WARNING)
+                    }
+                    Some((status, true)) => {
+                        (title.as_str(), status.as_str(), style::SELECTOR_WARNING)
+                    }
+                    Some((status, false)) => {
+                        (title.as_str(), status.as_str(), style::SELECTOR_DONE)
+                    }
+                    None => (title.as_str(), *hint, style::MUTED),
+                };
+                let mut shown = lines(header, &self.list, *current, room, &|index, width| {
                     text::clip(&rows[index], width)
                 });
                 shown.extend(under);
@@ -266,6 +412,12 @@ struct List {
     search: Option<Box<Search>>,
     /// Whether each row is a heading, which cannot be selected; empty when none is.
     headings: Vec<bool>,
+    /// The tree lines before each row without a query (`Picker::threaded`); empty when none.
+    tree: Vec<String>,
+    /// Whether a query chose the rows shown.
+    filtered: bool,
+    /// The selected row is about to be removed, and shows so.
+    warned: bool,
 }
 
 struct Search {
@@ -285,6 +437,9 @@ impl List {
             visible,
             search: None,
             headings: Vec::new(),
+            tree: Vec::new(),
+            filtered: false,
+            warned: false,
         }
     }
 
@@ -364,6 +519,7 @@ impl List {
             return;
         };
         let tokens = fuzzy::parse(&search.query);
+        self.filtered = !tokens.is_empty();
         if tokens.is_empty() {
             self.rows = (0..search.texts.len()).collect();
             self.selected = search.initial;
@@ -374,19 +530,18 @@ impl List {
     }
 }
 
-/// The selector's lines for a terminal of `(width, height)`: the title, the query being typed
-/// (with no row matching it, `none`), the rows around the selected one and, when some are not
-/// shown, the selected row's position.
+/// The selector's lines for a terminal of `(width, height)`: the title with the hint in its
+/// style, the query being typed (with no row matching it, `none`), the rows around the selected
+/// one and, when some are not shown, the selected row's position.
 fn lines(
-    title: &str,
-    hint: &str,
+    (title, hint, hint_style): (&str, &str, &str),
     list: &List,
     current: Option<usize>,
     (width, height): (usize, usize),
     row: &dyn Fn(usize, usize) -> String,
 ) -> Vec<String> {
     use style::{CURRENT, MUTED, RESET, SEARCH_CURSOR, SELECTED, SELECTOR_HEADING};
-    use style::{SELECTOR_MARK, SELECTOR_TITLE};
+    use style::{SELECTOR_MARK, SELECTOR_TITLE, SELECTOR_TREE, SELECTOR_WARNING};
     // The last column stays empty, so that a full row does not move the cursor to the next.
     let width = width.saturating_sub(1).max(8);
     let shown = list.rows.len();
@@ -403,7 +558,7 @@ fn lines(
     let hint_room = width.saturating_sub(title.width() + 2);
     let hint = text::clip(hint, hint_room);
     let mut lines = vec![format!(
-        "{SELECTOR_TITLE}{title}{RESET}  {MUTED}{hint}{RESET}"
+        "{SELECTOR_TITLE}{title}{RESET}  {hint_style}{hint}{RESET}"
     )];
     if let Some(search) = &list.search {
         let query = tail(&search.query, width - 3);
@@ -425,18 +580,32 @@ fn lines(
         };
         let index = list.rows[position];
         let is_current = current == Some(index);
-        let text = row(index, width - 2 - if is_current { 2 } else { 0 });
+        let tree = match list.filtered {
+            false => list.tree.get(index).map_or("", String::as_str),
+            true => "",
+        };
+        let room = width - 2 - if is_current { 2 } else { 0 };
+        let text = row(index, room.saturating_sub(tree.width()).max(1));
+        let tree = match tree {
+            "" => String::new(),
+            tree => format!("{SELECTOR_TREE}{tree}{RESET}"),
+        };
         let mark = if is_current {
             format!(" {CURRENT}✓{RESET}")
         } else {
             String::new()
         };
+        let selected = if list.warned {
+            SELECTOR_WARNING
+        } else {
+            SELECTED
+        };
         lines.push(if list.is_heading(position) {
             format!("  {SELECTOR_HEADING}{text}{RESET}")
         } else if position == list.selected {
-            format!("{SELECTOR_MARK}›{RESET} {SELECTED}{text}{RESET}{mark}")
+            format!("{SELECTOR_MARK}›{RESET} {tree}{selected}{text}{RESET}{mark}")
         } else {
-            format!("  {text}{mark}")
+            format!("  {tree}{text}{mark}")
         });
     }
     if visible < shown {
@@ -596,7 +765,13 @@ mod tests {
     fn shows_ten_rows_around_the_selection_with_its_position() {
         let row = |index: usize, width: usize| text::clip(&format!("row {index}"), width);
         let list = |selected| List::new(25, selected, 10);
-        let shown = plain(lines("Pick", HINT, &list(12), Some(9), (50, 24), &row));
+        let shown = plain(lines(
+            ("Pick", HINT, style::MUTED),
+            &list(12),
+            Some(9),
+            (50, 24),
+            &row,
+        ));
         assert_eq!(
             shown,
             [
@@ -614,21 +789,45 @@ mod tests {
                 "  (13/25)",
             ]
         );
-        let first = plain(lines("Pick", HINT, &list(0), None, (50, 24), &row));
+        let first = plain(lines(
+            ("Pick", HINT, style::MUTED),
+            &list(0),
+            None,
+            (50, 24),
+            &row,
+        ));
         assert_eq!(first[1], "› row 0");
         assert_eq!(first[10], "  row 9");
-        let last = plain(lines("Pick", HINT, &list(24), None, (50, 24), &row));
+        let last = plain(lines(
+            ("Pick", HINT, style::MUTED),
+            &list(24),
+            None,
+            (50, 24),
+            &row,
+        ));
         assert_eq!(last[1], "  row 15");
         assert_eq!(last[10], "› row 24");
         // A short terminal shows fewer rows; a narrow one cuts the hint and the rows.
-        let short = plain(lines("Pick", HINT, &list(3), None, (12, 6), &row));
+        let short = plain(lines(
+            ("Pick", HINT, style::MUTED),
+            &list(3),
+            None,
+            (12, 6),
+            &row,
+        ));
         assert_eq!(
             short,
             ["Pick  ↑↓ m…", "  row 2", "› row 3", "  row 4", "  (4/25)"]
         );
         let few = List::new(2, 1, 10);
         assert_eq!(
-            plain(lines("Pick", HINT, &few, None, (50, 24), &row)),
+            plain(lines(
+                ("Pick", HINT, style::MUTED),
+                &few,
+                None,
+                (50, 24),
+                &row
+            )),
             [
                 "Pick  ↑↓ move · Enter select · Esc cancel",
                 "  row 0",
@@ -670,7 +869,13 @@ mod tests {
         list.selected = 6;
         // The first rows shown lost their heading above: it shows in the first one's place.
         assert_eq!(
-            plain(lines("Pick", HINT, &list, None, (40, 24), &row)),
+            plain(lines(
+                ("Pick", HINT, style::MUTED),
+                &list,
+                None,
+                (40, 24),
+                &row
+            )),
             [
                 "Pick  ↑↓ move · Enter select · Esc can…",
                 "  After 1",
@@ -773,6 +978,81 @@ mod tests {
     }
 
     #[test]
+    fn session_keys_rename_and_delete_after_confirming_with_tree_lines_without_a_query() {
+        let texts = ["root parser", "fork parser", "other"].map(String::from);
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
+        let picker = || {
+            Picker::search("Resume", 10, &texts, 0, Some(2), "None", row)
+                .threaded(vec![String::new(), "   └─ ".into(), String::new()], row)
+                .acting()
+        };
+        let shown = |picker: &Picker| plain(picker.lines((60, 24)));
+        let mut list = picker();
+        assert_eq!(
+            shown(&list)[2..],
+            ["› root parser", "     └─ fork parser", "  other ✓"]
+        );
+        assert_eq!(list.key(&Key::Down), None);
+        let place = |query: &str, position| Spot {
+            query: query.into(),
+            position,
+        };
+        assert_eq!(
+            list.key(&Key::Rename),
+            Some(Picked::Act(Act::Rename, 1, place("", 1)))
+        );
+        // Ctrl+D asks first; Escape takes the question back, and other keys wait for an answer.
+        assert_eq!(list.key(&Key::EndOfInput), None);
+        let asked = shown(&list);
+        assert_eq!(
+            asked[0],
+            "Resume  Delete session? Enter confirm · Esc cancel"
+        );
+        for key in [Key::Down, Key::Text("x".into()), Key::Rename] {
+            assert_eq!(list.key(&key), None);
+        }
+        assert_eq!(list.key(&Key::Escape), None);
+        assert_eq!(
+            shown(&list)[0],
+            "Resume  ↑↓ move · Enter select · Esc cancel"
+        );
+        assert_eq!(shown(&list)[3], "›    └─ fork parser");
+        // A query shows the rows without their tree lines; the current row is not deleted.
+        for key in [Key::Text("pars".into()), Key::Down, Key::EndOfInput] {
+            assert_eq!(list.key(&key), None);
+        }
+        assert_eq!(
+            list.key(&Key::Enter),
+            Some(Picked::Act(Act::Delete, 1, place("pars", 1)))
+        );
+        let mut current = picker();
+        current.key(&Key::Up);
+        assert_eq!(current.key(&Key::EndOfInput), None);
+        let refused = shown(&current);
+        assert!(
+            refused[0].ends_with("Cannot delete the currently active session"),
+            "{refused:?}"
+        );
+        assert_eq!(current.key(&Key::Up), None);
+        assert_eq!(
+            shown(&current)[0],
+            "Resume  ↑↓ move · Enter select · Esc cancel"
+        );
+        // Shown again where it was, with what the key did; without `acting` the keys do nothing.
+        let again = picker().at(place("pars", 5), Some(("Session deleted".into(), false)));
+        let lines = shown(&again);
+        let unmatched = picker().at(place("zzz", 0), None);
+        assert!(!unmatched.is_empty());
+        assert_eq!(shown(&unmatched)[2], "  None");
+        assert_eq!(lines[..2], ["Resume  Session deleted", "> pars "]);
+        assert_eq!(lines[2..], ["  root parser", "› fork parser"]);
+        let mut plain_list = Picker::search("Resume", 10, &texts, 0, None, "None", row);
+        assert_eq!(plain_list.key(&Key::Rename), None);
+        assert_eq!(plain_list.key(&Key::EndOfInput), None);
+        assert_eq!(plain_list.key(&Key::Enter), Some(Picked::Row(Some(0))));
+    }
+
+    #[test]
     fn typing_shows_the_matching_rows_best_first() {
         let texts = [
             "fix the parser",
@@ -783,7 +1063,15 @@ mod tests {
         .map(String::from);
         let row = |index: usize, width: usize| text::clip(&texts[index], width);
         let mut list = List::searching(&texts, 1, 10, "No matching rows");
-        let shown = |list: &List| plain(lines("Pick", HINT, list, Some(0), (50, 24), &row));
+        let shown = |list: &List| {
+            plain(lines(
+                ("Pick", HINT, style::MUTED),
+                list,
+                Some(0),
+                (50, 24),
+                &row,
+            ))
+        };
         assert_eq!(shown(&list)[1..3], [">  ", "  fix the parser ✓"]);
         assert_eq!(shown(&list)[3], "› write a haiku");
         for key in [Key::Text("pa".into()), Key::Text("rs".into())] {
@@ -819,7 +1107,13 @@ mod tests {
         assert_eq!(list.key(&Key::Escape), Some(None));
         // A query wider than the line shows its end.
         list.key(&Key::Text("a very long query".into()));
-        let narrow = plain(lines("Pick", HINT, &list, None, (12, 24), &row));
+        let narrow = plain(lines(
+            ("Pick", HINT, style::MUTED),
+            &list,
+            None,
+            (12, 24),
+            &row,
+        ));
         assert_eq!(narrow[1], "> ng query ");
     }
 }

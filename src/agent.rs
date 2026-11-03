@@ -31,7 +31,7 @@ pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
-pub use session::{Session, SessionInfo};
+pub use session::{Removal, Session, SessionInfo};
 pub use skills::{Skill, Skills};
 pub use status::{Completed, Next, Routing, Step};
 pub use tools::{
@@ -309,7 +309,7 @@ impl Agent {
         let (session, conversation, prompts) = match opened {
             Some(path) => Session::open(&path)?,
             None => (
-                Session::create(&session::directory(&config.root)?, &config.root)?,
+                Session::create(&session::directory(&config.root)?, &config.root, None)?,
                 Vec::new(),
                 Vec::new(),
             ),
@@ -391,14 +391,48 @@ impl Agent {
         self.instruct();
     }
 
-    /// The sessions saved next to the current one that have a conversation, and the current one,
-    /// newest first. Scramjet writes no session file before the first reply, so it lists no
-    /// empty ones.
+    /// The sessions saved next to the current one that have a conversation, the current one
+    /// included, newest first. Scramjet writes no session file before the first reply, so it
+    /// lists no empty ones.
     pub fn sessions(&self) -> Result<Vec<SessionInfo>, AgentError> {
         let directory = self.session.path().parent().unwrap_or(Path::new("."));
         let mut sessions = Session::list(directory)?;
-        sessions.retain(|session| session.item_count > 0 || self.session.is_file(&session.path));
+        sessions.retain(|session| session.item_count > 0);
         Ok(sessions)
+    }
+
+    /// Names the saved session `path`, the current one too, as `set_session_name` does, as
+    /// Scramjet's `/resume` renames one.
+    pub fn rename_session(&mut self, path: &Path, name: &str) -> Result<(), AgentError> {
+        match self.session.is_file(path) {
+            true => self.set_session_name(name),
+            false => Ok(Session::name_file(path, name)?),
+        }
+    }
+
+    /// Deletes the saved session `path`, other than the current one, as Scramjet's `/resume`
+    /// deletes one: to the trash with the `trash` command when there is one, else for good.
+    pub fn delete_session(&self, path: &Path) -> Result<Removal, AgentError> {
+        if self.session.is_file(path) {
+            return Err(AgentError::Session(std::io::Error::other(
+                "cannot delete the current session",
+            )));
+        }
+        Ok(Session::delete(path)?)
+    }
+
+    /// Ends the agent, removing its session's file when this process created it and only model
+    /// and effort changes went in, as when a start that was to resume a session resumes none.
+    pub fn discard_unused_session(self) -> Result<(), AgentError> {
+        Ok(self.session.discard_if_unused()?)
+    }
+
+    /// Continues in `session`; the one before goes, its file too when it stayed unused
+    /// (`Session::discard_if_unused`), as Scramjet would not have written it. That file is left
+    /// when it cannot be removed, as all were before.
+    fn replace_session(&mut self, session: Session) {
+        let left = std::mem::replace(&mut self.session, session);
+        let _ = left.discard_if_unused();
     }
 
     /// Whether `path` is the current session's file.
@@ -509,7 +543,7 @@ impl Agent {
         let context_tokens = session.context_tokens();
         let effort = session.effort().map(str::to_owned);
         self.autopilot = session.autopilot().unwrap_or(self.autopilot);
-        self.session = session;
+        self.replace_session(session);
         self.conversation = conversation;
         self.prompts = prompts;
         self.usage = Usage {
@@ -532,12 +566,12 @@ impl Agent {
     /// Approvals given with `a` still apply.
     pub fn new_session(&mut self) -> Result<(), AgentError> {
         let directory = self.session.path().parent().unwrap_or(Path::new("."));
-        let mut session = Session::create(directory, &self.config.root)?;
+        let mut session = Session::create(directory, &self.config.root, None)?;
         session.record_model(&self.config.model)?;
         if let Some(effort) = &self.config.effort {
             session.record_effort(effort)?;
         }
-        self.session = session;
+        self.replace_session(session);
         self.conversation.clear();
         self.prompts.clear();
         self.usage = Usage::default();
