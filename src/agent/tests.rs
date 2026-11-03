@@ -170,6 +170,24 @@ pub(super) fn stream(events: &[Value]) -> Vec<u8> {
     response
 }
 
+/// A streamed Messages reply with these events.
+pub(super) fn messages_stream(events: &[Value]) -> Vec<u8> {
+    let body: String = events
+        .iter()
+        .map(|event| {
+            format!(
+                "event: {}\ndata: {event}\n\n",
+                event["type"].as_str().unwrap()
+            )
+        })
+        .collect();
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes()
+}
+
 /// Answers each connection with the next scripted response; returns the request bodies.
 pub(super) fn serve(responses: Vec<Vec<u8>>) -> (SocketAddr, std::thread::JoinHandle<Vec<Value>>) {
     let (address, server) = serve_requests(responses);

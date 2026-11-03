@@ -1475,12 +1475,14 @@ def command_sets(read, until, send, output):
     assert '> /demo:greet Ada "the reader"' in rows, rows
     # Without a report, Scramjet's status check follows, hidden; the model reports there.
     rows = on_screen('\u25cf report_scramjet_command_status completed')
-    assert 'Scramjet status check' not in '\n'.join(rows), rows
+    assert 'Status check for' not in '\n'.join(rows), rows
     on_screen('status: completed')
     send(b'/tools:echo a  b\r')
     on_screen('Echoed.')
-    # A status check answered without a report leaves the command waiting, silently.
-    on_screen('Still here.')
+    # Status checks answered without a report: after three, the command waits for the user.
+    on_screen('Nearly there.')
+    rows = on_screen('/tools:echo is waiting for you')
+    assert 'Reply to continue.' in ' '.join(rows), rows
     send(b'\x04')
 
 
@@ -1675,14 +1677,14 @@ def parked_question(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'/flow:step ask\r')
-    rows = on_screen('Parked for reply')
+    rows = on_screen('Waiting for your reply')
     assert 'Which colour?' in '\n'.join(rows), rows
     send(b'\x04')
 
 
 def parked_question_resumed(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
-    rows = on_screen('Parked for reply')
+    rows = on_screen('Waiting for your reply')
     assert 'Which colour?' in '\n'.join(rows), rows
     send(b'blue\r')
     # The reply resumes the command the session saved as waiting for it: its turn gets the
@@ -1694,6 +1696,27 @@ def parked_question_resumed(read, until, send, output):
     send(b'\x1b')
     rows = on_screen('Cancelled')
     assert '- /flow:step again \u2014 Ask again.' in rows, rows
+    send(b'\x04')
+
+
+def abandoned_command(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/flow:step x\r')
+    # The model's summary, then the choice, Keep working selected: Enter keeps the command.
+    rows = on_screen('\u2192 Keep working')
+    text = '\n'.join(rows)
+    for expected in ['Abandon /flow:step?', 'Half done: the parser is in, its tests are not.',
+                     'No next step will run.', '  Abandon']:
+        assert expected in text, (expected, text)
+    send(b'\r')
+    on_screen('keep /flow:step running')
+    on_screen('\u2192 Keep working')
+    send(b'\x1b[A\r')
+    rows = on_screen('[2 requests')
+    text = '\n'.join(rows)
+    assert 'The user confirmed: /flow:step is abandoned' in text, text
+    assert 'Select next step' not in text and 'Next step' not in text, text
     send(b'\x04')
 
 
@@ -1856,13 +1879,14 @@ with open(os.path.join(echo, 'tools:echo.md'), 'w') as file:
     file.write('Echo $@')
 known = set(session_files())
 run([], command_sets, serve_items([[message('Greeted.')], [report('call_1')], [message('Echoed.')],
-                                                    [message('Still here.')]]))
+                                   [message('Still here.')], [message('Still at it.')],
+                                   [message('Nearly there.')]]))
 run(['--continue'], command_sets_resumed)
 (commanded,) = set(session_files()) - known
 lines = list(map(json.loads, open(commanded)))
 checks = [line['content'] for line in lines if line.get('_scramjet_probe')]
-assert [check.split('\n')[0] for check in checks] == [
-    'Scramjet status check for `demo:greet`.', 'Scramjet status check for `tools:echo`.'], checks
+assert all(check.startswith('Status check for `/') for check in checks), checks
+assert [check.split('`')[1] for check in checks] == ['/demo:greet'] + ['/tools:echo'] * 3, checks
 users = [line for line in lines if line.get('role') == 'user' and not line.get('_scramjet_probe')]
 assert users == [
     {'role': 'user', '_scramjet_typed': '/demo:greet Ada "the reader"',
@@ -1958,11 +1982,24 @@ run(['--continue'], parked_question_resumed, serve_items([
     [report('call_2', [('/flow:step again', False, 'Ask again.')], 0)],
 ]))
 (parked,) = set(session_files()) - known
+known = set(session_files())
+abandon = {'summary': 'Half done: the parser is in, its tests are not.', 'status': 'abandoned'}
+run([], abandoned_command, serve_items([
+    [tool_call('call_1', 'report_scramjet_command_status', abandon)],
+    [tool_call('call_2', 'report_scramjet_command_status', abandon)],
+]))
+(abandoned,) = set(session_files()) - known
+lines = list(map(json.loads, open(abandoned)))
+outputs = [line['output'] for line in lines if line.get('type') == 'function_call_output']
+assert outputs == ['The user chose to keep /flow:step running: go on with its work.',
+                   'The user confirmed: /flow:step is abandoned, and no next step will run.'], outputs
+states = [line['command'] for line in lines if line.get('type') == 'command_state']
+assert states == ['flow:step', None], states
 lines = list(map(json.loads, open(parked)))
-checks = [line['content'].split('\n')[0] for line in lines if line.get('_scramjet_probe')]
-assert checks == ['Scramjet status check for `flow:step`.'], checks
-states = [(line['command'], line.get('state')) for line in lines if line.get('type') == 'command_state']
-assert states == [('flow:step', None), ('flow:step', 'parked'), ('flow:step', None), (None, None)], states
+checks = [line['content'] for line in lines if line.get('_scramjet_probe')]
+assert [check.split('`')[1] for check in checks] == ['/flow:step'], checks
+states = [line['command'] for line in lines if line.get('type') == 'command_state']
+assert states == ['flow:step', None], states
 fake_home = os.path.join(work, 'home')
 os.makedirs(fake_home)
 with open(os.path.join(fake_home, '.netrc'), 'w') as file:
@@ -2243,7 +2280,7 @@ def fullscreen_queue(read, until, send, output):
     send(b'after that\x1b\r')
     on_screen('Follow-up: after that')
     on_screen('Followed.')
-    # The command's status check, as its turn ended without a report.
+    # The command's status check, as its turn ended without a report; the model reports there.
     rows = on_screen('[4 requests')
     text = '\n'.join(rows)
     assert (text.index('> steer this') < text.index('> /demo:greet Ann\n\u2026 (sent as 5 lines')
@@ -2535,7 +2572,7 @@ run([], fullscreen_queue, serve_items([
     [tool_call('call_1', 'bash', {'command': 'echo started; sleep 2'})],
     [message('Steered.')],
     [message('Followed.')],
-    [message('Checked.')],
+    [message('Checked.'), report('call_3')],
     [tool_call('call_2', 'bash', {'command': 'sleep 30'})],
 ]))
 (queued,) = set(session_files()) - known

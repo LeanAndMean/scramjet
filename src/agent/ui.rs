@@ -61,7 +61,7 @@ pub trait AgentUi {
     /// is asked to approve, shown before its options or, in a resumed conversation, before a
     /// question's answer.
     fn question(&mut self, message: &str);
-    /// Something Scramjet would notify the user of, such as a command reported blocked.
+    /// Something to tell the user, such as a command waiting for them.
     fn notice(&mut self, text: &str);
     /// Scramjet's record of the next step chosen after a command completed, or of the list
     /// dismissed, as `Agent::record_next_step` returns it.

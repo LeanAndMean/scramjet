@@ -5,13 +5,13 @@ use serde_json::{Value, json};
 
 pub const NAME: &str = "get_scramjet_user_input";
 
-/// Scramjet's `promptSnippet`, listed under the available tools.
-pub(super) const SNIPPET: &str = "You have access to `get_scramjet_user_input` for requesting \
-structured user input mid-turn (confirm, select, or freetext). Confirm/select block until the user \
-responds and return their answer as the tool result; freetext terminates the turn so the user \
-replies in the standard editor. Prompt messages remain visible in the tool row/result history; \
-select results also show the available options. State surrounding context in prose before \
-calling the tool when the user needs that context to answer.";
+/// Listed under the available tools.
+pub(super) const SNIPPET: &str = "You have access to `get_scramjet_user_input` for asking the \
+user something mid-turn: confirm (yes/no) and select (one of your options) return their answer \
+as the tool result; freetext ends the turn, and they reply in the editor. During a Scramjet \
+command, ask through this tool rather than with a question in prose, which gets a status check \
+instead of an answer. The question stays visible in the tool row; give the context it needs in \
+its message or in prose just before.";
 
 pub(super) fn definition() -> Value {
     let kind = |value: &str| json!({"const": value, "type": "string"});
@@ -24,7 +24,10 @@ by freetext.",
         "parameters":{"type":"object","properties":{
             "type":{"anyOf":[kind("confirm"),kind("select"),kind("freetext")],
                 "description":"The interaction type: confirm, select, or freetext."},
-            "message":{"type":"string","description":"The question or prompt to show the user."},
+            "message":{"type":"string","description":"What you are asking, with what someone \
+who has not followed your work needs to answer it: the situation, why you need their input, and \
+what they could do, even if you are unsure (say so). Markdown renders. If you gave that context \
+in prose just before, the question alone will do."},
             "options":{"type":"array","description":"Required for select type. The list of options to present.",
                 "items":{"type":"object","properties":{
                     "value":{"type":"string"},"label":{"type":"string"},"description":{"type":"string"}},
@@ -132,7 +135,7 @@ and 'label'."
 
     /// What the model receives for the user's choice (`None`: cancelled), and whether the turn
     /// ends there, as Scramjet ends it after a freetext question or a cancelled one. `parked`:
-    /// a freetext question parked the active command for the reply.
+    /// a freetext question left the active command waiting for the reply.
     pub fn answer(&self, chosen: Option<usize>, parked: bool) -> (String, bool) {
         let (answer, ends) = match (&self.kind, chosen) {
             (Kind::Freetext, _) => (json!({ "parked": parked }), true),
@@ -165,7 +168,7 @@ pub fn shown(arguments: &Value, output: &str) -> Option<(String, String)> {
     };
     let text = match question.kind {
         Kind::Freetext if answer.get("parked").is_some() => match answer["parked"] == true {
-            true => "Parked for reply".to_owned(),
+            true => "Waiting for your reply".to_owned(),
             false => "Reply at the prompt".to_owned(),
         },
         Kind::Freetext => return None,
@@ -270,7 +273,10 @@ mod tests {
         assert_eq!((reply.as_str(), ends), (r#"{"parked":false}"#, true));
         assert_eq!(shown(&freetext, &reply).unwrap().1, "Reply at the prompt");
         let (parked, _) = Question::parse(&freetext).unwrap().answer(None, true);
-        assert_eq!(shown(&freetext, &parked).unwrap().1, "Parked for reply");
+        assert_eq!(
+            shown(&freetext, &parked).unwrap().1,
+            "Waiting for your reply"
+        );
         // An error result is shown as it is.
         assert_eq!(shown(&json!({"type":"confirm"}), "Validation error"), None);
         assert_eq!(shown(&confirm, "UI interaction failed"), None);

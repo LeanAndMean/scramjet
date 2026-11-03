@@ -1,11 +1,14 @@
-//! Scramjet's command lifecycle: a command a prompt runs stays active until the model reports
-//! it with `report_scramjet_command_status`; a turn that ends without a report gets Scramjet's
-//! status check; a completed command offers its next steps, which its `next:` policy and the
-//! `autonomy.yaml` edges route. As Scramjet's `lifecycle.ts`, `command-status.ts`,
-//! `next-step.ts`, `commands/validator.ts` and `auto-continue.ts` do.
+//! The command lifecycle (`docs/DESIGN.md`): a command a prompt starts keeps going until the
+//! model reports it `completed`, the user confirms abandoning it, or the user starts another
+//! command or types an unknown slash command. Any other stop leaves it waiting for the user, whose
+//! next message resumes it. A reply that ends without a report gets a status check, at most
+//! `CHECK_LIMIT` in a row without the user's input. A completed command offers its next steps,
+//! which its `next:` policy and the `autonomy.yaml` edges route, as Scramjet's `next-step.ts`,
+//! `commands/validator.ts` and `auto-continue.ts` do.
 
 use super::autonomy::{Edge, Edges};
 use super::commands::{Candidate, Commands, Policy};
+use super::question::Choice;
 use serde_json::{Value, json};
 
 pub const NAME: &str = "report_scramjet_command_status";
@@ -14,53 +17,43 @@ pub const NAME: &str = "report_scramjet_command_status";
 /// a next-step choice in the conversation, which the model sees.
 pub(super) const RECORD: &str = "scramjet_next_step_selection";
 
-/// Scramjet's `promptSnippet`, listed under the available tools.
-pub(super) const SNIPPET: &str = "You have access to `report_scramjet_command_status` for \
-reporting the status of an active Scramjet slash command. Summarize the work you performed first, \
-then give the status — the summary is your evidence, the status is your assessment of it. Once the \
-command's work is done and your final user-facing answer has been delivered, you may report a \
-terminal status (`completed`, `blocked`, or `incomplete`) inline — always deliver the complete \
-answer first, because reporting ends the turn. If you do not report inline, Scramjet sends a \
-status-check message as a fallback; respond to it with this tool. Do not call this tool for \
-ordinary user tasks.";
+/// Listed under the available tools.
+pub(super) const SNIPPET: &str = "You have access to `report_scramjet_command_status` for ending \
+an active Scramjet command. A command keeps running until its part is over: keep working while \
+there is more you can do, and ask the user with `get_scramjet_user_input` when you need something \
+from them. When its part is over, deliver your complete answer, then report `completed` with a \
+summary of the work; reporting ends the turn. If the user wants to stop before then, report \
+`abandoned`, as the only tool call in its response: the user reads your summary and confirms. A \
+response that ends without either gets a status check. Do not call this tool for ordinary user \
+tasks.";
 
-/// How often the model may say `continuing` to status checks before it must report.
-const CONTINUE_LIMIT: u32 = 3;
+/// How many status checks in a row, without the user's input, before the command waits for them.
+const CHECK_LIMIT: u32 = 3;
 
-const NO_ACTIVE_COMMAND_ERROR: &str = "report_scramjet_command_status is not active right now — \
-no Scramjet command is running. Use it only during an active Scramjet slash command: report a \
-terminal status inline once the command's work is done and the final answer is delivered, or in \
-response to Scramjet's status-check message. Do not call this tool for ordinary tasks.";
-const PARKED_ERROR: &str = "report_scramjet_command_status cannot accept a report right now: the \
-command is parked waiting for user input. Wait for the user's reply before reporting.";
-const ALREADY_REPORTED_ERROR: &str = "report_scramjet_command_status cannot accept a report right \
-now: a status report was already filed for this command. Do not call this tool again.";
-const CONTINUING_OUT_OF_PHASE_ERROR: &str = "report_scramjet_command_status cannot accept \
-\"continuing\" right now — it is only valid in response to Scramjet's status-check message or \
-while the command is dormant. Keep working, or report a terminal status (completed, blocked, \
-incomplete) once the work is done.";
-const CONTINUING: &str = "Continuing. Proceed with your work.";
+const NO_ACTIVE_COMMAND: &str = "No Scramjet command is running, so there is nothing to report. \
+Use this tool only to end an active Scramjet command.";
+const ALREADY_REPORTED: &str = "This command was already reported completed. Do not call this \
+tool again.";
 
 pub(super) fn definition() -> Value {
     let status = |value: &str| json!({"const": value, "type": "string"});
     json!({"type":"function","name":NAME,"strict":false,
-        "description":"Report the status of an active Scramjet slash command. Summarize the work \
-performed first, then give the status. Terminal statuses (completed, blocked, incomplete) may be \
-reported inline once the command's work is done and the final user-facing answer has been \
-delivered, or in response to Scramjet's status-check message. Do not call this tool for ordinary \
-user tasks.",
+        "description":"End the active Scramjet command with a summary of its work: `completed` \
+when this command's part is over and your final answer is delivered, `abandoned` when the user \
+wants to stop before then (they confirm first, and no next step runs). Do not call this tool for \
+ordinary user tasks.",
         "parameters":{"type":"object","properties":{
             "summary":{"type":"string","minLength":1,"pattern":"\\S",
-                "description":"A summary of the work you completed. On your first report, \
-summarize the work done so far; on each later report, summarize only the work completed since \
-your previous report."},
-            "status":{"anyOf":[status("completed"),status("blocked"),status("incomplete"),
-                    status("continuing")],
-                "description":"completed = the command's work is done and your final \
-user-facing answer was already delivered; continuing = you have more work to do right now (not \
-blocked, not waiting for input, not finished); blocked = the command cannot proceed (error, \
-missing dependency, authorization); incomplete = none of the above (stopped without a clean \
-completion/question/blocker)."},
+                "description":"What the command did. For `abandoned`, the user reads it before \
+confirming: cover the whole command (what was done, what remains and why stop), the essentials \
+first."},
+            "status":{"anyOf":[status("completed"),status("abandoned")],
+                "description":"completed = this command's part is over and your final answer was \
+delivered. It does not mean the overall task succeeded: never claim a success that did not \
+happen, and offer only next steps that fit what actually happened. abandoned = the user wants to \
+stop before this command's part is over; they confirm after reading your summary, and no next \
+step runs, not even a forced one. There is no status for going on: keep working, or ask the user \
+with get_scramjet_user_input."},
             "next_steps":{"type":"array",
                 "description":"Ordered next-step candidates for completed commands. Omit \
 entirely to stop the chain. Each entry is a suggested next message; entries may reuse the same \
@@ -82,23 +75,6 @@ option."}},
           "required":["summary","status"]}})
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Status {
-    Completed,
-    Blocked,
-    Incomplete,
-}
-
-impl Status {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::Blocked => "blocked",
-            Self::Incomplete => "incomplete",
-        }
-    }
-}
-
 /// A next step the model offers: a message to send, a slash command or text.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Offered {
@@ -107,40 +83,78 @@ pub(super) struct Offered {
     reason: Option<String>,
 }
 
-/// A terminal report.
+/// A completion report's next steps.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Report {
-    status: Status,
-    summary: String,
     next_steps: Vec<Offered>,
     recommended: Option<usize>,
 }
 
-/// Where an active command is, as Scramjet's lifecycle modes.
+/// Where an active command is.
 #[derive(Clone, Debug, PartialEq)]
 enum Phase {
-    /// Working; the status check is due when the turn ends.
-    Running {
-        continues: u32,
-    },
-    /// The status check was sent.
-    Probing {
-        continues: u32,
-    },
-    /// Waiting for the user's reply to a freetext question.
-    Parked,
-    /// Started but not running: nothing is checked until the model reports. `resumable`: a
-    /// question was cancelled, so the user's next reply resumes it.
-    Dormant {
-        resumable: bool,
-    },
-    Reported(Report),
+    /// Working: a reply that ends without a report gets a status check. `checks`: those sent
+    /// since the user's last input.
+    Running { checks: u32 },
+    /// Waiting for the user, whose next message resumes it.
+    Waiting,
+    /// Reported completed: its next steps are routed when the turn ends.
+    Completed(Report),
 }
 
 /// The active command and where it is.
 #[derive(Debug, Default)]
 pub(super) struct Lifecycle {
     active: Option<(String, Phase)>,
+}
+
+/// What a prompt is to the active command.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Prompt<'a> {
+    /// It runs this command, which replaces the active one.
+    Command(&'a str),
+    /// The user's reply: text, or a skill.
+    Reply,
+    /// A slash command that is neither a command nor a skill, which leaves the active command.
+    Unknown,
+}
+
+/// What a `report_scramjet_command_status` call does.
+#[derive(Debug, PartialEq)]
+pub(super) enum Reported {
+    /// What the model receives, whether it failed, and whether the turn ends with it.
+    Answer(String, bool, bool),
+    /// The model asks to abandon the active command; `Lifecycle::abandon` takes the user's
+    /// answer.
+    Abandon(Abandon),
+}
+
+/// A request to abandon a command, for the user to confirm.
+#[derive(Debug, PartialEq)]
+pub(super) struct Abandon {
+    command: String,
+    summary: String,
+}
+
+impl Abandon {
+    /// The question's title, over `choices`.
+    pub fn title(&self) -> String {
+        format!("Abandon /{}?", self.command)
+    }
+
+    /// Shown before the choices: the model's summary and what abandoning does.
+    pub fn message(&self) -> String {
+        format!(
+            "{}\n\nAbandoning ends `/{}` now. No next step will run.",
+            self.summary.trim(),
+            self.command
+        )
+    }
+
+    /// Abandon, then keep working, which is selected at first.
+    pub fn choices() -> [Choice; 2] {
+        ["Abandon", "Keep working"].map(Choice::plain)
+    }
 }
 
 /// What follows a turn.
@@ -163,35 +177,19 @@ pub struct Completed {
 }
 
 impl Lifecycle {
-    /// The session line that keeps the active command for a resume, as Scramjet's journal keeps
-    /// what it rebuilds its lifecycle from: the command (`null`: none) and, when the user's next
-    /// reply resumes it, `state`: `parked` (a freetext question waits for the reply) or
-    /// `resumable` (a question was cancelled). A completion is saved when its turn ends, as
-    /// Scramjet records a report then.
+    /// The session line that keeps the active command (`null`: none) for a resume. A completion
+    /// is saved when its turn ends, as Scramjet records a report then.
     pub fn saved(&self) -> Value {
-        let Some((name, phase)) = &self.active else {
-            return json!({"type":"command_state","command":null});
-        };
-        let mut line = json!({"type":"command_state","command":name});
-        match phase {
-            Phase::Parked => line["state"] = json!("parked"),
-            Phase::Dormant { resumable: true } => line["state"] = json!("resumable"),
-            _ => {}
-        }
-        line
+        json!({"type":"command_state","command":self.active()})
     }
 
-    /// The lifecycle a session's `saved` line leaves: as Scramjet rebuilds it, a command that
-    /// was working is dormant.
+    /// The lifecycle a session's `saved` line leaves: its command waits for the user, as do
+    /// those of older lines, whatever `state` they name (`parked`, `resumable` or none, which
+    /// was dormant).
     pub fn restored(saved: Option<&Value>) -> Self {
         let active = saved.and_then(|line| {
             let name = line["command"].as_str().filter(|name| !name.is_empty())?;
-            let phase = match line["state"].as_str() {
-                Some("parked") => Phase::Parked,
-                Some("resumable") => Phase::Dormant { resumable: true },
-                _ => Phase::Dormant { resumable: false },
-            };
-            Some((name.to_owned(), phase))
+            Some((name.to_owned(), Phase::Waiting))
         });
         Self { active }
     }
@@ -201,99 +199,78 @@ impl Lifecycle {
         self.active.as_ref().map(|(name, _)| name.as_str())
     }
 
-    /// Before a prompt is sent: a prompt running `command` starts it; as in Scramjet, a reply
-    /// resumes a command parked for it or whose question was cancelled, and a `/` prompt that
-    /// names no command ends the active one.
-    pub fn prompted(&mut self, prompt: &str, command: Option<&str>) {
-        if let Some(name) = command {
-            self.active = Some((name.to_owned(), Phase::Running { continues: 0 }));
-            return;
-        }
-        if prompt.starts_with('/') {
-            self.active = None;
-            return;
-        }
-        if let Some((_, phase)) = &mut self.active
-            && matches!(phase, Phase::Parked | Phase::Dormant { resumable: true })
-        {
-            *phase = Phase::Running { continues: 0 };
+    /// Before a prompt is sent, typed or queued.
+    pub fn prompted(&mut self, prompt: Prompt) {
+        match prompt {
+            Prompt::Command(name) => {
+                self.active = Some((name.to_owned(), Phase::Running { checks: 0 }));
+            }
+            Prompt::Unknown => self.active = None,
+            Prompt::Reply => self.answered(),
         }
     }
 
-    /// A freetext question parks the active command for the user's reply; whether one did.
-    pub fn park(&mut self) -> bool {
+    /// The user answered: a waiting command resumes, and status checks count from none again.
+    /// A completion stands.
+    pub fn answered(&mut self) {
+        if let Some((_, phase)) = &mut self.active
+            && !matches!(phase, Phase::Completed(_))
+        {
+            *phase = Phase::Running { checks: 0 };
+        }
+    }
+
+    /// A question ends the turn for the user (a freetext question, or one they dismissed): the
+    /// active command waits for them, and a report it made is dropped. Whether one is active.
+    pub fn wait(&mut self) -> bool {
         match &mut self.active {
             Some((_, phase)) => {
-                *phase = Phase::Parked;
+                *phase = Phase::Waiting;
                 true
             }
             None => false,
         }
     }
 
-    /// A cancelled question leaves the active command for the user's next reply to resume.
-    pub fn question_cancelled(&mut self) {
-        if let Some((_, phase)) = &mut self.active
-            && !matches!(phase, Phase::Reported(_))
-        {
-            *phase = Phase::Dormant { resumable: true };
-        }
-    }
-
-    /// The turn was cancelled: the command waits, and a report it made is dropped.
-    pub fn cancelled(&mut self) -> Option<String> {
+    /// The turn was cancelled or failed: as `wait`, returning what to tell the user.
+    pub fn interrupted(&mut self) -> Option<String> {
         let (name, phase) = self.active.as_mut()?;
-        let notice = match phase {
-            Phase::Reported(report) => Some(format!(
-                "scramjet: aborted — discarding \"{}\" status report for {name}",
-                report.status.name()
-            )),
-            _ => None,
+        let dropped = match phase {
+            Phase::Completed(_) => "; its completed report was dropped",
+            _ => "",
         };
-        *phase = Phase::Dormant { resumable: false };
-        notice
+        *phase = Phase::Waiting;
+        Some(format!(
+            "/{name} is waiting for you{dropped}. Reply to continue."
+        ))
     }
 
-    /// Runs a `report_scramjet_command_status` call: what the model receives, whether it
-    /// failed, and whether the turn ends with it.
-    pub fn report(&mut self, arguments: &Value) -> (String, bool, bool) {
-        let (summary, status) = match validate(arguments) {
+    /// Runs a `report_scramjet_command_status` call.
+    pub fn report(&mut self, arguments: &Value) -> Reported {
+        let (summary, abandon) = match validate(arguments) {
             Ok(valid) => valid,
-            Err(errors) => {
-                let received = serde_json::to_string_pretty(arguments).unwrap_or_default();
-                let text = format!(
-                    "Validation failed for tool \"{NAME}\":\n{errors}\n\nReceived arguments:\n{received}"
-                );
-                return (text, true, false);
-            }
+            Err(text) => return Reported::Answer(text, true, false),
         };
-        let Some((_, phase)) = &mut self.active else {
-            return (NO_ACTIVE_COMMAND_ERROR.into(), false, false);
-        };
-        let Some(status) = status else {
-            let text = match phase {
-                Phase::Probing { continues } if *continues >= CONTINUE_LIMIT => format!(
-                    "You have reported \"continuing\" {CONTINUE_LIMIT} times without completing \
-the command. Report your actual status: completed, blocked, or incomplete."
-                ),
-                Phase::Probing { continues } => {
-                    *phase = Phase::Running {
-                        continues: *continues + 1,
-                    };
-                    CONTINUING.into()
-                }
-                Phase::Dormant { .. } => {
-                    *phase = Phase::Running { continues: 0 };
-                    CONTINUING.into()
-                }
-                _ => CONTINUING_OUT_OF_PHASE_ERROR.into(),
-            };
-            return (text, false, false);
+        let Some((name, phase)) = &mut self.active else {
+            return Reported::Answer(NO_ACTIVE_COMMAND.into(), false, false);
         };
         match phase {
-            Phase::Parked => return (PARKED_ERROR.into(), false, false),
-            Phase::Reported(_) => return (ALREADY_REPORTED_ERROR.into(), false, false),
-            _ => {}
+            Phase::Waiting => {
+                let text = format!(
+                    "/{name} is waiting for the user's reply. Report only once they have answered."
+                );
+                return Reported::Answer(text, false, false);
+            }
+            Phase::Completed(_) => {
+                return Reported::Answer(ALREADY_REPORTED.into(), false, false);
+            }
+            Phase::Running { .. } => {}
+        }
+        if abandon {
+            return Reported::Abandon(Abandon {
+                command: name.clone(),
+                summary: summary.to_owned(),
+            });
         }
         let next_steps: Vec<Offered> = arguments["next_steps"]
             .as_array()
@@ -312,18 +289,43 @@ the command. Report your actual status: completed, blocked, or incomplete."
             Some(index) => next_steps.get(index),
             None => next_steps.first(),
         };
-        let next = next.filter(|step| parse_slash(&step.message).is_some());
-        let text = match next.filter(|_| status == Status::Completed) {
+        let text = match next.filter(|step| parse_slash(&step.message).is_some()) {
             Some(step) => format!("→ {}", step.message.trim()),
-            None => format!("status: {}", status.name()),
+            None => "status: completed".to_owned(),
         };
-        *phase = Phase::Reported(Report {
-            status,
-            summary: summary.to_owned(),
+        *phase = Phase::Completed(Report {
             next_steps,
             recommended,
         });
-        (text, false, true)
+        Reported::Answer(text, false, true)
+    }
+
+    /// The user's answer to `Abandon` (its `choices`; `None`: dismissed): what the model
+    /// receives, whether it failed, and whether the turn ends with it.
+    pub fn abandon(&mut self, abandon: &Abandon, chosen: Option<usize>) -> (String, bool, bool) {
+        let command = &abandon.command;
+        match chosen {
+            Some(0) => {
+                self.active = None;
+                let text = format!(
+                    "The user confirmed: /{command} is abandoned, and no next step will run."
+                );
+                (text, false, true)
+            }
+            Some(_) => {
+                self.answered();
+                let text =
+                    format!("The user chose to keep /{command} running: go on with its work.");
+                (text, false, false)
+            }
+            None => {
+                self.wait();
+                let text = format!(
+                    "The user dismissed the question: /{command} is waiting for their reply."
+                );
+                (text, false, true)
+            }
+        }
     }
 
     /// After a turn: what follows it; `autopilot` as `/autopilot` is, which the status check
@@ -333,20 +335,19 @@ the command. Report your actual status: completed, blocked, or incomplete."
             return Ended::Nothing;
         };
         match phase {
-            Phase::Running { continues } => {
+            Phase::Running { checks } if *checks >= CHECK_LIMIT => {
+                *phase = Phase::Waiting;
+                Ended::Notice(format!(
+                    "/{name} is waiting for you: it was checked on {CHECK_LIMIT} times in a row \
+and did not finish or ask you anything. Reply to continue."
+                ))
+            }
+            Phase::Running { checks } => {
+                *checks += 1;
                 let policy = commands.get(name).and_then(|command| command.next.as_ref());
-                let probe = probe_message(policy, name, autopilot);
-                *phase = Phase::Probing {
-                    continues: *continues,
-                };
-                Ended::Probe(probe)
+                Ended::Probe(probe_message(policy, name, autopilot))
             }
-            // As in Scramjet, a status check left unanswered pauses the command.
-            Phase::Probing { .. } => {
-                *phase = Phase::Dormant { resumable: false };
-                Ended::Nothing
-            }
-            Phase::Reported(report) if report.status == Status::Completed => {
+            Phase::Completed(report) => {
                 let completed = Completed {
                     command: name.clone(),
                     report: report.clone(),
@@ -354,62 +355,34 @@ the command. Report your actual status: completed, blocked, or incomplete."
                 self.active = None;
                 Ended::Completed(completed)
             }
-            Phase::Reported(report) => {
-                let notice = (report.status == Status::Blocked).then(|| {
-                    format!(
-                        "scramjet: command blocked — {}",
-                        clean_notice(&report.summary)
-                    )
-                });
-                *phase = Phase::Dormant { resumable: false };
-                notice.map_or(Ended::Nothing, Ended::Notice)
-            }
-            Phase::Parked | Phase::Dormant { .. } => Ended::Nothing,
+            Phase::Waiting => Ended::Nothing,
         }
-    }
-
-    /// Scramjet's system prompt section for a dormant command.
-    pub fn dormant_notice(&self) -> Option<String> {
-        let Some((name, Phase::Dormant { resumable })) = &self.active else {
-            return None;
-        };
-        let terminal = "If the work is already done, report a terminal status directly \
-(`status: \"completed\"`, `\"blocked\"`, or `\"incomplete\"`).";
-        let notice = if *resumable {
-            format!(
-                "The command `{name}` is dormant — it started but is not currently active.\n\
-The next interactive non-slash user reply will resume it because structured input was cancelled. \
-Continue the command work after that reply without first reporting `continuing`.\n{terminal}"
-            )
-        } else {
-            format!(
-                "The command `{name}` is dormant — it started but is not currently active.\n\
-Ordinary user replies do NOT auto-resume a dormant command.\n\
-You have two options:\n\
-- Before resuming work, first call `report_scramjet_command_status` with `status: \"continuing\"`.\n\
-- {terminal}\n\
-Both paths are accepted from dormant state."
-            )
-        };
-        Some(format!("\n\n# Dormant Scramjet Command\n\n{notice}"))
     }
 }
 
-/// The summary and the terminal status (`None`: continuing), or the schema errors, as Pi lists
-/// them.
-fn validate(arguments: &Value) -> Result<(&str, Option<Status>), String> {
+/// The summary and whether the call abandons the command, or what the model receives: the
+/// schema errors, as Pi lists them, or why a status of Scramjet's is not one here.
+fn validate(arguments: &Value) -> Result<(&str, bool), String> {
+    let refused = |status: &str| {
+        format!(
+            "`{status}` is not a status a command reports. While the command runs: if there is \
+more you can do, keep working; if you need something from the user, ask with \
+`get_scramjet_user_input`, explaining the situation; when this command's part is over, report \
+`completed`, even if the task did not succeed; if the user wants to stop before then, report \
+`abandoned`, and they are asked to confirm."
+        )
+    };
     let mut errors = Vec::new();
     let summary = arguments["summary"].as_str().unwrap_or_default();
     if summary.trim().is_empty() {
         errors.push("  - summary: must be a non-empty string with a non-blank character");
     }
-    let status = match arguments["status"].as_str() {
-        Some("completed") => Some(Some(Status::Completed)),
-        Some("blocked") => Some(Some(Status::Blocked)),
-        Some("incomplete") => Some(Some(Status::Incomplete)),
-        Some("continuing") => Some(None),
+    let abandon = match arguments["status"].as_str() {
+        Some("completed") => Some(false),
+        Some("abandoned") => Some(true),
+        Some(status @ ("blocked" | "incomplete" | "continuing")) => return Err(refused(status)),
         _ => {
-            errors.push("  - status: must be one of completed, blocked, incomplete or continuing");
+            errors.push("  - status: must be completed or abandoned");
             None
         }
     };
@@ -434,9 +407,15 @@ fresh_session and an optional string reason",
     if !recommended.is_null() && !recommended.is_u64() {
         errors.push("  - recommended_next_step: must be an integer of at least 0");
     }
-    match (errors.is_empty(), status) {
-        (true, Some(status)) => Ok((summary, status)),
-        _ => Err(errors.join("\n")),
+    match (errors.is_empty(), abandon) {
+        (true, Some(abandon)) => Ok((summary, abandon)),
+        _ => {
+            let received = serde_json::to_string_pretty(arguments).unwrap_or_default();
+            Err(format!(
+                "Validation failed for tool \"{NAME}\":\n{}\n\nReceived arguments:\n{received}",
+                errors.join("\n")
+            ))
+        }
     }
 }
 
@@ -580,26 +559,25 @@ fn escape_close_tag(text: &str) -> String {
     out
 }
 
-/// Scramjet's status check, sent as a hidden message when a command's turn ends without a report.
+/// The status check, sent as a hidden message when a command's reply ends without a report:
+/// keep working, ask or finish, then Scramjet's description of the command's next-step policy.
 fn probe_message(policy: Option<&Policy>, command: &str, autopilot: bool) -> String {
     let id = escape_close_tag(command);
     let preamble = format!(
-        "Scramjet status check for `{id}`.\n\n\
-Choose one route — do not write prose unless you continue command work after user input.\n\n\
-`report_scramjet_command_status` — summarize the work you performed, then report your status, \
-then stop the probe turn. The `summary` is your evidence and comes first; the `status` is your \
-assessment of it. Summarize only the work completed since your previous report (or all of it on \
-your first report):\n\
-- `continuing` — you have more work to do (not blocked, not waiting for input, not finished)\n\
-- `completed` — the command's work is done and your answer was already delivered\n\
-- `blocked` — cannot proceed (error, missing dependency, authorization)\n\
-- `incomplete` — stopped without clean completion\n\n\
-`get_scramjet_user_input` — if you need user input before continuing:\n\
-- successful `confirm`/`select` responses return in this probe turn; continue command work in \
-this turn\n\
-- `freetext` parks the command for the user's standard-editor reply; do not try to continue \
-same-turn\n\
-- cancelled `confirm`/`select` puts the command dormant; do not try to continue same-turn"
+        "Status check for `/{id}`: your last response ended without finishing this command or \
+asking the user anything. Pick one:\n\n\
+- Keep working. If there is more you can do, do it now.\n\
+- Ask the user. If you need something from them, such as a clarification, a decision, permission \
+to change scope or to go on while they are still asking questions, or help with something you \
+cannot do yourself (re-authenticating, installing a system package), call \
+`get_scramjet_user_input`. Explain the situation so that someone without your context understands \
+it, and suggest what they could do, even if you are unsure (say so).\n\
+- Finish. If this command has done its job, call `report_scramjet_command_status` with \
+`completed`. Completed means this command's part is over, not that the overall task succeeded. If \
+you found it cannot succeed and no useful work you are authorized to do would change that, finish \
+honestly: say what happened in your answer, and offer next steps only as the guidance below \
+allows. If the user wants to stop before this command's part is over, report `abandoned` instead; \
+the user is asked to confirm."
     );
     match policy {
         None => format!(
@@ -612,7 +590,6 @@ same-turn\n\
         ),
     }
 }
-
 /// A next step to take: a prompt to send, in a new session or not.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Step {
@@ -1042,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn status_checks_are_scramjets() {
+    fn status_checks_keep_scramjets_next_step_guidance() {
         let reference: Value = serde_json::from_str(include_str!("scramjet_probes.json")).unwrap();
         let candidate = |name: &str, hint: Option<&str>| Candidate {
             name: name.into(),
@@ -1064,6 +1041,13 @@ mod tests {
         let ask = Policy::Ask {
             hint: Some("  Ask them.  ".into()),
         };
+        // What follows the choices, as Scramjet's status check ends.
+        let guidance = |check: &str| {
+            let at = (check.find("\n\n<scramjet-next-step>"))
+                .or(check.find("\n\nThis command has no next-step policy."))
+                .unwrap();
+            check[at..].to_owned()
+        };
         for (key, policy, command) in [
             ("closed", Some(&closed), "rs:loop"),
             ("open", Some(&open), "rs:o"),
@@ -1071,28 +1055,32 @@ mod tests {
             ("ask", Some(&ask), "rs:a"),
             ("none", None, "rs:n"),
         ] {
-            assert_eq!(
-                probe_message(policy, command, false),
-                reference[key],
-                "{key}"
-            );
+            let check = probe_message(policy, command, false);
+            let expected = guidance(reference[key].as_str().unwrap());
+            assert_eq!(guidance(&check), expected, "{key}");
+            assert!(check.starts_with(&format!("Status check for `/{command}`: ")));
+            for choice in ["Keep working.", "Ask the user.", "Finish."] {
+                assert!(check.contains(&format!("\n- {choice} ")), "{key}: {choice}");
+            }
+            let preamble = &check[..check.len() - expected.len()];
+            for gone in ["continuing", "blocked", "incomplete", "dormant", "park"] {
+                assert!(!preamble.contains(gone), "{key}: {gone}");
+            }
         }
     }
 
     #[test]
-    fn a_saved_command_is_restored_as_scramjet_rebuilds_it() {
+    fn a_saved_command_is_restored_waiting_for_the_user() {
         let commands = commands();
-        let restored = |lifecycle: &Lifecycle| Lifecycle::restored(Some(&lifecycle.saved()));
+        let restored = |line: Value| Lifecycle::restored(Some(&line));
         let mut lifecycle = Lifecycle::default();
         assert_eq!(
             lifecycle.saved(),
             json!({"type":"command_state","command":null})
         );
-        assert_eq!(restored(&lifecycle).active, None);
+        assert_eq!(Lifecycle::restored(Some(&lifecycle.saved())).active, None);
         assert_eq!(Lifecycle::restored(None).active, None);
-
-        // Working, checked or reported: dormant once resumed.
-        lifecycle.prompted("/rs:loop", Some("rs:loop"));
+        lifecycle.prompted(Prompt::Command("rs:loop"));
         let started = json!({"type":"command_state","command":"rs:loop"});
         assert_eq!(lifecycle.saved(), started);
         assert!(matches!(
@@ -1100,154 +1088,193 @@ mod tests {
             Ended::Probe(_)
         ));
         assert_eq!(lifecycle.saved(), started);
-        lifecycle.report(&json!({"summary":"Done.","status":"completed"}));
+        let completed = json!({"summary":"Done.","status":"completed"});
+        lifecycle.report(&completed);
         assert_eq!(lifecycle.saved(), started);
-        let mut resumed = restored(&lifecycle);
-        assert!(
-            resumed
-                .dormant_notice()
-                .unwrap()
-                .contains("do NOT auto-resume")
-        );
-        resumed.prompted("go on", None);
-        assert_eq!(resumed.turn_ended(&commands, false), Ended::Nothing);
+
+        // Working, waiting or reported, and older lines' states: waiting, which a reply resumes.
+        let older = ["parked", "resumable", "dormant"]
+            .map(|state| json!({"type":"command_state","command":"rs:loop","state":state}));
+        for line in [lifecycle.saved()].into_iter().chain(older) {
+            let mut resumed = restored(line);
+            assert_eq!(resumed.active(), Some("rs:loop"));
+            assert_eq!(resumed.turn_ended(&commands, false), Ended::Nothing);
+            let Reported::Answer(text, false, false) = resumed.report(&completed) else {
+                panic!("a waiting command took a report");
+            };
+            assert_eq!(
+                text,
+                "/rs:loop is waiting for the user's reply. Report only once they have answered."
+            );
+            resumed.prompted(Prompt::Reply);
+            assert!(matches!(
+                resumed.turn_ended(&commands, false),
+                Ended::Probe(_)
+            ));
+        }
         assert!(matches!(
             lifecycle.turn_ended(&commands, false),
             Ended::Completed(_)
         ));
-        assert_eq!(restored(&lifecycle).active, None);
-
-        // Parked for a reply, or resumable after a cancelled question: the reply resumes it.
-        lifecycle.prompted("/rs:loop", Some("rs:loop"));
-        lifecycle.park();
-        assert_eq!(lifecycle.saved()["state"], "parked");
-        let mut resumed = restored(&lifecycle);
-        assert_eq!(resumed.dormant_notice(), None);
-        resumed.prompted("blue", None);
-        assert!(matches!(
-            resumed.turn_ended(&commands, false),
-            Ended::Probe(_)
-        ));
-        lifecycle.question_cancelled();
-        assert_eq!(lifecycle.saved()["state"], "resumable");
-        let mut resumed = restored(&lifecycle);
-        assert!(resumed.dormant_notice().unwrap().contains("will resume it"));
-        resumed.prompted("blue", None);
-        assert!(matches!(
-            resumed.turn_ended(&commands, false),
-            Ended::Probe(_)
-        ));
+        assert_eq!(restored(lifecycle.saved()).active, None);
     }
 
     #[test]
-    fn reports_follow_scramjets_lifecycle() {
+    fn a_command_runs_until_it_completes_is_abandoned_or_left() {
         let commands = commands();
-        let mut lifecycle = Lifecycle::default();
+        let answer = |text: &str, failed, ends| Reported::Answer(text.to_owned(), failed, ends);
         let completed = json!({"summary":"Did it.","status":"completed"});
-        let continuing = json!({"summary":"More.","status":"continuing"});
-        let error = |text: &str| (text.to_owned(), false, false);
-        assert_eq!(lifecycle.report(&completed), error(NO_ACTIVE_COMMAND_ERROR));
-        lifecycle.prompted("/rs:loop x", Some("rs:loop"));
+        let mut lifecycle = Lifecycle::default();
         assert_eq!(
-            lifecycle.report(&continuing),
-            error(CONTINUING_OUT_OF_PHASE_ERROR)
+            lifecycle.report(&completed),
+            answer(NO_ACTIVE_COMMAND, false, false)
         );
-        let Ended::Probe(check) = lifecycle.turn_ended(&commands, false) else {
-            panic!("no status check");
+
+        // Status checks: at most three in a row without the user's input, then it waits.
+        lifecycle.prompted(Prompt::Command("rs:loop"));
+        let ended = |lifecycle: &mut Lifecycle, count| {
+            (0..count)
+                .map(|_| match lifecycle.turn_ended(&commands, false) {
+                    Ended::Probe(check) => {
+                        let command = lifecycle.active().unwrap();
+                        assert!(check.starts_with(&format!("Status check for `/{command}`: ")));
+                        "check".to_owned()
+                    }
+                    Ended::Notice(notice) => notice,
+                    other => format!("{other:?}"),
+                })
+                .collect::<Vec<_>>()
         };
-        assert!(check.starts_with("Scramjet status check for `rs:loop`."));
-        assert!(check.contains("declares a `closed` next-step policy"));
-        for _ in 0..CONTINUE_LIMIT {
-            assert_eq!(lifecycle.report(&continuing), error(CONTINUING));
-            assert!(matches!(
-                lifecycle.turn_ended(&commands, false),
-                Ended::Probe(_)
-            ));
+        let waiting = "/rs:loop is waiting for you: it was checked on 3 times in a row and did \
+not finish or ask you anything. Reply to continue.";
+        assert_eq!(
+            ended(&mut lifecycle, 5),
+            ["check", "check", "check", waiting, "Nothing"]
+        );
+        // A reply resumes it; the user's input, a reply or an answer, counts the checks again.
+        lifecycle.prompted(Prompt::Reply);
+        assert_eq!(ended(&mut lifecycle, 2), ["check", "check"]);
+        lifecycle.prompted(Prompt::Reply);
+        assert_eq!(ended(&mut lifecycle, 2), ["check", "check"]);
+        lifecycle.answered();
+        assert_eq!(
+            ended(&mut lifecycle, 4),
+            ["check", "check", "check", waiting]
+        );
+
+        // Scramjet's other statuses are refused, as errors, and change nothing.
+        lifecycle.prompted(Prompt::Reply);
+        for status in ["blocked", "incomplete", "continuing"] {
+            let Reported::Answer(text, true, false) =
+                lifecycle.report(&json!({"summary":"Stuck.","status":status}))
+            else {
+                panic!("{status} was not refused");
+            };
+            assert!(text.starts_with(&format!("`{status}` is not a status a command reports.")));
+            assert!(text.contains("keep working") && text.contains("`abandoned`"));
         }
-        let (limit, _, _) = lifecycle.report(&continuing);
-        assert!(limit.starts_with("You have reported \"continuing\" 3 times"));
+        assert_eq!(ended(&mut lifecycle, 1), ["check"]);
+
+        // Completed: its next steps are routed when the turn ends; a reply meanwhile keeps it.
         let with_next = json!({"summary":"Did it.","status":"completed","recommended_next_step":1,
             "next_steps":[{"message":"text","fresh_session":false,"reason":"r"},
                 {"message":" /rs:steer now ","fresh_session":true,"reason":"r"}]});
         assert_eq!(
             lifecycle.report(&with_next),
-            ("→ /rs:steer now".into(), false, true)
+            answer("→ /rs:steer now", false, true)
         );
-        assert_eq!(lifecycle.report(&completed), error(ALREADY_REPORTED_ERROR));
+        assert_eq!(
+            lifecycle.report(&completed),
+            answer(ALREADY_REPORTED, false, false)
+        );
+        lifecycle.prompted(Prompt::Reply);
+        lifecycle.answered();
         assert!(matches!(
             lifecycle.turn_ended(&commands, false),
             Ended::Completed(_)
         ));
         assert_eq!(lifecycle.turn_ended(&commands, false), Ended::Nothing);
 
-        // Blocked: the user is told; the command is dormant until the model says it continues.
-        lifecycle.prompted("/rs:steer", Some("rs:steer"));
-        let blocked = json!({"summary":"Needs\n a  key.","status":"blocked",
-            "next_steps":[{"message":"/rs:loop","fresh_session":false}]});
+        // Abandoned, for the user to confirm: kept running, waiting, or ended without even a
+        // forced next step.
+        lifecycle.prompted(Prompt::Command("rs:forced"));
+        let abandoned = json!({"summary":"Half done.\n","status":"abandoned",
+            "next_steps":[{"message":"/rs:steer","fresh_session":false}]});
+        let Reported::Abandon(abandon) = lifecycle.report(&abandoned) else {
+            panic!("not asked");
+        };
+        assert_eq!(abandon.title(), "Abandon /rs:forced?");
         assert_eq!(
-            lifecycle.report(&blocked),
-            ("status: blocked".into(), false, true)
+            abandon.message(),
+            "Half done.\n\nAbandoning ends `/rs:forced` now. No next step will run."
         );
         assert_eq!(
-            lifecycle.turn_ended(&commands, false),
-            Ended::Notice("scramjet: command blocked — Needs a key.".into())
+            lifecycle.abandon(&abandon, Some(1)),
+            (
+                "The user chose to keep /rs:forced running: go on with its work.".into(),
+                false,
+                false
+            )
         );
-        let notice = lifecycle.dormant_notice().unwrap();
-        assert!(
-            notice
-                .starts_with("\n\n# Dormant Scramjet Command\n\nThe command `rs:steer` is dormant")
+        assert_eq!(ended(&mut lifecycle, 1), ["check"]);
+        assert_eq!(
+            lifecycle.abandon(&abandon, None),
+            (
+                "The user dismissed the question: /rs:forced is waiting for their reply.".into(),
+                false,
+                true
+            )
         );
-        assert!(notice.contains("Ordinary user replies do NOT auto-resume a dormant command."));
-        lifecycle.prompted("why?", None);
         assert_eq!(lifecycle.turn_ended(&commands, false), Ended::Nothing);
-        assert_eq!(lifecycle.report(&continuing), error(CONTINUING));
-        assert_eq!(lifecycle.dormant_notice(), None);
-        assert!(matches!(
-            lifecycle.turn_ended(&commands, false),
-            Ended::Probe(_)
-        ));
-
-        // Parked for a reply, which resumes it.
-        assert!(lifecycle.park());
-        assert_eq!(lifecycle.report(&completed), error(PARKED_ERROR));
-        assert_eq!(lifecycle.turn_ended(&commands, false), Ended::Nothing);
-        lifecycle.prompted("the answer", None);
-        assert!(matches!(
-            lifecycle.turn_ended(&commands, false),
-            Ended::Probe(_)
-        ));
-
-        // A cancelled question: the next reply resumes it; a `/` prompt naming nothing ends it.
-        lifecycle.question_cancelled();
-        assert!(
-            lifecycle
-                .dormant_notice()
-                .unwrap()
-                .contains("will resume it because structured input was cancelled")
+        lifecycle.prompted(Prompt::Reply);
+        assert!(matches!(lifecycle.report(&abandoned), Reported::Abandon(_)));
+        assert_eq!(
+            lifecycle.abandon(&abandon, Some(0)),
+            (
+                "The user confirmed: /rs:forced is abandoned, and no next step will run.".into(),
+                false,
+                true
+            )
         );
-        lifecycle.prompted("go on", None);
-        assert_eq!(lifecycle.dormant_notice(), None);
-        lifecycle.prompted("/unknown", None);
-        assert_eq!(lifecycle.report(&completed), error(NO_ACTIVE_COMMAND_ERROR));
-        assert!(!lifecycle.park());
+        assert_eq!(lifecycle.active(), None);
+        assert_eq!(lifecycle.turn_ended(&commands, false), Ended::Nothing);
 
-        // A cancelled turn drops its report.
-        lifecycle.prompted("/rs:loop", Some("rs:loop"));
+        // A question for the user leaves it waiting, dropping a report; an unknown slash
+        // command leaves it.
+        lifecycle.prompted(Prompt::Command("rs:loop"));
+        lifecycle.report(&completed);
+        assert!(lifecycle.wait());
+        assert_eq!(lifecycle.turn_ended(&commands, false), Ended::Nothing);
+        lifecycle.prompted(Prompt::Unknown);
+        assert_eq!(lifecycle.active(), None);
+        assert!(!lifecycle.wait());
+
+        // A cancelled or failed turn leaves it waiting, dropping a report, and says so.
+        assert_eq!(lifecycle.interrupted(), None);
+        lifecycle.prompted(Prompt::Command("rs:loop"));
+        assert_eq!(
+            lifecycle.interrupted().as_deref(),
+            Some("/rs:loop is waiting for you. Reply to continue.")
+        );
+        lifecycle.prompted(Prompt::Reply);
         lifecycle.report(&completed);
         assert_eq!(
-            lifecycle.cancelled().as_deref(),
-            Some("scramjet: aborted — discarding \"completed\" status report for rs:loop")
+            lifecycle.interrupted().as_deref(),
+            Some(
+                "/rs:loop is waiting for you; its completed report was dropped. Reply to continue."
+            )
         );
-        assert!(lifecycle.dormant_notice().is_some());
+        assert_eq!(lifecycle.turn_ended(&commands, false), Ended::Nothing);
 
         let invalid = json!({"summary":" ","status":"done","next_steps":[{"message":1}],
             "recommended_next_step":-1});
-        let (text, failed, ends) = lifecycle.report(&invalid);
-        assert!(failed && !ends);
+        let Reported::Answer(text, true, false) = lifecycle.report(&invalid) else {
+            panic!("invalid arguments taken");
+        };
         let received = serde_json::to_string_pretty(&invalid).unwrap();
         let errors = [
             "summary: must be a non-empty string with a non-blank character",
-            "status: must be one of completed, blocked, incomplete or continuing",
+            "status: must be completed or abandoned",
             "next_steps: each entry must have a string message, a boolean fresh_session and an \
 optional string reason",
             "recommended_next_step: must be an integer of at least 0",
@@ -1265,11 +1292,14 @@ Received arguments:\n{received}",
 
     fn completed(command: &str, report: Value) -> Completed {
         let mut lifecycle = Lifecycle::default();
-        lifecycle.prompted(&format!("/{command}"), Some(command));
+        lifecycle.prompted(Prompt::Command(command));
         let mut report = report;
         report["summary"] = json!("Done.");
         report["status"] = json!("completed");
-        assert!(lifecycle.report(&report).2);
+        assert!(matches!(
+            lifecycle.report(&report),
+            Reported::Answer(_, false, true)
+        ));
         match lifecycle.turn_ended(&commands(), false) {
             Ended::Completed(completed) => completed,
             other => panic!("{other:?}"),

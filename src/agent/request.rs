@@ -14,10 +14,7 @@ impl Agent {
     pub(super) fn request(&self) -> Value {
         let mut request = json!({
             "model": self.config.model,
-            "instructions": match self.lifecycle.dormant_notice() {
-                Some(notice) => self.instructions.clone() + &notice,
-                None => self.instructions.clone(),
-            },
+            "instructions": self.instructions,
             "input": self.replay_conversation(),
             "tools": tools::definitions(&self.config.tools),
             "tool_choice": "auto",
@@ -391,24 +388,6 @@ response is incomplete; retry the request."});
             matches!(&error, AgentError::Provider(message) if message.starts_with("Insufficient output space for Anthropic thinking")),
             "{error}"
         );
-    }
-
-    /// A streamed Messages reply with these events.
-    fn messages_stream(events: &[Value]) -> Vec<u8> {
-        let body: String = events
-            .iter()
-            .map(|event| {
-                format!(
-                    "event: {}\ndata: {event}\n\n",
-                    event["type"].as_str().unwrap()
-                )
-            })
-            .collect();
-        format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{body}",
-            body.len()
-        )
-        .into_bytes()
     }
 
     #[test]
