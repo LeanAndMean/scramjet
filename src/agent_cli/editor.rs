@@ -1,5 +1,6 @@
 //! Prompt editor for the interactive agent: raw-mode editing, bracketed paste and history.
 
+use super::file_search;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -648,21 +649,57 @@ const SLASH_COMMANDS: [(&str, &str); 9] = [
 
 /// Rows of the completion list, as Scramjet's autocomplete shows at most.
 const COMPLETION_ROWS: usize = 5;
+/// How often the editor looks for the entries an `@` search found, as often as Scramjet waits
+/// before starting one.
+const SEARCH_CHECK: Duration = Duration::from_millis(20);
 
-struct Suggestion {
+pub(super) struct Suggestion {
     /// What replaces the completed text.
-    value: String,
-    label: String,
-    description: String,
+    pub(super) value: String,
+    pub(super) label: String,
+    pub(super) description: String,
 }
 
-/// The list under the prompt that completes a slash command or a path, as Scramjet's editor
-/// does. It replaces the text from `start` to the cursor.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Slash,
+    Path,
+    /// An `@` file reference.
+    File,
+}
+
+/// The list under the prompt that completes a slash command, a path or an `@` file reference,
+/// as Scramjet's editor does. It replaces the text from `start` to the cursor.
 struct Completion {
     start: usize,
-    slash: bool,
+    kind: Kind,
     items: Vec<Suggestion>,
     selected: usize,
+}
+
+/// An `@` search started for the prompt's text and cursor as they were then.
+struct Lookup {
+    search: file_search::Search,
+    text: String,
+    cursor: usize,
+    /// Started by Tab, which puts in a single entry found at once.
+    tab: bool,
+}
+
+impl Lookup {
+    fn start(
+        root: &Path,
+        mention: file_search::Mention,
+        buffer: &Buffer,
+        tab: bool,
+    ) -> Option<Self> {
+        Some(Self {
+            search: file_search::Search::start(root, mention)?,
+            text: buffer.text.clone(),
+            cursor: buffer.cursor,
+            tab,
+        })
+    }
 }
 
 impl Completion {
@@ -695,7 +732,20 @@ impl Completion {
                 }
             })
             .collect();
-        Self::new(0, true, items)
+        Self::new(0, Kind::Slash, items)
+    }
+
+    /// The entries an `@` search found for the text from `start` to the cursor, selecting the
+    /// one that is that text or starts with it, as Scramjet selects its best match.
+    fn found(start: usize, items: Vec<Suggestion>, buffer: &Buffer) -> Option<Self> {
+        let typed = &buffer.text[start..buffer.cursor];
+        let best = items
+            .iter()
+            .position(|item| item.value == typed)
+            .or_else(|| items.iter().position(|item| item.value.starts_with(typed)));
+        let mut list = Self::new(start, Kind::File, items)?;
+        list.selected = best.unwrap_or(0);
+        Some(list)
     }
 
     /// The entries of the directory named by the word before the cursor whose names start with
@@ -741,15 +791,15 @@ impl Completion {
         items.sort_by_cached_key(|(directory, item)| (!directory, item.label.to_lowercase()));
         Self::new(
             start,
-            false,
+            Kind::Path,
             items.into_iter().map(|(_, item)| item).collect(),
         )
     }
 
-    fn new(start: usize, slash: bool, items: Vec<Suggestion>) -> Option<Self> {
+    fn new(start: usize, kind: Kind, items: Vec<Suggestion>) -> Option<Self> {
         (!items.is_empty()).then_some(Self {
             start,
-            slash,
+            kind,
             items,
             selected: 0,
         })
@@ -761,9 +811,30 @@ impl Completion {
     }
 
     fn apply(self, buffer: &mut Buffer) {
-        let value = &self.items[self.selected].value;
-        buffer.text.replace_range(self.start..buffer.cursor, value);
-        buffer.cursor = self.start + value.len();
+        let item = &self.items[self.selected];
+        let value = &item.value;
+        if self.kind != Kind::File {
+            buffer.text.replace_range(self.start..buffer.cursor, value);
+            buffer.cursor = self.start + value.len();
+            return;
+        }
+        // As Scramjet: a file is followed by a space, a directory not, so that its entries can
+        // be looked for next, inside its quotes when quoted, and the quote after the cursor is
+        // the one a quoted entry closes.
+        let directory = item.label.ends_with('/');
+        let closed = value.ends_with('"');
+        let mut end = buffer.cursor;
+        if closed
+            && buffer.text[self.start..buffer.cursor].starts_with("@\"")
+            && buffer.text[end..].starts_with('"')
+        {
+            end += 1;
+        }
+        let suffix = if directory { "" } else { " " };
+        buffer
+            .text
+            .replace_range(self.start..end, &format!("{value}{suffix}"));
+        buffer.cursor = self.start + value.len() + suffix.len() - usize::from(directory && closed);
     }
 
     /// The rows under the prompt, as Scramjet's select list draws them: the selected one
@@ -777,8 +848,12 @@ impl Completion {
             .selected
             .saturating_sub(visible / 2)
             .min(count - visible);
-        let column = self.items.iter().map(|item| item.label.width() + 2).max();
-        let column = column.unwrap_or(0).clamp(12, 32);
+        // Scramjet's commands' column fits their names; other lists' is 32 columns wide.
+        let column = match self.kind {
+            Kind::Slash => self.items.iter().map(|item| item.label.width() + 2).max(),
+            _ => None,
+        };
+        let column = column.map_or(32, |column| column.clamp(12, 32));
         let mut rows: Vec<String> = (top..top + visible)
             .map(|index| {
                 let item = &self.items[index];
@@ -882,12 +957,21 @@ impl Editor {
         let mut note: Option<String> = None;
         let mut dirty = false;
         let mut completion: Option<Completion> = None;
+        let mut lookup: Option<Lookup> = None;
         screen.draw(&buffer, None, &[], false)?;
         loop {
-            let key = match read_key(&mut source, Some(RESIZE_CHECK)) {
+            let wait = if lookup.is_some() {
+                SEARCH_CHECK
+            } else {
+                RESIZE_CHECK
+            };
+            let key = match read_key(&mut source, Some(wait)) {
                 Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Key::EndOfInput,
                 result => result?,
             };
+            if key == Key::Escape {
+                lookup = None;
+            }
             let armed = std::mem::take(&mut exit_armed);
             let noted = note.take();
             let tab = matches!(&key, Key::Text(text) if text == "\t");
@@ -928,7 +1012,7 @@ impl Editor {
                 // As in Scramjet, Enter on a command also submits it.
                 Key::Text(_) | Key::Enter if (tab || key == Key::Enter) && completion.is_some() => {
                     let list = completion.take().expect("checked above");
-                    let submit = list.slash && key == Key::Enter;
+                    let submit = list.kind == Kind::Slash && key == Key::Enter;
                     list.apply(&mut buffer);
                     if submit {
                         buffer.set(buffer.text.trim().to_owned());
@@ -1034,27 +1118,47 @@ impl Editor {
                     return Ok(None);
                 }
                 // Scramjet completes only commands after a `/` that starts the prompt; a path
-                // there is completed when no command matches.
+                // there is completed when no command matches. An `@` word is looked for.
                 Key::Text(_) if tab && !self.dialog => {
                     let before = &buffer.text[..buffer.cursor];
-                    completion = Completion::slash(before, &self.commands)
-                        .or_else(|| Completion::path(before, &self.root));
-                    if let Some(list) =
-                        completion.take_if(|list| list.items.len() == 1 && !list.slash)
-                    {
-                        list.apply(&mut buffer);
+                    completion = Completion::slash(before, &self.commands);
+                    match file_search::Mention::find(before) {
+                        Some(mention) if completion.is_none() => {
+                            lookup = Lookup::start(&self.root, mention, &buffer, true);
+                        }
+                        _ => {
+                            completion =
+                                completion.or_else(|| Completion::path(before, &self.root));
+                            if let Some(list) = completion
+                                .take_if(|list| list.items.len() == 1 && list.kind == Kind::Path)
+                            {
+                                list.apply(&mut buffer);
+                            }
+                        }
                     }
                     true
                 }
                 // A list follows what is typed, a path's while the same word is typed; commands
-                // are listed as soon as a `/` starts the prompt.
+                // are listed as soon as a `/` starts the prompt, entries for an `@` word once
+                // typing pauses, the list before staying until they are found.
                 Key::Text(_) | Key::Backspace if !self.dialog => {
                     buffer.apply(&key);
                     let before = &buffer.text[..buffer.cursor];
-                    completion = match completion.take() {
-                        Some(list) if !list.slash => Completion::path(before, &self.root)
-                            .filter(|next| next.start == list.start),
-                        _ => Completion::slash(before, &self.commands),
+                    completion = match (file_search::Mention::typed(before), completion.take()) {
+                        (Some(mention), list) => {
+                            let kept = list.filter(|list| {
+                                list.kind == Kind::File && list.start == mention.start
+                            });
+                            if !source.pending() {
+                                lookup = Lookup::start(&self.root, mention, &buffer, false);
+                            }
+                            kept
+                        }
+                        (None, Some(list)) if list.kind == Kind::Path => {
+                            Completion::path(before, &self.root)
+                                .filter(|next| next.start == list.start)
+                        }
+                        (None, _) => Completion::slash(before, &self.commands),
                     };
                     true
                 }
@@ -1090,6 +1194,17 @@ impl Editor {
                 }
             };
             dirty |= changed;
+            // A search for the text as it was before an edit or a cursor move finds nothing for
+            // it now.
+            lookup.take_if(|lookup| lookup.text != buffer.text || lookup.cursor != buffer.cursor);
+            if let Some(found) = lookup.as_mut().and_then(|lookup| lookup.search.poll()) {
+                let Lookup { search, tab, .. } = lookup.take().expect("polled");
+                completion = Completion::found(search.mention.start, found, &buffer);
+                if let Some(list) = completion.take_if(|list| tab && list.items.len() == 1) {
+                    list.apply(&mut buffer);
+                }
+                dirty = true;
+            }
             if dirty && !source.pending() {
                 let hint = exit_armed.then_some(EXIT_HINT).or(note.as_deref());
                 let rows = completion
@@ -1538,6 +1653,71 @@ mod tests {
                 .iter()
                 .any(|value| value.starts_with(&format!("~/{name}")))
         );
+    }
+
+    #[test]
+    fn file_references_select_the_best_match_and_are_put_in_as_scramjet_does() {
+        let item = |value: &str, label: &str| Suggestion {
+            value: value.into(),
+            label: label.into(),
+            description: value.trim_start_matches(['@', '"']).into(),
+        };
+        let apply = |text: &str, cursor: usize, start: usize, value: &str, label: &str| {
+            let mut buffer = Buffer {
+                text: text.into(),
+                cursor,
+            };
+            Completion::found(start, vec![item(value, label)], &buffer)
+                .unwrap()
+                .apply(&mut buffer);
+            (buffer.text, buffer.cursor)
+        };
+        // A file gets a space after it, a directory none.
+        assert_eq!(
+            apply("see @edi and", 8, 4, "@src/editor.rs", "editor.rs"),
+            ("see @src/editor.rs  and".into(), 19)
+        );
+        assert_eq!(apply("@sr", 3, 0, "@src/", "src/"), ("@src/".into(), 5));
+        // A quoted directory leaves the cursor inside its quotes, and a quoted entry closes the
+        // quote that follows the cursor.
+        assert_eq!(
+            apply("@\"my", 4, 0, "@\"my dir/\"", "my dir/"),
+            ("@\"my dir/\"".into(), 9)
+        );
+        assert_eq!(
+            apply("@\"my\" x", 4, 0, "@\"my file\"", "my file"),
+            ("@\"my file\"  x".into(), 11)
+        );
+        assert_eq!(
+            apply("@my\"", 3, 0, "@\"my file\"", "my file"),
+            ("@\"my file\" \"".into(), 11)
+        );
+
+        let buffer = Buffer {
+            text: "@src/ed".into(),
+            cursor: 7,
+        };
+        let items = || {
+            vec![
+                item("@lib/edit.rs", "edit.rs"),
+                item("@src/editor.rs", "editor.rs"),
+            ]
+        };
+        let list = Completion::found(0, items(), &buffer).unwrap();
+        assert_eq!(list.selected, 1);
+        assert_eq!(
+            plain(list.rows(60)),
+            [
+                "  edit.rs                         lib/edit.rs",
+                "→ editor.rs                       src/editor.rs",
+            ]
+        );
+        let buffer = Buffer {
+            text: "@xyz".into(),
+            cursor: 4,
+        };
+        assert_eq!(Completion::found(0, items(), &buffer).unwrap().selected, 0);
+        assert!(Completion::found(0, Vec::new(), &buffer).is_none());
     }
 
     #[test]

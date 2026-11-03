@@ -18,7 +18,7 @@ pub use commands::{Command, Commands};
 pub use question::Choice;
 pub use session::{Session, SessionInfo};
 pub use status::{Completed, Next, Routing, Step, record as next_step_record};
-pub use tools::sequence_diff;
+pub use tools::{search_program, sequence_diff};
 
 use client::{ClientError, ModelInfo, Protocol};
 use serde_json::{Value, json};

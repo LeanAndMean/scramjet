@@ -643,7 +643,7 @@ fn with_notices(lines: &[String], mut notices: Vec<String>) -> String {
 
 /// Where `rg` (for `grep`) or `fd` (for `find`) is, as Pi finds them: in Scramjet's `bin`
 /// directory, else on the `PATH` (`fd` also as Debian's `fdfind`).
-pub(super) fn search_program(tool: &str) -> Option<PathBuf> {
+pub fn search_program(tool: &str) -> Option<PathBuf> {
     let (binary, names): (&str, &[&str]) = match tool {
         "grep" => ("rg", &["rg"]),
         _ => ("fd", &["fd", "fdfind"]),

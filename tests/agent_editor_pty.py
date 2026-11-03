@@ -802,6 +802,37 @@ def completes_paths_and_commands(read, until, send, output):
     send(b'/qu\r')
 
 
+def completes_file_references(read, until, send, output):
+    os.makedirs(os.path.join(project, 'references', 'deep'))
+    open(os.path.join(project, 'references', 'deep', 'target-file.rs'), 'w').close()
+    open(os.path.join(project, 'references', 'some notes.md'), 'w').close()
+    mark = until(b'> ')
+    # An `@` word lists the entries fd finds anywhere in the project, with their paths.
+    send(b'look at @target')
+    mark = until('\u2192 target-file.rs'.encode(), mark)
+    mark = until(b'references/deep/', mark)
+    send(b'\t')
+    mark = until(b'> look at @references/deep/target-file.rs ', mark)
+    # A directory is put in without a space, and its entries are looked for next; a name with
+    # a space is quoted.
+    send(b'@refer')
+    mark = until('\u2192 references/'.encode(), mark)
+    send(b'\r')
+    mark = until(b'@references/', mark)
+    send(b'so')
+    mark = until('\u2192 some notes.md'.encode(), mark)
+    send(b'\t')
+    mark = until(b'@"references/some', mark)
+    mark = until(b'notes.md" ', mark)
+    # Typed after `=`, the word is looked for on Tab, and a single entry is put in at once.
+    send(b'\x03x=@target-f')
+    read(.3)
+    assert '\u2192'.encode() not in output[mark:], bytes(output[mark:])
+    send(b'\t')
+    mark = until(b'> x=@references/deep/target-file.rs ', mark)
+    send(b'\x03\x04')
+
+
 def bang_commands(read, until, send, output):
     mark = until(b'> ')
     send(b'!echo hi; exit 3\r')
@@ -1148,6 +1179,7 @@ run(['--retries', '0'], completes_paths_and_commands)
 (completed,) = set(session_files()) - known
 prompts = [item['content'] for item in map(json.loads, open(completed)) if item.get('role') == 'user']
 assert prompts == ['see completion/alpine-file and completion/unique-file'], prompts
+run([], completes_file_references)
 known = set(session_files())
 run([], bang_commands)
 (ran,) = set(session_files()) - known

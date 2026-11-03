@@ -1,5 +1,6 @@
 mod diff;
 mod editor;
+mod file_search;
 mod fuzzy;
 mod job;
 mod markdown;
