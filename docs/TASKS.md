@@ -2,15 +2,23 @@
 
 Pending work only (`CLAUDE.md`). What was done and how it was verified is in the commit messages; product choices awaiting the user's review are `Choice:` trailers in them.
 
-Last steer: 61000c1
+Last steer: 46ad988
 
 ## Current focus
 
-None. `/rs:loop <focus>` records a user-given focus here until it is finished.
+Given by the user in the second `/rs:steer` of 2026-11-03, ahead of the items below; when it is finished, this section goes back to `None`.
+
+**Rebuild the command lifecycle as agreed** ([design](DESIGN.md#agreed-product-shape-2026-11-03)). `src/agent/status.rs` copies Scramjet's lifecycle (f613d48), including the parts Scramjet's issue #638 sets out to remove: `blocked` and `incomplete` ending in `dormant` (and `blocked` dropping its `next_steps`), `continuing` with `CONTINUE_LIMIT`, the dormant notice in the instructions, and a status check telling the model "do not write prose" and to "stop the probe turn" while the `continuing` result tells it to go on. The routing of a completed command's next steps (policies, `autonomy.yaml` edges, autopilot, `/settings`) stays. To do:
+- One resting state, waiting for the user. Escape, a cancelled question, a freetext question, a failed response and the status-check limit all leave the command waiting, and the user's next prompt resumes it (`/skill:` prompts too, which today leave the command). Another command or an unknown slash command leaves it. The session's `command_state` record follows, and older records' dormant, parked and resumable states restore as waiting.
+- The status check after a reply that ends without a report: keep working, ask with `get_scramjet_user_input`, or finish, without `continuing`. At most 3 in a row without the user's input, then the command waits with a notice that says so.
+- `report_scramjet_command_status` takes `completed` and `abandoned`. `abandoned` ends the command with no next step, not even a forced one, and only once the user confirms after reading the summary; declined, the command keeps working, and dismissed, it waits. `blocked`, `incomplete` and `continuing`, which Mach 12's commands still name, are refused with a result that steers the model to keep working, ask or abandon.
+- The tool descriptions, snippets and status-check text written for this, not Scramjet's wording.
+- Cases to cover: a steering message that arrives after a report (Scramjet wedged there, its #364); a reply with neither text nor tool calls (#381); a confirm or select answered during a status check (today the command goes dormant, against what the check says); a failed response (today the lifecycle stays as it was, `src/agent/turn.rs:119`).
+- Reference: #638's plan of 2026-10-30 (`gh issue view 638 --repo LeanAndMean/scramjet --comments`), its user-decided points above all. Build it in scramjet-rs's own turn loop, without Scramjet's settlement races, watchdog and generation guards.
 
 ## Next candidates
 
-Order agreed with the user on 2026-11-03 (`/rs:steer`; [design](DESIGN.md#current-direction-2026-11-03)). Items 1 (how the code is organized), 2 (settings) and 3 (the full screen as the one interactive UI) are done. The small items in 6 fit between larger ones when cheap.
+Order agreed with the user on 2026-11-03 (`/rs:steer`; [design](DESIGN.md#current-direction-2026-11-03)); the command lifecycle (Current focus) goes before them. Items 1 (how the code is organized), 2 (settings) and 3 (the full screen as the one interactive UI) are done. The small items in 6 fit between larger ones when cheap.
 
 4. **Command sets.** Installing by reference (`scramjet-rs install`, `remove`, `list`; `commandSets` in the settings), set-owned agent namespaces and the catalog of set agents are in; Mach 12 and `scramjet` are installed in the user's settings from `~/repos/scramjet/packages/scramjet`. `delegate`, commands' `allowed-tools`, the four publication tools (GitHub through `gh`) with their approval and `autonomy.yaml`/`autonomy-defaults.yaml` policies, and warnings for unknown commands in `autonomy.yaml` are in. `/autopilot` and skills (Pi's locations, the instructions' list, `/skill:<name>`, the `skills` setting) are in. `/reload` is in. Next: perhaps `install -l` into a project's settings (Pi has it; scramjet-rs has no project settings yet). Publications still lack GitLab (Scramjet publishes there through `glab api`, with its draft-title rule and note checks) and Ctrl+O on a publication's call showing its payload, as Scramjet's expanded call does (now the payload shows only in the approval preview, so an auto-approved one shows just its call line and URL).
 5. **One `/settings`** for everything. The settings there are (thinking level, thinking blocks, steering and follow-up messages, Escape twice, leaving a branch, tools, credential stores, autopilot) are in, each changed with Enter and saved at once, and so are the next steps (command autonomy, with the settings a set's `autonomy-defaults.yaml` suggests, applied for this project or all) and publishing (publication approval per command and tool). So is Installed: what the session loaded with each one's source, and its problems, which launch sums up in one line. Next, perhaps: Enter on an Installed row opens its file in `$VISUAL`/`$EDITOR` and reloads after.
@@ -54,6 +62,7 @@ Not scheduled; fix them when they matter.
 For the user, reviewed with `/rs:steer`. None blocks current work.
 
 - Rotating the GitHub Copilot token exposed in the 2026-11-02 practice run is for the user.
+- The `Choice:` trailers of 61000c1..46ad988 (about 70 lines in 30 commits) are not reviewed yet: the user deferred them on 2026-11-03 to steer direction first.
 - The publication tools' writes are verified against scripted `gh` replies only; live, the preflight against GitHub and the approval ran, then were cancelled. A real write needs your permission and a target, e.g. a comment on a scratch issue in a repository of yours.
 
-Resolved 2026-11-03: direction and order (above); credentials become a setting (`unattended` by default); bundled command sets are installed by reference from `~/repos/scramjet`; the 31 earlier choice entries (`git show 5c9b5b8:docs/TASKS.md`) were reviewed one by one: those not listed in items 2–6 stay as they are.
+Resolved 2026-11-03: direction and order (above); credentials become a setting (`unattended` by default); bundled command sets are installed by reference from `~/repos/scramjet`; the 31 earlier choice entries (`git show 5c9b5b8:docs/TASKS.md`) were reviewed one by one: those not listed in items 2–6 stay as they are. Second steer of 2026-11-03: the command lifecycle is rebuilt first (Current focus). Checking Scramjet's open issues before matching a mechanism is not a standing practice, since some are stale.
