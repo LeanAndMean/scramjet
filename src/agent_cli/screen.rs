@@ -365,6 +365,9 @@ impl AgentUi for Link {
     fn user_prompt(&mut self, prompt: &str) {
         self.event(Event::UserPrompt(prompt.to_owned()));
     }
+    fn command_prompt(&mut self, typed: &str, sent: &str) {
+        self.event(Event::CommandPrompt(typed.to_owned(), sent.to_owned()));
+    }
     fn compaction_summary(&mut self, summary: &str) {
         self.event(Event::CompactionSummary(summary.to_owned()));
     }

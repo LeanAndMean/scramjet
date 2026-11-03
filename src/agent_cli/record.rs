@@ -31,6 +31,8 @@ pub(super) enum Event {
     Compacted(Compaction, Option<AutoCompaction>),
     CompactionFailed(String),
     UserPrompt(String),
+    /// A command's prompt as typed, and the text it sent.
+    CommandPrompt(String, String),
     CompactionSummary(String),
     BranchSummary(String),
     Approval(String, Answer),
@@ -153,6 +155,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::Compacted(compaction, automatic) => ui.compacted(compaction, *automatic),
         Event::CompactionFailed(error) => ui.compaction_error(error),
         Event::UserPrompt(prompt) => ui.user_prompt(prompt),
+        Event::CommandPrompt(typed, sent) => ui.command_prompt(typed, sent),
         Event::CompactionSummary(summary) => ui.compaction_summary(summary),
         Event::BranchSummary(summary) => ui.branch_summary(summary),
         Event::Approval(question, answer) => ui.approval(question, *answer),

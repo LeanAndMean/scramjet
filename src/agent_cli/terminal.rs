@@ -711,14 +711,20 @@ impl AgentUi for Terminal {
         self.compaction_error(&error.to_string());
     }
     fn user_prompt(&mut self, prompt: &str) {
-        self.clear();
-        // As the editor left it on screen; output to a pipe is not wrapped.
-        let width = match self.color {
-            true => self.width(),
-            false => usize::MAX,
-        };
-        for row in editor::prompt_rows(prompt, width, self.marked) {
-            self.err(&format!("{row}\n"));
+        self.prompt_rows(prompt);
+        self.err("\n");
+    }
+    /// As typed, and what it sent once results are shown whole.
+    fn command_prompt(&mut self, typed: &str, sent: &str) {
+        self.prompt_rows(typed);
+        let body = command_body(sent);
+        if self.full {
+            let block = self.summary_block(body);
+            self.err(&format!("\n{block}\n"));
+        } else if self.expandable {
+            let lines = body.lines().count();
+            let hint = self.dim(&format!("… (sent as {lines} lines{EXPAND_HINT})"));
+            self.err(&format!("{hint}\n"));
         }
         self.err("\n");
     }
@@ -890,11 +896,31 @@ impl Terminal {
         }
     }
     /// A compaction's summary as Scramjet shows it: dim markdown, wrapped to the terminal.
+    /// Its first lines while tool results are cut, as Scramjet previews a compaction's.
     fn summary_block(&self, summary: &str) -> String {
         let mut markdown = markdown::Markdown::new(self.color, style::SUMMARY);
         let text = markdown.reopen() + &markdown.push(summary.trim_end()) + &markdown.finish();
         let reset = if self.color { style::RESET } else { "" };
-        format!("{}{reset}", self.wrapped(&text))
+        let text = self.wrapped(&text);
+        let rows: Vec<&str> = text.split('\n').collect();
+        if self.full || !self.expandable || rows.len() <= SUMMARY_LINES {
+            return format!("{text}{reset}");
+        }
+        let more = rows.len() - SUMMARY_LINES;
+        let hint = format!("… ({more} more lines, {} total{EXPAND_HINT})", rows.len());
+        let kept = rows[..SUMMARY_LINES].join("\n");
+        format!("{kept}{reset}\n{}", self.dim(&hint))
+    }
+    fn prompt_rows(&mut self, prompt: &str) {
+        self.clear();
+        // As the editor left it on screen; output to a pipe is not wrapped.
+        let width = match self.color {
+            true => self.width(),
+            false => usize::MAX,
+        };
+        for row in editor::prompt_rows(prompt, width, self.marked) {
+            self.err(&format!("{row}\n"));
+        }
     }
     fn ask(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         self.clear();
@@ -963,6 +989,7 @@ const BASH_LINES: usize = 5;
 const COMMAND_LINES: usize = 20;
 const WRITE_LINES: usize = 10;
 const RESULT_LINES: usize = 6;
+const SUMMARY_LINES: usize = 10;
 /// Ends the note about the lines a preview leaves out, as Scramjet's does.
 const EXPAND_HINT: &str = ", Ctrl+O to expand";
 
@@ -971,6 +998,18 @@ enum Shown {
     Last(usize),
     /// Every line, wrapped rather than cut.
     All,
+}
+
+/// What a command sent, without the `<scramjet-command>` tags around it.
+fn command_body(sent: &str) -> &str {
+    let body = sent
+        .strip_prefix("<scramjet-command")
+        .and_then(|rest| rest.split_once(">\n"))
+        .map_or(sent, |(_, body)| body)
+        .trim_end();
+    body.strip_suffix("</scramjet-command>")
+        .unwrap_or(body)
+        .trim_end()
 }
 
 /// A failed command's ending follows its output after a blank line, which is not worth one of
@@ -1101,6 +1140,36 @@ mod tests {
         assert!(!text.contains("more lines") && !text.contains("earlier lines"));
         assert!(at("Counted to 12.").is_some(), "{lines:?}");
         assert!(text.contains(style::REASONING));
+    }
+
+    #[test]
+    fn summaries_and_command_texts_are_cut_until_expanded() {
+        let summary: String = (1..=12).map(|n| format!("Point {n}\n")).collect();
+        let sent = "<scramjet-command name=\"rs:loop\">\n# Build\n\nGo.\n</scramjet-command>";
+        let shown = |full| {
+            let mut ui = Terminal::capture_shown(30, Arc::new(AtomicBool::new(false)), full);
+            ui.command_prompt("/rs:loop", sent);
+            ui.compaction_summary(&summary);
+            ui.branch_summary("Short");
+            let text = ui.captured();
+            let mut plain = String::new();
+            let mut escape = Escape::None;
+            plain.extend(text.chars().filter(|&c| !escape.step(c) && c != FROM));
+            plain
+        };
+        let cut = shown(false);
+        let points: String = (1..=10).map(|n| format!("Point {n}\n")).collect();
+        assert!(cut.starts_with("> /rs:loop\n… (sent as 3 lines, Ctrl+O to expand)\n\n"));
+        assert!(cut.contains(&format!(
+            "{points}… (2 more lines, 12 total, Ctrl+O to expand)\n"
+        )));
+        assert!(cut.ends_with("\n\nShort\n\n"), "{cut:?}");
+        let whole = shown(true);
+        assert!(
+            whole.starts_with("> /rs:loop\n\nBuild\n\nGo.\n\n"),
+            "{whole:?}"
+        );
+        assert!(whole.contains(&summary) && !whole.contains("Ctrl+O"));
     }
 
     #[test]

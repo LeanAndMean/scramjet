@@ -73,6 +73,9 @@ impl AgentUi for Recorder {
     fn user_prompt(&mut self, prompt: &str) {
         self.shown.push(format!("prompt {prompt}"));
     }
+    fn command_prompt(&mut self, typed: &str, sent: &str) {
+        self.shown.push(format!("command {typed} sent {sent}"));
+    }
     fn compaction_summary(&mut self, summary: &str) {
         self.shown.push(format!("summary {summary}"));
     }

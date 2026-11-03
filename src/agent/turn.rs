@@ -1042,7 +1042,8 @@ for trusted repositories.",
         assert_eq!(resumed, prompts);
         let mut shown = Recorder::default();
         show_items(&conversation, &mut shown);
-        assert_eq!(shown.shown[0], format!("prompt {typed}"));
+        assert_eq!(shown.shown[0], format!("command {typed} sent {expansion}"));
+        assert!(shown.shown.contains(&"prompt /sjrstest:other x".to_owned()));
     }
 
     #[test]
@@ -1425,7 +1426,7 @@ be a non-empty array for select type. failed",
         let shown: Vec<_> = replay
             .shown
             .iter()
-            .filter(|s| s.starts_with("prompt "))
+            .filter(|s| s.starts_with("prompt ") || s.starts_with("command "))
             .collect();
         assert_eq!(shown.len(), 5);
         assert_eq!(agent.fork_prompts().unwrap(), prompts);

@@ -233,7 +233,10 @@ impl Interactive {
             }
         }
         if let Some(screen) = &self.screen {
-            screen.event(Event::UserPrompt(prompt.to_owned()));
+            screen.event(match self.agent.commands().expand(prompt) {
+                Some(sent) => Event::CommandPrompt(prompt.to_owned(), sent),
+                None => Event::UserPrompt(prompt.to_owned()),
+            });
         }
         let hide = (self.settings.hide_credentials).hides(start == Start::Unattended);
         self.agent.set_hide_credentials(hide);

@@ -2108,6 +2108,44 @@ def fullscreen_paste_and_clicks(read, until, send, output):
     send(b'\x15\x04')
 
 
+def fullscreen_collapsed(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    # Enough output for a compaction to have something to summarize.
+    send(b'go\r')
+    on_screen('Printed.')
+    send(b'/compact\r')
+    rows = on_screen('Point 1 of')
+    assert 'Point 14' not in '\n'.join(rows), rows
+    assert re.search(r'\n\u2026 \(\d+ more lines, \d+ total, Ctrl\+O to expand\)\n', '\n'.join(rows)), rows
+    send(b'/demo:greet Ada\r')
+    rows = on_screen('Greeted.')
+    assert '> /demo:greet Ada\n\u2026 (sent as 5 lines, Ctrl+O to expand)' in '\n'.join(rows), rows
+    # Ctrl+O shows both whole, in place, and again cut.
+    send(b'\x0f')
+    rows = on_screen('Greet Ada warmly.')
+    assert '<user-context>' in '\n'.join(rows), rows
+    send(b'\x1b[5~')
+    on_screen('Point 14')
+    send(b'\x0f')
+    on_screen('Greet Ada warmly.', gone=True)
+    send(b'\x04')
+
+
+def fullscreen_collapsed_resumed(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2026 (sent as 5 lines, Ctrl+O to expand)')
+    send(b'\x1b[5~')
+    on_screen('more lines below')
+    rows = on_screen('Point 1 of')
+    assert re.search(r'\n\u2026 \(\d+ more lines, \d+ total, Ctrl\+O to expand\)\n', '\n'.join(rows)), rows
+    send(b'\x1b')
+    on_screen('more lines below', gone=True)
+    send(b'\x0f')
+    on_screen('Greet Ada warmly.')
+    send(b'\x04')
+
+
 def left_the_screen(script):
     def checked(read, until, send, output):
         script(read, until, send, output)
@@ -2209,4 +2247,11 @@ run(['--fullscreen'], left_the_screen(fullscreen_paste_and_clicks), serve_items(
 prompts = [line['content'] for line in map(json.loads, open(pasted)) if line.get('role') == 'user']
 assert prompts == ['x pasted\nsecond \u2014'], prompts
 assert open(pastes).read() == '2\n', open(pastes).read()
+summary = '\n'.join('Point %d of the summary.' % number for number in range(1, 15))
+long_line = "head -c 49000 /dev/zero | tr '\\0' a"
+run(['--fullscreen'], left_the_screen(fullscreen_collapsed), serve_items([
+    [tool_call('call_1', 'bash', {'command': long_line})], [tool_call('call_2', 'bash', {'command': long_line})],
+    [message('Printed.')], [message(summary)], [message('Greeted.')], [report('call_3')],
+]))
+run(['--fullscreen', '--continue'], left_the_screen(fullscreen_collapsed_resumed))
 print('agent editor journeys passed')

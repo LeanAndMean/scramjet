@@ -3,7 +3,7 @@
 use super::tools::Call;
 use super::{
     AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, StreamProgress, TYPED,
-    compaction, message_text, question, session,
+    compaction, message_text, question,
 };
 use serde_json::Value;
 use std::{sync::atomic::AtomicBool, time::Duration};
@@ -43,6 +43,10 @@ pub trait AgentUi {
     fn compaction_failed(&mut self, error: &AgentError);
     /// A prompt of a resumed conversation, shown as the user typed it.
     fn user_prompt(&mut self, prompt: &str);
+    /// A command's prompt, as typed, and the text it sent in its place.
+    fn command_prompt(&mut self, typed: &str, _sent: &str) {
+        self.user_prompt(typed);
+    }
     /// The summary of a compaction in a resumed conversation.
     fn compaction_summary(&mut self, summary: &str);
     /// The summary of a branch the conversation came back from, in a resumed conversation.
@@ -193,8 +197,10 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                         .strip_prefix(&format!("Ran `{command}`\n"))
                         .map_or_else(|| content.to_owned(), command_output);
                     ui.command_result(&output, failed);
+                } else if let Some(typed) = item[TYPED].as_str() {
+                    ui.command_prompt(typed, content);
                 } else {
-                    ui.user_prompt(session::prompt_text(item));
+                    ui.user_prompt(content);
                 }
             }
             _ => {}
