@@ -5,6 +5,7 @@ mod diff;
 mod editor;
 mod file_search;
 mod fuzzy;
+mod install;
 mod interactive;
 mod job;
 mod markdown;
@@ -34,7 +35,16 @@ use std::{
 use terminal::{InputMode, Terminal};
 
 pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
-    let Some(mut options) = Options::parse(arguments)? else {
+    let arguments: Vec<OsString> = arguments.collect();
+    if let Some((command, rest)) = arguments.split_first()
+        && let Some(command) = command.to_str()
+    {
+        let rest: Option<Vec<String>> = rest.iter().map(|a| a.to_str().map(String::from)).collect();
+        if let Some(result) = install::run(command, &rest.unwrap_or_default()) {
+            return result;
+        }
+    }
+    let Some(mut options) = Options::parse(arguments.into_iter())? else {
         println!("{USAGE}");
         return Ok(());
     };
@@ -86,6 +96,7 @@ fn start(options: Options, settings: &Settings) -> Result<Agent, String> {
         ask: options.ask,
         retries: options.retries,
         tools: settings.tools.clone(),
+        command_sets: settings.command_sets.clone(),
     };
     let mut agent = Agent::start(config, options.choice).map_err(|e| e.to_string())?;
     let model = match agent.last_model() {

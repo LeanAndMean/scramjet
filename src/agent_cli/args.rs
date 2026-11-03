@@ -5,6 +5,7 @@ use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model ID] \
 [--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | --session FILE] [--ask]
 [-p PROMPT]
+       scramjet-rs install DIR | remove NAME|DIR | list
 
 Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
 the Messages API for Claude models (those whose Proxy model card lists only Messages).
@@ -51,9 +52,12 @@ for /resume N, /fork N, /tree N and /model ID.
 /session shows the session's file, the messages in its context and the tokens they used.
 Typed while a turn runs, /session, /name and /model run before its next request; the other
 commands stop it and run once it has.
-As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: the file
-.scramjet/SET/commands/SET:COMMAND.md of the project, or under $XDG_DATA_HOME/scramjet
-(~/.local/share/scramjet), is sent with the arguments substituted, inside <scramjet-command>.
+As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
+commands/SET:COMMAND.md is sent with the arguments substituted, inside <scramjet-command>. The
+sets are those installed, then those under $XDG_DATA_HOME/scramjet (~/.local/share/scramjet)
+and the project's .scramjet. `scramjet-rs install DIR` installs the set in DIR by reference,
+recorded in the settings' commandSets; `remove NAME` takes it out and `list` shows the sets
+loaded in the current directory, what each brings and what was skipped.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
 Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scramjet-rs/),

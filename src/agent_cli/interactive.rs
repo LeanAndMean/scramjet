@@ -68,7 +68,10 @@ impl Interactive {
                     agent.prompts().to_vec(),
                     hide_thinking.clone(),
                     agent.root().to_path_buf(),
-                    agent.commands().list().iter().map(command_entry).collect(),
+                    (agent.commands().list().iter())
+                        .filter(|command| !command.delegate_only)
+                        .map(command_entry)
+                        .collect(),
                     settings.double_escape != DoubleEscape::Nothing,
                 );
                 let started = Handle::start(

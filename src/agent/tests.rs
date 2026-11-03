@@ -238,12 +238,20 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
         ask: false,
         retries: 3,
         tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+        command_sets: Vec::new(),
     };
     let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
-    // The user's own agents stay out of the tests.
+    // The user's own agents and command sets stay out of the tests.
     agent.agents_directory = None;
+    project_sets(&mut agent);
     agent.instructions = instructions::agent(&root, &agent.config.tools, &agent.commands, &[]);
     (agent, scratch)
+}
+
+/// Gives `agent` the command sets of its project's `.scramjet` directory alone.
+pub(super) fn project_sets(agent: &mut Agent) {
+    agent.sets = Sets::find(&[], None, &agent.root().join(".scramjet"));
+    agent.commands = Commands::discover(&agent.sets);
 }
 
 /// The events of a reply that calls tool `name` once.
@@ -423,6 +431,7 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
         ask: false,
         retries: 3,
         tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+        command_sets: Vec::new(),
     };
     let resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
     assert_eq!(resumed.session_name(), Some("Parser work"));

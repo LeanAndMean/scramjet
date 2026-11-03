@@ -19,7 +19,7 @@ mod turn;
 mod ui;
 
 pub use client::StreamProgress;
-pub use commands::{Command, Commands};
+pub use commands::{Command, Commands, Origin, Set, Sets};
 pub use compaction::{AutoCompaction, Compaction};
 pub use question::Choice;
 pub use session::{Session, SessionInfo};
@@ -79,6 +79,8 @@ pub struct AgentConfig {
     pub retries: u32,
     /// The coding tools the model has, among `CODING_TOOLS`.
     pub tools: Vec<String>,
+    /// The directories of the installed command sets, in their order.
+    pub command_sets: Vec<PathBuf>,
 }
 
 /// The reasoning effort levels a model's card lists, and the current one, as Shift+Tab cycles
@@ -196,10 +198,9 @@ pub struct Agent {
     /// Scramjet's global `autonomy.yaml`, and what was last said about the files.
     autonomy: Option<PathBuf>,
     autonomy_diagnostics: Vec<String>,
-    /// Where subagents are found: the user's agent directory and Scramjet's global root of
-    /// command sets.
+    /// Where subagents are found: the user's agent directory and the command sets.
     agents_directory: Option<PathBuf>,
-    sets_root: Option<PathBuf>,
+    sets: Sets,
     session: Session,
     executor: tokio::runtime::Runtime,
     /// The current model's protocol and limits, from its name until `load_model_card`.
@@ -207,6 +208,40 @@ pub struct Agent {
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
     pub usage: Usage,
+}
+
+/// What a session in `root` with the `installed` command sets would load from them and from the
+/// agent directories, and what is wrong there, loose project agents included.
+pub fn inventory(installed: &[PathBuf], root: &Path) -> Inventory {
+    let sets = Sets::for_project(installed, root);
+    let commands = Commands::discover(&sets);
+    let user = subagent::user_directory();
+    let sources = subagent::Sources {
+        user: user.as_deref(),
+        sets: &sets,
+    };
+    let discovery = subagent::discover(&sources, root, subagent::Scope::Both);
+    let mut warnings = commands.warnings().to_vec();
+    warnings.extend(discovery.diagnostics);
+    let agents = (discovery.agents.into_iter())
+        .map(|agent| (agent.name, agent.path))
+        .collect();
+    Inventory {
+        sets,
+        commands,
+        agents,
+        warnings,
+    }
+}
+
+/// What `inventory` found.
+pub struct Inventory {
+    pub sets: Sets,
+    pub commands: Commands,
+    /// Every agent a subagent call could name, with its file.
+    pub agents: Vec<(String, PathBuf)>,
+    /// Why sets, commands and agent files were skipped.
+    pub warnings: Vec<String>,
 }
 
 impl Agent {
@@ -229,19 +264,13 @@ impl Agent {
         let executor = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        let sets_root = commands::global_root();
-        let commands = Commands::discover(sets_root.as_deref(), &config.root.join(".scramjet"));
-        let agents_directory = subagent::user_directory();
-        let sources = subagent::Sources {
-            user: agents_directory.as_deref(),
-            sets: sets_root.as_deref(),
-        };
-        let agents =
-            subagent::discover(&sources, &config.root, &config.root, subagent::Scope::User).agents;
+        let sets = Sets::for_project(&config.command_sets, &config.root);
+        let commands = Commands::discover(&sets);
+        let agents = subagent::registered(&sets, &mut Vec::new());
         let mut agent = Self {
             instructions: instructions::agent(&config.root, &config.tools, &commands, &agents),
-            agents_directory,
-            sets_root,
+            agents_directory: subagent::user_directory(),
+            sets,
             commands,
             lifecycle,
             completed: None,

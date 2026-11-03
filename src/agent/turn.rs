@@ -347,7 +347,7 @@ to a larger-context model)"
                     cache_key: self.session.id(),
                     sources: subagent::Sources {
                         user: self.agents_directory.as_deref(),
-                        sets: self.sets_root.as_deref(),
+                        sets: &self.sets,
                     },
                 };
                 subagent::run(&call.arguments, &parent, ui, cancel)
@@ -468,8 +468,8 @@ mod tests {
     use super::*;
     use crate::agent::tests::*;
     use crate::agent::{
-        AgentConfig, ChildItem, ChildState, Commands, Delegation, Navigated, Next, Session,
-        SessionChoice, TreeItem, instructions, show_items,
+        AgentConfig, ChildItem, ChildState, Delegation, Navigated, Next, Session, SessionChoice,
+        TreeItem, instructions, show_items,
     };
     use crate::provider_fixture as fixture;
     use std::{sync::Arc, time::Duration};
@@ -511,7 +511,7 @@ mod tests {
         let commands = agent.root().join(".scramjet/rs/commands");
         std::fs::create_dir_all(&commands).unwrap();
         std::fs::write(commands.join("rs:work.md"), "Work on $1.\n").unwrap();
-        agent.commands = Commands::discover(None, &agent.root().join(".scramjet"));
+        project_sets(&mut agent);
         agent.autonomy = None;
         // Before the second request, and before the status check's.
         let mut ui = Recorder {
@@ -617,7 +617,7 @@ mod tests {
             )
             .unwrap();
         }
-        agent.commands = Commands::discover(None, &agent.root().join(".scramjet"));
+        project_sets(&mut agent);
         agent.autonomy = None;
         let mut ui = Recorder {
             // Nothing before the first request; then where the reported turn would end.
@@ -1154,6 +1154,7 @@ for trusted repositories.",
             ask: false,
             retries: 3,
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+            command_sets: Vec::new(),
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
         agent.instructions = instructions::agent(&root, &agent.config.tools, &agent.commands, &[]);
@@ -1361,15 +1362,16 @@ be a non-empty array for select type. failed",
                 ask: false,
                 retries: 0,
                 tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+                command_sets: Vec::new(),
             };
             let path = agent.session_path().to_owned();
             drop(agent);
             let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
-            agent.commands = Commands::discover(None, &agent.root().join(".scramjet"));
+            project_sets(&mut agent);
             agent.autonomy = None;
             agent
         };
-        agent.commands = Commands::discover(None, &agent.root().join(".scramjet"));
+        project_sets(&mut agent);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent.turn("/rs:work", &mut ui, &cancel).unwrap();
@@ -1497,7 +1499,7 @@ be a non-empty array for select type. failed",
             "---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:work\n---\nWork on $1.\n",
         )
         .unwrap();
-        agent.commands = Commands::discover(None, &agent.root().join(".scramjet"));
+        project_sets(&mut agent);
         agent.autonomy = None;
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);

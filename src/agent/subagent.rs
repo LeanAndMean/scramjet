@@ -8,7 +8,8 @@ use super::{
     AgentError, AgentUi, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation,
     MAX_STEPS, ToolDetail, Usage,
     client::{self, ModelInfo},
-    commands, instructions,
+    commands::{self, Sets},
+    instructions,
     request::{self, Sending},
     sandbox,
     tools::{self, Call, Output},
@@ -105,8 +106,8 @@ pub(super) struct Sources<'a> {
     /// The user's loose agents: `$SCRAMJET_CODING_AGENT_DIR/agents`, else
     /// `~/.scramjet/agent/agents`.
     pub user: Option<&'a Path>,
-    /// Scramjet's global root of command sets.
-    pub sets: Option<&'a Path>,
+    /// The session's command sets, whose agents are registered.
+    pub sets: &'a Sets,
 }
 
 /// Scramjet's agent directory, as its `getAgentDir()`: `$SCRAMJET_CODING_AGENT_DIR`, else
@@ -135,29 +136,29 @@ pub(super) struct Discovery {
 
 /// As Scramjet's `discoverAgents`: the user's loose agents and those of the nearest
 /// `.scramjet/agents` above `cwd`, by `scope` (with `Both`, a project agent replaces a user one of
-/// its name), then the agents of the command sets under the global root and the project's
-/// `.scramjet`, which replace loose ones. Unlike Scramjet, loose agents named `mach12:` or
-/// `scramjet:` are kept: the bundled sets those names are reserved for are not loaded here.
-pub(super) fn discover(sources: &Sources, root: &Path, cwd: &Path, scope: Scope) -> Discovery {
+/// its name), then the agents of the command sets, which replace loose ones. Unlike Scramjet, a
+/// loose agent whose name is in a set's namespace (`<set>:`) is skipped with a warning: such
+/// names belong to the set.
+pub(super) fn discover(sources: &Sources, cwd: &Path, scope: Scope) -> Discovery {
     let mut found = Discovery::default();
     let project = nearest_project_directory(cwd);
     let mut agents: Vec<Definition> = Vec::new();
     if scope != Scope::Project
         && let Some(user) = sources.user
     {
-        agents = loose(user, "user", &mut found.diagnostics);
+        agents = loose(user, "user", sources.sets, &mut found.diagnostics);
     }
     if scope != Scope::User
         && let Some(project) = &project
     {
-        for agent in loose(project, "project", &mut found.diagnostics) {
+        for agent in loose(project, "project", sources.sets, &mut found.diagnostics) {
             match agents.iter_mut().find(|known| known.name == agent.name) {
                 Some(known) => *known = agent,
                 None => agents.push(agent),
             }
         }
     }
-    for agent in registered(sources.sets, root, &mut found.diagnostics) {
+    for agent in registered(sources.sets, &mut found.diagnostics) {
         agents.retain(|known| known.name != agent.name);
         agents.push(agent);
     }
@@ -188,8 +189,15 @@ fn nearest_project_directory(cwd: &Path) -> Option<PathBuf> {
         .find(|candidate| candidate.is_dir())
 }
 
-/// The agents in `directory`'s `.md` files, by file name, as Scramjet's `loadAgentsFromDir`.
-fn loose(directory: &Path, source: &'static str, diagnostics: &mut Vec<String>) -> Vec<Definition> {
+/// The agents in `directory`'s `.md` files, by file name, as Scramjet's `loadAgentsFromDir`,
+/// without those in the namespace of one of `sets`; a warning names them unless they link into
+/// the set's own directory.
+fn loose(
+    directory: &Path,
+    source: &'static str,
+    sets: &Sets,
+    diagnostics: &mut Vec<String>,
+) -> Vec<Definition> {
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
@@ -213,7 +221,30 @@ fn loose(directory: &Path, source: &'static str, diagnostics: &mut Vec<String>) 
         .collect();
     files.sort();
     let mut agents = Vec::new();
+    let claimed = |name: &str, path: &Path| {
+        let set = sets.owner(name)?;
+        let target = std::fs::canonicalize(path).ok();
+        let own = std::fs::canonicalize(&set.directory).ok();
+        if let (Some(target), Some(own)) = (target, own)
+            && target.starts_with(own)
+        {
+            return Some(None);
+        }
+        Some(Some(format!(
+            "skipping {source} agent {}: names starting with \"{}:\" belong to the {} command \
+set {}",
+            path.display(),
+            set.name,
+            set.origin.name(),
+            set.directory.display()
+        )))
+    };
     for path in files {
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        if let Some(skipped) = claimed(&stem, &path) {
+            diagnostics.extend(skipped);
+            continue;
+        }
         let content = match std::fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) => {
@@ -225,84 +256,76 @@ fn loose(directory: &Path, source: &'static str, diagnostics: &mut Vec<String>) 
             }
         };
         match parse(&path, &content, source) {
-            Ok(agent) => {
-                diagnostics.extend(agent.diagnostics.iter().cloned());
-                agents.push(agent);
-            }
+            Ok(agent) => match claimed(&agent.name, &path) {
+                Some(skipped) => diagnostics.extend(skipped),
+                None => {
+                    diagnostics.extend(agent.diagnostics.iter().cloned());
+                    agents.push(agent);
+                }
+            },
             Err(error) => diagnostics.push(error),
         }
     }
     agents
 }
 
-/// The agents of the command sets under `global` and the project's `.scramjet`, as Scramjet's
-/// `buildAgentRegistry`: `<set>/agents/<set>:<name>.md`, the first of a name kept.
-fn registered(
-    global: Option<&Path>,
-    root: &Path,
-    diagnostics: &mut Vec<String>,
-) -> Vec<Definition> {
-    let project = root.join(".scramjet");
+/// The agents of `sets`, as Scramjet's `buildAgentRegistry`: `<set>/agents/<set>:<name>.md`,
+/// the first of a name kept.
+pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<String>) -> Vec<Definition> {
     let mut agents: Vec<Definition> = Vec::new();
-    let roots = global
-        .map(|global| (global, "global"))
-        .into_iter()
-        .chain([(project.as_path(), "project")]);
-    for (sets_root, scope) in roots {
-        for set in commands::sets(sets_root) {
-            let directory = sets_root.join(&set).join("agents");
-            let Ok(entries) = std::fs::read_dir(&directory) else {
+    for set in sets.list() {
+        let scope = set.origin.name();
+        let directory = set.directory.join("agents");
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_file())
+            .collect();
+        files.sort();
+        for path in files {
+            let file = path.file_name().unwrap_or_default().to_string_lossy();
+            let prefix = format!("{}:", set.name);
+            let skipping = |error: String| format!("skipping agent {}: {error}", path.display());
+            let Some(stem) = file.strip_suffix(".md") else {
+                diagnostics.push(skipping(format!("{file}: not a markdown file")));
                 continue;
             };
-            let mut files: Vec<PathBuf> = entries
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|path| path.is_file())
-                .collect();
-            files.sort();
-            for path in files {
-                let file = path.file_name().unwrap_or_default().to_string_lossy();
-                let prefix = format!("{set}:");
-                let skipping =
-                    |error: String| format!("skipping agent {}: {error}", path.display());
-                let Some(stem) = file.strip_suffix(".md") else {
-                    diagnostics.push(skipping(format!("{file}: not a markdown file")));
-                    continue;
-                };
-                if !stem.starts_with(&prefix) {
+            if !stem.starts_with(&prefix) {
+                diagnostics.push(skipping(format!(
+                    "{file}: filename must start with \"{prefix}\""
+                )));
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let agent = match parse(&path, &content, scope) {
+                Ok(agent) if agent.name.starts_with(&prefix) => agent,
+                Ok(_) => {
                     diagnostics.push(skipping(format!(
-                        "{file}: filename must start with \"{prefix}\""
+                        "{file}: name must start with \"{prefix}\""
                     )));
                     continue;
                 }
-                let Ok(content) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
-                let agent = match parse(&path, &content, scope) {
-                    Ok(agent) if agent.name.starts_with(&prefix) => agent,
-                    Ok(_) => {
-                        diagnostics.push(skipping(format!(
-                            "{file}: name must start with \"{prefix}\""
-                        )));
-                        continue;
-                    }
-                    Err(error) => {
-                        diagnostics.push(skipping(error));
-                        continue;
-                    }
-                };
-                if let Some(existing) = agents.iter().find(|known| known.name == agent.name) {
-                    diagnostics.push(format!(
-                        "skipping {scope} agent {} at {}: name already registered from {}",
-                        agent.name,
-                        path.display(),
-                        existing.path.display()
-                    ));
+                Err(error) => {
+                    diagnostics.push(skipping(error));
                     continue;
                 }
-                diagnostics.extend(agent.diagnostics.iter().cloned());
-                agents.push(agent);
+            };
+            if let Some(existing) = agents.iter().find(|known| known.name == agent.name) {
+                diagnostics.push(format!(
+                    "skipping {scope} agent {} at {}: name already registered from {}",
+                    agent.name,
+                    path.display(),
+                    existing.path.display()
+                ));
+                continue;
             }
+            diagnostics.extend(agent.diagnostics.iter().cloned());
+            agents.push(agent);
         }
     }
     agents
@@ -749,7 +772,7 @@ pub(super) fn run(
             return (plain(text, true), Usage::default());
         }
     };
-    let discovery = discover(&parent.sources, parent.root, parent.root, given.scope);
+    let discovery = discover(&parent.sources, parent.root, given.scope);
     let warnings = match discovery.diagnostics.is_empty() {
         true => String::new(),
         false => {
@@ -1291,26 +1314,40 @@ mod tests {
     fn discovery_follows_the_scope_and_command_sets_replace_loose_agents() {
         let base = std::env::temp_dir().join(format!("scramjet-subagents-{}", std::process::id()));
         let _scratch = ScratchDir::new(base.clone());
-        let (user, sets, root) = (base.join("user"), base.join("sets"), base.join("project"));
+        let (user, global, root) = (base.join("user"), base.join("sets"), base.join("project"));
+        let installed = base.join("installed/mach12");
         write(&user.join("a.md"), &agent_file("a", ""));
         write(
             &user.join("shared.md"),
             &agent_file("shared", "tools: read\n"),
         );
         write(&user.join("mach12:kept.md"), &agent_file("mach12:kept", ""));
+        write(&user.join("mach10:old.md"), &agent_file("mach10:old", ""));
+        write(&user.join("renamed.md"), &agent_file("x:renamed", ""));
         write(&user.join("notes.txt"), "not an agent");
         write(&user.join("bad.md"), "---\nname: bad\n---\n");
         std::os::unix::fs::symlink(base.join("missing.md"), user.join("gone.md")).unwrap();
+        std::os::unix::fs::symlink(base.join("missing.md"), user.join("mach12:gone.md")).unwrap();
         write(
             &root.join(".scramjet/agents/shared.md"),
             &agent_file("shared", "tools: ls\n"),
         );
         write(&root.join(".scramjet/agents/b.md"), &agent_file("b", ""));
-        write(&sets.join("x/agents/x:c.md"), &agent_file("x:c", ""));
-        write(&sets.join("x/agents/y:d.md"), &agent_file("y:d", ""));
-        write(&sets.join("x/agents/x:e.md"), &agent_file("e", ""));
         write(
-            &sets.join("mach12/agents/mach12:kept.md"),
+            &installed.join("agents/mach12:reviewer.md"),
+            &agent_file("mach12:reviewer", ""),
+        );
+        // A link to the set's own file is the set's agent: it is left out without a warning.
+        std::os::unix::fs::symlink(
+            installed.join("agents/mach12:reviewer.md"),
+            user.join("mach12:reviewer.md"),
+        )
+        .unwrap();
+        write(&global.join("x/agents/x:c.md"), &agent_file("x:c", ""));
+        write(&global.join("x/agents/y:d.md"), &agent_file("y:d", ""));
+        write(&global.join("x/agents/x:e.md"), &agent_file("e", ""));
+        write(
+            &global.join("mach12/agents/mach12:kept.md"),
             &agent_file("mach12:kept", ""),
         );
         write(
@@ -1321,14 +1358,19 @@ mod tests {
             &root.join(".scramjet/z/agents/z:a.md"),
             &agent_file("z:a", ""),
         );
+        let sets = Sets::find(
+            std::slice::from_ref(&installed),
+            Some(&global),
+            &root.join(".scramjet"),
+        );
         let sources = Sources {
             user: Some(&user),
-            sets: Some(&sets),
+            sets: &sets,
         };
         let cwd = root.join("src/deep");
         std::fs::create_dir_all(&cwd).unwrap();
         let found = |scope| {
-            let discovery = discover(&sources, &root, &cwd, scope);
+            let discovery = discover(&sources, &cwd, scope);
             let agents: Vec<String> = discovery
                 .agents
                 .iter()
@@ -1341,13 +1383,22 @@ mod tests {
             user_scope,
             [
                 "a user",
-                "mach12:kept user",
+                "mach10:old user",
                 "shared user",
+                "mach12:reviewer installed",
                 "x:c global",
                 "z:a project"
             ]
         );
         let shown = |path: PathBuf| path.display().to_string();
+        let claimed = |file: &str, set: &str, origin: &str, directory: PathBuf| {
+            format!(
+                "skipping user agent {}: names starting with \"{set}:\" belong to the {origin} \
+command set {}",
+                shown(user.join(file)),
+                shown(directory)
+            )
+        };
         assert_eq!(
             diagnostics,
             [
@@ -1359,43 +1410,53 @@ mod tests {
                     "{}: failed to read agent file (No such file or directory (os error 2))",
                     shown(user.join("gone.md"))
                 ),
+                claimed("mach12:gone.md", "mach12", "installed", installed.clone()),
+                claimed("mach12:kept.md", "mach12", "installed", installed.clone()),
+                claimed("renamed.md", "x", "global", global.join("x")),
                 format!(
                     "skipping agent {}: x:e.md: name must start with \"x:\"",
-                    shown(sets.join("x/agents/x:e.md"))
+                    shown(global.join("x/agents/x:e.md"))
                 ),
                 format!(
                     "skipping agent {}: y:d.md: filename must start with \"x:\"",
-                    shown(sets.join("x/agents/y:d.md"))
+                    shown(global.join("x/agents/y:d.md"))
                 ),
                 format!(
                     "skipping project agent x:c at {}: name already registered from {}",
                     shown(root.join(".scramjet/x/agents/x:c.md")),
-                    shown(sets.join("x/agents/x:c.md"))
+                    shown(global.join("x/agents/x:c.md"))
                 ),
             ]
         );
         assert_eq!(
             found(Scope::Project).0,
-            ["b project", "shared project", "x:c global", "z:a project"]
+            [
+                "b project",
+                "shared project",
+                "mach12:reviewer installed",
+                "x:c global",
+                "z:a project"
+            ]
         );
         let (both, _) = found(Scope::Both);
         assert_eq!(
             both,
             [
                 "a user",
-                "mach12:kept user",
+                "mach10:old user",
                 "shared project",
                 "b project",
+                "mach12:reviewer installed",
                 "x:c global",
                 "z:a project"
             ]
         );
-        let agents = discover(&sources, &root, &cwd, Scope::Both).agents;
+        // As Scramjet's, the catalog lists the command sets' agents only.
+        let agents = registered(&sets, &mut Vec::new());
         assert_eq!(
             catalog(&agents),
             "# Available subagents\n\nThe following agents can be dispatched via the `subagent` \
-tool:\n\n- a: a agent\n- b: b agent\n- mach12:kept: mach12:kept agent\n- shared: shared agent\n\
-- x:c: x:c agent\n- z:a: z:a agent"
+tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- z:a: z:a agent"
         );
         assert_eq!(catalog(&[]), "");
     }

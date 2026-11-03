@@ -1,7 +1,7 @@
 //! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet-rs/settings.json` (by default
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
-use scramjet_rs::agent::{CODING_TOOLS, DEFAULT_TOOLS, search_program, shortened};
+use scramjet_rs::agent::{CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, shortened};
 use serde_json::{Map, Value, json};
 use std::{
     io,
@@ -62,6 +62,9 @@ pub(super) struct Settings {
     pub(super) hide_credentials: HideCredentials,
     pub(super) steering_mode: Delivery,
     pub(super) follow_up_mode: Delivery,
+    /// `commandSets`: the directories of the installed command sets; a relative one is relative
+    /// to the settings file's directory.
+    pub(super) command_sets: Vec<PathBuf>,
     /// What is wrong in the file; those keys keep their defaults.
     pub(super) warnings: Vec<String>,
 }
@@ -87,6 +90,7 @@ impl Settings {
             hide_credentials: HideCredentials::Unattended,
             steering_mode: Delivery::All,
             follow_up_mode: Delivery::OneAtATime,
+            command_sets: Vec::new(),
             warnings: Vec::new(),
         };
         let Some(path) = &settings.path else {
@@ -167,6 +171,95 @@ impl Settings {
                 &format!("a list of tool names ({})", CODING_TOOLS.join(", ")),
             ),
         }
+        match command_sets(object) {
+            Ok(entries) => {
+                self.command_sets = (entries.iter()).map(|entry| self.resolve(entry)).collect()
+            }
+            Err(()) => self.warnings.push(format!(
+                "{path}: commandSets must be a list of directories; ignored"
+            )),
+        }
+    }
+
+    /// `entry` of `commandSets` as a directory.
+    fn resolve(&self, entry: &str) -> PathBuf {
+        let directory = self.path.as_deref().and_then(Path::parent);
+        directory.unwrap_or(Path::new("/")).join(entry)
+    }
+
+    /// Adds the command set in `directory` to `commandSets`, by its absolute path, unless a set
+    /// of its name is there. Returns it.
+    pub(super) fn install_set(&mut self, directory: &Path) -> Result<Set, String> {
+        let directory = std::path::absolute(directory).map_err(|e| e.to_string())?;
+        let set = Set::at(&directory, Origin::Installed)?;
+        let path = self
+            .path
+            .clone()
+            .ok_or("no settings file: HOME is not set")?;
+        let mut object = read_object(&path)?;
+        let mut entries = command_sets(&object).map_err(|()| {
+            format!(
+                "{}: commandSets must be a list of directories",
+                shown(&path)
+            )
+        })?;
+        for entry in &entries {
+            let known = self.resolve(entry);
+            if known.file_name() == directory.file_name() {
+                return Err(match same_directory(&known, &directory) {
+                    true => format!("{} is already installed", set.name),
+                    false => format!(
+                        "a command set named {} is installed from {}; remove it first",
+                        set.name,
+                        known.display()
+                    ),
+                });
+            }
+        }
+        entries.push(directory.display().to_string());
+        object.insert("commandSets".into(), json!(entries));
+        write_object(&path, object)?;
+        self.command_sets.push(directory);
+        Ok(set)
+    }
+
+    /// Removes from `commandSets` the set named `reference`, or installed from that directory.
+    /// Returns the directory it was installed from.
+    pub(super) fn remove_set(&mut self, reference: &str) -> Result<PathBuf, String> {
+        let path = self
+            .path
+            .clone()
+            .ok_or("no settings file: HOME is not set")?;
+        let mut object = read_object(&path)?;
+        let mut entries = command_sets(&object).map_err(|()| {
+            format!(
+                "{}: commandSets must be a list of directories",
+                shown(&path)
+            )
+        })?;
+        let given = std::path::absolute(reference).ok();
+        let position = entries.iter().position(|entry| {
+            let known = self.resolve(entry);
+            known.file_name().is_some_and(|name| name == reference)
+                || given
+                    .as_deref()
+                    .is_some_and(|given| same_directory(&known, given))
+        });
+        let Some(position) = position else {
+            return Err(format!(
+                "no installed command set is named {reference} or installed from there"
+            ));
+        };
+        let removed = self.resolve(&entries.remove(position));
+        object.insert("commandSets".into(), json!(entries));
+        write_object(&path, object)?;
+        self.command_sets.retain(|directory| directory != &removed);
+        Ok(removed)
+    }
+
+    /// The settings file, shortened for display.
+    pub(super) fn shown_path(&self) -> Option<String> {
+        self.path.as_deref().map(shown)
     }
 
     /// The coding tools `names` lists that there are and that can run here.
@@ -226,10 +319,33 @@ impl Settings {
         };
         let mut object = read_object(path).map_err(io::Error::other)?;
         object.insert(key.to_owned(), value);
-        let text = serde_json::to_string_pretty(&Value::Object(object))? + "\n";
-        write_replacing(path, &text)
-            .map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", shown(path))))
+        write_object(path, object).map_err(io::Error::other)
     }
+}
+
+/// `commandSets`' entries; an error when it is not a list of strings.
+fn command_sets(object: &Map<String, Value>) -> Result<Vec<String>, ()> {
+    match object.get("commandSets") {
+        None => Ok(Vec::new()),
+        Some(Value::Array(entries)) => (entries.iter())
+            .map(|entry| entry.as_str().map(str::to_owned).ok_or(()))
+            .collect(),
+        Some(_) => Err(()),
+    }
+}
+
+/// Whether `a` and `b` are the same directory, also through links.
+fn same_directory(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
+fn write_object(path: &Path, object: Map<String, Value>) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(&Value::Object(object)).map_err(|e| e.to_string())?;
+    write_replacing(path, &(text + "\n")).map_err(|error| format!("{}: {error}", shown(path)))
 }
 
 fn shown(path: &Path) -> String {
@@ -462,6 +578,88 @@ mod tests {
         assert_eq!(
             std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
             1
+        );
+    }
+
+    #[test]
+    fn command_sets_are_installed_and_removed_by_reference() {
+        let scratch = Scratch::new("sets");
+        let path = scratch.0.join("config/settings.json");
+        let set = |name: &str| {
+            let directory = scratch.0.join(name);
+            std::fs::create_dir_all(directory.join("commands")).unwrap();
+            directory
+        };
+        let (mach12, other) = (set("repo/mach12"), set("other/mach12"));
+        let rs = set("rs");
+        std::fs::create_dir_all(scratch.0.join("plain")).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"theme": "x", "commandSets": ["../rs"]}"#).unwrap();
+        let mut settings = Settings::read(Some(path.clone()));
+        assert_eq!(settings.command_sets, [scratch.0.join("config/../rs")]);
+
+        let installed = settings.install_set(&mach12).unwrap();
+        assert_eq!(
+            (installed.name.as_str(), &installed.directory),
+            ("mach12", &mach12)
+        );
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let absolute = mach12.display().to_string();
+        assert_eq!(
+            saved,
+            json!({"theme": "x", "commandSets": ["../rs", absolute]})
+        );
+        assert_eq!(
+            Settings::read(Some(path.clone())).command_sets,
+            settings.command_sets
+        );
+        assert_eq!(
+            settings
+                .install_set(&scratch.0.join("repo/./mach12"))
+                .unwrap_err(),
+            "mach12 is already installed"
+        );
+        assert_eq!(
+            settings.install_set(&other).unwrap_err(),
+            format!("a command set named mach12 is installed from {absolute}; remove it first")
+        );
+        let plain = scratch.0.join("plain");
+        assert_eq!(
+            settings.install_set(&plain).unwrap_err(),
+            format!(
+                "{} is not a command set: it has no commands or agents directory",
+                plain.display()
+            )
+        );
+
+        assert_eq!(
+            settings.remove_set("rs").unwrap(),
+            scratch.0.join("config/../rs")
+        );
+        assert_eq!(settings.command_sets, std::slice::from_ref(&mach12));
+        let gone = rs.display().to_string();
+        assert_eq!(
+            settings.remove_set(&gone).unwrap_err(),
+            format!("no installed command set is named {gone} or installed from there")
+        );
+        assert!(settings.remove_set(&other.display().to_string()).is_err());
+        assert_eq!(settings.remove_set(&absolute).unwrap(), mach12);
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved, json!({"theme": "x", "commandSets": []}));
+
+        std::fs::write(&path, r#"{"commandSets": "../rs"}"#).unwrap();
+        let mut wrong = Settings::read(Some(path.clone()));
+        assert_eq!(
+            wrong.warnings,
+            [format!(
+                "{}: commandSets must be a list of directories; ignored",
+                shown(&path)
+            )]
+        );
+        assert!(wrong.install_set(&rs).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"commandSets": "../rs"}"#
         );
     }
 

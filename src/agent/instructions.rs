@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn the_tools_and_guidelines_listed_are_the_configured_ones() {
         let root = Path::new("/nonexistent/scramjet-rs-instructions");
-        let commands = Commands::discover(None, &root.join(".scramjet"));
+        let commands = Commands::default();
         let tools = super::super::tools::DEFAULT_TOOLS.map(String::from);
         let text = agent(root, &tools, &commands, &[]);
         let listed = "Available tools:\n- read: Read file contents\n- bash: Execute bash commands \
