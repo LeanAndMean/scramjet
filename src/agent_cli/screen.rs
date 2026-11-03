@@ -1032,7 +1032,6 @@ impl App {
             Some(builtin) if builtin.interrupts() => self.cancel.store(true, Ordering::Relaxed),
             _ => {}
         }
-        self.editor.remember(&text);
         self.queue().commands.push(text);
         self.draft = self.editor.draft(String::new());
         self.top = None;
@@ -1589,7 +1588,10 @@ impl App {
             // The draft holds the text sent.
             Action::Submit(_) if running => self.enqueue(false),
             Action::Submit(text) if self.ready => {
-                self.editor.remember(&text);
+                // As in Scramjet, Up does not recall built-in commands.
+                if Builtin::parse(&text).is_none() {
+                    self.editor.remember(&text);
+                }
                 self.ready = false;
                 self.top = None;
                 let _ = self.inputs.send(Input::Prompt(text));
@@ -1620,6 +1622,24 @@ impl App {
     }
 
     fn dialog_key(&mut self, key: Key, pending: bool) -> Flow {
+        if key == Key::Interrupt
+            && matches!(
+                self.dialog,
+                Some(Open {
+                    shown: Shown::Approve(_),
+                    ..
+                })
+            )
+        {
+            // As during the rest of the turn, Ctrl-C stops it; the question goes unanswered, so
+            // the session shows no answer to it.
+            self.cancel.store(true, Ordering::Relaxed);
+            self.dialog = None;
+            if let Some(activity) = &mut self.activity {
+                *activity = Activity::new("working");
+            }
+            return Flow::Go;
+        }
         let Some(open) = &mut self.dialog else {
             return Flow::Go;
         };
@@ -1639,9 +1659,7 @@ impl App {
                 Key::Text(text) if text.eq_ignore_ascii_case("n") => {
                     Some(Answer::Approved(agent::Answer::Deny))
                 }
-                Key::Enter | Key::Escape | Key::Interrupt => {
-                    Some(Answer::Approved(agent::Answer::Deny))
-                }
+                Key::Enter | Key::Escape => Some(Answer::Approved(agent::Answer::Deny)),
                 _ => None,
             },
             Shown::Text(text) => match text.editor.key(&mut text.draft, key, pending) {
@@ -1854,7 +1872,9 @@ fn prompt_rows(
     let start = rows.len();
     rows.extend(selection::rows(&text[top..top + shown]));
     if let Some(hint) = draft.hint() {
-        rows.push(muted(&clip(hint, width.saturating_sub(1))));
+        let mut wrap = Wrap::new(width.saturating_sub(1).max(10));
+        let text = wrap.push(hint) + &wrap.finish();
+        rows.extend(text.split('\n').map(muted));
     }
     rows.extend(selection::rows(&draft.completion_rows(width)));
     Some((start + row - top, column))

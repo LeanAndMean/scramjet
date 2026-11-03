@@ -103,6 +103,8 @@ impl Interactive {
     /// Reads and runs prompts until the user quits or the input ends.
     pub(super) fn run(mut self) -> Result<(), String> {
         let result = self.read_and_run();
+        // The terminal is given back first, so that an error saving the settings shows.
+        self.screen = None;
         self.save_hide_thinking();
         result
     }

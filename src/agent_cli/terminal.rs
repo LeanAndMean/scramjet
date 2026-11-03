@@ -601,10 +601,11 @@ impl AgentUi for Terminal {
     fn retrying(&mut self, error: &str, attempt: u32, retries: u32, delay: Duration) {
         self.clear();
         let text = format!(
-            "{error}\nretrying in {}s ({attempt}/{retries}; Ctrl-C cancels)",
+            "{}\nretrying in {}s ({attempt}/{retries}; Ctrl-C cancels)",
+            visible(error),
             delay.as_secs_f64().ceil()
         );
-        let text = self.styled(style::WARNING, &text);
+        let text = self.styled(style::WARNING, &self.wrapped(&text));
         self.err(&format!("{text}\n"));
         self.show_countdown("retrying in".into(), delay);
     }
@@ -731,8 +732,11 @@ impl AgentUi for Terminal {
             let block = self.summary_block(body);
             self.err(&format!("\n{block}\n"));
         } else if self.expandable {
-            let lines = body.lines().count();
-            let hint = self.dim(&format!("… (sent as {lines} lines{EXPAND_HINT})"));
+            let lines = match body.lines().count() {
+                1 => "1 line".to_owned(),
+                count => format!("{count} lines"),
+            };
+            let hint = self.dim(&format!("… (sent as {lines}{EXPAND_HINT})"));
             self.err(&format!("{hint}\n"));
         }
         self.err("\n");
