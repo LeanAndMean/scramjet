@@ -795,6 +795,26 @@ def bang_commands(read, until, send, output):
     send(b'\x03\x04')
 
 
+def conversation_view(read, until, send, output):
+    mark = until(b'> ')
+    send(b'!seq 1 40\r')
+    mark = until(b'(20 earlier lines, Ctrl+O to expand)', mark)
+    mark = until(b'> ', mark)
+    send(b'draft\x0f')
+    # The whole output, from its end, in the alternate screen.
+    mark = until(b'\x1b[?1049h', mark)
+    mark = until(b'19\xe2\x80\x9341 of 41', until(b'm40\x1b[0m\x1b[K', mark))
+    send(b'\x1b[H')
+    mark = until(b'1\xe2\x80\x9323 of 41', until(b'm2\x1b[0m\x1b[K', until(b'bash seq 1 40', mark)))
+    send(b'\x1b[6~')
+    mark = until(b'19\xe2\x80\x9341 of 41', mark)
+    send(b'\x1b')
+    mark = until(b'> draft', until(b'\x1b[?1049l', mark))
+    send(b'\x0fq')
+    mark = until(b'> draft', until(b'\x1b[?1049l', until(b'\x1b[?1049h', mark)))
+    send(b'\x03\x04')
+
+
 def final_texts_replace_lost_deltas(read, until, send, output):
     mark = until(b'> ')
     send(b'one\r')
@@ -1064,6 +1084,7 @@ assert prompts == ['see completion/alpine-file and completion/unique-file'], pro
 known = set(session_files())
 run([], bang_commands)
 (ran,) = set(session_files()) - known
+run([], conversation_view)
 items = [item for item in map(json.loads, open(ran)) if item.get('role') == 'user']
 assert [item['_scramjet_typed'] for item in items] == ['!echo hi; exit 3', '!sleep 30'], items
 assert items[1]['content'] == 'Ran `sleep 30`\n(no output)\n\n(command cancelled)', items

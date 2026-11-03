@@ -7,12 +7,13 @@ use super::{Wrap, clip, printable};
 use scramjet_rs::agent::sequence_diff;
 use unicode_width::UnicodeWidthStr;
 
-/// Screen rows a diff may take, besides the note about the lines left out.
-const DIFF_ROWS: usize = 40;
+/// Screen rows a diff may take in a tool block, besides the note about the lines left out.
+pub(super) const ROWS: usize = 40;
 
 /// The rows showing `diff`, whose lines are `{mark}{number} {text}` as the edit tool writes them,
-/// in `width` columns, styled when `color` is set.
-pub(super) fn rows(diff: &str, width: usize, color: bool) -> Vec<String> {
+/// in `width` columns, styled when `color` is set; at most `limit`, besides the note about the
+/// lines left out, which ends with `hint`.
+pub(super) fn rows(diff: &str, width: usize, color: bool, limit: usize, hint: &str) -> Vec<String> {
     let lines: Vec<&str> = diff.lines().collect();
     let mark = |i: usize| lines.get(i).and_then(|line| line.chars().next());
     let mut rows = Vec::new();
@@ -40,12 +41,16 @@ pub(super) fn rows(diff: &str, width: usize, color: bool) -> Vec<String> {
                 } else {
                     DIFF_ADDED
                 };
-                wrapped(gutter, &text, width, style, color)
+                wrapped(gutter, &text, width, style, color, limit)
             }
             _ => vec![styled(DIFF_CONTEXT, &clip(&printable(line), width), color)],
         };
-        if !rows.is_empty() && rows.len() + line_rows.len() > DIFF_ROWS {
-            let note = format!("… ({} more lines, {} total)", lines.len() - i, lines.len());
+        if !rows.is_empty() && rows.len() + line_rows.len() > limit {
+            let note = format!(
+                "… ({} more lines, {} total{hint})",
+                lines.len() - i,
+                lines.len()
+            );
             rows.push(styled(DIFF_CONTEXT, &note, color));
             break;
         }
@@ -62,18 +67,25 @@ fn split(line: &str) -> (&str, &str) {
 }
 
 /// A changed line's rows: the gutter, then its text wrapped under itself. A line longer than
-/// all the rows a diff may take ends with `…` in place of its last row.
-fn wrapped(gutter: &str, text: &str, width: usize, style: &str, color: bool) -> Vec<String> {
+/// all the `limit` rows a diff may take ends with `…` in place of its last row.
+fn wrapped(
+    gutter: &str,
+    text: &str,
+    width: usize,
+    style: &str,
+    color: bool,
+    limit: usize,
+) -> Vec<String> {
     let blank = " ".repeat(gutter.width());
     let mut wrap = Wrap::new(width.saturating_sub(blank.len()).max(10));
     let text = wrap.push(text) + &wrap.finish();
     let lines: Vec<&str> = text.split('\n').collect();
-    let cut = lines.len() > DIFF_ROWS;
+    let cut = lines.len() > limit;
     let mut rows = Vec::new();
     let mut inverse = false;
     for (k, line) in lines.iter().enumerate().take(match cut {
-        true => DIFF_ROWS - 1,
-        false => DIFF_ROWS,
+        true => limit - 1,
+        false => limit,
     }) {
         // A highlight that a break interrupts continues after the next row's indentation.
         let (indent, rest) = line.split_at(line.len() - line.trim_start_matches(' ').len());
@@ -173,7 +185,7 @@ mod tests {
     use super::*;
 
     fn plain(diff: &str, width: usize) -> Vec<String> {
-        rows(diff, width, false)
+        rows(diff, width, false, ROWS, "")
     }
 
     #[test]
@@ -201,15 +213,15 @@ mod tests {
     fn rows_beyond_the_limit_are_counted_and_a_huge_line_is_cut() {
         let diff: String = (1..=50).map(|n| format!("+{n:>2} line {n}\n")).collect();
         let shown = plain(&diff, 80);
-        assert_eq!(shown.len(), DIFF_ROWS + 1);
-        assert_eq!(shown[DIFF_ROWS - 1], "+40 line 40");
-        assert_eq!(shown[DIFF_ROWS], "… (10 more lines, 50 total)");
+        assert_eq!(shown.len(), ROWS + 1);
+        assert_eq!(shown[ROWS - 1], "+40 line 40");
+        assert_eq!(shown[ROWS], "… (10 more lines, 50 total)");
 
         let huge = format!("-1 {}\n+1 x\n", "word ".repeat(400));
         let shown = plain(&huge, 23);
-        assert_eq!(shown.len(), DIFF_ROWS + 1);
-        assert_eq!(shown[DIFF_ROWS - 1], "   …");
-        assert_eq!(shown[DIFF_ROWS], "… (1 more lines, 2 total)");
+        assert_eq!(shown.len(), ROWS + 1);
+        assert_eq!(shown[ROWS - 1], "   …");
+        assert_eq!(shown[ROWS], "… (1 more lines, 2 total)");
     }
 
     #[test]
@@ -225,7 +237,13 @@ mod tests {
         assert_eq!(new, "    \x1b[7mfour five\x1b[27m three");
 
         // A highlight broken across rows continues after the next row's indentation.
-        let colored = rows("-1 aaaa bbbb cccc dd\n+1 aaaa xxxx yyyy dd\n", 16, true);
+        let colored = rows(
+            "-1 aaaa bbbb cccc dd\n+1 aaaa xxxx yyyy dd\n",
+            16,
+            true,
+            ROWS,
+            "",
+        );
         assert_eq!(
             colored,
             [
@@ -236,7 +254,7 @@ mod tests {
             ]
         );
         // Lines of a larger change are shown without highlights.
-        let block = rows("-1 a\n-2 b\n+1 c\n", 20, true);
+        let block = rows("-1 a\n-2 b\n+1 c\n", 20, true, ROWS, "");
         assert_eq!(
             block,
             [

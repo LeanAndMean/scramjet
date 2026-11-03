@@ -7,6 +7,7 @@ mod select;
 mod style;
 mod tree;
 mod type_ahead;
+mod view;
 
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -55,6 +56,8 @@ edits the prompt in $VISUAL or $EDITOR; its text replaces the prompt when the ed
 `!command` runs a bash command in the project directory without a model turn and adds its output
 to the conversation for the next prompt; `!!command` runs it without adding it.
 Ctrl-C clears the prompt; on an empty prompt press it twice, or Ctrl-D, or type /exit, to quit.
+Ctrl+O shows the conversation in the alternate screen with every tool result whole, from its
+end: Up/Down, Page Up/Down and Home/End scroll it; Escape, q or Ctrl+O closes it.
 Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
 next one on; it works while a turn runs too. Shift+Tab sets the reasoning effort to the next
 level the model's Proxy card lists. /new starts a new session; /resume chooses one of
@@ -194,7 +197,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         })
     }
     .map_err(|e| e.to_string())?;
-    let mut ui = Terminal::new(hide_thinking.clone());
+    let mut ui = Terminal::new(hide_thinking.clone(), true);
 
     if let Some(prompt) = prompt {
         let prompt = if prompt == "-" {
@@ -258,6 +261,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 agent.commands().list().iter().map(command_entry).collect(),
             )
         });
+    ui.expandable = editor.is_some();
     // A completed command's next step, run as if typed.
     let mut queued: Option<String> = None;
     loop {
@@ -283,6 +287,20 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     Some(editor::Input::Tree) => {
                         escaped = true;
                         "/tree".to_owned()
+                    }
+                    Some(editor::Input::Conversation(typed)) => {
+                        let render = |width| {
+                            let mut capture = Terminal::capture(width, hide_thinking.clone());
+                            agent.show_conversation(&mut capture);
+                            capture.captured()
+                        };
+                        match view::show(render, &hide_thinking, typed) {
+                            Ok(typed) => editor.type_ahead(typed),
+                            Err(error) => eprintln!("error: {error}"),
+                        }
+                        // The prompt comes back where it was erased.
+                        spaced = true;
+                        continue;
                     }
                     None => return Ok(()),
                 }
@@ -1243,6 +1261,11 @@ struct Terminal {
     reasoning_hidden: bool,
     /// Reads the keys typed during a turn on a terminal.
     type_ahead: Option<type_ahead::TypeAhead>,
+    /// Output goes here instead of the terminal, styled for this width, with every tool result
+    /// in full, for the conversation view.
+    capture: Option<(String, usize)>,
+    /// Cut previews say that Ctrl+O shows them whole, as it does at the interactive prompt.
+    expandable: bool,
 }
 
 impl Terminal {
@@ -1256,7 +1279,8 @@ impl Terminal {
         bash_lines: usize,
     ) {
         self.clear();
-        let width = editor::terminal_size().0.saturating_sub(2).max(20);
+        let width = self.width().saturating_sub(2).max(20);
+        let full = self.capture.is_some();
         let took = self.tool_started.take().map(|started| started.elapsed());
         let style = match () {
             _ if !self.color => "",
@@ -1268,12 +1292,18 @@ impl Terminal {
             let row = |line| format!("{style}{line}{reset}");
             lines.into_iter().map(row).collect()
         };
+        let shown = |limited: Shown| if full { Shown::All } else { limited };
+        let hint = if self.expandable { EXPAND_HINT } else { "" };
+        let preview = |text: &str, shown: Shown, width| preview(text, shown, width, hint);
         let rows = match (name, detail) {
-            (_, Some(ToolDetail::Diff(diff))) => diff::rows(diff, width, self.color),
+            (_, Some(ToolDetail::Diff(diff))) => {
+                let limit = if full { usize::MAX } else { diff::ROWS };
+                diff::rows(diff, width, self.color, limit, hint)
+            }
             // As in Scramjet, trailing blank lines of a written file are not counted.
             (_, Some(ToolDetail::Written(content))) => styled(preview(
                 content.trim_end_matches(['\n', '\r']),
-                Shown::First(WRITE_LINES),
+                shown(Shown::First(WRITE_LINES)),
                 width,
             )),
             // The user's own answer, not dimmed as tool output is.
@@ -1286,7 +1316,7 @@ impl Terminal {
                 })
                 .collect(),
             (_, Some(ToolDetail::Subagents(usage))) => {
-                let mut rows = styled(preview(output, Shown::First(RESULT_LINES), width));
+                let mut rows = styled(preview(output, shown(Shown::First(RESULT_LINES)), width));
                 if !usage.is_empty() {
                     rows.push(self.dim(&clip(usage, width)));
                 }
@@ -1294,27 +1324,72 @@ impl Terminal {
             }
             ("bash", None) => styled(preview(
                 &bash_shown(output, failed),
-                Shown::Last(bash_lines),
+                shown(Shown::Last(bash_lines)),
                 width,
             )),
-            _ => styled(preview(output, Shown::First(RESULT_LINES), width)),
+            _ => styled(preview(output, shown(Shown::First(RESULT_LINES)), width)),
         };
         for row in rows {
-            eprintln!("  {row}");
+            self.err(&format!("  {row}\n"));
         }
         if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
-            eprintln!(
-                "  {}",
-                self.dim(&format!("took {:.1}s", took.as_secs_f64()))
-            );
+            let took = self.dim(&format!("took {:.1}s", took.as_secs_f64()));
+            self.err(&format!("  {took}\n"));
         }
         // As in Scramjet, a blank line separates each tool block from what follows.
-        eprintln!();
+        self.err("\n");
     }
-    fn new(hide_thinking: Arc<AtomicBool>) -> Self {
+    /// Renders into a buffer `width` columns wide, styled, with every tool result in full.
+    fn capture(width: usize, hide_thinking: Arc<AtomicBool>) -> Self {
+        let mut terminal = Self::new(hide_thinking, false);
+        terminal.color = true;
+        terminal.capture = Some((String::new(), width));
+        terminal
+    }
+    /// What was rendered into the buffer, after ending any streamed block.
+    fn captured(mut self) -> String {
+        self.clear();
+        self.capture
+            .take()
+            .map(|(text, _)| text)
+            .unwrap_or_default()
+    }
+    /// Writes to stderr, or the capture buffer.
+    fn err(&mut self, text: &str) {
+        match &mut self.capture {
+            Some((captured, _)) => captured.push_str(text),
+            None => eprint!("{text}"),
+        }
+    }
+    /// Writes to stdout, where replies go, or the capture buffer.
+    fn out(&mut self, text: &str) {
+        match &mut self.capture {
+            Some((captured, _)) => captured.push_str(text),
+            None => {
+                print!("{text}");
+                let _ = std::io::stdout().flush();
+            }
+        }
+    }
+    fn width(&self) -> usize {
+        match self.capture {
+            Some((_, width)) => width,
+            None => editor::terminal_size().0,
+        }
+    }
+    /// Whether replies are styled and wrapped: on a terminal, or when captured.
+    fn styled_replies(&self) -> bool {
+        self.capture.is_some() || std::io::stdout().is_terminal()
+    }
+    /// Whether the status line is drawn.
+    fn live(&self) -> bool {
+        self.color && self.capture.is_none()
+    }
+    /// With `status_thread`, on a terminal, a thread draws the status line.
+    fn new(hide_thinking: Arc<AtomicBool>, status_thread: bool) -> Self {
         let color = std::io::stderr().is_terminal();
         let status = Arc::new(Mutex::<Status>::default());
-        if color {
+        if color && status_thread {
             let status = status.clone();
             let hide = hide_thinking.clone();
             let mut hidden = hide.load(Ordering::Relaxed);
@@ -1355,11 +1430,13 @@ impl Terminal {
             reasoning: String::new(),
             reasoning_hidden: false,
             type_ahead: None,
+            capture: None,
+            expandable: false,
         }
     }
     /// Shows `activity` on the status line now, or only once it lasts a second.
     fn show(&mut self, activity: String, now: bool) {
-        if self.color {
+        if self.live() {
             let mut status = self.status.lock().unwrap();
             status.activity = Some((activity, Instant::now()));
             status.countdown = None;
@@ -1369,7 +1446,7 @@ impl Terminal {
         }
     }
     fn show_countdown(&mut self, activity: String, delay: Duration) {
-        if self.color {
+        if self.live() {
             let mut status = self.status.lock().unwrap();
             status.activity = Some((activity, Instant::now()));
             status.countdown = Some(delay);
@@ -1378,11 +1455,7 @@ impl Terminal {
     }
     /// `text` broken between words to fit the terminal, for output to stderr.
     fn wrapped(&self, text: &str) -> String {
-        let mut wrap = Wrap::new(if self.color {
-            editor::terminal_size().0
-        } else {
-            0
-        });
+        let mut wrap = Wrap::new(if self.color { self.width() } else { 0 });
         wrap.push(text) + &wrap.finish()
     }
     fn dim(&self, text: &str) -> String {
@@ -1407,7 +1480,7 @@ impl Terminal {
         } else {
             self.clear();
             let styled = match kind {
-                Streaming::Text => std::io::stdout().is_terminal(),
+                Streaming::Text => self.styled_replies(),
                 _ => self.color,
             };
             let base = if kind == Streaming::Reasoning {
@@ -1416,7 +1489,7 @@ impl Terminal {
                 ""
             };
             self.markdown = markdown::Markdown::new(styled, base);
-            self.wrap = Wrap::new(if styled { editor::terminal_size().0 } else { 0 });
+            self.wrap = Wrap::new(if styled { self.width() } else { 0 });
             self.streaming = kind;
             self.text_rows =
                 (kind == Streaming::Text && styled && self.streamed.is_empty()).then_some(0);
@@ -1472,7 +1545,7 @@ impl Terminal {
                     true => format!("{}Thinking...{}", style::THINKING_HIDDEN, style::RESET),
                     false => "Thinking...".into(),
                 };
-                eprint!("{marker}\n\n");
+                self.err(&format!("{marker}\n\n"));
                 self.streaming = Streaming::Reasoning;
                 self.printed_newlines = 2;
                 self.show("thinking".into(), true);
@@ -1486,10 +1559,9 @@ impl Terminal {
             if let Some(rows) = &mut self.text_rows {
                 *rows += text.matches('\n').count();
             }
-            print!("{text}");
-            let _ = std::io::stdout().flush();
+            self.out(text);
         } else {
-            eprint!("{text}");
+            self.err(text);
         }
     }
     /// Removes the status line and ends any streamed block before other output.
@@ -1501,15 +1573,16 @@ impl Terminal {
         self.print_streamed(&rest);
         match self.streaming {
             Streaming::None => {}
-            Streaming::Reasoning => eprint!(
-                "{}{}",
-                if self.color { style::RESET } else { "" },
-                "\n".repeat(2 - self.printed_newlines)
-            ),
+            Streaming::Reasoning => {
+                let reset = if self.color { style::RESET } else { "" };
+                self.err(&format!(
+                    "{reset}{}",
+                    "\n".repeat(2 - self.printed_newlines)
+                ));
+            }
             Streaming::Text => {
                 self.text_rows = self.text_rows.map(|rows| rows + 2);
-                println!("\n");
-                let _ = std::io::stdout().flush();
+                self.out("\n\n");
             }
         }
         self.printed_newlines = 0;
@@ -1593,28 +1666,28 @@ impl AgentUi for Terminal {
         }
         self.text_rows = None;
         if !text.is_empty() {
-            let width = match std::io::stdout().is_terminal() {
-                true => editor::terminal_size().0,
+            let width = match self.styled_replies() {
+                true => self.width(),
                 false => 0,
             };
             let mut markdown = markdown::Markdown::new(width > 0, "");
             let text = markdown.push(text.trim_end()) + &markdown.finish();
             let mut wrap = Wrap::new(width);
             let text = wrap.push(&text) + &wrap.finish();
-            println!("{text}\n");
-            let _ = std::io::stdout().flush();
+            self.out(&format!("{text}\n\n"));
         }
     }
     fn tool_call(&mut self, name: &str, summary: &str) {
         self.clear();
-        eprintln!("{}", self.dim(&self.wrapped(&call_line(name, summary))));
+        let line = self.dim(&self.wrapped(&call_line(name, summary)));
+        self.err(&format!("{line}\n"));
     }
     fn tool_running(&mut self) {
         self.tool_started = Some(Instant::now());
         self.show("running".into(), false);
     }
     fn tool_output(&mut self, output: &str) {
-        if !self.color {
+        if !self.live() {
             return;
         }
         // Two columns of indent, and one spare so that no line reaches the edge and wraps.
@@ -1672,29 +1745,31 @@ impl AgentUi for Terminal {
         self.clear();
         // As the editor left it on screen; output to a pipe is not wrapped.
         let width = match self.color {
-            true => editor::terminal_size().0,
+            true => self.width(),
             false => usize::MAX,
         };
         for row in editor::prompt_rows(prompt, width) {
-            eprintln!("{row}");
+            self.err(&format!("{row}\n"));
         }
-        eprintln!();
+        self.err("\n");
     }
     fn compaction_summary(&mut self, summary: &str) {
         self.clear();
-        eprintln!(
-            "{}\n\n{}\n",
+        let block = format!(
+            "{}\n\n{}\n\n",
             self.wrapped("✓ Compacted: the earlier conversation is summarized"),
             self.summary_block(summary)
         );
+        self.err(&block);
     }
     fn branch_summary(&mut self, summary: &str) {
         self.clear();
-        eprintln!(
-            "{}\n\n{}\n",
+        let block = format!(
+            "{}\n\n{}\n\n",
             self.wrapped("✓ Summarized the branch this conversation came back from"),
             self.summary_block(summary)
         );
+        self.err(&block);
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         // Only an answer typed after the question is shown may approve it.
@@ -1711,13 +1786,14 @@ impl AgentUi for Terminal {
     fn notice(&mut self, text: &str) {
         self.clear();
         let text = self.wrapped(&visible(text));
-        eprintln!("{}\n", self.styled(style::NOTICE, &text));
+        let text = self.styled(style::NOTICE, &text);
+        self.err(&format!("{text}\n\n"));
     }
     /// As Scramjet shows the message in the tool's row: markdown, under the call line.
     fn question(&mut self, message: &str) {
         self.clear();
         let width = match self.color {
-            true => editor::terminal_size().0.saturating_sub(2).max(20),
+            true => self.width().saturating_sub(2).max(20),
             false => 0,
         };
         let mut markdown = markdown::Markdown::new(self.color, "");
@@ -1725,11 +1801,11 @@ impl AgentUi for Terminal {
         let mut wrap = Wrap::new(width);
         for line in (wrap.push(&text) + &wrap.finish()).lines() {
             match line.is_empty() {
-                true => eprintln!(),
-                false => eprintln!("  {line}"),
+                true => self.err("\n"),
+                false => self.err(&format!("  {line}\n")),
             }
         }
-        eprintln!();
+        self.err("\n");
     }
     fn choose(
         &mut self,
@@ -1867,10 +1943,14 @@ const BASH_LINES: usize = 5;
 const COMMAND_LINES: usize = 20;
 const WRITE_LINES: usize = 10;
 const RESULT_LINES: usize = 6;
+/// Ends the note about the lines a preview leaves out, as Scramjet's does.
+const EXPAND_HINT: &str = ", Ctrl+O to expand";
 
 enum Shown {
     First(usize),
     Last(usize),
+    /// Every line, wrapped rather than cut.
+    All,
 }
 
 /// A failed command's ending follows its output after a blank line, which is not worth one of
@@ -1883,25 +1963,33 @@ fn bash_shown(output: &str, failed: bool) -> String {
 }
 
 /// The lines of a tool result to show, made safe for the terminal and cut to `width` cells,
-/// with a note for lines left out.
-fn preview(text: &str, shown: Shown, width: usize) -> Vec<String> {
+/// with a note for lines left out that ends with `hint`.
+fn preview(text: &str, shown: Shown, width: usize, hint: &str) -> Vec<String> {
     let lines: Vec<&str> = text.lines().collect();
     let fit = |line: &&str| clip(&printable(line), width);
     match shown {
         Shown::First(n) if lines.len() > n => {
             let mut kept: Vec<String> = lines[..n].iter().map(fit).collect();
             kept.push(format!(
-                "… ({} more lines, {} total)",
+                "… ({} more lines, {} total{hint})",
                 lines.len() - n,
                 lines.len()
             ));
             kept
         }
         Shown::Last(n) if lines.len() > n => {
-            let mut kept = vec![format!("… ({} earlier lines)", lines.len() - n)];
+            let mut kept = vec![format!("… ({} earlier lines{hint})", lines.len() - n)];
             kept.extend(lines[lines.len() - n..].iter().map(fit));
             kept
         }
+        Shown::All => lines
+            .iter()
+            .flat_map(|line| {
+                let mut wrap = Wrap::new(width);
+                let rows = wrap.push(&printable(line)) + &wrap.finish();
+                rows.split('\n').map(str::to_owned).collect::<Vec<_>>()
+            })
+            .collect(),
         _ => lines.iter().map(fit).collect(),
     }
 }
@@ -2153,9 +2241,9 @@ mod tests {
         let output: String = (1..=20).map(|n| format!("line {n}\n")).collect();
         let failed = format!("{output}\nCommand exited with code 1");
         assert_eq!(
-            preview(&bash_shown(&failed, true), Shown::Last(5), 80),
+            preview(&bash_shown(&failed, true), Shown::Last(5), 80, EXPAND_HINT),
             [
-                "… (16 earlier lines)",
+                "… (16 earlier lines, Ctrl+O to expand)",
                 "line 17",
                 "line 18",
                 "line 19",
@@ -2172,7 +2260,7 @@ mod tests {
             "Command exited with code 1"
         );
         assert_eq!(bash_shown("a\n\nb", false), "a\n\nb");
-        let head = preview(&output, Shown::First(2), 80);
+        let head = preview(&output, Shown::First(2), 80, "");
         assert_eq!(head, ["line 1", "line 2", "… (18 more lines, 20 total)"]);
         assert_eq!(
             printable("\x1b[31merror\x1b[0m:\tx\x1b]0;title\x07\x08 10%\r100%"),
@@ -2189,6 +2277,41 @@ mod tests {
         assert_eq!(clip("abcdefgh", 5), "abcd…");
         assert_eq!(clip("日本語です", 6), "日本…");
         assert_eq!(clip("short", 5), "short");
+    }
+
+    #[test]
+    fn the_captured_conversation_shows_every_tool_result_in_full() {
+        let mut ui = Terminal::capture(30, Arc::new(AtomicBool::new(false)));
+        ui.user_prompt("count");
+        ui.progress(&StreamProgress::Reasoning("Counting **now**.\n\n".into()));
+        ui.tool_call("bash", "seq 1 12");
+        let output: String = (1..=12).map(|n| format!("{n}\n")).collect();
+        ui.tool_result("bash", &output, None, false);
+        ui.tool_call("read", "a.txt");
+        ui.tool_result("read", &"word ".repeat(10), None, false);
+        let diff: String = (1..=50).map(|n| format!("+{n:>2} line {n}\n")).collect();
+        ui.tool_result("edit", "ok", Some(&ToolDetail::Diff(diff)), false);
+        ui.assistant("Counted to `12`.");
+        let text = ui.captured();
+        let plain = |text: &str| {
+            let mut plain = String::new();
+            let mut escape = Escape::None;
+            plain.extend(text.chars().filter(|&c| !escape.step(c)));
+            plain
+        };
+        let lines: Vec<String> = text.lines().map(plain).collect();
+        let at = |line: &str| lines.iter().position(|shown| shown == line);
+        let first = at("  1").expect("the first output line");
+        let numbers: Vec<_> = (1..=12).map(|n| format!("  {n}")).collect();
+        assert_eq!(lines[first..first + 12], numbers);
+        // A long line wraps instead of being cut.
+        let read = at("● read a.txt").unwrap();
+        assert_eq!(lines[read + 1], "  word word word word word");
+        assert_eq!(lines[read + 2], "  word word word word word");
+        assert!(at("  +50 line 50").is_some(), "{lines:?}");
+        assert!(!text.contains("more lines") && !text.contains("earlier lines"));
+        assert!(at("Counted to 12.").is_some(), "{lines:?}");
+        assert!(text.contains(style::REASONING));
     }
 
     #[test]

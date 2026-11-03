@@ -58,6 +58,8 @@ pub(super) enum Key {
     /// Shift+Tab, `ESC [ Z`.
     BackTab,
     External,
+    /// Ctrl+O, Scramjet's key to expand tool output.
+    Expand,
     Suspend,
     /// A lone Escape.
     Escape,
@@ -89,6 +91,7 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
         7 => Key::External,
         11 => Key::KillEnd,
         14 => Key::Down,
+        15 => Key::Expand,
         16 => Key::Up,
         20 => Key::ToggleThinking,
         21 => Key::KillStart,
@@ -469,8 +472,19 @@ pub(super) struct Stdin {
 }
 
 impl Stdin {
+    /// Input that reads `typed` before the terminal.
+    pub(super) fn starting_with(typed: Vec<u8>) -> Self {
+        Self {
+            buffer: typed,
+            start: 0,
+        }
+    }
     pub(super) fn pending(&self) -> bool {
         self.start < self.buffer.len()
+    }
+    /// The bytes read from the terminal but not yet taken.
+    pub(super) fn rest(mut self) -> Vec<u8> {
+        self.buffer.split_off(self.start)
     }
 }
 
@@ -614,6 +628,9 @@ pub enum Input {
     Prompt(String),
     /// Escape twice on an empty prompt, which opens `/tree` as in Scramjet. The prompt is erased.
     Tree,
+    /// Ctrl+O, to show the conversation in full. The prompt is erased, and its text is where the
+    /// next prompt starts; the keys typed after Ctrl+O come with it.
+    Conversation(Vec<u8>),
 }
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
@@ -854,10 +871,7 @@ impl Editor {
     /// its own.
     pub fn read(&mut self, cycle_effort: &mut dyn FnMut() -> String) -> io::Result<Option<Input>> {
         let raw = RawMode::enter()?;
-        let mut source = Stdin {
-            buffer: std::mem::take(&mut self.typed),
-            start: 0,
-        };
+        let mut source = Stdin::starting_with(std::mem::take(&mut self.typed));
         let mut screen = Screen::default();
         let mut buffer = Buffer::default();
         buffer.set(std::mem::take(&mut self.text));
@@ -946,7 +960,17 @@ impl Editor {
                     note = Some(cycle_effort());
                     true
                 }
-                Key::Ignored | Key::BackTab | Key::Escape | Key::PageUp | Key::PageDown => {
+                Key::Expand if !self.dialog => {
+                    screen.erase()?;
+                    self.text = buffer.text;
+                    return Ok(Some(Input::Conversation(source.rest())));
+                }
+                Key::Ignored
+                | Key::BackTab
+                | Key::Expand
+                | Key::Escape
+                | Key::PageUp
+                | Key::PageDown => {
                     exit_armed = armed;
                     note = noted;
                     false
