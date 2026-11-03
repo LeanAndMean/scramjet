@@ -282,22 +282,12 @@ impl Agent {
         let executor = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        let sets = Sets::for_project(&config.command_sets, &config.root);
-        let commands = Commands::discover(&sets);
-        let agents = subagent::registered(&sets, &mut Vec::new());
-        let skills = Skills::discover(&config.skills, &config.root);
         let mut agent = Self {
-            instructions: instructions::agent(
-                &config.root,
-                &config.tools,
-                &commands,
-                &agents,
-                &skills,
-            ),
-            agents_directory: subagent::user_directory(),
-            sets,
-            commands,
-            skills,
+            instructions: String::new(),
+            agents_directory: None,
+            sets: Sets::default(),
+            commands: Commands::default(),
+            skills: Skills::default(),
             lifecycle,
             completed: None,
             delegated: Vec::new(),
@@ -316,8 +306,37 @@ impl Agent {
                 ..Usage::default()
             },
         };
+        agent.load();
         agent.answer_interrupted_calls()?;
         Ok(agent)
+    }
+
+    /// `/reload`: finds the command sets, their commands and agents, the skills and the context
+    /// files again, as at start, with the settings' `tools`, `command_sets` and `skills`, as
+    /// Scramjet's reload does. The conversation and the command running stay; what is wrong in
+    /// `autonomy.yaml` is said again at the next routing.
+    pub fn reload(&mut self, tools: Vec<String>, command_sets: Vec<PathBuf>, skills: Vec<PathBuf>) {
+        self.config.tools = tools;
+        self.config.command_sets = command_sets;
+        self.config.skills = skills;
+        self.autonomy_diagnostics.clear();
+        self.load();
+    }
+
+    fn load(&mut self) {
+        let config = &self.config;
+        self.sets = Sets::for_project(&config.command_sets, &config.root);
+        self.commands = Commands::discover(&self.sets);
+        let agents = subagent::registered(&self.sets, &mut Vec::new());
+        self.skills = Skills::discover(&config.skills, &config.root);
+        self.agents_directory = subagent::user_directory();
+        self.instructions = instructions::agent(
+            &config.root,
+            &config.tools,
+            &self.commands,
+            &agents,
+            &self.skills,
+        );
     }
 
     /// The sessions saved next to the current one that have a conversation, and the current one,
@@ -474,12 +493,12 @@ impl Agent {
         Ok(())
     }
 
-    /// The commands this session's prompts can run, as discovered when the session started.
+    /// The commands this session's prompts can run, as discovered at start or `reload`.
     pub fn commands(&self) -> &Commands {
         &self.commands
     }
 
-    /// The skills found when the session started, which `/skill:<name>` runs.
+    /// The skills found at start or `reload`, which `/skill:<name>` runs.
     pub fn skills(&self) -> &Skills {
         &self.skills
     }

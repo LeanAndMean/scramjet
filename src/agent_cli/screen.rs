@@ -14,7 +14,7 @@ use super::interactive::effort_note;
 use super::record::{self, Event};
 use super::select::Picker;
 use super::selection::{self, Line};
-use super::settings::Delivery;
+use super::settings::{Delivery, DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, elapsed};
 use super::text::{Wrap, clip, one_line, visible};
@@ -62,6 +62,7 @@ const WHEEL_DOWN: u16 = 65;
 const ALLOW: &str = "Allow? [y/N, a = allow all until exit]";
 const BUSY: &str = "Busy: the session is not ready for a prompt yet";
 const SHELL_BUSY: &str = "A bash command is already running. Press Esc to cancel it first.";
+const RELOAD_BUSY: &str = "Wait for the current response to finish before reloading.";
 
 /// What the session asks the screen to show or do.
 enum ToScreen {
@@ -76,6 +77,9 @@ enum ToScreen {
     SetText(String),
     Remember(String),
     Note(String),
+    /// `/reload` read the commands and skills (the `/` list's rows after the built-in ones)
+    /// and whether Escape twice on an empty prompt does something.
+    Reloaded(Vec<(String, String)>, bool),
     Dialog(Dialog, mpsc::Sender<Answer>),
     /// The dialog's question is no longer asked.
     Dismiss,
@@ -224,6 +228,12 @@ impl Link {
     }
     pub(super) fn note(&self, note: String) {
         self.send(ToScreen::Note(note));
+    }
+    /// What `/reload` read: the commands and skills the `/` list shows, and the `settings`.
+    pub(super) fn reloaded(&mut self, commands: Vec<(String, String)>, settings: &Settings) {
+        self.modes = (settings.steering_mode, settings.follow_up_mode);
+        let double_escape = settings.double_escape != DoubleEscape::Nothing;
+        self.send(ToScreen::Reloaded(commands, double_escape));
     }
     /// Shows `dialog` and waits for its answer; `None` once the screen is gone or `cancel` set.
     pub(super) fn ask(&self, dialog: Dialog, cancel: Option<&AtomicBool>) -> Option<Answer> {
@@ -924,6 +934,9 @@ impl App {
             ToScreen::SetText(text) => self.draft = self.editor.draft(text),
             ToScreen::Remember(prompt) => self.editor.remember(&prompt),
             ToScreen::Note(note) => self.draft.set_note(note),
+            ToScreen::Reloaded(commands, double_escape) => {
+                self.editor.reloaded(commands, double_escape)
+            }
             ToScreen::Dialog(dialog, reply) => {
                 let shown = match dialog {
                     Dialog::Pick(picker) if picker.is_empty() => {
@@ -1051,11 +1064,16 @@ impl App {
     }
 
     /// Takes the built-in command `text` typed while a turn runs, as Scramjet runs it at once:
-    /// `/quit` exits, a command that replaces or rewrites the conversation stops the turn and
-    /// runs once it has, and the others run before the turn's next request (`AgentUi::pause`).
+    /// `/quit` exits, `/reload` is refused, a command that replaces or rewrites the conversation
+    /// stops the turn and runs once it has, and the others run before the turn's next request
+    /// (`AgentUi::pause`).
     fn command(&mut self, text: String) {
         match Builtin::parse(&text) {
             Some(Builtin::Quit) => return self.exit(),
+            Some(Builtin::Reload) => {
+                self.draft = self.editor.draft(String::new());
+                return self.draft.set_note(RELOAD_BUSY.to_owned());
+            }
             Some(builtin) if builtin.interrupts() => self.cancel.store(true, Ordering::Relaxed),
             _ => {}
         }

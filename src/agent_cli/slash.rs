@@ -1,12 +1,12 @@
 //! The built-in commands: `/new`, `/name`, `/session`, `/resume`, `/fork`, `/tree`, `/model`,
-//! `/compact`, `/autopilot`, and `!` commands.
-use super::interactive::{Interactive, model_line};
+//! `/compact`, `/autopilot`, `/reload`, and `!` commands.
+use super::interactive::{Interactive, completions, model_line};
 use super::screen;
 use super::terminal::Terminal;
 use super::text::{clip, one_line, visible};
 use super::{editor, select, style, tree};
 use scramjet_rs::agent::{Agent, AgentError, Navigated, SessionInfo};
-use std::time::Duration;
+use std::{sync::atomic::Ordering, time::Duration};
 use unicode_width::UnicodeWidthStr;
 
 /// A built-in command as typed, with its argument.
@@ -21,6 +21,7 @@ pub(super) enum Builtin<'a> {
     Model(&'a str),
     Compact(&'a str),
     Autopilot(&'a str),
+    Reload,
     Quit,
 }
 
@@ -42,6 +43,7 @@ impl<'a> Builtin<'a> {
             "/model" => Self::Model(argument),
             "/compact" => Self::Compact(argument),
             "/autopilot" => Self::Autopilot(argument),
+            "/reload" if argument.is_empty() => Self::Reload,
             "/exit" | "/quit" if argument.is_empty() => Self::Quit,
             _ => return None,
         })
@@ -49,11 +51,12 @@ impl<'a> Builtin<'a> {
 
     /// Whether, typed during a turn, it stops the turn and runs once it has: it replaces or
     /// rewrites the conversation, as Scramjet's `/compact` and `/new` abort the turn first and
-    /// a session switch disposes of it. The others run between the turn's requests.
+    /// a session switch disposes of it. The others run between the turn's requests, but
+    /// `/reload`, which the screen refuses during a turn, as Scramjet does.
     pub(super) fn interrupts(self) -> bool {
         !matches!(
             self,
-            Self::Name(_) | Self::Session | Self::Model(_) | Self::Autopilot(_)
+            Self::Name(_) | Self::Session | Self::Model(_) | Self::Autopilot(_) | Self::Reload
         )
     }
 }
@@ -77,6 +80,7 @@ impl Interactive {
             Some(Builtin::Model(wanted)) => self.model(wanted),
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
+            Some(Builtin::Reload) => self.reload(),
             Some(Builtin::Quit) | None => return false,
         }
         true
@@ -127,6 +131,28 @@ impl Interactive {
         }
         let state = if self.agent.autopilot() { "on" } else { "off" };
         self.say(&self.ui.dim(&format!("Autopilot is {state}")));
+    }
+
+    /// `/reload`, as Scramjet's: the settings, the command sets with their commands and agents,
+    /// the skills and the context files read again, and what is wrong in them shown as at start.
+    fn reload(&mut self) {
+        self.save_hide_thinking();
+        self.settings.reload();
+        let settings = &self.settings;
+        (self.hide_thinking).store(settings.hide_thinking_block, Ordering::Relaxed);
+        self.agent.reload(
+            settings.tools.clone(),
+            settings.command_sets.clone(),
+            settings.skills.clone(),
+        );
+        if let Some(screen) = &mut self.screen {
+            (screen.link).reloaded(completions(&self.agent), &self.settings);
+        }
+        for problem in self.problems() {
+            self.ui().notice(&problem);
+        }
+        let done = "Reloaded settings, command sets, agents, skills and context files";
+        self.say(&self.ui.dim(done));
     }
 
     fn resume(&mut self, wanted: &str) {
@@ -584,6 +610,7 @@ mod tests {
             "/model",
             "/model gpt-6-terra",
             "/autopilot on",
+            "/reload",
         ] {
             assert_eq!(stops(prompt), Some(false), "{prompt}");
         }
@@ -602,6 +629,7 @@ mod tests {
             "/session now",
             "/new one",
             "/exit now",
+            "/reload all",
             "/sessions",
             "/rs:loop",
             "!ls",

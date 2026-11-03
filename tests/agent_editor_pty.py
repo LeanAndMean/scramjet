@@ -910,7 +910,7 @@ def completes_paths_and_commands(read, until, send, output):
     on_screen('error: provider: cannot connect')
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     send(b'/')
-    on_screen('(1/10)')
+    on_screen('(1/11)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -1450,6 +1450,37 @@ def skills(read, until, send, output):
     send(b'\x04')
 
 
+def reloads(read, until, send, output):
+    shown, on_screen = full_screen(200)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/fresh:')
+    read(.3)
+    assert '/fresh:hi' not in '\n'.join(shown()), shown()
+    send(b'\x03')
+    # A command and settings written after the start count from /reload on.
+    os.makedirs(os.path.dirname(fresh_command))
+    with open(fresh_command, 'w') as file:
+        file.write('---\ndescription: Say hi\n---\nSay hi to $ARGUMENTS.\n')
+    with open(settings_path(reloading), 'w') as file:
+        file.write('{"tools": ["read", "bash"], "followUpMode": "each"}')
+    send(b'/reload\r')
+    rows = on_screen('Reloaded settings, command sets, agents, skills and context files')
+    assert ('settings: %s: followUpMode must be "all" or "one-at-a-time"; ignored'
+            % settings_path(reloading)) in rows, rows
+    send(b'/fresh:h')
+    rows = on_screen('\u2192 /fresh:hi')
+    assert rows[-1].split() == ['\u2192', '/fresh:hi', 'Say', 'hi'], rows
+    send(b'\tthere\r')
+    on_screen('thinking 1s')
+    # As in Scramjet, not while a turn runs.
+    send(b'/reload\r')
+    rows = on_screen('Wait for the current response to finish before reloading.')
+    assert rows[-2] == '>', rows
+    reload_gate.set()
+    on_screen('Hi.')
+    send(b'\x04')
+
+
 def questions(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -1678,6 +1709,18 @@ assert users == [{'role': 'user', '_scramjet_typed': '/skill:pdf form.pdf',
                              'Use ./fill.sh\n</skill>\n\nform.pdf' % (pdf, os.path.dirname(pdf))}], users
 assert '<location>%s</location>' % pdf in bodies[0]['instructions'], bodies[0]['instructions']
 shutil.rmtree(os.path.join(project, '.scramjet', 'skills'))
+fresh_command = os.path.join(project, '.scramjet', 'fresh', 'commands', 'fresh:hi.md')
+reloading = config_home('reloading')
+reload_gate = threading.Event()
+bodies = []
+run([], reloads, serve_items([[message('Hi.')], [message('Checked.')]], reload_gate, bodies=bodies),
+    variables={'XDG_CONFIG_HOME': reloading}, columns=200)
+assert bodies[0]['input'][0] == {'role': 'user', 'content': '<scramjet-command name="fresh:hi">\nSay hi to '
+                                 'there.\n</scramjet-command>'}, bodies[0]['input']
+assert '\n- /fresh:hi: Say hi\n' in bodies[0]['instructions'], bodies[0]['instructions']
+assert [tool['name'] for tool in bodies[0]['tools']][:2] == ['read', 'bash'], bodies[0]['tools']
+assert not {'edit', 'write'} & {tool['name'] for tool in bodies[0]['tools']}, bodies[0]['tools']
+shutil.rmtree(os.path.join(project, '.scramjet', 'fresh'))
 question_gate = threading.Event()
 asking = serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {

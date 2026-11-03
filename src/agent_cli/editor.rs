@@ -569,7 +569,7 @@ pub(super) fn terminal_size() -> (usize, usize) {
 }
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
-const SLASH_COMMANDS: [(&str, &str); 10] = [
+const SLASH_COMMANDS: [(&str, &str); 11] = [
     ("model", "Select model (opens selector UI)"),
     ("name", "Set session display name"),
     ("session", "Show session info and stats"),
@@ -578,6 +578,10 @@ const SLASH_COMMANDS: [(&str, &str); 10] = [
     ("new", "Start a new session"),
     ("compact", "Manually compact the session context"),
     ("resume", "Resume a different session"),
+    (
+        "reload",
+        "Reload settings, command sets, agents, skills and context files",
+    ),
     (
         "autopilot",
         "Toggle command auto-continuation: /autopilot on|off|status",
@@ -869,6 +873,13 @@ impl Editor {
             dialog: true,
             ..Self::new(Vec::new(), hide_thinking, PathBuf::new(), Vec::new(), false)
         }
+    }
+
+    /// Lists `commands` after the built-in ones, and makes Escape twice on an empty prompt
+    /// return `Action::DoubleEscape` when `double_escape`.
+    pub fn reloaded(&mut self, commands: Vec<(String, String)>, double_escape: bool) {
+        self.commands = commands;
+        self.double_escape = double_escape;
     }
 
     /// Makes `prompt` the most recent entry that Up recalls.
@@ -1540,6 +1551,7 @@ mod tests {
                 "/new",
                 "/compact",
                 "/resume",
+                "/reload",
                 "/autopilot",
                 "/quit",
             ]
@@ -1552,7 +1564,7 @@ mod tests {
                 "  /session    Show session info and stats",
                 "  /fork       Create a new fork from a previous user messa…",
                 "  /tree       Navigate session tree (switch branches)",
-                "  (1/10)",
+                "  (1/11)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -1567,11 +1579,11 @@ mod tests {
                 "  /new",
                 "→ /compact",
                 "  /resume",
-                "  /autopilot",
-                "  (7/10)"
+                "  /reload",
+                "  (7/11)"
             ]
         );
-        for _ in 0..4 {
+        for _ in 0..5 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);
@@ -1613,7 +1625,10 @@ mod tests {
             ("rs:review".to_owned(), "Review".to_owned()),
         ];
         let list = Completion::slash("/", &loaded).unwrap();
-        assert_eq!(labels(&list)[10..], ["/rs:loop", "/rs:review"]);
+        assert_eq!(
+            labels(&list)[SLASH_COMMANDS.len()..],
+            ["/rs:loop", "/rs:review"]
+        );
         let mut list = Completion::slash("/rs:", &loaded).unwrap();
         assert_eq!(labels(&list), ["/rs:loop", "/rs:review"]);
         list.select(false);

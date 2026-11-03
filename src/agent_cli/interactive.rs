@@ -71,13 +71,7 @@ impl Interactive {
                     agent.prompts().to_vec(),
                     hide_thinking.clone(),
                     agent.root().to_path_buf(),
-                    (agent.commands().list().iter())
-                        .filter(|command| !command.delegate_only)
-                        .map(command_entry)
-                        .chain(agent.skills().list().iter().map(|skill| {
-                            (format!("skill:{}", skill.name), skill.description.clone())
-                        }))
-                        .collect(),
+                    completions(&agent),
                     settings.double_escape != DoubleEscape::Nothing,
                 );
                 let started = Handle::start(
@@ -120,16 +114,7 @@ impl Interactive {
         ));
         // A tool block ends with a blank line; other output gets one before the prompt.
         self.show_resumed();
-        let warnings: Vec<_> = (self.settings.warnings.iter())
-            .map(|warning| format!("settings: {warning}"))
-            .chain(
-                (self.agent.commands().warnings().iter())
-                    .map(|warning| format!("scramjet: {warning}")),
-            )
-            .chain(
-                (self.agent.skills().warnings().iter()).map(|warning| format!("skills: {warning}")),
-            )
-            .collect();
+        let warnings = self.problems();
         if !warnings.is_empty() {
             if !std::mem::take(&mut self.spaced) {
                 self.blank();
@@ -377,8 +362,22 @@ impl Interactive {
         Some((command, start))
     }
 
+    /// What is wrong in the settings, the command sets and the skills, as said at start.
+    pub(super) fn problems(&self) -> Vec<String> {
+        (self.settings.warnings.iter())
+            .map(|warning| format!("settings: {warning}"))
+            .chain(
+                (self.agent.commands().warnings().iter())
+                    .map(|warning| format!("scramjet: {warning}")),
+            )
+            .chain(
+                (self.agent.skills().warnings().iter()).map(|warning| format!("skills: {warning}")),
+            )
+            .collect()
+    }
+
     /// Saves Ctrl+T's choice, made at the prompt or in a turn, when it changed.
-    fn save_hide_thinking(&mut self) {
+    pub(super) fn save_hide_thinking(&mut self) {
         let hide = self.hide_thinking.load(Ordering::Relaxed);
         if let Err(error) = self.settings.set_hide_thinking_block(hide) {
             self.say(&format!("error: settings not saved: {error}"));
@@ -516,6 +515,19 @@ fn add_shells(agent: &mut Agent, screen: &mut Handle) {
             screen.say(&format!("error: {error}"));
         }
     }
+}
+
+/// The rows the `/` list shows after the built-in commands: the loaded commands that are not
+/// only delegated, then the skills as `skill:<name>`.
+pub(super) fn completions(agent: &Agent) -> Vec<(String, String)> {
+    (agent.commands().list().iter())
+        .filter(|command| !command.delegate_only)
+        .map(command_entry)
+        .chain(
+            (agent.skills().list().iter())
+                .map(|skill| (format!("skill:{}", skill.name), skill.description.clone())),
+        )
+        .collect()
 }
 
 /// A loaded command's row in the `/` list: the argument hint before the description, as

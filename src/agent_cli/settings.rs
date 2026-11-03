@@ -82,7 +82,36 @@ impl Settings {
     }
 
     fn read(path: Option<PathBuf>) -> Self {
-        let mut settings = Self {
+        let mut settings = Self::defaults(path);
+        let Some(path) = &settings.path else {
+            return settings;
+        };
+        match read_object(path) {
+            Ok(object) => settings.apply(&object),
+            Err(error) => settings
+                .warnings
+                .push(format!("{error}; using the defaults")),
+        }
+        settings
+    }
+
+    /// `/reload`: the file read again; one that cannot be read leaves the settings as they were,
+    /// as Scramjet's reload does.
+    pub(super) fn reload(&mut self) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        match read_object(path) {
+            Ok(object) => {
+                *self = Self::defaults(self.path.take());
+                self.apply(&object);
+            }
+            Err(error) => self.warnings = vec![format!("{error}; kept as they were")],
+        }
+    }
+
+    fn defaults(path: Option<PathBuf>) -> Self {
+        Self {
             path,
             hide_thinking_block: false,
             double_escape: DoubleEscape::Tree,
@@ -95,17 +124,7 @@ impl Settings {
             command_sets: Vec::new(),
             skills: Vec::new(),
             warnings: Vec::new(),
-        };
-        let Some(path) = &settings.path else {
-            return settings;
-        };
-        match read_object(path) {
-            Ok(object) => settings.apply(&object),
-            Err(error) => settings
-                .warnings
-                .push(format!("{error}; using the defaults")),
         }
-        settings
     }
 
     fn apply(&mut self, object: &Map<String, Value>) {
@@ -584,6 +603,47 @@ mod tests {
                 format!(r#"{path}: followUpMode must be "all" or "one-at-a-time"; ignored"#),
             ]
         );
+    }
+
+    #[test]
+    fn a_reload_reads_the_file_afresh_and_keeps_the_settings_when_it_cannot() {
+        let scratch = Scratch::new("reload");
+        let mut settings = settings_with(
+            &scratch,
+            r#"{"hideThinkingBlock": true, "tools": ["read"], "skills": ["x"], "followUpMode": "each"}"#,
+        );
+        assert_eq!(settings.warnings.len(), 1);
+        let path = scratch.0.join("settings.json");
+        // Keys taken out go back to their defaults, and the old warnings go.
+        std::fs::write(
+            &path,
+            r#"{"commandSets": ["sets/mach12"], "steeringMode": 1}"#,
+        )
+        .unwrap();
+        settings.reload();
+        assert!(!settings.hide_thinking_block);
+        assert_eq!(settings.tools, DEFAULT_TOOLS);
+        assert!(settings.skills.is_empty());
+        assert_eq!(settings.command_sets, [scratch.0.join("sets/mach12")]);
+        let shown_path = shown(&path);
+        assert_eq!(
+            settings.warnings,
+            [format!(
+                r#"{shown_path}: steeringMode must be "all" or "one-at-a-time"; ignored"#
+            )]
+        );
+        std::fs::write(&path, r#"{"commandSets": ["#).unwrap();
+        settings.reload();
+        assert_eq!(settings.command_sets, [scratch.0.join("sets/mach12")]);
+        assert_eq!(settings.warnings.len(), 1);
+        assert!(
+            (settings.warnings[0].starts_with(&shown_path))
+                && settings.warnings[0].ends_with("; kept as they were"),
+            "{:?}",
+            settings.warnings
+        );
+        // Changes are still saved to that file.
+        assert_eq!(settings.path.as_deref(), Some(path.as_path()));
     }
 
     #[test]
