@@ -650,6 +650,13 @@ fn sessions_are_renamed_and_deleted_and_unused_new_ones_are_not_left_behind() {
         .unwrap();
     agent.resume_session(&current).unwrap();
     assert!(shared.exists());
+    // One another process has open stays too, as when its `--continue` took it.
+    agent.new_session().unwrap();
+    let continued = agent.session_path().to_owned();
+    let elsewhere = Session::open(&continued).unwrap();
+    agent.resume_session(&current).unwrap();
+    assert!(continued.exists());
+    drop(elsewhere);
     agent.new_session().unwrap();
     let last = agent.session_path().to_owned();
     agent.discard_unused_session().unwrap();
@@ -685,6 +692,39 @@ fn lines_another_process_appends_keep_entries_and_branches_right() {
     let (reopened, items, _) = Session::open(&path).unwrap();
     let prompts: Vec<_> = items.iter().map(|item| item["content"].clone()).collect();
     assert_eq!(prompts, ["one", "again"]);
+    assert_eq!(reopened.leaf(), session.leaf());
+}
+
+#[test]
+fn names_another_process_gives_while_entries_go_in_keep_the_file_readable() {
+    let scratch = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-renamed-{}", std::process::id())),
+    );
+    let path = scratch.0.join("shared.jsonl");
+    std::fs::write(&path, "{\"type\":\"session\",\"version\":1}\n").unwrap();
+    let (mut session, _, _) = Session::open(&path).unwrap();
+    let appending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let renamer = {
+        let (path, appending) = (path.clone(), appending.clone());
+        std::thread::spawn(move || {
+            let mut renamed = 0;
+            while renamed == 0 || appending.load(std::sync::atomic::Ordering::Relaxed) {
+                Session::name_file(&path, &format!("Name {renamed}")).unwrap();
+                renamed += 1;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            renamed
+        })
+    };
+    for n in 0..2000 {
+        session
+            .append(&json!({"role":"user","content":n.to_string()}))
+            .unwrap();
+    }
+    appending.store(false, std::sync::atomic::Ordering::Relaxed);
+    let last = format!("Name {}", renamer.join().unwrap() - 1);
+    let (reopened, items, _) = Session::open(&path).unwrap();
+    assert_eq!((items.len(), reopened.name()), (2000, Some(last.as_str())));
     assert_eq!(reopened.leaf(), session.leaf());
 }
 

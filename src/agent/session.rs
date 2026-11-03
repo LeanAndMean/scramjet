@@ -407,6 +407,7 @@ impl Session {
         let mut header = serde_json::to_vec(&header)?;
         header.push(b'\n');
         file.write_all(&header)?;
+        let _ = file.lock_shared();
         Ok(Self {
             path,
             file,
@@ -459,6 +460,8 @@ impl Session {
         let entries = read(path)?;
         let context = entries.context(path, entries.tail)?;
         let file = OpenOptions::new().append(true).open(path)?;
+        // Held while open, so that the process that created it does not discard it.
+        let _ = file.lock_shared();
         Ok((
             Self {
                 path: path.to_owned(),
@@ -598,6 +601,11 @@ impl Session {
     /// Saves `name` (trimmed; empty clears it) as the session's name, as Scramjet's `/name` does.
     /// It is a line of its own, not an entry: the conversation and its branches stay as they are.
     pub fn set_name(&mut self, name: &str) -> io::Result<()> {
+        let _writing = self.writing()?;
+        self.write_name(name)
+    }
+
+    fn write_name(&mut self, name: &str) -> io::Result<()> {
         let name = name.trim();
         let mut line = serde_json::to_vec(&json!({"type":"session_info","name":name}))?;
         line.push(b'\n');
@@ -613,8 +621,9 @@ impl Session {
     /// Scramjet orders sessions by their last message.
     pub fn name_file(path: &Path, name: &str) -> io::Result<()> {
         let mut session = Self::open(path)?.0;
+        let _writing = session.writing()?;
         let modified = session.file.metadata()?.modified()?;
-        session.set_name(name)?;
+        session.write_name(name)?;
         session.file.set_modified(modified)
     }
 
@@ -651,12 +660,24 @@ impl Session {
     }
 
     /// Removes the file of a session this process created and left without a conversation, as
-    /// Scramjet writes none before the first reply; one another process wrote to stays.
+    /// Scramjet writes none before the first reply; one another process wrote to or has open stays.
     pub fn discard_if_unused(self) -> io::Result<()> {
-        if self.unused && self.file.metadata()?.len() == self.size {
+        if self.unused && self.file.try_lock().is_ok() && self.file.metadata()?.len() == self.size {
             std::fs::remove_file(&self.path)?;
         }
         Ok(())
+    }
+
+    /// Locks the session directory until dropped, so that no other process's line lands between
+    /// `catch_up` and the write after it. Without `flock`, writes go unserialized.
+    fn writing(&self) -> io::Result<File> {
+        let directory = match self.path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
+        let directory = File::open(directory)?;
+        let _ = directory.lock();
+        Ok(directory)
     }
 
     /// Writes `lines` at the file's end; callers count them once it returns.
@@ -745,6 +766,7 @@ impl Session {
     /// Appends `item` as the entry after the leaf, with a branch line before it when the leaf is
     /// not the last entry, and makes it the leaf.
     pub fn append(&mut self, item: &Value) -> io::Result<()> {
+        let _writing = self.writing()?;
         self.catch_up()?;
         let branched = self.leaf != self.tail;
         let mut lines = Vec::new();
