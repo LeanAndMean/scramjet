@@ -162,7 +162,10 @@ fn find(entries: &[Entry], line: usize) -> Option<&Entry> {
 
 /// Whether `entry` is a prompt the user sent to the model, which a branch can start before.
 pub(super) fn is_prompt(entry: &Value) -> bool {
-    entry["role"] == "user" && !is_bang(entry) && entry["content"].is_string()
+    entry["role"] == "user"
+        && !is_bang(entry)
+        && entry["content"].is_string()
+        && entry.get(super::PROBE).is_none()
 }
 
 /// Whether `entry` is a `!` command, which is typed as `!...` and is not a prompt.
@@ -252,7 +255,9 @@ impl Entries {
     fn prompts(&self) -> Vec<String> {
         self.entries
             .iter()
-            .filter(|entry| entry.value["role"] == "user")
+            .filter(|entry| {
+                entry.value["role"] == "user" && entry.value.get(super::PROBE).is_none()
+            })
             .filter_map(|entry| {
                 let value = &entry.value;
                 value[super::TYPED].as_str().or(value["content"].as_str())

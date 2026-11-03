@@ -39,10 +39,29 @@ slow.listen(8)
 delayed = '127.0.0.1:%d' % slow.getsockname()[1]
 
 
+def receive(connection):
+    """Reads a whole request, so the answer never races the rest of it (an answer sent while the
+    client still writes resets the connection)."""
+    data = b''
+    while b'\r\n\r\n' not in data:
+        chunk = connection.recv(65536)
+        if not chunk:
+            return data
+        data += chunk
+    head, _, body = data.partition(b'\r\n\r\n')
+    length = re.search(rb'(?i)\r\ncontent-length: *(\d+)', head)
+    while length and len(body) < int(length.group(1)):
+        chunk = connection.recv(65536)
+        if not chunk:
+            break
+        body += chunk
+    return head + b'\r\n\r\n' + body
+
+
 def answer_slowly():
     while True:
         connection, _ = slow.accept()
-        connection.recv(65536)
+        receive(connection)
         time.sleep(1.5)
         connection.sendall(b'HTTP/1.1 500 Internal Server Error\r\ncontent-length: 4\r\n\r\nslow')
         connection.close()
@@ -72,7 +91,7 @@ def serve_call(command):
     def answer():
         while True:
             connection, _ = listener.accept()
-            connection.recv(65536)
+            receive(connection)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
                                b'connection: close\r\n\r\n%s' % (len(stream), stream))
             connection.close()
@@ -103,7 +122,7 @@ def serve_quiet_reasoning():
     def answer():
         while True:
             connection, _ = listener.accept()
-            connection.recv(65536)
+            receive(connection)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n'
                                b'transfer-encoding: chunked\r\n\r\n%x\r\n%s\r\n' % (len(body), body))
             threading.Thread(target=lambda c=connection: (time.sleep(30), c.close()), daemon=True).start()
@@ -159,11 +178,11 @@ def serve_thoughts(gates):
     def answer():
         for gate in gates:
             connection, _ = listener.accept()
-            if connection.recv(65536).startswith(b'GET'):
+            if receive(connection).startswith(b'GET'):
                 connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
                 connection.close()
                 connection, _ = listener.accept()
-                connection.recv(65536)
+                receive(connection)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n'
                                b'transfer-encoding: chunked\r\n\r\n%x\r\n%s\r\n' % (len(chunks[0]), chunks[0]))
             gate.wait(10)
@@ -207,7 +226,7 @@ def serve_replies(replies, models=(), cards=None, usage=None):
         pending = iter(streams)
         while True:
             connection, _ = listener.accept()
-            request = connection.recv(65536)
+            request = receive(connection)
             if request.startswith(b'GET /v1/models') and models:
                 connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n'
                                    b'connection: close\r\n\r\n%s' % (len(listing), listing))
@@ -267,7 +286,7 @@ def serve_items(responses, gate=None):
     def answer():
         for number, stream in enumerate(streams):
             connection, _ = listener.accept()
-            while connection.recv(65536).startswith(b'GET'):
+            while receive(connection).startswith(b'GET'):
                 connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
                 connection.close()
                 connection, _ = listener.accept()
@@ -311,7 +330,8 @@ editing = serve_items([
     [{'type': 'message', 'id': 'msg_1', 'role': 'assistant', 'status': 'completed',
       'content': [{'type': 'output_text', 'text': '**Done**, it says two.', 'annotations': []}]}],
 ])
-env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACHE=os.path.join(work, 'commands'))
+env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACHE=os.path.join(work, 'commands'),
+           XDG_CONFIG_HOME=os.path.join(work, 'config'))
 env.pop('VISUAL', None)
 env.pop('EDITOR', None)
 # Temporary files of the external editor go here, so the journeys can check they are removed.
@@ -1226,9 +1246,13 @@ def command_sets(read, until, send, output):
     mark = until(b'> /demo:greet ', mark)
     send(b'Ada "the reader"\r')
     mark = until(b'Greeted.', until(b'> /demo:greet Ada "the reader"', mark))
+    # Without a report, Scramjet's status check follows, hidden; the model reports there.
+    mark = until(b'status: completed', until(b'report_scramjet_command_status completed', mark))
     mark = until(b'> ', mark)
     send(b'/tools:echo a  b\r')
     mark = until(b'Echoed.', mark)
+    # A status check answered without a report leaves the command waiting, silently.
+    mark = until(b'Still here.', mark)
     until(b'> ', mark)
     send(b'\x04')
 
@@ -1254,10 +1278,30 @@ os.makedirs(echo)
 with open(os.path.join(echo, 'tools:echo.md'), 'w') as file:
     file.write('Echo $@')
 known = set(session_files())
-run([], command_sets, serve_replies([(['Greeted.'], 'Greeted.'), (['Echoed.'], 'Echoed.')]))
+def message(text):
+    return {'type': 'message', 'id': 'msg_1', 'role': 'assistant', 'status': 'completed',
+            'content': [{'type': 'output_text', 'text': text, 'annotations': []}]}
+
+
+def report(call_id, steps=None, recommended=None):
+    arguments = {'summary': 'Done.', 'status': 'completed'}
+    if steps is not None:
+        arguments['next_steps'] = [{'message': text, 'fresh_session': fresh, 'reason': reason}
+                                   for text, fresh, reason in steps]
+    if recommended is not None:
+        arguments['recommended_next_step'] = recommended
+    return tool_call(call_id, 'report_scramjet_command_status', arguments)
+
+
+run([], command_sets, serve_items([[message('Greeted.')], [report('call_1')], [message('Echoed.')],
+                                   [message('Still here.')]]))
 run(['--continue'], command_sets_resumed)
 (commanded,) = set(session_files()) - known
-users = [line for line in map(json.loads, open(commanded)) if line.get('role') == 'user']
+lines = list(map(json.loads, open(commanded)))
+checks = [line['content'] for line in lines if line.get('_scramjet_probe')]
+assert [check.split('\n')[0] for check in checks] == [
+    'Scramjet status check for `demo:greet`.', 'Scramjet status check for `tools:echo`.'], checks
+users = [line for line in lines if line.get('role') == 'user' and not line.get('_scramjet_probe')]
 assert users == [
     {'role': 'user', '_scramjet_typed': '/demo:greet Ada "the reader"',
      'content': '<scramjet-command name="demo:greet">\nGreet Ada warmly.\n\n<user-context>\nAda the reader\n'
@@ -1318,4 +1362,53 @@ run(['--continue'], questions_resumed)
 (asked,) = set(session_files()) - known
 outputs = [line['output'] for line in map(json.loads, open(asked)) if line.get('type') == 'function_call_output']
 assert outputs == ['{"selected":"a"}', '{"cancelled":true}'], outputs
+
+
+def next_steps(read, until, send, output):
+    mark = until(b'> ')
+    send(b'/flow:step one\r')
+    mark = until('\u2192 /flow:step two'.encode(), until(b'report_scramjet_command_status completed', mark))
+    # The steps the model offered, the recommended one selected, each reason under it.
+    mark = until(b'Select next step', mark)
+    mark = until('\u2192 0: /flow:step two'.encode(), mark)
+    mark = until(b'Do the second.', mark)
+    mark = until(b'1: /flow:done', mark)
+    send(b'\r')
+    mark = until('\u2192 /flow:step two \u2014 Do the second.'.encode(), until(b'Next step (from flow:step):', mark))
+    mark = until(b'New session started', mark)
+    # Run as if typed, in the new session; the status check after its reply offers a step that
+    # the project's edge chains without asking.
+    mark = until(b'Second done.', until(b'> /flow:step two', mark))
+    mark = until('\u2192 /flow:done \u2014 Finish.'.encode(), mark)
+    mark = until(b'All done.', until(b'> /flow:done', mark))
+    mark = until(b'> ', mark)
+    send(b'/flow:step three\r')
+    mark = until(b'Select next step', mark)
+    send(b'\x1b')
+    mark = until(b'Cancelled', until('- /flow:step four \u2014 Again.'.encode(), mark))
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+flow = os.path.join(project, '.scramjet', 'flow', 'commands')
+os.makedirs(flow)
+with open(os.path.join(flow, 'flow:step.md'), 'w') as file:
+    file.write('---\nnext:\n  mode: closed\n  candidates:\n    - name: flow:step\n    - name: flow:done\n---\nStep $1.\n')
+with open(os.path.join(flow, 'flow:done.md'), 'w') as file:
+    file.write('Finish.\n')
+with open(os.path.join(project, '.scramjet', 'autonomy.yaml'), 'w') as file:
+    file.write('edges:\n  flow:step:\n    flow:done: chain\n')
+known = set(session_files())
+run([], next_steps, serve_items([
+    [report('call_1', [('/flow:step two', True, 'Do the second.'), ('/flow:done', False, 'Stop here.')], 0)],
+    [message('Second done.')],
+    [report('call_2', [('/flow:done', False, 'Finish.')], 0)],
+    [message('All done.'), report('call_3')],
+    [report('call_4', [('/flow:step four', False, 'Again.')], 0)],
+]))
+first, second = sorted(set(session_files()) - known)
+prompts = lambda path: [line.get('_scramjet_typed') for line in map(json.loads, open(path))
+                        if line.get('role') == 'user' and not line.get('_scramjet_probe')]
+assert prompts(first) == ['/flow:step one'], prompts(first)
+assert prompts(second) == ['/flow:step two', '/flow:done', '/flow:step three'], prompts(second)
 print('agent editor journeys passed')

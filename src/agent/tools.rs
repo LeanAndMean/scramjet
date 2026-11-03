@@ -56,10 +56,9 @@ pub(super) fn definitions() -> Value {
             "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
           "required":["command"]}}
     ]);
-    tools
-        .as_array_mut()
-        .unwrap()
-        .push(super::question::definition());
+    let list = tools.as_array_mut().unwrap();
+    list.push(super::status::definition());
+    list.push(super::question::definition());
     tools
 }
 
@@ -90,6 +89,7 @@ impl<'a> Call<'a> {
     pub fn summary(&self) -> String {
         match self.name {
             "bash" => self.arguments["command"].as_str().unwrap_or("").to_owned(),
+            super::status::NAME => self.arguments["status"].as_str().unwrap_or("").to_owned(),
             "read" => {
                 let path = &shortened(self.arguments["path"].as_str().unwrap_or(""));
                 let (offset, limit) = (

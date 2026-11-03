@@ -131,11 +131,11 @@ and 'label'."
     }
 
     /// What the model receives for the user's choice (`None`: cancelled), and whether the turn
-    /// ends there, as Scramjet ends it after a freetext question or a cancelled one.
-    pub fn answer(&self, chosen: Option<usize>) -> (String, bool) {
+    /// ends there, as Scramjet ends it after a freetext question or a cancelled one. `parked`:
+    /// a freetext question parked the active command for the reply.
+    pub fn answer(&self, chosen: Option<usize>, parked: bool) -> (String, bool) {
         let (answer, ends) = match (&self.kind, chosen) {
-            // Scramjet parks a freetext question only for an active command's lifecycle.
-            (Kind::Freetext, _) => (json!({"parked": false}), true),
+            (Kind::Freetext, _) => (json!({ "parked": parked }), true),
             (_, None) => (json!({"cancelled": true}), true),
             (Kind::Confirm, Some(index)) => (json!({"confirmed": index == 0}), false),
             (Kind::Select, Some(index)) => (json!({"selected": self.options[index].value}), false),
@@ -239,13 +239,13 @@ mod tests {
             "options":[{"value":"a","label":"Alpha","description":"first"},{"value":"b","label":"Beta"}]});
         let question = Question::parse(&select).unwrap();
         assert_eq!(question.recommended, Some(1));
-        let (chosen, ends) = question.answer(Some(1));
+        let (chosen, ends) = question.answer(Some(1), false);
         assert_eq!((chosen.as_str(), ends), (r#"{"selected":"b"}"#, false));
         assert_eq!(
             shown(&select, &chosen).unwrap(),
             ("Which **one**?".into(), "  Alpha — first\n→ Beta".into())
         );
-        let (cancelled, ends) = question.answer(None);
+        let (cancelled, ends) = question.answer(None, false);
         assert_eq!((cancelled.as_str(), ends), (r#"{"cancelled":true}"#, true));
         assert_eq!(
             shown(&select, &cancelled).unwrap().1,
@@ -260,15 +260,17 @@ mod tests {
             (Some(1), r#"{"confirmed":false}"#, "Answer: No"),
             (None, r#"{"cancelled":true}"#, "Cancelled"),
         ] {
-            let (answer, ends) = question.answer(chosen);
+            let (answer, ends) = question.answer(chosen, false);
             assert_eq!((answer.as_str(), ends), (sent, chosen.is_none()));
             assert_eq!(shown(&confirm, &answer).unwrap().1, text);
         }
 
         let freetext = json!({"type":"freetext","message":"Why?"});
-        let (parked, ends) = Question::parse(&freetext).unwrap().answer(None);
-        assert_eq!((parked.as_str(), ends), (r#"{"parked":false}"#, true));
-        assert_eq!(shown(&freetext, &parked).unwrap().1, "Reply at the prompt");
+        let (reply, ends) = Question::parse(&freetext).unwrap().answer(None, false);
+        assert_eq!((reply.as_str(), ends), (r#"{"parked":false}"#, true));
+        assert_eq!(shown(&freetext, &reply).unwrap().1, "Reply at the prompt");
+        let (parked, _) = Question::parse(&freetext).unwrap().answer(None, true);
+        assert_eq!(shown(&freetext, &parked).unwrap().1, "Parked for reply");
         // An error result is shown as it is.
         assert_eq!(shown(&json!({"type":"confirm"}), "Validation error"), None);
         assert_eq!(shown(&confirm, "UI interaction failed"), None);

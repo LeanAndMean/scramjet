@@ -14,8 +14,9 @@ use rustix::{
     termios::{self, LocalModes, OptionalActions, QueueSelector, SpecialCodeIndex, Termios},
 };
 use scramjet_rs::agent::{
-    Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Choice, Compaction, Navigated,
-    Purpose, SessionChoice, SessionInfo, StreamProgress, ToolDetail,
+    Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Choice, Compaction, Completed,
+    Navigated, Next, Purpose, SessionChoice, SessionInfo, StreamProgress, ToolDetail,
+    next_step_record,
 };
 use std::{
     ffi::OsString,
@@ -206,6 +207,28 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         drop(mode);
         ui.clear();
         ui.usage(&agent, window);
+        // One prompt runs; a next step that would run after it is only named.
+        if let Some(completed) = agent.take_completed() {
+            let routing = agent.route(&completed, false);
+            let mut notices = routing.notices;
+            if let Next::Run(step) = routing.next {
+                let fresh = if step.fresh_session {
+                    " (fresh session)"
+                } else {
+                    ""
+                };
+                notices.push(format!(
+                    "scramjet: next would be {}{fresh}",
+                    one_line(&step.message)
+                ));
+            }
+            if !notices.is_empty() {
+                eprintln!();
+            }
+            for notice in &notices {
+                ui.notice(notice);
+            }
+        }
         return result.map_err(|e| e.to_string());
     }
 
@@ -217,6 +240,15 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     );
     // A tool block ends with a blank line; other output gets one before the prompt.
     let mut spaced = show_resumed(&agent, &mut ui);
+    if !agent.commands().warnings().is_empty() {
+        if !std::mem::take(&mut spaced) {
+            eprintln!();
+        }
+        for warning in agent.commands().warnings() {
+            ui.notice(&format!("scramjet: {warning}"));
+        }
+        spaced = true;
+    }
     let mut editor =
         (std::io::stdin().is_terminal() && std::io::stderr().is_terminal()).then(|| {
             editor::Editor::new(
@@ -226,11 +258,22 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                 agent.commands().list().iter().map(command_entry).collect(),
             )
         });
+    // A completed command's next step, run as if typed.
+    let mut queued: Option<String> = None;
     loop {
         // A double Escape erased the prompt for the tree, which then takes its place.
         let mut escaped = false;
-        let prompt = match &mut editor {
-            Some(editor) => {
+        let dispatched = queued.take();
+        let is_dispatched = dispatched.is_some();
+        let prompt = match (dispatched, &mut editor) {
+            (Some(prompt), _) => {
+                if !std::mem::take(&mut spaced) {
+                    eprintln!();
+                }
+                ui.user_prompt(&prompt);
+                prompt
+            }
+            (None, Some(editor)) => {
                 if !std::mem::take(&mut spaced) {
                     eprintln!();
                 }
@@ -244,7 +287,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
                     None => return Ok(()),
                 }
             }
-            None => match read_lines()? {
+            (None, None) => match read_lines()? {
                 Some(prompt) => prompt,
                 None => return Ok(()),
             },
@@ -645,7 +688,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         }
         if let Some(editor) = &mut editor {
             editor.remember(prompt);
-            eprintln!();
+            if !is_dispatched {
+                eprintln!();
+            }
         }
         cancel.store(false, Ordering::Relaxed);
         let result = during_turn(&mut ui, &cancel, editor.as_mut(), |ui| {
@@ -659,7 +704,86 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         }
         cancel.store(false, Ordering::Relaxed);
         ui.usage(&agent, window);
+        if let Some(completed) = agent.take_completed() {
+            queued = next_step(
+                &mut agent,
+                &completed,
+                editor.as_mut(),
+                &mut ui,
+                &mut spaced,
+            )?;
+        }
     }
+}
+
+/// The next step of a completed command, as Scramjet routes it with autopilot off: an edge set
+/// to `chain` or a forced step runs at once; otherwise the user chooses from the steps the
+/// model offered. Returns the prompt to run; a text step goes into the editor instead. `spaced`
+/// is set when what it shows ends with a blank line.
+fn next_step(
+    agent: &mut Agent,
+    completed: &Completed,
+    editor: Option<&mut editor::Editor>,
+    ui: &mut Terminal,
+    spaced: &mut bool,
+) -> Result<Option<String>, String> {
+    let routing = agent.route(completed, editor.is_some());
+    if routing.notices.is_empty() && routing.next == Next::Nothing {
+        return Ok(None);
+    }
+    // Under the usage line, as a prompt would be.
+    eprintln!();
+    for notice in &routing.notices {
+        ui.notice(notice);
+    }
+    let step = match routing.next {
+        Next::Nothing => {
+            *spaced = true;
+            return Ok(None);
+        }
+        Next::Run(step) => {
+            let record = next_step_record(&routing.source, std::slice::from_ref(&step), Some(0));
+            eprintln!("{}", ui.styled(style::NEXT_STEP, &ui.wrapped(&record)));
+            step
+        }
+        Next::Offer { steps, recommended } => {
+            let choices: Vec<_> = steps
+                .iter()
+                .map(|step| Choice {
+                    label: step.label(),
+                    description: Some(step.description()).filter(|text| !text.is_empty()),
+                    value: String::new(),
+                })
+                .collect();
+            let chosen = select::question("Select next step", &choices, recommended)
+                .map_err(|e| e.to_string())?;
+            let record = next_step_record(&routing.source, &steps, chosen);
+            eprintln!("{}", ui.styled(style::NEXT_STEP, &ui.wrapped(&record)));
+            match chosen {
+                Some(index) => steps[index].clone(),
+                None => return Ok(None),
+            }
+        }
+    };
+    let Some(command) = step.command else {
+        if let Some(editor) = editor {
+            editor.set_text(step.message);
+        }
+        return Ok(None);
+    };
+    if step.fresh_session {
+        match agent.new_session() {
+            Ok(()) => eprintln!(
+                "✓ New session started\nsession {}",
+                agent.session_path().display()
+            ),
+            Err(error) => {
+                eprintln!("error: {error}");
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(command))
 }
 
 /// Asks whether to summarize the branch `/tree` leaves, as Scramjet does. `None`: cancelled;
@@ -1575,6 +1699,12 @@ impl AgentUi for Terminal {
         let answer = self.ask(question, cancel);
         self.type_ahead = reading.map(type_ahead::TypeAhead::start);
         answer
+    }
+    /// A block of its own, ending with a blank line as a tool block does.
+    fn notice(&mut self, text: &str) {
+        self.clear();
+        let text = self.wrapped(&visible(text));
+        eprintln!("{}\n", self.styled(style::NOTICE, &text));
     }
     /// As Scramjet shows the message in the tool's row: markdown, under the call line.
     fn question(&mut self, message: &str) {

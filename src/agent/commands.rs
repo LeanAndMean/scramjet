@@ -6,6 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use yaml_rust2::{Yaml, YamlLoader};
 
 /// Sets Scramjet loads from its own package, so a directory of these names is not a set here.
 const BUNDLED_SETS: [&str; 2] = ["mach12", "scramjet"];
@@ -19,12 +20,38 @@ pub struct Command {
     pub description: String,
     pub argument_hint: Option<String>,
     body: String,
+    /// What may follow it, from the frontmatter's `next:` block.
+    pub(super) next: Option<Policy>,
+}
+
+/// A command's `next:` policy, as Scramjet's `parseNextStepPolicy` reads it: which commands the
+/// model may offer as next steps when it reports the command completed.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Policy {
+    /// `target` runs after the command completes.
+    Forced { target: String },
+    /// Only these commands may follow.
+    Closed { candidates: Vec<Candidate> },
+    /// Any command may follow except the blacklisted ones; the candidates are suggestions.
+    Open {
+        candidates: Vec<Candidate>,
+        blacklist: Vec<String>,
+    },
+    /// The user chooses; the model offers nothing.
+    Ask { hint: Option<String> },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Candidate {
+    pub name: String,
+    pub hint: Option<String>,
 }
 
 /// The commands found for a session, by name.
 #[derive(Clone, Debug, Default)]
 pub struct Commands {
     list: Vec<Command>,
+    warnings: Vec<String>,
 }
 
 /// Scramjet's global root for command sets: `$SCRAMJET_CACHE`, else `$XDG_DATA_HOME/scramjet`,
@@ -42,42 +69,82 @@ pub fn global_root() -> Option<PathBuf> {
 impl Commands {
     /// Finds the commands under `global`, then under `project` (the project's `.scramjet`
     /// directory). The first file registered under a name wins, so a global command shadows a
-    /// project one of the same name. Files that are not `<set>:` commands are skipped.
+    /// project one of the same name. Files that are not `<set>:` commands, or whose frontmatter
+    /// Scramjet would reject, are skipped with a warning.
     pub fn discover(global: Option<&Path>, project: &Path) -> Self {
-        let mut list: Vec<Command> = Vec::new();
+        let mut found = Self::default();
         for root in global.into_iter().chain([project]) {
             for set in sets(root) {
                 let directory = root.join(&set).join("commands");
                 for (file, content) in command_files(&directory) {
-                    let Some(command) = parse(&set, &file, &content) else {
-                        continue;
+                    let command = match parse(&set, &file, &content) {
+                        Ok(command) => command,
+                        Err(error) => {
+                            let path = directory.join(&file);
+                            found
+                                .warnings
+                                .push(format!("skipping {}: {error}", path.display()));
+                            continue;
+                        }
                     };
-                    if !list.iter().any(|known| known.name == command.name) {
-                        list.push(command);
+                    if !found.list.iter().any(|known| known.name == command.name) {
+                        found.list.push(command);
                     }
                 }
             }
         }
-        list.sort_by(|a, b| a.name.cmp(&b.name));
-        Self { list }
+        found.list.sort_by(|a, b| a.name.cmp(&b.name));
+        found
     }
 
     pub fn list(&self) -> &[Command] {
         &self.list
     }
 
+    /// Why command files were skipped, as Scramjet warns about them.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    /// Commands from `(file, content)` pairs, each in the set its name starts with.
+    #[cfg(test)]
+    pub(super) fn parsed(files: &[(&str, &str)]) -> Self {
+        let list = files.iter().map(|(file, content)| {
+            let set = file.split(':').next().unwrap();
+            parse(set, file, content).unwrap()
+        });
+        Self {
+            list: list.collect(),
+            warnings: Vec::new(),
+        }
+    }
+
+    pub(super) fn get(&self, name: &str) -> Option<&Command> {
+        self.list.iter().find(|command| command.name == name)
+    }
+
+    /// The command a prompt runs: `/<name> args` names it.
+    pub(super) fn named(&self, prompt: &str) -> Option<&Command> {
+        let rest = prompt.strip_prefix('/')?;
+        let name = rest.split(char::is_whitespace).next().unwrap_or(rest);
+        self.get(name)
+    }
+
     /// The text a prompt sends when it runs a command, `None` when it runs none: `/<name> args`
     /// names a command, whose body takes the arguments split as Scramjet splits them.
     pub fn expand(&self, prompt: &str) -> Option<String> {
-        let rest = prompt.strip_prefix('/')?;
-        let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-        let command = self.list.iter().find(|command| command.name == name)?;
+        let command = self.named(prompt)?;
+        let rest = &prompt[1..];
+        let args = rest
+            .split_once(char::is_whitespace)
+            .map_or("", |(_, args)| args);
         let body = substitute(&command.body, &split_args(args));
         if body.starts_with("<scramjet-command") {
             return Some(body);
         }
         Some(format!(
-            "<scramjet-command name=\"{name}\">\n{body}\n</scramjet-command>"
+            "<scramjet-command name=\"{}\">\n{body}\n</scramjet-command>",
+            command.name
         ))
     }
 }
@@ -118,23 +185,27 @@ fn command_files(directory: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The command in `content`, the file `file` of set `set`; `None` when the file name lacks the
-/// set's `<set>:` prefix.
-fn parse(set: &str, file: &str, content: &str) -> Option<Command> {
-    let name = file.strip_suffix(".md")?;
+/// The command in `content`, the file `file` of set `set`; otherwise why Scramjet's loader
+/// rejects it, in its words.
+fn parse(set: &str, file: &str, content: &str) -> Result<Command, String> {
+    let name = file.strip_suffix(".md").unwrap_or(file);
     if !name.starts_with(&format!("{set}:")) {
-        return None;
+        return Err(format!("{file}: filename must start with \"{set}:\""));
     }
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let (frontmatter, body) = split_frontmatter(content);
-    // Only top-level scalars are read; nested blocks such as `next:` are indented.
+    let frontmatter = YamlLoader::load_from_str(&frontmatter)
+        .map_err(|error| format!("{file}: malformed frontmatter — {error}"))?
+        .into_iter()
+        .next()
+        .unwrap_or(Yaml::Null);
+    let next = Policy::parse(&frontmatter["next"])
+        .map_err(|error| format!("{file}: invalid next block — {error}"))?;
     let field = |key: &str| {
-        frontmatter
-            .lines()
-            .filter_map(|line| line.split_once(':'))
-            .find(|(found, _)| *found == key)
-            .map(|(_, value)| unquote(value.trim()).to_owned())
-            .filter(|value| !value.is_empty())
+        frontmatter[key]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
     };
     let description = field("description").unwrap_or_else(|| {
         let first = body.lines().find(|line| !line.trim().is_empty());
@@ -144,12 +215,101 @@ fn parse(set: &str, file: &str, content: &str) -> Option<Command> {
             None => first.to_owned(),
         }
     });
-    Some(Command {
+    Ok(Command {
         name: name.to_owned(),
         description,
         argument_hint: field("argument-hint"),
         body,
+        next,
     })
+}
+
+impl Policy {
+    /// The policy of a `next:` value; `None` when there is none.
+    fn parse(raw: &Yaml) -> Result<Option<Self>, String> {
+        match raw {
+            Yaml::BadValue | Yaml::Null => return Ok(None),
+            Yaml::Hash(_) => {}
+            _ => return Err("next must be a mapping".into()),
+        }
+        let mode = raw["mode"].as_str().ok_or("next.mode must be a string")?;
+        let policy = match mode {
+            "forced" => {
+                let target = non_blank(&raw["target"])
+                    .ok_or("next.target must be a non-empty string for mode: forced")?;
+                Self::Forced { target }
+            }
+            "closed" => {
+                let candidates = candidates(&raw["candidates"]).map_err(|e| format!("next.{e}"))?;
+                if candidates.is_empty() {
+                    return Err("next.candidates must not be empty for mode: closed".into());
+                }
+                Self::Closed { candidates }
+            }
+            "open" => {
+                let candidates = candidates(&raw["candidates"]).map_err(|e| format!("next.{e}"))?;
+                let blacklist = match &raw["blacklist"] {
+                    Yaml::BadValue => Vec::new(),
+                    Yaml::Array(entries) => entries
+                        .iter()
+                        .enumerate()
+                        .map(|(index, entry)| {
+                            non_blank(entry).ok_or_else(|| {
+                                format!("next.blacklist[{index}] must be a non-empty string")
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                    _ => return Err("next.blacklist must be a list".into()),
+                };
+                Self::Open {
+                    candidates,
+                    blacklist,
+                }
+            }
+            "ask" => Self::Ask {
+                hint: optional_text(&raw["hint"]).map_err(|e| format!("next.{e}"))?,
+            },
+            other => return Err(format!("unknown next.mode: {other}")),
+        };
+        Ok(Some(policy))
+    }
+}
+
+fn candidates(raw: &Yaml) -> Result<Vec<Candidate>, String> {
+    let Yaml::Array(entries) = raw else {
+        return Err("candidates must be a list".into());
+    };
+    let mut candidates = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if !matches!(entry, Yaml::Hash(_)) {
+            return Err(format!("candidates[{index}] must be a mapping"));
+        }
+        let name = non_blank(&entry["name"])
+            .ok_or_else(|| format!("candidates[{index}].name must be a non-empty string"))?;
+        let hint = optional_text(&entry["hint"]).map_err(|e| format!("candidates[{index}].{e}"))?;
+        candidates.push(Candidate { name, hint });
+    }
+    Ok(candidates)
+}
+
+/// A string with more than blanks in it.
+fn non_blank(value: &Yaml) -> Option<String> {
+    value
+        .as_str()
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// A `hint`: absent, or a string with more than blanks in it.
+fn optional_text(value: &Yaml) -> Result<Option<String>, String> {
+    match value {
+        Yaml::BadValue => Ok(None),
+        Yaml::String(text) if text.trim().is_empty() => {
+            Err("hint must be a non-empty string when set".into())
+        }
+        Yaml::String(text) => Ok(Some(text.clone())),
+        _ => Err("hint must be a string when set".into()),
+    }
 }
 
 /// The frontmatter and the body after it, trimmed, as Scramjet's `parseFrontmatter` splits
@@ -165,19 +325,6 @@ fn split_frontmatter(content: &str) -> (String, String) {
         }
         _ => (String::new(), content),
     }
-}
-
-/// A scalar without its matching quotes.
-fn unquote(value: &str) -> &str {
-    for quote in ['"', '\''] {
-        if let Some(inner) = value
-            .strip_prefix(quote)
-            .and_then(|rest| rest.strip_suffix(quote))
-        {
-            return inner;
-        }
-    }
-    value
 }
 
 /// The arguments of a command as Scramjet splits them: at spaces and tabs, where quotes group
@@ -327,7 +474,7 @@ mod tests {
         let project = scratch.0.join("project");
         scratch.file(
             "global/rs/commands/rs:review.md",
-            "---\ndescription: Global review\nargument-hint: \"[commits or area]\"\nnext:\n  description: nested\n---\nGlobal $1\n",
+            "---\ndescription: Global review\nargument-hint: \"[commits or area]\"\nnext:\n  mode: ask\n  hint: nested\n---\nGlobal $1\n",
         );
         scratch.file(
             "global/rs/commands/rs:helper.md",
@@ -350,6 +497,20 @@ mod tests {
         let review = &commands.list()[2];
         assert_eq!(review.description, "Global review");
         assert_eq!(review.argument_hint.as_deref(), Some("[commits or area]"));
+        let hint = Some("nested".to_owned());
+        assert_eq!(review.next, Some(Policy::Ask { hint }));
+        let skipped = |file: &str, set: &str| {
+            let path = global.join(format!("{set}/commands/{file}"));
+            let error = format!("{file}: filename must start with \"{set}:\"");
+            format!("skipping {}: {error}", path.display())
+        };
+        assert_eq!(
+            commands.warnings(),
+            [
+                skipped("rs:wrong-set.md", "other"),
+                skipped("notes.md", "rs")
+            ]
+        );
         assert_eq!(
             commands.expand("/rs:review HEAD~2.."),
             Some(
@@ -386,6 +547,7 @@ mod tests {
         let crlf = "\u{feff}---\r\ndescription: \"Quoted\"\r\nargument-hint: '<a> [b]'\r\n---\r\n\r\n  Body\r\nmore  \r\n";
         let command = parse("rs", "rs:x.md", crlf).unwrap();
         assert_eq!(command.description, "Quoted");
+        assert_eq!(command.next, None);
         assert_eq!(command.argument_hint.as_deref(), Some("<a> [b]"));
         assert_eq!(command.body, "Body\nmore");
         // Without a closing line, the whole text is the body, untrimmed.
@@ -397,7 +559,101 @@ mod tests {
         let long = format!("\n\n{}é tail\nsecond\n", "x".repeat(59));
         let command = parse("rs", "rs:x.md", &long).unwrap();
         assert_eq!(command.description, format!("{}é...", "x".repeat(59)));
-        assert!(parse("rs", "other.md", "Body").is_none());
+        assert!(parse("rs", "other.md", "Body").is_err());
+        // As YAML, a folded description is one line, and a non-string one is not a description.
+        let folded = parse(
+            "rs",
+            "rs:x.md",
+            "---\ndescription: >\n  Two\n  lines\n---\nB",
+        )
+        .unwrap();
+        assert_eq!(folded.description, "Two lines\n");
+        let number = parse("rs", "rs:x.md", "---\ndescription: 12\n---\nBody line").unwrap();
+        assert_eq!(number.description, "Body line");
+        assert_eq!(
+            parse("rs", "rs:x.md", "---\ndescription: a: b\n---\nB").unwrap_err(),
+            "rs:x.md: malformed frontmatter — mapping values are not allowed in this context \
+at byte 14 line 1 column 15"
+        );
+    }
+
+    fn policy(next: &str) -> Result<Option<Policy>, String> {
+        let content = format!("---\nnext:\n{next}\n---\nBody");
+        parse("rs", "rs:x.md", &content).map(|command| command.next)
+    }
+
+    #[test]
+    fn next_policies_are_read_and_checked_as_scramjet_does() {
+        let candidate = |name: &str, hint: Option<&str>| Candidate {
+            name: name.into(),
+            hint: hint.map(str::to_owned),
+        };
+        assert_eq!(
+            policy(
+                "  mode: closed\n  candidates:\n    - name: rs:loop\n      hint: Again.\n    - name: rs:steer"
+            ),
+            Ok(Some(Policy::Closed {
+                candidates: vec![
+                    candidate("rs:loop", Some("Again.")),
+                    candidate("rs:steer", None)
+                ]
+            }))
+        );
+        assert_eq!(
+            policy("  mode: open\n  candidates: []\n  blacklist: [rs:x]"),
+            Ok(Some(Policy::Open {
+                candidates: Vec::new(),
+                blacklist: vec!["rs:x".into()]
+            }))
+        );
+        assert_eq!(
+            policy("  mode: forced\n  target: rs:review"),
+            Ok(Some(Policy::Forced {
+                target: "rs:review".into()
+            }))
+        );
+        assert_eq!(policy("  ~"), Ok(None));
+        let error = |next: &str| format!("rs:x.md: invalid next block — {next}");
+        for (next, message) in [
+            ("  - closed", "next must be a mapping"),
+            ("  mode: 3", "next.mode must be a string"),
+            ("  mode: sometimes", "unknown next.mode: sometimes"),
+            (
+                "  mode: forced\n  target: ' '",
+                "next.target must be a non-empty string for mode: forced",
+            ),
+            (
+                "  mode: closed\n  candidates: []",
+                "next.candidates must not be empty for mode: closed",
+            ),
+            ("  mode: closed", "next.candidates must be a list"),
+            (
+                "  mode: open\n  candidates: [rs:x]",
+                "next.candidates[0] must be a mapping",
+            ),
+            (
+                "  mode: open\n  candidates:\n    - hint: h",
+                "next.candidates[0].name must be a non-empty string",
+            ),
+            (
+                "  mode: open\n  candidates:\n    - name: a\n      hint: ~",
+                "next.candidates[0].hint must be a string when set",
+            ),
+            (
+                "  mode: open\n  candidates: []\n  blacklist: x",
+                "next.blacklist must be a list",
+            ),
+            (
+                "  mode: open\n  candidates: []\n  blacklist: ['']",
+                "next.blacklist[0] must be a non-empty string",
+            ),
+            (
+                "  mode: ask\n  hint: ''",
+                "next.hint must be a non-empty string when set",
+            ),
+        ] {
+            assert_eq!(policy(next), Err(error(message)), "{next}");
+        }
     }
 
     fn args(text: &str) -> Vec<String> {

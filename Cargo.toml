@@ -23,6 +23,7 @@ http-body-util = { version = "=0.1.5", default-features = false }
 hyper = { version = "=1.12.0", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio"] }
 tokio = { version = "=1.53.2", default-features = false, features = ["rt", "macros", "net", "sync", "time", "io-util"] }
+yaml-rust2 = { version = "=0.13.0", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "=1.53.2", default-features = false, features = ["test-util"] }

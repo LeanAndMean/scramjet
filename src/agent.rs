@@ -1,18 +1,21 @@
 //! A coding agent that talks to Proxy (Responses for GPT models, Messages for Claude) and works in
 //! a project.
 
+mod autonomy;
 mod client;
 mod commands;
 mod compaction;
 mod messages;
 mod question;
 mod session;
+mod status;
 mod tools;
 
 pub use client::StreamProgress;
 pub use commands::{Command, Commands};
 pub use question::Choice;
 pub use session::{Session, SessionInfo};
+pub use status::{Completed, Next, Routing, Step, record as next_step_record};
 pub use tools::sequence_diff;
 
 use client::{ClientError, ModelInfo, Protocol};
@@ -50,6 +53,9 @@ pub(super) const TYPED: &str = "_scramjet_typed";
 const FAILED: &str = "_scramjet_failed";
 /// Stored with an edit's result: the diff shown for it.
 const DIFF: &str = "_scramjet_diff";
+/// Stored, as `true`, with Scramjet's status check, a user message the user never typed, so it
+/// is neither shown nor recalled.
+pub(super) const PROBE: &str = "_scramjet_probe";
 /// Compaction keeps about this much of the latest conversation, as Scramjet does.
 const KEEP_RECENT_TOKENS: u64 = 20_000;
 
@@ -115,6 +121,8 @@ pub trait AgentUi {
     /// The markdown message of a question the model asks the user, shown before its options or,
     /// in a resumed conversation, before the answer.
     fn question(&mut self, message: &str);
+    /// Something Scramjet would notify the user of, such as a command reported blocked.
+    fn notice(&mut self, text: &str);
     /// Lets the user choose one of `options` under `title`, `recommended` selected at first;
     /// `None` when they cancel.
     fn choose(
@@ -285,6 +293,13 @@ pub struct Agent {
     conversation: Vec<Value>,
     prompts: Vec<String>,
     commands: Commands,
+    /// The command the last command prompt ran, until it is reported or left.
+    lifecycle: status::Lifecycle,
+    /// The command the last turn reported completed, until its next step is routed.
+    completed: Option<Completed>,
+    /// Scramjet's global `autonomy.yaml`, and what was last said about the files.
+    autonomy: Option<PathBuf>,
+    autonomy_diagnostics: Vec<String>,
     session: Session,
     executor: tokio::runtime::Runtime,
     /// The current model's protocol and limits, from its name until `load_model_card`.
@@ -317,6 +332,10 @@ impl Agent {
         );
         let mut agent = Self {
             commands,
+            lifecycle: status::Lifecycle::default(),
+            completed: None,
+            autonomy: autonomy::global_path(),
+            autonomy_diagnostics: Vec::new(),
             instructions: instructions(&config.root),
             info: ModelInfo::guess(&config.model),
             config,
@@ -394,7 +413,8 @@ impl Agent {
                 Some("function_call_output") => stats.tool_results += 1,
                 _ if item["role"] == "user"
                     && !session::is_bang(item)
-                    && !compaction::is_summary(item) =>
+                    && !compaction::is_summary(item)
+                    && item.get(PROBE).is_none() =>
                 {
                     stats.user += 1
                 }
@@ -566,6 +586,7 @@ impl Agent {
         };
         self.conversation = self.session.move_to(destination.leaf)?;
         self.usage.context_tokens = self.session.context_tokens();
+        self.leave_command();
         self.answer_interrupted_calls()?;
         if let Some((summary, files)) = summary {
             self.session
@@ -659,6 +680,7 @@ impl Agent {
             context_tokens,
             ..Usage::default()
         };
+        self.leave_command();
         if let Some(model) = model {
             self.info = ModelInfo::guess(&model);
             self.config.model = model;
@@ -683,6 +705,7 @@ impl Agent {
         self.conversation.clear();
         self.prompts.clear();
         self.usage = Usage::default();
+        self.leave_command();
         Ok(())
     }
 
@@ -919,10 +942,20 @@ impl Agent {
         Ok(())
     }
 
+    /// A session switch leaves the command that was running, as Scramjet's lifecycle starts
+    /// again from the session it switches to.
+    fn leave_command(&mut self) {
+        self.lifecycle.clear();
+        self.completed = None;
+    }
+
     fn request(&self) -> Value {
         let mut request = json!({
             "model": self.config.model,
-            "instructions": self.instructions,
+            "instructions": match self.lifecycle.dormant_notice() {
+                Some(notice) => self.instructions.clone() + &notice,
+                None => self.instructions.clone(),
+            },
             "input": self.replay_conversation(),
             "tools": tools::definitions(),
             "tool_choice": "auto",
@@ -982,6 +1015,12 @@ impl Agent {
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
         self.compact_before_prompt(ui, cancel)?;
+        self.completed = None;
+        let command = self
+            .commands
+            .named(prompt)
+            .map(|command| command.name.clone());
+        self.lifecycle.prompted(prompt, command.as_deref());
         // A command prompt sends its expansion; the prompt as typed is kept for recall and display.
         let message = match self.commands.expand(prompt) {
             Some(sent) => json!({"role":"user","content":sent,TYPED:prompt}),
@@ -989,6 +1028,57 @@ impl Agent {
         };
         self.add(message)?;
         self.prompts.push(prompt.to_owned());
+        let mut ran = self.run(ui, cancel);
+        // As Scramjet's lifecycle: a command's turn that ends without a report gets a status check.
+        loop {
+            match ran {
+                Err(AgentError::Cancelled) => {
+                    if let Some(notice) = self.lifecycle.cancelled() {
+                        ui.notice(&notice);
+                    }
+                    return Err(AgentError::Cancelled);
+                }
+                Err(error) => return Err(error),
+                Ok(()) => {}
+            }
+            match self.lifecycle.turn_ended(&self.commands) {
+                status::Ended::Probe(check) => {
+                    self.add(json!({"role":"user","content":check,PROBE:true}))?;
+                    ran = self.run(ui, cancel);
+                }
+                status::Ended::Completed(completed) => {
+                    self.completed = Some(completed);
+                    return Ok(());
+                }
+                status::Ended::Notice(notice) => {
+                    ui.notice(&notice);
+                    return Ok(());
+                }
+                status::Ended::Nothing => return Ok(()),
+            }
+        }
+    }
+
+    /// The command the last turn reported completed, for `route`.
+    pub fn take_completed(&mut self) -> Option<Completed> {
+        self.completed.take()
+    }
+
+    /// The next step of a completed command, from its `next:` policy and the `autonomy.yaml`
+    /// edges; `interactive` when the user can choose from a list. What is said about the
+    /// `autonomy.yaml` files is said once, until it changes, as in Scramjet.
+    pub fn route(&mut self, completed: &Completed, interactive: bool) -> Routing {
+        let mut edges = autonomy::Edges::load(self.autonomy.as_deref(), &self.config.root);
+        if edges.diagnostics == self.autonomy_diagnostics {
+            edges.diagnostics.clear();
+        } else {
+            self.autonomy_diagnostics = edges.diagnostics.clone();
+        }
+        status::route(completed, &self.commands, &edges, interactive)
+    }
+
+    /// Model requests and tool calls until a final answer.
+    fn run(&mut self, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> Result<(), AgentError> {
         let mut overflow_recovered = false;
         for _ in 0..MAX_STEPS {
             if cancel.load(Ordering::Relaxed) {
@@ -1269,7 +1359,17 @@ to a larger-context model)"
         };
         ui.tool_call(call.name, &call.summary());
         if call.name == question::NAME {
-            return ask(&call.arguments, ui);
+            return ask(&call.arguments, &mut self.lifecycle, ui);
+        }
+        if call.name == status::NAME {
+            let (text, failed, ends) = self.lifecycle.report(&call.arguments);
+            ui.tool_result(call.name, &text, None, failed);
+            let output = Output {
+                text,
+                detail: None,
+                failed,
+            };
+            return (output, ends);
         }
         let answer = match call.approval(&self.config.root) {
             Approval::Ask(question) if self.config.ask => ui.approve(&question, cancel),
@@ -1304,7 +1404,13 @@ to a larger-context model)"
 }
 
 /// Asks the user the question of a `get_scramjet_user_input` call, as Scramjet's tool does.
-fn ask(arguments: &Value, ui: &mut dyn AgentUi) -> (Output, bool) {
+/// A freetext question parks the active command for the user's reply, and a cancelled one leaves
+/// it for the next reply to resume.
+fn ask(
+    arguments: &Value,
+    lifecycle: &mut status::Lifecycle,
+    ui: &mut dyn AgentUi,
+) -> (Output, bool) {
     let question = match question::Question::parse(arguments) {
         Ok(question) => question,
         Err(error) => {
@@ -1325,7 +1431,11 @@ fn ask(arguments: &Value, ui: &mut dyn AgentUi) -> (Output, bool) {
             ui.choose("Choose an option", &question.options, question.recommended)
         }
     };
-    let (text, ends) = question.answer(chosen);
+    let parked = question.kind == question::Kind::Freetext && lifecycle.park();
+    if chosen.is_none() && question.kind != question::Kind::Freetext {
+        lifecycle.question_cancelled();
+    }
+    let (text, ends) = question.answer(chosen, parked);
     let detail = question::shown(arguments, &text).map(|(_, shown)| ToolDetail::Answer(shown));
     ui.tool_result(question::NAME, &text, detail.as_ref(), false);
     let output = Output {
@@ -1406,6 +1516,8 @@ fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                 };
                 ui.tool_result(name, output, detail.as_ref(), failed);
             }
+            // Scramjet's status check is not shown, as the user never typed it.
+            _ if item.get(PROBE).is_some() => {}
             _ if item["role"] == "user" => {
                 let content = item["content"].as_str().unwrap_or_default();
                 let command = item[TYPED]
@@ -1489,6 +1601,7 @@ Available tools:
 - bash: Execute bash commands (ls, grep, find, etc.)
 - edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call
 - write: Create or overwrite files
+- {status}: {status_snippet}
 - {question}: {snippet}
 
 Guidelines:
@@ -1512,6 +1625,8 @@ Current working directory: {root}
 ",
         root = root.display(),
         date = today(),
+        status = status::NAME,
+        status_snippet = status::SNIPPET,
         question = question::NAME,
         snippet = question::SNIPPET,
     );
@@ -1647,6 +1762,9 @@ mod tests {
         }
         fn question(&mut self, message: &str) {
             self.shown.push(format!("question {message}"));
+        }
+        fn notice(&mut self, text: &str) {
+            self.shown.push(format!("notice {text}"));
         }
         fn choose(
             &mut self,
@@ -2580,6 +2698,8 @@ response is incomplete; retry the request."});
     fn a_command_prompt_sends_its_expansion_and_is_recalled_as_typed() {
         let (endpoint, server) = serve(vec![
             stream(&fixture::text_events("one", fixture::known_usage())),
+            // Scramjet's status check after the command's turn, answered without a report.
+            stream(&fixture::text_events("checked", fixture::known_usage())),
             stream(&fixture::text_events("two", fixture::known_usage())),
         ]);
         let root =
@@ -2617,10 +2737,10 @@ response is incomplete; retry the request."});
             json!([{"role":"user","content":expansion}])
         );
         assert_eq!(
-            bodies[1]["input"][2],
+            bodies[2]["input"][4],
             json!({"role":"user","content":"/sjrstest:other x"})
         );
-        assert!(!bodies[1].to_string().contains("\"_scramjet_"));
+        assert!(!bodies[2].to_string().contains("\"_scramjet_"));
         assert!(
             bodies[0]["instructions"]
                 .as_str()
@@ -2630,7 +2750,8 @@ response is incomplete; retry the request."});
         let prompts = [typed, "/sjrstest:other x"];
         assert_eq!(agent.prompts(), prompts);
         assert_eq!(agent.fork_prompts().unwrap(), prompts);
-        assert_eq!(agent.stats().user, 2);
+        // The status check is in the total, as Pi counts its custom messages, not a user message.
+        assert_eq!((agent.stats().user, agent.stats().total), (2, 6));
         let tree = agent.tree().unwrap();
         assert_eq!(tree.entries[0].item, TreeItem::Prompt(typed.into()));
         let (_, conversation, resumed) = Session::open(&path).unwrap();
@@ -2875,6 +2996,137 @@ be a non-empty array for select type. failed",
                 .unwrap()
                 .ends_with("Answer(\"Reply at the prompt\")")
         );
+    }
+
+    #[test]
+    fn a_command_is_reported_inline_or_after_scramjets_status_check() {
+        let call = |id: &str, name: &str, arguments: Value| {
+            let events = fixture::call_events(&arguments.to_string(), fixture::known_usage());
+            let text = serde_json::to_string(&events).unwrap();
+            let text = text
+                .replace("\"inert\"", &format!("\"{name}\""))
+                .replace("call_1", id);
+            serde_json::from_str::<Vec<Value>>(&text).unwrap()
+        };
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let next = json!([{"message":"/rs:work again","fresh_session":true,"reason":"More."}]);
+        let (endpoint, server) = serve(vec![
+            stream(&call(
+                "call_1",
+                status::NAME,
+                json!({"summary":"Done.","status":"completed",
+                "recommended_next_step":0,"next_steps":next}),
+            )),
+            reply("worked"),
+            stream(&call(
+                "call_2",
+                status::NAME,
+                json!({"summary":"Needs a key.","status":"blocked"}),
+            )),
+            reply("hello"),
+            stream(&call(
+                "call_3",
+                question::NAME,
+                json!({"type":"freetext","message":"Which?"}),
+            )),
+            reply("used a.txt"),
+            stream(&call(
+                "call_4",
+                status::NAME,
+                json!({"summary":"Used it.","status":"completed"}),
+            )),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "status");
+        let commands = agent.root().join(".scramjet/rs/commands");
+        std::fs::create_dir_all(&commands).unwrap();
+        std::fs::write(
+            commands.join("rs:work.md"),
+            "---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:work\n---\nWork on $1.\n",
+        )
+        .unwrap();
+        agent.commands = Commands::discover(None, &agent.root().join(".scramjet"));
+        agent.autonomy = None;
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("/rs:work go", &mut ui, &cancel).unwrap();
+        let completed = agent.take_completed().unwrap();
+        let Next::Offer { steps, recommended } = agent.route(&completed, true).next else {
+            panic!("no next step offered");
+        };
+        assert_eq!(steps[0].command.as_deref(), Some("/rs:work again"));
+        assert!(steps[0].fresh_session);
+        assert_eq!(recommended, Some(0));
+        agent.turn("/rs:work", &mut ui, &cancel).unwrap();
+        assert!(agent.take_completed().is_none());
+        agent.turn("hi", &mut ui, &cancel).unwrap();
+        agent.turn("/rs:work", &mut ui, &cancel).unwrap();
+        agent.turn("a.txt", &mut ui, &cancel).unwrap();
+        assert!(agent.take_completed().is_some());
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 7);
+
+        let check = bodies[2]["input"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        assert_eq!(check["role"], "user");
+        assert_eq!(check.as_object().unwrap().len(), 2);
+        let check = check["content"].as_str().unwrap();
+        assert!(check.starts_with("Scramjet status check for `rs:work`."));
+        assert!(check.contains("  - [0] rs:work\n"));
+        let dormant = |body: &Value| {
+            let instructions = body["instructions"].as_str().unwrap();
+            instructions.contains("# Dormant Scramjet Command\n\nThe command `rs:work` is dormant")
+        };
+        let dormant: Vec<_> = bodies.iter().map(dormant).collect();
+        assert_eq!(dormant, [false, false, false, true, false, false, false]);
+        let instructions = bodies[0]["instructions"].as_str().unwrap();
+        assert!(instructions.contains(&format!("- {}: {}\n", status::NAME, status::SNIPPET)));
+        let tools: Vec<_> = bodies[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| &t["name"])
+            .collect();
+        assert!(tools.contains(&&json!(status::NAME)));
+        let outputs: Vec<_> = agent
+            .conversation()
+            .iter()
+            .filter_map(|item| item["output"].as_str())
+            .collect();
+        assert_eq!(
+            outputs,
+            [
+                "→ /rs:work again",
+                "status: blocked",
+                r#"{"parked":true}"#,
+                "status: completed"
+            ]
+        );
+        assert!(
+            ui.shown
+                .contains(&"notice scramjet: command blocked — Needs a key.".to_owned())
+        );
+        assert!(
+            ui.shown
+                .contains(&"call report_scramjet_command_status completed".to_owned())
+        );
+        // The status checks are neither recalled nor shown again.
+        let prompts = ["/rs:work go", "/rs:work", "hi", "/rs:work", "a.txt"];
+        assert_eq!(agent.prompts(), prompts);
+        let (_, _, resumed) = Session::open(agent.session_path()).unwrap();
+        assert_eq!(resumed, prompts);
+        let mut replay = Recorder::default();
+        agent.show_conversation(&mut replay);
+        let shown: Vec<_> = replay
+            .shown
+            .iter()
+            .filter(|s| s.starts_with("prompt "))
+            .collect();
+        assert_eq!(shown.len(), 5);
+        assert_eq!(agent.fork_prompts().unwrap(), prompts);
     }
 
     fn write_session(path: &Path, lines: &[Value], modified: std::time::SystemTime) {

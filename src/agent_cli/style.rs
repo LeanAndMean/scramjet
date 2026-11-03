@@ -21,6 +21,10 @@ pub const SUMMARY: &str = "\x1b[2m";
 pub const INFO_HEADING: &str = "\x1b[1m";
 /// A provider failure that is retried.
 pub const WARNING: &str = "\x1b[33m";
+/// What Scramjet notifies the user of about a command, such as a blocked report.
+pub const NOTICE: &str = "\x1b[33m";
+/// The record of a next step chosen or offered after a command completed.
+pub const NEXT_STEP: &str = "\x1b[2m";
 
 pub const DIFF_REMOVED: &str = "\x1b[31m";
 pub const DIFF_ADDED: &str = "\x1b[32m";
