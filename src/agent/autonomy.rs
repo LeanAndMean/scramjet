@@ -153,7 +153,7 @@ fn parse(text: &str, project: bool) -> Result<Layer, String> {
 }
 
 /// A map key as JavaScript's object keys see it: its text.
-fn yaml_key(key: &Yaml) -> String {
+pub(super) fn yaml_key(key: &Yaml) -> String {
     match key {
         Yaml::String(text) | Yaml::Real(text) => text.clone(),
         Yaml::Integer(number) => number.to_string(),

@@ -636,9 +636,15 @@ for user"
 }
 
 fn forced(target: &str, report: &Report, commands: &Commands, notices: &mut Vec<String>) -> Next {
-    if commands.get(target).is_none() {
+    let Some(command) = commands.get(target) else {
         notices.push(format!(
             "scramjet: forced target \"{target}\" not in registry; auto-continue skipped"
+        ));
+        return Next::Nothing;
+    };
+    if command.delegate_only {
+        notices.push(format!(
+            "scramjet: forced target \"{target}\" is delegate-only; auto-continue skipped"
         ));
         return Next::Nothing;
     }
@@ -758,8 +764,14 @@ fn allowed(
             }
             _ => {}
         }
-        if commands.get(name).is_none() {
-            return Err(format!("{name} is not registered"));
+        match commands.get(name) {
+            None => return Err(format!("{name} is not registered")),
+            Some(command) if command.delegate_only => {
+                return Err(format!(
+                    "{name} is delegate-only (invoke via delegate, not top-level dispatch)"
+                ));
+            }
+            Some(_) => {}
         }
     }
     if offered
@@ -908,6 +920,11 @@ mod tests {
                 "---\nnext:\n  mode: forced\n  target: rs:steer\n---\nForced",
             ),
             ("rs:ask.md", "---\nnext:\n  mode: ask\n---\nAsk"),
+            ("rs:helper.md", "---\ndelegate-only: true\n---\nHelp"),
+            (
+                "rs:forced-helper.md",
+                "---\nnext:\n  mode: forced\n  target: rs:helper\n---\nForced",
+            ),
         ])
     }
 
@@ -1181,14 +1198,16 @@ valid option(s): /rs:loop"
             json!({"recommended_next_step":0,"next_steps":[
                 step("Write the tests", Some("next"), false),
                 step("/rs:steer", Some("r"), false),
-                step("/rs:nope", Some("r"), false)]}),
+                step("/rs:nope", Some("r"), false),
+                step("/rs:helper", Some("r"), false)]}),
         );
         let (notices, next) = route(&opened, &none, true);
         assert_eq!(
             notices,
             [
                 "scramjet: skipped invalid next step(s): /rs:steer (rs:steer is blacklisted), \
-/rs:nope (rs:nope is not registered)"
+/rs:nope (rs:nope is not registered), /rs:helper (rs:helper is delegate-only (invoke via \
+delegate, not top-level dispatch))"
             ]
         );
         let Next::Offer { steps, .. } = next else {
@@ -1228,6 +1247,21 @@ valid option(s): /rs:loop"
                         .to_owned()
                 ],
                 Next::Run(target("/rs:steer", false))
+            )
+        );
+        assert_eq!(
+            route(
+                &completed("rs:forced-helper", json!({"next_steps":[]})),
+                &none,
+                false
+            ),
+            (
+                vec![
+                    "scramjet: forced target \"rs:helper\" is delegate-only; auto-continue \
+skipped"
+                        .to_owned()
+                ],
+                Next::Nothing
             )
         );
         let asked = completed(

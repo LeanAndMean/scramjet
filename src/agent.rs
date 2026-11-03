@@ -331,12 +331,12 @@ impl Agent {
             &config.root.join(".scramjet"),
         );
         let mut agent = Self {
+            instructions: instructions(&config.root, &commands),
             commands,
             lifecycle: status::Lifecycle::default(),
             completed: None,
             autonomy: autonomy::global_path(),
             autonomy_diagnostics: Vec::new(),
-            instructions: instructions(&config.root),
             info: ModelInfo::guess(&config.model),
             config,
             conversation,
@@ -1591,7 +1591,11 @@ provisional unless an authority requires an exact method; user decisions, trust 
 consumer contracts, and required side effects remain controlling.
 "#;
 
-fn instructions(root: &Path) -> String {
+fn instructions(root: &Path, commands: &Commands) -> String {
+    let catalog = match commands.catalog() {
+        catalog if catalog.is_empty() => catalog,
+        catalog => catalog + "\n\n",
+    };
     let mut text = format!(
         "You are scramjet-rs, a coding agent. You help the user with software engineering tasks \
 in the project directory {root}, using tools to read, write and edit files and to run bash commands.
@@ -1620,7 +1624,7 @@ large unchanged regions.
 - Show file paths clearly when working with files
 
 {COMMAND_FRAMING}
-Current date: {date}
+{catalog}Current date: {date}
 Current working directory: {root}
 ",
         root = root.display(),
@@ -2741,12 +2745,13 @@ response is incomplete; retry the request."});
             json!({"role":"user","content":"/sjrstest:other x"})
         );
         assert!(!bodies[2].to_string().contains("\"_scramjet_"));
-        assert!(
-            bodies[0]["instructions"]
-                .as_str()
-                .unwrap()
-                .contains("\n# Command framing\n\nCommands injected by the Scramjet harness")
-        );
+        let sent = bodies[0]["instructions"].as_str().unwrap();
+        assert!(sent.contains("\n# Command framing\n\nCommands injected by the Scramjet harness"));
+        assert!(sent.contains(
+            "consumer contracts, and required side effects remain controlling.\n\n\
+# Available commands\n\nThe following slash commands can be invoked directly:\n\n\
+- /sjrstest:echo: Echo\n\nCurrent date: "
+        ));
         let prompts = [typed, "/sjrstest:other x"];
         assert_eq!(agent.prompts(), prompts);
         assert_eq!(agent.fork_prompts().unwrap(), prompts);

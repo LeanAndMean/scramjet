@@ -18,7 +18,12 @@ pub struct Command {
     pub name: String,
     /// The frontmatter's, else the body's first line, as Scramjet's autocomplete shows it.
     pub description: String,
+    /// Whether `description` is the frontmatter's.
+    described: bool,
     pub argument_hint: Option<String>,
+    /// Meant to be run by another command; Scramjet neither lists it for the model nor runs it
+    /// as a next step.
+    pub(super) delegate_only: bool,
     body: String,
     /// What may follow it, from the frontmatter's `next:` block.
     pub(super) next: Option<Policy>,
@@ -77,7 +82,7 @@ impl Commands {
             for set in sets(root) {
                 let directory = root.join(&set).join("commands");
                 for (file, content) in command_files(&directory) {
-                    let command = match parse(&set, &file, &content) {
+                    let command = match parse(&set, &file, &content, &mut found.warnings) {
                         Ok(command) => command,
                         Err(error) => {
                             let path = directory.join(&file);
@@ -106,12 +111,38 @@ impl Commands {
         &self.warnings
     }
 
+    /// Scramjet's `# Available commands` section of the instructions, empty without commands.
+    pub(super) fn catalog(&self) -> String {
+        let lines: Vec<String> = self
+            .list
+            .iter()
+            .filter(|command| !command.delegate_only)
+            .map(|command| {
+                let prefix = match &command.argument_hint {
+                    Some(hint) => format!("/{} {hint}", command.name),
+                    None => format!("/{}", command.name),
+                };
+                match command.described {
+                    true => format!("- {prefix}: {}", command.description),
+                    false => format!("- {prefix}"),
+                }
+            })
+            .collect();
+        if lines.is_empty() {
+            return String::new();
+        }
+        format!(
+            "# Available commands\n\nThe following slash commands can be invoked directly:\n\n{}",
+            lines.join("\n")
+        )
+    }
+
     /// Commands from `(file, content)` pairs, each in the set its name starts with.
     #[cfg(test)]
     pub(super) fn parsed(files: &[(&str, &str)]) -> Self {
         let list = files.iter().map(|(file, content)| {
             let set = file.split(':').next().unwrap();
-            parse(set, file, content).unwrap()
+            parse(set, file, content, &mut Vec::new()).unwrap()
         });
         Self {
             list: list.collect(),
@@ -185,9 +216,14 @@ fn command_files(directory: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The command in `content`, the file `file` of set `set`; otherwise why Scramjet's loader
-/// rejects it, in its words.
-fn parse(set: &str, file: &str, content: &str) -> Result<Command, String> {
+/// The command in `content`, the file `file` of set `set`, with Scramjet's notices about fields
+/// it ignores added to `notices`; otherwise why Scramjet's loader rejects it, in its words.
+fn parse(
+    set: &str,
+    file: &str,
+    content: &str,
+    notices: &mut Vec<String>,
+) -> Result<Command, String> {
     let name = file.strip_suffix(".md").unwrap_or(file);
     if !name.starts_with(&format!("{set}:")) {
         return Err(format!("{file}: filename must start with \"{set}:\""));
@@ -207,7 +243,8 @@ fn parse(set: &str, file: &str, content: &str) -> Result<Command, String> {
             .filter(|value| !value.trim().is_empty())
             .map(str::to_owned)
     };
-    let description = field("description").unwrap_or_else(|| {
+    let described = field("description");
+    let description = described.clone().unwrap_or_else(|| {
         let first = body.lines().find(|line| !line.trim().is_empty());
         let first = first.unwrap_or_default();
         match first.char_indices().nth(60) {
@@ -215,13 +252,48 @@ fn parse(set: &str, file: &str, content: &str) -> Result<Command, String> {
             None => first.to_owned(),
         }
     });
+    let delegate_only = match &frontmatter["delegate-only"] {
+        Yaml::BadValue => false,
+        Yaml::Boolean(true) => true,
+        other => {
+            notices.push(format!(
+                "{file}: \"delegate-only\" must be exactly true when present (got {}; treated as \
+ absent)",
+                json(other)
+            ));
+            false
+        }
+    };
     Ok(Command {
         name: name.to_owned(),
         description,
-        argument_hint: field("argument-hint"),
+        described: described.is_some(),
+        argument_hint: field("argument-hint").map(|hint| hint.trim().to_owned()),
+        delegate_only,
         body,
         next,
     })
+}
+
+/// A YAML value as JavaScript's `JSON.stringify` writes it.
+fn json(value: &Yaml) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Yaml::String(text) => Value::String(text.clone()),
+        Yaml::Integer(number) => Value::from(*number),
+        Yaml::Real(text) => text
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map_or(Value::Null, Value::Number),
+        Yaml::Boolean(value) => Value::Bool(*value),
+        Yaml::Array(items) => items.iter().map(json).collect(),
+        Yaml::Hash(entries) => entries
+            .iter()
+            .map(|(key, value)| (super::autonomy::yaml_key(key), json(value)))
+            .collect(),
+        _ => Value::Null,
+    }
 }
 
 impl Policy {
@@ -480,6 +552,10 @@ mod tests {
             "global/rs/commands/rs:helper.md",
             "---\ndelegate-only: true\n---\n\nHelp with <caller-context>$ARGUMENTS</caller-context>\n",
         );
+        scratch.file(
+            "global/rs/commands/rs:odd.md",
+            "---\ndescription: Odd\nargument-hint: \"  <x>  \"\ndelegate-only: \"yes\"\n---\nOdd\n",
+        );
         scratch.file("global/rs/commands/notes.md", "---\n---\nNo prefix\n");
         scratch.file("global/rs/commands/rs:notes.txt", "not markdown\n");
         scratch.file("global/rs/commands/rs:folder.md/inner.txt", "not a file\n");
@@ -493,8 +569,11 @@ mod tests {
         scratch.file("project/rs/commands/rs:loop.md", "Loop $ARGUMENTS\n");
 
         let commands = Commands::discover(Some(&global), &project);
-        assert_eq!(names(&commands), ["rs:helper", "rs:loop", "rs:review"]);
-        let review = &commands.list()[2];
+        assert_eq!(
+            names(&commands),
+            ["rs:helper", "rs:loop", "rs:odd", "rs:review"]
+        );
+        let review = &commands.list()[3];
         assert_eq!(review.description, "Global review");
         assert_eq!(review.argument_hint.as_deref(), Some("[commits or area]"));
         let hint = Some("nested".to_owned());
@@ -508,9 +587,19 @@ mod tests {
             commands.warnings(),
             [
                 skipped("rs:wrong-set.md", "other"),
-                skipped("notes.md", "rs")
+                skipped("notes.md", "rs"),
+                "rs:odd.md: \"delegate-only\" must be exactly true when present (got \"yes\"; \
+ treated as absent)"
+                    .into(),
             ]
         );
+        // Scramjet's catalog: frontmatter descriptions only, without delegate-only commands.
+        assert_eq!(
+            commands.catalog(),
+            "# Available commands\n\nThe following slash commands can be invoked directly:\n\n\
+- /rs:loop\n- /rs:odd <x>: Odd\n- /rs:review [commits or area]: Global review"
+        );
+        assert_eq!(Commands::default().catalog(), "");
         assert_eq!(
             commands.expand("/rs:review HEAD~2.."),
             Some(
@@ -545,33 +634,52 @@ mod tests {
     #[test]
     fn frontmatter_is_read_as_scramjet_reads_it() {
         let crlf = "\u{feff}---\r\ndescription: \"Quoted\"\r\nargument-hint: '<a> [b]'\r\n---\r\n\r\n  Body\r\nmore  \r\n";
-        let command = parse("rs", "rs:x.md", crlf).unwrap();
+        let command = parse("rs", "rs:x.md", crlf, &mut Vec::new()).unwrap();
         assert_eq!(command.description, "Quoted");
         assert_eq!(command.next, None);
         assert_eq!(command.argument_hint.as_deref(), Some("<a> [b]"));
         assert_eq!(command.body, "Body\nmore");
         // Without a closing line, the whole text is the body, untrimmed.
-        let open = parse("rs", "rs:x.md", "---\ndescription: no end\n").unwrap();
+        let open = parse(
+            "rs",
+            "rs:x.md",
+            "---\ndescription: no end\n",
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(open.argument_hint, None);
         assert_eq!(open.body, "---\ndescription: no end\n");
         assert_eq!(open.description, "---");
         // Without a description, the body's first line, cut at 60 characters.
         let long = format!("\n\n{}é tail\nsecond\n", "x".repeat(59));
-        let command = parse("rs", "rs:x.md", &long).unwrap();
+        let command = parse("rs", "rs:x.md", &long, &mut Vec::new()).unwrap();
         assert_eq!(command.description, format!("{}é...", "x".repeat(59)));
-        assert!(parse("rs", "other.md", "Body").is_err());
+        assert!(parse("rs", "other.md", "Body", &mut Vec::new()).is_err());
         // As YAML, a folded description is one line, and a non-string one is not a description.
         let folded = parse(
             "rs",
             "rs:x.md",
             "---\ndescription: >\n  Two\n  lines\n---\nB",
+            &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(folded.description, "Two lines\n");
-        let number = parse("rs", "rs:x.md", "---\ndescription: 12\n---\nBody line").unwrap();
+        let number = parse(
+            "rs",
+            "rs:x.md",
+            "---\ndescription: 12\n---\nBody line",
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(number.description, "Body line");
         assert_eq!(
-            parse("rs", "rs:x.md", "---\ndescription: a: b\n---\nB").unwrap_err(),
+            parse(
+                "rs",
+                "rs:x.md",
+                "---\ndescription: a: b\n---\nB",
+                &mut Vec::new()
+            )
+            .unwrap_err(),
             "rs:x.md: malformed frontmatter — mapping values are not allowed in this context \
 at byte 14 line 1 column 15"
         );
@@ -579,7 +687,7 @@ at byte 14 line 1 column 15"
 
     fn policy(next: &str) -> Result<Option<Policy>, String> {
         let content = format!("---\nnext:\n{next}\n---\nBody");
-        parse("rs", "rs:x.md", &content).map(|command| command.next)
+        parse("rs", "rs:x.md", &content, &mut Vec::new()).map(|command| command.next)
     }
 
     #[test]
