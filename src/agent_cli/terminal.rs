@@ -172,7 +172,7 @@ fn context(tokens: u64, window: Option<u64>) -> String {
     }
 }
 
-fn elapsed(seconds: u64) -> String {
+pub(super) fn elapsed(seconds: u64) -> String {
     match seconds {
         0 => String::new(),
         1..60 => format!(" {seconds}s"),
@@ -209,6 +209,8 @@ pub(super) struct Terminal {
     capture: Option<(String, usize)>,
     /// Cut previews say that Ctrl+O shows them whole, as it does at the interactive prompt.
     pub(super) expandable: bool,
+    /// Every tool result is shown whole, as the conversation view shows them.
+    full: bool,
 }
 
 impl Terminal {
@@ -223,7 +225,7 @@ impl Terminal {
     ) {
         self.clear();
         let width = self.width().saturating_sub(2).max(20);
-        let full = self.capture.is_some();
+        let full = self.full;
         let took = self.tool_started.take().map(|started| started.elapsed());
         let style = match () {
             _ if !self.color => "",
@@ -287,6 +289,14 @@ impl Terminal {
         let mut terminal = Self::new(hide_thinking, false);
         terminal.color = true;
         terminal.capture = Some((String::new(), width));
+        terminal.full = true;
+        terminal
+    }
+    /// As `capture`, with tool results cut as the inline output shows them unless `full`.
+    pub(super) fn capture_shown(width: usize, hide_thinking: Arc<AtomicBool>, full: bool) -> Self {
+        let mut terminal = Self::capture(width, hide_thinking);
+        terminal.full = full;
+        terminal.expandable = !full;
         terminal
     }
     /// What was rendered into the buffer, after ending any streamed block.
@@ -372,6 +382,7 @@ impl Terminal {
             type_ahead: None,
             capture: None,
             expandable: false,
+            full: false,
         }
     }
     /// Shows `activity` on the status line now, or only once it lasts a second.
@@ -529,20 +540,24 @@ impl Terminal {
         self.streaming = Streaming::None;
     }
     pub(super) fn usage(&self, agent: &Agent) {
-        let usage = agent.usage;
-        let line = format!(
-            "[{} requests · {} input tokens ({} cached) · {} output tokens{}]",
-            usage.requests,
-            usage.input_tokens,
-            usage.cached_input_tokens,
-            usage.output_tokens,
-            usage
-                .context_tokens
-                .map(|tokens| format!(" · context {}", context(tokens, agent.context_window())))
-                .unwrap_or_default()
-        );
-        eprintln!("{}", self.dim(&self.wrapped(&line)));
+        eprintln!("{}", self.dim(&self.wrapped(&usage_line(agent))));
     }
+}
+
+/// The usage line after a turn: requests, tokens and how full the context is.
+pub(super) fn usage_line(agent: &Agent) -> String {
+    let usage = agent.usage;
+    format!(
+        "[{} requests · {} input tokens ({} cached) · {} output tokens{}]",
+        usage.requests,
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+        usage
+            .context_tokens
+            .map(|tokens| format!(" · context {}", context(tokens, agent.context_window())))
+            .unwrap_or_default()
+    )
 }
 
 impl AgentUi for Terminal {
@@ -805,6 +820,12 @@ impl Terminal {
             .map(|(cancel, expand, typed)| type_ahead::TypeAhead::resume(cancel, expand, typed));
         answer
     }
+    /// A message of the session's own, wrapped, as a block ending with a blank line.
+    pub(super) fn said(&mut self, text: &str) {
+        self.clear();
+        let text = self.wrapped(text);
+        self.err(&format!("{text}\n\n"));
+    }
     pub(super) fn compaction_error(&mut self, error: &str) {
         self.clear();
         let text = self.wrapped(&format!("error: automatic compaction failed: {error}"));
@@ -824,10 +845,15 @@ impl Terminal {
             self.err(&format!("{note}\n"));
         }
     }
-    /// The output of the running tool so far, as the status line shows its end.
+    /// The output of the running tool so far, as the status line shows its end; all of it
+    /// when the results are shown whole.
     pub(super) fn running_output(&mut self, output: &str) {
         let width = self.width().saturating_sub(2).max(20);
-        for row in preview(output.trim_end_matches('\n'), Shown::All, width, "") {
+        let shown = match self.full {
+            true => Shown::All,
+            false => Shown::Last(BASH_LINES),
+        };
+        for row in preview(output.trim_end_matches('\n'), shown, width, "") {
             let row = self.styled(style::STATUS, &row);
             self.err(&format!("  {row}\n"));
         }

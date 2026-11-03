@@ -972,19 +972,12 @@ impl Editor {
         let raw = RawMode::enter()?;
         let mut source = Stdin::starting_with(std::mem::take(&mut self.typed));
         let mut screen = Screen::default();
-        let mut buffer = Buffer::default();
-        buffer.set(std::mem::take(&mut self.text));
-        let mut browsing = self.history.len();
-        let mut draft = String::new();
-        let mut exit_armed = false;
-        let mut last_escape: Option<Instant> = None;
-        let mut note: Option<String> = None;
+        let text = std::mem::take(&mut self.text);
+        let mut draft = self.draft(text);
         let mut dirty = false;
-        let mut completion: Option<Completion> = None;
-        let mut lookup: Option<Lookup> = None;
-        screen.draw(&buffer, None, &[], false)?;
+        screen.draw(&draft.buffer, None, &[], false)?;
         loop {
-            let wait = if lookup.is_some() {
+            let wait = if draft.searching() {
                 SEARCH_CHECK
             } else {
                 RESIZE_CHECK
@@ -993,251 +986,405 @@ impl Editor {
                 Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Key::EndOfInput,
                 result => result?,
             };
-            if key == Key::Escape {
-                lookup = None;
-            }
-            let armed = std::mem::take(&mut exit_armed);
-            let noted = note.take();
-            let tab = matches!(&key, Key::Text(text) if text == "\t");
             let changed = match key {
                 // Stopped by a SIGTSTP from outside: the shell wrote below the prompt.
                 Key::Idle if super::job::continued() => {
-                    exit_armed = armed;
-                    note = noted;
                     screen = Screen::default();
                     true
                 }
-                Key::Idle => {
-                    exit_armed = armed;
-                    note = noted;
-                    terminal_size().0 != screen.width
-                }
-                Key::Suspend => {
-                    screen.erase()?;
-                    raw.suspend();
-                    super::job::suspend();
-                    // Drawn again below, not once more at the next idle check.
-                    super::job::continued();
-                    raw.resume()?;
-                    exit_armed = armed;
-                    note = noted;
-                    true
-                }
-                Key::Escape if completion.is_some() => {
-                    completion = None;
-                    true
-                }
-                Key::Up | Key::Down if completion.is_some() => {
-                    if let Some(list) = &mut completion {
-                        list.select(key == Key::Up);
-                    }
-                    true
-                }
-                // As in Scramjet, Enter on a command also submits it.
-                Key::Text(_) | Key::Enter if (tab || key == Key::Enter) && completion.is_some() => {
-                    let list = completion.take().expect("checked above");
-                    let submit = list.kind == Kind::Slash && key == Key::Enter;
-                    list.apply(&mut buffer);
-                    if submit {
-                        buffer.set(buffer.text.trim().to_owned());
-                        screen.draw(&buffer, None, &[], true)?;
-                        return Ok(Some(Input::Prompt(buffer.text)));
-                    }
-                    true
-                }
-                Key::Escape | Key::Interrupt if self.dialog => {
-                    screen.erase()?;
-                    return Ok(None);
-                }
-                Key::EndOfInput if self.dialog && buffer.text.is_empty() => {
-                    screen.erase()?;
-                    return Ok(None);
-                }
-                Key::Escape if self.double_escape && buffer.text.trim().is_empty() => {
-                    if last_escape.is_some_and(|at| at.elapsed() < DOUBLE_ESCAPE) {
-                        screen.erase()?;
-                        self.text = buffer.text;
-                        return Ok(Some(Input::DoubleEscape));
-                    }
-                    last_escape = Some(Instant::now());
-                    exit_armed = armed;
-                    note = noted;
-                    false
-                }
-                Key::BackTab if !self.dialog => {
-                    note = Some(cycle_effort());
-                    true
-                }
-                Key::Expand if !self.dialog => {
-                    screen.erase()?;
-                    self.text = buffer.text;
-                    return Ok(Some(Input::Conversation(source.rest())));
-                }
-                Key::Ignored
-                | Key::BackTab
-                | Key::Expand
-                | Key::Escape
-                | Key::PageUp
-                | Key::PageDown => {
-                    exit_armed = armed;
-                    note = noted;
-                    false
-                }
-                Key::ToggleThinking => {
-                    let hidden = !self.hide_thinking.fetch_xor(true, Ordering::Relaxed);
-                    note = Some(thinking_note(hidden).to_owned());
-                    true
-                }
-                Key::External => {
-                    completion = None;
-                    if let Some(command) = editor_command() {
-                        // A full-screen editor gives the screen back as it was, so the prompt
-                        // is drawn again in its place.
-                        screen.erase()?;
-                        raw.suspend();
-                        let edited = run_editor(&command, &buffer.text);
-                        raw.resume()?;
-                        match edited {
-                            Ok(Some(text)) => buffer.set(text),
-                            Ok(None) => {}
-                            Err(error) => note = Some(error),
+                Key::Idle => terminal_size().0 != screen.width,
+                key => match self.key(&mut draft, key, source.pending()) {
+                    Action::Edited(changed) => changed,
+                    Action::Submit(text) => {
+                        match self.dialog {
+                            true => screen.erase()?,
+                            false => screen.draw(&draft.buffer, None, &[], true)?,
                         }
-                    } else {
-                        note = Some(NO_EDITOR.to_owned());
+                        return Ok(Some(Input::Prompt(text)));
                     }
-                    true
-                }
-                Key::Enter if buffer.text[..buffer.cursor].ends_with('\\') => {
-                    buffer.apply(&Key::Backspace);
-                    buffer.apply(&Key::NewLine);
-                    true
-                }
-                Key::Enter if buffer.text.trim().is_empty() => true,
-                Key::Enter if self.dialog && !buffer.text.trim().is_empty() => {
-                    screen.erase()?;
-                    return Ok(Some(Input::Prompt(buffer.text.trim().to_owned())));
-                }
-                Key::Enter => {
-                    // As in Scramjet, the prompt is sent trimmed, and shown as sent.
-                    buffer.set(buffer.text.trim().to_owned());
-                    screen.draw(&buffer, None, &[], true)?;
-                    return Ok(Some(Input::Prompt(buffer.text)));
-                }
-                Key::Interrupt if buffer.text.is_empty() => {
-                    if armed {
-                        screen.draw(&buffer, None, &[], true)?;
+                    Action::Exit => {
+                        match self.dialog {
+                            true => screen.erase()?,
+                            false => screen.draw(&draft.buffer, None, &[], true)?,
+                        }
                         return Ok(None);
                     }
-                    exit_armed = true;
-                    true
-                }
-                Key::Interrupt => {
-                    buffer = Buffer::default();
-                    completion = None;
-                    browsing = self.history.len();
-                    true
-                }
-                Key::EndOfInput if buffer.text.is_empty() => {
-                    screen.draw(&buffer, None, &[], true)?;
-                    return Ok(None);
-                }
-                // Scramjet completes only commands after a `/` that starts the prompt; a path
-                // there is completed when no command matches. An `@` word is looked for.
-                Key::Text(_) if tab && !self.dialog => {
-                    let before = &buffer.text[..buffer.cursor];
-                    completion = Completion::slash(before, &self.commands);
-                    match file_search::Mention::find(before) {
-                        Some(mention) if completion.is_none() => {
-                            lookup = Lookup::start(&self.root, mention, &buffer, true);
-                        }
-                        _ => {
-                            completion =
-                                completion.or_else(|| Completion::path(before, &self.root));
-                            if let Some(list) = completion
-                                .take_if(|list| list.items.len() == 1 && list.kind == Kind::Path)
-                            {
-                                list.apply(&mut buffer);
-                            }
-                        }
+                    Action::DoubleEscape => {
+                        screen.erase()?;
+                        self.text = draft.buffer.text;
+                        return Ok(Some(Input::DoubleEscape));
                     }
-                    true
-                }
-                // A list follows what is typed, a path's while the same word is typed; commands
-                // are listed as soon as a `/` starts the prompt, entries for an `@` word once
-                // typing pauses, the list before staying until they are found.
-                Key::Text(_) | Key::Backspace if !self.dialog => {
-                    buffer.apply(&key);
-                    let before = &buffer.text[..buffer.cursor];
-                    completion = match (file_search::Mention::typed(before), completion.take()) {
-                        (Some(mention), list) => {
-                            let kept = list.filter(|list| {
-                                list.kind == Kind::File && list.start == mention.start
-                            });
-                            if !source.pending() {
-                                lookup = Lookup::start(&self.root, mention, &buffer, false);
-                            }
-                            kept
-                        }
-                        (None, Some(list)) if list.kind == Kind::Path => {
-                            Completion::path(before, &self.root)
-                                .filter(|next| next.start == list.start)
-                        }
-                        (None, _) => Completion::slash(before, &self.commands),
-                    };
-                    true
-                }
-                Key::Up | Key::Down => {
-                    let up = key == Key::Up;
-                    let layout = Layout::new(&buffer.text, terminal_size().0);
-                    if let Some(cursor) = layout.vertical(buffer.cursor, up) {
-                        buffer.cursor = cursor;
-                    } else if up && browsing > 0 {
-                        if browsing == self.history.len() {
-                            draft = std::mem::take(&mut buffer.text);
-                        }
-                        browsing -= 1;
-                        buffer.set(self.history[browsing].clone());
-                    } else if !up && browsing < self.history.len() {
-                        browsing += 1;
-                        buffer.set(match self.history.get(browsing) {
-                            Some(entry) => entry.clone(),
-                            None => std::mem::take(&mut draft),
-                        });
+                    Action::Conversation => {
+                        screen.erase()?;
+                        self.text = draft.buffer.text;
+                        return Ok(Some(Input::Conversation(source.rest())));
                     }
-                    true
-                }
-                Key::EndOfInput => {
-                    completion = None;
-                    buffer.apply(&Key::Delete);
-                    true
-                }
-                key => {
-                    completion = None;
-                    buffer.apply(&key);
-                    true
-                }
+                    Action::CycleEffort => {
+                        draft.note = Some(cycle_effort());
+                        true
+                    }
+                    Action::Suspend => {
+                        screen.erase()?;
+                        raw.suspend();
+                        super::job::suspend();
+                        // Drawn again below, not once more at the next idle check.
+                        super::job::continued();
+                        raw.resume()?;
+                        true
+                    }
+                    Action::External => {
+                        if let Some(command) = editor_command() {
+                            // A full-screen editor gives the screen back as it was, so the
+                            // prompt is drawn again in its place.
+                            screen.erase()?;
+                            raw.suspend();
+                            let edited = run_editor(&command, &draft.buffer.text);
+                            raw.resume()?;
+                            draft.edited(edited);
+                        } else {
+                            draft.note = Some(NO_EDITOR.to_owned());
+                        }
+                        true
+                    }
+                },
             };
-            dirty |= changed;
-            // A search for the text as it was before an edit or a cursor move finds nothing for
-            // it now.
-            lookup.take_if(|lookup| lookup.text != buffer.text || lookup.cursor != buffer.cursor);
-            if let Some(found) = lookup.as_mut().and_then(|lookup| lookup.search.poll()) {
-                let Lookup { search, tab, .. } = lookup.take().expect("polled");
-                completion = Completion::found(search.mention.start, found, &buffer);
-                if let Some(list) = completion.take_if(|list| tab && list.items.len() == 1) {
-                    list.apply(&mut buffer);
-                }
-                dirty = true;
-            }
+            dirty |= changed | self.poll(&mut draft);
             if dirty && !source.pending() {
-                let hint = exit_armed.then_some(EXIT_HINT).or(note.as_deref());
-                let rows = completion
-                    .as_ref()
-                    .map_or_else(Vec::new, |list| list.rows(terminal_size().0));
-                screen.draw(&buffer, hint, &rows, false)?;
+                let rows = draft.completion_rows(terminal_size().0);
+                screen.draw(&draft.buffer, draft.hint(), &rows, false)?;
                 dirty = false;
             }
         }
+    }
+
+    /// Reads a dialog's text: `None` when cancelled.
+    pub(super) fn read_dialog(mut self) -> io::Result<Option<String>> {
+        Ok(match self.read(&mut String::new)? {
+            Some(Input::Prompt(text)) => Some(text),
+            _ => None,
+        })
+    }
+
+    /// A draft for a new prompt that starts with `text`, the cursor at its end.
+    pub(super) fn draft(&self, text: String) -> Draft {
+        let mut buffer = Buffer::default();
+        buffer.set(text);
+        Draft {
+            buffer,
+            ..Draft::default()
+        }
+    }
+
+    /// Edits `draft` with `key`, or says what the caller should do for it; `pending`: more keys
+    /// are already typed, so an `@` search waits for them.
+    pub(super) fn key(&self, draft: &mut Draft, key: Key, pending: bool) -> Action {
+        let Draft {
+            buffer,
+            browsing,
+            saved,
+            exit_armed,
+            last_escape,
+            note,
+            completion,
+            lookup,
+        } = draft;
+        if key == Key::Escape {
+            *lookup = None;
+        }
+        let armed = std::mem::take(exit_armed);
+        let noted = note.take();
+        let tab = matches!(&key, Key::Text(text) if text == "\t");
+        let changed = match key {
+            Key::Idle | Key::Suspend => {
+                *exit_armed = armed;
+                *note = noted;
+                return match key {
+                    Key::Suspend => Action::Suspend,
+                    _ => Action::Edited(false),
+                };
+            }
+            Key::Escape if completion.is_some() => {
+                *completion = None;
+                true
+            }
+            Key::Up | Key::Down if completion.is_some() => {
+                if let Some(list) = completion {
+                    list.select(key == Key::Up);
+                }
+                true
+            }
+            // As in Scramjet, Enter on a command also submits it.
+            Key::Text(_) | Key::Enter if (tab || key == Key::Enter) && completion.is_some() => {
+                let list = completion.take().expect("checked above");
+                let submit = list.kind == Kind::Slash && key == Key::Enter;
+                list.apply(buffer);
+                if submit {
+                    buffer.set(buffer.text.trim().to_owned());
+                    return Action::Submit(buffer.text.clone());
+                }
+                true
+            }
+            Key::Escape | Key::Interrupt if self.dialog => return Action::Exit,
+            Key::EndOfInput if self.dialog && buffer.text.is_empty() => return Action::Exit,
+            Key::Escape if self.double_escape && buffer.text.trim().is_empty() => {
+                if last_escape.is_some_and(|at| at.elapsed() < DOUBLE_ESCAPE) {
+                    *last_escape = None;
+                    return Action::DoubleEscape;
+                }
+                *last_escape = Some(Instant::now());
+                *exit_armed = armed;
+                *note = noted;
+                false
+            }
+            Key::BackTab if !self.dialog => return Action::CycleEffort,
+            Key::Expand if !self.dialog => return Action::Conversation,
+            Key::Ignored
+            | Key::BackTab
+            | Key::Expand
+            | Key::Escape
+            | Key::PageUp
+            | Key::PageDown => {
+                *exit_armed = armed;
+                *note = noted;
+                false
+            }
+            Key::ToggleThinking => {
+                let hidden = !self.hide_thinking.fetch_xor(true, Ordering::Relaxed);
+                *note = Some(thinking_note(hidden).to_owned());
+                true
+            }
+            Key::External => {
+                *completion = None;
+                return Action::External;
+            }
+            Key::Enter if buffer.text[..buffer.cursor].ends_with('\\') => {
+                buffer.apply(&Key::Backspace);
+                buffer.apply(&Key::NewLine);
+                true
+            }
+            Key::Enter if buffer.text.trim().is_empty() => true,
+            Key::Enter => {
+                // As in Scramjet, the prompt is sent trimmed, and shown as sent.
+                buffer.set(buffer.text.trim().to_owned());
+                return Action::Submit(buffer.text.clone());
+            }
+            Key::Interrupt if buffer.text.is_empty() => {
+                if armed {
+                    return Action::Exit;
+                }
+                *exit_armed = true;
+                true
+            }
+            Key::Interrupt => {
+                *buffer = Buffer::default();
+                *completion = None;
+                *browsing = None;
+                true
+            }
+            Key::EndOfInput if buffer.text.is_empty() => return Action::Exit,
+            // Scramjet completes only commands after a `/` that starts the prompt; a path
+            // there is completed when no command matches. An `@` word is looked for.
+            Key::Text(_) if tab && !self.dialog => {
+                let before = &buffer.text[..buffer.cursor];
+                *completion = Completion::slash(before, &self.commands);
+                match file_search::Mention::find(before) {
+                    Some(mention) if completion.is_none() => {
+                        *lookup = Lookup::start(&self.root, mention, buffer, true);
+                    }
+                    _ => {
+                        *completion = completion
+                            .take()
+                            .or_else(|| Completion::path(before, &self.root));
+                        if let Some(list) = completion
+                            .take_if(|list| list.items.len() == 1 && list.kind == Kind::Path)
+                        {
+                            list.apply(buffer);
+                        }
+                    }
+                }
+                true
+            }
+            // A list follows what is typed, a path's while the same word is typed; commands
+            // are listed as soon as a `/` starts the prompt, entries for an `@` word once
+            // typing pauses, the list before staying until they are found.
+            Key::Text(_) | Key::Backspace if !self.dialog => {
+                buffer.apply(&key);
+                let before = &buffer.text[..buffer.cursor];
+                *completion = match (file_search::Mention::typed(before), completion.take()) {
+                    (Some(mention), list) => {
+                        let kept = list
+                            .filter(|list| list.kind == Kind::File && list.start == mention.start);
+                        if !pending {
+                            *lookup = Lookup::start(&self.root, mention, buffer, false);
+                        }
+                        kept
+                    }
+                    (None, Some(list)) if list.kind == Kind::Path => {
+                        Completion::path(before, &self.root).filter(|next| next.start == list.start)
+                    }
+                    (None, _) => Completion::slash(before, &self.commands),
+                };
+                true
+            }
+            Key::Up | Key::Down => {
+                let up = key == Key::Up;
+                let layout = Layout::new(&buffer.text, terminal_size().0);
+                if let Some(cursor) = layout.vertical(buffer.cursor, up) {
+                    buffer.cursor = cursor;
+                } else if up && !self.history.is_empty() && *browsing != Some(0) {
+                    let at = match *browsing {
+                        Some(at) => at - 1,
+                        None => {
+                            *saved = std::mem::take(&mut buffer.text);
+                            self.history.len() - 1
+                        }
+                    };
+                    *browsing = Some(at);
+                    buffer.set(self.history[at].clone());
+                } else if let Some(at) = browsing.filter(|_| !up) {
+                    *browsing = Some(at + 1).filter(|&next| next < self.history.len());
+                    buffer.set(match *browsing {
+                        Some(next) => self.history[next].clone(),
+                        None => std::mem::take(saved),
+                    });
+                }
+                true
+            }
+            Key::EndOfInput => {
+                *completion = None;
+                buffer.apply(&Key::Delete);
+                true
+            }
+            key => {
+                *completion = None;
+                buffer.apply(&key);
+                true
+            }
+        };
+        Action::Edited(changed)
+    }
+
+    /// Shows the entries an `@` search found, once it found them for the draft as it is;
+    /// returns whether the draft changed.
+    pub(super) fn poll(&self, draft: &mut Draft) -> bool {
+        let Draft {
+            buffer,
+            completion,
+            lookup,
+            ..
+        } = draft;
+        // A search for the text as it was before an edit or a cursor move finds nothing for it
+        // now.
+        lookup.take_if(|lookup| lookup.text != buffer.text || lookup.cursor != buffer.cursor);
+        let Some(found) = lookup.as_mut().and_then(|lookup| lookup.search.poll()) else {
+            return false;
+        };
+        let Lookup { search, tab, .. } = lookup.take().expect("polled");
+        *completion = Completion::found(search.mention.start, found, buffer);
+        if let Some(list) = completion.take_if(|list| tab && list.items.len() == 1) {
+            list.apply(buffer);
+        }
+        true
+    }
+}
+
+/// A prompt being edited, and what goes with it from one key to the next.
+#[derive(Default)]
+pub(super) struct Draft {
+    buffer: Buffer,
+    /// The history entry shown; `None` for the text typed.
+    browsing: Option<usize>,
+    /// The text typed, while Up shows history.
+    saved: String,
+    exit_armed: bool,
+    last_escape: Option<Instant>,
+    /// Shown under the prompt until the next key.
+    note: Option<String>,
+    completion: Option<Completion>,
+    lookup: Option<Lookup>,
+}
+
+/// What the caller does for a key the editor does not handle itself.
+#[derive(Debug, PartialEq)]
+pub(super) enum Action {
+    /// Whether the draft changed and is drawn again.
+    Edited(bool),
+    /// Enter: the text, trimmed, which the draft then holds.
+    Submit(String),
+    /// Ctrl-C twice or Ctrl-D on an empty prompt, or a dialog cancelled.
+    Exit,
+    /// Escape twice on an empty prompt (see `Input::DoubleEscape`).
+    DoubleEscape,
+    /// Ctrl+O.
+    Conversation,
+    /// Shift+Tab.
+    CycleEffort,
+    /// Ctrl-Z.
+    Suspend,
+    /// Ctrl-G: edit the text with `$VISUAL` or `$EDITOR` (see `Draft::edited`).
+    External,
+}
+
+impl Draft {
+    pub(super) fn text(&self) -> &str {
+        &self.buffer.text
+    }
+
+    /// Whether an `@` search runs, whose entries `Editor::poll` shows once found.
+    pub(super) fn searching(&self) -> bool {
+        self.lookup.is_some()
+    }
+
+    pub(super) fn completing(&self) -> bool {
+        self.completion.is_some()
+    }
+
+    /// The line under the prompt: how to exit after a first Ctrl-C, or a note.
+    pub(super) fn hint(&self) -> Option<&str> {
+        self.exit_armed
+            .then_some(EXIT_HINT)
+            .or(self.note.as_deref())
+    }
+
+    pub(super) fn set_note(&mut self, note: String) {
+        self.note = Some(note);
+    }
+
+    /// Removes the note if it is `note`.
+    pub(super) fn clear_note(&mut self, note: &str) {
+        self.note.take_if(|shown| shown == note);
+    }
+
+    /// The completion list's rows, if one is open.
+    pub(super) fn completion_rows(&self, width: usize) -> Vec<String> {
+        self.completion
+            .as_ref()
+            .map_or_else(Vec::new, |list| list.rows(width))
+    }
+
+    /// The prompt's rows at `width`, and the row and column of the cursor in them.
+    pub(super) fn rows(&self, width: usize) -> (Vec<String>, usize, usize) {
+        let layout = Layout::new(&self.buffer.text, width);
+        let cursor = layout.at(self.buffer.cursor);
+        (layout.rows, cursor.row, cursor.column)
+    }
+
+    /// Takes what the external editor did: its text, or the reason it did nothing.
+    pub(super) fn edited(&mut self, edited: Result<Option<String>, String>) {
+        match edited {
+            Ok(Some(text)) => self.buffer.set(text),
+            Ok(None) => {}
+            Err(error) => self.note = Some(error),
+        }
+    }
+}
+
+/// `$VISUAL` or `$EDITOR` run on `text` with the terminal as the shell left it: its text, or
+/// `None` when it did not save; an error when none is configured or it could not run.
+pub(super) fn external(text: &str) -> Result<Option<String>, String> {
+    match editor_command() {
+        Some(command) => run_editor(&command, text),
+        None => Err(NO_EDITOR.to_owned()),
     }
 }
 

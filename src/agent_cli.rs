@@ -7,6 +7,7 @@ mod interactive;
 mod job;
 mod markdown;
 mod record;
+mod screen;
 mod select;
 mod settings;
 mod slash;
@@ -37,6 +38,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     };
     let prompt = options.prompt.take();
+    let fullscreen = options.fullscreen;
     let mut settings = Settings::load();
     let mut agent = start(options, &settings)?;
     let cancel = Arc::new(AtomicBool::new(false));
@@ -44,7 +46,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     handle_signals(&cancel, &hide_thinking)?;
     let mut ui = Terminal::new(hide_thinking.clone(), true);
     let Some(prompt) = prompt else {
-        return interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings).run();
+        let interactive =
+            interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings, fullscreen)?;
+        return interactive.run();
     };
     for warning in std::mem::take(&mut settings.warnings) {
         ui.notice(&format!("settings: {warning}"));

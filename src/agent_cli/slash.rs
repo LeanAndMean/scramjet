@@ -1,14 +1,12 @@
 //! The built-in commands: `/new`, `/name`, `/session`, `/resume`, `/fork`, `/tree`, `/model`,
 //! `/compact`, and `!` commands.
 use super::interactive::{Interactive, model_line};
+use super::screen;
 use super::terminal::Terminal;
 use super::text::{clip, one_line, visible};
 use super::{editor, select, style, tree};
-use scramjet_rs::agent::{Agent, AgentError, AgentUi, Navigated, SessionInfo};
-use std::{
-    sync::{Arc, atomic::AtomicBool},
-    time::Duration,
-};
+use scramjet_rs::agent::{Agent, AgentError, Navigated, SessionInfo};
+use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
 impl Interactive {
@@ -28,7 +26,7 @@ impl Interactive {
             }
             "/name" => self.name(argument),
             "/session" if argument.is_empty() => {
-                eprint!("{}", session_info(&self.agent, &self.ui))
+                self.say(session_info(&self.agent, &self.ui).trim_end())
             }
             "/resume" => self.resume(argument)?,
             "/fork" => self.fork(argument, escaped)?,
@@ -44,14 +42,12 @@ impl Interactive {
     pub(super) fn new_session(&mut self) -> bool {
         match self.agent.new_session() {
             Ok(()) => {
-                eprintln!(
-                    "✓ New session started\nsession {}",
-                    self.agent.session_path().display()
-                );
+                let path = self.agent.session_path().display();
+                self.replaced(&format!("✓ New session started\nsession {path}"));
                 true
             }
             Err(error) => {
-                eprintln!("error: {error}");
+                self.say(&format!("error: {error}"));
                 false
             }
         }
@@ -60,13 +56,13 @@ impl Interactive {
     fn name(&mut self, name: &str) {
         if name.is_empty() {
             match self.agent.session_name() {
-                Some(current) => eprintln!("{}", self.ui.dim(&format!("Session name: {current}"))),
-                None => eprintln!("Usage: /name <name>"),
+                Some(current) => self.say(&self.ui.dim(&format!("Session name: {current}"))),
+                None => self.say("Usage: /name <name>"),
             }
         } else {
             match self.agent.set_session_name(name) {
-                Ok(()) => eprintln!("{}", self.ui.dim(&format!("Session name set: {name}"))),
-                Err(error) => eprintln!("error: {error}"),
+                Ok(()) => self.say(&self.ui.dim(&format!("Session name set: {name}"))),
+                Err(error) => self.say(&format!("error: {error}")),
             }
         }
     }
@@ -75,7 +71,7 @@ impl Interactive {
         let sessions = match self.agent.sessions() {
             Ok(sessions) => sessions,
             Err(error) => {
-                eprintln!("error: {error}");
+                self.say(&format!("error: {error}"));
                 return Ok(());
             }
         };
@@ -84,14 +80,14 @@ impl Interactive {
             .position(|session| self.agent.is_session(&session.path));
         let chosen = match wanted {
             "" if sessions.is_empty() => {
-                eprintln!("No sessions to resume");
+                self.say("No sessions to resume");
                 None
             }
-            "" if self.editor.is_some() => {
+            "" if self.interactive() => {
                 // Newest first, so the first other than the current one is the likely choice.
                 let initial = usize::from(current == Some(0));
                 let texts: Vec<_> = sessions.iter().map(search_text).collect();
-                select::search(
+                self.search(
                     "Resume session",
                     select::VISIBLE,
                     &texts,
@@ -99,8 +95,7 @@ impl Interactive {
                     current,
                     "No matching sessions",
                     |index, width| session_line(&sessions[index], width),
-                )
-                .map_err(|e| e.to_string())?
+                )?
             }
             "" => {
                 let width = editor::terminal_size().0;
@@ -117,11 +112,13 @@ impl Interactive {
             }
             wanted => match wanted.parse::<usize>() {
                 Err(_) | Ok(0) => {
-                    eprintln!("error: /resume requires a positive session number");
+                    self.say("error: /resume requires a positive session number");
                     None
                 }
                 Ok(number) if number > sessions.len() => {
-                    eprintln!("error: no session numbered {number} (/resume lists them)");
+                    self.say(&format!(
+                        "error: no session numbered {number} (/resume lists them)"
+                    ));
                     None
                 }
                 Ok(number) => Some(number - 1),
@@ -130,24 +127,19 @@ impl Interactive {
         match chosen {
             None => {}
             Some(index) if current == Some(index) => {
-                eprintln!("error: session {} is the current one", index + 1)
+                self.say(&format!("error: session {} is the current one", index + 1))
             }
             Some(index) => match self.agent.resume_session(&sessions[index].path) {
                 Ok(()) => {
                     self.agent.load_model_card();
-                    if let Some(editor) = &mut self.editor {
-                        for prompt in self.agent.prompts() {
-                            editor.remember(prompt);
-                        }
-                    }
-                    eprintln!(
+                    self.remember_prompts();
+                    self.replaced(&format!(
                         "✓ Resumed session · {}\nsession {}",
                         model_line(&self.agent),
                         self.agent.session_path().display(),
-                    );
-                    self.show_resumed();
+                    ));
                 }
-                Err(error) => eprintln!("error: {error}"),
+                Err(error) => self.say(&format!("error: {error}")),
             },
         }
         Ok(())
@@ -157,24 +149,23 @@ impl Interactive {
         let prompts = match self.agent.fork_prompts() {
             Ok(prompts) => prompts,
             Err(error) => {
-                eprintln!("error: {error}");
+                self.say(&format!("error: {error}"));
                 return Ok(());
             }
         };
         let chosen = match wanted {
             "" if prompts.is_empty() => {
-                eprintln!("No messages to fork from");
+                self.say("No messages to fork from");
                 None
             }
-            "" if self.editor.is_some() => select::select(
+            "" if self.interactive() => self.select(
                 "Fork from message",
                 select::VISIBLE,
                 prompts.len(),
                 prompts.len() - 1,
                 None,
                 |index, width| clip(&one_line(&prompts[index]), width),
-            )
-            .map_err(|e| e.to_string())?,
+            )?,
             "" => {
                 let digits = prompts.len().to_string().len();
                 let width = editor::terminal_size().0.saturating_sub(digits + 1);
@@ -186,11 +177,13 @@ impl Interactive {
             }
             wanted => match wanted.parse::<usize>() {
                 Err(_) | Ok(0) => {
-                    eprintln!("error: /fork requires a positive message number");
+                    self.say("error: /fork requires a positive message number");
                     None
                 }
                 Ok(number) if number > prompts.len() => {
-                    eprintln!("error: no message numbered {number} (/fork lists them)");
+                    self.say(&format!(
+                        "error: no message numbered {number} (/fork lists them)"
+                    ));
                     None
                 }
                 Ok(number) => Some(number - 1),
@@ -204,21 +197,18 @@ impl Interactive {
         match self.agent.fork(index) {
             Ok(Some(prompt)) => {
                 self.agent.load_model_card();
-                eprintln!(
+                self.replaced(&format!(
                     "✓ Forked to new session · {}\nsession {}",
                     model_line(&self.agent),
                     self.agent.session_path().display(),
-                );
-                self.show_resumed();
-                if let Some(editor) = &mut self.editor {
-                    editor.set_text(prompt);
-                }
+                ));
+                self.set_text(prompt);
             }
-            Ok(None) => eprintln!(
+            Ok(None) => self.say(&format!(
                 "error: no message numbered {} (/fork lists them)",
                 index + 1
-            ),
-            Err(error) => eprintln!("error: {error}"),
+            )),
+            Err(error) => self.say(&format!("error: {error}")),
         }
         Ok(())
     }
@@ -230,28 +220,27 @@ impl Interactive {
             let session_tree = match self.agent.tree() {
                 Ok(tree) => tree,
                 Err(error) => {
-                    eprintln!("error: {error}");
+                    self.say(&format!("error: {error}"));
                     return Ok(());
                 }
             };
             let (rows, current) = tree::rows(&session_tree);
             let chosen = match wanted {
                 "" if rows.is_empty() => {
-                    eprintln!("No entries in session");
+                    self.say("No entries in session");
                     None
                 }
-                "" if self.editor.is_some() => {
+                "" if self.interactive() => {
                     // As Scramjet's tree, half the terminal.
                     let visible = (editor::terminal_size().1 / 2).max(5);
-                    select::select(
+                    self.select(
                         "Session Tree",
                         visible,
                         rows.len(),
                         reopen.or(current).unwrap_or(rows.len() - 1),
                         None,
                         |index, width| clip(&rows[index].1, width),
-                    )
-                    .map_err(|e| e.to_string())?
+                    )?
                 }
                 "" => {
                     let digits = rows.len().to_string().len();
@@ -263,11 +252,13 @@ impl Interactive {
                 }
                 wanted => match wanted.parse::<usize>() {
                     Err(_) | Ok(0) => {
-                        eprintln!("error: /tree requires a positive entry number");
+                        self.say("error: /tree requires a positive entry number");
                         None
                     }
                     Ok(number) if number > rows.len() => {
-                        eprintln!("error: no entry numbered {number} (/tree lists them)");
+                        self.say(&format!(
+                            "error: no entry numbered {number} (/tree lists them)"
+                        ));
                         None
                     }
                     Ok(number) => Some(number - 1),
@@ -281,20 +272,18 @@ impl Interactive {
             let line = session_tree.entries[rows[index].0].line;
             // As Scramjet asks when the editor is in use, unless the settings skip the question;
             // piped input moves without one.
-            let ask = self.editor.is_some() && !self.settings.skip_branch_summary_prompt;
+            let ask = self.interactive() && !self.settings.skip_branch_summary_prompt;
             let summary = match ask.then(|| self.agent.leaves_branch(line)) {
-                Some(Ok(true)) => {
-                    match ask_branch_summary(&self.hide_thinking).map_err(|e| e.to_string())? {
-                        Some(summary) => summary,
-                        None => {
-                            (wanted, reopen) = ("", Some(index));
-                            continue;
-                        }
+                Some(Ok(true)) => match self.ask_branch_summary()? {
+                    Some(summary) => summary,
+                    None => {
+                        (wanted, reopen) = ("", Some(index));
+                        continue;
                     }
-                }
+                },
                 None | Some(Ok(false)) => None,
                 Some(Err(error)) => {
-                    eprintln!("error: {error}");
+                    self.say(&format!("error: {error}"));
                     return Ok(());
                 }
             };
@@ -302,24 +291,28 @@ impl Interactive {
                 Some(focus) => self.during_turn(None, |agent, ui, cancel| {
                     agent.navigate(line, Some(focus), ui, cancel)
                 }),
-                None => self.agent.navigate(line, None, &mut self.ui, &self.cancel),
+                None => match &mut self.screen {
+                    Some(screen) => self
+                        .agent
+                        .navigate(line, None, &mut screen.link, &self.cancel),
+                    None => self.agent.navigate(line, None, &mut self.ui, &self.cancel),
+                },
             };
             match result {
-                Ok(Navigated::AlreadyThere) => eprintln!("Already at this point"),
+                Ok(Navigated::AlreadyThere) => self.say("Already at this point"),
                 Ok(Navigated::Moved { prompt }) => {
-                    eprintln!("✓ Navigated to selected point");
-                    self.show_resumed();
-                    if let (Some(editor), Some(prompt)) = (&mut self.editor, prompt) {
-                        editor.set_text(prompt);
+                    self.replaced("✓ Navigated to selected point");
+                    if let Some(prompt) = prompt {
+                        self.set_text(prompt);
                     }
                 }
                 Err(AgentError::Cancelled) => {
-                    eprintln!("Branch summarization cancelled");
+                    self.say("Branch summarization cancelled");
                     escaped = false;
                     (wanted, reopen) = ("", Some(index));
                     continue;
                 }
-                Err(error) => eprintln!("error: {error}"),
+                Err(error) => self.say(&format!("error: {error}")),
             }
             return Ok(());
         }
@@ -327,26 +320,26 @@ impl Interactive {
 
     fn model(&mut self, wanted: &str) -> Result<(), String> {
         let Some(models) = self.agent.models() else {
-            eprintln!("error: could not list the endpoint's models");
+            self.say("error: could not list the endpoint's models");
             return Ok(());
         };
         let current = models.iter().position(|model| model == self.agent.model());
         let chosen = match wanted {
             "" if models.is_empty() => {
-                eprintln!("The endpoint lists no models");
+                self.say("The endpoint lists no models");
                 None
             }
-            "" if self.editor.is_some() => select::search(
-                "Select model",
-                select::VISIBLE,
-                &models,
-                current.unwrap_or(0),
-                current,
-                "No matching models",
-                |index, width| clip(&visible(&models[index]), width),
-            )
-            .map_err(|e| e.to_string())?
-            .map(|index| models[index].clone()),
+            "" if self.interactive() => self
+                .search(
+                    "Select model",
+                    select::VISIBLE,
+                    &models,
+                    current.unwrap_or(0),
+                    current,
+                    "No matching models",
+                    |index, width| clip(&visible(&models[index]), width),
+                )?
+                .map(|index| models[index].clone()),
             "" => {
                 for (index, model) in models.iter().enumerate() {
                     let mark = if current == Some(index) { "*" } else { " " };
@@ -356,7 +349,7 @@ impl Interactive {
             }
             wanted if models.iter().any(|model| model == wanted) => Some(wanted.to_owned()),
             wanted => {
-                eprintln!("error: no model {wanted} (/model lists them)");
+                self.say(&format!("error: no model {wanted} (/model lists them)"));
                 None
             }
         };
@@ -364,9 +357,9 @@ impl Interactive {
             match self.agent.set_model(&model) {
                 Ok(()) => {
                     self.agent.load_model_card();
-                    eprintln!("✓ Model set to {}", model_line(&self.agent));
+                    self.say(&format!("✓ Model set to {}", model_line(&self.agent)));
                 }
-                Err(error) => eprintln!("error: {error}"),
+                Err(error) => self.say(&format!("error: {error}")),
             }
         }
         Ok(())
@@ -375,10 +368,10 @@ impl Interactive {
     fn compact(&mut self, focus: &str) {
         let result = self.during_turn(None, |agent, ui, cancel| agent.compact(focus, ui, cancel));
         match result {
-            Ok(Some(compaction)) => self.ui.compacted(&compaction, None),
-            Ok(None) => eprintln!("Nothing to compact: the conversation is all recent."),
-            Err(AgentError::Cancelled) => eprintln!("{}", self.ui.dim("(cancelled)")),
-            Err(error) => eprintln!("error: {error}"),
+            Ok(Some(compaction)) => self.ui().compacted(&compaction, None),
+            Ok(None) => self.say("Nothing to compact: the conversation is all recent."),
+            Err(AgentError::Cancelled) => self.say(&self.ui.dim("(cancelled)")),
+            Err(error) => self.say(&format!("error: {error}")),
         }
     }
 
@@ -402,45 +395,57 @@ impl Interactive {
         });
         match result {
             Ok(()) => self.spaced = true,
-            Err(error) => eprintln!("error: {error}"),
+            Err(error) => self.say(&format!("error: {error}")),
         }
         true
     }
-}
 
-/// Asks whether to summarize the branch `/tree` leaves, as Scramjet does. `None`: cancelled;
-/// otherwise no summary, or one with the additional focus given (empty for none).
-fn ask_branch_summary(hide_thinking: &Arc<AtomicBool>) -> std::io::Result<Option<Option<String>>> {
-    const CHOICES: [&str; 3] = ["No summary", "Summarize", "Summarize with custom prompt"];
-    const TITLE: &str = "Custom summarization instructions";
-    loop {
-        let chosen = select::select(
-            "Summarize branch?",
-            select::VISIBLE,
-            CHOICES.len(),
-            0,
-            None,
-            |index, width| clip(CHOICES[index], width),
-        )?;
-        match chosen {
-            None => return Ok(None),
-            Some(0) => return Ok(Some(None)),
-            Some(1) => return Ok(Some(Some(String::new()))),
-            Some(_) => {
-                let room = editor::terminal_size().0.saturating_sub(TITLE.width() + 3);
-                eprintln!(
-                    "{}{TITLE}{}  {}{}{}",
-                    style::SELECTOR_TITLE,
-                    style::RESET,
-                    style::MUTED,
-                    clip("Enter submit · Esc cancel", room),
-                    style::RESET
-                );
-                let focus = editor::Editor::dialog(hide_thinking.clone()).read(&mut String::new)?;
-                // The title's row, above the erased editor.
-                eprint!("\x1b[1A\r\x1b[J");
-                if let Some(editor::Input::Prompt(focus)) = focus {
-                    return Ok(Some(Some(focus)));
+    /// Asks whether to summarize the branch `/tree` leaves, as Scramjet does. `None`: cancelled;
+    /// otherwise no summary, or one with the additional focus given (empty for none).
+    fn ask_branch_summary(&self) -> Result<Option<Option<String>>, String> {
+        const CHOICES: [&str; 3] = ["No summary", "Summarize", "Summarize with custom prompt"];
+        const TITLE: &str = "Custom summarization instructions";
+        loop {
+            let chosen = self.select(
+                "Summarize branch?",
+                select::VISIBLE,
+                CHOICES.len(),
+                0,
+                None,
+                |index, width| clip(CHOICES[index], width),
+            )?;
+            match chosen {
+                None => return Ok(None),
+                Some(0) => return Ok(Some(None)),
+                Some(1) => return Ok(Some(Some(String::new()))),
+                Some(_) => {
+                    let focus = match &self.screen {
+                        Some(screen) => {
+                            match screen.ask(screen::Dialog::Text(TITLE.into()), None) {
+                                Some(screen::Answer::Text(focus)) => focus,
+                                _ => None,
+                            }
+                        }
+                        None => {
+                            let room = editor::terminal_size().0.saturating_sub(TITLE.width() + 3);
+                            eprintln!(
+                                "{}{TITLE}{}  {}{}{}",
+                                style::SELECTOR_TITLE,
+                                style::RESET,
+                                style::MUTED,
+                                clip("Enter submit · Esc cancel", room),
+                                style::RESET
+                            );
+                            let dialog = editor::Editor::dialog(self.hide_thinking.clone());
+                            let focus = dialog.read_dialog().map_err(|e| e.to_string())?;
+                            // The title's row, above the erased editor.
+                            eprint!("\x1b[1A\r\x1b[J");
+                            focus
+                        }
+                    };
+                    if let Some(focus) = focus {
+                        return Ok(Some(Some(focus)));
+                    }
                 }
             }
         }

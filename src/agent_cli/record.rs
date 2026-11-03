@@ -1,5 +1,6 @@
 //! A turn's display calls, kept as they pass to the terminal, so that the conversation view can
-//! show the turn so far, rendered again at its own width, while the turn runs.
+//! show the turn so far, rendered again at its own width, while the turn runs; the full-screen
+//! interface keeps the whole conversation so.
 
 use super::terminal::{Status, Terminal};
 use super::view;
@@ -16,7 +17,8 @@ use std::{
     time::Duration,
 };
 
-enum Event {
+/// A display call, and what the session says between turns (`Text`).
+pub(super) enum Event {
     Waiting(Purpose),
     Progress(StreamProgress),
     Retrying(String, u32, u32, Duration),
@@ -34,6 +36,8 @@ enum Event {
     Approval(String, Answer),
     Question(String),
     Notice(String),
+    /// A message of the session's own, such as a command's result, styled but not wrapped.
+    Text(String),
 }
 
 #[derive(Default)]
@@ -130,7 +134,8 @@ impl view::Turn for Shown {
     }
 }
 
-fn replay(event: &Event, ui: &mut Terminal) {
+/// Shows `event` on `ui` as it showed when it happened.
+pub(super) fn replay(event: &Event, ui: &mut Terminal) {
     match event {
         Event::Waiting(purpose) => ui.waiting(*purpose),
         Event::Progress(update) => ui.progress(update),
@@ -153,6 +158,7 @@ fn replay(event: &Event, ui: &mut Terminal) {
         Event::Approval(question, answer) => ui.approval(question, *answer),
         Event::Question(message) => ui.question(message),
         Event::Notice(text) => ui.notice(text),
+        Event::Text(text) => ui.said(text),
     }
 }
 

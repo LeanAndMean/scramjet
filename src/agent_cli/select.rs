@@ -57,11 +57,134 @@ pub(super) fn question(
     options: &[Choice],
     recommended: Option<usize>,
 ) -> io::Result<Option<usize>> {
-    let visible = options.len().min(QUESTION_VISIBLE);
-    let list = List::new(options.len(), recommended.unwrap_or(0), visible);
+    let list = List::new(
+        options.len(),
+        recommended.unwrap_or(0),
+        question_visible(options),
+    );
     choose(list, |list, size| {
         question_lines(title, options, recommended, list, size)
     })
+}
+
+fn question_visible(options: &[Choice]) -> usize {
+    options.len().min(QUESTION_VISIBLE)
+}
+
+/// A list as `select`, `search` and `question` show it, for a screen that draws it and passes
+/// it the keys.
+pub(super) struct Picker {
+    list: List,
+    shape: Shape,
+}
+
+enum Shape {
+    /// A selector's rows, given at the width they take on the terminal when the list opens.
+    Rows {
+        title: String,
+        current: Option<usize>,
+        rows: Vec<String>,
+    },
+    Question {
+        title: String,
+        options: Vec<Choice>,
+        recommended: Option<usize>,
+    },
+}
+
+impl Picker {
+    /// As `select`.
+    pub(super) fn select(
+        title: &str,
+        visible: usize,
+        count: usize,
+        initial: usize,
+        current: Option<usize>,
+        row: impl Fn(usize, usize) -> String,
+    ) -> Self {
+        let list = List::new(count, initial, visible);
+        Self::rows(title, list, current, row)
+    }
+
+    /// As `search`.
+    pub(super) fn search(
+        title: &str,
+        visible: usize,
+        texts: &[String],
+        initial: usize,
+        current: Option<usize>,
+        none: &str,
+        row: impl Fn(usize, usize) -> String,
+    ) -> Self {
+        let list = List::searching(texts, initial, visible, none);
+        Self::rows(title, list, current, row)
+    }
+
+    /// As `question`.
+    pub(super) fn question(title: &str, options: &[Choice], recommended: Option<usize>) -> Self {
+        Self {
+            list: List::new(
+                options.len(),
+                recommended.unwrap_or(0),
+                question_visible(options),
+            ),
+            shape: Shape::Question {
+                title: title.to_owned(),
+                options: options.to_vec(),
+                recommended,
+            },
+        }
+    }
+
+    fn rows(
+        title: &str,
+        list: List,
+        current: Option<usize>,
+        row: impl Fn(usize, usize) -> String,
+    ) -> Self {
+        // As wide as `lines` asks for them, the mark after the current row included.
+        let width = terminal_size().0.saturating_sub(1).max(8) - 2;
+        let rows = (0..list.rows.len())
+            .map(|index| row(index, width - if current == Some(index) { 2 } else { 0 }))
+            .collect();
+        Self {
+            list,
+            shape: Shape::Rows {
+                title: title.to_owned(),
+                current,
+                rows,
+            },
+        }
+    }
+
+    /// Whether there is nothing to choose from, as `select` returns `None` at once then.
+    pub(super) fn is_empty(&self) -> bool {
+        self.list.rows.is_empty()
+    }
+
+    /// Moves the selection or edits the query, or returns what was chosen: `Some(None)` when
+    /// cancelled.
+    pub(super) fn key(&mut self, key: &Key) -> Option<Option<usize>> {
+        self.list.key(key)
+    }
+
+    /// The list's lines for a screen of `(width, height)`.
+    pub(super) fn lines(&self, size: (usize, usize)) -> Vec<String> {
+        match &self.shape {
+            Shape::Rows {
+                title,
+                current,
+                rows,
+            } => lines(title, &self.list, *current, size, &|index, width| {
+                text::clip(&rows[index], width)
+            }),
+            Shape::Question {
+                title,
+                options,
+                recommended,
+            } => question_lines(title, options, *recommended, &self.list, size),
+        }
+    }
 }
 
 /// `lines(list, (width, height))` draws the list for the terminal's size.

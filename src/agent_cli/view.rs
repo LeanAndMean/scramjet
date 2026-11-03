@@ -284,7 +284,7 @@ fn draw(
 /// The lines of rendered text, each ending its styles and starting with those still on from the
 /// lines before, so that any of them can be drawn first. Only style sequences are kept of the
 /// escape sequences, and no other control characters.
-fn screen_lines(text: &str) -> Vec<String> {
+pub(super) fn screen_lines(text: &str) -> Vec<String> {
     let text = text.trim_end_matches('\n');
     if text.is_empty() {
         return Vec::new();

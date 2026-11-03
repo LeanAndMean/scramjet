@@ -2,7 +2,7 @@
 
 A ground-up Rust redesign of Scramjet: a terminal coding agent, aiming at lightweight parallel agents and actively managed LLM concurrency.
 
-**Status:** `scramjet-rs` is a working interactive coding agent through the local Proxy proxy, verified live on Linux/WSL2 Ubuntu. It is early: output is inline, with a full-screen view of the conversation on Ctrl+O; Scramjet's full-screen UI, most settings, command-set installation, `/autopilot`, delegation and skills are not there yet ([docs/TASKS.md](docs/TASKS.md)). macOS is untested. The ~8,000 concurrent request goal is an aspiration, not measured performance.
+**Status:** `scramjet-rs` is a working interactive coding agent through the local Proxy proxy, verified live on Linux/WSL2 Ubuntu. It is early: output is inline, with a full-screen view of the conversation on Ctrl+O; `--fullscreen` tries the full-screen interface that is to replace it (below). Steering and follow-up messages, most settings, command-set installation, `/autopilot`, delegation and skills are not there yet ([docs/TASKS.md](docs/TASKS.md)). macOS is untested. The ~8,000 concurrent request goal is an aspiration, not measured performance.
 
 ## Use
 
@@ -17,7 +17,7 @@ scramjet-rs --continue                                     # resume this project
 scramjet-rs --help                                         # options and keys
 ```
 
-Options: `--model ID` (default `gpt-6-luna`; a resumed session keeps the model it last used), `--effort LEVEL` (default: a resumed session's, else `defaultThinkingLevel`, else `medium`), `--max-output-tokens N`, `--retries N` (default 3), `--session FILE`, `--project DIR`, `--endpoint ADDR`, `--ask`.
+Options: `--model ID` (default `gpt-6-luna`; a resumed session keeps the model it last used), `--effort LEVEL` (default: a resumed session's, else `defaultThinkingLevel`, else `medium`), `--max-output-tokens N`, `--retries N` (default 3), `--session FILE`, `--project DIR`, `--endpoint ADDR`, `--ask`, `--fullscreen`.
 
 Most behavior follows Scramjet; what to know:
 
@@ -30,6 +30,7 @@ Most behavior follows Scramjet; what to know:
 - **Sessions** are saved under `$XDG_STATE_HOME/scramjet-rs/sessions/` (default `~/.local/state/…`), apart from Scramjet's. `/new`, `/resume`, `/fork`, `/tree` (also Escape twice on an empty prompt; it offers to summarize the branch left behind), `/name`, `/session`, `/model` and `/compact [focus]` work as in Scramjet; the context is compacted automatically near the model's window. A resumed session is shown as its turns ran. A tool call interrupted mid-run is reported to the model as unknown and never re-run.
 - **Retries:** transient failures (rate limits, overload, HTTP 408/429/5xx, cut streams) are sent again after 2s, 4s and 8s, or the provider's Retry-After up to 60s. A failed response's tool calls never run.
 - **Keys:** Enter sends; Shift+Enter, Alt+Enter, Ctrl-J or a trailing `\` add a line; paste never sends. Up/Down recall prompts; `/` lists commands, `@` lists project files (with `fd`), Tab completes paths; Ctrl-G edits in `$VISUAL`/`$EDITOR`. `!command` runs a shell command and adds its output to the conversation, `!!command` without adding it. Escape cancels a turn and keeps text typed meanwhile; Ctrl-C cancels and discards it, and twice (or Ctrl-D, or `/quit`) quits. Ctrl+O opens the conversation full-screen with every result whole, following a running turn; Ctrl+T hides or shows reasoning; Ctrl-Z suspends. Piped stdin falls back to plain lines, with lists printed numbered (`/resume N`, `/model ID`).
+- **Full screen** (`--fullscreen`): the conversation fills the alternate screen above the prompt, which stays and takes keys while a turn runs (Enter then waits for the turn; Escape interrupts it). Page Up/Down scroll, Escape goes back to the end; Ctrl+O shows tool results whole or cut, in place; Ctrl+T hides or shows reasoning, also that already shown. Lists, questions and approvals show in the prompt's place. Nothing is left on the terminal on exit.
 
 ## Develop
 

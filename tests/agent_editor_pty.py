@@ -269,9 +269,9 @@ def item_events(index, item):
     return events + [{'type': 'response.output_item.done', 'output_index': index, 'item': item}]
 
 
-def serve_items(responses, gate=None):
+def serve_items(responses, gate=None, models=()):
     """Answers the requests in turn with a response streaming the complete items in `responses`,
-    the first once `gate`, if given, is set."""
+    the first once `gate`, if given, is set, and lists `models` at `/v1/models`."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -283,11 +283,17 @@ def serve_items(responses, gate=None):
         events.append({'type': 'response.completed', 'response': {'id': 'resp_1', 'status': 'completed', 'output': items}})
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
+    listing = json.dumps({'data': [{'id': model} for model in models]}).encode()
+
     def answer():
         for number, stream in enumerate(streams):
             connection, _ = listener.accept()
-            while receive(connection).startswith(b'GET'):
-                connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
+            while (request := receive(connection)).startswith(b'GET'):
+                if request.startswith(b'GET /v1/models') and models:
+                    connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n'
+                                       b'content-length: %d\r\nconnection: close\r\n\r\n%s' % (len(listing), listing))
+                else:
+                    connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
                 connection.close()
                 connection, _ = listener.accept()
             if gate and number == 0:
@@ -1788,4 +1794,135 @@ never = config_home('never', '{"hideCredentials": "never"}')
 run(['-p', 'peek'], printed_with_credentials, serve_items([[peek('call_1')], [message('Peeked.')]]),
     variables=dict(in_fake_home, XDG_CONFIG_HOME=never))
 os.remove(os.path.join(project, 'made.txt'))
+class Screen:
+    """The rows that the frames written since the last switch to the alternate screen leave on a
+    terminal `columns` wide: cursor moves, erasing and text; styles and modes are ignored."""
+
+    def __init__(self, output, columns, rows=24):
+        self.grid = [[' '] * columns for _ in range(rows)]
+        self.row = self.column = 0
+        start = output.rfind(b'\x1b[?1049h')
+        text = bytes(output[start:] if start >= 0 else b'').decode('utf-8', 'replace')
+        for match in re.finditer(r'\x1b\[([?0-9;]*)([@-~])|\x1b.|([\r\n])|([^\x1b\r\n])', text):
+            parameters, final, control, character = match.groups()
+            if final == 'H':
+                place = (parameters or '1;1').split(';') + ['1']
+                self.row, self.column = int(place[0] or 1) - 1, int(place[1] or 1) - 1
+            elif final == 'K':
+                self.grid[self.row][self.column:] = [' '] * (columns - self.column)
+            elif final == 'J' and parameters == '2':
+                self.grid = [[' '] * columns for _ in range(rows)]
+            elif control == '\r':
+                self.column = 0
+            elif control == '\n':
+                self.row = min(self.row + 1, rows - 1)
+            elif character is not None and character >= ' ' and self.column < columns:
+                self.grid[self.row][self.column] = character
+                self.column += 1
+
+    def rows(self):
+        return [''.join(row).rstrip() for row in self.grid]
+
+
+def full_screen(columns=60):
+    """`until` and `shown` for the full screen: waiting for a text to be on screen, and the rows."""
+
+    def make(read, output):
+        def shown():
+            return Screen(output, columns).rows()
+
+        def on_screen(text, gone=False):
+            end = time.monotonic() + 10
+            while (text in '\n'.join(shown())) == gone:
+                assert time.monotonic() < end, (text, '\n'.join(shown()))
+                read(.05)
+            return shown()
+        return shown, on_screen
+    return make
+
+
+def fullscreen_turn(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    rows = on_screen('\u2500' * 20)
+    assert rows[-2].startswith('\u2500' * 20) and rows[-1] == '>', rows
+    send(b'go\r')
+    rows = on_screen('Done, it says two.')
+    text = '\n'.join(rows)
+    for expected in ['> go', 'Changing the file.', '\u25cf edit a.txt', '+1 two', '\u25cf bash echo checked; exit 2',
+                     'Command exited with code 2', '[3 requests']:
+        assert expected in text, (expected, text)
+    # Under the conversation, the editor's prompt, ready for the next one.
+    assert rows[-1] == '>', rows
+    # Ctrl+T hides the reasoning already shown, and shows it again.
+    send(b'\x14')
+    rows = on_screen('Thinking...')
+    assert 'Changing the file.' not in '\n'.join(rows), rows
+    send(b'\x14')
+    on_screen('Changing the file.')
+    send(b'\x1b[5~')
+    rows = on_screen('more lines below')
+    send(b'\x1b')
+    on_screen('more lines below', gone=True)
+    send(b'\x04')
+
+
+def fullscreen_typed_during_turn(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('running 1s')
+    # The editor takes keys while the turn runs, and shows them.
+    send(b'next one')
+    rows = on_screen('> next one')
+    assert any(row.startswith('\u2026 running') for row in rows), rows
+    send(b'\r')
+    on_screen('A turn is running: Esc interrupts it')
+    send(b'\x1b')
+    rows = on_screen('(cancelled)')
+    assert rows[-1] == '> next one', rows
+    send(b'\x03\x04')
+
+
+def fullscreen_lists(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/model\r')
+    rows = on_screen('Select model')
+    assert any(row.startswith('\u203a gpt-6-luna') for row in rows), rows
+    send(b'\x1b[B\r')
+    on_screen('\u2713 Model set to gpt-6-terra')
+    send(b'pick\r')
+    on_screen('\u2192 Beta')
+    send(b'\x1b[A\r')
+    on_screen('Chose alpha.')
+    send(b'\x03')
+    on_screen('Ctrl-C again')
+    send(b'\x03')
+
+
+def left_the_screen(script):
+    def checked(read, until, send, output):
+        script(read, until, send, output)
+        read(.5)
+        assert output.rfind(b'\x1b[?1049l') > output.rfind(b'\x1b[?1049h') > 0, 'alternate screen left on'
+    return checked
+
+
+with open(os.path.join(project, 'a.txt'), 'w') as file:
+    file.write('one\n')
+run(['--fullscreen'], left_the_screen(fullscreen_turn), serve_items([
+    [{'type': 'reasoning', 'id': 'rs_1', 'status': 'completed',
+      'summary': [{'type': 'summary_text', 'text': 'Changing the file.'}]},
+     tool_call('call_1', 'edit', {'path': 'a.txt', 'edits': [{'oldText': 'one', 'newText': 'two'}]})],
+    [tool_call('call_2', 'bash', {'command': 'echo checked; exit 2'})],
+    [message('**Done**, it says two.')],
+]))
+run(['--fullscreen'], left_the_screen(fullscreen_typed_during_turn), talking)
+run(['--fullscreen'], left_the_screen(fullscreen_lists), serve_items([
+    [tool_call('call_1', 'get_scramjet_user_input', {
+        'type': 'select', 'message': 'Which **one**?', 'recommended': 1,
+        'options': [{'value': 'a', 'label': 'Alpha', 'description': 'the first'},
+                    {'value': 'b', 'label': 'Beta', 'description': 'the second'}]})],
+    [message('Chose alpha.')],
+], models=['gpt-6-luna', 'gpt-6-terra']))
 print('agent editor journeys passed')

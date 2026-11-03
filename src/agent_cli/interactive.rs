@@ -1,7 +1,9 @@
-//! The interactive session: prompts read from the editor or from piped lines, the built-in
-//! commands (`slash.rs`), model turns and a completed command's next step.
+//! The interactive session: prompts read from the editor, the full screen or piped lines, the
+//! built-in commands (`slash.rs`), model turns and a completed command's next step.
+use super::record::Event;
+use super::screen::{self, Handle};
 use super::settings::{DoubleEscape, Settings};
-use super::terminal::{InputMode, Terminal};
+use super::terminal::{InputMode, Terminal, usage_line};
 use super::{editor, record, select, style, type_ahead, view};
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Choice, Command, Completed, Next, next_step_record,
@@ -17,9 +19,11 @@ use std::{
 pub(super) struct Interactive {
     pub(super) agent: Agent,
     pub(super) ui: Terminal,
-    /// The line editor, when stdin and stderr are terminals. Without it, prompts are read as lines
-    /// and lists are printed numbered.
+    /// The line editor, when stdin and stderr are terminals and the session is not shown full
+    /// screen. Without either, prompts are read as lines and lists are printed numbered.
     pub(super) editor: Option<editor::Editor>,
+    /// The full screen (`--fullscreen`), which then shows everything and edits the prompts.
+    pub(super) screen: Option<Handle>,
     /// Whether what was shown last ends with a blank line, so the next prompt needs none.
     pub(super) spaced: bool,
     /// Set by Ctrl-C: cancels what runs.
@@ -56,8 +60,9 @@ impl Interactive {
         cancel: Arc<AtomicBool>,
         hide_thinking: Arc<AtomicBool>,
         settings: Settings,
-    ) -> Self {
-        let editor =
+        fullscreen: bool,
+    ) -> Result<Self, String> {
+        let mut editor =
             (std::io::stdin().is_terminal() && std::io::stderr().is_terminal()).then(|| {
                 editor::Editor::new(
                     agent.prompts().to_vec(),
@@ -67,16 +72,24 @@ impl Interactive {
                     settings.double_escape != DoubleEscape::Nothing,
                 )
             });
+        let screen = match editor.take_if(|_| fullscreen) {
+            Some(editor) => Some(
+                Handle::start(editor, hide_thinking.clone(), cancel.clone())
+                    .map_err(|error| format!("cannot show the full screen: {error}"))?,
+            ),
+            None => None,
+        };
         ui.expandable = editor.is_some();
-        Self {
+        Ok(Self {
             agent,
             ui,
             editor,
+            screen,
             spaced: false,
             cancel,
             hide_thinking,
             settings,
-        }
+        })
     }
 
     /// Reads and runs prompts until the user quits or the input ends.
@@ -87,12 +100,12 @@ impl Interactive {
     }
 
     fn read_and_run(&mut self) -> Result<(), String> {
-        eprintln!(
+        self.say(&format!(
             "scramjet-rs · {} · {}\nsession {}",
             model_line(&self.agent),
             self.agent.root().display(),
             self.agent.session_path().display(),
-        );
+        ));
         // A tool block ends with a blank line; other output gets one before the prompt.
         self.show_resumed();
         let warnings: Vec<_> = (self.settings.warnings.iter())
@@ -104,10 +117,10 @@ impl Interactive {
             .collect();
         if !warnings.is_empty() {
             if !std::mem::take(&mut self.spaced) {
-                eprintln!();
+                self.blank();
             }
             for warning in &warnings {
-                self.ui.notice(warning);
+                self.ui().notice(warning);
             }
             self.spaced = true;
         }
@@ -140,6 +153,21 @@ impl Interactive {
 
     /// The next prompt: `dispatched`, a next step to run as if typed, or what the user enters.
     fn read(&mut self, dispatched: Option<String>) -> Result<Read, String> {
+        if let Some(screen) = &self.screen {
+            if let Some(prompt) = dispatched {
+                return Ok(Read::Prompt(prompt));
+            }
+            loop {
+                match screen.input() {
+                    screen::Input::Prompt(prompt) => return Ok(Read::Prompt(prompt)),
+                    screen::Input::DoubleEscape => return Ok(Read::DoubleEscape),
+                    screen::Input::CycleEffort => {
+                        screen.note(cycle_effort(&mut self.agent, &mut self.settings));
+                    }
+                    screen::Input::End => return Ok(Read::End),
+                }
+            }
+        }
         let prompt = match (dispatched, &mut self.editor) {
             (Some(prompt), _) => {
                 if !std::mem::take(&mut self.spaced) {
@@ -153,18 +181,7 @@ impl Interactive {
                     eprintln!();
                 }
                 let (agent, settings) = (&mut self.agent, &mut self.settings);
-                let read = editor.read(&mut || {
-                    let cycled = agent.cycle_effort();
-                    let unsaved = match &cycled {
-                        Ok(Some(level)) => settings.set_default_thinking_level(level).err(),
-                        _ => None,
-                    };
-                    let note = effort_note(cycled);
-                    match unsaved {
-                        Some(error) => format!("{note} (settings not saved: {error})"),
-                        None => note,
-                    }
-                });
+                let read = editor.read(&mut || cycle_effort(agent, settings));
                 match read.map_err(|e| e.to_string())? {
                     Some(editor::Input::Prompt(prompt)) => prompt,
                     Some(editor::Input::DoubleEscape) => return Ok(Read::DoubleEscape),
@@ -202,6 +219,9 @@ impl Interactive {
                 eprintln!();
             }
         }
+        if let Some(screen) = &self.screen {
+            screen.event(Event::UserPrompt(prompt.to_owned()));
+        }
         let hide = (self.settings.hide_credentials).hides(start == Start::Unattended);
         self.agent.set_hide_credentials(hide);
         let result = self.during_turn(Some(prompt), |agent, ui, cancel| {
@@ -209,10 +229,10 @@ impl Interactive {
         });
         match result {
             Ok(()) => {}
-            Err(AgentError::Cancelled) => eprintln!("{}", self.ui.dim("(cancelled)")),
-            Err(error) => eprintln!("error: {error}"),
+            Err(AgentError::Cancelled) => self.say(&self.ui.dim("(cancelled)")),
+            Err(error) => self.say(&format!("error: {error}")),
         }
-        self.ui.usage(&self.agent);
+        self.say_styled(style::MUTED, &usage_line(&self.agent));
         match self.agent.take_completed() {
             Some(completed) => self.next_step(&completed),
             None => Ok(None),
@@ -229,6 +249,13 @@ impl Interactive {
         run: impl FnOnce(&mut Agent, &mut dyn AgentUi, &AtomicBool) -> T,
     ) -> T {
         self.cancel.store(false, Ordering::Relaxed);
+        if let Some(screen) = &mut self.screen {
+            screen.turn(true);
+            let result = run(&mut self.agent, &mut screen.link, &self.cancel);
+            screen.turn(false);
+            self.cancel.store(false, Ordering::Relaxed);
+            return result;
+        }
         let shown = self.editor.as_ref().map(|_| {
             Arc::new(record::Shown::new(
                 self.agent.conversation(),
@@ -269,14 +296,14 @@ impl Interactive {
     /// set to `chain` or a forced step runs at once; otherwise the user chooses from the steps
     /// the model offered. Returns the prompt to run; a text step goes into the editor instead.
     fn next_step(&mut self, completed: &Completed) -> Result<Option<(String, Start)>, String> {
-        let routing = self.agent.route(completed, self.editor.is_some());
+        let routing = self.agent.route(completed, self.interactive());
         if routing.notices.is_empty() && routing.next == Next::Nothing {
             return Ok(None);
         }
         // Under the usage line, as a prompt would be.
-        eprintln!();
+        self.blank();
         for notice in &routing.notices {
-            self.ui.notice(notice);
+            self.ui().notice(notice);
         }
         let (step, start) = match routing.next {
             Next::Nothing => {
@@ -298,8 +325,15 @@ impl Interactive {
                         value: String::new(),
                     })
                     .collect();
-                let chosen = select::question("Select next step", &choices, recommended)
-                    .map_err(|e| e.to_string())?;
+                let chosen = match &self.screen {
+                    Some(screen) => screen.pick(select::Picker::question(
+                        "Select next step",
+                        &choices,
+                        recommended,
+                    )),
+                    None => select::question("Select next step", &choices, recommended)
+                        .map_err(|e| e.to_string())?,
+                };
                 self.show_record(&next_step_record(&routing.source, &steps, chosen));
                 match chosen {
                     Some(index) => (steps[index].clone(), Start::Chosen),
@@ -308,9 +342,7 @@ impl Interactive {
             }
         };
         let Some(command) = step.command else {
-            if let Some(editor) = &mut self.editor {
-                editor.set_text(step.message);
-            }
+            self.set_text(step.message);
             return Ok(None);
         };
         if step.fresh_session && !self.new_session() {
@@ -324,20 +356,130 @@ impl Interactive {
     fn save_hide_thinking(&mut self) {
         let hide = self.hide_thinking.load(Ordering::Relaxed);
         if let Err(error) = self.settings.set_hide_thinking_block(hide) {
-            eprintln!("error: settings not saved: {error}");
+            self.say(&format!("error: settings not saved: {error}"));
         }
     }
 
     fn show_record(&self, record: &str) {
-        eprintln!(
-            "{}",
-            self.ui.styled(style::NEXT_STEP, &self.ui.wrapped(record))
-        );
+        self.say_styled(style::NEXT_STEP, record);
+    }
+
+    /// Whether the user can choose from lists and answer questions as they show.
+    pub(super) fn interactive(&self) -> bool {
+        self.editor.is_some() || self.screen.is_some()
+    }
+
+    /// Shows a message, on its own line or, full screen, as a block.
+    pub(super) fn say(&self, text: &str) {
+        match &self.screen {
+            Some(screen) => screen.say(text),
+            None => eprintln!("{text}"),
+        }
+    }
+
+    /// Shows a message in `style`, wrapped to the terminal's width.
+    pub(super) fn say_styled(&self, style: &str, text: &str) {
+        match &self.screen {
+            Some(screen) => screen.say(&self.ui.styled(style, text)),
+            None => eprintln!("{}", self.ui.styled(style, &self.ui.wrapped(text))),
+        }
+    }
+
+    /// A blank line, where the inline output needs one; the full screen spaces blocks itself.
+    pub(super) fn blank(&self) {
+        if self.screen.is_none() {
+            eprintln!();
+        }
+    }
+
+    /// Where the agent shows what it does outside a turn.
+    pub(super) fn ui(&mut self) -> &mut dyn AgentUi {
+        match &mut self.screen {
+            Some(screen) => &mut screen.link,
+            None => &mut self.ui,
+        }
+    }
+
+    /// Starts the next prompt with `text`.
+    pub(super) fn set_text(&mut self, text: String) {
+        match (&self.screen, &mut self.editor) {
+            (Some(screen), _) => screen.set_text(text),
+            (None, Some(editor)) => editor.set_text(text),
+            (None, None) => {}
+        }
+    }
+
+    /// Makes the session's prompts those that Up recalls.
+    pub(super) fn remember_prompts(&mut self) {
+        for prompt in self.agent.prompts() {
+            match (&self.screen, &mut self.editor) {
+                (Some(screen), _) => screen.remember(prompt),
+                (None, Some(editor)) => editor.remember(prompt),
+                (None, None) => {}
+            }
+        }
+    }
+
+    /// Chooses one of `count` rows, as `select::select`, on the screen in use.
+    pub(super) fn select(
+        &self,
+        title: &str,
+        visible: usize,
+        count: usize,
+        initial: usize,
+        current: Option<usize>,
+        row: impl Fn(usize, usize) -> String,
+    ) -> Result<Option<usize>, String> {
+        match &self.screen {
+            Some(screen) => Ok(screen.pick(select::Picker::select(
+                title, visible, count, initial, current, row,
+            ))),
+            None => select::select(title, visible, count, initial, current, row)
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    /// As `select`, searching as `select::search`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn search(
+        &self,
+        title: &str,
+        visible: usize,
+        texts: &[String],
+        initial: usize,
+        current: Option<usize>,
+        none: &str,
+        row: impl Fn(usize, usize) -> String,
+    ) -> Result<Option<usize>, String> {
+        match &self.screen {
+            Some(screen) => Ok(screen.pick(select::Picker::search(
+                title, visible, texts, initial, current, none, row,
+            ))),
+            None => select::search(title, visible, texts, initial, current, none, row)
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    /// Shows that the session was replaced, with `message`, then its conversation. Full screen,
+    /// the conversation before goes and the message follows the new one.
+    pub(super) fn replaced(&mut self, message: &str) {
+        match &self.screen {
+            Some(screen) => screen.clear(),
+            None => self.say(message),
+        }
+        self.show_resumed();
+        if self.screen.is_some() {
+            self.say(message);
+        }
     }
 
     /// Shows a resumed conversation under its header, as Scramjet redraws it; it then ends with
     /// a blank line.
     pub(super) fn show_resumed(&mut self) {
+        if let Some(screen) = &mut self.screen {
+            self.agent.show_conversation(&mut screen.link);
+            return;
+        }
         self.spaced = !self.agent.conversation().is_empty();
         if self.spaced {
             eprintln!();
@@ -363,6 +505,20 @@ pub(super) fn model_line(agent: &Agent) -> String {
     match agent.effort() {
         Some(effort) => format!("{} · thinking {effort}", agent.model()),
         None => agent.model().to_owned(),
+    }
+}
+
+/// Shift+Tab: the next effort level, saved as the settings' default; returns what to say.
+fn cycle_effort(agent: &mut Agent, settings: &mut Settings) -> String {
+    let cycled = agent.cycle_effort();
+    let unsaved = match &cycled {
+        Ok(Some(level)) => settings.set_default_thinking_level(level).err(),
+        _ => None,
+    };
+    let note = effort_note(cycled);
+    match unsaved {
+        Some(error) => format!("{note} (settings not saved: {error})"),
+        None => note,
     }
 }
 
