@@ -323,6 +323,7 @@ talking = serve_call('echo first; sleep 1.5; echo second; sleep 30')
 # A command whose raw text would show only `echo hello` on a terminal.
 disguised = serve_call('rm -rf scratch\r\x1b[2Kecho hello')
 approved = serve_call('echo approved-$((6*7)); sleep 30')
+pausing = serve_call('sleep 2')
 # A turn that edits a file, runs a failing command and replies.
 editing = serve_items([
     [{'type': 'reasoning', 'id': 'rs_1', 'status': 'completed',
@@ -608,6 +609,38 @@ def escape_after_approval(read, until, send, output):
     send(b'\x1b')
     mark = until(b'(cancelled)', mark)
     until(b'> ', mark)
+    send(b'\x04')
+
+
+def typed_between_approvals(read, until, send, output):
+    """Types during an approved command, then meets the next question; returns after it."""
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'Allow? [y/N, a = allow all until exit] ', mark)
+    send(b'y\r')
+    mark = until(b'running 1s', mark)
+    send(b'kept')
+    return until(b'Allow? [y/N, a = allow all until exit] ', mark)
+
+
+def approval_keeps_typed_ahead(read, until, send, output):
+    mark = typed_between_approvals(read, until, send, output)
+    send(b'y\r')
+    mark = until(b'running 1s', mark)
+    send(b'\x1b')
+    mark = until(b'(cancelled)', mark)
+    until(b'> kept', mark)
+    send(b'\x03\x04')
+
+
+def cancel_at_approval_drops_typed_ahead(read, until, send, output):
+    mark = typed_between_approvals(read, until, send, output)
+    read(.3)
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    mark = until(b'> ', mark)
+    read(.3)
+    assert b'kept' not in output[mark:], 'text typed before Ctrl-C at a question was kept'
     send(b'\x04')
 
 
@@ -1161,6 +1194,8 @@ run([], escape_cancels_and_keeps_typed_ahead, hanging)
 run([], escape_sequence_does_not_cancel, hanging)
 run([], escape_cancels_command)
 run(['--ask'], escape_after_approval, approved)
+run(['--ask'], approval_keeps_typed_ahead, pausing)
+run(['--ask'], cancel_at_approval_drops_typed_ahead, pausing)
 run([], thinking_counts_seconds, hanging)
 run([], quiet_after_reasoning_shows_thinking, quiet_reasoning)
 run([], ctrl_t_hides_reasoning, thoughts)

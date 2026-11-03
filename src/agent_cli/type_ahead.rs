@@ -40,10 +40,11 @@ pub(super) struct TypeAhead {
 impl TypeAhead {
     /// Reads stdin; a lone Escape sets `cancel`, and Ctrl+O calls `expand`.
     pub(super) fn start(cancel: Arc<AtomicBool>, expand: Option<Expand>) -> Self {
+        DISCARD.store(false, Ordering::Relaxed);
         Self::reading(std::io::stdin(), cancel, expand, Vec::new())
     }
 
-    /// Reads stdin again after `finish` returned `typed`, which Ctrl-C can still discard.
+    /// Reads stdin again after `finish` returned `typed`, which a Ctrl-C since then discards.
     pub(super) fn resume(cancel: Arc<AtomicBool>, expand: Option<Expand>, typed: Vec<u8>) -> Self {
         Self::reading(std::io::stdin(), cancel, expand, typed)
     }
@@ -54,7 +55,6 @@ impl TypeAhead {
         expand: Option<Expand>,
         typed: Vec<u8>,
     ) -> Self {
-        DISCARD.store(false, Ordering::Relaxed);
         let stop = Arc::new(AtomicBool::new(false));
         let thread = std::thread::spawn({
             let (stop, cancel, expand) = (stop.clone(), cancel.clone(), expand.clone());

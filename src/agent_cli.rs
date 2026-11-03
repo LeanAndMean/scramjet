@@ -1799,16 +1799,7 @@ impl AgentUi for Terminal {
         self.err(&block);
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
-        // Only an answer typed after the question is shown may approve it.
-        let reading = self.type_ahead.take().map(|typed| {
-            let restart = (typed.cancel(), typed.expand());
-            typed.finish();
-            restart
-        });
-        let answer = self.ask(question, cancel);
-        self.type_ahead =
-            reading.map(|(cancel, expand)| type_ahead::TypeAhead::start(cancel, expand));
-        answer
+        self.without_type_ahead(|ui| ui.ask(question, cancel))
     }
     /// A block of its own, ending with a blank line as a tool block does.
     fn notice(&mut self, text: &str) {
@@ -1846,16 +1837,10 @@ impl AgentUi for Terminal {
         if !stdin.is_terminal() {
             return numbered_choice(title, options, recommended);
         }
-        // Text typed before the list is shown waits for the next prompt, and chooses nothing.
-        let reading = self
-            .type_ahead
-            .take()
-            .map(|typed| (typed.cancel(), typed.expand(), typed.finish()));
-        let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
-        let chosen = select::question(title, options, recommended).unwrap_or(None);
-        self.type_ahead = reading
-            .map(|(cancel, expand, typed)| type_ahead::TypeAhead::resume(cancel, expand, typed));
-        chosen
+        self.without_type_ahead(|_| {
+            let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
+            select::question(title, options, recommended).unwrap_or(None)
+        })
     }
 }
 
@@ -1897,6 +1882,18 @@ fn numbered_choice(title: &str, options: &[Choice], recommended: Option<usize>) 
 }
 
 impl Terminal {
+    /// Runs `question` with the keys typed during the turn so far kept for the next prompt, so
+    /// that none of them answers it.
+    fn without_type_ahead<T>(&mut self, question: impl FnOnce(&mut Self) -> T) -> T {
+        let reading = self
+            .type_ahead
+            .take()
+            .map(|typed| (typed.cancel(), typed.expand(), typed.finish()));
+        let answer = question(self);
+        self.type_ahead = reading
+            .map(|(cancel, expand, typed)| type_ahead::TypeAhead::resume(cancel, expand, typed));
+        answer
+    }
     fn compaction_error(&mut self, error: &str) {
         self.clear();
         let text = self.wrapped(&format!("error: automatic compaction failed: {error}"));
