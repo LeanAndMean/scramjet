@@ -297,13 +297,18 @@ impl Entries {
 
 /// `$XDG_STATE_HOME/scramjet-rs/sessions/<project path with / as ->`.
 pub fn directory(root: &Path) -> io::Result<PathBuf> {
+    let slug = root.to_string_lossy().trim_matches('/').replace('/', "-");
+    Ok(state_directory()?.join("sessions").join(slug))
+}
+
+/// `$XDG_STATE_HOME/scramjet-rs`, by default `~/.local/state/scramjet-rs`.
+pub(super) fn state_directory() -> io::Result<PathBuf> {
     let state = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
         .ok_or_else(|| io::Error::other("neither XDG_STATE_HOME nor HOME is set"))?;
-    let slug = root.to_string_lossy().trim_matches('/').replace('/', "-");
-    Ok(state.join("scramjet-rs/sessions").join(slug))
+    Ok(state.join("scramjet-rs"))
 }
 
 impl Session {

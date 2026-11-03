@@ -1,7 +1,8 @@
 //! Scramjet's `subagent` tool (`subagent/index.ts`): the model hands tasks to agents defined in
 //! markdown files, each run with a context of its own and its final reply as the result. Here
 //! the children run in this process with the parent's endpoint, and get read-only tools only:
-//! `read`, `ls`, and bash in the read-only sandbox.
+//! `read` and `ls`, and bash, `grep` and `find` in the read-only sandbox, none of which shows
+//! the user's credential stores.
 
 use super::{
     AgentError, AgentUi, MAX_STEPS, Sending, ToolDetail, Usage,
@@ -1011,10 +1012,10 @@ fn child_tools(
     let default = ["read", "bash", "edit", "write"].map(str::to_owned);
     let listed = agent.tools.as_deref().unwrap_or(&default);
     let mut tools = Vec::new();
-    let (mut writers, mut missing) = (Vec::new(), Vec::new());
+    let (mut writers, mut unconfined, mut missing) = (Vec::new(), Vec::new(), Vec::new());
     for tool in listed {
         match READ_ONLY.iter().find(|known| *known == tool) {
-            Some(&"bash") if sandbox.is_err() => missing.push(tool.as_str()),
+            Some(&("bash" | "grep" | "find")) if sandbox.is_err() => unconfined.push(tool.as_str()),
             Some(&("grep" | "find")) if tools::search_program(tool).is_none() => {
                 missing.push(tool.as_str())
             }
@@ -1032,12 +1033,12 @@ fn child_tools(
         ));
     }
     if let Err(error) = sandbox
-        && missing.contains(&"bash")
+        && !unconfined.is_empty()
     {
         warnings.push(format!(
-            "bash: left out, as its read-only sandbox is unavailable ({error})"
+            "{}: left out, as the read-only sandbox is unavailable ({error})",
+            unconfined.join(", ")
         ));
-        missing.retain(|tool| *tool != "bash");
     }
     for (tool, program) in [("grep", "ripgrep (rg)"), ("find", "fd")] {
         if missing.contains(&tool) {
@@ -1452,13 +1453,13 @@ tool:\n\n- a: a agent\n- b: b agent\n- mach12:kept: mach12:kept agent\n- shared:
         assert_eq!(tools, ["read", "grep", "find", "ls", "bash"]);
         assert_eq!(warnings, ["noted", "web: not available to subagents here"]);
         let missing = Err("no bwrap".to_owned());
-        let (tools, warnings) = child_tools(&agent(Some("read, bash")), &missing);
-        assert_eq!(tools, ["read"]);
+        let (tools, warnings) = child_tools(&agent(Some("read, grep, ls, bash")), &missing);
+        assert_eq!(tools, ["read", "ls"]);
         assert_eq!(
             warnings,
             [
                 "noted",
-                "bash: left out, as its read-only sandbox is unavailable (no bwrap)"
+                "grep, bash: left out, as the read-only sandbox is unavailable (no bwrap)"
             ]
         );
     }

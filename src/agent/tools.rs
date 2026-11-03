@@ -1,4 +1,7 @@
-use super::ToolDetail;
+use super::{
+    ToolDetail,
+    sandbox::{self, Hidden},
+};
 use serde_json::{Value, json};
 use std::{
     io::Read,
@@ -205,18 +208,34 @@ impl<'a> Call<'a> {
         }
     }
 
-    /// As `run` for a subagent's tools, none of which changes a file: bash runs in the read-only
-    /// sandbox.
+    /// As `run` for a subagent's tools, none of which changes a file or shows the user's
+    /// credential stores: bash, `grep` and `find` run in the read-only sandbox.
     pub fn run_read_only(&self, root: &Path, cancel: &AtomicBool) -> Result<Output, String> {
+        self.run_hiding(root, &Hidden::current(), cancel)
+    }
+
+    fn run_hiding(
+        &self,
+        root: &Path,
+        hidden: &Hidden,
+        cancel: &AtomicBool,
+    ) -> Result<Output, String> {
+        if self.name != "bash" {
+            hidden.check(&resolve(
+                root,
+                self.arguments["path"].as_str().unwrap_or("."),
+            ))?;
+        }
         let text = match self.name {
             "read" => read(root, self)?,
             "ls" => ls(root, self)?,
-            "grep" => grep(root, self, cancel)?,
-            "find" => find(root, self, cancel)?,
+            "grep" => grep(root, self, hidden, cancel)?,
+            "find" => find(root, self, hidden, cancel)?,
             "bash" => {
                 let ran = run_sandboxed(
                     root,
                     self.str("command")?,
+                    hidden,
                     Some(timeout(self)),
                     cancel,
                     &mut |_| {},
@@ -242,8 +261,6 @@ pub(super) struct Output {
     pub failed: bool,
 }
 
-/// Resolves `path` against the project root without following symlinks. A leading `~` is the
-/// home directory, as in Scramjet.
 /// A path in the home directory as `~/...`, as Scramjet shows tool paths.
 fn shortened(path: &str) -> String {
     let home = std::env::home_dir().filter(|home| home.parent().is_some());
@@ -257,6 +274,8 @@ fn shortened(path: &str) -> String {
     }
 }
 
+/// Resolves `path` against the project root without following symlinks. A leading `~` is the
+/// home directory, as in Scramjet.
 pub(super) fn resolve(root: &Path, path: &str) -> PathBuf {
     let joined = match (path.strip_prefix('~'), std::env::home_dir()) {
         (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
@@ -717,7 +736,7 @@ fn run_lines(
 
 /// Pi's `grep`: ripgrep's matches as `path:line: text`, context lines read from the file as
 /// `path-line- text`, paths relative to a directory searched.
-fn grep(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String> {
+fn grep(root: &Path, call: &Call, hidden: &Hidden, cancel: &AtomicBool) -> Result<String, String> {
     let pattern = call.str("pattern")?;
     let path = resolve(root, call.arguments["path"].as_str().unwrap_or("."));
     let metadata =
@@ -727,7 +746,7 @@ fn grep(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String>
         .as_u64()
         .map_or(GREP_LIMIT, |n| n.max(1) as usize);
     let program = search_program("grep").ok_or("ripgrep (rg) is not available")?;
-    let mut command = Command::new(program);
+    let mut command = sandbox::program(root, &path, &program, hidden);
     command.args(["--json", "--line-number", "--color=never", "--hidden"]);
     if call.arguments["ignoreCase"] == true {
         command.arg("--ignore-case");
@@ -842,7 +861,7 @@ fn grep(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String>
 }
 
 /// Pi's `find`: fd's paths matching a glob, relative to the directory searched.
-fn find(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String> {
+fn find(root: &Path, call: &Call, hidden: &Hidden, cancel: &AtomicBool) -> Result<String, String> {
     let pattern = call.str("pattern")?;
     let path = resolve(root, call.arguments["path"].as_str().unwrap_or("."));
     if std::fs::metadata(&path).is_err() {
@@ -852,7 +871,7 @@ fn find(root: &Path, call: &Call, cancel: &AtomicBool) -> Result<String, String>
         .as_u64()
         .map_or(FIND_LIMIT, |n| n.max(1) as usize);
     let program = search_program("find").ok_or("fd is not available")?;
-    let mut command = Command::new(program);
+    let mut command = sandbox::program(root, &path, &program, hidden);
     command.args([
         "--glob",
         "--color=never",
@@ -925,12 +944,13 @@ pub(super) fn run_command(
 pub(super) fn run_sandboxed(
     root: &Path,
     command: &str,
+    hidden: &Hidden,
     timeout: Option<Duration>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
-    let process = super::sandbox::command(root, command);
-    run_process(process, super::sandbox::PROGRAM, timeout, cancel, progress)
+    let process = sandbox::command(root, command, hidden);
+    run_process(process, sandbox::PROGRAM, timeout, cancel, progress)
 }
 
 fn run_process(
@@ -1413,6 +1433,62 @@ to see full lines]",
         );
         assert!(run("write", json!({"path":"x","content":""})).is_err());
         assert!(!root.join("x").exists());
+    }
+
+    #[test]
+    fn subagent_tools_do_not_show_credential_stores() {
+        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
+        let home =
+            std::env::temp_dir().join(format!("scramjet-agent-hidden-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(home.join(".netrc"), "SECRET-netrc\n").unwrap();
+        std::fs::write(home.join(".ssh/id_x"), "SECRET-key\n").unwrap();
+        std::fs::write(root.join("a.txt"), "plain SECRET-not\n").unwrap();
+        std::os::unix::fs::symlink(home.join(".netrc"), root.join("link")).unwrap();
+        let hidden = Hidden::under(&home);
+        let cancel = AtomicBool::new(false);
+        let run = |name: &str, arguments: Value| {
+            call(name, arguments)
+                .run_hiding(&root, &hidden, &cancel)
+                .map(|output| output.text)
+        };
+        let refused =
+            |path: &str| format!("{path}: hidden from subagents, as it holds credentials");
+        for (name, path, shown) in [
+            ("read", "../.netrc", home.join(".netrc")),
+            ("read", "link", root.join("link")),
+            ("ls", "~/../../..", PathBuf::from("/")),
+            ("ls", "../.ssh", home.join(".ssh")),
+            ("grep", "../.ssh/id_x", home.join(".ssh/id_x")),
+            ("find", "../.ssh", home.join(".ssh")),
+        ] {
+            let result = run(name, json!({"path": path, "pattern": "*"}));
+            match path {
+                "~/../../.." => assert!(result.is_ok(), "{result:?}"),
+                _ => assert_eq!(result, Err(refused(&shown.display().to_string()))),
+            }
+        }
+        assert_eq!(
+            run("grep", json!({"pattern":"SECRET","path":".."})),
+            Ok("project/a.txt:1: plain SECRET-not".into())
+        );
+        assert_eq!(
+            run("grep", json!({"pattern":"nowhere","path":".."})),
+            Ok("No matches found".into())
+        );
+        assert_eq!(
+            run("find", json!({"pattern":"id_*","path":".."})),
+            Ok("No files found matching pattern".into())
+        );
+        let shown = run(
+            "bash",
+            json!({"command":"cat ../.netrc link ../.ssh/id_x; ls -A ../.ssh"}),
+        )
+        .unwrap();
+        assert!(!shown.contains("SECRET"), "{shown}");
     }
 
     #[test]
