@@ -86,18 +86,25 @@ impl Hidden {
     /// sessions the user opens on a server of `base` never have the stores hidden.
     fn keep_tmux_apart(&mut self, base: &Path, own: Option<PathBuf>) {
         use std::os::unix::fs::DirBuilderExt;
-        let sockets = base.join(format!("tmux-{}", rustix::process::getuid().as_raw()));
+        let name = format!("tmux-{}", rustix::process::getuid().as_raw());
+        let sockets = base.join(&name);
         // Made as tmux makes it: bubblewrap would leave a mount point it made open to others,
         // which tmux then refuses to use.
         let _ = std::fs::DirBuilder::new().mode(0o700).create(&sockets);
+        let own = own
+            .filter(|own| std::fs::create_dir_all(own).is_ok())
+            .and_then(|own| std::fs::canonicalize(own).ok());
+        // Run from a hidden command, or in a session one started, `base` is `own`, whose servers
+        // have the stores hidden.
+        let theirs = own.as_ref().map(|own| own.join(&name));
         if let Some(real) = std::fs::canonicalize(&sockets)
             .ok()
-            .filter(|real| real.is_dir())
+            .filter(|real| real.is_dir() && Some(real) != theirs.as_ref())
         {
             self.identities.extend(identity(&real));
             self.directories.push(real);
         }
-        self.tmux = own.filter(|own| std::fs::create_dir_all(own).is_ok());
+        self.tmux = own;
     }
 
     pub(super) fn under(home: &Path, auth: Option<PathBuf>) -> Hidden {
@@ -215,6 +222,11 @@ fn confined(root: &Path, also: Option<&Path>, hidden: &Hidden) -> Command {
         process.args(["--tmpfs", WSLG]);
     }
     hide(&mut process, hidden);
+    // Servers that commands with the stores hidden started run what a client asks writable and
+    // on the network.
+    if let Some(own) = &hidden.tmux {
+        process.arg("--tmpfs").arg(own).arg("--remount-ro").arg(own);
+    }
     process.arg("--chdir").arg(root).arg("--");
     process
 }
@@ -570,6 +582,32 @@ TMUX={socket},1,0 tmux run-shell '{cat}'; tmux new-session -d -s own 'sleep 300'
         assert!(
             shown.status.success() && shown.stdout.is_empty(),
             "{shown:?}"
+        );
+
+        // Nor can a subagent's sandbox, read-only and off the network, have it act for it. `own`
+        // as the root is mounted again, as the state directory is in the home directory.
+        let reached = home.join("reached");
+        let script = format!(
+            "TMUX_TMPDIR={} tmux run-shell 'touch {}'",
+            own.display(),
+            reached.display()
+        );
+        let output = super::command(&own, &script, &hidden).output().unwrap();
+        assert!(!reached.exists(), "{output:?}");
+
+        // scramjet-rs run where TMUX_TMPDIR is already its own, as in a session a hidden command
+        // started, still has tmux in its hidden commands.
+        let mut nested = super::Hidden::under(&home, None);
+        nested.keep_tmux_apart(&own, Some(own.clone()));
+        let script = "tmux new-session -d -s nested 'sleep 300' && tmux ls -F '#S'";
+        let output = super::hiding(&home.join("project"), script, &nested)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "nested\nown\n",
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
         );
 
         // Made as tmux makes it, so that tmux outside can use it afterwards.
