@@ -331,7 +331,17 @@ impl Layout {
             let mut hanging = false;
             let mut word: Option<WordStart> = None;
             for (index, grapheme) in line.grapheme_indices(true) {
-                let shown = if grapheme == "\t" { TAB } else { grapheme };
+                let escaped: String;
+                // Text the user did not type, such as a resumed or dispatched prompt, may hold
+                // escape sequences; a control character is a grapheme of its own.
+                let shown = if grapheme == "\t" {
+                    TAB
+                } else if grapheme.chars().any(char::is_control) {
+                    escaped = grapheme.escape_default().to_string();
+                    &escaped
+                } else {
+                    grapheme
+                };
                 let cells = shown.width();
                 let row = rows.len() - 1;
                 if grapheme == " " || grapheme == "\t" {
@@ -850,20 +860,28 @@ impl Completion {
             .min(count - visible);
         // Scramjet's commands' column fits their names; other lists' is 32 columns wide.
         let column = match self.kind {
-            Kind::Slash => self.items.iter().map(|item| item.label.width() + 2).max(),
+            Kind::Slash => self
+                .items
+                .iter()
+                .map(|item| super::visible(&item.label).width() + 2)
+                .max(),
             _ => None,
         };
         let column = column.map_or(32, |column| column.clamp(12, 32));
         let mut rows: Vec<String> = (top..top + visible)
             .map(|index| {
                 let item = &self.items[index];
-                let label = super::clip(&item.label, width.saturating_sub(2));
+                // File names and command descriptions come from the project.
+                let label = super::clip(&super::visible(&item.label), width.saturating_sub(2));
                 let room = width.saturating_sub(2 + column);
                 let description = if item.description.is_empty() || room <= 10 {
                     String::new()
                 } else {
                     let pad = " ".repeat(column.saturating_sub(label.width()));
-                    format!("{pad}{}", super::clip(&item.description, room))
+                    format!(
+                        "{pad}{}",
+                        super::clip(&super::visible(&item.description), room)
+                    )
                 };
                 if index == self.selected {
                     format!("{COMPLETION_SELECTED}→ {label}{description}{RESET}")
@@ -1443,6 +1461,26 @@ mod tests {
         assert_eq!(exact.rows, ["> abcd"]);
         assert_eq!((exact.at(4).row, exact.at(4).column), (0, 6));
         assert_eq!(Layout::new("a\tb", 80).rows, ["> a    b"]);
+    }
+
+    #[test]
+    fn control_characters_show_escaped_and_the_cursor_counts_them() {
+        let layout = Layout::new("a\x1b]52;c;eA==\x07b\r", 80);
+        assert_eq!(layout.rows, ["> a\\u{1b}]52;c;eA==\\u{7}b\\r"]);
+        let after = layout.at("a\x1b".len());
+        assert_eq!((after.row, after.column), (0, 9));
+        let end = layout.at("a\x1b]52;c;eA==\x07b\r".len());
+        assert_eq!(end.column, layout.rows[0].len());
+    }
+
+    #[test]
+    fn completion_rows_escape_control_characters() {
+        let loaded = [("x\x1b[2J".to_owned(), "clears\x1b]0;title\x07".to_owned())];
+        let list = Completion::slash("/x", &loaded).unwrap();
+        assert_eq!(
+            plain(list.rows(60)),
+            ["→ /x\\u{1b}[2J  clears\\u{1b}]0;title\\u{7}"]
+        );
     }
 
     #[test]

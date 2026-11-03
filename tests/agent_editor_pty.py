@@ -1570,6 +1570,22 @@ assert prompts(first) == ['/flow:step one'], prompts(first)
 assert prompts(second) == ['/flow:step two', '/flow:done', '/flow:step three'], prompts(second)
 
 
+
+def dispatched_prompt_shows_escapes(read, until, send, output):
+    mark = until(b'> ')
+    send(b'/flow:step hostile\r')
+    # The model wrote the chained step: its control characters show escaped, never raw.
+    mark = until(b'> /flow:done \\u{1b}]0;pwned\\u{7}', mark)
+    mark = until(b'> ', until(b'Finished hostile.', mark))
+    assert b'\x1b]0;pwned' not in output, 'a next step wrote an escape sequence to the terminal'
+    send(b'\x04')
+
+
+run([], dispatched_prompt_shows_escapes, serve_items([
+    [report('call_1', [('/flow:done \x1b]0;pwned\x07', False, 'Finish.')], 0)],
+    [message('Finished hostile.'), report('call_2')],
+]))
+
 def parked_question(read, until, send, output):
     mark = until(b'> ')
     send(b'/flow:step ask\r')
