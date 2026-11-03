@@ -1084,10 +1084,12 @@ impl Ran {
         }
     }
 
-    /// As Scramjet's text for a `!` command: what it ran, its output and how it ended.
+    /// As Scramjet's text for a `!` command: what it ran, its output without escape sequences,
+    /// and how it ended.
     pub fn message(&self, command: &str) -> String {
         let mut text = format!("Ran `{command}`\n");
-        match self.output.trim_end_matches('\n') {
+        let output: Vec<String> = self.output.split('\n').map(terminal_line).collect();
+        match output.join("\n").trim_end_matches('\n') {
             "" => text += "(no output)",
             output => text += &format!("```\n{output}\n```"),
         }
@@ -1098,6 +1100,50 @@ impl Ran {
         }
         text
     }
+}
+
+/// A line of output as a terminal shows it: only the text after its last carriage return, without
+/// escape sequences or control characters other than tabs.
+pub fn terminal_line(line: &str) -> String {
+    let line = line
+        .split('\r')
+        .rfind(|part| !part.is_empty())
+        .unwrap_or("");
+    let mut text = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\t' => text.push(c),
+            '\x1b' => match chars.next() {
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\x07' || (c == '\x1b' && chars.next().is_some()) {
+                            break;
+                        }
+                    }
+                }
+                // Intermediate bytes, then one final byte, such as `ESC ( B` from `tput sgr0`.
+                Some(' '..='/') => {
+                    for c in chars.by_ref() {
+                        if !(' '..='/').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            c if c.is_control() => {}
+            c => text.push(c),
+        }
+    }
+    text
 }
 
 /// The end of a running command's output, from the start of a line where it is cut.

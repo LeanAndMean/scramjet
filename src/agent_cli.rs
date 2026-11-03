@@ -19,7 +19,7 @@ use rustix::{
 use scramjet_rs::agent::{
     Agent, AgentConfig, AgentError, AgentUi, Answer, AutoCompaction, Choice, Compaction, Completed,
     Navigated, Next, Purpose, SessionChoice, SessionInfo, StreamProgress, ToolDetail,
-    next_step_record,
+    next_step_record, terminal_line,
 };
 use std::{
     ffi::OsString,
@@ -2059,48 +2059,9 @@ fn preview(text: &str, shown: Shown, width: usize, hint: &str) -> Vec<String> {
     }
 }
 
-/// Drops escape sequences and control characters, expands tabs, and keeps only the text after
-/// the last carriage return, as a terminal would show it.
+/// A line as a terminal shows it (`terminal_line`), tabs expanded.
 fn printable(line: &str) -> String {
-    let line = line
-        .split('\r')
-        .rfind(|part| !part.is_empty())
-        .unwrap_or("");
-    let mut text = String::with_capacity(line.len());
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\t' => text.push_str("    "),
-            '\x1b' => match chars.next() {
-                Some('[') => {
-                    for c in chars.by_ref() {
-                        if ('@'..='~').contains(&c) {
-                            break;
-                        }
-                    }
-                }
-                Some(']') => {
-                    while let Some(c) = chars.next() {
-                        if c == '\x07' || (c == '\x1b' && chars.next().is_some()) {
-                            break;
-                        }
-                    }
-                }
-                // Intermediate bytes, then one final byte, such as `ESC ( B` from `tput sgr0`.
-                Some(' '..='/') => {
-                    for c in chars.by_ref() {
-                        if !(' '..='/').contains(&c) {
-                            break;
-                        }
-                    }
-                }
-                _ => {}
-            },
-            c if c.is_control() => {}
-            c => text.push(c),
-        }
-    }
-    text
+    terminal_line(line).replace('\t', "    ")
 }
 
 /// As Scramjet shows a call, with every line of a command; later lines go under the first.

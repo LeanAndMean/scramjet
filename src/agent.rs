@@ -18,7 +18,7 @@ pub use commands::{Command, Commands};
 pub use question::Choice;
 pub use session::{Session, SessionInfo};
 pub use status::{Completed, Next, Routing, Step, record as next_step_record};
-pub use tools::{search_program, sequence_diff};
+pub use tools::{search_program, sequence_diff, terminal_line};
 
 use client::{ClientError, ModelInfo, Protocol};
 use serde_json::{Value, json};
@@ -3113,21 +3113,22 @@ response is incomplete; retry the request."});
         let (mut agent, _scratch) = agent(endpoint, "bang");
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
-        agent
-            .shell("echo hi; exit 3", true, &mut ui, &cancel)
-            .unwrap();
+        // As Scramjet's `!` gives the model its output, without escape sequences.
+        let command = r"printf '\e[1mhi\e[0m\n10%%\r100%%\n'; exit 3";
+        let typed = format!("!{command}");
+        agent.shell(command, true, &mut ui, &cancel).unwrap();
         agent.shell("echo secret", false, &mut ui, &cancel).unwrap();
         assert_eq!(ui.calls, ["bash", "bash"]);
         assert_eq!(agent.usage.requests, 0);
-        let message = "Ran `echo hi; exit 3`\n```\nhi\n```\n\nCommand exited with code 3";
+        let message = format!("Ran `{command}`\n```\nhi\n100%\n```\n\nCommand exited with code 3");
         assert_eq!(
             agent.conversation(),
             [
-                json!({"role":"user","content":message,"_scramjet_typed":"!echo hi; exit 3",
+                json!({"role":"user","content":message,"_scramjet_typed":typed,
                 "_scramjet_failed":true})
             ]
         );
-        assert_eq!(agent.prompts(), ["!echo hi; exit 3"]);
+        assert_eq!(agent.prompts(), [typed.as_str()]);
         agent.turn("next", &mut ui, &cancel).unwrap();
         let bodies = server.join().unwrap();
         assert_eq!(
@@ -3137,8 +3138,11 @@ response is incomplete; retry the request."});
         assert!(!bodies[0].to_string().contains("\"_scramjet_"));
         let path = agent.session_path().to_owned();
         let (_, _, prompts) = Session::open(&path).unwrap();
-        assert_eq!(prompts, ["!echo hi; exit 3", "next"]);
+        assert_eq!(prompts, [typed.as_str(), "next"]);
         assert!(!std::fs::read_to_string(&path).unwrap().contains("secret"));
+        // As Scramjet's session list names it by its first message, not a `!` command.
+        let listed = agent.sessions().unwrap();
+        assert_eq!(listed[0].first_prompt.as_deref(), Some("next"));
     }
 
     #[test]

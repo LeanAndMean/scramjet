@@ -10,6 +10,7 @@ use std::{
 /// A saved session as `/resume` lists it.
 pub struct SessionInfo {
     pub path: PathBuf,
+    /// Its first prompt to the model, as typed; not a `!` command.
     pub first_prompt: Option<String>,
     /// Its prompts and replies on every branch, which `/resume` searches as Scramjet searches
     /// a session's messages.
@@ -333,7 +334,10 @@ impl Session {
             };
             sessions.push(SessionInfo {
                 path,
-                first_prompt: entries.prompts().into_iter().next(),
+                first_prompt: entries
+                    .fork_points()
+                    .next()
+                    .map(|entry| prompt_text(&entry.value).to_owned()),
                 text: entries.text(),
                 name: entries.name.clone(),
                 item_count: context.items.len(),
