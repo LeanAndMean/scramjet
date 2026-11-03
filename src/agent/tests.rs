@@ -198,11 +198,12 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
         max_output_tokens: None,
         ask: false,
         retries: 3,
+        tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
     };
     let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
     // The user's own agents stay out of the tests.
     agent.agents_directory = None;
-    agent.instructions = instructions::agent(&root, &agent.commands, &[]);
+    agent.instructions = instructions::agent(&root, &agent.config.tools, &agent.commands, &[]);
     (agent, scratch)
 }
 
@@ -382,6 +383,7 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
         max_output_tokens: None,
         ask: false,
         retries: 3,
+        tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
     };
     let resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
     assert_eq!(resumed.session_name(), Some("Parser work"));

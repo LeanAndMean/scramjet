@@ -34,22 +34,51 @@ const MAX_TIMEOUT: u64 = 3600;
 /// Unchanged lines shown around each change in an edit diff, as in Scramjet.
 const DIFF_CONTEXT: usize = 4;
 
-pub(super) fn definitions() -> Value {
-    let mut tools = json!([
-        {"type":"function","name":"read","strict":false,
+/// The coding tools the agent can be given, in the order the model sees them.
+pub const CODING_TOOLS: [&str; 7] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+/// Scramjet's, which the agent has unless the settings list others.
+pub const DEFAULT_TOOLS: [&str; 4] = ["read", "bash", "edit", "write"];
+
+/// The definitions of the agent's tools: the coding tools among `names`, then the harness's own.
+pub(super) fn definitions(names: &[String]) -> Value {
+    let mut tools: Vec<Value> = CODING_TOOLS
+        .iter()
+        .filter(|tool| names.iter().any(|name| name == *tool))
+        .map(|tool| definition(tool, false))
+        .collect();
+    tools.push(super::status::definition());
+    tools.push(super::question::definition());
+    tools.push(super::subagent::definition());
+    Value::Array(tools)
+}
+
+/// The definitions of a subagent's tools, `names` among `read`, `grep`, `find`, `ls` and `bash`.
+pub(super) fn child_definitions(names: &[&str]) -> Value {
+    let tools = ["read", "grep", "find", "ls", "bash"]
+        .into_iter()
+        .filter(|tool| names.contains(tool))
+        .map(|tool| definition(tool, true));
+    Value::Array(tools.collect())
+}
+
+/// Pi's definition of the coding tool `name`; `sandboxed`: a bash that runs in the read-only
+/// sandbox.
+fn definition(name: &str, sandboxed: bool) -> Value {
+    match name {
+        "read" => json!({"type":"function","name":"read","strict":false,
          "description":"Read a text file. Output is truncated to 2000 lines or 50KB; use offset/limit (1-based line numbers) to read large files in parts.",
          "parameters":{"type":"object","properties":{
             "path":{"type":"string","description":"File path, relative to the project directory or absolute"},
             "offset":{"type":"integer","description":"First line to read (1-based)"},
             "limit":{"type":"integer","description":"Maximum number of lines to read"}},
-          "required":["path"]}},
-        {"type":"function","name":"write","strict":false,
+          "required":["path"]}}),
+        "write" => json!({"type":"function","name":"write","strict":false,
          "description":"Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
          "parameters":{"type":"object","properties":{
             "path":{"type":"string","description":"Path to the file to write, relative to the project directory or absolute"},
             "content":{"type":"string","description":"Content to write to the file"}},
-          "required":["path","content"]}},
-        {"type":"function","name":"edit","strict":false,
+          "required":["path","content"]}}),
+        "edit" => json!({"type":"function","name":"edit","strict":false,
          "description":"Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
          "parameters":{"type":"object","properties":{
             "path":{"type":"string","description":"Path to the file to edit, relative to the project directory or absolute"},
@@ -58,31 +87,17 @@ pub(super) fn definitions() -> Value {
                 "items":{"type":"object","properties":{
                 "oldText":{"type":"string","description":"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."},
                 "newText":{"type":"string","description":"Replacement text for this targeted edit."}},"required":["oldText","newText"]}}},
-          "required":["path","edits"]}},
-        {"type":"function","name":"bash","strict":false,
-         "description":"Run a bash command in the project directory. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
+          "required":["path","edits"]}}),
+        "bash" => json!({"type":"function","name":"bash","strict":false,
+         "description":match sandboxed {
+            true => "Run a bash command in the working directory, in a read-only sandbox without network: no file can be changed, except in a private /tmp that is discarded when the command ends. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
+            false => "Run a bash command in the project directory. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
+         },
          "parameters":{"type":"object","properties":{
             "command":{"type":"string","description":"Bash command to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
-          "required":["command"]}}
-    ]);
-    let list = tools.as_array_mut().unwrap();
-    list.push(super::status::definition());
-    list.push(super::question::definition());
-    list.push(super::subagent::definition());
-    tools
-}
-
-/// The definitions of a subagent's tools, `names` among `read`, `grep`, `find`, `ls` and `bash`.
-pub(super) fn child_definitions(names: &[&str]) -> Value {
-    let all = definitions();
-    let read = all
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|tool| tool["name"] == "read")
-        .cloned();
-    let grep = json!({"type":"function","name":"grep","strict":false,
+          "required":["command"]}}),
+        "grep" => json!({"type":"function","name":"grep","strict":false,
         "description":format!("Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to {GREP_LIMIT} matches or {}KB (whichever is hit first). Long lines are truncated to {GREP_LINE_CHARS} chars.", MAX_BYTES / 1024),
         "parameters":{"type":"object","properties":{
             "pattern":{"type":"string","description":"Search pattern (regex or literal string)"},
@@ -92,31 +107,20 @@ pub(super) fn child_definitions(names: &[&str]) -> Value {
             "literal":{"type":"boolean","description":"Treat pattern as literal string instead of regex (default: false)"},
             "context":{"type":"integer","description":"Number of lines to show before and after each match (default: 0)"},
             "limit":{"type":"integer","description":format!("Maximum number of matches to return (default: {GREP_LIMIT})")}},
-          "required":["pattern"]}});
-    let find = json!({"type":"function","name":"find","strict":false,
+          "required":["pattern"]}}),
+        "find" => json!({"type":"function","name":"find","strict":false,
         "description":format!("Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to {FIND_LIMIT} results or {}KB (whichever is hit first).", MAX_BYTES / 1024),
         "parameters":{"type":"object","properties":{
             "pattern":{"type":"string","description":"Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'"},
             "path":{"type":"string","description":"Directory to search in (default: current directory)"},
             "limit":{"type":"integer","description":format!("Maximum number of results (default: {FIND_LIMIT})")}},
-          "required":["pattern"]}});
-    let ls = json!({"type":"function","name":"ls","strict":false,
+          "required":["pattern"]}}),
+        _ => json!({"type":"function","name":"ls","strict":false,
         "description":format!("List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to {LS_LIMIT} entries or {}KB (whichever is hit first).", MAX_BYTES / 1024),
         "parameters":{"type":"object","properties":{
             "path":{"type":"string","description":"Directory to list (default: current directory)"},
-            "limit":{"type":"integer","description":format!("Maximum number of entries to return (default: {LS_LIMIT})")}}}});
-    let bash = json!({"type":"function","name":"bash","strict":false,
-        "description":"Run a bash command in the working directory, in a read-only sandbox without network: no file can be changed, except in a private /tmp that is discarded when the command ends. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
-        "parameters":{"type":"object","properties":{
-            "command":{"type":"string","description":"Bash command to execute"},
-            "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
-          "required":["command"]}});
-    let tools: Vec<Value> = [read, Some(grep), Some(find), Some(ls), Some(bash)]
-        .into_iter()
-        .flatten()
-        .filter(|tool| names.iter().any(|name| tool["name"] == *name))
-        .collect();
-    Value::Array(tools)
+            "limit":{"type":"integer","description":format!("Maximum number of entries to return (default: {LS_LIMIT})")}}}}),
+    }
 }
 
 /// What the user is asked to approve before a tool runs, if anything, when approvals are on.
@@ -195,17 +199,21 @@ impl<'a> Call<'a> {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(&str),
     ) -> Result<Output, String> {
-        match self.name {
-            "read" => Ok(Output {
-                text: read(root, self)?,
-                detail: None,
-                failed: false,
-            }),
-            "write" => write(root, self),
-            "edit" => edit(root, self),
-            "bash" => bash(root, self, cancel, progress),
-            other => Err(format!("unknown tool `{other}`")),
-        }
+        let text = match self.name {
+            "read" => read(root, self)?,
+            "ls" => ls(root, self)?,
+            "grep" => grep(root, self, None, cancel)?,
+            "find" => find(root, self, None, cancel)?,
+            "write" => return write(root, self),
+            "edit" => return edit(root, self),
+            "bash" => return bash(root, self, cancel, progress),
+            other => return Err(format!("Tool {other} not found")),
+        };
+        Ok(Output {
+            text,
+            detail: None,
+            failed: false,
+        })
     }
 
     /// As `run` for a subagent's tools, none of which changes a file or shows the user's
@@ -229,8 +237,8 @@ impl<'a> Call<'a> {
         let text = match self.name {
             "read" => read(root, self)?,
             "ls" => ls(root, self)?,
-            "grep" => grep(root, self, hidden, cancel)?,
-            "find" => find(root, self, hidden, cancel)?,
+            "grep" => grep(root, self, Some(hidden), cancel)?,
+            "find" => find(root, self, Some(hidden), cancel)?,
             "bash" => {
                 let ran = run_sandboxed(
                     root,
@@ -242,7 +250,7 @@ impl<'a> Call<'a> {
                 )?;
                 return Ok(ran.tool_output());
             }
-            other => return Err(format!("unknown tool `{other}`")),
+            other => return Err(format!("Tool {other} not found")),
         };
         Ok(Output {
             text,
@@ -664,6 +672,18 @@ pub fn search_program(tool: &str) -> Option<PathBuf> {
     })
 }
 
+/// `program` searching `path`: confined when there are credential stores to hide.
+fn search(root: &Path, path: &Path, program: &Path, hidden: Option<&Hidden>) -> Command {
+    match hidden {
+        Some(hidden) => sandbox::program(root, path, program, hidden),
+        None => {
+            let mut command = Command::new(program);
+            command.current_dir(root);
+            command
+        }
+    }
+}
+
 /// Runs `command` until it ends, `cancel` is set or `line` returns false for a line of its
 /// standard output: its exit status, `None` when `line` stopped it, and the start of its
 /// standard error.
@@ -735,8 +755,14 @@ fn run_lines(
 }
 
 /// Pi's `grep`: ripgrep's matches as `path:line: text`, context lines read from the file as
-/// `path-line- text`, paths relative to a directory searched.
-fn grep(root: &Path, call: &Call, hidden: &Hidden, cancel: &AtomicBool) -> Result<String, String> {
+/// `path-line- text`, paths relative to a directory searched. With `hidden`, ripgrep runs in the
+/// read-only sandbox, which hides them.
+fn grep(
+    root: &Path,
+    call: &Call,
+    hidden: Option<&Hidden>,
+    cancel: &AtomicBool,
+) -> Result<String, String> {
     let pattern = call.str("pattern")?;
     let path = resolve(root, call.arguments["path"].as_str().unwrap_or("."));
     let metadata =
@@ -746,7 +772,7 @@ fn grep(root: &Path, call: &Call, hidden: &Hidden, cancel: &AtomicBool) -> Resul
         .as_u64()
         .map_or(GREP_LIMIT, |n| n.max(1) as usize);
     let program = search_program("grep").ok_or("ripgrep (rg) is not available")?;
-    let mut command = sandbox::program(root, &path, &program, hidden);
+    let mut command = search(root, &path, &program, hidden);
     command.args(["--json", "--line-number", "--color=never", "--hidden"]);
     if call.arguments["ignoreCase"] == true {
         command.arg("--ignore-case");
@@ -861,8 +887,14 @@ fn grep(root: &Path, call: &Call, hidden: &Hidden, cancel: &AtomicBool) -> Resul
     Ok(with_notices(&lines, notices))
 }
 
-/// Pi's `find`: fd's paths matching a glob, relative to the directory searched.
-fn find(root: &Path, call: &Call, hidden: &Hidden, cancel: &AtomicBool) -> Result<String, String> {
+/// Pi's `find`: fd's paths matching a glob, relative to the directory searched; in the sandbox
+/// with `hidden`, as `grep`.
+fn find(
+    root: &Path,
+    call: &Call,
+    hidden: Option<&Hidden>,
+    cancel: &AtomicBool,
+) -> Result<String, String> {
     let pattern = call.str("pattern")?;
     let path = resolve(root, call.arguments["path"].as_str().unwrap_or("."));
     if std::fs::metadata(&path).is_err() {
@@ -872,7 +904,7 @@ fn find(root: &Path, call: &Call, hidden: &Hidden, cancel: &AtomicBool) -> Resul
         .as_u64()
         .map_or(FIND_LIMIT, |n| n.max(1) as usize);
     let program = search_program("find").ok_or("fd is not available")?;
-    let mut command = sandbox::program(root, &path, &program, hidden);
+    let mut command = search(root, &path, &program, hidden);
     command.args([
         "--glob",
         "--color=never",

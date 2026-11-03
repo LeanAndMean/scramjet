@@ -1,7 +1,7 @@
 //! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet-rs/settings.json` (by default
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
-use scramjet_rs::agent::shortened;
+use scramjet_rs::agent::{CODING_TOOLS, DEFAULT_TOOLS, search_program, shortened};
 use serde_json::{Map, Value, json};
 use std::{
     io,
@@ -29,6 +29,8 @@ pub(super) struct Settings {
     pub(super) skip_branch_summary_prompt: bool,
     /// `defaultThinkingLevel`, named as the model cards name levels.
     pub(super) default_thinking_level: Option<String>,
+    /// `tools`: the agent's coding tools, Scramjet's by default.
+    pub(super) tools: Vec<String>,
     /// What is wrong in the file; those keys keep their defaults.
     pub(super) warnings: Vec<String>,
 }
@@ -50,6 +52,7 @@ impl Settings {
             double_escape: DoubleEscape::Tree,
             skip_branch_summary_prompt: false,
             default_thinking_level: None,
+            tools: DEFAULT_TOOLS.map(str::to_owned).to_vec(),
             warnings: Vec::new(),
         };
         let Some(path) = &settings.path else {
@@ -104,6 +107,44 @@ impl Settings {
                 &LEVELS.map(|l| format!("\"{l}\"")).join(", "),
             ),
         }
+        match object.get("tools") {
+            None => {}
+            Some(Value::Array(names)) => self.tools = self.read_tools(&path, names),
+            Some(_) => wrong(
+                "tools",
+                &format!("a list of tool names ({})", CODING_TOOLS.join(", ")),
+            ),
+        }
+    }
+
+    /// The coding tools `names` lists that there are and that can run here.
+    fn read_tools(&mut self, path: &str, names: &[Value]) -> Vec<String> {
+        let mut tools: Vec<String> = Vec::new();
+        for name in names {
+            match name.as_str() {
+                Some(tool) if CODING_TOOLS.contains(&tool) => {
+                    let missing = match tool {
+                        "grep" => search_program(tool).is_none().then_some("ripgrep (rg)"),
+                        "find" => search_program(tool).is_none().then_some("fd"),
+                        _ => None,
+                    };
+                    match missing {
+                        Some(program) => self.warnings.push(format!(
+                            "{path}: tools: {tool} left out, as {program} is not installed"
+                        )),
+                        None if !tools.iter().any(|known| known == tool) => {
+                            tools.push(tool.to_owned())
+                        }
+                        None => {}
+                    }
+                }
+                _ => self.warnings.push(format!(
+                    "{path}: tools: {name} is not one of {}; ignored",
+                    CODING_TOOLS.join(", ")
+                )),
+            }
+        }
+        tools
     }
 
     /// Ctrl+T's choice, saved when it changed.
@@ -219,7 +260,37 @@ mod tests {
         assert_eq!(settings.double_escape, DoubleEscape::Tree);
         assert!(!settings.skip_branch_summary_prompt);
         assert_eq!(settings.default_thinking_level, None);
+        assert_eq!(settings.tools, ["read", "bash", "edit", "write"]);
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+    }
+
+    #[test]
+    fn tools_lists_the_agents_coding_tools() {
+        let scratch = Scratch::new("tools");
+        let settings = settings_with(
+            &scratch,
+            r#"{"tools": ["read", "grep", "gerp", "bash", 3, "ls", "read", "find"]}"#,
+        );
+        assert_eq!(settings.tools, ["read", "grep", "bash", "ls", "find"]);
+        let path = shown(&scratch.0.join("settings.json"));
+        let known = "read, bash, edit, write, grep, find, ls";
+        assert_eq!(
+            settings.warnings,
+            [
+                format!(r#"{path}: tools: "gerp" is not one of {known}; ignored"#),
+                format!("{path}: tools: 3 is not one of {known}; ignored"),
+            ]
+        );
+        let none = settings_with(&scratch, r#"{"tools": []}"#);
+        assert!(none.tools.is_empty() && none.warnings.is_empty());
+        let wrong = settings_with(&scratch, r#"{"tools": "read,grep"}"#);
+        assert_eq!(wrong.tools, ["read", "bash", "edit", "write"]);
+        assert_eq!(
+            wrong.warnings,
+            [format!(
+                "{path}: tools must be a list of tool names ({known}); ignored"
+            )]
+        );
     }
 
     #[test]

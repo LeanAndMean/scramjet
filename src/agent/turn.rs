@@ -258,6 +258,11 @@ to a larger-context model)"
             };
             return (output, ends);
         }
+        if !self.config.tools.iter().any(|tool| tool == call.name) {
+            let output = format!("Tool {} not found", call.name);
+            ui.tool_result(call.name, &output, None, true);
+            return (failure(output), false);
+        }
         let answer = match call.approval(&self.config.root) {
             Approval::Ask(question) if self.config.ask => ui.approve(&question, cancel),
             _ => Answer::Allow,
@@ -604,6 +609,59 @@ for trusted repositories.",
     }
 
     #[test]
+    fn the_configured_coding_tools_are_offered_and_only_they_run() {
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", "grep", json!({"pattern":"needle","path":"src"})),
+            tool_call("call_2", "ls", json!({"path":"src"})),
+            tool_call("call_3", "write", json!({"path":"x.txt","content":"x"})),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "configured-tools");
+        agent.config.tools = ["ls", "grep", "read"].map(String::from).to_vec();
+        agent.instructions =
+            instructions::agent(agent.root(), &agent.config.tools, &agent.commands, &[]);
+        std::fs::create_dir(agent.root().join("src")).unwrap();
+        std::fs::write(agent.root().join("src/a.txt"), "a needle\n").unwrap();
+        let mut ui = Recorder::default();
+        agent
+            .turn("look", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        let bodies = server.join().unwrap();
+        let names: Vec<_> = (bodies[0]["tools"].as_array().unwrap().iter())
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "read",
+                "grep",
+                "ls",
+                status::NAME,
+                question::NAME,
+                subagent::NAME
+            ]
+        );
+        let instructions = bodies[0]["instructions"].as_str().unwrap();
+        for line in [
+            "- read: Read file contents\n- grep: Search file contents for patterns (respects \
+.gitignore)\n- ls: List directory contents\n- report_scramjet_command_status:",
+            "Guidelines:\n- Use read to examine files instead of cat or sed.\n- Be concise",
+        ] {
+            assert!(instructions.contains(line), "{instructions}");
+        }
+        let outputs: Vec<_> = agent
+            .conversation()
+            .iter()
+            .filter_map(|item| item["output"].as_str())
+            .collect();
+        assert_eq!(
+            outputs,
+            ["a.txt:1: a needle", "a.txt", "Tool write not found"]
+        );
+        assert!(!agent.root().join("x.txt").exists());
+    }
+
+    #[test]
     fn a_tool_call_with_large_arguments_runs() {
         let content = "let x = 1;\n".repeat(4_000);
         let arguments = json!({ "path": "big.rs", "content": content }).to_string();
@@ -729,9 +787,10 @@ for trusted repositories.",
             max_output_tokens: None,
             ask: false,
             retries: 3,
+            tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
-        agent.instructions = instructions::agent(&root, &agent.commands, &[]);
+        agent.instructions = instructions::agent(&root, &agent.config.tools, &agent.commands, &[]);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         let typed = "/sjrstest:echo hi 'the user'";
@@ -934,6 +993,7 @@ be a non-empty array for select type. failed",
                 max_output_tokens: None,
                 ask: false,
                 retries: 0,
+                tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             };
             let path = agent.session_path().to_owned();
             drop(agent);

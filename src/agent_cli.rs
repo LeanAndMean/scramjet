@@ -80,6 +80,7 @@ fn start(options: Options, settings: &Settings) -> Result<Agent, String> {
         max_output_tokens: options.max_output_tokens,
         ask: options.ask,
         retries: options.retries,
+        tools: settings.tools.clone(),
     };
     let mut agent = Agent::start(config, options.choice).map_err(|e| e.to_string())?;
     let model = match agent.last_model() {

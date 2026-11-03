@@ -19,7 +19,7 @@ impl Agent {
                 None => self.instructions.clone(),
             },
             "input": self.replay_conversation(),
-            "tools": tools::definitions(),
+            "tools": tools::definitions(&self.config.tools),
             "tool_choice": "auto",
             "parallel_tool_calls": false,
             "stream": true,
@@ -319,6 +319,7 @@ response is incomplete; retry the request."});
             max_output_tokens: None,
             ask: false,
             retries: 3,
+            tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
         let replay = agent.replay_conversation();
@@ -533,6 +534,7 @@ response is incomplete; retry the request."});
             max_output_tokens: None,
             ask: false,
             retries: 3,
+            tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
         };
         let agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
         assert_eq!(agent.request()["prompt_cache_key"], "1700000000000-42");

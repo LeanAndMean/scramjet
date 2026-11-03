@@ -19,52 +19,98 @@ provisional unless an authority requires an exact method; user decisions, trust 
 consumer contracts, and required side effects remain controlling.
 "#;
 
-pub(super) fn agent(root: &Path, commands: &Commands, agents: &[subagent::Definition]) -> String {
+/// The agent's instructions, with Pi's list of its coding `tools` and the guidelines for them.
+pub(super) fn agent(
+    root: &Path,
+    tools: &[String],
+    commands: &Commands,
+    agents: &[subagent::Definition],
+) -> String {
     let catalog: String = [subagent::catalog(agents), commands.catalog()]
         .into_iter()
         .filter(|catalog| !catalog.is_empty())
         .map(|catalog| catalog + "\n\n")
         .collect();
+    let has = |tool: &str| tools.iter().any(|name| name == tool);
+    let mut listed: Vec<String> = super::tools::CODING_TOOLS
+        .into_iter()
+        .filter(|tool| has(tool))
+        .map(|tool| match tool {
+            "read" => "- read: Read file contents",
+            "bash" => "- bash: Execute bash commands (ls, grep, find, etc.)",
+            "edit" => {
+                "- edit: Make precise file edits with exact text replacement, including multiple \
+disjoint edits in one call"
+            }
+            "write" => "- write: Create or overwrite files",
+            "grep" => "- grep: Search file contents for patterns (respects .gitignore)",
+            "find" => "- find: Find files by glob pattern (respects .gitignore)",
+            _ => "- ls: List directory contents",
+        })
+        .map(str::to_owned)
+        .collect();
+    listed.extend([
+        format!("- {}: {}", status::NAME, status::SNIPPET),
+        format!("- {}: {}", question::NAME, question::SNIPPET),
+        format!("- {}: {}", subagent::NAME, subagent::SNIPPET),
+    ]);
+    let mut guidelines = Vec::new();
+    if has("bash") {
+        guidelines.push(match ["grep", "find", "ls"].iter().any(|tool| has(tool)) {
+            true => {
+                "- Prefer grep/find/ls tools over bash for file exploration (faster, respects \
+.gitignore)"
+            }
+            false => {
+                "- Use bash for file operations like ls, rg, find, and for git, builds and tests"
+            }
+        });
+    }
+    if has("read") {
+        guidelines.push("- Use read to examine files instead of cat or sed.");
+    }
+    if has("edit") {
+        guidelines.extend([
+            "- Use edit for precise changes (edits[].oldText must match exactly)",
+            "- When changing multiple separate locations in one file, use one edit call with \
+multiple entries in edits[] instead of multiple edit calls",
+            "- Each edits[].oldText is matched against the original file, not after earlier edits \
+are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
+            "- Keep edits[].oldText as small as possible while still being unique in the file. Do \
+not pad with large unchanged regions.",
+        ]);
+    }
+    if has("write") {
+        guidelines.push("- Use write only for new files or complete rewrites.");
+    }
+    if has("edit") || has("write") {
+        guidelines.push(
+            "- Prefer editing existing files. Keep changes focused on the task, and verify them \
+with relevant checks.",
+        );
+    }
+    guidelines.extend([
+        "- Be concise in your responses",
+        "- Show file paths clearly when working with files",
+    ]);
     let text = format!(
         "You are scramjet-rs, a coding agent. You help the user with software engineering tasks \
-in the project directory {root}, using tools to read, write and edit files and to run bash commands.
+in the project directory {root}, using the tools below.
 
 Available tools:
-- read: Read file contents
-- bash: Execute bash commands (ls, grep, find, etc.)
-- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call
-- write: Create or overwrite files
-- {status}: {status_snippet}
-- {question}: {snippet}
-- {subagent}: {subagent_snippet}
+{tools}
 
 Guidelines:
-- Use bash for file operations like ls, rg, find, and for git, builds and tests
-- Use read to examine files instead of cat or sed.
-- Use edit for precise changes (edits[].oldText must match exactly)
-- When changing multiple separate locations in one file, use one edit call with multiple entries in \
-edits[] instead of multiple edit calls
-- Each edits[].oldText is matched against the original file, not after earlier edits are applied. \
-Do not emit overlapping or nested edits. Merge nearby changes into one edit.
-- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with \
-large unchanged regions.
-- Use write only for new files or complete rewrites.
-- Prefer editing existing files. Keep changes focused on the task, and verify them with relevant checks.
-- Be concise in your responses
-- Show file paths clearly when working with files
+{guidelines}
 
 {COMMAND_FRAMING}
 {catalog}Current date: {date}
 Current working directory: {root}
 ",
         root = root.display(),
+        tools = listed.join("\n"),
+        guidelines = guidelines.join("\n"),
         date = today(),
-        status = status::NAME,
-        status_snippet = status::SNIPPET,
-        question = question::NAME,
-        snippet = question::SNIPPET,
-        subagent = subagent::NAME,
-        subagent_snippet = subagent::SNIPPET,
     );
     text + &project_context(root)
 }
@@ -173,4 +219,37 @@ fn today() -> String {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
     format!("{year:04}-{month:02}-{day:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tools_and_guidelines_listed_are_the_configured_ones() {
+        let root = Path::new("/nonexistent/scramjet-rs-instructions");
+        let commands = Commands::discover(None, &root.join(".scramjet"));
+        let tools = super::super::tools::DEFAULT_TOOLS.map(String::from);
+        let text = agent(root, &tools, &commands, &[]);
+        let listed = "Available tools:\n- read: Read file contents\n- bash: Execute bash commands \
+(ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including \
+multiple disjoint edits in one call\n- write: Create or overwrite files\n- report_scramjet_command_status:";
+        assert!(text.contains(listed), "{text}");
+        let guidelines = "Guidelines:\n- Use bash for file operations like ls, rg, find, and for \
+git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use edit for precise";
+        assert!(text.contains(guidelines), "{text}");
+        assert!(
+            text.contains("- Use write only for new files or complete rewrites.\n- Prefer editing")
+        );
+
+        let text = agent(root, &[], &commands, &[]);
+        assert!(text.contains("Available tools:\n- report_scramjet_command_status:"));
+        assert!(text.contains("Guidelines:\n- Be concise in your responses\n"));
+        let all = super::super::tools::CODING_TOOLS.map(String::from);
+        let text = agent(root, &all, &commands, &[]);
+        assert!(text.contains(
+            "Guidelines:\n- Prefer grep/find/ls tools over bash for file exploration (faster, \
+respects .gitignore)\n- Use read"
+        ));
+    }
 }

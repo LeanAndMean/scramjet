@@ -1138,6 +1138,7 @@ mod tests {
             max_output_tokens: None,
             ask: false,
             retries: 3,
+            tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
         };
         let mut resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
         assert_eq!(resumed.usage.context_tokens, Some(29_000));

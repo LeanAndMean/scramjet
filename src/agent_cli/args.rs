@@ -55,7 +55,8 @@ press Ctrl-C twice to quit.
 Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scramjet-rs/),
 with Scramjet's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary) and
-defaultThinkingLevel.";
+defaultThinkingLevel; and tools, the agent's coding tools among read, bash, edit, write (the
+default) and grep, find, ls.";
 
 /// What the command line asks for.
 pub(super) struct Options {

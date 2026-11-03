@@ -1011,7 +1011,7 @@ fn child_tools(
     agent: &Definition,
     sandbox: &Result<(), String>,
 ) -> (Vec<&'static str>, Vec<String>) {
-    let default = ["read", "bash", "edit", "write"].map(str::to_owned);
+    let default = tools::DEFAULT_TOOLS.map(str::to_owned);
     let listed = agent.tools.as_deref().unwrap_or(&default);
     let mut tools = Vec::new();
     let (mut writers, mut unconfined, mut missing) = (Vec::new(), Vec::new(), Vec::new());

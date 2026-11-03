@@ -24,7 +24,9 @@ pub use compaction::{AutoCompaction, Compaction};
 pub use question::Choice;
 pub use session::{Session, SessionInfo};
 pub use status::{Completed, Next, Routing, Step, record as next_step_record};
-pub use tools::{search_program, sequence_diff, shortened, terminal_line};
+pub use tools::{
+    CODING_TOOLS, DEFAULT_TOOLS, search_program, sequence_diff, shortened, terminal_line,
+};
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use ui::{AgentUi, Answer, Purpose, ToolDetail, show_items};
 
@@ -69,6 +71,8 @@ pub struct AgentConfig {
     pub ask: bool,
     /// Extra attempts for a model request that failed transiently (rate limit, overload, network).
     pub retries: u32,
+    /// The coding tools the model has, among `CODING_TOOLS`.
+    pub tools: Vec<String>,
 }
 
 pub enum SessionChoice {
@@ -202,7 +206,7 @@ impl Agent {
         let agents =
             subagent::discover(&sources, &config.root, &config.root, subagent::Scope::User).agents;
         let mut agent = Self {
-            instructions: instructions::agent(&config.root, &commands, &agents),
+            instructions: instructions::agent(&config.root, &config.tools, &commands, &agents),
             agents_directory,
             sets_root,
             commands,
