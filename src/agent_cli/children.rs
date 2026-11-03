@@ -42,8 +42,8 @@ pub(super) fn rows(children: &Children, look: &Look) -> Vec<String> {
     rows.rows
 }
 
-/// One line per child, for the inline output's lines above the status line: how it is going and
-/// what it did last.
+/// One line per child, for the lines above the status line of printed output: how it is going
+/// and what it did last.
 pub(super) fn activity(children: &Children, width: usize) -> Vec<String> {
     let lines = children.runs.iter().map(|run| {
         let last = match run.items.last() {

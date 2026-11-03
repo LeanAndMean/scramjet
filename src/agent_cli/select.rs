@@ -1,12 +1,12 @@
-//! A list to choose from with the arrow keys, drawn under the prompt, as Scramjet's selectors
-//! for `/resume`, `/fork` and `/model` are; those for `/resume` and `/model` search as you type.
+//! A list to choose from with the arrow keys, drawn in the prompt's place on the full screen, as
+//! Scramjet's selectors for `/resume`, `/fork` and `/model` are; those for `/resume` and `/model`
+//! search as you type.
 
-use super::editor::{Key, RESIZE_CHECK, RawMode, Stdin, read_key, terminal_size};
+use super::editor::{Key, terminal_size};
 use super::fuzzy::{self, Haystack};
 use super::style;
 use super::text;
 use scramjet_rs::agent::Choice;
-use std::io::{self, Write};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Rows shown at once, as in Scramjet's selectors other than its tree.
@@ -18,61 +18,12 @@ const QUESTION_VISIBLE: usize = 8;
 const OPTION_ROWS: usize = 4;
 const DESCRIPTION_INDENT: &str = "     ";
 
-/// Shows `title` over `count` rows, at most `visible` at once, `row(index, width)` giving each
-/// one's text in at most `width` columns, and returns the index chosen with Enter, starting at
-/// `initial`; `None` when cancelled with Escape or Ctrl-C. The `current` row is marked. The rows
-/// are erased when it returns.
-pub(super) fn select(
-    title: &str,
-    visible: usize,
-    count: usize,
-    initial: usize,
-    current: Option<usize>,
-    row: impl Fn(usize, usize) -> String,
-) -> io::Result<Option<usize>> {
-    let list = List::new(count, initial, visible);
-    choose(list, |list, size| lines(title, list, current, size, &row))
-}
-
-/// As `select`, with a line to type a query on, as Scramjet's session and model selectors have:
-/// the query shows only the rows whose `texts` match it, best first (see `fuzzy`), and `none`
-/// when no row does.
-pub(super) fn search(
-    title: &str,
-    visible: usize,
-    texts: &[String],
-    initial: usize,
-    current: Option<usize>,
-    none: &str,
-    row: impl Fn(usize, usize) -> String,
-) -> io::Result<Option<usize>> {
-    let list = List::searching(texts, initial, visible, none);
-    choose(list, |list, size| lines(title, list, current, size, &row))
-}
-
-/// As Scramjet's list for a question the model asks: each option's label with its description
-/// under it, at most `QUESTION_VISIBLE` options at once, framed with `title` and the keys to use.
-pub(super) fn question(
-    title: &str,
-    options: &[Choice],
-    recommended: Option<usize>,
-) -> io::Result<Option<usize>> {
-    let list = List::new(
-        options.len(),
-        recommended.unwrap_or(0),
-        question_visible(options),
-    );
-    choose(list, |list, size| {
-        question_lines(title, options, recommended, list, size)
-    })
-}
-
 fn question_visible(options: &[Choice]) -> usize {
     options.len().min(QUESTION_VISIBLE)
 }
 
-/// A list as `select`, `search` and `question` show it, for a screen that draws it and passes
-/// it the keys.
+/// A list for a screen that draws it and passes it the keys; it returns the row chosen with
+/// Enter, or nothing when cancelled with Escape or Ctrl-C.
 pub(super) struct Picker {
     list: List,
     shape: Shape,
@@ -93,7 +44,8 @@ enum Shape {
 }
 
 impl Picker {
-    /// As `select`.
+    /// `title` over `count` rows, at most `visible` at once, `row(index, width)` giving each
+    /// one's text in at most `width` columns, starting at `initial`; the `current` row is marked.
     pub(super) fn select(
         title: &str,
         visible: usize,
@@ -106,7 +58,9 @@ impl Picker {
         Self::rows(title, list, current, row)
     }
 
-    /// As `search`.
+    /// As `select`, with a line to type a query on, as Scramjet's session and model selectors
+    /// have: the query shows only the rows whose `texts` match it, best first (see `fuzzy`), and
+    /// `none` when no row does.
     pub(super) fn search(
         title: &str,
         visible: usize,
@@ -120,7 +74,9 @@ impl Picker {
         Self::rows(title, list, current, row)
     }
 
-    /// As `question`.
+    /// As Scramjet's list for a question the model asks: each option's label with its
+    /// description under it, at most `QUESTION_VISIBLE` options at once, framed with `title` and
+    /// the keys to use.
     pub(super) fn question(title: &str, options: &[Choice], recommended: Option<usize>) -> Self {
         Self {
             list: List::new(
@@ -157,7 +113,7 @@ impl Picker {
         }
     }
 
-    /// Whether there is nothing to choose from, as `select` returns `None` at once then.
+    /// Whether there is nothing to choose from: the screen then returns nothing at once.
     pub(super) fn is_empty(&self) -> bool {
         self.list.rows.is_empty()
     }
@@ -184,83 +140,6 @@ impl Picker {
                 recommended,
             } => question_lines(title, options, *recommended, &self.list, size),
         }
-    }
-}
-
-/// `lines(list, (width, height))` draws the list for the terminal's size.
-fn choose(
-    mut list: List,
-    lines: impl Fn(&List, (usize, usize)) -> Vec<String>,
-) -> io::Result<Option<usize>> {
-    if list.rows.is_empty() {
-        return Ok(None);
-    }
-    let raw = RawMode::enter()?;
-    let _cursor = HiddenCursor::new();
-    let mut source = Stdin::default();
-    let mut drawn = 0;
-    let mut width = 0;
-    let mut redraw = true;
-    loop {
-        if redraw && !source.pending() {
-            let size = terminal_size();
-            width = size.0;
-            let lines = lines(&list, size);
-            let mut stderr = io::stderr().lock();
-            write!(stderr, "{}{}", erase(drawn), lines.join("\r\n"))?;
-            stderr.flush()?;
-            drawn = lines.len();
-            redraw = false;
-        }
-        let key = match read_key(&mut source, Some(RESIZE_CHECK)) {
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Key::Interrupt,
-            result => result?,
-        };
-        match key {
-            // Stopped from outside: the shell wrote below the list.
-            Key::Idle if super::job::continued() => (drawn, redraw) = (0, true),
-            Key::Idle => redraw |= terminal_size().0 != width,
-            Key::Suspend => {
-                eprint!("{}\x1b[?25h", erase(drawn));
-                raw.suspend();
-                super::job::suspend();
-                super::job::continued();
-                raw.resume()?;
-                eprint!("\x1b[?25l");
-                (drawn, redraw) = (0, true);
-            }
-            key => match list.key(&key) {
-                Some(chosen) => {
-                    eprint!("{}", erase(drawn));
-                    return Ok(chosen);
-                }
-                None => redraw = true,
-            },
-        }
-    }
-}
-
-/// Moves to the first of the `drawn` rows and clears from there.
-fn erase(drawn: usize) -> String {
-    match drawn {
-        0 | 1 => "\r\x1b[J".into(),
-        rows => format!("\x1b[{}A\r\x1b[J", rows - 1),
-    }
-}
-
-struct HiddenCursor;
-
-impl HiddenCursor {
-    fn new() -> Self {
-        eprint!("\x1b[?25l");
-        Self
-    }
-}
-
-impl Drop for HiddenCursor {
-    fn drop(&mut self) {
-        eprint!("\x1b[?25h");
-        let _ = io::stderr().flush();
     }
 }
 

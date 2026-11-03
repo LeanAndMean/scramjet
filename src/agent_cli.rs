@@ -18,8 +18,6 @@ mod style;
 mod terminal;
 mod text;
 mod tree;
-mod type_ahead;
-mod view;
 
 use args::{Options, USAGE};
 use rustix::termios::{self, OptionalActions, QueueSelector};
@@ -41,7 +39,6 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     };
     let prompt = options.prompt.take();
-    let inline = options.inline;
     let mut settings = Settings::load();
     let mut agent = start(options, &settings)?;
     let cancel = Arc::new(AtomicBool::new(false));
@@ -50,7 +47,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let mut ui = Terminal::new(hide_thinking.clone(), true);
     let Some(prompt) = prompt else {
         let interactive =
-            interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings, inline)?;
+            interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings)?;
         return interactive.run();
     };
     for warning in std::mem::take(&mut settings.warnings) {
@@ -126,8 +123,7 @@ fn handle_signals(cancel: &Arc<AtomicBool>, hide_thinking: &Arc<AtomicBool>) -> 
                 }
                 signal_hook::low_level::exit(130);
             }
-            // A cancel drops the text typed during the turn, read or not.
-            type_ahead::DISCARD.store(true, Ordering::Relaxed);
+            // Keys typed before it answer nothing and are not left for the shell.
             let _ = termios::tcflush(BorrowedFd::borrow_raw(0), QueueSelector::IFlush);
         })
     }

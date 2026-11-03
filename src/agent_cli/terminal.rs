@@ -1,7 +1,8 @@
-//! The inline renderer: the agent's output printed to the terminal as it streams, with a
-//! status line under it, and the terminal modes of a turn.
+//! The agent's output as text: printed as it streams for `-p` and piped input, with a status
+//! line under it on a terminal, or captured for the full screen to show; and the terminal modes
+//! of a `-p` turn.
 use super::text::{FROM, Wrap, call_line, clip, printable, visible};
-use super::{children, diff, editor, job, markdown, select, style, type_ahead, view};
+use super::{children, diff, editor, job, markdown, style};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -12,7 +13,7 @@ use scramjet_rs::agent::{
     StreamProgress, ToolDetail,
 };
 use std::{
-    io::{BufRead, IsTerminal},
+    io::{BufRead, IsTerminal, Write},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -125,7 +126,7 @@ impl Status {
         if self.drawn.as_deref() == Some(&block) {
             return;
         }
-        view::print(false, &format!("{}{block}", self.erase()));
+        print(false, &format!("{}{block}", self.erase()));
         self.rows_above = self.output.len();
         self.drawn = Some(block);
     }
@@ -140,7 +141,7 @@ impl Status {
     fn clear(&mut self) -> bool {
         let drawn = self.drawn.take().is_some();
         if drawn && !job::continued() {
-            view::print(false, &self.erase());
+            print(false, &self.erase());
         }
         self.activity = None;
         self.countdown = None;
@@ -202,14 +203,11 @@ pub(super) struct Terminal {
     /// The reasoning streamed in the current block, and whether only its marker is shown.
     reasoning: String,
     reasoning_hidden: bool,
-    /// Reads the keys typed during a turn on a terminal.
-    pub(super) type_ahead: Option<type_ahead::TypeAhead>,
-    /// Output goes here instead of the terminal, styled for this width, with every tool result
-    /// in full, for the conversation view.
+    /// Output goes here instead of the terminal, styled for this width, for the full screen.
     capture: Option<(String, usize)>,
-    /// Cut previews say that Ctrl+O shows them whole, as it does at the interactive prompt.
-    pub(super) expandable: bool,
-    /// Every tool result is shown whole, as the conversation view shows them.
+    /// Cut previews say that Ctrl+O shows them whole, as it does on the full screen.
+    expandable: bool,
+    /// Every tool result is shown whole, as Ctrl+O shows them on the full screen.
     full: bool,
     /// The output marks gutters and wrapped lines for the full screen's copy (`text::FROM`).
     marked: bool,
@@ -285,14 +283,15 @@ impl Terminal {
         self.err("\n");
     }
     /// Renders into a buffer `width` columns wide, styled, with every tool result in full.
-    pub(super) fn capture(width: usize, hide_thinking: Arc<AtomicBool>) -> Self {
+    fn capture(width: usize, hide_thinking: Arc<AtomicBool>) -> Self {
         let mut terminal = Self::new(hide_thinking, false);
         terminal.color = true;
         terminal.capture = Some((String::new(), width));
         terminal.full = true;
         terminal
     }
-    /// As `capture`, with tool results cut as the inline output shows them unless `full`.
+    /// As `capture`, marked for the full screen's copy, with tool results cut as `-p` prints
+    /// them unless `full`.
     pub(super) fn capture_shown(width: usize, hide_thinking: Arc<AtomicBool>, full: bool) -> Self {
         let mut terminal = Self::capture(width, hide_thinking);
         terminal.full = full;
@@ -312,14 +311,14 @@ impl Terminal {
     fn err(&mut self, text: &str) {
         match &mut self.capture {
             Some((captured, _)) => captured.push_str(text),
-            None => view::print(false, text),
+            None => print(false, text),
         }
     }
     /// Writes to stdout, where replies go, or the capture buffer.
     fn out(&mut self, text: &str) {
         match &mut self.capture {
             Some((captured, _)) => captured.push_str(text),
-            None => view::print(true, text),
+            None => print(true, text),
         }
     }
     fn width(&self) -> usize {
@@ -380,7 +379,6 @@ impl Terminal {
             hide_thinking,
             reasoning: String::new(),
             reasoning_hidden: false,
-            type_ahead: None,
             capture: None,
             expandable: false,
             full: false,
@@ -760,7 +758,7 @@ impl AgentUi for Terminal {
         self.err(&block);
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
-        self.without_type_ahead(|ui| ui.ask(question, cancel))
+        self.ask(question, cancel)
     }
     /// A block of its own, ending with a blank line as a tool block does.
     fn notice(&mut self, text: &str) {
@@ -796,19 +794,25 @@ impl AgentUi for Terminal {
     ) -> Option<usize> {
         self.clear();
         let stdin = std::io::stdin();
-        if !stdin.is_terminal() {
-            return numbered_choice(title, options, recommended);
-        }
-        self.without_type_ahead(|_| {
+        // On a terminal, keys typed before it answer nothing, and the answer is an echoed line.
+        let terminal = stdin.is_terminal();
+        if terminal {
             let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
-            select::question(title, options, recommended).unwrap_or(None)
-        })
+        }
+        let _answer = terminal.then(InputMode::answer);
+        numbered_choice(title, options, recommended, terminal)
     }
 }
 
-/// A question's options for piped input: numbered, answered by a line with a number, or an empty
-/// one for the recommended (else the first) option; anything else cancels.
-fn numbered_choice(title: &str, options: &[Choice], recommended: Option<usize>) -> Option<usize> {
+/// A question's options for `-p` and piped input: numbered, answered by a line with a number, or
+/// an empty one for the recommended (else the first) option; anything else cancels. `echoed`:
+/// the line typed shows, its newline included.
+fn numbered_choice(
+    title: &str,
+    options: &[Choice],
+    recommended: Option<usize>,
+    echoed: bool,
+) -> Option<usize> {
     let initial = recommended.unwrap_or(0);
     let mut text = format!("{title}\n");
     for (index, option) in options.iter().enumerate() {
@@ -828,8 +832,9 @@ fn numbered_choice(title: &str, options: &[Choice], recommended: Option<usize>) 
     );
     let mut typed = String::new();
     let read = std::io::stdin().lock().read_line(&mut typed).unwrap_or(0);
-    // Piped input is not echoed.
-    eprintln!();
+    if !echoed || read == 0 {
+        eprintln!();
+    }
     if read == 0 {
         return None;
     }
@@ -843,19 +848,18 @@ fn numbered_choice(title: &str, options: &[Choice], recommended: Option<usize>) 
     }
 }
 
+/// Writes to stdout, where replies go, or stderr.
+fn print(stdout: bool, text: &str) {
+    let _ = match stdout {
+        true => {
+            let mut out = std::io::stdout().lock();
+            out.write_all(text.as_bytes()).and_then(|()| out.flush())
+        }
+        false => std::io::stderr().lock().write_all(text.as_bytes()),
+    };
+}
+
 impl Terminal {
-    /// Runs `question` with the keys typed during the turn so far kept for the next prompt, so
-    /// that none of them answers it.
-    fn without_type_ahead<T>(&mut self, question: impl FnOnce(&mut Self) -> T) -> T {
-        let reading = self
-            .type_ahead
-            .take()
-            .map(|typed| (typed.cancel(), typed.expand(), typed.finish()));
-        let answer = question(self);
-        self.type_ahead = reading
-            .map(|(cancel, expand, typed)| type_ahead::TypeAhead::resume(cancel, expand, typed));
-        answer
-    }
     /// A message of the session's own, wrapped, as a block ending with a blank line.
     pub(super) fn said(&mut self, text: &str) {
         self.clear();

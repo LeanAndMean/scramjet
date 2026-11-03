@@ -4,7 +4,7 @@ use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model ID] \
 [--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | --session FILE] [--ask]
-[--inline] [-p PROMPT]
+[-p PROMPT]
 
 Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
 the Messages API for Claude models (those whose Proxy model card lists only Messages).
@@ -19,8 +19,6 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   --ask                  ask before each bash command and each write or edit outside the
                          project (answer `a` to stop asking until exit); by default tool
                          calls run without asking, as in Scramjet. Bash is not sandboxed.
-  --inline               print the session inline, as before the full screen (see below;
-                         to be removed)
   -p PROMPT              run one prompt and exit (`-p -` reads it from stdin)
 The session fills the terminal's alternate screen: the conversation above a status line and the
 prompt. Page Up/Down and the mouse wheel scroll the conversation; Escape goes back to its end.
@@ -62,11 +60,7 @@ Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scr
 with Scramjet's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary) and
 defaultThinkingLevel; and tools, the agent's coding tools among read, bash, edit, write (the
-default) and grep, find, ls.
-With --inline the session is printed inline instead, as before the full screen: Ctrl+O then
-shows the conversation in the alternate screen (Escape, q or Ctrl+O closes it), and text typed
-while a turn runs is kept for the next prompt without being shown; Escape cancels the turn and
-keeps that text, Ctrl-C cancels it and discards that text. Alt+Enter starts a new line there.";
+default) and grep, find, ls.";
 
 /// What the command line asks for.
 pub(super) struct Options {
@@ -77,7 +71,6 @@ pub(super) struct Options {
     pub(super) max_output_tokens: Option<u64>,
     pub(super) choice: SessionChoice,
     pub(super) ask: bool,
-    pub(super) inline: bool,
     pub(super) retries: u32,
     /// `-p`: the one prompt to run, `-` to read it from stdin.
     pub(super) prompt: Option<String>,
@@ -96,7 +89,6 @@ impl Options {
             max_output_tokens: None,
             choice: SessionChoice::New,
             ask: false,
-            inline: false,
             retries: 3,
             prompt: None,
         };
@@ -130,7 +122,6 @@ impl Options {
                 Some("--continue") => options.choice = SessionChoice::Continue,
                 Some("--session") => options.choice = SessionChoice::Open(PathBuf::from(value()?)),
                 Some("--ask") => options.ask = true,
-                Some("--inline") => options.inline = true,
                 Some("-p" | "--print") => options.prompt = Some(value()?),
                 Some("-h" | "--help") => return Ok(None),
                 _ => return Err(format!("unknown argument {argument:?}\n\n{USAGE}")),

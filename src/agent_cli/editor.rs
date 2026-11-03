@@ -1,14 +1,10 @@
-//! Prompt editor for the interactive agent: raw-mode editing, bracketed paste and history.
+//! The prompt editor of the full screen: keys read from the terminal, editing, completion and
+//! history.
 
 use super::file_search;
 use super::text::{self, FROM, JOINED, SPACE};
-use rustix::{
-    event::{PollFd, PollFlags, Timespec, poll},
-    io::Errno,
-    termios::{self, OptionalActions, Termios},
-};
+use rustix::termios::{self, OptionalActions, Termios};
 use std::{
-    fmt::Write as _,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     os::unix::fs::OpenOptionsExt,
@@ -38,7 +34,8 @@ pub(super) enum Key {
     Paste(String),
     Enter,
     NewLine,
-    /// A new line in the inline editor; the full screen queues a follow-up with it.
+    /// A new line in a dialog's text; at the prompt the full screen sends with it, or queues a
+    /// follow-up during a turn.
     AltEnter,
     Backspace,
     Delete,
@@ -48,7 +45,7 @@ pub(super) enum Key {
     WordRight,
     Up,
     Down,
-    /// Up in the inline editor; the full screen puts queued messages back in the editor.
+    /// Puts the messages queued during a turn back in the editor; Up in a dialog's text.
     AltUp,
     PageUp,
     PageDown,
@@ -556,72 +553,6 @@ impl Drop for RawMode {
     }
 }
 
-#[derive(Default)]
-pub(super) struct Stdin {
-    buffer: Vec<u8>,
-    start: usize,
-}
-
-impl Stdin {
-    /// Input that reads `typed` before the terminal.
-    pub(super) fn starting_with(typed: Vec<u8>) -> Self {
-        Self {
-            buffer: typed,
-            start: 0,
-        }
-    }
-    pub(super) fn pending(&self) -> bool {
-        self.start < self.buffer.len()
-    }
-    /// The bytes read from the terminal but not yet taken.
-    pub(super) fn rest(mut self) -> Vec<u8> {
-        self.buffer.split_off(self.start)
-    }
-}
-
-impl ByteSource for Stdin {
-    fn byte(&mut self, wait: Option<Duration>) -> io::Result<Option<u8>> {
-        if self.start == self.buffer.len() {
-            let stdin = io::stdin();
-            let timeout = wait.map(|wait| Timespec {
-                tv_sec: wait.as_secs() as i64,
-                tv_nsec: i64::from(wait.subsec_nanos()),
-            });
-            let mut fds = [PollFd::new(&stdin, PollFlags::IN)];
-            match poll(&mut fds, timeout.as_ref()) {
-                Ok(0) => return Ok(None),
-                Ok(_) => {}
-                Err(Errno::INTR) => return Ok(None),
-                Err(error) => return Err(error.into()),
-            }
-            self.buffer.resize(4096, 0);
-            let read = loop {
-                match rustix::io::read(&stdin, &mut self.buffer) {
-                    Err(Errno::INTR) => continue,
-                    result => break result?,
-                }
-            };
-            if read == 0 {
-                return Err(io::ErrorKind::UnexpectedEof.into());
-            }
-            self.buffer.truncate(read);
-            self.start = 0;
-        }
-        self.start += 1;
-        Ok(Some(self.buffer[self.start - 1]))
-    }
-}
-
-/// The editor's place on screen between redraws.
-#[derive(Default)]
-struct Screen {
-    /// Row of the terminal cursor, counted from the first drawn row.
-    cursor_row: usize,
-    /// First layout row drawn when the text is taller than the terminal.
-    top: usize,
-    width: usize,
-}
-
 /// The rows a prompt takes on screen as the editor shows it, wrapped to `width`, `marked` for
 /// a copy (`text::FROM`) if asked.
 pub(super) fn prompt_rows(text: &str, width: usize, marked: bool) -> Vec<String> {
@@ -635,95 +566,6 @@ pub(super) fn terminal_size() -> (usize, usize) {
         .map_or((80, 24), |size| {
             (usize::from(size.ws_col), usize::from(size.ws_row))
         })
-}
-
-impl Screen {
-    /// Clears the drawn rows and leaves the cursor where the first one starts.
-    fn erase(&mut self) -> io::Result<()> {
-        let mut stderr = io::stderr().lock();
-        if self.cursor_row > 0 {
-            write!(stderr, "\x1b[{}A", self.cursor_row)?;
-        }
-        stderr.write_all(b"\r\x1b[J")?;
-        self.cursor_row = 0;
-        self.top = 0;
-        stderr.flush()
-    }
-
-    /// Redraws the editor, with `list` (a completion list's rows) under it. `done` draws every
-    /// row and leaves the cursor below them.
-    fn draw(
-        &mut self,
-        buffer: &Buffer,
-        hint: Option<&str>,
-        list: &[String],
-        done: bool,
-    ) -> io::Result<()> {
-        let (width, height) = terminal_size();
-        self.width = width;
-        let layout = Layout::new(&buffer.text, width);
-        let cursor = layout.at(buffer.cursor);
-        let total = layout.rows.len();
-        let visible = if done {
-            total
-        } else {
-            height.saturating_sub(2 + list.len()).max(1).min(total)
-        };
-        self.top = self
-            .top
-            .min(cursor.row)
-            .max((cursor.row + 1).saturating_sub(visible))
-            .min(total - visible);
-        let mut out = String::new();
-        if self.cursor_row > 0 {
-            write!(out, "\x1b[{}A", self.cursor_row).unwrap();
-        }
-        out.push_str("\r\x1b[J");
-        out.push_str(&layout.rows[self.top..self.top + visible].join("\r\n"));
-        if let Some(hint) = hint {
-            write!(
-                out,
-                "\r\n{}{hint}{}",
-                super::style::MUTED,
-                super::style::RESET
-            )
-            .unwrap();
-        }
-        for row in list {
-            write!(out, "\r\n{row}").unwrap();
-        }
-        if done {
-            out.push_str("\r\n");
-            self.cursor_row = 0;
-            self.top = 0;
-        } else {
-            let row = cursor.row - self.top;
-            let last = visible - 1 + usize::from(hint.is_some()) + list.len();
-            if last > row {
-                write!(out, "\x1b[{}A", last - row).unwrap();
-            }
-            out.push('\r');
-            if cursor.column > 0 {
-                write!(out, "\x1b[{}C", cursor.column).unwrap();
-            }
-            self.cursor_row = row;
-        }
-        let mut stderr = io::stderr().lock();
-        stderr.write_all(out.as_bytes())?;
-        stderr.flush()
-    }
-}
-
-/// What the editor read.
-#[derive(Debug, PartialEq)]
-pub enum Input {
-    Prompt(String),
-    /// Escape twice on an empty prompt, which opens `/tree` or `/fork` as in Scramjet. The prompt
-    /// is erased.
-    DoubleEscape,
-    /// Ctrl+O, to show the conversation in full. The prompt is erased, and its text is where the
-    /// next prompt starts; the keys typed after Ctrl+O come with it.
-    Conversation(Vec<u8>),
 }
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
@@ -741,9 +583,6 @@ const SLASH_COMMANDS: [(&str, &str); 9] = [
 
 /// Rows of the completion list, as Scramjet's autocomplete shows at most.
 const COMPLETION_ROWS: usize = 5;
-/// How often the editor looks for the entries an `@` search found, as often as Scramjet waits
-/// before starting one.
-const SEARCH_CHECK: Duration = Duration::from_millis(20);
 
 pub(super) struct Suggestion {
     /// What replaces the completed text.
@@ -989,15 +828,10 @@ pub struct Editor {
     root: PathBuf,
     /// The commands listed after the built-in ones: names and descriptions.
     commands: Vec<(String, String)>,
-    /// Whether Escape twice on an empty prompt returns `Input::DoubleEscape`.
+    /// Whether Escape twice on an empty prompt returns `Action::DoubleEscape`.
     double_escape: bool,
-    /// Reads one text for a question, as Scramjet's dialog editor: Escape or Ctrl-C cancels, and
-    /// the text is erased when it returns.
+    /// Edits one text for a question, as Scramjet's dialog editor: Escape or Ctrl-C cancels.
     dialog: bool,
-    /// Keys typed during the last turn, read before the terminal.
-    typed: Vec<u8>,
-    /// The text the next prompt starts with.
-    text: String,
 }
 
 impl Editor {
@@ -1016,8 +850,6 @@ impl Editor {
             commands,
             double_escape,
             dialog: false,
-            typed: Vec::new(),
-            text: String::new(),
         }
     }
 
@@ -1029,120 +861,11 @@ impl Editor {
         }
     }
 
-    pub fn type_ahead(&mut self, typed: Vec<u8>) {
-        self.typed = typed;
-    }
-
-    /// Starts the next prompt with `text`, the cursor at its end.
-    pub fn set_text(&mut self, text: String) {
-        self.text = text;
-    }
-
     /// Makes `prompt` the most recent entry that Up recalls.
     pub fn remember(&mut self, prompt: &str) {
         if self.history.last().is_none_or(|last| last != prompt) {
             self.history.push(prompt.to_owned());
         }
-    }
-
-    /// Reads one prompt. `None` means the user asked to exit, or cancelled a dialog. Shift+Tab
-    /// calls `cycle_effort` (never in a dialog) and shows the note it returns, as Ctrl+T shows
-    /// its own.
-    pub fn read(&mut self, cycle_effort: &mut dyn FnMut() -> String) -> io::Result<Option<Input>> {
-        let raw = RawMode::enter()?;
-        let mut source = Stdin::starting_with(std::mem::take(&mut self.typed));
-        let mut screen = Screen::default();
-        let text = std::mem::take(&mut self.text);
-        let mut draft = self.draft(text);
-        let mut dirty = false;
-        screen.draw(&draft.buffer, None, &[], false)?;
-        loop {
-            let wait = if draft.searching() {
-                SEARCH_CHECK
-            } else {
-                RESIZE_CHECK
-            };
-            let key = match read_key(&mut source, Some(wait)) {
-                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Key::EndOfInput,
-                result => result?,
-            };
-            let changed = match key {
-                // Stopped by a SIGTSTP from outside: the shell wrote below the prompt.
-                Key::Idle if super::job::continued() => {
-                    screen = Screen::default();
-                    true
-                }
-                Key::Idle => terminal_size().0 != screen.width,
-                key => match self.key(&mut draft, key, source.pending()) {
-                    Action::Edited(changed) => changed,
-                    Action::Submit(text) => {
-                        match self.dialog {
-                            true => screen.erase()?,
-                            false => screen.draw(&draft.buffer, None, &[], true)?,
-                        }
-                        return Ok(Some(Input::Prompt(text)));
-                    }
-                    Action::Exit => {
-                        match self.dialog {
-                            true => screen.erase()?,
-                            false => screen.draw(&draft.buffer, None, &[], true)?,
-                        }
-                        return Ok(None);
-                    }
-                    Action::DoubleEscape => {
-                        screen.erase()?;
-                        self.text = draft.buffer.text;
-                        return Ok(Some(Input::DoubleEscape));
-                    }
-                    Action::Conversation => {
-                        screen.erase()?;
-                        self.text = draft.buffer.text;
-                        return Ok(Some(Input::Conversation(source.rest())));
-                    }
-                    Action::CycleEffort => {
-                        draft.note = Some(cycle_effort());
-                        true
-                    }
-                    Action::Suspend => {
-                        screen.erase()?;
-                        raw.suspend();
-                        super::job::suspend();
-                        // Drawn again below, not once more at the next idle check.
-                        super::job::continued();
-                        raw.resume()?;
-                        true
-                    }
-                    Action::External => {
-                        if let Some(command) = editor_command() {
-                            // A full-screen editor gives the screen back as it was, so the
-                            // prompt is drawn again in its place.
-                            screen.erase()?;
-                            raw.suspend();
-                            let edited = run_editor(&command, &draft.buffer.text);
-                            raw.resume()?;
-                            draft.edited(edited);
-                        } else {
-                            draft.note = Some(NO_EDITOR.to_owned());
-                        }
-                        true
-                    }
-                },
-            };
-            dirty |= changed | self.poll(&mut draft);
-            if dirty && !source.pending() {
-                let rows = draft.completion_rows(terminal_size().0);
-                screen.draw(&draft.buffer, draft.hint(), &rows, false)?;
-                dirty = false;
-            }
-        }
-    }
-
-    /// Reads a dialog's text: `None` when cancelled.
-    pub(super) fn read_dialog(mut self) -> io::Result<Option<String>> {
-        Ok(match self.read(&mut String::new)? {
-            Some(Input::Prompt(text)) => Some(text),
-            _ => None,
-        })
     }
 
     /// A draft for a new prompt that starts with `text`, the cursor at its end.
@@ -1222,7 +945,6 @@ impl Editor {
                 false
             }
             Key::BackTab if !self.dialog => return Action::CycleEffort,
-            Key::Expand if !self.dialog => return Action::Conversation,
             Key::Ignored
             | Key::Mouse(_)
             | Key::BackTab
@@ -1399,10 +1121,8 @@ pub(super) enum Action {
     Submit(String),
     /// Ctrl-C twice or Ctrl-D on an empty prompt, or a dialog cancelled.
     Exit,
-    /// Escape twice on an empty prompt (see `Input::DoubleEscape`).
+    /// Escape twice on an empty prompt, which opens `/tree` or `/fork` as in Scramjet.
     DoubleEscape,
-    /// Ctrl+O.
-    Conversation,
     /// Shift+Tab.
     CycleEffort,
     /// Ctrl-Z.

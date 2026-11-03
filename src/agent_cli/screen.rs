@@ -658,7 +658,7 @@ impl Transcript {
     }
 }
 
-/// The lines of `events` as the inline output shows them, rendered at the look's width.
+/// The lines of `events` as `Terminal` renders them at the look's width.
 fn render(events: &[Event], (width, _, whole): Look, hide_thinking: Arc<AtomicBool>) -> Vec<Line> {
     let mut ui = Terminal::capture_shown(width, hide_thinking, whole);
     for event in events {
@@ -1584,7 +1584,7 @@ impl App {
             key => key,
         };
         match self.editor.key(&mut self.draft, key, pending) {
-            Action::Edited(_) | Action::Conversation => {}
+            Action::Edited(_) => {}
             // The draft holds the text sent.
             Action::Submit(_) if running => self.enqueue(false),
             Action::Submit(text) if self.ready => {

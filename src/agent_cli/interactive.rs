@@ -4,8 +4,8 @@ use super::record::Event;
 use super::screen::{self, Handle};
 use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
-use super::terminal::{InputMode, Terminal, usage_line};
-use super::{editor, record, select, style, type_ahead, view};
+use super::terminal::{Terminal, usage_line};
+use super::{editor, select, style};
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Choice, Command, Completed, Next, next_step_record,
 };
@@ -19,12 +19,10 @@ use std::{
 
 pub(super) struct Interactive {
     pub(super) agent: Agent,
+    /// Prints what the session shows without the full screen.
     pub(super) ui: Terminal,
-    /// The inline line editor (`--inline`), when stdin and stderr are terminals. Without a
-    /// terminal, prompts are read as lines and lists are printed numbered.
-    pub(super) editor: Option<editor::Editor>,
-    /// The full screen, when stdin and stderr are terminals but for `--inline`: it then shows
-    /// everything and edits the prompts.
+    /// The full screen, when stdin and stderr are terminals: it then shows everything and edits
+    /// the prompts. Without it, prompts are read as lines and lists are printed numbered.
     pub(super) screen: Option<Handle>,
     /// Whether what was shown last ends with a blank line, so the next prompt needs none.
     pub(super) spaced: bool,
@@ -58,40 +56,35 @@ enum Read {
 impl Interactive {
     pub(super) fn new(
         agent: Agent,
-        mut ui: Terminal,
+        ui: Terminal,
         cancel: Arc<AtomicBool>,
         hide_thinking: Arc<AtomicBool>,
         settings: Settings,
-        inline: bool,
     ) -> Result<Self, String> {
-        let mut editor =
-            (std::io::stdin().is_terminal() && std::io::stderr().is_terminal()).then(|| {
-                editor::Editor::new(
+        let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+        let screen = match terminal {
+            true => {
+                let editor = editor::Editor::new(
                     agent.prompts().to_vec(),
                     hide_thinking.clone(),
                     agent.root().to_path_buf(),
                     agent.commands().list().iter().map(command_entry).collect(),
                     settings.double_escape != DoubleEscape::Nothing,
-                )
-            });
-        let screen = match editor.take_if(|_| !inline) {
-            Some(editor) => Some(
-                Handle::start(
+                );
+                let started = Handle::start(
                     editor,
                     hide_thinking.clone(),
                     cancel.clone(),
                     (settings.steering_mode, settings.follow_up_mode),
                     agent.root().to_path_buf(),
-                )
-                .map_err(|error| format!("cannot show the full screen: {error}"))?,
-            ),
-            None => None,
+                );
+                Some(started.map_err(|error| format!("cannot show the full screen: {error}"))?)
+            }
+            false => None,
         };
-        ui.expandable = editor.is_some();
         Ok(Self {
             agent,
             ui,
-            editor,
             screen,
             spaced: false,
             cancel,
@@ -138,13 +131,13 @@ impl Interactive {
         let mut queued: Option<(String, Start)> = None;
         loop {
             self.save_hide_thinking();
-            self.typed_during_turn(false)?;
+            self.typed_during_turn(false);
             let (dispatched, start) = queued.take().unzip();
-            let (prompt, escaped) = match self.read(dispatched)? {
-                Read::Prompt(prompt) => (prompt, false),
+            let prompt = match self.read(dispatched)? {
+                Read::Prompt(prompt) => prompt,
                 Read::DoubleEscape => match self.settings.double_escape {
-                    DoubleEscape::Fork => ("/fork".to_owned(), true),
-                    DoubleEscape::Tree | DoubleEscape::Nothing => ("/tree".to_owned(), true),
+                    DoubleEscape::Fork => "/fork".to_owned(),
+                    DoubleEscape::Tree | DoubleEscape::Nothing => "/tree".to_owned(),
                 },
                 Read::Again => continue,
                 Read::End => return Ok(()),
@@ -156,8 +149,8 @@ impl Interactive {
             if Builtin::parse(prompt) == Some(Builtin::Quit) {
                 return Ok(());
             }
-            if !self.builtin(prompt, escaped)? {
-                queued = self.send(prompt, start.unwrap_or(Start::Typed))?;
+            if !self.builtin(prompt) {
+                queued = self.send(prompt, start.unwrap_or(Start::Typed));
             }
         }
     }
@@ -184,41 +177,15 @@ impl Interactive {
                 }
             }
         }
-        let prompt = match (dispatched, &mut self.editor) {
-            (Some(prompt), _) => {
+        let prompt = match dispatched {
+            Some(prompt) => {
                 if !std::mem::take(&mut self.spaced) {
                     eprintln!();
                 }
                 self.ui.user_prompt(&prompt);
                 prompt
             }
-            (None, Some(editor)) => {
-                if !std::mem::take(&mut self.spaced) {
-                    eprintln!();
-                }
-                let (agent, settings) = (&mut self.agent, &mut self.settings);
-                let read = editor.read(&mut || cycle_effort(agent, settings));
-                match read.map_err(|e| e.to_string())? {
-                    Some(editor::Input::Prompt(prompt)) => prompt,
-                    Some(editor::Input::DoubleEscape) => return Ok(Read::DoubleEscape),
-                    Some(editor::Input::Conversation(typed)) => {
-                        let render = |width| {
-                            let mut capture = Terminal::capture(width, self.hide_thinking.clone());
-                            self.agent.show_conversation(&mut capture);
-                            capture.captured()
-                        };
-                        match view::show(render, None, &self.hide_thinking, typed) {
-                            Ok(typed) => editor.type_ahead(typed),
-                            Err(error) => eprintln!("error: {error}"),
-                        }
-                        // The prompt comes back where it was erased.
-                        self.spaced = true;
-                        return Ok(Read::Again);
-                    }
-                    None => return Ok(Read::End),
-                }
-            }
-            (None, None) => match read_lines()? {
+            None => match read_lines()? {
                 Some(prompt) => prompt,
                 None => return Ok(Read::End),
             },
@@ -228,13 +195,7 @@ impl Interactive {
 
     /// Runs `prompt` as a model turn. Returns the next step to run, when the turn's command
     /// completed with one.
-    fn send(&mut self, prompt: &str, start: Start) -> Result<Option<(String, Start)>, String> {
-        if let Some(editor) = &mut self.editor {
-            editor.remember(prompt);
-            if start == Start::Typed {
-                eprintln!();
-            }
-        }
+    fn send(&mut self, prompt: &str, start: Start) -> Option<(String, Start)> {
         if let Some(screen) = &self.screen {
             screen.event(match self.agent.commands().expand(prompt) {
                 Some(sent) => Event::CommandPrompt(prompt.to_owned(), sent),
@@ -244,10 +205,8 @@ impl Interactive {
         let hide = (self.settings.hide_credentials).hides(start == Start::Unattended);
         self.agent.set_hide_credentials(hide);
         let result = match self.screen.is_some() {
-            true => self.turn_on_screen(prompt)?,
-            false => self.during_turn(Some(prompt), |agent, ui, cancel| {
-                agent.turn(prompt, ui, cancel)
-            }),
+            true => self.turn_on_screen(prompt),
+            false => self.during_turn(|agent, ui, cancel| agent.turn(prompt, ui, cancel)),
         };
         match result {
             Ok(()) => {}
@@ -255,32 +214,27 @@ impl Interactive {
             Err(error) => self.say(&format!("error: {error}")),
         }
         self.say_styled(style::MUTED, &usage_line(&self.agent));
-        match self.agent.take_completed() {
-            Some(completed) => self.next_step(&completed),
-            None => Ok(None),
-        }
+        let completed = self.agent.take_completed()?;
+        self.next_step(&completed)
     }
 
-    /// Runs `prompt` as a model turn on the full screen, as `during_turn` does. Where the turn
+    /// Runs `prompt` as a model turn on the full screen, as `on_screen` does. Where the turn
     /// pauses, the built-in commands typed meanwhile that do not stop it run, and it goes on;
     /// Escape or Ctrl-C meanwhile stop it.
-    fn turn_on_screen(&mut self, prompt: &str) -> Result<Result<(), AgentError>, String> {
+    fn turn_on_screen(&mut self, prompt: &str) -> Result<(), AgentError> {
         self.cancel.store(false, Ordering::Relaxed);
         let effort = self.agent.effort().map(str::to_owned);
         let mut result = self.on_screen(|agent, ui, cancel| agent.turn(prompt, ui, cancel));
         while let Err(AgentError::Paused) = result {
-            if let Err(error) = self.typed_during_turn(true) {
-                self.ended_on_screen(effort);
-                return Err(error);
-            }
+            self.typed_during_turn(true);
             result = self.on_screen(Agent::resume_turn);
         }
         self.ended_on_screen(effort);
-        Ok(result)
+        result
     }
 
     /// Runs `run` with the full screen showing that a turn runs, Shift+Tab cycling the current
-    /// model's levels; without it, on the inline terminal.
+    /// model's levels; without it, printed.
     fn on_screen<T>(
         &mut self,
         run: impl FnOnce(&mut Agent, &mut dyn AgentUi, &AtomicBool) -> T,
@@ -318,24 +272,20 @@ impl Interactive {
     /// Runs the built-in commands typed in the full screen while a turn ran, in order;
     /// `paused`: the turn paused for them, and those from the first that stops it on wait for
     /// it to end.
-    fn typed_during_turn(&mut self, paused: bool) -> Result<(), String> {
+    fn typed_during_turn(&mut self, paused: bool) {
         let Some(screen) = &self.screen else {
-            return Ok(());
+            return;
         };
         for command in screen.take_commands(paused) {
-            self.builtin(&command, false)?;
+            self.builtin(&command);
         }
-        Ok(())
     }
 
-    /// Runs a model turn, `/compact`, a branch summary or a `!` command with the terminal in its
-    /// turn mode, while keys typed meanwhile are read for the editor's next prompt
-    /// (`type_ahead`), and Ctrl+O shows the conversation, `prompt` if any, and the turn so far.
-    /// A Ctrl-C from before it starts does not cancel it. Full screen, an effort that Shift+Tab
-    /// chose meanwhile is set if no request took it, and saved as the settings' default.
+    /// Runs a model turn, `/compact`, a branch summary or a `!` command; a Ctrl-C from before it
+    /// starts does not cancel it. Full screen, an effort that Shift+Tab chose meanwhile is set if
+    /// no request took it, and saved as the settings' default.
     pub(super) fn during_turn<T>(
         &mut self,
-        prompt: Option<&str>,
         run: impl FnOnce(&mut Agent, &mut dyn AgentUi, &AtomicBool) -> T,
     ) -> T {
         self.cancel.store(false, Ordering::Relaxed);
@@ -345,37 +295,7 @@ impl Interactive {
             self.ended_on_screen(effort);
             return result;
         }
-        let shown = self.editor.as_ref().map(|_| {
-            Arc::new(record::Shown::new(
-                self.agent.conversation(),
-                prompt,
-                &self.ui,
-            ))
-        });
-        let mode = InputMode::turn();
-        let expand = shown.clone().map(|shown| -> type_ahead::Expand {
-            Arc::new(move |typed, waiting: &AtomicBool| shown.follow(typed, waiting))
-        });
-        self.ui.type_ahead = self
-            .editor
-            .is_some()
-            .then(|| type_ahead::TypeAhead::start(self.cancel.clone(), expand));
-        let result = match &shown {
-            Some(shown) => run(
-                &mut self.agent,
-                &mut record::Recording {
-                    ui: &mut self.ui,
-                    shown,
-                },
-                &self.cancel,
-            ),
-            None => run(&mut self.agent, &mut self.ui, &self.cancel),
-        };
-        let typed = self.ui.type_ahead.take().map(type_ahead::TypeAhead::finish);
-        drop(mode);
-        if let (Some(editor), Some(typed)) = (&mut self.editor, typed) {
-            editor.type_ahead(typed);
-        }
+        let result = run(&mut self.agent, &mut self.ui, &self.cancel);
         self.ui.clear();
         self.cancel.store(false, Ordering::Relaxed);
         result
@@ -384,10 +304,10 @@ impl Interactive {
     /// The next step of a completed command, as Scramjet routes it with autopilot off: an edge
     /// set to `chain` or a forced step runs at once; otherwise the user chooses from the steps
     /// the model offered. Returns the prompt to run; a text step goes into the editor instead.
-    fn next_step(&mut self, completed: &Completed) -> Result<Option<(String, Start)>, String> {
+    fn next_step(&mut self, completed: &Completed) -> Option<(String, Start)> {
         let routing = self.agent.route(completed, self.interactive());
         if routing.notices.is_empty() && routing.next == Next::Nothing {
-            return Ok(None);
+            return None;
         }
         // Under the usage line, as a prompt would be.
         self.blank();
@@ -397,7 +317,7 @@ impl Interactive {
         let (step, start) = match routing.next {
             Next::Nothing => {
                 self.spaced = true;
-                return Ok(None);
+                return None;
             }
             Next::Run(step) => {
                 let record =
@@ -414,34 +334,28 @@ impl Interactive {
                         value: String::new(),
                     })
                     .collect();
-                let chosen = match &self.screen {
-                    Some(screen) => screen.pick(select::Picker::question(
+                let chosen = (self.screen.as_ref()).and_then(|screen| {
+                    screen.pick(select::Picker::question(
                         "Select next step",
                         &choices,
                         recommended,
-                    )),
-                    None => select::question("Select next step", &choices, recommended)
-                        .map_err(|e| e.to_string())?,
-                };
+                    ))
+                });
                 self.show_record(&next_step_record(&routing.source, &steps, chosen));
-                match chosen {
-                    Some(index) => (steps[index].clone(), Start::Chosen),
-                    None => return Ok(None),
-                }
+                (steps[chosen?].clone(), Start::Chosen)
             }
         };
         let Some(command) = step.command else {
             self.set_text(step.message);
-            return Ok(None);
+            return None;
         };
         if step.fresh_session && !self.new_session() {
-            return Ok(None);
+            return None;
         }
-        Ok(Some((command, start)))
+        Some((command, start))
     }
 
-    /// Saves Ctrl+T's choice, made at the prompt, in a turn or in the conversation view, when
-    /// it changed.
+    /// Saves Ctrl+T's choice, made at the prompt or in a turn, when it changed.
     fn save_hide_thinking(&mut self) {
         let hide = self.hide_thinking.load(Ordering::Relaxed);
         if let Err(error) = self.settings.set_hide_thinking_block(hide) {
@@ -455,7 +369,7 @@ impl Interactive {
 
     /// Whether the user can choose from lists and answer questions as they show.
     pub(super) fn interactive(&self) -> bool {
-        self.editor.is_some() || self.screen.is_some()
+        self.screen.is_some()
     }
 
     /// Shows a message, on its own line or, full screen, as a block.
@@ -474,7 +388,7 @@ impl Interactive {
         }
     }
 
-    /// A blank line, where the inline output needs one; the full screen spaces blocks itself.
+    /// A blank line, where printed output needs one; the full screen spaces blocks itself.
     pub(super) fn blank(&self) {
         if self.screen.is_none() {
             eprintln!();
@@ -491,25 +405,22 @@ impl Interactive {
 
     /// Starts the next prompt with `text`.
     pub(super) fn set_text(&mut self, text: String) {
-        match (&self.screen, &mut self.editor) {
-            (Some(screen), _) => screen.set_text(text),
-            (None, Some(editor)) => editor.set_text(text),
-            (None, None) => {}
+        if let Some(screen) = &self.screen {
+            screen.set_text(text);
         }
     }
 
     /// Makes the session's prompts those that Up recalls.
     pub(super) fn remember_prompts(&mut self) {
-        for prompt in self.agent.prompts() {
-            match (&self.screen, &mut self.editor) {
-                (Some(screen), _) => screen.remember(prompt),
-                (None, Some(editor)) => editor.remember(prompt),
-                (None, None) => {}
+        if let Some(screen) = &self.screen {
+            for prompt in self.agent.prompts() {
+                screen.remember(prompt);
             }
         }
     }
 
-    /// Chooses one of `count` rows, as `select::select`, on the screen in use.
+    /// Chooses one of `count` rows on the full screen, as `select::Picker::select`; `None`
+    /// without it.
     pub(super) fn select(
         &self,
         title: &str,
@@ -518,17 +429,12 @@ impl Interactive {
         initial: usize,
         current: Option<usize>,
         row: impl Fn(usize, usize) -> String,
-    ) -> Result<Option<usize>, String> {
-        match &self.screen {
-            Some(screen) => Ok(screen.pick(select::Picker::select(
-                title, visible, count, initial, current, row,
-            ))),
-            None => select::select(title, visible, count, initial, current, row)
-                .map_err(|e| e.to_string()),
-        }
+    ) -> Option<usize> {
+        let picker = select::Picker::select(title, visible, count, initial, current, row);
+        self.screen.as_ref()?.pick(picker)
     }
 
-    /// As `select`, searching as `select::search`.
+    /// As `select`, searching as `select::Picker::search`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn search(
         &self,
@@ -539,14 +445,9 @@ impl Interactive {
         current: Option<usize>,
         none: &str,
         row: impl Fn(usize, usize) -> String,
-    ) -> Result<Option<usize>, String> {
-        match &self.screen {
-            Some(screen) => Ok(screen.pick(select::Picker::search(
-                title, visible, texts, initial, current, none, row,
-            ))),
-            None => select::search(title, visible, texts, initial, current, none, row)
-                .map_err(|e| e.to_string()),
-        }
+    ) -> Option<usize> {
+        let picker = select::Picker::search(title, visible, texts, initial, current, none, row);
+        self.screen.as_ref()?.pick(picker)
     }
 
     /// Shows that the session was replaced, with `message`, then its conversation. Full screen,

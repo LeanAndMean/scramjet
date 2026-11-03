@@ -1,5 +1,5 @@
 """Drives `scramjet-rs` in a pseudo-terminal against closed and scripted endpoints: the session
-on the full screen, the full screen's own features, and the inline renderer's until it goes."""
+on the full screen, and the full screen's own features."""
 import atexit
 import base64
 import fcntl
@@ -33,11 +33,6 @@ silent = socket.socket()
 silent.bind(('127.0.0.1', 0))
 silent.listen(8)
 hanging = '127.0.0.1:%d' % silent.getsockname()[1]
-# Answers every request with an error after a pause, so a turn ends on its own.
-slow = socket.socket()
-slow.bind(('127.0.0.1', 0))
-slow.listen(8)
-delayed = '127.0.0.1:%d' % slow.getsockname()[1]
 
 
 def receive(connection):
@@ -59,16 +54,6 @@ def receive(connection):
     return head + b'\r\n\r\n' + body
 
 
-def answer_slowly():
-    while True:
-        connection, _ = slow.accept()
-        receive(connection)
-        time.sleep(1.5)
-        connection.sendall(b'HTTP/1.1 500 Internal Server Error\r\ncontent-length: 4\r\n\r\nslow')
-        connection.close()
-
-
-threading.Thread(target=answer_slowly, daemon=True).start()
 def serve_call(command):
     """Answers every request with a call to run `command` in bash; returns the address."""
     listener = socket.socket()
@@ -319,8 +304,6 @@ def tool_call(call_id, name, arguments):
     return {'type': 'function_call', 'id': 'fc_' + call_id, 'call_id': call_id, 'name': name, 'status': 'completed',
             'arguments': json.dumps(arguments)}
 quiet_reasoning = serve_quiet_reasoning()
-view_gate = threading.Event()
-view_thoughts = serve_thoughts([view_gate])
 # As from Proxy's DeepSeek route: the first delta lost, then a text sent only in its done event.
 replies = serve_replies([([' of the reply.'], 'The start of the reply.'), ([], 'Only at the end.'),
                          (['Streamed ', 'whole.'], 'Streamed whole.')])
@@ -398,14 +381,14 @@ def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, 
     # Never enabled, without an editor (`-p`), or disabled after it was.
     assert output.rfind(b'\x1b[?2004l') >= output.rfind(b'\x1b[?2004h'), 'bracketed paste left enabled'
     assert output.rfind(b'\x1b[?25h') >= output.rfind(b'\x1b[?25l'), 'cursor left hidden'
-    # Never shown (`-p`, `--inline`), or left after it was.
+    # Never shown (`-p`), or left after it was.
     assert output.rfind(b'\x1b[?1049l') >= output.rfind(b'\x1b[?1049h'), 'alternate screen left on'
     assert output.rfind(b'\x1b[?1002l') >= output.rfind(b'\x1b[?1002h'), 'mouse reports left on'
     os.close(master)
     os.close(slave)
 
 
-def run_in_shell(script, endpoint, arguments=b''):
+def run_in_shell(script, endpoint):
     """Runs the agent from an interactive shell with job control, which on a stop restores no
     terminal mode of its own (dash), so the agent's own restoring is what the shell sees."""
     master, slave = pty.openpty()
@@ -441,7 +424,7 @@ def run_in_shell(script, endpoint, arguments=b''):
     def send(data):
         os.write(master, data)
 
-    send(b'stty -g > ../mode; %s %s--endpoint %s\r' % (BINARY.encode(), arguments, endpoint.encode()))
+    send(b'stty -g > ../mode; %s --endpoint %s\r' % (BINARY.encode(), endpoint.encode()))
     script(read, until, send, output)
     send(b'exit\r')
     assert shell.wait(timeout=10) == 0, bytes(output[-2000:])
@@ -1575,6 +1558,14 @@ def printed_hides_credentials(read, until, send, output):
 def printed_with_credentials(read, until, send, output):
     until(b'Peeked.', until(b'FAKE-env-secret', until(b'FAKE-netrc-secret')))
 
+
+def printed_question(read, until, send, output):
+    # Without the full screen, a question's options are numbered and answered by a line, which shows.
+    mark = until(b'  2. Beta \xe2\x80\x94 the second [recommended]\r\n', until(b'Choose an option'))
+    mark = until(b'Choice [1-2, Enter = 2]: ', mark)
+    send(b'1\r')
+    until(b'Chose alpha.', until(b'1\r\n', mark))
+
 greet = os.path.join(project, '.scramjet', 'demo', 'commands')
 os.makedirs(greet)
 with open(os.path.join(greet, 'demo:greet.md'), 'w') as file:
@@ -1684,6 +1675,17 @@ never = config_home('never', '{"hideCredentials": "never"}')
 run(['-p', 'peek'], printed_with_credentials, serve_items([[peek('call_1')], [message('Peeked.')]]),
     variables=dict(in_fake_home, XDG_CONFIG_HOME=never))
 os.remove(os.path.join(project, 'made.txt'))
+known = set(session_files())
+run(['-p', 'pick'], printed_question, serve_items([
+    [tool_call('call_1', 'get_scramjet_user_input', {
+        'type': 'select', 'message': 'Pick one.', 'recommended': 1,
+        'options': [{'value': 'a', 'label': 'Alpha', 'description': 'the first'},
+                    {'value': 'b', 'label': 'Beta', 'description': 'the second'}]})],
+    [message('Chose alpha.')],
+]))
+(printed,) = set(session_files()) - known
+outputs = [line['output'] for line in map(json.loads, open(printed)) if line.get('type') == 'function_call_output']
+assert outputs == ['{"selected":"a"}'], outputs
 
 
 # The full screen's own features.
@@ -2167,167 +2169,4 @@ run(['--model', 'gpt-6-luna'], fullscreen_subagent, serve_items([
     [message('Scouted.')],
 ], gate=subagent_gate, gated=2))
 run(['--continue'], fullscreen_subagent_resumed)
-
-
-# The inline renderer's own features (`--inline`), deleted with it.
-def suspend_in_view(read, until, send, output):
-    mark = until(b'> ')
-    send(b'go\r')
-    mark = until(b'running 1s', mark)
-    send(b'\x0f')
-    mark = until(b'\xc2\xb7 \xe2\x80\xa6 running', until(b'\x1b[?1049h', mark))
-    send(b'\x1a')
-    left = until(b'\x1b[?1049l', mark)
-    mark = until(b'Stopped', left)
-    send(SAME_MODE)
-    mark = until(b'restored-42', mark)
-    send(b'fg\r')
-    # The view again, following the turn.
-    mark = until(b'\xc2\xb7 \xe2\x80\xa6 running', until(b'\x1b[?1049h', mark))
-    send(b'q')
-    mark = until(b'running', until(b'\x1b[?1049l', mark))
-    send(b'\x03')
-    mark = until(b'(cancelled)', mark)
-    mark = until(b'> ', mark)
-    send(b'\x04')
-    mark = until(b'$ ', mark)
-    send(SAME_MODE)
-    until(b'restored-42', mark)
-
-
-def typed_during_turn(read, until, send, output):
-    mark = until(b'> ')
-    send(b'go\r')
-    mark = until(b'thinking', mark)
-    # A Shift+Tab among them acts at the next prompt and keeps the keys after it.
-    send(b'typed\x1b[Z ahead')
-    mark = until(b'HTTP 500', mark)
-    assert b'typed ahead' not in output[:mark], 'keys typed during a turn were echoed'
-    until(b'> typed ahead', mark)
-    send(b'\x03\x04')
-
-
-def escape_cancels_and_keeps_typed_ahead(read, until, send, output):
-    mark = until(b'> ')
-    send(b'go\r')
-    mark = until(b'thinking', mark)
-    send(b'kept\x1b')
-    mark = until(b'(cancelled)', mark)
-    until(b'> kept', mark)
-    send(b'\x03\x04')
-
-
-def escape_sequence_does_not_cancel(read, until, send, output):
-    mark = until(b'> ')
-    send(b'go\r')
-    mark = until(b'thinking', mark)
-    send(b'\x1b[A')
-    read(.3)
-    assert b'(cancelled)' not in output[mark:], 'an arrow key cancelled the turn'
-    send(b'\x03')
-    mark = until(b'(cancelled)', mark)
-    until(b'> ', mark)
-    send(b'\x04')
-
-
-def typed_between_approvals(read, until, send, output):
-    """Types during an approved command, then meets the next question; returns after it."""
-    mark = until(b'> ')
-    send(b'go\r')
-    mark = until(b'Allow? [y/N, a = allow all until exit] ', mark)
-    send(b'y\r')
-    mark = until(b'running 1s', mark)
-    send(b'kept')
-    return until(b'Allow? [y/N, a = allow all until exit] ', mark)
-
-
-def approval_keeps_typed_ahead(read, until, send, output):
-    mark = typed_between_approvals(read, until, send, output)
-    send(b'y\r')
-    mark = until(b'running 1s', mark)
-    send(b'\x1b')
-    mark = until(b'(cancelled)', mark)
-    until(b'> kept', mark)
-    send(b'\x03\x04')
-
-
-def cancel_at_approval_drops_typed_ahead(read, until, send, output):
-    mark = typed_between_approvals(read, until, send, output)
-    read(.3)
-    send(b'\x03')
-    mark = until(b'(cancelled)', mark)
-    mark = until(b'> ', mark)
-    read(.3)
-    assert b'kept' not in output[mark:], 'text typed before Ctrl-C at a question was kept'
-    send(b'\x04')
-
-
-def conversation_view(read, until, send, output):
-    mark = until(b'> ')
-    send(b'!seq 1 40\r')
-    mark = until(b'(20 earlier lines, Ctrl+O to expand)', mark)
-    mark = until(b'> ', mark)
-    send(b'draft\x0f')
-    # The whole output, from its end, in the alternate screen.
-    mark = until(b'\x1b[?1049h', mark)
-    mark = until(b'19\xe2\x80\x9341 of 41', until(b'm40\x1b[0m\x1b[K', mark))
-    send(b'\x1b[H')
-    mark = until(b'1\xe2\x80\x9323 of 41', until(b'm2\x1b[0m\x1b[K', until(b'bash seq 1 40', mark)))
-    send(b'\x1b[6~')
-    mark = until(b'19\xe2\x80\x9341 of 41', mark)
-    send(b'\x1b')
-    mark = until(b'> draft', until(b'\x1b[?1049l', mark))
-    send(b'\x0fq')
-    mark = until(b'> draft', until(b'\x1b[?1049l', until(b'\x1b[?1049h', mark)))
-    send(b'\x03\x04')
-
-
-def view_follows_the_turn(read, until, send, output):
-    mark = until(b'> ')
-    send(b'go\r')
-    mark = until(b'running 1s', until(b'bash echo first', mark))
-    send(b'kept\x0f')
-    enter = until(b'\x1b[?1049h', mark)
-    # The prompt, the call, its output so far and what the agent does, then the output that follows.
-    mark = until(b'first', until(b'bash echo first', until(b'> go', enter)))
-    mark = until(b'\xc2\xb7 \xe2\x80\xa6 running', mark)
-    mark = until(b'second', mark)
-    send(b'\x1b')
-    left = until(b'\x1b[?1049l', mark)
-    assert b'\x1b[J' not in output[enter:left], 'inline output drawn over the view'
-    # The inline output held meanwhile, then Escape cancels the turn, keeping the text typed.
-    mark = until(b'running', until(b'second', left))
-    send(b'\x1b')
-    mark = until(b'(cancelled)', mark)
-    until(b'> kept', mark)
-    send(b'\x03\x04')
-
-
-def view_waits_at_the_turn_end(read, until, send, output):
-    mark = until(b'> ')
-    send(b'go\r')
-    mark = until(b'First thought.', mark)
-    send(b'\x0f')
-    enter = until(b'\x1b[?1049h', mark)
-    mark = until(b'First thought.', enter)
-    view_gate.set()
-    mark = until(b'waiting for you', until(b'The reply.', until(b'Second thought.', mark)))
-    read(.3)
-    assert b'requests' not in output[enter:], 'the turn went on to its usage line under the view'
-    send(b'q')
-    left = until(b'\x1b[?1049l', mark)
-    mark = until(b'requests', until(b'The reply.', until(b'Second thought.', left)))
-    until(b'> ', mark)
-    send(b'\x04')
-
-
-run_in_shell(suspend_in_view, talking, b'--inline ')
-run(['--inline', '--retries', '0'], typed_during_turn, delayed)
-run(['--inline'], escape_cancels_and_keeps_typed_ahead, hanging)
-run(['--inline'], escape_sequence_does_not_cancel, hanging)
-run(['--inline', '--ask'], approval_keeps_typed_ahead, pausing)
-run(['--inline', '--ask'], cancel_at_approval_drops_typed_ahead, pausing)
-run(['--inline'], conversation_view)
-run(['--inline'], view_follows_the_turn, talking)
-run(['--inline'], view_waits_at_the_turn_end, view_thoughts)
 print('agent editor journeys passed')
