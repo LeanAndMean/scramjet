@@ -254,7 +254,7 @@ fn paste(source: &mut impl ByteSource) -> io::Result<Key> {
 }
 
 /// Pasted text keeps its line breaks and tabs; other control characters are dropped.
-fn clean(text: &str) -> String {
+pub(super) fn clean(text: &str) -> String {
     text.replace("\r\n", "\n")
         .replace('\r', "\n")
         .chars()

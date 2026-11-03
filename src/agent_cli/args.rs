@@ -62,8 +62,10 @@ default) and grep, find, ls.
 With --fullscreen the conversation fills the screen above the prompt, which stays while a turn
 runs: Enter then queues a message for the model's next request, Alt+Enter one for when the turn
 would end (steeringMode and followUpMode: all or one-at-a-time at once); Escape interrupts the
-turn and puts them back in the editor, as Alt+Up does. Page Up/Down scroll the conversation,
-Escape goes back to its end. Ctrl+O shows tool results whole, or cut again; Ctrl+T hides
+turn and puts them back in the editor, as Alt+Up does. Page Up/Down and the mouse wheel scroll
+the conversation, Escape goes back to its end. Dragging selects its text, a double click a word,
+a triple click the line; Ctrl+C or a right click copies it, and a right click without a
+selection pastes the clipboard into the prompt. Ctrl+O shows tool results whole, or cut again; Ctrl+T hides
 reasoning, also that already shown. Lists and questions show in the prompt's place.";
 
 /// What the command line asks for.

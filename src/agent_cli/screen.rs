@@ -1,9 +1,10 @@
 //! The full-screen interface (`--fullscreen`): the conversation in the alternate screen, scrolled
 //! by the application, with the status line, the prompt editor and lists docked under it; the
 //! editor keeps taking keys while a turn runs, and what is sent then is queued for the model, as
-//! Scramjet's steering and follow-up messages. The mouse wheel scrolls, and dragging selects
-//! text to copy, as in Scramjet's retained view. A thread owns the terminal; the session runs on
-//! the caller's thread and talks to it through a `Handle`.
+//! Scramjet's steering and follow-up messages. The mouse wheel scrolls, dragging or a double or
+//! triple click selects text to copy, and a right click copies it or pastes, as in Scramjet's
+//! retained view. A thread owns the terminal; the session runs on the caller's thread and talks
+//! to it through a `Handle`.
 
 use super::editor::{
     Action, ByteSource, Draft, ESCAPE_WAIT, Editor, Key, Mouse, RESIZE_CHECK, RawMode, read_key,
@@ -46,6 +47,9 @@ const EDITOR_SHARE: usize = 30;
 const WHEEL: isize = 3;
 /// How often a selection dragged to the top or bottom edge scrolls on, as in Scramjet.
 const EDGE: Duration = Duration::from_millis(80);
+/// The longest time from a click's press to the next one's that counts them as a double or
+/// triple click, as in Scramjet.
+const CLICKS: Duration = Duration::from_millis(500);
 const LEFT: u16 = 0;
 const RIGHT: u16 = 2;
 const DRAG: u16 = 32;
@@ -432,6 +436,27 @@ struct Edge {
 /// A copy under way: the terminal's sequence that copies, if any, or the failure.
 type Copying = mpsc::Receiver<Result<Option<String>, String>>;
 
+/// The clipboard read for a right click, pasted only into the editor it was for, unchanged.
+struct Pasting {
+    /// A text dialog's editor, rather than the prompt's.
+    dialog: bool,
+    text: String,
+    read: mpsc::Receiver<Result<String, String>>,
+}
+
+/// The last press of the left button, which the next one may repeat as a double or triple click.
+struct Click {
+    count: u8,
+    at: Instant,
+    /// The screen's column and row.
+    cell: (usize, usize),
+    mark: Mark,
+    /// The line pressed, as shown.
+    line: String,
+    /// Released where it was pressed.
+    released: bool,
+}
+
 /// The conversation shown, in parts that each render on their own: a turn, or what came
 /// between turns. Each part is rendered again only when it or the look changes.
 #[derive(Default)]
@@ -563,6 +588,8 @@ struct App {
     selection: Option<Selection>,
     edge: Option<Edge>,
     copying: Option<Copying>,
+    pasting: Option<Pasting>,
+    click: Option<Click>,
     /// The user asked to exit; keys are no longer taken.
     exiting: bool,
     /// The terminal's size, the rows and the cursor drawn last.
@@ -599,6 +626,8 @@ impl App {
             selection: None,
             edge: None,
             copying: None,
+            pasting: None,
+            click: None,
             exiting: false,
             size: (0, 0),
             drawn: Vec::new(),
@@ -636,6 +665,7 @@ impl App {
                 text.editor.poll(&mut text.draft);
             }
             self.copied()?;
+            self.pasted();
             if self
                 .edge
                 .as_ref()
@@ -651,7 +681,7 @@ impl App {
             if let Some(edge) = &self.edge {
                 wait = wait.min(EDGE.saturating_sub(edge.scrolled.elapsed()));
             }
-            if self.copying.is_some() {
+            if self.copying.is_some() || self.pasting.is_some() {
                 wait = wait.min(FRAME);
             }
             if !source.pending() {
@@ -909,8 +939,9 @@ impl App {
     }
 
     /// As Scramjet's retained view: the wheel scrolls; the left button selects from where it is
-    /// pressed in the conversation to where it is dragged, a drag to an edge scrolling on; a
-    /// right click copies what is selected.
+    /// pressed in the conversation to where it is dragged, a drag to an edge scrolling on, and
+    /// pressed twice or three times selects a word or the line; a right click copies what is
+    /// selected, else pastes.
     fn mouse(&mut self, mouse: Mouse) {
         let Mouse {
             button,
@@ -919,6 +950,12 @@ impl App {
             release,
         } = mouse;
         if release {
+            if let Some(click) = &mut self.click
+                && button == LEFT
+                && click.cell == (column, row)
+            {
+                click.released = true;
+            }
             self.edge = None;
             if let Some(selection) = &mut self.selection {
                 selection.held = false;
@@ -927,6 +964,9 @@ impl App {
                 }
             }
             return;
+        }
+        if button != LEFT && button != DRAG {
+            self.click = None;
         }
         match button {
             WHEEL_UP | WHEEL_DOWN => {
@@ -939,24 +979,67 @@ impl App {
                     selection.head = head;
                 }
             }
-            RIGHT => self.copy(),
+            RIGHT if self.selection.is_some() => self.copy(),
+            RIGHT if self.copying.is_none() => self.paste(),
             LEFT => {
+                let previous = self.click.take();
                 self.clear_selection();
                 let top = self.shown_top();
                 if row < self.rows && top + row < self.transcript.len() {
                     let follow = self.top.is_none();
                     self.top = Some(self.transcript.locate(top));
                     let mark = self.mark(column, row);
+                    let line = self
+                        .transcript
+                        .window(top + row, 1)
+                        .pop()
+                        .unwrap_or_default();
+                    let count = match previous {
+                        Some(click)
+                            if click.released
+                                && click.at.elapsed() <= CLICKS
+                                && click.cell == (column, row)
+                                && click.mark == mark
+                                && click.line == line =>
+                        {
+                            click.count % 3 + 1
+                        }
+                        _ => 1,
+                    };
+                    let at = |column| Mark { column, ..mark };
+                    let (anchor, head) = match count {
+                        2 => selection::word(&line, column)
+                            .map_or((mark, mark), |(start, end)| (at(start), at(end))),
+                        3 => (at(0), at(selection::width(&line))),
+                        _ => (mark, mark),
+                    };
                     self.selection = Some(Selection {
-                        anchor: mark,
-                        head: mark,
+                        anchor,
+                        head,
                         held: true,
                         dragged: false,
                         follow,
                     });
+                    self.click = Some(Click {
+                        count,
+                        at: Instant::now(),
+                        cell: (column, row),
+                        mark,
+                        line,
+                        released: false,
+                    });
                 }
             }
             DRAG => {
+                // A press reported again where it was is not yet a drag.
+                if self
+                    .click
+                    .as_ref()
+                    .is_some_and(|click| click.cell == (column, row))
+                {
+                    return;
+                }
+                self.click = None;
                 let head = self.mark(column, row);
                 let Some(selection) = self.selection.as_mut().filter(|selection| selection.held)
                 else {
@@ -1056,6 +1139,70 @@ impl App {
         Ok(())
     }
 
+    /// The editor shown, if any: a text dialog's, or the prompt's when no dialog is open.
+    fn editing(&mut self) -> Option<(&Editor, &mut Draft)> {
+        match &mut self.dialog {
+            None => Some((&self.editor, &mut self.draft)),
+            Some(Open {
+                shown: Shown::Text(text),
+                ..
+            }) => Some((&text.editor, &mut text.draft)),
+            Some(_) => None,
+        }
+    }
+
+    /// Reads the clipboard, on a thread of its own, for the editor shown.
+    fn paste(&mut self) {
+        if self.pasting.is_some() {
+            return;
+        }
+        let dialog = self.dialog.is_some();
+        let Some((_, draft)) = self.editing() else {
+            return;
+        };
+        let text = draft.text().to_owned();
+        let (done, read) = mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("clipboard".into())
+            .spawn(move || {
+                let _ = done.send(clipboard::paste());
+            });
+        match started {
+            Ok(_) => self.pasting = Some(Pasting { dialog, text, read }),
+            Err(error) => {
+                if let Some((_, draft)) = self.editing() {
+                    draft.set_note(format!("Paste failed: {error}"));
+                }
+            }
+        }
+    }
+
+    /// Ends a paste whose clipboard was read: as Scramjet's, it goes into the editor only if
+    /// that is still shown and unchanged, as if pasted from the terminal.
+    fn pasted(&mut self) {
+        let read = match self.pasting.as_ref().map(|pasting| pasting.read.try_recv()) {
+            None | Some(Err(TryRecvError::Empty)) => return,
+            Some(Ok(read)) => read,
+            Some(Err(TryRecvError::Disconnected)) => Err("the clipboard failed".to_owned()),
+        };
+        let pasting = self.pasting.take().expect("checked above");
+        if self.exiting || self.dialog.is_some() != pasting.dialog {
+            return;
+        }
+        let Some((editor, draft)) = self
+            .editing()
+            .filter(|(_, draft)| draft.text() == pasting.text)
+        else {
+            return;
+        };
+        match read {
+            Ok(text) => {
+                editor.key(draft, Key::Paste(editor::clean(&text)), false);
+            }
+            Err(error) => draft.set_note(format!("Paste failed: {error}")),
+        }
+    }
+
     fn key(&mut self, key: Key, pending: bool) -> Flow {
         if self.exiting {
             return Flow::Go;
@@ -1063,6 +1210,9 @@ impl App {
         if let Key::Mouse(mouse) = key {
             self.mouse(mouse);
             return Flow::Go;
+        }
+        if key != Key::Idle {
+            self.click = None;
         }
         // As in Scramjet, Ctrl+C copies what is selected, Escape lets it go and goes back to the
         // end, and other keys let it go and do what they do.

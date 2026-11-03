@@ -55,6 +55,54 @@ pub(super) fn snap(line: &str, column: usize) -> usize {
     at
 }
 
+/// The columns `line`'s cells take.
+pub(super) fn width(line: &str) -> usize {
+    (pieces(line).into_iter())
+        .map(|piece| match piece {
+            Piece::Cell(_, width) => width,
+            Piece::Style(_) => 0,
+        })
+        .sum()
+}
+
+/// What a double click at `column` selects in `line`, as in Scramjet: the run of cells of the
+/// same kind (whitespace, punctuation or other) around the cell there, from its first column
+/// to after its last; `None` past the line's end.
+pub(super) fn word(line: &str, column: usize) -> Option<(usize, usize)> {
+    let mut cells = Vec::new();
+    let mut at = 0;
+    for piece in pieces(line) {
+        if let Piece::Cell(cell, width) = piece {
+            cells.push((at, at + width, kind(cell)));
+            at += width;
+        }
+    }
+    let index = cells
+        .iter()
+        .position(|&(start, end, _)| start <= column && column < end)?;
+    let same = cells[index].2;
+    let first = (cells[..index].iter())
+        .rposition(|cell| cell.2 != same)
+        .map_or(0, |before| before + 1);
+    let last = (cells[index..].iter())
+        .position(|cell| cell.2 != same)
+        .map_or(cells.len(), |after| index + after)
+        - 1;
+    Some((cells[first].0, cells[last].1))
+}
+
+/// Scramjet's kinds of cell for a double click: 0 whitespace, 1 punctuation, 2 other.
+fn kind(cell: &str) -> u8 {
+    const PUNCTUATION: &str = "(){}[]<>.,;:'\"!?+-=*/\\|&%^$#@~`";
+    if cell.chars().any(char::is_whitespace) {
+        0
+    } else if cell.chars().any(|c| PUNCTUATION.contains(c)) {
+        1
+    } else {
+        2
+    }
+}
+
 /// The text of `line`'s cells that start from `left` and before `right`.
 fn cut(line: &str, left: usize, right: usize) -> String {
     let mut at = 0;
@@ -151,6 +199,26 @@ mod tests {
         );
         assert_eq!(highlight(line, 0, 0), line);
         assert_eq!(highlight("", 0, usize::MAX), "");
+    }
+
+    #[test]
+    fn a_double_click_takes_the_run_of_cells_of_its_kind() {
+        // Columns: `snake_case` 0-9, `:` 10, ` ` 11, `src` 12-14, `/` 15, `a` 16, `.` 17,
+        // `rs` 18-19, two spaces 20-21, `界界` 22-25, ` ` 26, `end` 27-29.
+        let line = "\x1b[1msnake_case\x1b[0m: src/a.rs  界界 end";
+        let at = |column| word(line, column);
+        assert_eq!(at(0), Some((0, 10)));
+        assert_eq!(at(9), Some((0, 10)));
+        assert_eq!(at(10), Some((10, 11)));
+        assert_eq!(at(14), Some((12, 15)));
+        assert_eq!(at(15), Some((15, 16)));
+        assert_eq!(at(19), Some((18, 20)));
+        assert_eq!(at(21), Some((20, 22)));
+        assert_eq!(at(23), Some((22, 26)));
+        assert_eq!(at(28), Some((27, 30)));
+        assert_eq!(at(30), None);
+        assert_eq!(width(line), 30);
+        assert_eq!(word("", 0), None);
     }
 
     #[test]

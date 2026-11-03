@@ -344,6 +344,10 @@ env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACH
            XDG_CONFIG_HOME=os.path.join(work, 'config'), SCRAMJET_CODING_AGENT_DIR=os.path.join(work, 'agent'))
 env.pop('VISUAL', None)
 env.pop('EDITOR', None)
+# The journeys never reach the desktop's clipboard: those that copy or paste give a stand-in tool.
+for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'SSH_CONNECTION', 'SSH_CLIENT',
+             'MOSH_CONNECTION']:
+    env.pop(name, None)
 # Temporary files of the external editor go here, so the journeys can check they are removed.
 scratch = os.path.join(work, 'tmp')
 os.mkdir(scratch)
@@ -1979,6 +1983,40 @@ def fullscreen_copied_by_the_terminal(read, until, send, output):
     send(b'\x04')
 
 
+def copied(expected):
+    end = time.monotonic() + 10
+    while not os.path.exists(clipboard) or open(clipboard).read() != expected:
+        assert time.monotonic() < end, (expected, os.path.exists(clipboard) and open(clipboard).read())
+        time.sleep(.05)
+
+
+def fullscreen_paste_and_clicks(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    # Without a selection, a right click pastes the clipboard into the prompt, as the terminal would.
+    send(b'x \x1b[<2;5;5M\x1b[<2;5;5m')
+    rows = on_screen('second \u2014')
+    assert rows[-2:] == ['> x pasted', '. second \u2014'], rows
+    send(b'\r')
+    rows = on_screen('[1 requests')
+    row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
+    # A double click selects the word under it, a triple click the line.
+    send(b'\x1b[<0;15;%dM\x1b[<0;15;%dm' % (row, row) * 2)
+    until(b'\x1b[7mreply')
+    send(b'\x03')
+    copied('reply')
+    send(b'\x1b[<0;15;%dM\x1b[<0;15;%dm' % (row, row) * 3)
+    until(b'\x1b[7mRow 30 of the reply.')
+    send(b'\x03')
+    copied('Row 30 of the reply.')
+    # The clipboard read takes a second this time: the prompt changes meanwhile, so it is not pasted.
+    send(b'\x1b[<2;5;5M\x1b[<2;5;5mz')
+    on_screen('> z')
+    read(1.5)
+    assert shown()[-1] == '> z', shown()
+    send(b'\x15\x04')
+
+
 def left_the_screen(script):
     def checked(read, until, send, output):
         script(read, until, send, output)
@@ -2026,6 +2064,21 @@ os.chmod(os.path.join(clipboard_bin, 'wl-copy'), 0o755)
 run(['--fullscreen'], left_the_screen(fullscreen_mouse), serve_items([[message(rows_reply)]]), variables={
     'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
     'CLIPBOARD': clipboard})
-run(['--fullscreen'], left_the_screen(fullscreen_copied_by_the_terminal), serve_items([[message(rows_reply)]]),
-    variables={'WAYLAND_DISPLAY': '', 'DISPLAY': ''})
+run(['--fullscreen'], left_the_screen(fullscreen_copied_by_the_terminal), serve_items([[message(rows_reply)]]))
+pastes = os.path.join(work, 'pastes')
+# Checks it is asked for the clipboard's text as Scramjet asks; the second time it takes a second.
+with open(os.path.join(clipboard_bin, 'powershell.exe'), 'w') as script_file:
+    script_file.write('#!/bin/sh\n[ "$3" = -STA ] && [ "$4" = -Command ] || exit 1\n'
+                      'case "$5" in *"[System.Windows.Forms.Clipboard]::GetText()"*) ;; *) exit 1;; esac\n'
+                      'count=$(cat "$PASTES" 2>/dev/null || echo 0)\necho $((count + 1)) > "$PASTES"\n'
+                      '[ "$count" -ge 1 ] && sleep 1\nprintf \'pasted\\r\\nsecond \\342\\200\\224\'\n')
+os.chmod(os.path.join(clipboard_bin, 'powershell.exe'), 0o755)
+known = set(session_files())
+run(['--fullscreen'], left_the_screen(fullscreen_paste_and_clicks), serve_items([[message(rows_reply)]]), variables={
+    'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WSL_DISTRO_NAME': 'Test', 'WAYLAND_DISPLAY': 'wayland-test',
+    'CLIPBOARD': clipboard, 'PASTES': pastes})
+(pasted,) = set(session_files()) - known
+prompts = [line['content'] for line in map(json.loads, open(pasted)) if line.get('role') == 'user']
+assert prompts == ['x pasted\nsecond \u2014'], prompts
+assert open(pastes).read() == '2\n', open(pastes).read()
 print('agent editor journeys passed')
