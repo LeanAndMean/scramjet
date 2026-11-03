@@ -44,7 +44,6 @@ Not scheduled; fix them when they matter.
 - The full screen renders a running turn's part again from all its events at each frame (at most every 16 ms); a very long turn may make that slow. Ctrl+O and Ctrl+T keep the view at the same part and line within it, which can move within a long turn.
 - A `!` command run during a turn in the full screen shows only its last 5 lines until the turn ends, not expandable with Ctrl+O (Scramjet's shows 20 and expands); a `!` typed while the session itself runs one (no turn) runs alongside it, where Scramjet refuses a second.
 - A built-in command typed during a turn in the full screen waits for the turn's next request, which can be minutes away while a tool or subagent runs (Scramjet runs `/session`, `/name` and `/model` at once); the dock shows it as `Command: …` meanwhile.
-- In a summary or a command's text, a wrapped first list item's continuation is not indented as the later items' are (`Terminal::summary_block`: the base style opened before the first line).
 - A failing test can leave its directory in `/tmp`: the `autonomy`, `commands`, `agent_cli::editor` and `agent_cli::file_search` tests remove theirs only at their end, where the other agent tests use the `agent::tests::ScratchDir` drop guard.
 
 ## Open questions

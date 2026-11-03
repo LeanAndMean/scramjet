@@ -133,8 +133,10 @@ impl Wrap {
             return;
         }
         if self.line_start {
-            let marker = matches!(self.word.as_str(), "-" | "*" | "+" | "•" | "●")
-                || self.word.strip_suffix(['.', ')']).is_some_and(|number| {
+            let mut escape = Escape::None;
+            let shown: String = self.word.chars().filter(|&c| !escape.step(c)).collect();
+            let marker = matches!(shown.as_str(), "-" | "*" | "+" | "•" | "●")
+                || shown.strip_suffix(['.', ')']).is_some_and(|number| {
                     !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
                 });
             let indent = self.spaces + if marker { self.word_width + 1 } else { 0 };
@@ -271,6 +273,11 @@ mod tests {
             "- one two\n  three\n12. four\n    five six\n  seven\n  eight"
         );
         assert_eq!(wrapped(12, &["-flag one two"]), "-flag one\ntwo");
+        // A style before the marker takes no columns.
+        assert_eq!(
+            wrapped(12, &["\x1b[2m- one two three"]),
+            "\x1b[2m- one two\n  three"
+        );
         assert_eq!(
             wrapped(20, &["● bash cargo fmt --check && cargo clippy"]),
             "● bash cargo fmt\n  --check && cargo\n  clippy"
