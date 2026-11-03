@@ -10,8 +10,9 @@ Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses AP
 the Messages API for Claude models (those whose Proxy model card lists only Messages).
   --project DIR          project directory (default: current directory)
   --model ID             model (default: gpt-6-luna, or the one a resumed session last used)
-  --effort LEVEL         reasoning effort, e.g. low, medium, high (default: the model's, or the
-                         one a resumed session last used)
+  --effort LEVEL         reasoning effort, e.g. low, medium, high (default: the one a resumed
+                         session last used, else the settings' defaultThinkingLevel, else
+                         medium)
   --retries N            resend a request that failed transiently up to N times (default 3)
   --continue             resume the session for this project written to last
   --session FILE         resume a specific session file
@@ -29,14 +30,14 @@ Ctrl+O shows the conversation in the alternate screen with every tool result who
 end: Up/Down, Page Up/Down and Home/End scroll it; Escape, q or Ctrl+O closes it.
 Ctrl+T hides reasoning summaries behind a `Thinking...` line, or shows them again, from the
 next one on; it works while a turn runs too. Shift+Tab sets the reasoning effort to the next
-level the model's Proxy card lists. /new starts a new session; /resume chooses one of
-this project's sessions to switch to. /fork chooses one of this session's prompts and continues
-in a new session from before it, with it in the prompt for editing. /tree shows this session's
-branches and continues from the entry chosen, in the same session: from before a prompt, which
-is put in the prompt for editing, or from after a reply or tool result. When that leaves part of
-the conversation, it asks whether the model should summarize that branch, also with your own
-instructions, for the conversation to continue with. Escape twice on an empty prompt opens
-/tree too. /model chooses a model.
+level the model's Proxy card lists. Both are saved in the settings. /new starts a new session;
+/resume chooses one of this project's sessions to switch to. /fork chooses one of this
+session's prompts and continues in a new session from before it, with it in the prompt for
+editing. /tree shows this session's branches and continues from the entry chosen, in the same
+session: from before a prompt, which is put in the prompt for editing, or from after a reply
+or tool result. When that leaves part of the conversation, it asks whether the model should
+summarize that branch, also with your own instructions, for the conversation to continue
+with. Escape twice on an empty prompt opens /tree too. /model chooses a model.
 Their lists take Up/Down, Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; typed
 text filters the /resume and /model lists, best match first (a \"quoted phrase\" matches as
 written). With piped input they are printed numbered instead, for /resume N, /fork N, /tree N
@@ -50,7 +51,11 @@ As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: the file
 this also happens by itself when the context nears the model's window.
 While a turn, /compact or a `!` command runs, typed text is kept for the next prompt without
 being shown. Escape cancels it and keeps that text; Ctrl-C cancels it and discards that text;
-press Ctrl-C twice to quit.";
+press Ctrl-C twice to quit.
+Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scramjet-rs/),
+with Scramjet's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
+Escape), branchSummary.skipPrompt (true: /tree never asks for a summary) and
+defaultThinkingLevel.";
 
 /// What the command line asks for.
 pub(super) struct Options {

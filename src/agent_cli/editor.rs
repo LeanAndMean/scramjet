@@ -638,8 +638,9 @@ impl Screen {
 #[derive(Debug, PartialEq)]
 pub enum Input {
     Prompt(String),
-    /// Escape twice on an empty prompt, which opens `/tree` as in Scramjet. The prompt is erased.
-    Tree,
+    /// Escape twice on an empty prompt, which opens `/tree` or `/fork` as in Scramjet. The prompt
+    /// is erased.
+    DoubleEscape,
     /// Ctrl+O, to show the conversation in full. The prompt is erased, and its text is where the
     /// next prompt starts; the keys typed after Ctrl+O come with it.
     Conversation(Vec<u8>),
@@ -908,6 +909,8 @@ pub struct Editor {
     root: PathBuf,
     /// The commands listed after the built-in ones: names and descriptions.
     commands: Vec<(String, String)>,
+    /// Whether Escape twice on an empty prompt returns `Input::DoubleEscape`.
+    double_escape: bool,
     /// Reads one text for a question, as Scramjet's dialog editor: Escape or Ctrl-C cancels, and
     /// the text is erased when it returns.
     dialog: bool,
@@ -924,12 +927,14 @@ impl Editor {
         hide_thinking: Arc<AtomicBool>,
         root: PathBuf,
         commands: Vec<(String, String)>,
+        double_escape: bool,
     ) -> Self {
         Self {
             history,
             hide_thinking,
             root,
             commands,
+            double_escape,
             dialog: false,
             typed: Vec::new(),
             text: String::new(),
@@ -940,7 +945,7 @@ impl Editor {
     pub fn dialog(hide_thinking: Arc<AtomicBool>) -> Self {
         Self {
             dialog: true,
-            ..Self::new(Vec::new(), hide_thinking, PathBuf::new(), Vec::new())
+            ..Self::new(Vec::new(), hide_thinking, PathBuf::new(), Vec::new(), false)
         }
     }
 
@@ -1048,11 +1053,11 @@ impl Editor {
                     screen.erase()?;
                     return Ok(None);
                 }
-                Key::Escape if buffer.text.trim().is_empty() => {
+                Key::Escape if self.double_escape && buffer.text.trim().is_empty() => {
                     if last_escape.is_some_and(|at| at.elapsed() < DOUBLE_ESCAPE) {
                         screen.erase()?;
                         self.text = buffer.text;
-                        return Ok(Some(Input::Tree));
+                        return Ok(Some(Input::DoubleEscape));
                     }
                     last_escape = Some(Instant::now());
                     exit_armed = armed;

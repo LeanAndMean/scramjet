@@ -8,6 +8,7 @@ mod job;
 mod markdown;
 mod record;
 mod select;
+mod settings;
 mod slash;
 mod style;
 mod terminal;
@@ -19,6 +20,7 @@ mod view;
 use args::{Options, USAGE};
 use rustix::termios::{self, OptionalActions, QueueSelector};
 use scramjet_rs::agent::{Agent, AgentConfig, AgentUi, Next};
+use settings::Settings;
 use std::{
     ffi::OsString,
     os::fd::BorrowedFd,
@@ -35,20 +37,29 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     };
     let prompt = options.prompt.take();
-    let mut agent = start(options)?;
+    let mut settings = Settings::load();
+    let mut agent = start(options, &settings)?;
     let cancel = Arc::new(AtomicBool::new(false));
-    let hide_thinking = Arc::new(AtomicBool::new(false));
+    let hide_thinking = Arc::new(AtomicBool::new(settings.hide_thinking_block));
     handle_signals(&cancel, &hide_thinking)?;
     let mut ui = Terminal::new(hide_thinking.clone(), true);
-    match prompt {
-        Some(prompt) => print(&mut agent, &mut ui, prompt, &cancel),
-        None => interactive::Interactive::new(agent, ui, cancel, hide_thinking).run(),
+    let Some(prompt) = prompt else {
+        return interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings).run();
+    };
+    for warning in std::mem::take(&mut settings.warnings) {
+        ui.notice(&format!("settings: {warning}"));
     }
+    let result = print(&mut agent, &mut ui, prompt, &cancel);
+    if let Err(error) = settings.set_hide_thinking_block(hide_thinking.load(Ordering::Relaxed)) {
+        eprintln!("error: settings not saved: {error}");
+    }
+    result
 }
 
 /// Starts the agent in the project the options name. A model or effort they give wins over the
-/// one a resumed session last used.
-fn start(options: Options) -> Result<Agent, String> {
+/// one a resumed session last used; without either, the effort is the settings' default
+/// thinking level, else Scramjet's default, `medium`.
+fn start(options: Options, settings: &Settings) -> Result<Agent, String> {
     let root = match options.project {
         Some(path) => path,
         None => std::env::current_dir().map_err(|e| e.to_string())?,
@@ -76,9 +87,11 @@ fn start(options: Options) -> Result<Agent, String> {
         _ => agent.model().to_owned(),
     };
     agent.set_model(model).map_err(|e| e.to_string())?;
-    if let Some(effort) = chosen_effort.or_else(|| agent.last_effort().map(str::to_owned)) {
-        agent.set_effort(effort).map_err(|e| e.to_string())?;
-    }
+    let effort = chosen_effort
+        .or_else(|| agent.last_effort().map(str::to_owned))
+        .or_else(|| settings.default_thinking_level.clone())
+        .unwrap_or_else(|| "medium".to_owned());
+    agent.set_effort(effort).map_err(|e| e.to_string())?;
     agent.load_model_card();
     Ok(agent)
 }

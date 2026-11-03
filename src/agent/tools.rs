@@ -262,7 +262,7 @@ pub(super) struct Output {
 }
 
 /// A path in the home directory as `~/...`, as Scramjet shows tool paths.
-fn shortened(path: &str) -> String {
+pub fn shortened(path: &str) -> String {
     let home = std::env::home_dir().filter(|home| home.parent().is_some());
     match home
         .as_ref()

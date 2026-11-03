@@ -13,7 +13,7 @@ use unicode_width::UnicodeWidthStr;
 
 impl Interactive {
     /// Runs `prompt` if it is a built-in command; returns whether it was. `escaped`: a double
-    /// Escape erased the prompt for `/tree`.
+    /// Escape erased the prompt for `/tree` or `/fork`.
     pub(super) fn builtin(&mut self, prompt: &str, escaped: bool) -> Result<bool, String> {
         if let Some(command) = prompt.strip_prefix('!') {
             return Ok(self.bang(prompt, command));
@@ -31,7 +31,7 @@ impl Interactive {
                 eprint!("{}", session_info(&self.agent, &self.ui))
             }
             "/resume" => self.resume(argument)?,
-            "/fork" => self.fork(argument)?,
+            "/fork" => self.fork(argument, escaped)?,
             "/tree" => self.tree(argument, escaped)?,
             "/model" => self.model(argument)?,
             "/compact" => self.compact(argument),
@@ -153,7 +153,7 @@ impl Interactive {
         Ok(())
     }
 
-    fn fork(&mut self, wanted: &str) -> Result<(), String> {
+    fn fork(&mut self, wanted: &str, escaped: bool) -> Result<(), String> {
         let prompts = match self.agent.fork_prompts() {
             Ok(prompts) => prompts,
             Err(error) => {
@@ -197,6 +197,8 @@ impl Interactive {
             },
         };
         let Some(index) = chosen else {
+            // Nothing is left where the erased prompt was, so it is drawn there again.
+            self.spaced = escaped && !prompts.is_empty();
             return Ok(());
         };
         match self.agent.fork(index) {
@@ -277,12 +279,10 @@ impl Interactive {
                 return Ok(());
             };
             let line = session_tree.entries[rows[index].0].line;
-            // As Scramjet asks when the editor is in use; piped input moves without one.
-            let summary = match self
-                .editor
-                .is_some()
-                .then(|| self.agent.leaves_branch(line))
-            {
+            // As Scramjet asks when the editor is in use, unless the settings skip the question;
+            // piped input moves without one.
+            let ask = self.editor.is_some() && !self.settings.skip_branch_summary_prompt;
+            let summary = match ask.then(|| self.agent.leaves_branch(line)) {
                 Some(Ok(true)) => {
                     match ask_branch_summary(&self.hide_thinking).map_err(|e| e.to_string())? {
                         Some(summary) => summary,

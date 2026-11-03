@@ -353,9 +353,9 @@ with open(failing_script, 'w') as script_file:
 os.chmod(failing_script, 0o755)
 
 
-def run(arguments, script, endpoint=closed, status=0, variables={}):
+def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60):
     master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 60, 0, 0))
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, columns, 0, 0))
     before = termios.tcgetattr(slave)
 
     def own_terminal():
@@ -1054,7 +1054,7 @@ def fork_session(read, until, send, output):
     send(b'\x1b[A')
     mark = until(SELECTED + b'second', mark)
     send(b'\r')
-    mark = until('\u2713 Forked to new session \u00b7 gpt-6-luna\r\nsession '.encode(), mark)
+    mark = until('\u2713 Forked to new session \u00b7 gpt-6-luna \u00b7 thinking medium\r\nsession '.encode(), mark)
     # The conversation before the second prompt is shown, then that prompt waits in the editor.
     mark = until(b'.jsonl\r\n\r\n> first\r\n\r\nReply one.', mark)
     shown = until(b'> second', mark)
@@ -1179,6 +1179,32 @@ def session_files():
     return glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
 
 
+def config_home(name, settings=None):
+    """A directory for XDG_CONFIG_HOME of its own, with `settings` (text) as the settings file."""
+    path = os.path.join(work, 'config-' + name)
+    os.makedirs(os.path.join(path, 'scramjet-rs'))
+    if settings is not None:
+        with open(settings_path(path), 'w') as file:
+            file.write(settings)
+    return path
+
+
+def settings_path(home):
+    return os.path.join(home, 'scramjet-rs', 'settings.json')
+
+
+def hidden_from_the_start(read, until, send, output):
+    mark = until(b'> ')
+    send(b'go\r')
+    mark = until(b'\x1b[2;3mThinking...\x1b[0m', mark)
+    read(.3)
+    assert b'the paragraph ends here' not in output, bytes(output[-1500:])
+    send(b'\x03')
+    mark = until(b'(cancelled)', mark)
+    until(b'> ', mark)
+    send(b'\x04')
+
+
 run(['--retries', '0'], first)
 sessions = session_files()
 assert len(sessions) == 1, sessions
@@ -1198,7 +1224,11 @@ run(['--ask'], approval_keeps_typed_ahead, pausing)
 run(['--ask'], cancel_at_approval_drops_typed_ahead, pausing)
 run([], thinking_counts_seconds, hanging)
 run([], quiet_after_reasoning_shows_thinking, quiet_reasoning)
-run([], ctrl_t_hides_reasoning, thoughts)
+hiding = config_home('hiding')
+run([], ctrl_t_hides_reasoning, thoughts, variables={'XDG_CONFIG_HOME': hiding})
+# Ctrl+T's last choice, hidden, is saved and read by the next start.
+assert json.load(open(settings_path(hiding))) == {'hideThinkingBlock': True}
+run([], hidden_from_the_start, serve_quiet_reasoning(), variables={'XDG_CONFIG_HOME': hiding})
 run([], running_counts_seconds, calling)
 run([], running_shows_output, talking)
 run(['--ask'], approval_shows_hidden_characters, disguised)
@@ -1258,7 +1288,7 @@ branching = serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Rep
 run([], tree_session, branching)
 (branched,) = set(session_files()) - known
 lines = [json.loads(line) for line in open(branched)]
-assert {'type': 'branch', 'parent': 3} in lines, lines
+assert {'type': 'branch', 'parent': 4} in lines, lines
 (summary,) = [line['summary'] for line in lines if line.get('type') == 'branch_summary']
 assert summary.startswith('The user explored a different conversation branch before returning here.\n'), summary
 assert summary.endswith('\n\nThe branch said two.'), summary
@@ -1293,22 +1323,102 @@ def explicit_effort_wins(read, until, send, output):
     send(b'\x04')
 
 
+def default_level_from_settings(read, until, send, output):
+    mark = until(b'gpt-6-luna \xc2\xb7 thinking max \xc2\xb7 ')
+    until(b'> ', mark)
+    send(b'\x04')
+
+
+def double_escape_forks(read, until, send, output):
+    mark = until(b'> ')
+    send(b'first\r')
+    mark = until(b'Reply one.', mark)
+    mark = until(b'> ', mark)
+    send(b'second\r')
+    mark = until(b'Reply two.', mark)
+    mark = until(b'> ', mark)
+    # doubleEscapeAction "fork": the fork selector opens in the prompt's place, and cancelling it
+    # draws the prompt there again.
+    send(b'\x1b')
+    read(.1)
+    send(b'\x1b')
+    opened = until(b'Fork from message', mark)
+    assert b'\r\n' not in output[mark:opened], bytes(output[mark:opened])
+    mark = until(SELECTED + b'second', opened)
+    send(b'\x1b')
+    mark = until(b'> ', mark)
+    assert b'\r\n' not in output[opened:mark].split(b'\x1b[?25h')[-1], bytes(output[opened:mark])
+    # branchSummary.skipPrompt: leaving a branch asks nothing.
+    send(b'/tree\r')
+    mark = until(b'Session Tree', mark)
+    send(b'\x1b[A')
+    mark = until(SELECTED + '\u2022 user: second'.encode(), mark)
+    send(b'\r')
+    shown = until('\u2713 Navigated to selected point'.encode(), mark)
+    assert b'Summarize branch?' not in output[mark:shown], bytes(output[mark:shown])
+    until(b'> second', shown)
+    send(b'\x03\x04')
+
+
+def double_escape_does_nothing(read, until, send, output):
+    mark = until(b'gpt-6-luna \xc2\xb7 thinking medium \xc2\xb7 ')
+    mark = until(b'\x1b[33msettings: ' + settings_path(quiet).encode() + b': defaultThinkingLevel must be "off", '
+                 b'"minimal", "low", "medium", "high", "xhigh", "max"; ignored', mark)
+    mark = until(b'> ', mark)
+    send(b'\x1b')
+    read(.1)
+    send(b'\x1b')
+    read(.4)
+    assert b'Session Tree' not in output[mark:] and b'No entries' not in output[mark:], bytes(output[mark:])
+    send(b'\x04')
+
+
+def broken_settings_are_kept(read, until, send, output):
+    mark = until(b'settings: ' + settings_path(broken).encode() + b': EOF while parsing a value at line 1 column 25;'
+                 b' using the defaults')
+    mark = until(b'> ', mark)
+    send(b'\x14')
+    mark = until(b'Thinking blocks: hidden', mark)
+    send(b'\x04')
+    until(b'error: settings not saved: ', mark)
+
+
 def saved_levels(path):
     return [json.loads(line)['level'] for line in open(path) if 'thinking_level_change' in line]
 
 
 known = set(session_files())
+levels = config_home('levels')
 effort_cards = [{'requestId': 'gpt-6-luna', 'supportedProtocols': ['openai-responses'],
                  'reasoning': {'levels': ['none', 'low', 'medium', 'high', 'xhigh', 'max'], 'default': 'medium'}}]
-run([], shift_tab_cycles_effort, serve_replies([(['Reply.'], 'Reply.')], cards=effort_cards))
+in_levels = {'XDG_CONFIG_HOME': levels}
+run([], shift_tab_cycles_effort, serve_replies([(['Reply.'], 'Reply.')], cards=effort_cards), variables=in_levels)
 (effort,) = set(session_files()) - known
-assert saved_levels(effort) == ['high', 'xhigh'], saved_levels(effort)
+# A new session starts at Scramjet's default level, medium.
+assert saved_levels(effort) == ['medium', 'high', 'xhigh'], saved_levels(effort)
+assert json.load(open(settings_path(levels))) == {'defaultThinkingLevel': 'xhigh'}
 prompts = [item['content'] for item in map(json.loads, open(effort)) if item.get('role') == 'user']
 assert prompts == ['aXb'], prompts
-run(['--continue'], shift_tab_resumed, serve_replies([], cards=effort_cards))
-assert saved_levels(effort) == ['high', 'xhigh', 'max'], saved_levels(effort)
-run(['--continue', '--effort', 'low'], explicit_effort_wins, serve_replies([], cards=effort_cards))
-assert saved_levels(effort) == ['high', 'xhigh', 'max', 'low'], saved_levels(effort)
+run(['--continue'], shift_tab_resumed, serve_replies([], cards=effort_cards), variables=in_levels)
+assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max'], saved_levels(effort)
+run(['--continue', '--effort', 'low'], explicit_effort_wins, serve_replies([], cards=effort_cards),
+    variables=in_levels)
+assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max', 'low'], saved_levels(effort)
+# --effort is not saved; a new session starts at the level Shift+Tab saved.
+assert json.load(open(settings_path(levels))) == {'defaultThinkingLevel': 'max'}
+known = set(session_files())
+run([], default_level_from_settings, serve_replies([], cards=effort_cards), variables=in_levels)
+(started,) = set(session_files()) - known
+assert saved_levels(started) == ['max'], saved_levels(started)
+forking_home = config_home('forking', '{"doubleEscapeAction": "fork", "branchSummary": {"skipPrompt": true}}')
+run([], double_escape_forks, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]),
+    variables={'XDG_CONFIG_HOME': forking_home})
+quiet = config_home('quiet', '{"doubleEscapeAction": "none", "defaultThinkingLevel": "hgih"}')
+# Wide enough for the warnings in one line.
+run([], double_escape_does_nothing, variables={'XDG_CONFIG_HOME': quiet}, columns=200)
+broken = config_home('broken', '{"hideThinkingBlock": tru')
+run([], broken_settings_are_kept, variables={'XDG_CONFIG_HOME': broken}, columns=200)
+assert open(settings_path(broken)).read() == '{"hideThinkingBlock": tru'
 
 
 def name_and_session(read, until, send, output):

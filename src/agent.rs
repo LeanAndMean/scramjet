@@ -24,7 +24,7 @@ pub use compaction::{AutoCompaction, Compaction};
 pub use question::Choice;
 pub use session::{Session, SessionInfo};
 pub use status::{Completed, Next, Routing, Step, record as next_step_record};
-pub use tools::{search_program, sequence_diff, terminal_line};
+pub use tools::{search_program, sequence_diff, shortened, terminal_line};
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use ui::{AgentUi, Answer, Purpose, ToolDetail, show_items};
 

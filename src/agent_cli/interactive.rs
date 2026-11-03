@@ -1,5 +1,6 @@
 //! The interactive session: prompts read from the editor or from piped lines, the built-in
 //! commands (`slash.rs`), model turns and a completed command's next step.
+use super::settings::{DoubleEscape, Settings};
 use super::terminal::{InputMode, Terminal};
 use super::{editor, record, select, style, type_ahead, view};
 use scramjet_rs::agent::{
@@ -24,13 +25,14 @@ pub(super) struct Interactive {
     /// Set by Ctrl-C: cancels what runs.
     pub(super) cancel: Arc<AtomicBool>,
     pub(super) hide_thinking: Arc<AtomicBool>,
+    pub(super) settings: Settings,
 }
 
 /// What the user gave at the prompt.
 enum Read {
     Prompt(String),
-    /// A double Escape erased the prompt for `/tree`, which then takes its place.
-    Tree,
+    /// A double Escape erased the prompt for `/tree` or `/fork`, which then takes its place.
+    DoubleEscape,
     /// Nothing to run; the prompt is read again.
     Again,
     /// The input ended.
@@ -43,6 +45,7 @@ impl Interactive {
         mut ui: Terminal,
         cancel: Arc<AtomicBool>,
         hide_thinking: Arc<AtomicBool>,
+        settings: Settings,
     ) -> Self {
         let editor =
             (std::io::stdin().is_terminal() && std::io::stderr().is_terminal()).then(|| {
@@ -51,6 +54,7 @@ impl Interactive {
                     hide_thinking.clone(),
                     agent.root().to_path_buf(),
                     agent.commands().list().iter().map(command_entry).collect(),
+                    settings.double_escape != DoubleEscape::Nothing,
                 )
             });
         ui.expandable = editor.is_some();
@@ -61,11 +65,18 @@ impl Interactive {
             spaced: false,
             cancel,
             hide_thinking,
+            settings,
         }
     }
 
     /// Reads and runs prompts until the user quits or the input ends.
     pub(super) fn run(mut self) -> Result<(), String> {
+        let result = self.read_and_run();
+        self.save_hide_thinking();
+        result
+    }
+
+    fn read_and_run(&mut self) -> Result<(), String> {
         eprintln!(
             "scramjet-rs · {} · {}\nsession {}",
             model_line(&self.agent),
@@ -74,23 +85,34 @@ impl Interactive {
         );
         // A tool block ends with a blank line; other output gets one before the prompt.
         self.show_resumed();
-        if !self.agent.commands().warnings().is_empty() {
+        let warnings: Vec<_> = (self.settings.warnings.iter())
+            .map(|warning| format!("settings: {warning}"))
+            .chain(
+                (self.agent.commands().warnings().iter())
+                    .map(|warning| format!("scramjet: {warning}")),
+            )
+            .collect();
+        if !warnings.is_empty() {
             if !std::mem::take(&mut self.spaced) {
                 eprintln!();
             }
-            for warning in self.agent.commands().warnings() {
-                self.ui.notice(&format!("scramjet: {warning}"));
+            for warning in &warnings {
+                self.ui.notice(warning);
             }
             self.spaced = true;
         }
         // A completed command's next step, run as if typed.
         let mut queued: Option<String> = None;
         loop {
+            self.save_hide_thinking();
             let dispatched = queued.take();
             let is_dispatched = dispatched.is_some();
             let (prompt, escaped) = match self.read(dispatched)? {
                 Read::Prompt(prompt) => (prompt, false),
-                Read::Tree => ("/tree".to_owned(), true),
+                Read::DoubleEscape => match self.settings.double_escape {
+                    DoubleEscape::Fork => ("/fork".to_owned(), true),
+                    DoubleEscape::Tree | DoubleEscape::Nothing => ("/tree".to_owned(), true),
+                },
                 Read::Again => continue,
                 Read::End => return Ok(()),
             };
@@ -121,11 +143,22 @@ impl Interactive {
                 if !std::mem::take(&mut self.spaced) {
                     eprintln!();
                 }
-                let agent = &mut self.agent;
-                let read = editor.read(&mut || effort_note(agent.cycle_effort()));
+                let (agent, settings) = (&mut self.agent, &mut self.settings);
+                let read = editor.read(&mut || {
+                    let cycled = agent.cycle_effort();
+                    let unsaved = match &cycled {
+                        Ok(Some(level)) => settings.set_default_thinking_level(level).err(),
+                        _ => None,
+                    };
+                    let note = effort_note(cycled);
+                    match unsaved {
+                        Some(error) => format!("{note} (settings not saved: {error})"),
+                        None => note,
+                    }
+                });
                 match read.map_err(|e| e.to_string())? {
                     Some(editor::Input::Prompt(prompt)) => prompt,
-                    Some(editor::Input::Tree) => return Ok(Read::Tree),
+                    Some(editor::Input::DoubleEscape) => return Ok(Read::DoubleEscape),
                     Some(editor::Input::Conversation(typed)) => {
                         let render = |width| {
                             let mut capture = Terminal::capture(width, self.hide_thinking.clone());
@@ -273,6 +306,15 @@ impl Interactive {
             return Ok(None);
         }
         Ok(Some(command))
+    }
+
+    /// Saves Ctrl+T's choice, made at the prompt, in a turn or in the conversation view, when
+    /// it changed.
+    fn save_hide_thinking(&mut self) {
+        let hide = self.hide_thinking.load(Ordering::Relaxed);
+        if let Err(error) = self.settings.set_hide_thinking_block(hide) {
+            eprintln!("error: settings not saved: {error}");
+        }
     }
 
     fn show_record(&self, record: &str) {
