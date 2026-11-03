@@ -4,7 +4,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{Request, body::Incoming, client::conn::http1};
 use hyper_util::rt::TokioIo;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
@@ -530,15 +530,28 @@ async fn responses_reply(
             outcome == crate::http::responses::Outcome::Incomplete,
         )),
         Ok(parsed) => match parsed.envelope {
-            Some(envelope) => Ok(Reply {
-                items: envelope
-                    .items
-                    .into_iter()
-                    .map(|i| i.raw().clone())
-                    .collect(),
-                usage: parsed.usage,
-                incomplete: None,
-            }),
+            Some(envelope) => {
+                let mut items: Vec<Value> = (envelope.items.into_iter())
+                    .map(|item| item.raw().clone())
+                    .collect();
+                let incomplete = (parsed.status == "incomplete").then(|| {
+                    // Kept as the Claude reply cut at its limit is: its messages, and the
+                    // reasoning before them, which a replay needs followed by an item.
+                    let last = items.iter().rposition(|item| item["type"] == "message");
+                    items.truncate(last.map_or(0, |last| last + 1));
+                    // Sent again as Scramjet replays a message, completed.
+                    for item in items.iter_mut().filter(|item| item["type"] == "message") {
+                        item["status"] = json!("completed");
+                    }
+                    "response incomplete: it reached the output token limit (max_output_tokens)"
+                        .to_owned()
+                });
+                Ok(Reply {
+                    items,
+                    usage: parsed.usage,
+                    incomplete,
+                })
+            }
             None => {
                 let message = format!(
                     "response {}{}",

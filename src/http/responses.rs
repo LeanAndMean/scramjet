@@ -278,15 +278,22 @@ fn usage(response: &Value) -> Result<Option<ProviderUsage>, Outcome> {
     usage.validate()?;
     Ok(Some(usage))
 }
+/// Whether a message or reasoning item's status fits: `in_progress` when added, `completed` when
+/// done, or `incomplete` when the response stopped at its output limit.
+fn status(item: &Value, complete: bool) -> Result<bool, Outcome> {
+    Ok(match string(item, "status")? {
+        "completed" | "incomplete" => complete,
+        "in_progress" => !complete,
+        _ => false,
+    })
+}
 pub(crate) fn validate_item(item: &Value, complete: bool) -> Result<(), Outcome> {
     if !identity(string(item, "id")?) {
         return Err(Outcome::Framing);
     }
     match string(item, "type")? {
         "message" => {
-            if string(item, "role")? != "assistant"
-                || string(item, "status")? != if complete { "completed" } else { "in_progress" }
-            {
+            if string(item, "role")? != "assistant" || !status(item, complete)? {
                 return Err(Outcome::Framing);
             }
             if item.get("phase").is_some_and(|phase| {
@@ -336,9 +343,7 @@ pub(crate) fn validate_item(item: &Value, complete: bool) -> Result<(), Outcome>
             }
         }
         "reasoning" => {
-            if item.get("status").is_some_and(|status| {
-                status.as_str() != Some(if complete { "completed" } else { "in_progress" })
-            }) {
+            if item.get("status").is_some() && !status(item, complete)? {
                 return Err(Outcome::Framing);
             }
             let summary = item["summary"].as_array().ok_or(Outcome::Framing)?;
@@ -837,7 +842,12 @@ impl ResponsesParser {
                         validate_item(item, true)?;
                         state.done = Some(item.clone());
                     }
-                    if self.items.is_empty() {
+                    if self.items.is_empty()
+                        || self
+                            .items
+                            .iter()
+                            .any(|state| state.done.as_ref().unwrap()["status"] == "incomplete")
+                    {
                         return Err(Outcome::Framing);
                     }
                     let selected: Vec<_> = self.items.iter().map(|s| &s.done).collect();
@@ -896,12 +906,20 @@ impl ResponsesParser {
         let response = self.terminal.ok_or(Outcome::Incomplete)?;
         let status = string(&response, "status")?.to_owned();
         let usage = usage(&response)?;
-        let envelope = if status == "completed" {
+        let call = |item: &Value| item["type"] == "function_call";
+        // As in Scramjet's client, a response stopped at its output limit keeps the items it
+        // finished, unless it made a function call.
+        let cut = status == "incomplete"
+            && response["incomplete_details"]["reason"] == "max_output_tokens"
+            && !self.items.iter().any(|state| call(&state.added))
+            && !(response["output"].as_array().into_iter().flatten()).any(call);
+        let envelope = if status == "completed" || cut {
             Some(ProviderEnvelope {
                 items: self
                     .items
                     .into_iter()
-                    .map(|state| ProviderItem::checked(state.done.unwrap(), self.limits.envelope))
+                    .filter_map(|state| state.done)
+                    .map(|item| ProviderItem::checked(item, self.limits.envelope))
                     .collect::<Result<Vec<_>, _>>()?,
             })
         } else {

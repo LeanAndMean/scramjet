@@ -15,6 +15,18 @@ pub fn text_events(text: &str, usage: Value) -> Vec<Value> {
         json!({"type":"response.completed","response":{"id":"resp_1","status":"completed","model":"gpt-6-luna","output":[item],"usage":usage}}),
     ]
 }
+/// A reply stopped at its output limit, as Proxy's GPT routes send it: the message done as
+/// `incomplete`, then `response.incomplete`.
+pub fn cut_events(text: &str, usage: Value) -> Vec<Value> {
+    let mut events = text_events(text, usage);
+    events[7]["item"]["status"] = json!("incomplete");
+    let terminal = &mut events[8];
+    terminal["type"] = json!("response.incomplete");
+    terminal["response"]["status"] = json!("incomplete");
+    terminal["response"]["incomplete_details"] = json!({"reason":"max_output_tokens"});
+    terminal["response"]["output"][0]["status"] = json!("incomplete");
+    events
+}
 pub fn call_events(arguments: &str, usage: Value) -> Vec<Value> {
     let item = json!({"type":"function_call","id":"fc_1","call_id":"call_1","name":"inert","status":"completed","arguments":arguments});
     vec![

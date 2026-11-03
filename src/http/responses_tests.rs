@@ -645,6 +645,57 @@ fn done_items_are_authoritative_when_the_terminal_copy_differs() {
     );
 }
 #[test]
+fn a_response_stopped_at_its_output_limit_keeps_its_finished_items_unless_it_made_a_call() {
+    let parsed = parse(&fixture::wire(
+        &fixture::cut_events("At the edge", fixture::known_usage()),
+        false,
+    ))
+    .unwrap();
+    assert_eq!(parsed.status, "incomplete");
+    assert!(complete(&parsed.usage.unwrap()));
+    let items = parsed.envelope.unwrap().items;
+    assert_eq!(items.len(), 1);
+    assert_eq!(message_text(&items[0]).as_deref(), Some("At the edge"));
+    assert_eq!(items[0].raw()["status"], "incomplete");
+
+    // A reasoning item still running when the reply stopped is left out.
+    let mut events = fixture::cut_events("x", Value::Null);
+    events.insert(
+        7,
+        json!({"type":"response.output_item.added","output_index":1,
+            "item":{"type":"reasoning","id":"rs_1","summary":[]}}),
+    );
+    let items = parse(&fixture::wire(&events, false))
+        .unwrap()
+        .envelope
+        .unwrap()
+        .items;
+    assert_eq!(items.len(), 1);
+
+    let mut other = fixture::cut_events("x", Value::Null);
+    other[8]["response"]["incomplete_details"]["reason"] = json!("content_filter");
+    let parsed = parse(&fixture::wire(&other, false)).unwrap();
+    assert!(parsed.envelope.is_none());
+    assert_eq!(parsed.error.as_deref(), Some("content_filter"));
+
+    let mut call = fixture::call_events("{}", Value::Null);
+    let terminal = call.last_mut().unwrap();
+    terminal["type"] = json!("response.incomplete");
+    terminal["response"]["status"] = json!("incomplete");
+    terminal["response"]["incomplete_details"] = json!({"reason":"max_output_tokens"});
+    assert!(
+        parse(&fixture::wire(&call, false))
+            .unwrap()
+            .envelope
+            .is_none()
+    );
+
+    // A completed response holds no item that stopped short.
+    let mut contradictory = fixture::text_events("x", Value::Null);
+    contradictory[7]["item"]["status"] = json!("incomplete");
+    assert!(parse(&fixture::wire(&contradictory, false)).is_err());
+}
+#[test]
 fn progress_reports_deltas_and_started_calls_only_when_enabled() {
     let bytes = fixture::wire(&fixture::continuation_events("hé🙂", "{}", "opaque"), false);
     let mut parser = ResponsesParser::new();

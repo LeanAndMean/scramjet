@@ -554,6 +554,54 @@ reached the output token limit (max_tokens); the tool call it was making did not
     }
 
     #[test]
+    fn a_gpt_reply_at_the_output_limit_keeps_its_text_and_ends_the_turn() {
+        // Stopped while reasoning after a message: the reasoning, which a replay would need
+        // followed by an item, is left out.
+        let mut reasoning = fixture::cut_events("Looking", fixture::known_usage());
+        let thought = json!({"type":"reasoning","id":"rs_2","summary":[],"status":"incomplete"});
+        reasoning.insert(
+            8,
+            json!({"type":"response.output_item.added","output_index":1,
+                "item":{"type":"reasoning","id":"rs_2","summary":[]}}),
+        );
+        reasoning.insert(
+            9,
+            json!({"type":"response.output_item.done","output_index":1,"item":thought}),
+        );
+        let (endpoint, server) = serve_requests(vec![
+            stream(&fixture::cut_events("At the edge", fixture::known_usage())),
+            stream(&reasoning),
+            stream(&fixture::text_events(
+                "Shorter then.",
+                fixture::known_usage(),
+            )),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "gpt-limit");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let error = agent.turn("Write a story", &mut ui, &cancel).unwrap_err();
+        assert!(
+            matches!(&error, AgentError::Provider(message) if message == "response incomplete: it \
+reached the output token limit (max_output_tokens)"),
+            "{error}"
+        );
+        assert_eq!(ui.replies, ["At the edge"]);
+        assert_eq!(agent.usage.output_tokens, 5);
+        agent.turn("Go on", &mut ui, &cancel).unwrap_err();
+        agent.turn("Continue", &mut ui, &cancel).unwrap();
+        let requests = server.join().unwrap();
+        let input = &requests[2].1["input"];
+        let shape: Vec<_> = (input.as_array().unwrap().iter())
+            .map(|item| (item["role"].as_str(), item["status"].as_str()))
+            .collect();
+        let (user, reply) = ((Some("user"), None), (Some("assistant"), Some("completed")));
+        assert_eq!(shape, [user, reply, user, reply, user]);
+        assert_eq!(input[1]["content"][0]["text"], "At the edge");
+        assert_eq!(input[3]["content"][0]["text"], "Looking");
+        assert_eq!(input[4]["content"], "Continue");
+    }
+
+    #[test]
     fn requests_share_the_session_cache_key_across_resumes() {
         let root =
             std::env::temp_dir().join(format!("scramjet-agent-cache-{}", std::process::id()));
