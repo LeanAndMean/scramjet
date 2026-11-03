@@ -1809,7 +1809,8 @@ run(['-p', 'peek'], printed_with_credentials, serve_items([[peek('call_1')], [me
 os.remove(os.path.join(project, 'made.txt'))
 class Screen:
     """The rows that the frames written since the last switch to the alternate screen leave on a
-    terminal `columns` wide: cursor moves, erasing and text; styles and modes are ignored."""
+    terminal `columns` wide, without autowrap as the full screen sets it (a character at the last
+    column leaves the cursor there): cursor moves, erasing and text; styles are ignored."""
 
     def __init__(self, output, columns, rows=24):
         self.grid = [[' '] * columns for _ in range(rows)]
@@ -1822,6 +1823,8 @@ class Screen:
             if final == 'H':
                 place = (parameters or '1;1').split(';') + ['1']
                 self.row, self.column = int(place[0] or 1) - 1, int(place[1] or 1) - 1
+            elif final == 'K' and parameters == '2':
+                self.grid[self.row] = [' '] * columns
             elif final == 'K':
                 self.grid[self.row][self.column:] = [' '] * (columns - self.column)
             elif final == 'J' and parameters == '2':
@@ -1830,9 +1833,9 @@ class Screen:
                 self.column = 0
             elif control == '\n':
                 self.row = min(self.row + 1, rows - 1)
-            elif character is not None and character >= ' ' and self.column < columns:
+            elif character is not None and character >= ' ':
                 self.grid[self.row][self.column] = character
-                self.column += 1
+                self.column = min(self.column + 1, columns - 1)
 
     def rows(self):
         return [''.join(row).rstrip() for row in self.grid]
@@ -2070,6 +2073,8 @@ def fullscreen_copy_into_the_dock(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     rows = on_screen('[2 requests')
+    # A row as wide as the screen keeps its last column.
+    assert full_width in rows, rows
     call = rows.index('\u25cf bash for w in a b; do')
     assert rows[call + 1:call + 3] == ['    echo $w', '  done'], rows
     # A command's later lines are copied as written, without the columns that put them under the first.
@@ -2296,8 +2301,9 @@ run(['--fullscreen'], left_the_screen(fullscreen_copy_unwrapped), serve_items([
     [tool_call('call_1', 'bash', {'command': "printf 'one\\n  two\\n'"})], [message(wrapped_reply)],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
                'CLIPBOARD': clipboard})
+full_width = 'Copied, and this reply fills every one of the sixty columns.'
 run(['--fullscreen'], left_the_screen(fullscreen_copy_into_the_dock), serve_items([
-    [tool_call('call_1', 'bash', {'command': 'for w in a b; do\n  echo $w\ndone'})], [message('Copied.')],
+    [tool_call('call_1', 'bash', {'command': 'for w in a b; do\n  echo $w\ndone'})], [message(full_width)],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
                'CLIPBOARD': clipboard})
 pastes = os.path.join(work, 'pastes')

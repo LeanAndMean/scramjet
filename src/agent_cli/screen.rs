@@ -1807,7 +1807,10 @@ impl App {
         }
         for (index, row) in frame.iter().enumerate() {
             if self.drawn.get(index) != Some(row) {
-                write!(out, "\x1b[{};1H{row}{}\x1b[K", index + 1, style::RESET).unwrap();
+                // Erased first: without autowrap, a row as wide as the screen leaves the
+                // cursor on its last cell, which erasing after it would take.
+                let reset = style::RESET;
+                write!(out, "\x1b[{};1H\x1b[2K{row}{reset}", index + 1).unwrap();
             }
         }
         if let Some((row, column)) = cursor.filter(|(row, _)| *row < height) {

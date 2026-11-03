@@ -44,6 +44,7 @@ Not scheduled; fix them when they matter.
 - The full screen renders a running turn's part again from all its events at each frame (at most every 16 ms); a very long turn may make that slow. Ctrl+O and Ctrl+T keep the view at the same part and line within it, which can move within a long turn.
 - A `!` command run during a turn in the full screen shows only its last 5 lines until the turn ends, not expandable with Ctrl+O (Scramjet's shows 20 and expands); a `!` typed while the session itself runs one (no turn) runs alongside it, where Scramjet refuses a second.
 - A built-in command typed during a turn in the full screen waits for the turn's next request, which can be minutes away while a tool or subagent runs (Scramjet runs `/session`, `/name` and `/model` at once); the dock shows it as `Command: …` meanwhile.
+- The inline editor's PTY journey `thinking_counts_seconds` once timed out waiting for `(cancelled)` after Ctrl-C (2026-11-03; passed before and on the rerun). The inline renderer is due to go (item 3); look into it if it recurs before then.
 - A failing test can leave its directory in `/tmp`: the `autonomy`, `commands`, `agent_cli::editor` and `agent_cli::file_search` tests remove theirs only at their end, where the other agent tests use the `agent::tests::ScratchDir` drop guard.
 
 ## Open questions
