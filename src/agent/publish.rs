@@ -5,7 +5,7 @@
 //! done only once read back, and one that may have happened is reported so, never retried.
 
 use super::{
-    AgentUi, Choice,
+    AgentUi,
     autonomy::{self, Publication},
     commands::Commands,
     forge::{self, Exec, Posted, Repository, Request},
@@ -394,12 +394,7 @@ fn publish(
             repository.shown(),
             proposal.consequence()
         );
-        let choices = ["Approve publication", "Cancel"].map(|label| Choice {
-            label: label.into(),
-            description: None,
-            value: label.into(),
-        });
-        if ui.choose(&title, &choices, None) != Some(0) {
+        if !ui.approve_publication(&title) {
             return Outcome::Cancelled;
         }
         ui.tool_running();

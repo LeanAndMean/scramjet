@@ -91,6 +91,20 @@ pub trait AgentUi {
         options: &[Choice],
         recommended: Option<usize>,
     ) -> Option<usize>;
+    /// Asks whether to publish what `question` just showed, under `title` with
+    /// `publication_choices`; `true` only when approved.
+    fn approve_publication(&mut self, title: &str) -> bool {
+        self.choose(title, &publication_choices(), None) == Some(0)
+    }
+}
+
+/// Scramjet's choices for a publication: approve it, then cancel.
+pub fn publication_choices() -> [Choice; 2] {
+    ["Approve publication", "Cancel"].map(|label| Choice {
+        label: label.into(),
+        description: None,
+        value: label.into(),
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

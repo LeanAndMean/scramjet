@@ -1761,6 +1761,16 @@ assert outputs[:2] == [verified, verified], outputs
 assert outputs[3] == 'Add issue comment publication cancelled. No remote write was performed.', outputs
 posts = [data for args, data in map(json.loads, open(forge_log)) if data is not None]
 assert posts == ['{"body":"It **breaks** on tabs.","title":"Fix the parser"}'] * 2, posts
+# In piped input the choice is a numbered line, and an empty one cancels: it may only separate prompts.
+for piped, outcome in [(b'file it\n\nthanks\n', 'cancelled'), (b'file it\n1\n', 'verified')]:
+    logged = len(open(forge_log).readlines())
+    ran = subprocess.run([BINARY, '--endpoint', serve_items([[filed], [message('Filed.')], [message('Thanks.')]])],
+                         cwd=project, env=dict(env, PATH=forge + os.pathsep + env['PATH']), input=piped,
+                         capture_output=True, timeout=30)
+    shown = ran.stderr.decode()
+    assert 'Choice [1-2, Enter = 2]: ' in shown and 'Create issue publication %s' % outcome in shown, shown
+    posts = [data for args, data in map(json.loads, open(forge_log).readlines()[logged:]) if data is not None]
+    assert len(posts) == (outcome == 'verified'), posts
 
 
 # The full screen's own features.

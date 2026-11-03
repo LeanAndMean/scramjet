@@ -11,6 +11,7 @@ use rustix::{
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, Compaction, DELEGATE,
     DELEGATE_SCOPE_WARNING, PUBLICATION_TOOLS, Purpose, StreamProgress, ToolDetail,
+    publication_choices,
 };
 use std::{
     io::{BufRead, IsTerminal, Write},
@@ -824,28 +825,24 @@ impl AgentUi for Terminal {
         options: &[Choice],
         recommended: Option<usize>,
     ) -> Option<usize> {
-        self.clear();
-        let stdin = std::io::stdin();
-        // On a terminal, keys typed before it answer nothing, and the answer is an echoed line.
-        let terminal = stdin.is_terminal();
-        if terminal {
-            let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
-        }
-        let _answer = terminal.then(InputMode::answer);
-        numbered_choice(title, options, recommended, terminal)
+        self.numbered(title, options, recommended, recommended.unwrap_or(0))
+    }
+    /// Unlike a question's, an empty line cancels: in piped input it may not be an answer.
+    fn approve_publication(&mut self, title: &str) -> bool {
+        self.numbered(title, &publication_choices(), None, 1) == Some(0)
     }
 }
 
-/// A question's options for `-p` and piped input: numbered, answered by a line with a number, or
-/// an empty one for the recommended (else the first) option; anything else cancels. `echoed`:
-/// the line typed shows, its newline included.
+/// Options for `-p` and piped input: numbered, answered by a line with a number, or an empty
+/// one for option `blank`; anything else cancels. `echoed`: the line typed shows, its newline
+/// included.
 fn numbered_choice(
     title: &str,
     options: &[Choice],
     recommended: Option<usize>,
+    blank: usize,
     echoed: bool,
 ) -> Option<usize> {
-    let initial = recommended.unwrap_or(0);
     let mut text = format!("{title}\n");
     for (index, option) in options.iter().enumerate() {
         text += &format!("  {}. {}", index + 1, visible(&option.label));
@@ -860,7 +857,7 @@ fn numbered_choice(
     eprint!(
         "{text}Choice [1-{}, Enter = {}]: ",
         options.len(),
-        initial + 1
+        blank + 1
     );
     let mut typed = String::new();
     let read = std::io::stdin().lock().read_line(&mut typed).unwrap_or(0);
@@ -871,7 +868,7 @@ fn numbered_choice(
         return None;
     }
     match typed.trim() {
-        "" => Some(initial),
+        "" => Some(blank),
         typed => typed
             .parse::<usize>()
             .ok()
@@ -988,6 +985,24 @@ impl Terminal {
         for row in editor::prompt_rows(prompt, width, self.marked) {
             self.err(&format!("{row}\n"));
         }
+    }
+    /// `options` numbered under `title`, as `numbered_choice` asks.
+    fn numbered(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+        blank: usize,
+    ) -> Option<usize> {
+        self.clear();
+        let stdin = std::io::stdin();
+        // On a terminal, keys typed before it answer nothing, and the answer is an echoed line.
+        let terminal = stdin.is_terminal();
+        if terminal {
+            let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
+        }
+        let _answer = terminal.then(InputMode::answer);
+        numbered_choice(title, options, recommended, blank, terminal)
     }
     fn ask(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         self.clear();
