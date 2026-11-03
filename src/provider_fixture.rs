@@ -26,19 +26,6 @@ pub fn call_events(arguments: &str, usage: Value) -> Vec<Value> {
         json!({"type":"response.completed","response":{"id":"resp_1","status":"completed","model":"gpt-6-luna","output":[item],"usage":usage}}),
     ]
 }
-/// A complete stream whose terminal reports failure, with complete usage: never executable.
-#[allow(dead_code)]
-pub fn failed_terminal_events() -> Vec<Value> {
-    let mut events = text_events("synthetic-private\u{001b}hé🙂", known_usage());
-    let terminal = events.last_mut().unwrap();
-    terminal["type"] = json!("response.failed");
-    terminal["response"]["status"] = json!("failed");
-    terminal["response"]["error"] = json!({"code":"server_error","message":"synthetic-private"});
-    terminal["response"]["output"][0]["synthetic-private\u{001b}key"] =
-        json!({"nested":"synthetic-private"});
-    events
-}
-#[allow(dead_code)]
 pub fn continuation_events(text: &str, arguments: &str, encrypted: &str) -> Vec<Value> {
     let call = call_events(arguments, known_usage());
     let message = text_events(text, known_usage());
@@ -82,36 +69,6 @@ pub fn continuation_events(text: &str, arguments: &str, encrypted: &str) -> Vec<
     output.push(message);
     events.push(json!({"type":"response.completed","response":{"id":"resp_1","status":"completed","output":output,"usage":known_usage()}}));
     events
-}
-
-#[allow(dead_code)]
-pub fn qualify_events(events: &mut [Value], ordinal: usize) {
-    fn qualify(value: &mut Value, ordinal: usize) {
-        match value {
-            Value::String(text)
-                if matches!(
-                    text.as_str(),
-                    "resp_1" | "rs_0" | "rs_1" | "fc_1" | "msg_1" | "call_1"
-                ) =>
-            {
-                *text = format!("{text}.{ordinal}");
-            }
-            Value::Array(values) => {
-                for value in values {
-                    qualify(value, ordinal);
-                }
-            }
-            Value::Object(values) => {
-                for value in values.values_mut() {
-                    qualify(value, ordinal);
-                }
-            }
-            _ => {}
-        }
-    }
-    for event in events {
-        qualify(event, ordinal);
-    }
 }
 
 pub fn known_usage() -> Value {

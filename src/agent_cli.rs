@@ -35,7 +35,7 @@ use std::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const USAGE: &str = "Usage: scramjet-rs agent [--project DIR] [--endpoint ADDR] [--model ID] \
+const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model ID] \
 [--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | --session FILE] [--ask]
 [-p PROMPT]
 
@@ -238,7 +238,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     }
 
     eprintln!(
-        "scramjet-rs agent · {} · {}\nsession {}",
+        "scramjet-rs · {} · {}\nsession {}",
         model_line(&agent),
         agent.root().display(),
         agent.session_path().display(),

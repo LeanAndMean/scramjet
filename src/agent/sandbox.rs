@@ -208,7 +208,6 @@ mod tests {
 
     #[test]
     fn sandboxed_commands_read_but_cannot_write_or_connect() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         super::available().expect("bubblewrap works here");
         let root = std::env::temp_dir().join(format!("scramjet-sandbox-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
@@ -256,7 +255,6 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
 
     #[test]
     fn credential_stores_are_hidden_and_left_unchanged() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let home = std::env::temp_dir().join(format!("scramjet-hidden-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
         std::fs::create_dir_all(home.join(".ssh")).unwrap();
@@ -292,7 +290,6 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
 
     #[test]
     fn a_cancelled_sandboxed_command_stops_with_everything_it_started() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let marker = format!("{}.{}", 300 + std::process::id() % 100, std::process::id());
         let cancel = AtomicBool::new(false);
         let started = Instant::now();

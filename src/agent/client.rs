@@ -80,7 +80,7 @@ const NON_OVERFLOW_WORDS: &[&str] = &["rate limit", "too many requests", "thrott
 
 pub(super) struct Reply {
     pub items: Vec<Value>,
-    pub usage: Option<crate::ProviderUsage>,
+    pub usage: Option<crate::http::responses::ProviderUsage>,
 }
 
 pub(super) enum ClientError {
@@ -378,11 +378,9 @@ async fn exchange(
             .iter()
             .map(|value| value.as_bytes()),
         SystemTime::now(),
-    )
-    .wait
-    {
-        Some(crate::RetryWait::Delay(delay)) => Some(delay),
-        Some(crate::RetryWait::Unrepresentable) => Some(Duration::MAX),
+    ) {
+        Some(crate::http::retry_after::RetryWait::Delay(delay)) => Some(delay),
+        Some(crate::http::retry_after::RetryWait::Unrepresentable) => Some(Duration::MAX),
         None => None,
     };
     let mut body = response.into_body();
@@ -473,7 +471,7 @@ async fn responses_reply(
             Some(outcome) => Err(match &parser.stream_error {
                 Some(event) => Failure::event(event),
                 None => {
-                    let cut_short = outcome == crate::Outcome::Incomplete;
+                    let cut_short = outcome == crate::http::responses::Outcome::Incomplete;
                     Failure::new(describe(&parser, outcome), cut_short)
                 }
             }),
@@ -484,7 +482,7 @@ async fn responses_reply(
     match parser.complete() {
         Err(outcome) => Err(Failure::new(
             format!("stream ended before the response completed ({outcome:?})"),
-            outcome == crate::Outcome::Incomplete,
+            outcome == crate::http::responses::Outcome::Incomplete,
         )),
         Ok(parsed) => match parsed.envelope {
             Some(envelope) => Ok(Reply {
@@ -511,7 +509,7 @@ async fn responses_reply(
     }
 }
 
-fn describe(parser: &ResponsesParser, outcome: crate::Outcome) -> String {
+fn describe(parser: &ResponsesParser, outcome: crate::http::responses::Outcome) -> String {
     let failure = &parser.failure;
     format!(
         "unexpected response stream ({outcome:?} at {:?}{}{})",

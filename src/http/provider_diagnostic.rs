@@ -1,15 +1,5 @@
-use serde::Serialize;
-
-pub const PROVIDER_DIAGNOSTIC_BYTES: usize = 4096;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderFailureStage {
-    Reservation,
-    Connect,
-    Handshake,
-    HttpHead,
-    ContentType,
-    Body,
     SseFrame,
     Json,
     Sequence,
@@ -23,18 +13,15 @@ pub enum ProviderFailureStage {
     Terminal,
     Usage,
     FinalItems,
-    MissingTerminal,
-    TrailingData,
-    Acknowledgement,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderIdentityProblem {
     Missing,
     NotString,
     Empty,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderFailure {
     pub stage: ProviderFailureStage,
     pub event: Option<&'static str>,

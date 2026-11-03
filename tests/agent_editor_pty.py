@@ -1,4 +1,4 @@
-"""Drives `scramjet-rs agent` in a pseudo-terminal: the prompt editor, and typing or quitting while
+"""Drives `scramjet-rs` in a pseudo-terminal: the prompt editor, and typing or quitting while
 a turn runs, against closed and scripted endpoints."""
 import atexit
 import fcntl
@@ -361,7 +361,7 @@ def run(arguments, script, endpoint=closed, status=0, variables={}):
         os.setsid()
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
-    child = subprocess.Popen([BINARY, 'agent', '--endpoint', endpoint, *arguments], cwd=project, env=dict(env, **variables),
+    child = subprocess.Popen([BINARY, '--endpoint', endpoint, *arguments], cwd=project, env=dict(env, **variables),
                              stdin=slave, stdout=slave, stderr=slave, close_fds=True, preexec_fn=own_terminal)
     output = bytearray()
 
@@ -430,7 +430,7 @@ def run_in_shell(script, endpoint):
     def send(data):
         os.write(master, data)
 
-    send(b'stty -g > ../mode; %s agent --endpoint %s\r' % (BINARY.encode(), endpoint.encode()))
+    send(b'stty -g > ../mode; %s --endpoint %s\r' % (BINARY.encode(), endpoint.encode()))
     script(read, until, send, output)
     send(b'exit\r')
     assert shell.wait(timeout=10) == 0, bytes(output[-2000:])
@@ -453,7 +453,7 @@ def suspend_in_shell(read, until, send, output):
     send(SAME_MODE)
     mark = until(b'restored-42', mark)
     send(b'fg\r')
-    mark = until(b'agent --endpoint', mark)
+    mark = until(b'scramjet-rs --endpoint', mark)
     shown = until(b'running', mark)
     assert b'A\x1b[J' not in output[mark:shown], 'redrawn over the shell\'s lines: %r' % bytes(output[mark:shown])
     send(b'hidden')

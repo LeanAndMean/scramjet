@@ -199,7 +199,7 @@ pub struct Usage {
 
 impl Usage {
     /// Counts a response's tokens.
-    fn count(&mut self, usage: &crate::ProviderUsage) {
+    fn count(&mut self, usage: &crate::http::responses::ProviderUsage) {
         self.input_tokens += usage.input_tokens.unwrap_or(0);
         self.cached_input_tokens += usage.cached_input_tokens.unwrap_or(0);
         self.output_tokens += usage.output_tokens.unwrap_or(0);
@@ -1669,7 +1669,7 @@ fn command_output(message: &str) -> String {
 
 /// A response's usage as saved with its last item: input tokens not read from the cache, output
 /// tokens and cache reads, as Scramjet's usage counts them.
-fn saved_usage(usage: &crate::ProviderUsage) -> Value {
+fn saved_usage(usage: &crate::http::responses::ProviderUsage) -> Value {
     let cached = usage.cached_input_tokens.unwrap_or(0);
     json!({
         "input": usage.input_tokens.unwrap_or(0).saturating_sub(cached),
@@ -2091,7 +2091,6 @@ mod tests {
 
     #[test]
     fn a_subagent_runs_its_task_read_only_and_returns_its_last_reply() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let (endpoint, server) = serve(vec![
             tool_call(
@@ -2174,7 +2173,6 @@ here\n\nkept.txt says original";
 
     #[test]
     fn parallel_and_chained_subagents_share_out_tasks_at_most_at_the_parents_effort() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let mut parent_requests = 0;
         let (endpoint, server) = serve_answering(8, move |body| {
@@ -2996,7 +2994,6 @@ response is incomplete; retry the request."});
 
     #[test]
     fn allowing_all_stops_later_approval_questions() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let bash = |id: &str| {
             let events = fixture::call_events(r#"{"command":"true"}"#, fixture::known_usage());
             let text = serde_json::to_string(&events).unwrap();
@@ -3055,7 +3052,6 @@ response is incomplete; retry the request."});
 
     #[test]
     fn tool_calls_run_without_questions_unless_asked() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let bash = |id: &str, command: &str| {
             let arguments = json!({ "command": command }).to_string();
             let events = fixture::call_events(&arguments, fixture::known_usage());
@@ -3089,7 +3085,6 @@ response is incomplete; retry the request."});
 
     #[test]
     fn bang_commands_run_without_a_turn_and_are_recalled_as_typed() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let (endpoint, server) = serve(vec![stream(&fixture::text_events(
             "ok",
             fixture::known_usage(),
@@ -3196,7 +3191,6 @@ response is incomplete; retry the request."});
 
     #[test]
     fn a_cancelled_bang_command_is_recorded_as_cancelled() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let (endpoint, _server) = serve(vec![]);
         let (mut agent, _scratch) = agent(endpoint, "bang-cancel");
         let mut ui = Recorder::default();
@@ -3282,7 +3276,6 @@ response is incomplete; retry the request."});
 
     #[test]
     fn results_keep_what_was_shown_for_a_resume_but_not_for_the_model() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let call = |id: &str, name: &str, arguments: Value| {
             let events = fixture::call_events(&arguments.to_string(), fixture::known_usage());
             let text = serde_json::to_string(&events).unwrap();

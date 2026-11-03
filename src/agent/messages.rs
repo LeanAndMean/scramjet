@@ -500,7 +500,7 @@ impl Stream {
             .collect();
         let usage = self.usage.map(|[input, read, write, output]| {
             let input = input + read + write;
-            crate::ProviderUsage {
+            crate::http::responses::ProviderUsage {
                 input_tokens: Some(input),
                 output_tokens: Some(output),
                 total_tokens: Some(input + output),

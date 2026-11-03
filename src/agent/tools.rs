@@ -1197,7 +1197,6 @@ disjoint regions."
 
     #[test]
     fn read_pages_long_files_and_bash_reports_exit_and_tail() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let root = std::env::temp_dir().join(format!("scramjet-agent-read-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
         let text: String = (1..=3000).map(|n| format!("line {n}\n")).collect();
@@ -1288,7 +1287,6 @@ disjoint regions."
 
     #[test]
     fn read_only_search_tools_answer_as_pis_do() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         assert!(search_program("grep").is_some() && search_program("find").is_some());
         let root =
             std::env::temp_dir().join(format!("scramjet-agent-search-{}", std::process::id()));
@@ -1438,7 +1436,6 @@ to see full lines]",
 
     #[test]
     fn subagent_tools_do_not_show_credential_stores() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let home =
             std::env::temp_dir().join(format!("scramjet-agent-hidden-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
@@ -1524,7 +1521,6 @@ to see full lines]",
 
     #[test]
     fn a_search_stops_its_program_when_done_or_cancelled() {
-        let _gate = crate::coding::tests::PROCESS_GATE.write().unwrap();
         let started = Instant::now();
         let mut command = Command::new("sh");
         command.args(["-c", "echo one; echo two; sleep 30"]);

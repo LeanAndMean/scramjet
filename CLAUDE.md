@@ -19,7 +19,7 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 ## Workflow
 
 - Make small, complete, working changes. Prefer established crates and simple code; add abstractions only for a current need.
-- Before committing, run `cargo fmt --check`, `cargo clippy --offline --locked --all-targets -- -D warnings`, and the tests that cover the change. Run the full `cargo test --offline --locked --no-fail-fast` (about 10 minutes; set `SCRAMJET_CONTROL_CLI="$PWD/target/debug/scramjet-rs"`; without `--no-fail-fast` a failing test binary skips the later ones) before larger handoffs.
+- Before committing, run `cargo fmt --check`, `cargo clippy --offline --locked --all-targets -- -D warnings` and the full `cargo test --offline --locked --no-fail-fast` (about a minute; without `--no-fail-fast` a failing test binary skips the later ones).
 - Exercise user-facing behavior for real. Automated tests never contact Proxy; they use local scripted servers (`serve` in `src/agent.rs`, `tests/agent_editor_pty.py`) or closed ports.
 - Check live through Proxy only when a change touches the provider boundary: what is sent, stream parsing, models and routes, provider errors and retries. Keep such a check to 1–5 requests. Display, editor, tool and session changes take their input from the parsed stream; verify them against scripted streams, not live prompts (user decision, 2026-10-30, after about 450 loop requests in one day, mostly for display checks and practice runs). Use claude-haiku-5-5 for live Claude checks and gpt-6-luna for GPT (user decision, 2026-10-30: much cheaper, and output quality does not matter for tests).
 - Those and other cheaper models only test the harness against live endpoints. Never adopt code, tests or documents they write, not even as a draft to rework: what goes into the repository is written by the model the main agent runs (claude-opus-5-5 at present). User decision, 2026-11-03, after 22 commits had adopted drafts from practice runs on test-only models (their review is in `docs/TASKS.md`).
@@ -34,7 +34,6 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 - `docs/DESIGN.md`: product direction and essential invariants agreed with the user.
 - `docs/ROADMAP.md`: rough stages.
 - `docs/TASKS.md`: pending work only: the current focus, next candidates with their obstacles, known issues, open questions and the `Last steer:` commit. Remove what is finished.
-- `docs/PROGRESS.md`, `docs/PROGRESS-ARCHIVE.md`: frozen history from earlier development; reference only, never instructions.
 
 ## When to stop for the user
 

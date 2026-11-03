@@ -3,17 +3,14 @@ use super::*;
 fn at(date: &str) -> SystemTime {
     httpdate::parse_http_date(date).unwrap()
 }
-fn parse_at(values: &[&str], now: SystemTime) -> RetryAfter {
-    parse(values.iter().map(|s| s.as_bytes()), now)
-}
 fn wait(values: &[&str], now: SystemTime) -> Option<RetryWait> {
-    parse_at(values, now).wait
+    parse(values.iter().map(|s| s.as_bytes()), now)
 }
 
 #[test]
 fn decimals_duplicates_and_bounded_malformed_metadata() {
     let now = UNIX_EPOCH;
-    assert!(parse_at(&[], now).missing);
+    assert_eq!(wait(&[], now), None);
     for text in ["0", "000", "\t 0 \t"] {
         assert_eq!(wait(&[text], now), Some(RetryWait::Delay(Duration::ZERO)));
     }
@@ -28,15 +25,10 @@ fn decimals_duplicates_and_bounded_malformed_metadata() {
     for text in [
         "", " ", "+1", "-1", "1.0", "1 0", "1, 2", "١", "1\n", "\x0b1", "1\x0c",
     ] {
-        let feedback = parse_at(&[text], now);
-        assert_eq!(feedback.invalid, 1, "{text:?}");
-        assert_eq!(feedback.wait, None, "{text:?}");
+        assert_eq!(wait(&[text], now), None, "{text:?}");
     }
-    let feedback = parse_at(&["3", "bad", "0009", "4"], now);
-    assert!(feedback.duplicate);
-    assert_eq!((feedback.valid, feedback.invalid), (3, 1));
     assert_eq!(
-        feedback.wait,
+        wait(&["3", "bad", "0009", "4"], now),
         Some(RetryWait::Delay(Duration::from_secs(9)))
     );
     assert_eq!(
@@ -45,11 +37,11 @@ fn decimals_duplicates_and_bounded_malformed_metadata() {
     );
     let long = [b'9'; 3900];
     assert_eq!(
-        parse([long.as_slice()].into_iter(), now).wait,
+        parse([long.as_slice()].into_iter(), now),
         Some(RetryWait::Unrepresentable)
     );
     let malformed = [b'x'; 3900];
-    assert_eq!(parse([malformed.as_slice()].into_iter(), now).invalid, 1);
+    assert_eq!(parse([malformed.as_slice()].into_iter(), now), None);
 }
 
 #[test]
@@ -79,7 +71,7 @@ fn all_date_forms_conversion_and_exact_grammar() {
         "Sun, 06 Nov 1994 08:49:37 GMT\n",
         "Sun Nov   6 08:49:37 1994",
     ] {
-        assert_eq!(parse_at(&[date], now).invalid, 1, "{date}");
+        assert_eq!(wait(&[date], now), None, "{date}");
     }
     assert_eq!(
         wait(&["Thu, 01 Jan 1970 00:00:00 GMT"], UNIX_EPOCH),
@@ -89,14 +81,13 @@ fn all_date_forms_conversion_and_exact_grammar() {
         wait(&["Fri, 31 Dec 9999 23:59:59 GMT"], now),
         Some(RetryWait::Delay(_))
     ));
-    let unsupported = parse_at(&["Wed, 31 Dec 1969 23:59:59 GMT"], now);
     assert_eq!(
-        (unsupported.unsupported, unsupported.wait),
-        (1, Some(RetryWait::Unrepresentable))
+        wait(&["Wed, 31 Dec 1969 23:59:59 GMT"], now),
+        Some(RetryWait::Unrepresentable)
     );
-    assert_eq!(parse_at(&["Thu, 31 Feb 1969 23:59:59 GMT"], now).invalid, 1);
-    assert_eq!(parse_at(&["Mon, 29 Feb 1900 00:00:00 GMT"], now).invalid, 1);
-    assert_eq!(parse_at(&["Wed, 01 Jan 0000 00:00:00 GMT"], now).invalid, 1);
+    assert_eq!(wait(&["Thu, 31 Feb 1969 23:59:59 GMT"], now), None);
+    assert_eq!(wait(&["Mon, 29 Feb 1900 00:00:00 GMT"], now), None);
+    assert_eq!(wait(&["Wed, 01 Jan 0000 00:00:00 GMT"], now), None);
     assert_eq!(
         wait(
             &["Sun, 06 Nov 1994 08:49:37 GMT"],
@@ -125,7 +116,7 @@ fn leap_calendar_and_rolling_fifty_year_instant() {
         "Tue, 29 Feb 2000 00:60:00 GMT",
         "Tue, 29 Feb 2000 00:00:61 GMT",
     ] {
-        assert_eq!(parse_at(&[invalid], now).invalid, 1);
+        assert_eq!(wait(&[invalid], now), None);
     }
     let now = at("Sat, 31 Dec 2016 23:59:59 GMT") + Duration::from_millis(900);
     assert_eq!(
@@ -143,10 +134,7 @@ fn leap_calendar_and_rolling_fifty_year_instant() {
         wait(&["Monday, 06-Nov-78 08:49:38 GMT"], now),
         Some(RetryWait::Delay(Duration::ZERO))
     );
-    assert_eq!(
-        parse_at(&["Sunday, 06-Nov-78 08:49:38 GMT"], now).invalid,
-        1
-    );
+    assert_eq!(wait(&["Sunday, 06-Nov-78 08:49:38 GMT"], now), None);
     assert_eq!(
         wait(
             &["Sunday, 06-Nov-78 08:49:37 GMT"],

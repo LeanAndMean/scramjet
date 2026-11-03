@@ -1,18 +1,23 @@
 use super::provider_diagnostic::{ProviderFailure, ProviderFailureStage, ProviderIdentityProblem};
-use crate::Outcome;
 use serde::{
     Deserialize,
     de::{self, MapAccess, SeqAccess, Visitor},
 };
 use serde_json::{Map, Value, json};
-use std::{collections::BTreeSet, fmt, io};
+use std::{fmt, io};
 
 pub const PROVIDER_ENVELOPE_BYTES: usize = 16_384;
 pub const PROVIDER_FRAME_BYTES: usize = 16_384;
 pub const PROVIDER_OUTPUT_ITEMS: usize = 8;
-pub const PROVIDER_MODEL: &str = "gpt-6-luna";
-// Eight selected journey turns can each retain eight items, a result and user input.
-const INPUT_ITEMS: usize = 8 * (PROVIDER_OUTPUT_ITEMS + 2);
+
+/// Why a stream or value was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    Framing,
+    Unsupported,
+    Incomplete,
+    ResourceLimit,
+}
 
 /// Incremental output reported while a response streams, for display only.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +36,7 @@ pub struct ParserLimits {
     pub items: usize,
 }
 impl ParserLimits {
+    #[cfg(test)]
     pub const DEFAULT: Self = Self {
         frame: PROVIDER_FRAME_BYTES,
         envelope: PROVIDER_ENVELOPE_BYTES,
@@ -48,9 +54,6 @@ pub struct ProviderUsage {
     pub reasoning_tokens: Option<u64>,
 }
 impl ProviderUsage {
-    pub fn complete(&self) -> bool {
-        self.input_tokens.is_some() && self.output_tokens.is_some() && self.total_tokens.is_some()
-    }
     pub(crate) fn validate(&self) -> Result<(), Outcome> {
         if let (Some(input), Some(output), Some(total)) =
             (self.input_tokens, self.output_tokens, self.total_tokens)
@@ -76,9 +79,6 @@ pub struct ProviderItem {
     wire: Value,
 }
 impl ProviderItem {
-    pub(crate) fn from_context(wire: Value) -> Result<Self, Outcome> {
-        Self::checked(wire, PROVIDER_ENVELOPE_BYTES)
-    }
     fn checked(wire: Value, limit: usize) -> Result<Self, Outcome> {
         bounded_json(&wire, limit)?;
         validate_item(&wire, true)?;
@@ -87,159 +87,10 @@ impl ProviderItem {
     pub(crate) fn raw(&self) -> &Value {
         &self.wire
     }
-    pub fn id(&self) -> &str {
-        self.wire["id"].as_str().expect("validated item identity")
-    }
-    pub fn kind(&self) -> &str {
-        self.wire["type"].as_str().expect("validated item type")
-    }
-    pub fn function_call(&self) -> Option<ProviderFunctionCall<'_>> {
-        (self.kind() == "function_call").then(|| ProviderFunctionCall {
-            call_id: self.wire["call_id"].as_str().unwrap(),
-            name: self.wire["name"].as_str().unwrap(),
-            arguments: self.wire["arguments"].as_str().unwrap(),
-        })
-    }
-    pub fn text(&self) -> Option<String> {
-        (self.kind() == "message").then(|| {
-            self.wire["content"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|part| part["text"].as_str().unwrap())
-                .collect()
-        })
-    }
-}
-#[derive(Clone, Copy, Debug)]
-pub struct ProviderFunctionCall<'a> {
-    pub call_id: &'a str,
-    pub name: &'a str,
-    pub arguments: &'a str,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProviderEnvelope {
-    pub response_id: String,
     pub items: Vec<ProviderItem>,
-}
-#[derive(Clone, Debug)]
-pub enum ProviderInput {
-    User(String),
-    Item(ProviderItem),
-    ToolResult { call_id: String, output: String },
-}
-#[derive(Clone, Debug)]
-pub struct ProviderTool {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-}
-#[derive(Clone, Debug)]
-pub struct ProviderRequest {
-    pub(crate) encoded: String,
-}
-impl ProviderRequest {
-    pub fn new(input: &[ProviderInput], tools: &[ProviderTool]) -> Result<Self, Outcome> {
-        if input.is_empty() || input.len() > INPUT_ITEMS || tools.len() > 3 {
-            return Err(Outcome::ResourceLimit);
-        }
-        let mut admitted_bytes = 0usize;
-        for item in input {
-            let bytes = match item {
-                ProviderInput::User(text) => text.len(),
-                ProviderInput::Item(item) => {
-                    bounded_json(&item.wire, PROVIDER_ENVELOPE_BYTES)?.len()
-                }
-                ProviderInput::ToolResult { call_id, output } => call_id
-                    .len()
-                    .checked_add(output.len())
-                    .ok_or(Outcome::ResourceLimit)?,
-            };
-            admitted_bytes = admitted_bytes
-                .checked_add(bytes)
-                .ok_or(Outcome::ResourceLimit)?;
-            if admitted_bytes > PROVIDER_ENVELOPE_BYTES {
-                return Err(Outcome::ResourceLimit);
-            }
-        }
-        for tool in tools {
-            let schema = bounded_json(&tool.parameters, PROVIDER_ENVELOPE_BYTES)?;
-            for bytes in [tool.name.len(), tool.description.len(), schema.len()] {
-                admitted_bytes = admitted_bytes
-                    .checked_add(bytes)
-                    .ok_or(Outcome::ResourceLimit)?;
-                if admitted_bytes > PROVIDER_ENVELOPE_BYTES {
-                    return Err(Outcome::ResourceLimit);
-                }
-            }
-        }
-        let mut ids = BTreeSet::new();
-        let mut calls = BTreeSet::new();
-        let mut pending = None;
-        let mut wire_input = Vec::with_capacity(input.len());
-        for item in input {
-            match item {
-                ProviderInput::User(text) => {
-                    if pending.is_some() {
-                        return Err(Outcome::Framing);
-                    }
-                    if text.len() > PROVIDER_ENVELOPE_BYTES {
-                        return Err(Outcome::ResourceLimit);
-                    }
-                    wire_input.push(json!({"role":"user","content":text}));
-                }
-                ProviderInput::Item(item) => {
-                    if !ids.insert(item.id()) {
-                        return Err(Outcome::Framing);
-                    }
-                    if let Some(call) = item.function_call() {
-                        if pending.is_some() || !calls.insert(call.call_id) {
-                            return Err(Outcome::Framing);
-                        }
-                        pending = Some(call.call_id);
-                    }
-                    wire_input.push(item.wire.clone());
-                }
-                ProviderInput::ToolResult { call_id, output } => {
-                    if pending != Some(call_id.as_str()) {
-                        return Err(Outcome::Framing);
-                    }
-                    if output.len() > PROVIDER_ENVELOPE_BYTES {
-                        return Err(Outcome::ResourceLimit);
-                    }
-                    pending = None;
-                    wire_input.push(
-                        json!({"type":"function_call_output","call_id":call_id,"output":output}),
-                    );
-                }
-            }
-        }
-        if pending.is_some() {
-            return Err(Outcome::Framing);
-        }
-        let mut names = BTreeSet::new();
-        let mut wire_tools = Vec::with_capacity(tools.len());
-        for tool in tools {
-            if !name(&tool.name) || !names.insert(&tool.name) || !tool.parameters.is_object() {
-                return Err(Outcome::Framing);
-            }
-            if tool.description.len() > PROVIDER_ENVELOPE_BYTES {
-                return Err(Outcome::ResourceLimit);
-            }
-            wire_tools.push(
-                json!({"type":"function","name":tool.name,"description":tool.description,
-                "parameters":tool.parameters,"strict":true}),
-            );
-        }
-        let wire = json!({"model":PROVIDER_MODEL,"input":wire_input,"tools":wire_tools,
-            "stream":true,"store":false,"include":["reasoning.encrypted_content"],
-            "max_output_tokens":1024,"parallel_tool_calls":false});
-        let encoded = bounded_json(&wire, PROVIDER_ENVELOPE_BYTES)?;
-        Ok(Self { encoded })
-    }
-    pub fn encoded_bytes(&self) -> usize {
-        self.encoded.len()
-    }
 }
 
 struct BoundedWriter {
@@ -372,9 +223,6 @@ pub(crate) fn bounded_json_value(bytes: &[u8], limit: usize) -> Result<Value, Ou
 #[cfg(test)]
 pub(crate) fn strict_json(bytes: &[u8]) -> Result<Value, Outcome> {
     bounded_json_value(bytes, PROVIDER_FRAME_BYTES)
-}
-pub(crate) fn metadata_json(bytes: &[u8]) -> Result<Value, Outcome> {
-    bounded_json_value(bytes, crate::runtime::MAX_WIRE)
 }
 fn string<'a>(value: &'a Value, field: &str) -> Result<&'a str, Outcome> {
     value
@@ -533,8 +381,6 @@ pub(crate) struct ParsedResponse {
     pub(crate) error_code: Option<String>,
     pub(crate) envelope: Option<ProviderEnvelope>,
     pub(crate) usage: Option<ProviderUsage>,
-    pub(crate) response_id: String,
-    pub(crate) reported_model: Option<String>,
     pub(crate) status: String,
 }
 pub(crate) struct ResponsesParser {
@@ -554,6 +400,7 @@ pub(crate) struct ResponsesParser {
     pub(crate) stream_error: Option<Value>,
 }
 impl ResponsesParser {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::with_limits(ParserLimits::DEFAULT)
     }
@@ -1048,11 +895,9 @@ impl ResponsesParser {
         }
         let response = self.terminal.ok_or(Outcome::Incomplete)?;
         let status = string(&response, "status")?.to_owned();
-        let response_id = self.response_id.unwrap();
         let usage = usage(&response)?;
         let envelope = if status == "completed" {
             Some(ProviderEnvelope {
-                response_id: response_id.clone(),
                 items: self
                     .items
                     .into_iter()
@@ -1071,16 +916,11 @@ impl ResponsesParser {
             error_code: response["error"]["code"].as_str().map(str::to_owned),
             envelope,
             usage,
-            response_id,
-            reported_model: self.reported_model,
             status,
         })
     }
 }
 
-#[cfg(test)]
-#[path = "responses_context_tests.rs"]
-mod responses_context_tests;
 #[cfg(test)]
 #[path = "responses_tests.rs"]
 mod responses_tests;

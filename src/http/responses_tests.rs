@@ -8,6 +8,19 @@ fn parse(bytes: &[u8]) -> Result<ParsedResponse, Outcome> {
     }
     parser.complete()
 }
+fn complete(usage: &ProviderUsage) -> bool {
+    usage.input_tokens.is_some() && usage.output_tokens.is_some() && usage.total_tokens.is_some()
+}
+fn message_text(item: &ProviderItem) -> Option<String> {
+    (item.raw()["type"] == "message").then(|| {
+        item.raw()["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|part| part["text"].as_str().unwrap())
+            .collect()
+    })
+}
 #[test]
 fn text_and_call_roundtrip_every_split_and_newline() {
     for crlf in [false, true] {
@@ -24,27 +37,10 @@ fn text_and_call_roundtrip_every_split_and_newline() {
                     }
                 }
                 let parsed = parser.complete().unwrap();
-                assert_eq!(parsed.response_id, "resp_1");
-                assert!(parsed.usage.unwrap().complete());
+                assert!(complete(&parsed.usage.unwrap()));
                 let envelope = parsed.envelope.unwrap();
-                let mut input = vec![ProviderInput::User("synthetic".into())];
-                for item in envelope.items {
-                    let call = item.function_call().map(|c| c.call_id.to_owned());
-                    input.push(ProviderInput::Item(item));
-                    if let Some(call_id) = call {
-                        input.push(ProviderInput::ToolResult {
-                            call_id,
-                            output: "read back".into(),
-                        });
-                    }
-                }
-                let request = ProviderRequest::new(&input, &[]).unwrap();
-                let value = strict_json(request.encoded.as_bytes()).unwrap();
-                assert_eq!(value["model"], PROVIDER_MODEL);
-                assert_eq!(value["max_output_tokens"], 1024);
-                assert_eq!(value["store"], false);
                 assert_eq!(
-                    value["input"][1]["id"],
+                    envelope.items[0].raw()["id"],
                     if events.len() == 9 { "msg_1" } else { "fc_1" }
                 );
             }
@@ -145,26 +141,8 @@ fn bounded_opaque_ids_are_correlated_and_replayed_without_character_normalizatio
     events[5]["response"]["output"][0]["call_id"] = json!(call_id);
     let parsed = parse(&fixture::wire(&events, false)).unwrap();
     let envelope = parsed.envelope.unwrap();
-    assert_eq!(envelope.response_id, response_id);
-    let request = ProviderRequest::new(
-        &[
-            ProviderInput::Item(envelope.items[0].clone()),
-            ProviderInput::ToolResult {
-                call_id: call_id.into(),
-                output: "observed".into(),
-            },
-        ],
-        &[],
-    )
-    .unwrap();
-    assert_eq!(
-        strict_json(request.encoded.as_bytes()).unwrap()["input"][0]["id"],
-        item_id
-    );
-    assert_eq!(
-        strict_json(request.encoded.as_bytes()).unwrap()["input"][1]["call_id"],
-        call_id
-    );
+    assert_eq!(envelope.items[0].raw()["id"], item_id);
+    assert_eq!(envelope.items[0].raw()["call_id"], call_id);
     assert!(identity(&"x".repeat(4096)));
     assert!(identity(&"\u{0000}".repeat(1024)));
     assert!(!identity(""));
@@ -199,10 +177,7 @@ fn final_function_calls_keep_optional_status_and_initial_argument_evidence() {
     events.remove(2);
     let parsed = parse(&fixture::wire(&events, false)).unwrap();
     assert_eq!(
-        parsed.envelope.unwrap().items[0]
-            .function_call()
-            .unwrap()
-            .arguments,
+        parsed.envelope.unwrap().items[0].raw()["arguments"],
         arguments
     );
     events[1]["item"]["arguments"] = json!("{\"message\":\"different\"}");
@@ -216,8 +191,7 @@ fn opaque_ids_and_reported_models_use_aggregate_budgets_not_guessed_field_caps()
         events[0]["response"]["id"] = json!(id);
         events[1]["response"]["id"] = json!(id);
         events[8]["response"]["id"] = json!(id);
-        let parsed = parse(&fixture::wire(&events, false)).unwrap();
-        assert_eq!(parsed.response_id, id);
+        assert!(parse(&fixture::wire(&events, false)).is_ok());
     }
     let mut events = fixture::call_events("{}", fixture::known_usage());
     let id = "opaque:/+==".repeat(384);
@@ -235,22 +209,7 @@ fn opaque_ids_and_reported_models_use_aggregate_budgets_not_guessed_field_caps()
     }
     events[5]["response"]["output"][0] = events[4]["item"].clone();
     let parsed = parse(&fixture::wire(&events, false)).unwrap();
-    assert_eq!(parsed.reported_model.as_deref(), Some(model.as_str()));
-    let request = ProviderRequest::new(
-        &[
-            ProviderInput::Item(parsed.envelope.unwrap().items[0].clone()),
-            ProviderInput::ToolResult {
-                call_id: id.clone(),
-                output: "observed".into(),
-            },
-        ],
-        &[],
-    )
-    .unwrap();
-    assert_eq!(
-        strict_json(request.encoded.as_bytes()).unwrap()["input"][1]["call_id"],
-        id
-    );
+    assert_eq!(parsed.envelope.unwrap().items[0].raw()["call_id"], id);
     let mut events = fixture::text_events("x", Value::Null);
     events[0]["response"]["id"] = json!("x".repeat(PROVIDER_FRAME_BYTES));
     assert!(matches!(
@@ -289,7 +248,7 @@ fn byte_bounded_large_part_lists_preserve_metadata_without_saving_small_allocati
     let parsed = parse(&fixture::wire(&events, false)).unwrap();
     let item = &parsed.envelope.unwrap().items[0];
     assert_eq!(
-        item.text().unwrap(),
+        message_text(item).unwrap(),
         (0..32).map(|index| format!("x{index}")).collect::<String>()
     );
     assert_eq!(item.wire["content"][31]["opaque"], metadata);
@@ -335,70 +294,6 @@ fn valid_deep_json_is_a_work_budget_refusal_not_malformed_protocol() {
     assert_eq!(strict_json(b"[broken]"), Err(Outcome::Framing));
 }
 #[test]
-fn representative_complete_parent_context_with_185_byte_ids_fits_without_clipping() {
-    let poem = "\u{0000}".repeat(512);
-    let script = "from pathlib import Path\nprint(Path('haiku.md').read_text(), end='')\n";
-    let tools:Vec<_>=["write","read","bash"].into_iter().map(|name|ProviderTool {name:name.into(),description:"bounded synthetic tool".into(),
-        parameters: match name {
-            "write" => json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}),
-            "read" => json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
-            _ => json!({"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}),
-        }}).collect();
-    let steps = [
-        (
-            "write",
-            json!({"path":"haiku.md","content":poem}),
-            "created".to_owned(),
-        ),
-        ("read", json!({"path":"haiku.md"}), poem.clone()),
-        (
-            "write",
-            json!({"path":"print_haiku.py","content":script}),
-            "created".into(),
-        ),
-        (
-            "bash",
-            json!({"command":"/usr/bin/python3 -I print_haiku.py"}),
-            poem.clone(),
-        ),
-    ];
-    let mut input = vec![ProviderInput::User(
-        "create/read a haiku, create a Python reader, execute via fixed Bash".into(),
-    )];
-    for (ordinal, (name, arguments, output)) in steps.into_iter().enumerate() {
-        let mut events = fixture::call_events(&arguments.to_string(), fixture::known_usage());
-        let response_id = format!("resp.{ordinal}{}", "x".repeat(179));
-        let item_id = format!("item.{ordinal}{}", "x".repeat(179));
-        let call_id = format!("call.{ordinal}{}", "x".repeat(179));
-        events[0]["response"]["id"] = json!(response_id);
-        events[5]["response"]["id"] = json!(response_id);
-        for i in [1, 4] {
-            events[i]["item"]["id"] = json!(item_id);
-            events[i]["item"]["call_id"] = json!(call_id);
-            events[i]["item"]["name"] = json!(name);
-        }
-        for i in [2, 3] {
-            events[i]["item_id"] = json!(item_id);
-        }
-        events[5]["response"]["output"][0] = events[4]["item"].clone();
-        let envelope = parse(&fixture::wire(&events, false))
-            .unwrap()
-            .envelope
-            .unwrap();
-        input.push(ProviderInput::Item(envelope.items[0].clone()));
-        input.push(ProviderInput::ToolResult { call_id, output });
-    }
-    let request = ProviderRequest::new(&input, &tools).unwrap();
-    println!(
-        "representative-parent-185-id-request={}",
-        request.encoded_bytes()
-    );
-    assert!(request.encoded_bytes() <= PROVIDER_ENVELOPE_BYTES);
-    let wire = strict_json(request.encoded.as_bytes()).unwrap();
-    assert_eq!(wire["input"][4]["output"], poem);
-    assert_eq!(wire["input"][8]["output"], poem);
-}
-#[test]
 fn interleaved_items_and_initial_text_remain_provisional_until_all_final_items_match() {
     let text = fixture::text_events("hé🙂", fixture::known_usage());
     let added = json!({"id":"rs_1","type":"reasoning","summary":[],"status":"in_progress"});
@@ -421,7 +316,7 @@ fn interleaved_items_and_initial_text_remain_provisional_until_all_final_items_m
     events.push(json!({"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[finished,text[7]["item"]],"usage":fixture::known_usage()}}));
     let parsed = parse(&fixture::wire(&events, false)).unwrap();
     assert_eq!(
-        parsed.envelope.unwrap().items[1].text().as_deref(),
+        message_text(&parsed.envelope.unwrap().items[1]).as_deref(),
         Some("hé🙂")
     );
     events.remove(events.len() - 2);
@@ -449,11 +344,7 @@ fn response_metadata_is_consistent_without_assuming_request_model_echo() {
     for i in [0, 1, 8] {
         events[i]["response"]["model"] = json!("qualified-deployment-model");
     }
-    let parsed = parse(&fixture::wire(&events, false)).unwrap();
-    assert_eq!(
-        parsed.reported_model.as_deref(),
-        Some("qualified-deployment-model")
-    );
+    assert!(parse(&fixture::wire(&events, false)).is_ok());
     let mut contradictory = events.clone();
     contradictory[8]["response"]["model"] = json!("different");
     assert!(parse(&fixture::wire(&contradictory, false)).is_err());
@@ -487,7 +378,7 @@ fn standard_sse_metadata_multiline_data_and_optional_done_do_not_mint_authority(
         ));
         let parsed = parse(wire.as_bytes()).unwrap();
         assert!(parsed.envelope.is_some());
-        assert!(parsed.usage.unwrap().complete());
+        assert!(complete(&parsed.usage.unwrap()));
         wire.push_str(&format!(
             "data: [DONE]{newline}{newline}data: junk{newline}{newline}"
         ));
@@ -505,7 +396,7 @@ fn failures_preserve_usage_without_executable_items() {
         ];
         let parsed = parse(&fixture::wire(&events, false)).unwrap();
         assert!(parsed.envelope.is_none());
-        assert!(parsed.usage.unwrap().complete());
+        assert!(complete(&parsed.usage.unwrap()));
         assert_eq!(parsed.status, status);
     }
     let parsed = parse(&fixture::wire(
@@ -530,41 +421,15 @@ fn failures_preserve_usage_without_executable_items() {
         false,
     ))
     .unwrap();
-    assert!(!parsed.usage.unwrap().complete());
+    assert!(!complete(&parsed.usage.unwrap()));
 }
 #[test]
-fn request_and_frame_limits_reject_without_clipping() {
+fn frame_limit_and_malformed_json_reject_without_clipping() {
     let mut parser = ResponsesParser::new();
     for _ in 0..PROVIDER_FRAME_BYTES {
         parser.byte(b'x').unwrap();
     }
     assert_eq!(parser.byte(b'x'), Err(Outcome::ResourceLimit));
-    assert!(
-        ProviderRequest::new(
-            &[ProviderInput::User("x".repeat(PROVIDER_ENVELOPE_BYTES))],
-            &[]
-        )
-        .is_err()
-    );
-    assert!(
-        ProviderRequest::new(
-            &[ProviderInput::User(
-                "\u{0000}".repeat(PROVIDER_ENVELOPE_BYTES / 6)
-            )],
-            &[]
-        )
-        .is_err()
-    );
-    let request =
-        ProviderRequest::new(&[ProviderInput::User("\u{0000}".repeat(2000))], &[]).unwrap();
-    assert!(request.encoded_bytes() <= PROVIDER_ENVELOPE_BYTES);
-    assert_eq!(
-        strict_json(request.encoded.as_bytes()).unwrap()["input"][0]["content"]
-            .as_str()
-            .unwrap()
-            .len(),
-        2000
-    );
     assert!(strict_json(b"{\"type\":1,\"type\":2}").is_err());
     assert!(strict_json(b"{\"a\":{\"x\":1,\"x\":2}}").is_err());
     assert!(parse(b"data: \xff\n\n").is_err());
@@ -594,26 +459,14 @@ fn opaque_reasoning_and_complete_mixed_output_survive_replay() {
     }
     events.push(json!({"type":"response.completed","response":{"id":"resp_1","status":"completed",
         "output":[reasoning_done,call[4]["item"].clone(),text[7]["item"].clone()],"usage":fixture::known_usage()}}));
-    let parsed = parse(&fixture::wire(&events, false)).unwrap();
-    let mut input = vec![ProviderInput::User("synthetic".into())];
-    input.extend(
-        parsed
-            .envelope
-            .unwrap()
-            .items
-            .into_iter()
-            .map(ProviderInput::Item),
-    );
-    input.push(ProviderInput::ToolResult {
-        call_id: "call_1".into(),
-        output: "observed".into(),
-    });
-    let request = ProviderRequest::new(&input, &[]).unwrap();
-    let wire = strict_json(request.encoded.as_bytes()).unwrap();
-    assert_eq!(wire["input"][1]["encrypted_content"], "opaque-synthetic");
-    assert_eq!(wire["input"][2]["call_id"], "call_1");
-    assert_eq!(wire["input"][3]["id"], "msg_1");
-    assert_eq!(wire["input"][4]["output"], "observed");
+    let items = parse(&fixture::wire(&events, false))
+        .unwrap()
+        .envelope
+        .unwrap()
+        .items;
+    assert_eq!(items[0].raw()["encrypted_content"], "opaque-synthetic");
+    assert_eq!(items[1].raw()["call_id"], "call_1");
+    assert_eq!(items[2].raw()["id"], "msg_1");
 }
 #[test]
 fn unsupported_namespace_and_part_or_item_repetition_are_non_executable() {
@@ -632,7 +485,7 @@ fn unsupported_namespace_and_part_or_item_repetition_are_non_executable() {
         if text[i]["type"] == "response.output_text.delta" {
             // Deltas are only shown while streaming; the final text is the done event's.
             let items = parsed.unwrap().envelope.unwrap().items;
-            assert_eq!(items[0].text().as_deref(), Some("x"));
+            assert_eq!(message_text(&items[0]).as_deref(), Some("x"));
         } else {
             assert!(parsed.is_err(), "repeated text event {i}");
         }
@@ -677,9 +530,9 @@ fn items_are_found_by_id_and_a_text_may_arrive_only_in_its_done_event() {
         .envelope
         .unwrap()
         .items;
-    let kinds: Vec<_> = items.iter().map(|item| item.kind()).collect();
+    let kinds: Vec<_> = items.iter().map(|item| &item.raw()["type"]).collect();
     assert_eq!(kinds, ["message", "reasoning"]);
-    assert_eq!(items[0].text().as_deref(), Some("2"));
+    assert_eq!(message_text(&items[0]).as_deref(), Some("2"));
     let mut repeated = events.to_vec();
     repeated.insert(4, events[3].clone());
     assert!(parse(&fixture::wire(&repeated, false)).is_err());
@@ -708,136 +561,6 @@ fn compatibility_resource_and_malformed_failures_are_distinct() {
         Err(Outcome::ResourceLimit)
     ));
 }
-#[test]
-fn eight_turn_journey_retains_complete_escaped_files_tools_and_multiple_reasoning_items() {
-    let poem = "\u{0000}".repeat(512);
-    let script = "from pathlib import Path\nprint(Path('haiku.md').read_text(), end='')\n";
-    let tools: Vec<_> = ["write","read","bash"].into_iter().map(|name| ProviderTool {
-        name:name.into(),description:"bounded synthetic tool".into(),
-        parameters:json!({"type":"object","properties":{"payload":{"type":"string"}},"required":["payload"],"additionalProperties":false}),
-    }).collect();
-    for all_call_turns in [true, false] {
-        let mut input = vec![ProviderInput::User("Create/read haiku.md, create print_haiku.py, run fixed Python via Bash; preserve all context.".into())];
-        let mut expected = vec![
-            json!({"role":"user","content":"Create/read haiku.md, create print_haiku.py, run fixed Python via Bash; preserve all context."}),
-        ];
-        for ordinal in 0..8 {
-            let (name, arguments, output) = match ordinal {
-                0 => (
-                    "write",
-                    json!({"path":"haiku.md","content":poem}),
-                    "created".into(),
-                ),
-                1 => ("read", json!({"path":"haiku.md"}), poem.clone()),
-                2 => (
-                    "write",
-                    json!({"path":"print_haiku.py","content":script}),
-                    "created".into(),
-                ),
-                3 => (
-                    "bash",
-                    json!({"command":"/usr/bin/python3 -I print_haiku.py"}),
-                    poem.clone(),
-                ),
-                _ => ("read", json!({"path":"print_haiku.py"}), script.into()),
-            };
-            let mut events = fixture::continuation_events(
-                "checked",
-                &arguments.to_string(),
-                &"opaque:/é".repeat(4),
-            );
-            fixture::qualify_events(&mut events, ordinal);
-            for event in &mut events {
-                if event["item"]["type"] == "function_call" {
-                    event["item"]["name"] = json!(name);
-                }
-            }
-            events.last_mut().unwrap()["response"]["output"][2]["name"] = json!(name);
-            if ordinal >= 4 && !all_call_turns {
-                events.retain(|event| {
-                    event["item"]["type"] != "function_call"
-                        && !event["type"]
-                            .as_str()
-                            .unwrap()
-                            .starts_with("response.function_call_arguments")
-                });
-                for event in &mut events {
-                    if event["output_index"] == 3 {
-                        event["output_index"] = json!(2);
-                    }
-                }
-                events.last_mut().unwrap()["response"]["output"]
-                    .as_array_mut()
-                    .unwrap()
-                    .remove(2);
-            }
-            let envelope = parse(&fixture::wire(&events, false))
-                .unwrap()
-                .envelope
-                .unwrap();
-            for item in envelope.items {
-                expected.push(item.wire.clone());
-                input.push(ProviderInput::Item(item));
-            }
-            if ordinal < 4 || all_call_turns {
-                let call_id = format!("call_1.{ordinal}");
-                expected
-                    .push(json!({"type":"function_call_output","call_id":call_id,"output":output}));
-                input.push(ProviderInput::ToolResult { call_id, output });
-            }
-        }
-        if all_call_turns {
-            assert!(matches!(
-                ProviderRequest::new(&input, &tools),
-                Err(Outcome::ResourceLimit)
-            ));
-            continue;
-        }
-        let request = ProviderRequest::new(&input, &tools).unwrap();
-        println!(
-            "eight-turn-complete-escaped-journey={}",
-            request.encoded_bytes()
-        );
-        let wire = strict_json(request.encoded.as_bytes()).unwrap();
-        assert_eq!(wire["input"], json!(expected));
-        assert_eq!(wire["tools"].as_array().unwrap().len(), 3);
-        assert_eq!(
-            wire["input"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|item| item["type"] == "reasoning")
-                .count(),
-            16
-        );
-        let before = format!("{input:?}");
-        let mut larger = input.clone();
-        larger.push(ProviderInput::User("\u{0000}".repeat(512)));
-        assert!(matches!(
-            ProviderRequest::new(&larger, &tools),
-            Err(Outcome::ResourceLimit)
-        ));
-        assert_eq!(format!("{input:?}"), before);
-        let mut near = 0;
-        while ProviderRequest::new(&[ProviderInput::User("\u{0000}".repeat(near + 1))], &tools)
-            .is_ok()
-        {
-            near += 1;
-        }
-        let fitted =
-            ProviderRequest::new(&[ProviderInput::User("\u{0000}".repeat(near))], &tools).unwrap();
-        assert!(fitted.encoded_bytes() > PROVIDER_ENVELOPE_BYTES - 6);
-        assert_eq!(
-            strict_json(fitted.encoded.as_bytes()).unwrap()["input"][0]["content"],
-            "\u{0000}".repeat(near)
-        );
-        assert!(matches!(
-            ProviderRequest::new(&[ProviderInput::User("\u{0000}".repeat(near + 1))], &tools),
-            Err(Outcome::ResourceLimit)
-        ));
-    }
-}
-
 #[test]
 fn canonical_done_replay_budget_includes_identity_and_wrapper_not_terminal_only() {
     let id = "r".repeat(1500);
@@ -871,55 +594,6 @@ fn canonical_done_replay_budget_includes_identity_and_wrapper_not_terminal_only(
 }
 
 #[test]
-fn replay_requires_actual_call_result_identity() {
-    let envelope = parse(&fixture::wire(
-        &fixture::call_events("{}", Value::Null),
-        false,
-    ))
-    .unwrap()
-    .envelope
-    .unwrap();
-    let item = envelope.items[0].clone();
-    assert!(ProviderRequest::new(&[ProviderInput::Item(item.clone())], &[]).is_err());
-    assert!(
-        ProviderRequest::new(
-            &[
-                ProviderInput::Item(item.clone()),
-                ProviderInput::ToolResult {
-                    call_id: "foreign".into(),
-                    output: "x".into()
-                }
-            ],
-            &[]
-        )
-        .is_err()
-    );
-    assert!(
-        ProviderRequest::new(
-            &[ProviderInput::ToolResult {
-                call_id: "call_1".into(),
-                output: "x".into()
-            }],
-            &[]
-        )
-        .is_err()
-    );
-    assert!(
-        ProviderRequest::new(
-            &[
-                ProviderInput::Item(item.clone()),
-                ProviderInput::ToolResult {
-                    call_id: "call_1".into(),
-                    output: "x".into()
-                },
-                ProviderInput::Item(item)
-            ],
-            &[]
-        )
-        .is_err()
-    );
-}
-#[test]
 fn done_items_are_authoritative_when_the_terminal_copy_differs() {
     // The deployed route sent a terminal reasoning copy whose ID and encrypted content differed
     // from its `output_item.done` event; Scramjet's clients replay the done copy.
@@ -952,13 +626,14 @@ fn done_items_are_authoritative_when_the_terminal_copy_differs() {
     );
     events.last_mut().unwrap()["response"]["output"] = json!([]);
     assert_eq!(
-        parse(&fixture::wire(&events, false))
-            .unwrap()
-            .envelope
-            .unwrap()
-            .items[0]
-            .text()
-            .as_deref(),
+        message_text(
+            &parse(&fixture::wire(&events, false))
+                .unwrap()
+                .envelope
+                .unwrap()
+                .items[0]
+        )
+        .as_deref(),
         Some("x")
     );
 

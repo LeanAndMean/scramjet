@@ -1,8 +1,13 @@
 #[cfg(test)]
 mod tests;
 
-use crate::runtime::{RetryAfter, RetryWait};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetryWait {
+    Delay(Duration),
+    Unrepresentable,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Date {
@@ -239,12 +244,14 @@ fn value(bytes: &[u8], now: SystemTime, clock: Option<Date>) -> Result<RetryWait
     ))
 }
 
-pub(crate) fn parse<'a>(values: impl Iterator<Item = &'a [u8]>, now: SystemTime) -> RetryAfter {
+/// The longest wait the headers ask for; an unsupported date asks for an unknown one.
+pub(crate) fn parse<'a>(
+    values: impl Iterator<Item = &'a [u8]>,
+    now: SystemTime,
+) -> Option<RetryWait> {
     let clock = utc(now);
-    let mut result = RetryAfter::default();
-    let mut count = 0;
+    let mut result = None;
     for bytes in values {
-        count += 1;
         let start = bytes
             .iter()
             .position(|b| !matches!(b, b' ' | b'\t'))
@@ -253,28 +260,18 @@ pub(crate) fn parse<'a>(values: impl Iterator<Item = &'a [u8]>, now: SystemTime)
             .iter()
             .rposition(|b| !matches!(b, b' ' | b'\t'))
             .map_or(start, |i| i + 1);
-        let bytes = &bytes[start..end];
-        match value(bytes, now, clock) {
-            Ok(wait) => {
-                result.valid += 1;
-                result.wait = match (result.wait, wait) {
-                    (Some(RetryWait::Unrepresentable), _) | (_, RetryWait::Unrepresentable) => {
-                        Some(RetryWait::Unrepresentable)
-                    }
-                    (Some(RetryWait::Delay(a)), RetryWait::Delay(b)) => {
-                        Some(RetryWait::Delay(a.max(b)))
-                    }
-                    (None, wait) => Some(wait),
-                };
+        let wait = match value(&bytes[start..end], now, clock) {
+            Ok(wait) => wait,
+            Err(true) => RetryWait::Unrepresentable,
+            Err(false) => continue,
+        };
+        result = match (result, wait) {
+            (Some(RetryWait::Unrepresentable), _) | (_, RetryWait::Unrepresentable) => {
+                Some(RetryWait::Unrepresentable)
             }
-            Err(true) => {
-                result.unsupported += 1;
-                result.wait = Some(RetryWait::Unrepresentable);
-            }
-            Err(false) => result.invalid += 1,
-        }
+            (Some(RetryWait::Delay(a)), RetryWait::Delay(b)) => Some(RetryWait::Delay(a.max(b))),
+            (None, wait) => Some(wait),
+        };
     }
-    result.missing = count == 0;
-    result.duplicate = count > 1;
     result
 }
