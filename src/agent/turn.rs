@@ -251,6 +251,9 @@ to a larger-context model)"
                 }
                 self.add(item)?;
             }
+            if let Some(message) = reply.incomplete {
+                return Err(AgentError::Provider(message));
+            }
             if calls.is_empty() {
                 self.compact_when_full(ui, cancel)?;
                 if self.continue_queued(ui)? {
@@ -908,6 +911,75 @@ here\n\nkept.txt says original";
         let mut resumed = Recorder::default();
         show_items(agent.conversation(), &mut resumed);
         assert_eq!(resumed.details, ui.details);
+    }
+
+    #[test]
+    fn a_subagent_reply_at_the_output_limit_returns_its_text_as_a_failure_without_its_call() {
+        let reply = |blocks: Vec<Value>, reason: &str| {
+            let mut events = vec![
+                json!({"type":"message_start","message":{"id":"msg","usage":{"input_tokens":3,"output_tokens":1}}}),
+            ];
+            for (index, block) in blocks.into_iter().enumerate() {
+                events.push(
+                    json!({"type":"content_block_start","index":index,"content_block":block}),
+                );
+                events.push(json!({"type":"content_block_stop","index":index}));
+            }
+            events.push(json!({"type":"message_delta","delta":{"stop_reason":reason},"usage":{"output_tokens":5}}));
+            events.push(json!({"type":"message_stop"}));
+            messages_stream(&events)
+        };
+        let call = |id: &str, name: &str, input: Value| json!({"type":"tool_use","id":id,"name":name,"input":input});
+        let (endpoint, server) = serve(vec![
+            reply(
+                vec![call(
+                    "toolu_1",
+                    subagent::NAME,
+                    json!({"agent":"reviewer","task":"Look"}),
+                )],
+                "tool_use",
+            ),
+            reply(
+                vec![
+                    json!({"type":"text","text":"Found two"}),
+                    call("toolu_2", "bash", json!({"command":"touch ran"})),
+                ],
+                "max_tokens",
+            ),
+            reply(vec![json!({"type":"text","text":"done"})], "end_turn"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "subagent-limit");
+        agent.set_model("claude-opus-5-5").unwrap();
+        let agents = agent.root().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Reviews\ntools: bash\n---\n\nYou review.\n",
+        )
+        .unwrap();
+        agent.agents_directory = Some(agents);
+        let mut ui = Recorder::default();
+        agent
+            .turn("review", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 3);
+        assert_eq!(
+            bodies[2]["messages"][2]["content"][0]["content"],
+            "Agent error: response incomplete: it reached the output token limit (max_tokens); \
+the tool call it was making did not run"
+        );
+        assert!(!agent.root().join("ran").exists());
+        let ToolDetail::Subagents(ended) = &ui.details[0] else {
+            panic!("{:?}", ui.details);
+        };
+        let run = &ended.runs[0];
+        assert_eq!(run.items, [ChildItem::Text("Found two".into())]);
+        assert!(
+            matches!(&run.state, ChildState::Failed { reason, .. } if reason.as_deref() == Some("error")),
+            "{:?}",
+            run.state
+        );
     }
 
     #[test]

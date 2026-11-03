@@ -9,8 +9,12 @@ use std::collections::HashSet;
 /// Used without a model card to say how much a reply may have.
 pub(super) const DEFAULT_MAX_TOKENS: u64 = 32_000;
 
-/// The beta header budget thinking needs; adaptive models have interleaved thinking built in.
-pub(super) const INTERLEAVED_THINKING_BETA: &str = "interleaved-thinking-2025-05-14";
+/// The beta budget thinking needs; adaptive models have interleaved thinking built in.
+const INTERLEAVED_THINKING_BETA: &str = "interleaved-thinking-2025-05-14";
+
+/// The beta that streams tool input as it is written instead of buffering it, which Scramjet's
+/// configuration for Proxy asks for in place of `eager_input_streaming` on each tool.
+const FINE_GRAINED_TOOL_STREAMING_BETA: &str = "fine-grained-tool-streaming-2025-05-14";
 
 /// Least output space left for a reply when thinking takes a budget, as Scramjet keeps it.
 const MIN_OUTPUT_TOKENS: u64 = 1024;
@@ -40,9 +44,25 @@ pub(super) fn adaptive_thinking(model: &str) -> bool {
     major > 4 || (major == 4 && minor >= 6)
 }
 
-/// Whether `body` asks for budget thinking, which needs the interleaved-thinking beta header.
-pub(super) fn budget_thinking(body: &Value) -> bool {
-    body["thinking"]["type"] == "enabled"
+/// The `anthropic-beta` header `body` needs, if any, in Scramjet's order.
+pub(super) fn betas(body: &Value) -> Option<String> {
+    let mut betas = Vec::new();
+    if body["tools"]
+        .as_array()
+        .is_some_and(|tools| !tools.is_empty())
+    {
+        betas.push(FINE_GRAINED_TOOL_STREAMING_BETA);
+    }
+    if body["thinking"]["type"] == "enabled" {
+        betas.push(INTERLEAVED_THINKING_BETA);
+    }
+    (!betas.is_empty()).then(|| betas.join(","))
+}
+
+/// Scramjet's long cache retention, which its coding agent uses by default: written prefixes stay
+/// cached for an hour instead of five minutes.
+fn cache_control() -> Value {
+    json!({"type":"ephemeral","ttl":"1h"})
 }
 
 /// The thinking budget for an effort level, as Scramjet's default budgets; `xhigh` and `max`
@@ -71,7 +91,7 @@ pub(super) fn request(request: &Value, max_tokens: u64, thinking: bool) -> Resul
         "model": request["model"],
         "max_tokens": max_tokens,
         "stream": true,
-        "system": [{"type":"text","text":request["instructions"],"cache_control":{"type":"ephemeral"}}],
+        "system": [{"type":"text","text":request["instructions"],"cache_control":cache_control()}],
         "messages": messages(items),
     });
     if let Some(tools) = request["tools"].as_array() {
@@ -149,7 +169,7 @@ fn messages(items: &[Value]) -> Vec<Value> {
     if let Some(("user", blocks)) = messages.last_mut()
         && let Some(last) = blocks.last_mut()
     {
-        last["cache_control"] = json!({"type":"ephemeral"});
+        last["cache_control"] = cache_control();
     }
     messages
         .into_iter()
@@ -436,7 +456,8 @@ impl Stream {
     }
 
     /// The reply once the stream ended; a reply cut short or stopped early is a failure, so its
-    /// tool calls never run.
+    /// tool calls never run. One stopped at the output token limit keeps its text (and the
+    /// reasoning with it) without its tool calls, whose input may be cut off.
     pub(super) fn finish(self) -> Result<Reply, Failure> {
         if !self.stopped {
             return Err(Failure::new(
@@ -447,26 +468,21 @@ impl Stream {
         if self.blocks.iter().any(|block| !block.done) {
             return Err(malformed("unfinished content block"));
         }
-        match self.stop_reason.as_deref() {
-            None | Some("end_turn" | "tool_use" | "stop_sequence" | "pause_turn") => {}
-            Some("max_tokens") => {
-                return Err(Failure::new(
-                    "response incomplete: it reached the output token limit (max_tokens)",
-                    false,
-                ));
-            }
+        let limited = match self.stop_reason.as_deref() {
+            None | Some("end_turn" | "tool_use" | "stop_sequence" | "pause_turn") => false,
+            Some("max_tokens") => true,
             Some(reason) => {
                 return Err(Failure::provider(
                     None,
                     format!("response stopped: {reason}"),
                 ));
             }
-        }
+        };
         let id = match self.id.as_str() {
             "" => "msg".to_owned(),
             id => tool_id(&json!(id)),
         };
-        let items = self
+        let mut items: Vec<Value> = self
             .blocks
             .into_iter()
             .enumerate()
@@ -498,6 +514,24 @@ impl Stream {
                 _ => None,
             })
             .collect();
+        let incomplete = limited.then(|| {
+            let calls = items
+                .iter()
+                .filter(|item| item["type"] == "function_call")
+                .count();
+            items.retain(|item| item["type"] != "function_call");
+            if !items.iter().any(|item| item["type"] == "message") {
+                items.clear();
+            }
+            let mut message =
+                "response incomplete: it reached the output token limit (max_tokens)".to_owned();
+            match calls {
+                0 => {}
+                1 => message.push_str("; the tool call it was making did not run"),
+                n => message.push_str(&format!("; the {n} tool calls in it did not run")),
+            }
+            message
+        });
         let usage = self.usage.map(|[input, read, write, output]| {
             let input = input + read + write;
             crate::http::responses::ProviderUsage {
@@ -508,7 +542,11 @@ impl Stream {
                 reasoning_tokens: None,
             }
         });
-        Ok(Reply { items, usage })
+        Ok(Reply {
+            items,
+            usage,
+            incomplete,
+        })
     }
 }
 
@@ -578,7 +616,7 @@ mod tests {
                 {"role":"user","content":[
                     {"type":"tool_result","tool_use_id":"call_2","content":"Error: bad"},
                     {"type":"tool_result","tool_use_id":"call_3","content":"No result provided","is_error":true},
-                    {"type":"text","text":"second","cache_control":{"type":"ephemeral"}},
+                    {"type":"text","text":"second","cache_control":{"type":"ephemeral","ttl":"1h"}},
                 ]},
             ])
         );
@@ -586,6 +624,7 @@ mod tests {
         let plain = plain.unwrap();
         assert_eq!(plain["max_tokens"], 9);
         assert!(plain.get("thinking").is_none());
+        assert_eq!(betas(&plain), None);
         let deepseek = json!({"model":"deepseek-v4-pro","input":[]});
         assert!(
             super::request(&deepseek, 9, true)
@@ -626,7 +665,7 @@ mod tests {
                 json!({"type":"enabled","budget_tokens":expected,"display":"summarized"}),
                 "{effort:?}"
             );
-            assert!(budget_thinking(&body));
+            assert_eq!(betas(&body).as_deref(), Some(INTERLEAVED_THINKING_BETA));
             assert!(body.get("output_config").is_none());
         }
         let card = json!({"model":"claude-haiku-4-5-20251001","input":[]});
@@ -761,8 +800,6 @@ mod tests {
         let fail = |events: Vec<Value>| decode(&events).0.err().unwrap();
         let cut = fail(text.to_vec());
         assert!(cut.transient && cut.message.contains("ended before"));
-        let limit = fail([&text[..], &end("max_tokens")].concat());
-        assert!(!limit.transient && limit.message.contains("max_tokens"));
         let refusal = fail([&text[..], &end("refusal")].concat());
         assert!(!refusal.transient && !refusal.overflow);
         assert!(fail([&text[..], &end("model_context_window_exceeded")].concat()).overflow);
@@ -779,5 +816,99 @@ mod tests {
         assert_eq!(failure.message, "provider error: Overloaded");
         let invalid = json!({"type":"error","error":{"type":"invalid_request_error","message":"retry later"}});
         assert!(!fail(vec![invalid]).transient);
+    }
+
+    #[test]
+    fn a_reply_at_the_output_limit_keeps_its_text_but_not_its_tool_calls() {
+        let thinking = [
+            block_start(0, json!({"type":"thinking","thinking":"Plan"})),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"s"}}),
+            block_stop(0),
+        ];
+        let text = [
+            block_start(1, json!({"type":"text","text":"Writing it"})),
+            block_stop(1),
+        ];
+        let call = |index| {
+            [
+                block_start(
+                    index,
+                    json!({"type":"tool_use","id":"toolu_1","name":"write","input":{}}),
+                ),
+                json!({"type":"content_block_delta","index":index,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a"}}),
+                block_stop(index),
+            ]
+        };
+        let decoded = |blocks: &[&[Value]]| {
+            let events = [&[start()][..], &blocks.concat(), &end("max_tokens")].concat();
+            decode(&events).0.ok().unwrap()
+        };
+        let reply = decoded(&[&thinking, &text, &call(2)]);
+        assert_eq!(
+            reply.items,
+            [
+                json!({"type":"reasoning","summary":[{"type":"summary_text","text":"Plan"}],"signature":"s"}),
+                json!({"type":"message","id":"msg_1_1","role":"assistant","status":"completed",
+                    "content":[{"type":"output_text","text":"Writing it","annotations":[]}]}),
+            ]
+        );
+        assert_eq!(
+            reply.incomplete.as_deref(),
+            Some(
+                "response incomplete: it reached the output token limit (max_tokens); the tool \
+call it was making did not run"
+            )
+        );
+        assert_eq!(reply.usage.unwrap().output_tokens, Some(9));
+        let text_only = decoded(&[&text]);
+        assert_eq!(text_only.items.len(), 1);
+        assert_eq!(
+            text_only.incomplete.as_deref(),
+            Some("response incomplete: it reached the output token limit (max_tokens)")
+        );
+        let mut second = call(3);
+        second[0]["content_block"]["id"] = json!("toolu_2");
+        let calls = decoded(&[&text, &call(2), &second]);
+        assert!(
+            calls
+                .incomplete
+                .unwrap()
+                .ends_with("the 2 tool calls in it did not run")
+        );
+        // Without text there is nothing to keep, not even the reasoning before a cut-off call.
+        let no_text = decoded(&[&thinking, &call(1)]);
+        assert!(no_text.items.is_empty());
+        assert!(no_text.incomplete.is_some());
+        let complete = decode(&[&[start()][..], &text, &end("end_turn")].concat()).0;
+        assert!(complete.ok().unwrap().incomplete.is_none());
+    }
+
+    #[test]
+    fn requests_with_tools_ask_for_fine_grained_tool_streaming() {
+        let tool = json!({"name":"read","description":"Read","parameters":{"type":"object"}});
+        let request = |model: &str, tools: Value| {
+            super::request(
+                &json!({"model":model,"input":[],"tools":tools,"max_output_tokens":40000}),
+                0,
+                true,
+            )
+            .unwrap()
+        };
+        let adaptive = request("claude-opus-5-5", json!([tool]));
+        assert_eq!(
+            betas(&adaptive).as_deref(),
+            Some("fine-grained-tool-streaming-2025-05-14")
+        );
+        assert_eq!(
+            adaptive["system"][0]["cache_control"],
+            json!({"type":"ephemeral","ttl":"1h"})
+        );
+        assert!(adaptive["tools"][0].get("cache_control").is_none());
+        let budget = request("claude-sonnet-4-5", json!([tool]));
+        assert_eq!(
+            betas(&budget).as_deref(),
+            Some("fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14")
+        );
+        assert_eq!(betas(&request("claude-opus-5-5", json!([]))), None);
     }
 }

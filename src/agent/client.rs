@@ -93,6 +93,9 @@ const NON_OVERFLOW_WORDS: &[&str] = &["rate limit", "too many requests", "thrott
 pub(super) struct Reply {
     pub items: Vec<Value>,
     pub usage: Option<crate::http::responses::ProviderUsage>,
+    /// Why the reply stopped before it was complete, when it reached the output token limit:
+    /// `items` then keep its text, but not its tool calls.
+    pub incomplete: Option<String>,
 }
 
 pub(super) enum ClientError {
@@ -351,20 +354,19 @@ async fn get(endpoint: SocketAddr, path: &str) -> Option<Bytes> {
     }
 }
 
-/// `interleaved` asks a Messages request for the interleaved-thinking beta, which budget thinking
-/// needs.
+/// `betas` is a Messages request's `anthropic-beta` header.
 pub(super) async fn respond(
     endpoint: SocketAddr,
     protocol: Protocol,
     body: Vec<u8>,
-    interleaved: bool,
+    betas: Option<&str>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(StreamProgress),
 ) -> Result<Reply, ClientError> {
     tokio::select! {
         biased;
         () = cancelled(cancel) => Err(ClientError::Cancelled),
-        result = exchange(endpoint, protocol, body, interleaved, progress) => result.map_err(ClientError::Failed),
+        result = exchange(endpoint, protocol, body, betas, progress) => result.map_err(ClientError::Failed),
     }
 }
 
@@ -372,7 +374,7 @@ async fn exchange(
     endpoint: SocketAddr,
     protocol: Protocol,
     body: Vec<u8>,
-    interleaved: bool,
+    betas: Option<&str>,
     progress: &mut dyn FnMut(StreamProgress),
 ) -> Result<Reply, Failure> {
     let socket = TcpStream::connect(endpoint).await.map_err(|e| {
@@ -395,10 +397,9 @@ async fn exchange(
                 .uri("/v1/messages")
                 .header("x-api-key", "managed-by-proxy")
                 .header("anthropic-version", "2023-06-01");
-            if interleaved {
-                request.header("anthropic-beta", super::messages::INTERLEAVED_THINKING_BETA)
-            } else {
-                request
+            match betas {
+                Some(betas) => request.header("anthropic-beta", betas),
+                None => request,
             }
         }
     };
@@ -536,6 +537,7 @@ async fn responses_reply(
                     .map(|i| i.raw().clone())
                     .collect(),
                 usage: parsed.usage,
+                incomplete: None,
             }),
             None => {
                 let message = format!(

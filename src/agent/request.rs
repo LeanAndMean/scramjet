@@ -119,8 +119,8 @@ pub(super) fn send(
     cancel: &AtomicBool,
     on: &mut dyn FnMut(Sending),
 ) -> Result<client::Reply, AgentError> {
-    let (body, interleaved) = match info.protocol {
-        Protocol::Responses => (serde_json::to_vec(request), false),
+    let (body, betas) = match info.protocol {
+        Protocol::Responses => (serde_json::to_vec(request), None),
         Protocol::Messages => {
             let body = messages::request(
                 request,
@@ -128,8 +128,8 @@ pub(super) fn send(
                 info.reasoning,
             )
             .map_err(AgentError::Provider)?;
-            let interleaved = messages::budget_thinking(&body);
-            (serde_json::to_vec(&body), interleaved)
+            let betas = messages::betas(&body);
+            (serde_json::to_vec(&body), betas)
         }
     };
     let body = body.map_err(std::io::Error::from)?;
@@ -140,7 +140,7 @@ pub(super) fn send(
             endpoint,
             info.protocol,
             body.clone(),
-            interleaved,
+            betas.as_deref(),
             cancel,
             &mut |update| on(Sending::Progress(&update)),
         )) {
@@ -360,7 +360,9 @@ response is incomplete; retry the request."});
         let requests = server.join().unwrap();
         let (head, body) = &requests[0];
         assert!(
-            head.contains("anthropic-beta: interleaved-thinking-2025-05-14\r\n"),
+            head.contains(
+                "anthropic-beta: fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14\r\n"
+            ),
             "{head}"
         );
         assert_eq!(
@@ -447,7 +449,10 @@ response is incomplete; retry the request."});
         for (head, _) in &requests {
             assert!(head.starts_with("post /v1/messages http/1.1\r\n"), "{head}");
             assert!(head.contains("anthropic-version: 2023-06-01\r\n"), "{head}");
-            assert!(!head.contains("anthropic-beta"), "{head}");
+            assert!(
+                head.contains("anthropic-beta: fine-grained-tool-streaming-2025-05-14\r\n"),
+                "{head}"
+            );
         }
         let first = &requests[0].1;
         assert_eq!(first["model"], "claude-opus-5-5");
@@ -465,7 +470,7 @@ response is incomplete; retry the request."});
         assert_eq!(
             first["messages"],
             json!([{"role":"user","content":[{"type":"text","text":"What is in notes.txt?",
-                "cache_control":{"type":"ephemeral"}}]}])
+                "cache_control":{"type":"ephemeral","ttl":"1h"}}]}])
         );
         let second = &requests[1].1["messages"];
         assert_eq!(
@@ -480,7 +485,10 @@ response is incomplete; retry the request."});
         assert_eq!(second[2]["role"], "user");
         assert_eq!(result["tool_use_id"], "toolu_1");
         assert!(result["content"].as_str().unwrap().contains("hello"));
-        assert_eq!(result["cache_control"], json!({"type":"ephemeral"}));
+        assert_eq!(
+            result["cache_control"],
+            json!({"type":"ephemeral","ttl":"1h"})
+        );
         assert!(second[0]["content"][0].get("cache_control").is_none());
         // Input counts cache reads and writes, as Responses input does.
         assert_eq!(agent.usage.input_tokens, 17 + 37);
@@ -493,6 +501,55 @@ response is incomplete; retry the request."});
                 .filter(|item| item.get("type").is_some())
                 .all(|item| item["_scramjet_model"] == "claude-opus-5-5"
                     || item["type"] == "function_call_output")
+        );
+    }
+
+    #[test]
+    fn a_claude_reply_at_the_output_limit_keeps_its_text_and_ends_the_turn_without_its_call() {
+        let (endpoint, server) = serve_requests(vec![
+            messages_stream(&[
+                json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Writing notes.txt"}}),
+                json!({"type":"content_block_stop","index":0}),
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"write","input":{}}}),
+                json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"notes.txt\",\"content\":\"hel"}}),
+                json!({"type":"content_block_stop","index":1}),
+                json!({"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":20}}),
+                json!({"type":"message_stop"}),
+            ]),
+            messages_stream(&[
+                json!({"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":9,"output_tokens":1}}}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"Shorter then."}}),
+                json!({"type":"content_block_stop","index":0}),
+                json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}),
+                json!({"type":"message_stop"}),
+            ]),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "limit");
+        agent.set_model("claude-opus-5-5").unwrap();
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let error = agent.turn("Write notes", &mut ui, &cancel).unwrap_err();
+        assert!(
+            matches!(&error, AgentError::Provider(message) if message == "response incomplete: it \
+reached the output token limit (max_tokens); the tool call it was making did not run"),
+            "{error}"
+        );
+        assert_eq!(ui.replies, ["Writing notes.txt"]);
+        assert!(ui.calls.is_empty());
+        assert!(!scratch.0.join("notes.txt").exists());
+        assert_eq!(agent.usage.output_tokens, 20);
+        agent.turn("Continue", &mut ui, &cancel).unwrap();
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests[1].1["messages"],
+            json!([
+                {"role":"user","content":[{"type":"text","text":"Write notes"}]},
+                {"role":"assistant","content":[{"type":"text","text":"Writing notes.txt"}]},
+                {"role":"user","content":[{"type":"text","text":"Continue",
+                    "cache_control":{"type":"ephemeral","ttl":"1h"}}]},
+            ])
         );
     }
 

@@ -614,7 +614,8 @@ impl Agent {
         }))
     }
 
-    /// One request without tools for the text a summarization `prompt` asks for.
+    /// One request without tools for the text a summarization `prompt` asks for. As in Scramjet,
+    /// a summary cut off at the output token limit is kept.
     pub(super) fn summarize(
         &mut self,
         prompt: String,

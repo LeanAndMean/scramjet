@@ -1222,6 +1222,10 @@ fn run_child(
             }
             input.push(item);
         }
+        if let Some(message) = reply.incomplete {
+            run.error = Some((Some("error"), message));
+            return run;
+        }
         if calls.is_empty() {
             return run;
         }
