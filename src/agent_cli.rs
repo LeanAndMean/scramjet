@@ -848,7 +848,7 @@ fn model_line(agent: &Agent) -> String {
 fn effort_note(cycled: Result<Option<String>, AgentError>) -> String {
     match cycled {
         Ok(Some(level)) => format!("Thinking level: {level}"),
-        Ok(None) => "Thinking level unchanged: this model's card lists no levels".to_owned(),
+        Ok(None) => "Current model does not support thinking".to_owned(),
         Err(error) => format!("error: {error}"),
     }
 }
@@ -2264,6 +2264,18 @@ mod tests {
         assert_eq!(context(9_950, Some(200_000)), "9.9k/200k (5.0%)");
         assert_eq!(context(12_000_000, Some(20_000_000)), "12M/20M (60.0%)");
         assert_eq!(context(53_000, None), "53k");
+    }
+
+    #[test]
+    fn effort_note_says_as_scramjet_does_when_no_levels() {
+        assert_eq!(
+            effort_note(Ok(None)),
+            "Current model does not support thinking"
+        );
+        assert_eq!(
+            effort_note(Ok(Some("high".to_owned()))),
+            "Thinking level: high"
+        );
     }
 
     #[test]
