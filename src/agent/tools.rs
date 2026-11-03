@@ -782,7 +782,8 @@ fn grep(root: &Path, call: &Call, hidden: &Hidden, cancel: &AtomicBool) -> Resul
     })?;
     if found.is_empty() {
         return match status.and_then(|status| status.code()) {
-            Some(0 | 1) => Ok("No matches found".into()),
+            // bubblewrap's own failures exit with 1 too.
+            Some(0 | 1) if !stderr.starts_with("bwrap:") => Ok("No matches found".into()),
             code => Err(match stderr.trim() {
                 "" => format!("ripgrep exited with code {}", code.unwrap_or(-1)),
                 error => error.to_owned(),
@@ -1448,7 +1449,12 @@ to see full lines]",
         std::fs::write(home.join(".ssh/id_x"), "SECRET-key\n").unwrap();
         std::fs::write(root.join("a.txt"), "plain SECRET-not\n").unwrap();
         std::os::unix::fs::symlink(home.join(".netrc"), root.join("link")).unwrap();
-        let hidden = Hidden::under(&home);
+        std::fs::create_dir_all(home.join("other")).unwrap();
+        std::fs::write(home.join("other/f.txt"), "needle\n").unwrap();
+        std::os::unix::fs::symlink(home.join("other"), root.join("abs")).unwrap();
+        std::fs::create_dir_all(home.join("agent")).unwrap();
+        std::fs::write(home.join("agent/auth.json"), "SECRET-auth\n").unwrap();
+        let hidden = Hidden::under(&home, Some(home.join("agent/auth.json")));
         let cancel = AtomicBool::new(false);
         let run = |name: &str, arguments: Value| {
             call(name, arguments)
@@ -1460,6 +1466,7 @@ to see full lines]",
         for (name, path, shown) in [
             ("read", "../.netrc", home.join(".netrc")),
             ("read", "link", root.join("link")),
+            ("read", "../agent/auth.json", home.join("agent/auth.json")),
             ("ls", "~/../../..", PathBuf::from("/")),
             ("ls", "../.ssh", home.join(".ssh")),
             ("grep", "../.ssh/id_x", home.join(".ssh/id_x")),
@@ -1483,12 +1490,36 @@ to see full lines]",
             run("find", json!({"pattern":"id_*","path":".."})),
             Ok("No files found matching pattern".into())
         );
+        assert_eq!(
+            run("grep", json!({"pattern":"needle","path":"abs"})),
+            Ok("f.txt:1: needle".into())
+        );
+        assert_eq!(
+            run("find", json!({"pattern":"*.txt","path":"abs"})),
+            Ok("f.txt".into())
+        );
         let shown = run(
             "bash",
-            json!({"command":"cat ../.netrc link ../.ssh/id_x; ls -A ../.ssh"}),
+            json!({"command":"cat ../.netrc link ../.ssh/id_x ../agent/auth.json; ls -A ../.ssh"}),
         )
         .unwrap();
         assert!(!shown.contains("SECRET"), "{shown}");
+        let alias = std::path::Path::new("/mnt/wslg/distro").join(home.strip_prefix("/").unwrap());
+        if alias.is_dir() {
+            for (name, path) in [("read", ".netrc"), ("read", ".ssh/id_x"), ("ls", ".ssh")] {
+                let path = alias.join(path).display().to_string();
+                assert_eq!(run(name, json!({ "path": path })), Err(refused(&path)));
+            }
+            let alias = alias.display().to_string();
+            let command = format!("cat {alias}/.netrc {alias}/.ssh/id_x; ls {alias}/.ssh");
+            let shown = run("bash", json!({ "command": command })).unwrap();
+            assert!(
+                !shown.contains("SECRET") && !shown.contains("id_x\n"),
+                "{shown}"
+            );
+            let searched = run("grep", json!({"pattern":"SECRET","path":alias}));
+            assert!(!format!("{searched:?}").contains("SECRET-"), "{searched:?}");
+        }
     }
 
     #[test]

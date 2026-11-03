@@ -13,5 +13,7 @@ for d in .aws .ssh .gnupg .config/gh .config/proxy .local/share/proxy .kube .con
     .local/share/keyrings .password-store; do
   if [ -d "$HOME/$d" ]; then args="$args --tmpfs $HOME/$d --remount-ro $HOME/$d"; fi
 done
+# WSL2 mounts / again here, where the stores above would still show.
+if [ -d /mnt/wslg/distro ]; then args="$args --tmpfs /mnt/wslg/distro --remount-ro /mnt/wslg/distro"; fi
 # shellcheck disable=SC2086
 exec bwrap $args -- "$@"

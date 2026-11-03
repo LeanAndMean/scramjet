@@ -3,6 +3,7 @@
 //! the user's credential stores hidden.
 
 use std::{
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -38,38 +39,59 @@ const HIDDEN_DIRECTORIES: [&str; 11] = [
     ".password-store",
 ];
 
+/// WSL2 mounts the root filesystem again here (`distro`), next to WSLg's X11 and audio sockets.
+const WSLG: &str = "/mnt/wslg";
+
 /// The credential stores that exist, by their real paths. In the sandbox a hidden file reads
 /// as empty and a hidden directory has no entries, both read-only.
 #[derive(Default)]
 pub(super) struct Hidden {
     files: Vec<PathBuf>,
     directories: Vec<PathBuf>,
+    /// Device and inode of each, which another mount of the same filesystem shares.
+    identities: Vec<(u64, u64)>,
 }
 
 impl Hidden {
-    /// Those of this user's home directory.
+    /// Those of this user's home directory, and Scramjet's `auth.json` wherever
+    /// `SCRAMJET_CODING_AGENT_DIR` puts it.
     pub(super) fn current() -> Hidden {
-        std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home))
+        let auth = super::subagent::agent_directory().map(|dir| dir.join("auth.json"));
+        std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, auth))
     }
 
-    pub(super) fn under(home: &Path) -> Hidden {
-        let existing = |names: &[&str], directories: bool| {
-            names
-                .iter()
-                .filter_map(|name| std::fs::canonicalize(home.join(name)).ok())
+    pub(super) fn under(home: &Path, auth: Option<PathBuf>) -> Hidden {
+        let existing = |paths: Vec<PathBuf>, directories: bool| {
+            let mut real: Vec<PathBuf> = paths
+                .into_iter()
+                .filter_map(|path| std::fs::canonicalize(path).ok())
                 .filter(|path| path.is_dir() == directories)
-                .collect()
+                .collect();
+            real.sort();
+            real.dedup();
+            real
         };
+        let files = HIDDEN_FILES.iter().map(|name| home.join(name)).chain(auth);
+        let files = existing(files.collect(), false);
+        let directories = HIDDEN_DIRECTORIES.iter().map(|name| home.join(name));
+        let directories = existing(directories.collect(), true);
+        let identities = files
+            .iter()
+            .chain(&directories)
+            .filter_map(|path| identity(path));
         Hidden {
-            files: existing(&HIDDEN_FILES, false),
-            directories: existing(&HIDDEN_DIRECTORIES, true),
+            identities: identities.collect(),
+            files,
+            directories,
         }
     }
 
-    /// Refuses a path that is, or is in, a hidden store, also through a symlink.
+    /// Refuses a path that is, or is in, a hidden store, also through a symlink or another
+    /// mount of its filesystem.
     pub(super) fn check(&self, path: &Path) -> Result<(), String> {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-        match self.files.contains(&real) || self.directories.iter().any(|d| real.starts_with(d)) {
+        let mut identities = real.ancestors().filter_map(identity);
+        match identities.any(|found| self.identities.contains(&found)) {
             true => Err(format!(
                 "{}: hidden from subagents, as it holds credentials",
                 path.display()
@@ -77,6 +99,12 @@ impl Hidden {
             false => Ok(()),
         }
     }
+}
+
+fn identity(path: &Path) -> Option<(u64, u64)> {
+    std::fs::metadata(path)
+        .ok()
+        .map(|metadata| (metadata.dev(), metadata.ino()))
 }
 
 /// `bash -c command` in `root`, confined.
@@ -96,9 +124,11 @@ pub(super) fn program(root: &Path, path: &Path, program: &Path, hidden: &Hidden)
 
 /// Bubblewrap up to the program to run. Its own namespaces keep the program off the network
 /// and let a cancellation kill everything it started; a new session keeps it from typing into
-/// the terminal; an empty `/run` hides the session's sockets (D-Bus, WSL interop) through which
-/// a command could act outside. `root` and `also` are mounted again in case they are under
-/// `/tmp` or `/run`, before the hidden stores, so that those stay hidden in them.
+/// the terminal; an empty `/run` and `/mnt/wslg` hide the session's sockets (D-Bus, WSL interop,
+/// WSLg) through which a command could act outside, and WSL's second mount of `/`. `root` and
+/// `also` are mounted again by their real paths (bubblewrap cannot mount over an absolute
+/// symlink) in case they are under `/tmp` or `/run`, before what is hidden, so that it stays
+/// hidden in them.
 fn confined(root: &Path, also: Option<&Path>, hidden: &Hidden) -> Command {
     let mut process = Command::new(PROGRAM);
     process.args([
@@ -118,7 +148,11 @@ fn confined(root: &Path, also: Option<&Path>, hidden: &Hidden) -> Command {
         "/run",
     ]);
     for path in std::iter::once(root).chain(also) {
-        process.arg("--ro-bind").arg(path).arg(path);
+        let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        process.arg("--ro-bind").arg(&real).arg(&real);
+    }
+    if Path::new(WSLG).is_dir() {
+        process.args(["--tmpfs", WSLG]);
     }
     if !hidden.files.is_empty() {
         let empty = empty_file();
@@ -233,9 +267,13 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         std::os::unix::fs::symlink(home.join(".netrc"), home.join("project/link")).unwrap();
         let script = "cat ../.netrc link a.txt; ls -A ../.ssh; cat ../.ssh/id_x; grep -r SECRET ..; \
 echo x > ../.netrc; touch ../.ssh/new; echo done";
-        let output = super::command(&home.join("project"), script, &super::Hidden::under(&home))
-            .output()
-            .unwrap();
+        let output = super::command(
+            &home.join("project"),
+            script,
+            &super::Hidden::under(&home, None),
+        )
+        .output()
+        .unwrap();
         let errors = String::from_utf8_lossy(&output.stderr);
         assert_eq!(String::from_utf8_lossy(&output.stdout), "plain\ndone\n");
         assert!(!errors.contains("SECRET"), "{errors}");
