@@ -2,14 +2,20 @@
 //! completed command's recommended next command runs at once (`chain`) or waits for the user
 //! (`pause`), from the project's `.scramjet/autonomy.yaml`, then the global one; the global file's
 //! `publications` say whether a command's publication with a tool asks the user first. A command
-//! set's `autonomy-defaults.yaml` gives its own commands' publication defaults.
+//! set's `autonomy-defaults.yaml` gives its own commands' publication defaults. `/settings`
+//! shows the edges of each command's next steps and changes them (`NextSteps`).
 
-use super::commands::Commands;
+use super::commands::{Commands, Policy};
+use super::tools::{shortened, write_replacing};
 use std::path::{Path, PathBuf};
 use yaml_rust2::{Yaml, YamlLoader};
 
+/// The project's file, under its root.
+const PROJECT_FILE: &str = ".scramjet/autonomy.yaml";
+
+/// Whether a completed command's recommended next command runs at once or waits for the user.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Edge {
+pub enum Edge {
     Chain,
     Pause,
 }
@@ -64,7 +70,7 @@ impl Edges {
     /// Reads the project's file under `root`, then the global one; a missing file has no edges.
     /// Names that are not among `commands` are warned about, as Scramjet does.
     pub fn load(global: Option<&Path>, root: &Path, commands: &Commands) -> Self {
-        let project = root.join(".scramjet/autonomy.yaml");
+        let project = root.join(PROJECT_FILE);
         let mut edges = Self::default();
         let mut invalid = false;
         for (scope, path) in [("project", Some(project.as_path())), ("global", global)] {
@@ -112,6 +118,248 @@ impl Edges {
             diagnostics: Vec::new(),
         }
     }
+}
+
+/// Which file a next step's setting is in: the project's, or the global one, for all projects.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Scope {
+    Project,
+    Global,
+}
+
+/// The setting a next step goes by, and where it is from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Setting {
+    pub edge: Edge,
+    pub scope: Scope,
+    /// It is the file's setting for any other command (`*`).
+    pub any_other: bool,
+}
+
+/// A command's next step, as `/settings` shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NextStep {
+    pub source: String,
+    /// `None`: any other command, the files' `*`.
+    pub target: Option<String>,
+    /// The command always runs it next (`mode: forced`), whatever the files say.
+    pub forced: bool,
+    /// What the step goes by; `None`: autopilot decides.
+    pub setting: Option<Setting>,
+    /// The project's file has a setting of its own for it.
+    pub in_project: bool,
+    /// The global file has a setting of its own for it.
+    pub in_global: bool,
+}
+
+/// The next steps of the commands that have them, and the files their settings are in.
+#[derive(Debug)]
+pub struct NextSteps {
+    pub steps: Vec<NextStep>,
+    pub project: PathBuf,
+    pub global: Option<PathBuf>,
+    /// Why a file cannot be used, shortened; then neither is, as in Scramjet.
+    pub problems: Vec<String>,
+}
+
+impl NextSteps {
+    /// Each candidate of each command's `next:` policy (its target when forced) and, where a
+    /// file sets one, its `*`, with the setting that applies to it, read afresh.
+    pub(super) fn load(global: Option<&Path>, root: &Path, commands: &Commands) -> Self {
+        let project = root.join(PROJECT_FILE);
+        let mut problems = Vec::new();
+        let mut load = |path: Option<&Path>, in_project| {
+            let path = path?;
+            read(path, in_project).unwrap_or_else(|message| {
+                problems.push(format!("{}: {message}", shown_path(path)));
+                None
+            })
+        };
+        let in_project = &load(Some(&project), true).unwrap_or_default();
+        let in_global = &load(global, false).unwrap_or_default();
+        let mut steps = Vec::new();
+        for command in commands.list() {
+            let source = &command.name;
+            let candidates = match &command.next {
+                Some(Policy::Forced { target }) => {
+                    steps.push(NextStep {
+                        source: source.clone(),
+                        target: Some(target.clone()),
+                        forced: true,
+                        setting: None,
+                        in_project: false,
+                        in_global: false,
+                    });
+                    continue;
+                }
+                Some(Policy::Closed { candidates } | Policy::Open { candidates, .. }) => candidates,
+                Some(Policy::Ask { .. }) | None => continue,
+            };
+            let mut targets: Vec<Option<&str>> = Vec::new();
+            for candidate in candidates {
+                if !targets.contains(&Some(candidate.name.as_str())) {
+                    targets.push(Some(&candidate.name));
+                }
+            }
+            if [in_project, in_global]
+                .iter()
+                .any(|file| exact(file, source, "*").is_some())
+            {
+                targets.push(None);
+            }
+            for target in targets {
+                let key = target.unwrap_or("*");
+                let setting = problems.is_empty().then(|| {
+                    [(in_project, Scope::Project), (in_global, Scope::Global)]
+                        .into_iter()
+                        .find_map(|(file, scope)| {
+                            let own = exact(file, source, key).map(|edge| (edge, false));
+                            let other = || exact(file, source, "*").map(|edge| (edge, true));
+                            let (edge, any_other) = own.or_else(other)?;
+                            Some(Setting {
+                                edge,
+                                scope,
+                                any_other,
+                            })
+                        })
+                });
+                steps.push(NextStep {
+                    source: source.clone(),
+                    target: target.map(str::to_owned),
+                    forced: false,
+                    setting: setting.flatten(),
+                    in_project: exact(in_project, source, key).is_some(),
+                    in_global: exact(in_global, source, key).is_some(),
+                });
+            }
+        }
+        Self {
+            steps,
+            project,
+            global: global.map(Path::to_path_buf),
+            problems,
+        }
+    }
+}
+
+/// The setting `file` has for `source` → `target` itself.
+fn exact(file: &File, source: &str, target: &str) -> Option<Edge> {
+    let (_, targets) = file.edges.iter().find(|(name, _)| name == source)?;
+    let (_, edge) = targets.iter().find(|(name, _)| name == target)?;
+    Some(*edge)
+}
+
+/// Sets what follows `source` when it recommends `target` (`None`: any other command): `edge`
+/// in the file of `scope`, and for all projects without the project's own setting, which would
+/// hide it here; with no edge, neither file keeps a setting for it, and autopilot decides.
+pub(super) fn choose(
+    global: Option<&Path>,
+    root: &Path,
+    (source, target): (&str, Option<&str>),
+    choice: Option<(Edge, Scope)>,
+) -> Result<(), String> {
+    let project = root.join(PROJECT_FILE);
+    let target = target.unwrap_or("*");
+    let global = || global.ok_or("no file for all projects: HOME is not set");
+    match choice {
+        Some((edge, Scope::Project)) => change(&project, true, source, target, Some(edge)),
+        Some((edge, Scope::Global)) => {
+            change(global()?, false, source, target, Some(edge))?;
+            change(&project, true, source, target, None)
+        }
+        None => {
+            change(&project, true, source, target, None)?;
+            match global() {
+                Ok(path) => change(path, false, source, target, None),
+                Err(_) => Ok(()),
+            }
+        }
+    }
+}
+
+/// Sets `source` → `target` to `edge` in the file at `path`, or takes it out. A file that would
+/// not change is not written, and one left with no settings is removed, as Scramjet removes it.
+fn change(
+    path: &Path,
+    in_project: bool,
+    source: &str,
+    target: &str,
+    edge: Option<Edge>,
+) -> Result<(), String> {
+    let shown = shown_path(path);
+    let mut file = read(path, in_project)
+        .map_err(|message| format!("{shown}: {message}"))?
+        .unwrap_or_default();
+    if exact(&file, source, target) == edge {
+        return Ok(());
+    }
+    let at = match file.edges.iter().position(|(name, _)| name == source) {
+        Some(at) => at,
+        None => {
+            file.edges.push((source.to_owned(), Vec::new()));
+            file.edges.len() - 1
+        }
+    };
+    let targets = &mut file.edges[at].1;
+    match (targets.iter_mut().find(|(name, _)| name == target), edge) {
+        (Some((_, known)), Some(edge)) => *known = edge,
+        (None, Some(edge)) => targets.push((target.to_owned(), edge)),
+        (_, None) => targets.retain(|(name, _)| name != target),
+    }
+    file.edges.retain(|(_, targets)| !targets.is_empty());
+    let written = match file.edges.is_empty() && file.publications.is_empty() {
+        true => std::fs::remove_file(path),
+        false => write_replacing(path, &serialized(&file)),
+    };
+    written.map_err(|error| format!("{shown}: {error}"))
+}
+
+/// A file's settings in Scramjet's layout, in their order.
+fn serialized(file: &File) -> String {
+    fn section<T>(
+        name: &str,
+        entries: &[(String, Vec<(String, T)>)],
+        value: fn(&T) -> &str,
+    ) -> String {
+        let mut text = String::new();
+        for (command, settings) in entries.iter().filter(|(_, settings)| !settings.is_empty()) {
+            text += &format!("  {}:\n", yaml_scalar(command));
+            for (name, setting) in settings {
+                text += &format!("    {}: {}\n", yaml_scalar(name), value(setting));
+            }
+        }
+        match text.is_empty() {
+            true => text,
+            false => format!("{name}:\n{text}"),
+        }
+    }
+    let edge = |edge: &Edge| match edge {
+        Edge::Chain => "chain",
+        Edge::Pause => "pause",
+    };
+    let publication = |publication: &Publication| match publication {
+        Publication::Ask => "always-ask",
+        Publication::Auto => "auto-approve",
+    };
+    section("edges", &file.edges, edge) + &section("publications", &file.publications, publication)
+}
+
+/// `name` as a YAML key that reads back as it is: plain when it is a name such as `rs:loop` or
+/// `create_pr`, else double-quoted (JSON's quoting is YAML's).
+fn yaml_scalar(name: &str) -> String {
+    let plain = name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && (name.chars()).all(|c| c.is_ascii_alphanumeric() || "_-.:/".contains(c))
+        && !name.ends_with(':')
+        && !["true", "false", "null", "yes", "no", "on", "off", "y", "n"]
+            .contains(&name.to_ascii_lowercase().as_str());
+    match plain {
+        true => name.to_owned(),
+        false => serde_json::to_string(name).unwrap_or_default(),
+    }
+}
+
+fn shown_path(path: &Path) -> String {
+    shortened(&path.display().to_string())
 }
 
 /// The user's setting in the `global` file for `command`'s publications with `tool`, read
@@ -392,6 +640,219 @@ rs:loop; edge settings ignored this dispatch",
             (edges.resolve("rs:loop", "rs:loop"), edges.diagnostics.len()),
             (None, 0)
         );
+    }
+
+    fn flow() -> Commands {
+        let closed = "---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:loop\n    - name: rs:steer\n---\nLoop";
+        Commands::parsed(&[
+            ("rs:loop.md", closed),
+            (
+                "rs:review.md",
+                "---\nnext:\n  mode: forced\n  target: rs:loop\n---\nReview",
+            ),
+            ("rs:steer.md", "---\nnext:\n  mode: ask\n---\nSteer"),
+            ("rs:plain.md", "Plain"),
+        ])
+    }
+
+    #[test]
+    fn next_steps_show_what_applies_and_where_it_is_from() {
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-autonomy-steps-{}", std::process::id())),
+        );
+        let root = &scratch.0;
+        let global = root.join("global.yaml");
+        let steps = || NextSteps::load(Some(&global), root, &flow());
+        let step =
+            |source: &str, target: Option<&str>, setting, (in_project, in_global)| NextStep {
+                source: source.into(),
+                target: target.map(str::to_owned),
+                forced: false,
+                setting,
+                in_project,
+                in_global,
+            };
+        let set = |edge, scope, any_other| {
+            Some(Setting {
+                edge,
+                scope,
+                any_other,
+            })
+        };
+        let forced = NextStep {
+            forced: true,
+            ..step("rs:review", Some("rs:loop"), None, (false, false))
+        };
+        // Without files autopilot decides every step but the forced one; ask and no policy
+        // have none.
+        assert_eq!(
+            steps().steps,
+            [
+                step("rs:loop", Some("rs:loop"), None, (false, false)),
+                step("rs:loop", Some("rs:steer"), None, (false, false)),
+                forced.clone(),
+            ]
+        );
+        std::fs::create_dir_all(root.join(".scramjet")).unwrap();
+        std::fs::write(
+            root.join(".scramjet/autonomy.yaml"),
+            "edges:\n  rs:loop:\n    rs:steer: pause\n  rs:review:\n    rs:loop: pause\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &global,
+            "edges:\n  rs:loop:\n    rs:steer: chain\n    '*': chain\n",
+        )
+        .unwrap();
+        let loaded = steps();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        assert_eq!(
+            loaded.steps,
+            [
+                step(
+                    "rs:loop",
+                    Some("rs:loop"),
+                    set(Edge::Chain, Scope::Global, true),
+                    (false, false)
+                ),
+                step(
+                    "rs:loop",
+                    Some("rs:steer"),
+                    set(Edge::Pause, Scope::Project, false),
+                    (true, true)
+                ),
+                step(
+                    "rs:loop",
+                    None,
+                    set(Edge::Chain, Scope::Global, false),
+                    (false, true)
+                ),
+                forced,
+            ]
+        );
+        // A file that cannot be used leaves both unused, as routing does.
+        std::fs::write(&global, "edges: [\n").unwrap();
+        let broken = steps();
+        assert!(broken.steps.iter().all(|step| step.setting.is_none()));
+        assert_eq!(broken.problems.len(), 1);
+        assert!(
+            broken.problems[0].starts_with(&format!("{}: autonomy.yaml:", global.display())),
+            "{:?}",
+            broken.problems
+        );
+    }
+
+    #[test]
+    fn choosing_a_next_step_writes_the_files_routing_reads() {
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-autonomy-choose-{}", std::process::id())),
+        );
+        let root = &scratch.0;
+        let global = root.join("config/scramjet/autonomy.yaml");
+        let project = root.join(".scramjet/autonomy.yaml");
+        let choose = |target, choice| choose(Some(&global), root, ("rs:loop", target), choice);
+        let edges = || Edges::load(Some(&global), root, &flow());
+        let text = |path: &Path| std::fs::read_to_string(path).ok();
+
+        choose(Some("rs:steer"), Some((Edge::Pause, Scope::Project))).unwrap();
+        assert_eq!(
+            text(&project).as_deref(),
+            Some("edges:\n  rs:loop:\n    rs:steer: pause\n")
+        );
+        assert_eq!(text(&global), None);
+        // For all projects: this project's own setting goes, so that it holds here too.
+        choose(Some("rs:steer"), Some((Edge::Chain, Scope::Global))).unwrap();
+        assert_eq!(text(&project), None, "an emptied file is removed");
+        assert_eq!(edges().resolve("rs:loop", "rs:steer"), Some(Edge::Chain));
+        std::fs::write(
+            &global,
+            "# mine\nedges:\n  rs:loop:\n    rs:steer: chain\n    '*': pause\n\
+publications:\n  rs:loop:\n    create_pr: auto-approve\n",
+        )
+        .unwrap();
+        // A change that changes nothing leaves the file as it is, comments and all.
+        choose(Some("rs:steer"), Some((Edge::Chain, Scope::Global))).unwrap();
+        choose(Some("rs:loop"), None).unwrap();
+        assert!(text(&global).unwrap().starts_with("# mine\n"));
+        choose(Some("rs:loop"), Some((Edge::Chain, Scope::Global))).unwrap();
+        choose(None, Some((Edge::Chain, Scope::Project))).unwrap();
+        assert_eq!(
+            text(&global).as_deref(),
+            Some(
+                "edges:\n  rs:loop:\n    rs:steer: chain\n    \"*\": pause\n    rs:loop: chain\n\
+publications:\n  rs:loop:\n    create_pr: auto-approve\n"
+            )
+        );
+        assert_eq!(
+            text(&project).as_deref(),
+            Some("edges:\n  rs:loop:\n    \"*\": chain\n")
+        );
+        // Autopilot decides: neither file keeps a setting for it.
+        choose(Some("rs:steer"), Some((Edge::Pause, Scope::Project))).unwrap();
+        choose(Some("rs:steer"), None).unwrap();
+        assert_eq!(
+            text(&project).as_deref(),
+            Some("edges:\n  rs:loop:\n    \"*\": chain\n")
+        );
+        let read_back = parse(&text(&global).unwrap(), false).unwrap();
+        assert_eq!(
+            read_back.edges,
+            [(
+                "rs:loop".to_owned(),
+                vec![
+                    ("*".to_owned(), Edge::Pause),
+                    ("rs:loop".to_owned(), Edge::Chain)
+                ]
+            )]
+        );
+        assert_eq!(read_back.publications.len(), 1);
+        // A file that cannot be read is not overwritten.
+        std::fs::write(&project, "edges: [\n").unwrap();
+        let error = choose(Some("rs:loop"), Some((Edge::Pause, Scope::Project))).unwrap_err();
+        assert!(error.starts_with(&project.display().to_string()), "{error}");
+        assert_eq!(text(&project).as_deref(), Some("edges: [\n"));
+        assert!(choose(Some("rs:loop"), None).is_err());
+        let without_home = super::choose(
+            None,
+            root,
+            ("rs:loop", Some("rs:loop")),
+            Some((Edge::Chain, Scope::Global)),
+        );
+        assert_eq!(
+            without_home.unwrap_err(),
+            "no file for all projects: HOME is not set"
+        );
+    }
+
+    #[test]
+    fn names_are_written_so_that_they_read_back_as_they_are() {
+        let names = [
+            "rs:loop",
+            "create_pr",
+            "*",
+            "true",
+            "No",
+            "a: b",
+            "end:",
+            "it's",
+            "1e3",
+            "a\"b\nc",
+            "~",
+        ];
+        let file = File {
+            edges: names
+                .iter()
+                .map(|name| (name.to_string(), vec![(name.to_string(), Edge::Pause)]))
+                .collect(),
+            publications: vec![("a b".into(), vec![("create_pr".into(), Publication::Ask)])],
+        };
+        let text = serialized(&file);
+        assert!(
+            text.contains("\n  rs:loop:\n    rs:loop: pause\n"),
+            "{text}"
+        );
+        assert!(text.contains("\n    create_pr: always-ask\n"), "{text}");
+        assert_eq!(parse(&text, false), Ok(file));
     }
 
     #[test]

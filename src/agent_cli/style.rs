@@ -55,6 +55,8 @@ pub const HEADING: &str = "\x1b[1;33m";
 pub const SELECTOR_TITLE: &str = "\x1b[1m";
 pub const SELECTED: &str = "\x1b[1m";
 pub const SELECTOR_MARK: &str = "\x1b[36m";
+/// A heading among a selector's rows, over the rows it groups.
+pub const SELECTOR_HEADING: &str = "\x1b[2m";
 /// Text selected with the mouse in the full screen, as Scramjet's retained view shows it.
 pub const SELECTION: &str = "\x1b[7m";
 /// The cursor block after the query typed in a selector, as Scramjet's input draws it.

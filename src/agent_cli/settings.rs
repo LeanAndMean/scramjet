@@ -1,7 +1,9 @@
 //! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet-rs/settings.json` (by default
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
-use scramjet_rs::agent::{CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, shortened};
+use scramjet_rs::agent::{
+    CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, shortened, write_replacing,
+};
 use serde_json::{Map, Value, json};
 use std::{
     io,
@@ -58,9 +60,11 @@ pub(super) enum Row {
     BranchSummary,
     Tools,
     Credentials,
+    Autopilot,
+    NextSteps,
 }
 
-pub(super) const ROWS: [Row; 8] = [
+pub(super) const ROWS: [Row; 10] = [
     Row::ThinkingLevel,
     Row::ThinkingBlocks,
     Row::Steering,
@@ -69,6 +73,8 @@ pub(super) const ROWS: [Row; 8] = [
     Row::BranchSummary,
     Row::Tools,
     Row::Credentials,
+    Row::Autopilot,
+    Row::NextSteps,
 ];
 
 impl Row {
@@ -82,6 +88,8 @@ impl Row {
             Self::BranchSummary => "Leaving a branch",
             Self::Tools => "Tools",
             Self::Credentials => "Credential stores",
+            Self::Autopilot => "Autopilot",
+            Self::NextSteps => "Next steps",
         }
     }
 
@@ -106,6 +114,15 @@ impl Row {
             Self::Credentials => {
                 "~/.ssh, ~/.netrc and other known stores, kept from the agent's tools: in turns no one \
                  started (a next step run at once, -p), always or never. Subagents never see them."
+            }
+            Self::Autopilot => {
+                "On: when a command finishes, the next step it recommends runs after a 3-second \
+                 countdown, unless you choose. For this session; /autopilot switches it too."
+            }
+            Self::NextSteps => {
+                "What follows a command that finishes and recommends a next one: continue \
+                 automatically, ask you, or let autopilot decide. Kept in Scramjet's autonomy.yaml \
+                 files, which Scramjet reads too."
             }
         }
     }
@@ -411,15 +428,15 @@ impl Settings {
         self.save("defaultThinkingLevel", json!(level))
     }
 
-    /// The value `row` shows in `/settings`; the thinking level is the session's, not one of
-    /// the settings'.
+    /// The value `row` shows in `/settings`; the thinking level, autopilot and the next steps are
+    /// the session's, not the settings'.
     pub(super) fn shown(&self, row: Row) -> String {
         let delivery = |mode| match mode {
             Delivery::All => "all at once",
             Delivery::OneAtATime => "one at a time",
         };
         match row {
-            Row::ThinkingLevel => String::new(),
+            Row::ThinkingLevel | Row::Autopilot | Row::NextSteps => String::new(),
             Row::ThinkingBlocks if self.hide_thinking_block => "hidden".into(),
             Row::ThinkingBlocks => "shown".into(),
             Row::Steering => delivery(self.steering_mode).into(),
@@ -447,8 +464,8 @@ impl Settings {
         }
     }
 
-    /// Moves `row` to its next value, as Enter in `/settings` does, and saves it. The thinking
-    /// level and the tools, which have lists of their own, stay.
+    /// Moves `row` to its next value, as Enter in `/settings` does, and saves it. Those that are
+    /// not in the file, and the tools, which have a list of their own, stay.
     pub(super) fn cycle(&mut self, row: Row) -> io::Result<()> {
         let next = |mode| match mode {
             Delivery::All => Delivery::OneAtATime,
@@ -459,7 +476,7 @@ impl Settings {
             Delivery::OneAtATime => "one-at-a-time",
         };
         match row {
-            Row::ThinkingLevel | Row::Tools => Ok(()),
+            Row::ThinkingLevel | Row::Tools | Row::Autopilot | Row::NextSteps => Ok(()),
             Row::ThinkingBlocks => self.set_hide_thinking_block(!self.hide_thinking_block),
             Row::Steering => {
                 self.steering_mode = next(self.steering_mode);
@@ -583,30 +600,6 @@ fn read_object(path: &Path) -> Result<Map<String, Value>, String> {
         Ok(_) => Err(format!("{}: not a JSON object", shown(path))),
         Err(error) => Err(format!("{}: {error}", shown(path))),
     }
-}
-
-/// Writes `text` to a file beside `path`'s target and renames it over the target, so a reader
-/// never sees part of it. A symbolic link stays one.
-fn write_replacing(path: &Path, text: &str) -> io::Result<()> {
-    let target = match std::fs::canonicalize(path) {
-        Ok(target) => target,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if let Some(directory) = path.parent() {
-                std::fs::create_dir_all(directory)?;
-            }
-            path.to_path_buf()
-        }
-        Err(error) => return Err(error),
-    };
-    let mut temporary = target.clone().into_os_string();
-    temporary.push(format!(".{}.tmp", std::process::id()));
-    let temporary = PathBuf::from(temporary);
-    let written =
-        std::fs::write(&temporary, text).and_then(|()| std::fs::rename(&temporary, &target));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    written
 }
 
 #[cfg(test)]

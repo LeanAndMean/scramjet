@@ -1718,6 +1718,56 @@ def autopilot_resumed(read, until, send, output):
     send(b'\x04')
 
 
+def next_step_settings(read, until, send, output):
+    shown, on_screen = full_screen(columns=80, rows=40)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/settings\r')
+    on_screen('Settings  \u2191\u2193 move')
+    send(b'\x1b[A')
+    rows = on_screen('\u203a ' + setting('Next steps', 'continue automatically: 1 \u00b7 ask me: 2'))
+    assert '  ' + setting('Autopilot', 'off') in rows, rows
+    # Each command's steps under it: what follows each, and where that is set.
+    send(b'\r')
+    rows = on_screen('Next steps  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc back')
+    at = rows.index('  After /flow:step')
+    assert rows[at + 1:at + 4] == [
+        '\u203a   \u2192 /flow:step         ask me \u00b7 as any other command',
+        '    \u2192 /flow:done         continue automatically \u00b7 this project',
+        '    \u2192 any other command  ask me \u00b7 all projects',
+    ], rows
+    assert 'When /flow:step finishes and recommends /flow:step, the next steps wait' in ' '.join(rows), rows
+    send(b'\r')
+    rows = on_screen('After /flow:step \u2192 /flow:step  \u2191\u2193 move')
+    assert '\u2713' not in '\n'.join(rows), rows
+    send(b'\x1b[B\r')
+    rows = on_screen('\u2192 /flow:step         continue automatically \u00b7 all projects')
+    # Autopilot decides: the project's setting goes, and the one for any other command holds.
+    send(b'\x1b[B\r')
+    rows = on_screen('\u203a Continue automatically, in this project \u2713')
+    send(b'\x1b[F')
+    rows = on_screen('\u203a Autopilot decides')
+    note = ' '.join(row.strip() for row in rows)
+    assert "Takes its setting out of this project's file. The setting for any other command still holds" \
+        in note, rows
+    send(b'\r')
+    on_screen('\u203a   \u2192 /flow:done         ask me \u00b7 as any other command')
+    send(b'\x1b')
+    on_screen('\u203a ' + setting('Next steps', 'continue automatically: 1 \u00b7 ask me: 2'))
+    send(b'\x1b[A\r')
+    on_screen('\u203a ' + setting('Autopilot', 'on'))
+    send(b'\x1b')
+    ending(read, output, ['\u2500' * 79, '>'], columns=80, rows=40)
+    # Chained by the setting just made, unasked; then held for the user, autopilot on as it is.
+    send(b'/flow:step one\r')
+    rows = on_screen('Chained.')
+    assert '> /flow:step two' in rows, rows
+    rows = on_screen('Select next step')
+    assert 'auto-selects' not in '\n'.join(rows), rows
+    send(b'\x1b')
+    on_screen('Cancelled')
+    send(b'\x04')
+
+
 def printed_hides_credentials(read, until, send, output):
     mark = until(b'Peeked.', until(b'ran-42'))
     assert b'FAKE-' not in output, bytes(output)
@@ -1886,6 +1936,20 @@ assert [line['on'] for line in lines if line.get('type') == 'autopilot'] == [Tru
 outputs = [line['output'] for line in lines if line.get('call_id') == 'call_2' and 'output' in line]
 assert outputs == ['ran-42\n'], outputs
 os.remove(os.path.join(project, 'made.txt'))
+stepping = config_home('steps')
+os.makedirs(os.path.join(stepping, 'scramjet'))
+with open(os.path.join(stepping, 'scramjet', 'autonomy.yaml'), 'w') as file:
+    file.write("edges:\n  flow:step:\n    '*': pause\n")
+known = set(session_files())
+run([], next_step_settings, serve_items([
+    [report('call_1', [('/flow:step two', False, 'Go on.')], 0)],
+    [message('Chained.'), report('call_2', [('/flow:done', False, 'Finish.')], 0)],
+]), variables={'XDG_CONFIG_HOME': stepping}, columns=80, rows=40)
+assert not os.path.exists(os.path.join(project, '.scramjet', 'autonomy.yaml'))
+assert open(os.path.join(stepping, 'scramjet', 'autonomy.yaml')).read() == \
+    'edges:\n  flow:step:\n    "*": pause\n    flow:step: chain\n'
+(stepped,) = set(session_files()) - known
+assert [line['on'] for line in map(json.loads, open(stepped)) if line.get('type') == 'autopilot'] == [True]
 # `-p` runs unattended: hidden by default, unless the settings say never.
 run(['-p', 'peek'], printed_hides_credentials, serve_items([[peek('call_1')], [message('Peeked.')]]),
     variables=in_fake_home)

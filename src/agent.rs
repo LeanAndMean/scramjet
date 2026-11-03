@@ -22,6 +22,7 @@ mod tree;
 mod turn;
 mod ui;
 
+pub use autonomy::{Edge, NextStep, NextSteps, Scope, Setting};
 pub use client::StreamProgress;
 pub use commands::{Command, Commands, Origin, Set, Sets};
 pub use compaction::{AutoCompaction, Compaction};
@@ -33,6 +34,7 @@ pub use skills::{Skill, Skills};
 pub use status::{Completed, Next, Routing, Step};
 pub use tools::{
     CODING_TOOLS, DEFAULT_TOOLS, search_program, sequence_diff, shortened, terminal_line,
+    write_replacing,
 };
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use turn::Shell;
@@ -598,6 +600,25 @@ impl Agent {
     /// the value it had.
     pub fn autopilot(&self) -> bool {
         self.autopilot
+    }
+
+    /// The next steps of the commands that have them, with what the `autonomy.yaml` files say
+    /// of each, as `/settings` shows them.
+    pub fn next_steps(&self) -> NextSteps {
+        NextSteps::load(self.autonomy.as_deref(), &self.config.root, &self.commands)
+    }
+
+    /// Sets what follows `source` when it recommends `target` (`None`: any other command): it
+    /// runs at once or waits for the user (`edge`), for this project or all projects, or, with
+    /// no choice, autopilot decides. Used from the next routing on.
+    pub fn set_next_step(
+        &self,
+        source: &str,
+        target: Option<&str>,
+        choice: Option<(Edge, Scope)>,
+    ) -> Result<(), String> {
+        let (global, root) = (self.autonomy.as_deref(), &self.config.root);
+        autonomy::choose(global, root, (source, target), choice)
     }
 
     /// `/autopilot on` or `off`, saved in the session.

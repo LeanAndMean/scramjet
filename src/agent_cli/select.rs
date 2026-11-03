@@ -110,6 +110,14 @@ impl Picker {
         self
     }
 
+    /// Makes the rows `headings` marks headings of the rows under them, which the selection
+    /// passes over.
+    pub(super) fn headed(mut self, headings: Vec<bool>) -> Self {
+        self.list.headings = headings;
+        self.list.settle(false);
+        self
+    }
+
     /// Keeps the list shown once answered, so that a session showing another in its place at
     /// once (`/settings`) does not show the prompt between them.
     pub(super) fn held(mut self) -> Self {
@@ -256,6 +264,8 @@ struct List {
     /// Rows shown at once, and moved by a page.
     visible: usize,
     search: Option<Box<Search>>,
+    /// Whether each row is a heading, which cannot be selected; empty when none is.
+    headings: Vec<bool>,
 }
 
 struct Search {
@@ -274,6 +284,25 @@ impl List {
             selected: initial.min(count.saturating_sub(1)),
             visible,
             search: None,
+            headings: Vec::new(),
+        }
+    }
+
+    fn is_heading(&self, position: usize) -> bool {
+        (self.headings.get(self.rows[position])).is_some_and(|&heading| heading)
+    }
+
+    /// Moves the selection off a heading: up, or down to the first row under it.
+    fn settle(&mut self, up: bool) {
+        let count = self.rows.len();
+        for _ in 0..count {
+            if !self.is_heading(self.selected) {
+                return;
+            }
+            self.selected = match up {
+                true => (self.selected + count - 1) % count,
+                false => (self.selected + 1) % count,
+            };
         }
     }
 
@@ -325,6 +354,7 @@ impl List {
             Key::Escape | Key::Interrupt => return Some(None),
             _ => self.selected,
         };
+        self.settle(matches!(key, Key::Up));
         None
     }
 
@@ -355,7 +385,8 @@ fn lines(
     (width, height): (usize, usize),
     row: &dyn Fn(usize, usize) -> String,
 ) -> Vec<String> {
-    use style::{CURRENT, MUTED, RESET, SEARCH_CURSOR, SELECTED, SELECTOR_MARK, SELECTOR_TITLE};
+    use style::{CURRENT, MUTED, RESET, SEARCH_CURSOR, SELECTED, SELECTOR_HEADING};
+    use style::{SELECTOR_MARK, SELECTOR_TITLE};
     // The last column stays empty, so that a full row does not move the cursor to the next.
     let width = width.saturating_sub(1).max(8);
     let shown = list.rows.len();
@@ -382,7 +413,16 @@ fn lines(
             lines.push(format!("  {MUTED}{none}{RESET}"));
         }
     }
+    // Rows scrolled away from their heading show it in place of the first of them.
+    let heading = (top..list.selected)
+        .next()
+        .filter(|&at| !list.is_heading(at))
+        .and_then(|at| (0..at).rev().find(|&above| list.is_heading(above)));
     for position in top..top + visible {
+        let position = match heading {
+            Some(heading) if position == top => heading,
+            _ => position,
+        };
         let index = list.rows[position];
         let is_current = current == Some(index);
         let text = row(index, width - 2 - if is_current { 2 } else { 0 });
@@ -391,14 +431,19 @@ fn lines(
         } else {
             String::new()
         };
-        lines.push(if position == list.selected {
+        lines.push(if list.is_heading(position) {
+            format!("  {SELECTOR_HEADING}{text}{RESET}")
+        } else if position == list.selected {
             format!("{SELECTOR_MARK}›{RESET} {SELECTED}{text}{RESET}{mark}")
         } else {
             format!("  {text}{mark}")
         });
     }
     if visible < shown {
-        lines.push(format!("  {MUTED}({}/{shown}){RESET}", list.selected + 1));
+        // Of the rows that can be selected.
+        let rows = |end| (0..end).filter(|&at| !list.is_heading(at)).count();
+        let (at, of) = (rows(list.selected + 1), rows(shown));
+        lines.push(format!("  {MUTED}({at}/{of}){RESET}"));
     }
     lines
 }
@@ -588,6 +633,50 @@ mod tests {
                 "Pick  ↑↓ move · Enter select · Esc cancel",
                 "  row 0",
                 "› row 1"
+            ]
+        );
+    }
+
+    #[test]
+    fn headings_group_rows_and_are_passed_over() {
+        // Two groups: a heading, then three rows under each.
+        let headings: Vec<bool> = (0..8).map(|index| index % 4 == 0).collect();
+        let row = |index: usize, width: usize| {
+            let text = match index % 4 {
+                0 => format!("After {}", index / 4),
+                at => format!("  row {}.{at}", index / 4),
+            };
+            text::clip(&text, width)
+        };
+        let mut list = List::new(8, 0, 3);
+        list.headings = headings;
+        list.settle(false);
+        assert_eq!(list.selected, 1);
+        let mut moved = Vec::new();
+        for key in [
+            Key::Up,
+            Key::Down,
+            Key::Up,
+            Key::LineStart,
+            Key::Down,
+            Key::Down,
+            Key::Down,
+            Key::PageUp,
+        ] {
+            assert_eq!(list.key(&key), None);
+            moved.push(list.selected);
+        }
+        assert_eq!(moved, [7, 1, 7, 1, 2, 3, 5, 2]);
+        list.selected = 6;
+        // The first rows shown lost their heading above: it shows in the first one's place.
+        assert_eq!(
+            plain(lines("Pick", HINT, &list, None, (40, 24), &row)),
+            [
+                "Pick  ↑↓ move · Enter select · Esc can…",
+                "  After 1",
+                "›   row 1.2",
+                "    row 1.3",
+                "  (5/6)",
             ]
         );
     }

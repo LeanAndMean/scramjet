@@ -6,7 +6,10 @@ use super::settings::{ROWS, Row};
 use super::terminal::Terminal;
 use super::text::{clip, one_line, visible};
 use super::{editor, select, style, tree};
-use scramjet_rs::agent::{Agent, AgentError, CODING_TOOLS, Navigated, SessionInfo, search_program};
+use scramjet_rs::agent::{
+    Agent, AgentError, CODING_TOOLS, Edge, Navigated, NextStep, NextSteps, Scope, SessionInfo,
+    Setting, search_program, shortened,
+};
 use std::{sync::atomic::Ordering, time::Duration};
 use unicode_width::UnicodeWidthStr;
 
@@ -14,6 +17,29 @@ const SETTINGS_KEYS: &str = "↑↓ move · Enter change · Esc close";
 const NO_LEVELS: &str = "The model's card lists no thinking levels to choose from.";
 const BACK_KEYS: &str = "↑↓ move · Enter select · Esc back";
 const TOOLS_KEYS: &str = "↑↓ move · Enter switch on or off · Esc back";
+const STEPS_KEYS: &str = "↑↓ move · Enter change · Esc back";
+/// What a next step can be set to, in the order `/settings` offers them.
+const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
+    (
+        "Continue automatically, in this project",
+        Some((Edge::Chain, Scope::Project)),
+    ),
+    (
+        "Continue automatically, in all projects",
+        Some((Edge::Chain, Scope::Global)),
+    ),
+    (
+        "Ask me, in this project",
+        Some((Edge::Pause, Scope::Project)),
+    ),
+    (
+        "Ask me, in all projects",
+        Some((Edge::Pause, Scope::Global)),
+    ),
+    ("Autopilot decides", None),
+];
+const AUTOPILOT_DECIDES: &str = "With autopilot on, the recommended step runs after a 3-second \
+    countdown; off, the next steps wait for you to choose.";
 
 /// What a coding tool does, as `/settings` says under its row, in the instructions' words.
 fn tool_note(tool: &str) -> &'static str {
@@ -182,9 +208,13 @@ impl Interactive {
             };
             let rows = self.setting_rows();
             let levels = !self.agent.effort_levels().is_empty();
+            let problems = self.agent.next_steps().problems;
             let notes = (ROWS.iter())
                 .map(|row| match row {
                     Row::ThinkingLevel if !levels => NO_LEVELS.to_owned(),
+                    Row::NextSteps if !problems.is_empty() => {
+                        format!("{} {}", row.description(), not_used(&problems))
+                    }
                     row => row.description().to_owned(),
                 })
                 .collect();
@@ -204,6 +234,12 @@ impl Interactive {
             match ROWS[index] {
                 Row::ThinkingLevel => self.choose_thinking_level(),
                 Row::Tools => self.choose_tools(),
+                Row::NextSteps => self.choose_next_steps(),
+                Row::Autopilot => {
+                    if let Err(error) = self.agent.set_autopilot(!self.agent.autopilot()) {
+                        self.say(&format!("error: {error}"));
+                    }
+                }
                 row => {
                     if let Err(error) = self.settings.cycle(row) {
                         self.say(&format!("error: settings not saved: {error}"));
@@ -226,6 +262,9 @@ impl Interactive {
         let width = ROWS.iter().map(|row| row.label().len()).max().unwrap_or(0);
         let value = |row| match row {
             Row::ThinkingLevel => self.agent.effort().unwrap_or("model default").to_owned(),
+            Row::Autopilot if self.agent.autopilot() => "on".into(),
+            Row::Autopilot => "off".into(),
+            Row::NextSteps => steps_summary(&self.agent.next_steps()),
             row => self.settings.shown(row),
         };
         (ROWS.iter())
@@ -311,6 +350,140 @@ impl Interactive {
             if let Err(error) = saved {
                 self.say(&format!("error: settings not saved: {error}"));
             }
+        }
+    }
+
+    /// Each command's next steps under the command, with what follows each and where that is
+    /// set; Enter changes one. The routing after the next command uses the files as changed.
+    fn choose_next_steps(&mut self) {
+        let mut at = 0;
+        loop {
+            let Some(screen) = &self.screen else {
+                return;
+            };
+            let steps = self.agent.next_steps();
+            if steps.steps.is_empty() {
+                return;
+            }
+            let width = (steps.steps.iter())
+                .map(|step| target_name(step).width())
+                .max()
+                .unwrap_or(0);
+            // A heading before each command's steps: `None` in `shown`.
+            let mut rows = Vec::new();
+            let mut shown = Vec::new();
+            let mut notes = Vec::new();
+            for (index, step) in steps.steps.iter().enumerate() {
+                if index == 0 || steps.steps[index - 1].source != step.source {
+                    rows.push(format!("After /{}", step.source));
+                    shown.push(None);
+                    notes.push(String::new());
+                }
+                let target = target_name(step);
+                let pad = " ".repeat(width - target.width());
+                rows.push(format!("  → {target}{pad}  {}", step_value(step)));
+                shown.push(Some(index));
+                notes.push(step_note(step, &steps, self.agent.autopilot()));
+            }
+            let headings = shown.iter().map(Option::is_none).collect();
+            let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
+            let picker = select::Picker::select(
+                "Next steps",
+                visible,
+                rows.len(),
+                at,
+                None,
+                |index, width| clip(&rows[index], width),
+            );
+            let picker = picker.headed(headings).noting(STEPS_KEYS, notes).held();
+            let Some(index) = screen.pick(picker) else {
+                return;
+            };
+            at = index;
+            if let Some(step) = shown[index].map(|index| &steps.steps[index])
+                && !step.forced
+            {
+                self.choose_next_step(&steps, step);
+            }
+        }
+    }
+
+    /// What follows `step`: continue automatically or ask, for this project or all of them, or
+    /// autopilot decides; saved at once.
+    fn choose_next_step(&mut self, steps: &NextSteps, step: &NextStep) {
+        let Some(screen) = &self.screen else {
+            return;
+        };
+        let current = match step.setting {
+            None => Some(STEP_CHOICES.len() - 1),
+            Some(Setting {
+                any_other: true, ..
+            }) => None,
+            Some(Setting { edge, scope, .. }) => {
+                (STEP_CHOICES.iter()).position(|(_, choice)| *choice == Some((edge, scope)))
+            }
+        };
+        let project = shortened(&steps.project.display().to_string());
+        let global = (steps.global.as_ref()).map(|path| shortened(&path.display().to_string()));
+        let wildcard =
+            (steps.steps.iter()).any(|other| other.source == step.source && other.target.is_none());
+        let source = format!("/{}", step.source);
+        let notes = (STEP_CHOICES.iter())
+            .map(|(_, choice)| match choice {
+                Some((edge, Scope::Project)) => {
+                    format!(
+                        "{} Saved for this project in {project}.",
+                        meaning(*edge, &source)
+                    )
+                }
+                Some((_, Scope::Global)) if global.is_none() => {
+                    "Not available: HOME is not set.".to_owned()
+                }
+                Some((edge, Scope::Global)) => {
+                    let instead = match step.in_project {
+                        true => {
+                            ", and taken out of this project's file, whose setting would hold here"
+                        }
+                        false => "",
+                    };
+                    let global = global.as_deref().unwrap_or_default();
+                    let meaning = meaning(*edge, &source);
+                    format!("{meaning} Saved for all projects in {global}{instead}.")
+                }
+                None => {
+                    let out = match (step.in_project, step.in_global) {
+                        (true, true) => {
+                            " Takes its settings out of this project's file and the \
+                                         file for all projects."
+                        }
+                        (true, false) => " Takes its setting out of this project's file.",
+                        (false, true) => " Takes its setting out of the file for all projects.",
+                        (false, false) => "",
+                    };
+                    let still = match wildcard && step.target.is_some() {
+                        true => " The setting for any other command still holds; change that too.",
+                        false => "",
+                    };
+                    format!("{AUTOPILOT_DECIDES}{out}{still}")
+                }
+            })
+            .collect();
+        let title = format!("After {source} → {}", target_name(step));
+        let picker = select::Picker::select(
+            &title,
+            select::VISIBLE,
+            STEP_CHOICES.len(),
+            current.unwrap_or(0),
+            current,
+            |index, width| clip(STEP_CHOICES[index].0, width),
+        );
+        let Some(index) = screen.pick(picker.noting(BACK_KEYS, notes).held()) else {
+            return;
+        };
+        let target = step.target.as_deref();
+        let chosen = STEP_CHOICES[index].1;
+        if let Err(error) = self.agent.set_next_step(&step.source, target, chosen) {
+            self.say(&format!("error: next step not saved: {error}"));
         }
     }
 
@@ -682,6 +855,136 @@ impl Interactive {
                 }
             }
         }
+    }
+}
+
+/// What follows a command's next step, as the list of next steps shows it.
+fn step_value(step: &NextStep) -> String {
+    let Some(setting) = step.setting else {
+        return match step.forced {
+            true => "always continues".into(),
+            false => "autopilot decides".into(),
+        };
+    };
+    let edge = match setting.edge {
+        Edge::Chain => "continue automatically",
+        Edge::Pause => "ask me",
+    };
+    match (setting.any_other, setting.scope) {
+        (true, _) => format!("{edge} · as any other command"),
+        (false, Scope::Project) => format!("{edge} · this project"),
+        (false, Scope::Global) => format!("{edge} · all projects"),
+    }
+}
+
+/// The step's command, or what stands for any other.
+fn target_name(step: &NextStep) -> String {
+    match &step.target {
+        Some(target) => format!("/{target}"),
+        None => "any other command".into(),
+    }
+}
+
+/// What `edge` does after `source`, in a sentence.
+fn meaning(edge: Edge, source: &str) -> String {
+    match edge {
+        Edge::Chain => format!("The recommended step runs as soon as {source} finishes."),
+        Edge::Pause => "The next steps wait for you to choose, also with autopilot on.".into(),
+    }
+}
+
+/// The note under a next step: what happens, where that is set, and why the files are not used.
+fn step_note(step: &NextStep, steps: &NextSteps, autopilot: bool) -> String {
+    let source = format!("/{}", step.source);
+    let target = target_name(step);
+    if step.forced {
+        return format!(
+            "{source} always runs {target} next: the command says so, and no setting changes it."
+        );
+    }
+    let when = match &step.target {
+        Some(_) => format!("When {source} finishes and recommends {target}"),
+        None => {
+            format!("When {source} finishes and recommends a step without a setting of its own")
+        }
+    };
+    let what = match step.setting.map(|setting| setting.edge) {
+        Some(Edge::Chain) => format!("{when}, it runs at once."),
+        Some(Edge::Pause) => {
+            format!("{when}, the next steps wait for you to choose, also with autopilot on.")
+        }
+        None => {
+            let state = if autopilot { "on" } else { "off" };
+            format!(
+                "{when}: with autopilot on, it runs after a 3-second countdown; off, the next \
+                 steps wait for you to choose. Autopilot is {state}."
+            )
+        }
+    };
+    let file = |scope| {
+        let path = match scope {
+            Scope::Project => Some(&steps.project),
+            Scope::Global => steps.global.as_ref(),
+        };
+        path.map_or_else(String::new, |path| shortened(&path.display().to_string()))
+    };
+    let from = match step.setting {
+        None => String::new(),
+        Some(Setting {
+            any_other: true,
+            scope,
+            ..
+        }) => format!(
+            " As any other command after {source}, set in {}.",
+            file(scope)
+        ),
+        Some(Setting {
+            scope: Scope::Project,
+            ..
+        }) => format!(" Set for this project in {}.", file(Scope::Project)),
+        Some(Setting {
+            scope: Scope::Global,
+            ..
+        }) => format!(" Set for all projects in {}.", file(Scope::Global)),
+    };
+    match steps.problems.is_empty() {
+        true => what + &from,
+        false => format!("{what} {}", not_used(&steps.problems)),
+    }
+}
+
+/// Why the `autonomy.yaml` files are not used.
+fn not_used(problems: &[String]) -> String {
+    format!(
+        "Not used now, as {}; until that is fixed, autopilot decides every step.",
+        problems.join("; ")
+    )
+}
+
+/// The value of `/settings`' row for the next steps: how many go which way.
+fn steps_summary(steps: &NextSteps) -> String {
+    if !steps.problems.is_empty() {
+        return "not used: a file has an error".into();
+    }
+    if steps.steps.is_empty() {
+        return "no command has any".into();
+    }
+    let count = |edge| {
+        (steps.steps.iter())
+            .filter(|step| step.setting.is_some_and(|setting| setting.edge == edge))
+            .count()
+    };
+    let parts: Vec<String> = [
+        ("continue automatically", count(Edge::Chain)),
+        ("ask me", count(Edge::Pause)),
+    ]
+    .into_iter()
+    .filter(|(_, count)| *count > 0)
+    .map(|(words, count)| format!("{words}: {count}"))
+    .collect();
+    match parts.is_empty() {
+        true => "autopilot decides all".into(),
+        false => parts.join(" · "),
     }
 }
 

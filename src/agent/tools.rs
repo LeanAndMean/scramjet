@@ -4,7 +4,7 @@ use super::{
 };
 use serde_json::{Value, json};
 use std::{
-    io::Read,
+    io::{self, Read},
     path::{Component, Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
     sync::{
@@ -286,6 +286,30 @@ pub(super) struct Output {
     pub detail: Option<ToolDetail>,
     /// The tool ran but reports failure, such as a command's non-zero exit.
     pub failed: bool,
+}
+
+/// Writes `text` to a file beside `path`'s target and renames it over the target, so a reader
+/// never sees part of it. A symbolic link stays one.
+pub fn write_replacing(path: &Path, text: &str) -> io::Result<()> {
+    let target = match std::fs::canonicalize(path) {
+        Ok(target) => target,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Some(directory) = path.parent() {
+                std::fs::create_dir_all(directory)?;
+            }
+            path.to_path_buf()
+        }
+        Err(error) => return Err(error),
+    };
+    let mut temporary = target.clone().into_os_string();
+    temporary.push(format!(".{}.tmp", std::process::id()));
+    let temporary = PathBuf::from(temporary);
+    let written =
+        std::fs::write(&temporary, text).and_then(|()| std::fs::rename(&temporary, &target));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
 }
 
 /// A path in the home directory as `~/...`, as Scramjet shows tool paths.
