@@ -5,7 +5,8 @@
 //! the user's credential stores.
 
 use super::{
-    AgentError, AgentUi, MAX_STEPS, ToolDetail, Usage,
+    AgentError, AgentUi, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation,
+    MAX_STEPS, ToolDetail, Usage,
     client::{self, ModelInfo},
     commands, instructions,
     request::{self, Sending},
@@ -38,8 +39,6 @@ const MAX_CONCURRENCY: usize = 4;
 const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 /// The tools a child can have; none of them changes a file.
 const READ_ONLY: [&str; 5] = ["read", "grep", "find", "ls", "bash"];
-/// Running children's latest tool calls shown above the status line.
-const ACTIVITY_LINES: usize = 5;
 
 pub(super) fn definition() -> Value {
     let effort = json!({"type":"string","enum":LEVELS,
@@ -589,20 +588,61 @@ struct Job<'a> {
     agent: Option<&'a Definition>,
     task: String,
     cwd: PathBuf,
+    model: String,
+    /// The level its requests ask for, at most the parent's (`child_effort`).
     effort: Option<String>,
+    tools: Vec<&'static str>,
+    warnings: Vec<String>,
 }
 
 impl<'a> Job<'a> {
-    fn new(task: &'a Task, text: String, agents: &'a [Definition], root: &Path) -> Self {
+    fn new(
+        task: &'a Task,
+        text: String,
+        agents: &'a [Definition],
+        parent: &Parent,
+        sandbox: &Result<(), String>,
+    ) -> Self {
+        let agent = agents.iter().find(|agent| agent.name == task.agent);
+        let (tools, warnings) = agent
+            .map(|agent| child_tools(agent, sandbox))
+            .unwrap_or_default();
         Self {
             name: &task.agent,
-            agent: agents.iter().find(|agent| agent.name == task.agent),
+            agent,
             task: text,
             cwd: match &task.cwd {
-                Some(cwd) => tools::resolve(root, cwd),
-                None => root.to_owned(),
+                Some(cwd) => tools::resolve(parent.root, cwd),
+                None => parent.root.to_owned(),
             },
-            effort: task.effort.clone(),
+            model: agent
+                .map(|agent| agent.model.as_deref().unwrap_or(parent.model).to_owned())
+                .unwrap_or_default(),
+            effort: agent.and(child_effort(task.effort.as_deref(), parent.effort)),
+            tools,
+            warnings,
+        }
+    }
+
+    /// The job as the user sees it before it runs.
+    fn shown(&self) -> ChildRun {
+        ChildRun {
+            agent: self.name.to_owned(),
+            source: self
+                .agent
+                .map_or("unknown", |agent| agent.source)
+                .to_owned(),
+            model: self.model.clone(),
+            // Scramjet's `off` is the endpoint's `none`.
+            effort: self.effort.as_deref().map(|effort| match effort {
+                "none" => "off".to_owned(),
+                effort => effort.to_owned(),
+            }),
+            task: self.task.clone(),
+            state: ChildState::Running,
+            items: Vec::new(),
+            usage: ChildUsage::default(),
+            warnings: self.warnings.clone(),
         }
     }
 }
@@ -610,7 +650,6 @@ impl<'a> Job<'a> {
 /// How one task ran.
 struct Run {
     agent: String,
-    model: String,
     /// The text of its last reply that had text.
     output: String,
     /// Why it failed, as Scramjet's stop reason (`error`, `aborted`, or none), with the message.
@@ -626,12 +665,30 @@ impl Run {
     fn new(name: &str) -> Self {
         Self {
             agent: name.to_owned(),
-            model: String::new(),
             output: String::new(),
             error: None,
             usage: Usage::default(),
             turns: 0,
             warnings: Vec::new(),
+        }
+    }
+
+    fn shown_usage(&self) -> ChildUsage {
+        ChildUsage {
+            turns: self.turns,
+            input_tokens: self.usage.input_tokens,
+            cached_input_tokens: self.usage.cached_input_tokens,
+            output_tokens: self.usage.output_tokens,
+        }
+    }
+
+    fn shown_state(&self) -> ChildState {
+        match &self.error {
+            None => ChildState::Done,
+            Some((reason, message)) => ChildState::Failed {
+                reason: reason.map(str::to_owned),
+                message: message.clone(),
+            },
         }
     }
 
@@ -775,14 +832,21 @@ trusted repositories.",
         format!("Unknown agent: \"{name}\". Available agents: {available}.{warnings}")
     };
     let sandbox = sandbox::available();
-    let job = |task, text| Job::new(task, text, &discovery.agents, parent.root);
+    let job = |task, text| Job::new(task, text, &discovery.agents, parent, &sandbox);
     ui.tool_running();
-    let mut activity = Activity::new(!matches!(mode, Mode::Single(_)));
+    let mut shown = Children {
+        mode: match mode {
+            Mode::Single(_) => Delegation::Single,
+            Mode::Parallel(_) => Delegation::Parallel,
+            Mode::Chain(_) => Delegation::Chain,
+        },
+        runs: Vec::new(),
+    };
     let mut runner =
-        |jobs: &[Job]| run_jobs(jobs, parent, &sandbox, &unknown, ui, &mut activity, cancel);
+        |jobs: &[Job], shown: &mut Children| run_jobs(jobs, parent, &unknown, ui, shown, cancel);
     let (text, failed, runs) = match &mode {
         Mode::Single(task) => {
-            let runs = runner(&[job(task, task.task.clone())]);
+            let runs = runner(&[job(task, task.task.clone())], &mut shown);
             let run = &runs[0];
             let text = match &run.error {
                 Some((reason, _)) => {
@@ -802,7 +866,7 @@ trusted repositories.",
                     break;
                 }
                 let task = step.task.replace("{previous}", &previous);
-                let run = runner(&[job(step, task)]).remove(0);
+                let run = runner(&[job(step, task)], &mut shown).remove(0);
                 if run.error.is_some() {
                     let text = format!(
                         "Chain stopped at step {} ({}): {}",
@@ -838,7 +902,7 @@ trusted repositories.",
                 .iter()
                 .map(|task| job(task, task.task.clone()))
                 .collect();
-            let runs = runner(&jobs);
+            let runs = runner(&jobs, &mut shown);
             let succeeded = runs.iter().filter(|run| run.error.is_none()).count();
             let summaries: Vec<String> = runs
                 .iter()
@@ -866,18 +930,8 @@ trusted repositories.",
         }
     };
     let mut usage = Usage::default();
-    let mut turns = 0;
     for run in &runs {
         usage.add(&run.usage);
-        turns += run.turns;
-    }
-    let model = match &runs[..] {
-        [run] => Some(run.model.as_str()).filter(|model| !model.is_empty()),
-        _ => None,
-    };
-    let mut shown = usage_line(&usage, turns, model);
-    if runs.len() > 1 && !shown.is_empty() {
-        shown = format!("Total: {shown}");
     }
     let output = Output {
         text,
@@ -887,50 +941,28 @@ trusted repositories.",
     (output, usage)
 }
 
-/// The children's latest tool calls, shown while they run.
-struct Activity {
-    /// Whether lines name their agent, as when several run.
-    labelled: bool,
-    lines: Vec<String>,
-}
-
-impl Activity {
-    fn new(labelled: bool) -> Self {
-        Self {
-            labelled,
-            lines: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, agent: &str, line: &str, ui: &mut dyn AgentUi) {
-        let line = match self.labelled {
-            true => format!("{agent} {line}"),
-            false => line.to_owned(),
-        };
-        self.lines.push(line);
-        if self.lines.len() > ACTIVITY_LINES {
-            self.lines.remove(0);
-        }
-        ui.tool_output(&self.lines.join("\n"));
-    }
-}
-
+/// What a running child reports.
 enum Event {
-    Activity(String),
+    Item(ChildItem),
+    /// Its usage so far, after each response.
+    Usage(ChildUsage),
     Done(Run),
 }
 
 /// Runs `jobs`, at most `MAX_CONCURRENCY` at a time, each on a thread of its own; this thread
-/// shows what they do. A job not started before a cancellation is reported aborted.
+/// adds them to `shown` and shows what they do. A job not started before a cancellation is
+/// reported aborted.
 fn run_jobs(
     jobs: &[Job],
     parent: &Parent,
-    sandbox: &Result<(), String>,
     unknown: &(dyn Fn(&str) -> String + Sync),
     ui: &mut dyn AgentUi,
-    activity: &mut Activity,
+    shown: &mut Children,
     cancel: &AtomicBool,
 ) -> Vec<Run> {
+    let first = shown.runs.len();
+    shown.runs.extend(jobs.iter().map(Job::shown));
+    ui.subagents(shown);
     let mut runs: Vec<Option<Run>> = jobs.iter().map(|_| None).collect();
     let next = AtomicUsize::new(0);
     let (sender, receiver) = mpsc::channel::<(usize, Event)>();
@@ -945,11 +977,9 @@ fn run_jobs(
                     }
                     let job = &jobs[index];
                     let run = match job.agent {
-                        Some(agent) => {
-                            run_child(job, agent, parent, sandbox, cancel, &mut |line| {
-                                let _ = sender.send((index, Event::Activity(line)));
-                            })
-                        }
+                        Some(agent) => run_child(job, agent, parent, cancel, &mut |event| {
+                            let _ = sender.send((index, event));
+                        }),
                         None => Run::failed(job.name, None, unknown(job.name)),
                     };
                     let _ = sender.send((index, Event::Done(run)));
@@ -958,23 +988,21 @@ fn run_jobs(
         }
         drop(sender);
         for (index, event) in receiver {
+            let child = &mut shown.runs[first + index];
             match event {
-                Event::Activity(line) => activity.push(jobs[index].name, &line, ui),
+                Event::Item(item) => child.items.push(item),
+                Event::Usage(usage) => child.usage = usage,
                 Event::Done(run) => {
-                    if activity.labelled {
-                        let ended = if run.error.is_some() {
-                            "✗ failed"
-                        } else {
-                            "✓ done"
-                        };
-                        activity.push(jobs[index].name, ended, ui);
-                    }
+                    child.state = run.shown_state();
+                    child.usage = run.shown_usage();
                     runs[index] = Some(run);
                 }
             }
+            ui.subagents(shown);
         }
     });
-    runs.into_iter()
+    let runs: Vec<Run> = runs
+        .into_iter()
         .zip(jobs)
         .map(|(run, job)| {
             run.unwrap_or_else(|| {
@@ -985,7 +1013,11 @@ fn run_jobs(
                 )
             })
         })
-        .collect()
+        .collect();
+    for (child, run) in shown.runs[first..].iter_mut().zip(&runs) {
+        child.state = run.shown_state();
+    }
+    runs
 }
 
 /// The effort a child asks for: the one requested, at most the parent's, else the parent's.
@@ -1059,22 +1091,17 @@ fn child_tools(
 
 /// Runs `job` to its final reply, as Scramjet's child process runs its task: a conversation of
 /// its own that starts with `Task: <task>`, the agent's file added to the instructions.
-/// `activity` receives a line for each tool call.
+/// `report` receives its replies' texts and tool calls, and its usage after each response.
 fn run_child(
     job: &Job,
     agent: &Definition,
     parent: &Parent,
-    sandbox: &Result<(), String>,
     cancel: &AtomicBool,
-    activity: &mut dyn FnMut(String),
+    report: &mut dyn FnMut(Event),
 ) -> Run {
-    let (tools, warnings) = child_tools(agent, sandbox);
+    let tools = &job.tools;
     let mut run = Run::new(job.name);
-    run.warnings = warnings;
-    run.model = agent
-        .model
-        .clone()
-        .unwrap_or_else(|| parent.model.to_owned());
+    run.warnings = job.warnings.clone();
     let executor = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1085,14 +1112,14 @@ fn run_child(
             return run;
         }
     };
-    let info = match run.model == parent.model {
+    let info = match job.model == parent.model {
         true => parent.info.clone(),
         false => executor
-            .block_on(client::model_info(parent.endpoint, &run.model))
-            .unwrap_or_else(|| ModelInfo::guess(&run.model)),
+            .block_on(client::model_info(parent.endpoint, &job.model))
+            .unwrap_or_else(|| ModelInfo::guess(&job.model)),
     };
-    let effort = child_effort(job.effort.as_deref(), parent.effort);
-    let instructions = instructions::child(&job.cwd, &tools, &agent.prompt);
+    let effort = &job.effort;
+    let instructions = instructions::child(&job.cwd, tools, &agent.prompt);
     let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];
     for _ in 0..MAX_STEPS {
         if cancel.load(Ordering::Relaxed) {
@@ -1100,10 +1127,10 @@ fn run_child(
             return run;
         }
         let mut request = json!({
-            "model": run.model,
+            "model": job.model,
             "instructions": instructions,
             "input": input,
-            "tools": tools::child_definitions(&tools),
+            "tools": tools::child_definitions(tools),
             "tool_choice": "auto",
             "parallel_tool_calls": false,
             "stream": true,
@@ -1147,13 +1174,15 @@ fn run_child(
         if let Some(usage) = &reply.usage {
             run.usage.count(usage);
         }
+        report(Event::Usage(run.shown_usage()));
         let mut calls = Vec::new();
         for item in reply.items {
             match item["type"].as_str() {
                 Some("message") => {
                     let text = super::message_text(&item);
                     if !text.is_empty() {
-                        run.output = text;
+                        run.output = text.clone();
+                        report(Event::Item(ChildItem::Text(text)));
                     }
                 }
                 Some("function_call") => calls.push(item.clone()),
@@ -1167,7 +1196,10 @@ fn run_child(
         for item in calls {
             let output = match Call::parse(&item) {
                 Ok(call) => {
-                    activity(activity_line(&call));
+                    report(Event::Item(ChildItem::Call {
+                        name: call.name.to_owned(),
+                        summary: call.summary(),
+                    }));
                     match tools.contains(&call.name) {
                         true => call
                             .run_read_only(&job.cwd, cancel)
@@ -1185,43 +1217,6 @@ fn run_child(
     }
     run.error = Some((Some("error"), AgentError::TooManySteps.to_string()));
     run
-}
-
-/// A child's tool call as Scramjet's subagent row lists it.
-fn activity_line(call: &Call) -> String {
-    let summary = call.summary();
-    let first = summary.lines().next().unwrap_or_default();
-    match call.name {
-        "bash" => format!("→ $ {first}"),
-        name => format!("→ {name} {first}"),
-    }
-}
-
-/// As Scramjet's `formatUsageStats`: turns, input not read from the cache, output, cache reads
-/// and the model.
-fn usage_line(usage: &Usage, turns: u64, model: Option<&str>) -> String {
-    let count = |n: u64| match n {
-        0..1_000 => n.to_string(),
-        1_000..10_000 => format!("{:.1}k", n as f64 / 1e3),
-        10_000..1_000_000 => format!("{}k", (n as f64 / 1e3).round()),
-        _ => format!("{:.1}M", n as f64 / 1e6),
-    };
-    let mut parts = Vec::new();
-    if turns > 0 {
-        parts.push(format!("{turns} turn{}", if turns > 1 { "s" } else { "" }));
-    }
-    let uncached = usage.input_tokens.saturating_sub(usage.cached_input_tokens);
-    if uncached > 0 {
-        parts.push(format!("↑{}", count(uncached)));
-    }
-    if usage.output_tokens > 0 {
-        parts.push(format!("↓{}", count(usage.output_tokens)));
-    }
-    if usage.cached_input_tokens > 0 {
-        parts.push(format!("R{}", count(usage.cached_input_tokens)));
-    }
-    parts.extend(model.map(str::to_owned));
-    parts.join(" ")
 }
 
 #[cfg(test)]

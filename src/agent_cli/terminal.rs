@@ -1,14 +1,14 @@
 //! The inline renderer: the agent's output printed to the terminal as it streams, with a
 //! status line under it, and the terminal modes of a turn.
 use super::text::{FROM, Wrap, call_line, clip, printable, visible};
-use super::{diff, editor, job, markdown, select, style, type_ahead, view};
+use super::{children, diff, editor, job, markdown, select, style, type_ahead, view};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
     termios::{self, LocalModes, OptionalActions, SpecialCodeIndex, Termios},
 };
 use scramjet_rs::agent::{
-    Agent, AgentError, AgentUi, Answer, AutoCompaction, Choice, Compaction, Purpose,
+    Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, Compaction, Purpose,
     StreamProgress, ToolDetail,
 };
 use std::{
@@ -263,12 +263,8 @@ impl Terminal {
                     rows.split('\n').map(str::to_owned).collect::<Vec<_>>()
                 })
                 .collect(),
-            (_, Some(ToolDetail::Subagents(usage))) => {
-                let mut rows = styled(preview(output, shown(Shown::First(RESULT_LINES)), width));
-                if !usage.is_empty() {
-                    rows.push(self.dim(&clip(usage, width)));
-                }
-                rows
+            (_, Some(ToolDetail::Subagents(children))) => {
+                children::rows(children, &self.look(width))
             }
             ("bash", None) => styled(preview(
                 &bash_shown(output, failed),
@@ -678,6 +674,18 @@ impl AgentUi for Terminal {
             status.draw();
         }
     }
+    /// Above the status line, a line per child.
+    fn subagents(&mut self, shown: &Children) {
+        if !self.live() {
+            return;
+        }
+        let width = editor::terminal_size().0.saturating_sub(3).max(20);
+        let mut status = self.status.lock().unwrap();
+        status.output = children::activity(shown, width);
+        if status.drawn.is_some() {
+            status.draw();
+        }
+    }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
         self.result(name, output, detail, failed, BASH_LINES);
     }
@@ -870,6 +878,24 @@ impl Terminal {
     }
     /// The output of the running tool so far, as the status line shows its end; all of it
     /// when the results are shown whole.
+    /// The rows of a running `subagent` call's children, as its result shows them.
+    pub(super) fn running_subagents(&mut self, shown: &Children) {
+        let width = self.width().saturating_sub(2).max(20);
+        let gutter = self.gutter();
+        for row in children::rows(shown, &self.look(width)) {
+            self.err(&format!("{gutter}{row}\n"));
+        }
+    }
+    /// How a tool block's rows `width` columns wide are laid out.
+    fn look(&self, width: usize) -> children::Look {
+        children::Look {
+            width,
+            color: self.color,
+            marked: self.marked,
+            full: self.full,
+            hint: if self.expandable { EXPAND_HINT } else { "" },
+        }
+    }
     pub(super) fn running_output(&mut self, output: &str) {
         let width = self.width().saturating_sub(2).max(20);
         let shown = match self.full {

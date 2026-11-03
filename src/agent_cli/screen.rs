@@ -24,8 +24,8 @@ use rustix::{
     io::Errno,
 };
 use scramjet_rs::agent::{
-    self, AgentError, AgentUi, AutoCompaction, Choice, Compaction, EffortCycle, Purpose, Shell,
-    StreamProgress, ToolDetail,
+    self, AgentError, AgentUi, AutoCompaction, Children, Choice, Compaction, EffortCycle, Purpose,
+    Shell, StreamProgress, ToolDetail,
 };
 use std::{
     fmt::Write as _,
@@ -349,6 +349,9 @@ impl AgentUi for Link {
     fn tool_output(&mut self, output: &str) {
         self.event(Event::ToolOutput(output.to_owned()));
     }
+    fn subagents(&mut self, shown: &Children) {
+        self.event(Event::Subagents(shown.clone()));
+    }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
         let event = Event::ToolResult(name.to_owned(), output.to_owned(), detail.cloned(), failed);
         self.event(event);
@@ -551,6 +554,7 @@ impl Transcript {
         // Streamed text is kept whole, and only a running tool's latest output.
         match (part.events.last_mut(), event) {
             (Some(Event::ToolOutput(last)), Event::ToolOutput(output)) => *last = output,
+            (Some(Event::Subagents(last)), Event::Subagents(shown)) => *last = shown,
             (
                 Some(Event::Progress(StreamProgress::Text(last))),
                 Event::Progress(StreamProgress::Text(delta)),
@@ -628,9 +632,7 @@ fn render(events: &[Event], (width, _, whole): Look, hide_thinking: Arc<AtomicBo
     for event in events {
         record::replay(event, &mut ui);
     }
-    if let Some(Event::ToolOutput(output)) = events.last() {
-        ui.running_output(output);
-    }
+    record::running(events.last(), &mut ui);
     let mut lines = selection::lines(&ui.captured());
     // Each block ends with a blank line, which separates it from the next part.
     if !lines.is_empty() {

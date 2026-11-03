@@ -3,8 +3,8 @@
 use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, CONTEXT, Completed, DIFF, FAILED,
-    MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, TYPED, ToolDetail, USAGE, autonomy, message_text,
-    question, sandbox, status, subagent,
+    MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, TYPED, ToolDetail, USAGE, autonomy,
+    message_text, question, sandbox, status, subagent,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -215,8 +215,12 @@ to a larger-context model)"
                 if output.failed {
                     result[FAILED] = json!(true);
                 }
-                if let Some(ToolDetail::Diff(diff)) = output.detail {
-                    result[DIFF] = json!(diff);
+                match &output.detail {
+                    Some(ToolDetail::Diff(diff)) => result[DIFF] = json!(diff),
+                    Some(ToolDetail::Subagents(children)) => {
+                        result[SUBAGENTS] = serde_json::to_value(children).unwrap_or_default()
+                    }
+                    _ => {}
                 }
                 self.add(result)?;
                 if cancel.load(Ordering::Relaxed) {
@@ -451,8 +455,8 @@ mod tests {
     use super::*;
     use crate::agent::tests::*;
     use crate::agent::{
-        AgentConfig, Commands, Navigated, Next, Session, SessionChoice, TreeItem, instructions,
-        show_items,
+        AgentConfig, ChildItem, ChildState, Commands, Delegation, Navigated, Next, Session,
+        SessionChoice, TreeItem, instructions, show_items,
     };
     use crate::provider_fixture as fixture;
     use std::{sync::Arc, time::Duration};
@@ -649,13 +653,51 @@ here\n\nkept.txt says original";
             ui.shown
                 .contains(&"call subagent reviewer [user]\nCheck kept.txt …".to_owned())
         );
-        let shown = ui
-            .shown
-            .iter()
-            .find(|line| line.starts_with("result subagent"))
-            .unwrap();
-        assert!(shown.starts_with(&format!("result subagent {result} Subagents(\"3 turns ")));
-        assert!(shown.ends_with(" m\")"), "{shown}");
+        assert!(
+            ui.shown
+                .contains(&format!("result subagent {result} {:?}", ui.details[0]))
+        );
+        // The child as it started, after each response, call and text, and as it ended.
+        let started = &ui.children[0].runs[0];
+        assert_eq!(
+            (started.state.clone(), started.items.len()),
+            (ChildState::Running, 0)
+        );
+        let call = |name: &str, summary: &str| ChildItem::Call {
+            name: name.into(),
+            summary: summary.into(),
+        };
+        let items = vec![
+            call("bash", "cat kept.txt; echo changed > kept.txt"),
+            call("write", "kept.txt"),
+            ChildItem::Text("kept.txt says original".into()),
+        ];
+        let ToolDetail::Subagents(ended) = &ui.details[0] else {
+            panic!("{:?}", ui.details);
+        };
+        let run = &ended.runs[0];
+        assert_eq!(ended.mode, Delegation::Single);
+        assert_eq!(
+            (
+                &run.agent[..],
+                &run.source[..],
+                &run.model[..],
+                &run.task[..]
+            ),
+            ("reviewer", "user", "m", "Check kept.txt\nCarefully.")
+        );
+        assert_eq!((&run.state, &run.items), (&ChildState::Done, &items));
+        assert_eq!(run.usage.turns, 3);
+        assert_eq!(
+            run.warnings,
+            ["write: left out, as subagents run read-only here"]
+        );
+        assert_eq!(ui.children.last(), Some(ended));
+        assert_eq!(ui.children.len(), 1 + 3 + 3 + 1);
+        // Stored with the result, so that a resumed conversation shows them.
+        let mut resumed = Recorder::default();
+        show_items(agent.conversation(), &mut resumed);
+        assert_eq!(resumed.details, ui.details);
     }
 
     #[test]
@@ -725,6 +767,49 @@ Unknown agent: \"nope\". Available agents: \"a\", \"b\".\n\n[b] completed: Task:
             "Task: after Task: first at low at minimal"
         );
         assert_eq!(agent.usage.requests, 8);
+        let shown: Vec<_> = (ui.details.iter())
+            .map(|detail| {
+                let ToolDetail::Subagents(children) = detail else {
+                    panic!("{detail:?}");
+                };
+                let runs = children.runs.iter().map(|run| {
+                    let failed = matches!(run.state, ChildState::Failed { reason: None, .. });
+                    (
+                        &run.agent[..],
+                        &run.source[..],
+                        run.effort.as_deref(),
+                        failed,
+                    )
+                });
+                (children.mode, runs.collect::<Vec<_>>())
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (
+                    Delegation::Parallel,
+                    vec![
+                        ("a", "user", Some("low"), false),
+                        ("nope", "unknown", None, true),
+                        ("b", "user", Some("low"), false)
+                    ]
+                ),
+                (
+                    Delegation::Chain,
+                    vec![
+                        ("a", "user", Some("low"), false),
+                        ("b", "user", Some("minimal"), false)
+                    ]
+                )
+            ]
+        );
+        // A chain's steps are shown as they start.
+        let steps: Vec<usize> = (ui.children.iter())
+            .filter(|children| children.mode == Delegation::Chain)
+            .map(|children| children.runs.len())
+            .collect();
+        assert_eq!((steps.first(), steps.last()), (Some(&1), Some(&2)));
     }
 
     #[test]

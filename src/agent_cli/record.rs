@@ -5,8 +5,8 @@
 use super::terminal::{Status, Terminal};
 use super::view;
 use scramjet_rs::agent::{
-    self, AgentError, AgentUi, Answer, AutoCompaction, Choice, Compaction, Purpose, StreamProgress,
-    ToolDetail,
+    self, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, Compaction, Purpose,
+    StreamProgress, ToolDetail,
 };
 use serde_json::Value;
 use std::{
@@ -26,6 +26,8 @@ pub(super) enum Event {
     ToolCall(String, String),
     ToolRunning,
     ToolOutput(String),
+    /// The children of a running `subagent` call, as they are now.
+    Subagents(Children),
     ToolResult(String, String, Option<ToolDetail>, bool),
     CommandResult(String, bool),
     Compacted(Compaction, Option<AutoCompaction>),
@@ -73,13 +75,11 @@ impl Shown {
         let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
         log.version += 1;
         // Only a running tool's latest output is shown.
-        if let (Event::ToolOutput(output), Some(Event::ToolOutput(last))) =
-            (&event, log.events.last_mut())
-        {
-            last.clone_from(output);
-            return;
+        match (event, log.events.last_mut()) {
+            (Event::ToolOutput(output), Some(Event::ToolOutput(last))) => *last = output,
+            (Event::Subagents(shown), Some(Event::Subagents(last))) => *last = shown,
+            (event, _) => log.events.push(event),
         }
-        log.events.push(event);
     }
 
     /// Shows the view until the user closes it, given the keys typed after Ctrl+O; `waiting`
@@ -121,9 +121,7 @@ impl view::Turn for Shown {
         for event in &log.events {
             replay(event, &mut ui);
         }
-        if let Some(Event::ToolOutput(output)) = log.events.last() {
-            ui.running_output(output);
-        }
+        running(log.events.last(), &mut ui);
         drop(log);
         ui.captured()
     }
@@ -147,7 +145,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::Assistant(text) => ui.assistant(text),
         Event::ToolCall(name, summary) => ui.tool_call(name, summary),
         Event::ToolRunning => ui.tool_running(),
-        Event::ToolOutput(_) => {}
+        Event::ToolOutput(_) | Event::Subagents(_) => {}
         Event::ToolResult(name, output, detail, failed) => {
             ui.tool_result(name, output, detail.as_ref(), *failed)
         }
@@ -162,6 +160,16 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::Question(message) => ui.question(message),
         Event::Notice(text) => ui.notice(text),
         Event::Text(text) => ui.said(text),
+    }
+}
+
+/// What a tool still running shows, when `last` is its latest event: its output so far, or its
+/// children.
+pub(super) fn running(last: Option<&Event>, ui: &mut Terminal) {
+    match last {
+        Some(Event::ToolOutput(output)) => ui.running_output(output),
+        Some(Event::Subagents(shown)) => ui.running_subagents(shown),
+        _ => {}
     }
 }
 
@@ -201,6 +209,10 @@ impl AgentUi for Recording<'_> {
     fn tool_output(&mut self, output: &str) {
         self.shown.record(Event::ToolOutput(output.to_owned()));
         self.ui.tool_output(output);
+    }
+    fn subagents(&mut self, shown: &Children) {
+        self.shown.record(Event::Subagents(shown.clone()));
+        self.ui.subagents(shown);
     }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
         let event = Event::ToolResult(name.to_owned(), output.to_owned(), detail.cloned(), failed);

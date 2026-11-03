@@ -29,7 +29,10 @@ pub use tools::{
 };
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use turn::Shell;
-pub use ui::{AgentUi, Answer, Purpose, ToolDetail, show_items};
+pub use ui::{
+    AgentUi, Answer, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation, Purpose,
+    ToolDetail, show_items,
+};
 
 use client::ModelInfo;
 use serde_json::{Value, json};
@@ -58,6 +61,8 @@ pub(super) const TYPED: &str = "_scramjet_typed";
 const FAILED: &str = "_scramjet_failed";
 /// Stored with an edit's result: the diff shown for it.
 const DIFF: &str = "_scramjet_diff";
+/// Stored with a `subagent` call's result: its children (`Children`), as they ended.
+const SUBAGENTS: &str = "_scramjet_subagents";
 /// Stored, as `true`, with Scramjet's status check, a user message the user never typed, so it
 /// is neither shown nor recalled.
 pub(super) const PROBE: &str = "_scramjet_probe";

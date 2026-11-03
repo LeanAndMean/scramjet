@@ -2,9 +2,10 @@
 //! conversation replayed as its turns showed.
 use super::tools::Call;
 use super::{
-    AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, StreamProgress, TYPED,
-    compaction, message_text, question,
+    AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, SUBAGENTS, StreamProgress,
+    TYPED, compaction, message_text, question,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{sync::atomic::AtomicBool, time::Duration};
 
@@ -33,6 +34,9 @@ pub trait AgentUi {
     fn tool_running(&mut self);
     /// The end of the running tool's output so far.
     fn tool_output(&mut self, _output: &str) {}
+    /// The children of the running `subagent` call, each time one starts, does something or
+    /// ends.
+    fn subagents(&mut self, _children: &Children) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
     /// The result of a command the user ran with `!` or `!!`.
@@ -106,8 +110,87 @@ pub enum ToolDetail {
     Written(String),
     /// What the user answered a question, as Scramjet's result row shows it.
     Answer(String),
-    /// The subagents' token usage, shown under their result.
-    Subagents(String),
+    /// The children of a `subagent` call, as they ended.
+    Subagents(Children),
+}
+
+/// The children of a `subagent` call as the user sees them, as Scramjet's tool details keep
+/// them: what each was given, how it went and what it did. Stored with the call's result.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Children {
+    pub mode: Delegation,
+    /// In the order of the call's tasks; a chain's are added as its steps start.
+    pub runs: Vec<ChildRun>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Delegation {
+    Single,
+    Parallel,
+    Chain,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChildRun {
+    pub agent: String,
+    /// Where the agent's file is from (`user`, `project`, a command set's `global`), or
+    /// `unknown` when no agent has the name.
+    pub source: String,
+    /// Empty when no agent has the name.
+    pub model: String,
+    /// The thinking level it asks for, as Scramjet names it.
+    pub effort: Option<String>,
+    pub task: String,
+    pub state: ChildState,
+    /// Its replies' texts and tool calls, in order; the last text is its result.
+    pub items: Vec<ChildItem>,
+    pub usage: ChildUsage,
+    /// What was said about the agent's file and the tools it did not get.
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChildState {
+    /// Running, or waiting for its turn among the parallel tasks.
+    Running,
+    Done,
+    /// Scramjet's stop reason (`error`, `aborted`), if any, and what went wrong.
+    Failed {
+        reason: Option<String>,
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChildItem {
+    Text(String),
+    /// A tool call's name and the one-line summary its call line shows.
+    Call {
+        name: String,
+        summary: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChildUsage {
+    /// Responses received.
+    pub turns: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+impl ChildRun {
+    /// The text of its last reply that had text.
+    pub fn output(&self) -> Option<&str> {
+        self.items.iter().rev().find_map(|item| match item {
+            ChildItem::Text(text) => Some(text.as_str()),
+            ChildItem::Call { .. } => None,
+        })
+    }
 }
 
 /// Shows stored items as their turns showed them, as Scramjet redraws a resumed session: each
@@ -165,18 +248,21 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                     .as_ref()
                     .filter(|call| call.name == question::NAME)
                     .and_then(|call| question::shown(&call.arguments, output));
-                let detail = match (item[DIFF].as_str(), asked) {
-                    (Some(diff), _) => Some(ToolDetail::Diff(diff.to_owned())),
-                    (None, Some((message, answer))) => {
+                let children = item.get(SUBAGENTS).cloned();
+                let children = children.and_then(|value| serde_json::from_value(value).ok());
+                let detail = match (item[DIFF].as_str(), asked, children) {
+                    (Some(diff), ..) => Some(ToolDetail::Diff(diff.to_owned())),
+                    (None, None, Some(children)) => Some(ToolDetail::Subagents(children)),
+                    (None, Some((message, answer)), _) => {
                         ui.question(&message);
                         Some(ToolDetail::Answer(answer))
                     }
                     // A write's preview is the content it was given.
-                    (None, None) if name == "write" && !failed => call
+                    (None, None, None) if name == "write" && !failed => call
                         .as_ref()
                         .and_then(|call| call.arguments["content"].as_str())
                         .map(|content| ToolDetail::Written(content.to_owned())),
-                    (None, None) => None,
+                    (None, None, None) => None,
                 };
                 ui.tool_result(name, output, detail.as_ref(), failed);
             }

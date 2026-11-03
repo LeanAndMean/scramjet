@@ -270,10 +270,10 @@ def item_events(index, item):
     return events + [{'type': 'response.output_item.done', 'output_index': index, 'item': item}]
 
 
-def serve_items(responses, gate=None, models=(), cards=None, bodies=None):
+def serve_items(responses, gate=None, models=(), cards=None, bodies=None, gated=0):
     """Answers the requests in turn with a response streaming the complete items in `responses`,
-    the first once `gate`, if given, is set, lists `models` at `/v1/models` and `cards` at
-    `/api/model-cards`, and adds each request's body to `bodies`, if given."""
+    the one at index `gated` once `gate`, if given, is set, lists `models` at `/v1/models` and
+    `cards` at `/api/model-cards`, and adds each request's body to `bodies`, if given."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -305,7 +305,7 @@ def serve_items(responses, gate=None, models=(), cards=None, bodies=None):
                 connection, _ = listener.accept()
             if bodies is not None:
                 bodies.append(json.loads(request.partition(b'\r\n\r\n')[2]))
-            if gate and number == 0:
+            if gate and number == gated:
                 gate.wait(10)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
                                b'connection: close\r\n\r\n%s' % (len(stream), stream))
@@ -2146,6 +2146,38 @@ def fullscreen_collapsed_resumed(read, until, send, output):
     send(b'\x04')
 
 
+def fullscreen_subagent(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    # The child's row while it runs: how it goes, its model, and what it did so far.
+    rows = on_screen('\u2192 ls .')
+    assert '\u23f3 scout (user) gpt-6-luna' in '\n'.join(rows), rows
+    subagent_gate.set()
+    rows = on_screen('Scouted.')
+    text = '\n'.join(rows)
+    for expected in ['\u25cf subagent scout [user]', '\u2713 scout (user) gpt-6-luna', '  \u2192 ls .\n  Found a.txt.',
+                     '  Line 3\n  \u2026 (2 more lines, Ctrl+O to expand)\n  2 turns']:
+        assert expected in text, (expected, text)
+    assert 'Line 4' not in text, text
+    # Ctrl+O shows it whole, its task and result; again, cut.
+    send(b'\x0f')
+    rows = on_screen('Line 5')
+    assert '\u2500\u2500\u2500 Task \u2500\u2500\u2500\n  Look around the project.' in '\n'.join(rows), rows
+    send(b'\x0f')
+    on_screen('Line 5', gone=True)
+    send(b'\x04')
+
+
+def fullscreen_subagent_resumed(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    rows = on_screen('Scouted.')
+    assert '  Line 3\n  \u2026 (2 more lines, Ctrl+O to expand)' in '\n'.join(rows), rows
+    send(b'\x0f')
+    on_screen('Line 5')
+    send(b'\x04')
+
+
 def left_the_screen(script):
     def checked(read, until, send, output):
         script(read, until, send, output)
@@ -2254,4 +2286,15 @@ run(['--fullscreen'], left_the_screen(fullscreen_collapsed), serve_items([
     [message('Printed.')], [message(summary)], [message('Greeted.')], [report('call_3')],
 ]))
 run(['--fullscreen', '--continue'], left_the_screen(fullscreen_collapsed_resumed))
+os.makedirs(os.path.join(work, 'agent', 'agents'), exist_ok=True)
+with open(os.path.join(work, 'agent', 'agents', 'scout.md'), 'w') as file:
+    file.write('---\nname: scout\ndescription: Looks around\ntools: ls\n---\n\nYou look around.\n')
+subagent_gate = threading.Event()
+run(['--fullscreen', '--model', 'gpt-6-luna'], left_the_screen(fullscreen_subagent), serve_items([
+    [tool_call('call_1', 'subagent', {'agent': 'scout', 'task': 'Look around the project.'})],
+    [tool_call('call_2', 'ls', {'path': '.'})],
+    [message('Found a.txt.\nLine 2\nLine 3\nLine 4\nLine 5')],
+    [message('Scouted.')],
+], gate=subagent_gate, gated=2))
+run(['--fullscreen', '--continue'], left_the_screen(fullscreen_subagent_resumed))
 print('agent editor journeys passed')

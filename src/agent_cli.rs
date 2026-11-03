@@ -1,4 +1,5 @@
 mod args;
+mod children;
 mod clipboard;
 mod diff;
 mod editor;

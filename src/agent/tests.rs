@@ -29,6 +29,10 @@ pub(super) struct Recorder {
     pub(super) efforts: Vec<Option<String>>,
     /// What each call of `pause` gives, in order; then no pause.
     pub(super) pauses: Vec<bool>,
+    /// Each running `subagent` call's children, as each update showed them.
+    pub(super) children: Vec<Children>,
+    /// The details of the results shown.
+    pub(super) details: Vec<ToolDetail>,
 }
 impl AgentUi for Recorder {
     fn waiting(&mut self, purpose: Purpose) {
@@ -51,7 +55,11 @@ impl AgentUi for Recorder {
         self.calls.push(name.to_owned());
     }
     fn tool_running(&mut self) {}
+    fn subagents(&mut self, children: &Children) {
+        self.children.push(children.clone());
+    }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
+        self.details.extend(detail.cloned());
         let failed = if failed { " failed" } else { "" };
         let detail = detail
             .map(|detail| format!(" {detail:?}"))

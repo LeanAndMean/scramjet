@@ -5,6 +5,12 @@ pub const RESET: &str = "\x1b[0m";
 
 /// The status line and the running command's output lines above it.
 pub const STATUS: &str = "\x1b[2m";
+/// A subagent's glyph while it runs, once it is done and when it failed, and the name of the
+/// agent or of several children's mode beside it.
+pub const SUBAGENT_RUNNING: &str = "\x1b[33m";
+pub const SUBAGENT_DONE: &str = "\x1b[32m";
+pub const SUBAGENT_FAILED: &str = "\x1b[31m";
+pub const SUBAGENT_NAME: &str = "\x1b[1m";
 /// Secondary notes: `took 1.2s`, `(cancelled)`, why a compaction ran, editor hints.
 pub const MUTED: &str = "\x1b[2m";
 /// A tool's result preview.
