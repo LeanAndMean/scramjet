@@ -246,7 +246,7 @@ impl Terminal {
         let rows = match (name, detail) {
             (_, Some(ToolDetail::Diff(diff))) => {
                 let limit = if full { usize::MAX } else { diff::ROWS };
-                diff::rows(diff, width, self.color, limit, hint)
+                diff::rows(diff, width, self.color, marked, limit, hint)
             }
             // As in Scramjet, trailing blank lines of a written file are not counted.
             (_, Some(ToolDetail::Written(content))) => styled(preview(
@@ -647,7 +647,8 @@ impl AgentUi for Terminal {
     }
     fn tool_call(&mut self, name: &str, summary: &str) {
         self.clear();
-        let line = self.dim(&self.wrapped(&call_line(name, summary)));
+        let width = if self.color { self.width() } else { 0 };
+        let line = self.dim(&call_line(name, summary, width, self.marked));
         self.err(&format!("{line}\n"));
     }
     fn tool_running(&mut self) {

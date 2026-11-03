@@ -11,9 +11,17 @@ use unicode_width::UnicodeWidthStr;
 pub(super) const ROWS: usize = 40;
 
 /// The rows showing `diff`, whose lines are `{mark}{number} {text}` as the edit tool writes them,
-/// in `width` columns, styled when `color` is set; at most `limit`, besides the note about the
-/// lines left out, which ends with `hint`.
-pub(super) fn rows(diff: &str, width: usize, color: bool, limit: usize, hint: &str) -> Vec<String> {
+/// in `width` columns, styled when `color` is set, the rows a line wraps to `marked` for a copy
+/// that joins them (`text::JOINED`) if asked; at most `limit`, besides the note about the lines
+/// left out, which ends with `hint`.
+pub(super) fn rows(
+    diff: &str,
+    width: usize,
+    color: bool,
+    marked: bool,
+    limit: usize,
+    hint: &str,
+) -> Vec<String> {
     let lines: Vec<&str> = diff.lines().collect();
     let mark = |i: usize| lines.get(i).and_then(|line| line.chars().next());
     let mut rows = Vec::new();
@@ -41,7 +49,7 @@ pub(super) fn rows(diff: &str, width: usize, color: bool, limit: usize, hint: &s
                 } else {
                     DIFF_ADDED
                 };
-                wrapped(gutter, &text, width, style, color, limit)
+                wrapped(gutter, &text, width, style, color, marked, limit)
             }
             _ => vec![styled(DIFF_CONTEXT, &clip(&printable(line), width), color)],
         };
@@ -74,10 +82,11 @@ fn wrapped(
     width: usize,
     style: &str,
     color: bool,
+    marked: bool,
     limit: usize,
 ) -> Vec<String> {
     let blank = " ".repeat(gutter.width());
-    let mut wrap = Wrap::new(width.saturating_sub(blank.len()).max(10));
+    let mut wrap = Wrap::new(width.saturating_sub(blank.len()).max(10)).marking(marked);
     let text = wrap.push(text) + &wrap.finish();
     let lines: Vec<&str> = text.split('\n').collect();
     let cut = lines.len() > limit;
@@ -185,7 +194,7 @@ mod tests {
     use super::*;
 
     fn plain(diff: &str, width: usize) -> Vec<String> {
-        rows(diff, width, false, ROWS, "")
+        rows(diff, width, false, false, ROWS, "")
     }
 
     #[test]
@@ -206,6 +215,14 @@ mod tests {
         assert_eq!(
             plain("+12 \n+13     indented code\n", 18),
             ["+12 ", "+13     indented", "        code"]
+        );
+        // Marked, a copy joins the rows a line wrapped to.
+        let marked = rows(diff, 24, false, true, ROWS, "");
+        let lines = super::super::selection::lines(&marked.join("\n"));
+        assert_eq!(
+            super::super::selection::text(&lines, 0, usize::MAX),
+            " 1 unchanged context th…\n-2 - **Sessions:** saved as lines\n\
+             +2 - **Sessions:** saved as JSON lines"
         );
     }
 
@@ -241,6 +258,7 @@ mod tests {
             "-1 aaaa bbbb cccc dd\n+1 aaaa xxxx yyyy dd\n",
             16,
             true,
+            false,
             ROWS,
             "",
         );
@@ -254,7 +272,7 @@ mod tests {
             ]
         );
         // Lines of a larger change are shown without highlights.
-        let block = rows("-1 a\n-2 b\n+1 c\n", 20, true, ROWS, "");
+        let block = rows("-1 a\n-2 b\n+1 c\n", 20, true, false, ROWS, "");
         assert_eq!(
             block,
             [

@@ -476,10 +476,17 @@ struct Place {
     line: usize,
 }
 
-/// A point of the conversation between two cells: before column `column` of the line at `place`.
+/// Where a point of a selection is: a line of the conversation, or a row of the dock under it.
+#[derive(Clone, Copy, PartialEq)]
+enum At {
+    Line(Place),
+    Dock(usize),
+}
+
+/// A point between two cells: before column `column` of the line or row at `at`.
 #[derive(Clone, Copy, PartialEq)]
 struct Mark {
-    place: Place,
+    at: At,
     column: usize,
 }
 
@@ -493,6 +500,32 @@ struct Selection {
     /// The view followed the end when the selection started, and goes back to it when the
     /// selection ends, unless the user scrolled meanwhile.
     follow: bool,
+    /// It started in the dock, which it then reaches wherever the view is.
+    in_dock: bool,
+}
+
+/// What is selected, by line and column, from its start to before its end; the dock's rows are
+/// counted on from `length`, the conversation's.
+struct Selected {
+    start: (usize, usize),
+    end: (usize, usize),
+    length: usize,
+    /// The conversation's lines from here on are not selected: as in Scramjet, a selection
+    /// that reaches into the dock takes the conversation only as far as it is shown.
+    seam: usize,
+}
+
+impl Selected {
+    /// The columns selected of line `line`, from and before, if any.
+    fn columns(&self, line: usize) -> Option<(usize, usize)> {
+        let taken = (line < self.seam || line >= self.length)
+            && (self.start.0..=self.end.0).contains(&line);
+        taken.then(|| {
+            let left = (line == self.start.0).then_some(self.start.1);
+            let right = (line == self.end.0).then_some(self.end.1);
+            (left.unwrap_or(0), right.unwrap_or(usize::MAX))
+        })
+    }
 }
 
 /// Where the pointer is while a selection is dragged at the top (-1) or bottom (1) edge of the
@@ -678,6 +711,8 @@ struct App {
     /// The terminal's size, the rows and the cursor drawn last.
     size: (usize, usize),
     drawn: Vec<String>,
+    /// The dock's rows drawn last.
+    docked: Vec<Line>,
     cursor: Option<(usize, usize)>,
     /// The last frame's transcript rows and its length, for scrolling.
     rows: usize,
@@ -717,6 +752,7 @@ impl App {
             exiting: false,
             size: (0, 0),
             drawn: Vec::new(),
+            docked: Vec::new(),
             cursor: None,
             rows: 1,
             last: 0,
@@ -1107,23 +1143,65 @@ impl App {
         self.scroll(lines);
     }
 
-    /// The point of the conversation at the screen's `column` and `row`, kept to the lines shown.
-    fn mark(&self, column: usize, row: usize) -> Mark {
+    /// Whether the selection reaches into the dock, as in Scramjet: it started there, or the
+    /// view is at the end.
+    fn reaches_dock(&self) -> bool {
+        (self.selection.as_ref()).is_some_and(|selection| selection.in_dock)
+            || self.shown_top() == self.last
+    }
+
+    /// The point at the screen's `column` and `row`: in the dock if `row` is there and `dock`,
+    /// else in the conversation, kept to the lines shown.
+    fn mark(&self, column: usize, row: usize, dock: bool) -> Mark {
+        if dock && row >= self.rows && !self.docked.is_empty() {
+            let row = (row - self.rows).min(self.docked.len() - 1);
+            let column = selection::snap(&self.docked[row].shown, column);
+            return Mark {
+                at: At::Dock(row),
+                column,
+            };
+        }
         let line = self.shown_top() + row.min(self.rows.saturating_sub(1));
         let line = line.min(self.transcript.len().saturating_sub(1));
         let text = self.transcript.shown(line);
         Mark {
-            place: self.transcript.locate(line),
+            at: At::Line(self.transcript.locate(line)),
             column: selection::snap(&text, column),
         }
     }
 
-    /// What is selected, by line and column, from its start to before its end.
-    fn selected(&self) -> Option<((usize, usize), (usize, usize))> {
+    /// The line or row at `at`, as drawn.
+    fn shown(&self, at: At) -> String {
+        match at {
+            At::Line(place) => self.transcript.shown(self.transcript.line(place)),
+            At::Dock(row) => {
+                (self.docked.get(row)).map_or_else(String::new, |line| line.shown.clone())
+            }
+        }
+    }
+
+    fn selected(&self) -> Option<Selected> {
         let selection = self.selection.as_ref()?;
-        let point = |mark: Mark| (self.transcript.line(mark.place), mark.column);
+        let length = self.transcript.len();
+        let point = |mark: Mark| match mark.at {
+            At::Line(place) => (self.transcript.line(place), mark.column),
+            At::Dock(row) => {
+                let row = row.min(self.docked.len().saturating_sub(1));
+                (length + row, mark.column)
+            }
+        };
         let (anchor, head) = (point(selection.anchor), point(selection.head));
-        (anchor != head).then(|| (anchor.min(head), anchor.max(head)))
+        let (start, end) = (anchor.min(head), anchor.max(head));
+        let seam = match end.0 >= length {
+            true => (self.shown_top() + self.rows).min(length),
+            false => length,
+        };
+        (anchor != head).then_some(Selected {
+            start,
+            end,
+            length,
+            seam,
+        })
     }
 
     fn clear_selection(&mut self) {
@@ -1170,7 +1248,7 @@ impl App {
         match button {
             WHEEL_UP | WHEEL_DOWN => {
                 self.navigate(if button == WHEEL_UP { -WHEEL } else { WHEEL });
-                let head = self.mark(column, row);
+                let head = self.mark(column, row, self.reaches_dock());
                 if let Some(selection) = &mut self.selection
                     && selection.held
                     && selection.dragged
@@ -1184,11 +1262,12 @@ impl App {
                 let previous = self.click.take();
                 self.clear_selection();
                 let top = self.shown_top();
-                if row < self.rows && top + row < self.transcript.len() {
+                let in_dock = row >= self.rows && row - self.rows < self.docked.len();
+                if in_dock || (row < self.rows && top + row < self.transcript.len()) {
                     let follow = self.top.is_none();
                     self.top = Some(self.transcript.locate(top));
-                    let mark = self.mark(column, row);
-                    let line = self.transcript.shown(top + row);
+                    let mark = self.mark(column, row, in_dock);
+                    let line = self.shown(mark.at);
                     let count = match previous {
                         Some(click)
                             if click.released
@@ -1214,6 +1293,7 @@ impl App {
                         held: true,
                         dragged: false,
                         follow,
+                        in_dock,
                     });
                     self.click = Some(Click {
                         count,
@@ -1235,7 +1315,7 @@ impl App {
                     return;
                 }
                 self.click = None;
-                let head = self.mark(column, row);
+                let head = self.mark(column, row, self.reaches_dock());
                 let Some(selection) = self.selection.as_mut().filter(|selection| selection.held)
                 else {
                     return;
@@ -1244,7 +1324,7 @@ impl App {
                 selection.head = head;
                 let direction = match row {
                     0 => -1,
-                    row if row + 1 >= self.rows => 1,
+                    row if row + 1 >= self.rows && !selection.in_dock => 1,
                     _ => 0,
                 };
                 let scrolled = (self.edge.as_ref())
@@ -1275,27 +1355,41 @@ impl App {
         if let Some(selection) = &mut self.selection {
             selection.follow = false;
         }
-        if !self.scroll(direction) {
-            self.edge = None;
-            return;
-        }
-        let head = self.mark(column, row);
+        let scrolled = self.scroll(direction);
+        // At the end, the pointer may be on the dock's rows.
+        let head = self.mark(column, row, self.reaches_dock());
         if let Some(selection) = &mut self.selection {
             selection.head = head;
         }
-        if let Some(edge) = &mut self.edge {
-            edge.scrolled = Instant::now();
+        match (scrolled, &mut self.edge) {
+            (true, Some(edge)) => edge.scrolled = Instant::now(),
+            _ => self.edge = None,
         }
     }
 
     /// Copies the text selected, as shown, on a thread of its own: a clipboard tool may take a
     /// while.
     fn copy(&mut self) {
-        let Some((start, end)) = self.selected().filter(|_| self.copying.is_none()) else {
+        let Some(selected) = self.selected().filter(|_| self.copying.is_none()) else {
             return;
         };
-        let lines = self.transcript.window(start.0, end.0 + 1 - start.0);
-        let text = selection::text(&lines, start.1, end.1);
+        let Selected {
+            start,
+            end,
+            length,
+            seam,
+        } = selected;
+        let shown = start.0.min(seam)..(end.0 + 1).min(seam);
+        let mut lines = self.transcript.window(shown.start, shown.len());
+        if end.0 >= length {
+            let rows = start.0.max(length) - length..=end.0 - length;
+            lines.extend(self.docked.get(rows).into_iter().flatten().cloned());
+        }
+        let left = match start.0 < seam || start.0 >= length {
+            true => start.1,
+            false => 0,
+        };
+        let text = selection::text(&lines, left, end.1);
         if text.is_empty() {
             return;
         }
@@ -1578,7 +1672,7 @@ impl App {
     }
 
     /// The rows under the conversation, and where the cursor goes in them.
-    fn dock(&self, (width, height): (usize, usize)) -> (Vec<String>, Option<(usize, usize)>) {
+    fn dock(&self, (width, height): (usize, usize)) -> (Vec<Line>, Option<(usize, usize)>) {
         let mut rows = Vec::new();
         let queue = self.queue();
         // Above the status line, as Scramjet shows them.
@@ -1593,9 +1687,9 @@ impl App {
             ];
             let mut lines = render(&events, (width, false, false), self.hide_thinking.clone());
             lines.pop();
-            rows.extend(lines.into_iter().map(|line| line.shown));
+            rows.extend(lines);
         }
-        rows.push(self.status(width));
+        rows.push(selection::row(&self.status(width)));
         let queued = [
             ("Steering", &queue.steering),
             ("Follow-up", &queue.follow_ups),
@@ -1606,7 +1700,7 @@ impl App {
                     &format!("{kind}: {}", one_line(message)),
                     width.saturating_sub(1),
                 );
-                rows.push(format!("{}{line}{}", style::MUTED, style::RESET));
+                rows.push(muted(&line));
             }
         }
         for command in &queue.commands {
@@ -1614,14 +1708,14 @@ impl App {
                 &format!("Command: {}", one_line(command)),
                 width.saturating_sub(1),
             );
-            rows.push(format!("{}{line}{}", style::MUTED, style::RESET));
+            rows.push(muted(&line));
         }
         if !queue.is_empty() {
             let hint = clip(
                 "↳ Alt+Up to edit all queued messages",
                 width.saturating_sub(1),
             );
-            rows.push(format!("{}{hint}{}", style::MUTED, style::RESET));
+            rows.push(muted(&hint));
         }
         drop(queue);
         let room = height.saturating_sub(rows.len() + 1).max(1);
@@ -1630,40 +1724,40 @@ impl App {
                 shown: Shown::Pick(picker),
                 ..
             }) => {
-                rows.extend(picker.lines((width, room)));
+                rows.extend(selection::rows(&picker.lines((width, room))));
                 None
             }
             Some(Open {
                 shown: Shown::Approve(question),
                 ..
             }) => {
-                let mut wrap = Wrap::new(width.saturating_sub(1).max(10));
+                let mut wrap = Wrap::new(width.saturating_sub(1).max(10)).marking(true);
                 let text = wrap.push(&visible(question)) + &wrap.finish();
-                rows.extend(text.split('\n').map(str::to_owned));
-                rows.push(format!("{ALLOW} "));
+                rows.extend(selection::rows(&text.split('\n').collect::<Vec<_>>()));
+                rows.push(selection::row(&format!("{ALLOW} ")));
                 Some((rows.len() - 1, ALLOW.len() + 1))
             }
             Some(Open {
                 shown: Shown::Text(text),
                 ..
             }) => {
-                rows.push(format!(
+                rows.push(selection::row(&format!(
                     "{}{}{}  {}Enter submit · Esc cancel{}",
                     style::SELECTOR_TITLE,
                     text.title,
                     style::RESET,
                     style::MUTED,
                     style::RESET
-                ));
+                )));
                 prompt_rows(&text.draft, &mut rows, width, room)
             }
             None => {
-                rows.push(format!(
+                rows.push(Line::rule(&format!(
                     "{}{}{}",
                     style::MUTED,
                     "─".repeat(width.saturating_sub(1)),
                     style::RESET
-                ));
+                )));
                 prompt_rows(&self.draft, &mut rows, width, room)
             }
         };
@@ -1693,19 +1787,19 @@ impl App {
         if top == last && self.selection.is_none() {
             self.top = None;
         }
-        let window = self.transcript.window(top, rows).into_iter();
-        let mut frame: Vec<String> = window.map(|line| line.shown).collect();
-        if let Some((start, end)) = self.selected() {
-            for (line, row) in (top..).zip(&mut frame) {
-                if (start.0..=end.0).contains(&line) {
-                    let left = if line == start.0 { start.1 } else { 0 };
-                    let right = if line == end.0 { end.1 } else { usize::MAX };
-                    *row = selection::highlight(row, left, right);
-                }
-            }
-        }
+        self.docked = dock;
+        let selected = self.selected();
+        let shown = |line: &Line, at: usize| match selected.as_ref().and_then(|s| s.columns(at)) {
+            Some((left, right)) => selection::highlight(&line.shown, left, right),
+            None => line.shown.clone(),
+        };
+        let window = self.transcript.window(top, rows);
+        let mut frame: Vec<String> = (window.iter().zip(top..))
+            .map(|(line, at)| shown(line, at))
+            .collect();
         frame.resize(rows, String::new());
-        frame.extend(dock);
+        let length = self.transcript.len();
+        frame.extend((self.docked.iter().zip(length..)).map(|(line, at)| shown(line, at)));
         frame.truncate(height);
         let cursor = cursor.map(|(row, column)| (rows + row, column));
         if frame == self.drawn && cursor == self.cursor {
@@ -1747,7 +1841,7 @@ fn restored(count: usize) -> String {
 /// and completion list; returns where the cursor is.
 fn prompt_rows(
     draft: &Draft,
-    rows: &mut Vec<String>,
+    rows: &mut Vec<Line>,
     width: usize,
     room: usize,
 ) -> Option<(usize, usize)> {
@@ -1755,13 +1849,17 @@ fn prompt_rows(
     let shown = (room * EDITOR_SHARE / 100).max(1).min(text.len());
     let top = (row + 1).saturating_sub(shown).min(text.len() - shown);
     let start = rows.len();
-    rows.extend(text[top..top + shown].iter().cloned());
+    rows.extend(selection::rows(&text[top..top + shown]));
     if let Some(hint) = draft.hint() {
-        let hint = clip(hint, width.saturating_sub(1));
-        rows.push(format!("{}{hint}{}", style::MUTED, style::RESET));
+        rows.push(muted(&clip(hint, width.saturating_sub(1))));
     }
-    rows.extend(draft.completion_rows(width));
+    rows.extend(selection::rows(&draft.completion_rows(width)));
     Some((start + row - top, column))
+}
+
+/// A dock row of `text` in the muted style.
+fn muted(text: &str) -> Line {
+    selection::row(&format!("{}{text}{}", style::MUTED, style::RESET))
 }
 
 /// The alternate screen, lines cut at the edge rather than wrapped, and the mouse's buttons,
@@ -1882,6 +1980,32 @@ mod tests {
         };
         assert_eq!(queue.take(), ["steer", "later"]);
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn a_selection_into_the_dock_takes_the_conversation_as_far_as_shown() {
+        // Lines 0 to 9 of the conversation, shown as far as 7, then the dock's rows from 10.
+        let selected = Selected {
+            start: (3, 4),
+            end: (11, 2),
+            length: 10,
+            seam: 8,
+        };
+        let columns = [2, 3, 7, 8, 9, 10, 11, 12].map(|line| selected.columns(line));
+        let all = Some((0, usize::MAX));
+        assert_eq!(
+            columns,
+            [
+                None,
+                Some((4, usize::MAX)),
+                all,
+                None,
+                None,
+                all,
+                Some((0, 2)),
+                None
+            ]
+        );
     }
 
     #[test]

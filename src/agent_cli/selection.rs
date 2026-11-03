@@ -1,7 +1,7 @@
-//! Text selected with the mouse in the full screen's conversation, as Scramjet's retained view
-//! selects it: between the starts of the cells pressed and dragged to, shown reversed, copied
-//! as displayed but for gutters and the line breaks of wrapping. Lines are the screen's
-//! (`lines`), which hold only style sequences besides the text.
+//! Text selected with the mouse in the full screen's conversation and the dock under it, as
+//! Scramjet's retained view selects it: between the starts of the cells pressed and dragged to,
+//! shown reversed, copied as displayed but for gutters, rules and the line breaks of wrapping.
+//! Lines are the screen's (`lines`), which hold only style sequences besides the text.
 
 use super::style;
 use super::text::{FROM, JOINED, SPACE};
@@ -17,6 +17,18 @@ pub(super) struct Line {
     from: usize,
     /// When the next line continues it, what goes between them in a copy.
     joined: Option<String>,
+    /// A rule between blocks, which a copy leaves out.
+    rule: bool,
+}
+
+impl Line {
+    /// `shown`, a rule that a copy leaves out.
+    pub(super) fn rule(shown: &str) -> Self {
+        Self {
+            rule: true,
+            ..row(shown)
+        }
+    }
 }
 
 /// The lines of rendered text, each ending its styles and starting with those still on from the
@@ -25,12 +37,26 @@ pub(super) struct Line {
 /// copy holds.
 pub(super) fn lines(text: &str) -> Vec<Line> {
     let text = text.trim_end_matches('\n');
-    if text.is_empty() {
-        return Vec::new();
+    match text.is_empty() {
+        true => Vec::new(),
+        false => split(text.split('\n')),
     }
+}
+
+/// As `lines`, a line for each of `rows`.
+pub(super) fn rows(rows: &[impl AsRef<str>]) -> Vec<Line> {
+    split(rows.iter().map(AsRef::as_ref))
+}
+
+/// As `lines`, the line of a row.
+pub(super) fn row(shown: &str) -> Line {
+    split(std::iter::once(shown)).pop().unwrap_or_default()
+}
+
+fn split<'a>(rows: impl Iterator<Item = &'a str>) -> Vec<Line> {
     let mut active = String::new();
     let mut lines: Vec<Line> = Vec::new();
-    for line in text.split('\n') {
+    for line in rows {
         let mut shown = active.clone();
         let (mut column, mut from, mut joined) = (0, 0, None::<String>);
         let mut chars = line.chars().peekable();
@@ -81,6 +107,7 @@ pub(super) fn lines(text: &str) -> Vec<Line> {
             shown,
             from,
             joined: None,
+            rule: false,
         });
     }
     lines
@@ -239,22 +266,26 @@ pub(super) fn highlight(line: &str, left: usize, right: usize) -> String {
 }
 
 /// The text selected in `lines`, from column `left` of the first to before column `right` of
-/// the last, without gutters: a line each, without their trailing spaces, but for a line that
-/// the next continues, which they join as it says.
+/// the last, without gutters and rules: a line each, without their trailing spaces, but for a
+/// line that the next continues, which they join as it says.
 pub(super) fn text(lines: &[Line], left: usize, right: usize) -> String {
     let last = lines.len().saturating_sub(1);
     let mut text = String::new();
-    for (index, line) in lines.iter().enumerate() {
+    // What goes between the line copied last and the next.
+    let mut between = "";
+    for (index, line) in lines.iter().enumerate().filter(|(_, line)| !line.rule) {
         let from = if index == 0 { left } else { 0 }.max(line.from);
         let to = if index == last { right } else { usize::MAX };
         let cut = cut(&line.shown, from, to);
+        text += between;
         match &line.joined {
-            Some(joined) if index < last => text += &(cut + joined),
+            Some(joined) if index < last => {
+                text += &cut;
+                between = joined;
+            }
             _ => {
                 text += cut.trim_end();
-                if index < last {
-                    text.push('\n');
-                }
+                between = "\n";
             }
         }
     }
@@ -341,5 +372,20 @@ mod tests {
         let prompt = lines(&format!("> {FROM}one two \n  {JOINED}three\n. {FROM}next"));
         assert_eq!(prompt[1].shown, "  three");
         assert_eq!(text(&prompt, 0, 99), "one two three\nnext");
+    }
+
+    #[test]
+    fn rows_make_a_line_each_and_a_copy_leaves_rules_out() {
+        let dock = [
+            rows(&["", "status"]),
+            vec![Line::rule("\x1b[2m────\x1b[0m")],
+            rows(&[format!("> {FROM}one "), format!("  {JOINED}two")]),
+        ]
+        .concat();
+        assert_eq!(dock.len(), 5);
+        assert_eq!(dock[2].shown, "\x1b[2m────\x1b[0m");
+        assert_eq!(text(&dock, 0, 99), "\nstatus\none two");
+        assert_eq!(text(&dock[2..], 0, 99), "one two");
+        assert_eq!(text(&dock[1..3], 2, 99), "atus");
     }
 }

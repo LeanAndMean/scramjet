@@ -2065,6 +2065,33 @@ def fullscreen_copy_unwrapped(read, until, send, output):
     send(b'\x04')
 
 
+def fullscreen_copy_into_the_dock(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    rows = on_screen('[2 requests')
+    call = rows.index('\u25cf bash for w in a b; do')
+    assert rows[call + 1:call + 3] == ['    echo $w', '  done'], rows
+    # A command's later lines are copied as written, without the columns that put them under the first.
+    send(b'\x1b[<0;8;%dM\x1b[<32;60;%dM\x1b[<0;60;%dm\x03' % (call + 1, call + 3, call + 3))
+    copied('for w in a b; do\n  echo $w\ndone')
+    draft = 'alpha ' * 11 + 'end'
+    send(draft.encode())
+    rows = on_screen('alpha end')
+    assert rows[-2:] == ['> ' + 'alpha ' * 8 + 'alpha', '  alpha alpha end'], rows
+    usage = next(index for index, text in enumerate(rows) if text.startswith('[2 requests'))
+    # At the end, a drag goes on into the dock: the blank status line, not the rule, and the
+    # prompt's text as typed.
+    send(b'\x1b[<0;1;%dM\x1b[<32;30;%dM\x1b[<32;60;24M\x1b[<0;60;24m' % (usage + 1, usage + 3))
+    until(b'\x1b[7m  alpha alpha end')
+    send(b'\x03')
+    copied(rows[usage] + '\n\n\n' + draft)
+    # A triple click in the dock selects its row.
+    send(b'\x1b[<0;9;24M\x1b[<0;9;24m' * 3 + b'\x03')
+    copied('alpha alpha end')
+    send(b'\x15\x04')
+
+
 def fullscreen_copied_by_the_terminal(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -2267,6 +2294,10 @@ wrapped_reply = ('The tests ran with cargo test --offline --locked --no-fail-fas
                  'passed; a copy of this sentence comes out as one line.')
 run(['--fullscreen'], left_the_screen(fullscreen_copy_unwrapped), serve_items([
     [tool_call('call_1', 'bash', {'command': "printf 'one\\n  two\\n'"})], [message(wrapped_reply)],
+]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
+               'CLIPBOARD': clipboard})
+run(['--fullscreen'], left_the_screen(fullscreen_copy_into_the_dock), serve_items([
+    [tool_call('call_1', 'bash', {'command': 'for w in a b; do\n  echo $w\ndone'})], [message('Copied.')],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
                'CLIPBOARD': clipboard})
 pastes = os.path.join(work, 'pastes')

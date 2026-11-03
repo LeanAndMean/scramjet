@@ -186,13 +186,31 @@ pub(super) fn printable(line: &str) -> String {
     terminal_line(line).replace('\t', "    ")
 }
 
-/// As Scramjet shows a call, with every line of a command; later lines go under the first.
-pub(super) fn call_line(name: &str, summary: &str) -> String {
+/// As Scramjet shows a call, with every line of a command, wrapped to `width` (zero: not
+/// wrapped); later lines go under the first, the two columns before them a gutter (`FROM`) if
+/// `marked`, so that a copy holds the command as written.
+pub(super) fn call_line(name: &str, summary: &str, width: usize, marked: bool) -> String {
+    let wrapped = |text: &str, width| {
+        let mut wrap = Wrap::new(width).marking(marked);
+        wrap.push(text) + &wrap.finish()
+    };
     let summary = visible(summary.trim_end_matches('\n'));
-    match summary.is_empty() {
-        true => format!("● {name}"),
-        false => format!("● {name} {}", summary.replace('\n', "\n  ")),
+    let mut lines = summary.split('\n');
+    let mut shown = match lines.next() {
+        Some(first) if !summary.is_empty() => wrapped(&format!("● {name} {first}"), width),
+        _ => format!("● {name}"),
+    };
+    let gutter = if marked {
+        format!("  {FROM}")
+    } else {
+        "  ".into()
+    };
+    for line in lines {
+        for row in wrapped(line, width.saturating_sub(2)).split('\n') {
+            shown += &format!("\n{gutter}{row}");
+        }
     }
+    shown
 }
 
 /// Shows control and invisible formatting characters (other than newlines and tabs) as escapes,
@@ -282,14 +300,22 @@ mod tests {
             wrapped(20, &["● bash cargo fmt --check && cargo clippy"]),
             "● bash cargo fmt\n  --check && cargo\n  clippy"
         );
-        let script = call_line("bash", "python3 - <<'EOF'\nif x:\n    y()\r\nEOF\n");
+        let script = "python3 - <<'EOF'\nif x:\n    y()\r\nEOF\n";
         assert_eq!(
-            script,
+            call_line("bash", script, 0, false),
             "● bash python3 - <<'EOF'\n  if x:\n      y()\\r\n  EOF"
         );
         assert_eq!(
-            wrapped(16, &[&script]),
+            call_line("bash", script, 16, false),
             "● bash python3 -\n  <<'EOF'\n  if x:\n      y()\\r\n  EOF"
+        );
+        assert_eq!(call_line("read", "", 16, false), "● read");
+        // Marked, the copy leaves out the columns that put later lines under the first.
+        assert_eq!(
+            call_line("bash", "echo one two\n  echo three four", 14, true),
+            format!(
+                "● bash echo\n  {JOINED}{SPACE}one two\n  {FROM}  echo three\n  {FROM}  {JOINED}{SPACE}four"
+            )
         );
         assert_eq!(wrapped(0, &["no  wrap \n"]), "no  wrap \n");
         assert_eq!(

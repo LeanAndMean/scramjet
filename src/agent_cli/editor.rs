@@ -1443,9 +1443,10 @@ impl Draft {
             .map_or_else(Vec::new, |list| list.rows(width))
     }
 
-    /// The prompt's rows at `width`, and the row and column of the cursor in them.
+    /// The prompt's rows at `width`, marked for a copy (`text::FROM`), and the row and column of
+    /// the cursor in them.
     pub(super) fn rows(&self, width: usize) -> (Vec<String>, usize, usize) {
-        let layout = Layout::new(&self.buffer.text, width);
+        let layout = Layout::marked(&self.buffer.text, width, true);
         let cursor = layout.at(self.buffer.cursor);
         (layout.rows, cursor.row, cursor.column)
     }
