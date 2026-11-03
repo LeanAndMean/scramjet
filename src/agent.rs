@@ -2990,6 +2990,27 @@ response is incomplete; retry the request."});
         assert!(failure(None, "prompt is too long: 213462 tokens > 200000 maximum").overflow);
         assert!(!failure(None, "Rate limit reached: too many tokens").overflow);
         assert!(!failure(None, "Invalid value for 'input'").overflow);
+        // Scramjet's provider examples, and deepseek-v4.1-flash's gateway through Proxy.
+        for overflow in [
+            "This model's maximum context length is 327680 tokens. However, you requested 330001",
+            "Requested token count exceeds the model's maximum context length of 131,072 tokens",
+            "The input token count (1196265) exceeds the maximum number of tokens allowed",
+            "prompt token count of 140000 exceeds the limit of 128000",
+            "The input (140000 tokens) is longer than the model's context length (131072 tokens).",
+            "Prompt contains 140000 tokens, too large for model with 131072 maximum context length",
+            "prompt too long; exceeded max context length by 12 tokens",
+        ] {
+            assert!(failure(None, overflow).overflow, "{overflow}");
+        }
+        // The same words without what makes them an overflow in Scramjet's patterns.
+        for other in [
+            "The upload exceeds the limit of the plan",
+            "max_tokens must be less than the maximum context length",
+            "Invalid input token count",
+            "ThrottlingException: Too many tokens, please wait before trying again.",
+        ] {
+            assert!(!failure(None, other).overflow, "{other}");
+        }
     }
 
     #[test]

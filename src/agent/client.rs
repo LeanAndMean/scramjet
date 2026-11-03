@@ -51,26 +51,38 @@ const TRANSIENT_WORDS: &[&str] = &[
     "stream ended",
     "retry",
 ];
-/// Failure wording that says the input exceeded the model's context window, from Scramjet's
-/// overflow patterns (`packages/ai/src/utils/overflow.ts`), as case-insensitive substrings.
-const OVERFLOW_WORDS: &[&str] = &[
+/// Scramjet's patterns for a failure saying the input exceeded the model's context window
+/// (`packages/ai/src/utils/overflow.ts`), matched in lower case: `#` is a number and `*` any
+/// text; its optional words are spelled out.
+const OVERFLOW_PATTERNS: &[&str] = &[
     "prompt is too long",
     "request_too_large",
     "input is too long for requested model",
     "exceeds the context window",
-    "maximum context length",
-    "input token count",
-    "maximum prompt length is",
+    "exceeds maximum context length of # token",
+    "exceeds the maximum context length of # token",
+    "exceeds model's maximum context length of # token",
+    "exceeds models maximum context length of # token",
+    "exceeds the model's maximum context length of # token",
+    "exceeds the models maximum context length of # token",
+    "input token count*exceeds the maximum",
+    "maximum prompt length is #",
     "reduce the length of the messages",
-    "exceeds the limit of",
+    "maximum context length is # tokens",
+    "input (# tokens) is longer than the model's context length (# tokens)",
+    "input (# tokens) is longer than the models context length (# tokens)",
+    "exceeds the limit of #",
     "exceeds the available context size",
     "greater than the context length",
     "context window exceeds limit",
     "exceeded model token limit",
-    "too large for model with",
+    "too large for model with # maximum context length",
     "model_context_window_exceeded",
-    "prompt too long",
+    "prompt too long; exceeded context length",
+    "prompt too long; exceeded max context length",
     "context_length_exceeded",
+    "context_length exceeded",
+    "context length_exceeded",
     "context length exceeded",
     "too many tokens",
     "token limit exceeded",
@@ -153,7 +165,39 @@ fn mentions(message: &str, words: &[&str]) -> bool {
 
 /// Whether a failure's message says the input exceeded the model's context window.
 fn overflows(message: &str) -> bool {
-    !mentions(message, NON_OVERFLOW_WORDS) && mentions(message, OVERFLOW_WORDS)
+    let message = message.to_lowercase();
+    !mentions(&message, NON_OVERFLOW_WORDS)
+        && OVERFLOW_PATTERNS
+            .iter()
+            .any(|pattern| contains_pattern(&message, pattern))
+}
+
+/// Whether `text` contains `pattern`, where `#` is a number (digits and commas) and `*` any text.
+fn contains_pattern(text: &str, pattern: &str) -> bool {
+    text.char_indices()
+        .any(|(at, _)| matches_from(&text[at..], pattern))
+}
+
+fn matches_from(text: &str, pattern: &str) -> bool {
+    let mut rest = pattern.chars();
+    match rest.next() {
+        None => true,
+        Some('#') => {
+            let number = text.len()
+                - text
+                    .trim_start_matches(|c: char| c.is_ascii_digit() || c == ',')
+                    .len();
+            (1..=number).any(|end| matches_from(&text[end..], rest.as_str()))
+        }
+        Some('*') => text
+            .char_indices()
+            .map(|(at, _)| at)
+            .chain([text.len()])
+            .any(|at| matches_from(&text[at..], rest.as_str())),
+        Some(c) => text
+            .strip_prefix(c)
+            .is_some_and(|text| matches_from(text, rest.as_str())),
+    }
 }
 
 pub(super) async fn cancelled(flag: &AtomicBool) {
