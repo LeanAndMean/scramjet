@@ -9,6 +9,49 @@ use super::{
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// A `!` or `!!` command the user ran, which `Agent::add_shell` adds to the conversation: run
+/// while a turn runs, it waits for the turn to end, as Scramjet keeps it from coming between a
+/// tool call and its result.
+pub struct Shell {
+    command: String,
+    /// Added to the conversation (`!`), or only shown (`!!`).
+    include: bool,
+    ran: Result<tools::Ran, String>,
+}
+
+impl Shell {
+    /// Runs `command` with bash in `root` until it ends or `cancel` is set; `progress` receives
+    /// the end of its output as it grows.
+    pub fn run(
+        root: &std::path::Path,
+        command: &str,
+        include: bool,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(&str),
+    ) -> Self {
+        Self {
+            command: command.to_owned(),
+            include,
+            ran: tools::run_command(root, command, None, cancel, progress),
+        }
+    }
+
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    /// What it showed, as its result shows it, and whether it failed.
+    pub fn shown(&self) -> (String, bool) {
+        match &self.ran {
+            Ok(ran) => {
+                let shown = ran.tool_output();
+                (shown.text, shown.failed)
+            }
+            Err(error) => (format!("Error: {error}"), true),
+        }
+    }
+}
+
 impl Agent {
     /// Runs one user prompt to completion: model requests and tool calls until a final answer.
     /// As Scramjet does, the conversation is compacted before the prompt and after the reply if
@@ -98,6 +141,9 @@ impl Agent {
             }
             let steering = ui.steering();
             self.add_queued(steering, ui)?;
+            if let Some(level) = ui.effort() {
+                self.set_effort(level)?;
+            }
             let request = self.request();
             let reply = match self.respond(&request, Purpose::Reply, ui, cancel) {
                 Ok(reply) => reply,
@@ -213,22 +259,22 @@ to a larger-context model)"
     ) -> Result<(), AgentError> {
         ui.tool_call("bash", command);
         ui.tool_running();
-        let ran =
-            match tools::run_command(&self.config.root, command, None, cancel, &mut |output| {
-                ui.tool_output(output)
-            }) {
-                Ok(ran) => ran,
-                Err(error) => {
-                    ui.command_result(&format!("Error: {error}"), true);
-                    return Ok(());
-                }
-            };
-        let shown = ran.tool_output();
-        ui.command_result(&shown.text, shown.failed);
-        if include {
-            let prompt = format!("!{command}");
-            let mut message = json!({"role":"user","content":ran.message(command),TYPED:prompt});
-            if shown.failed {
+        let shell = Shell::run(&self.config.root, command, include, cancel, &mut |output| {
+            ui.tool_output(output)
+        });
+        self.add_shell(shell, ui)
+    }
+
+    /// Shows how `shell`, run apart from the agent, ended, and adds it to the conversation as
+    /// `shell` says.
+    pub fn add_shell(&mut self, shell: Shell, ui: &mut dyn AgentUi) -> Result<(), AgentError> {
+        let (text, failed) = shell.shown();
+        ui.command_result(&text, failed);
+        if let (true, Ok(ran)) = (shell.include, &shell.ran) {
+            let prompt = format!("!{}", shell.command);
+            let message = ran.message(&shell.command);
+            let mut message = json!({"role":"user","content":message,TYPED:prompt});
+            if failed {
                 message[FAILED] = json!(true);
             }
             self.add(message)?;
@@ -396,6 +442,28 @@ mod tests {
     };
     use crate::provider_fixture as fixture;
     use std::{sync::Arc, time::Duration};
+
+    #[test]
+    fn an_effort_chosen_during_a_turn_goes_with_its_next_request() {
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", "bash", json!({"command":"true"})),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "effort-during");
+        agent.set_effort("low").unwrap();
+        let mut ui = Recorder {
+            efforts: vec![None, Some("high".into())],
+            ..Recorder::default()
+        };
+        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+        let bodies = server.join().unwrap();
+        let efforts: Vec<_> = (bodies.iter())
+            .map(|body| body["reasoning"]["effort"].clone())
+            .collect();
+        assert_eq!(efforts, ["low", "high"]);
+        assert_eq!(agent.effort(), Some("high"));
+        assert_eq!(agent.last_effort(), Some("high"));
+    }
 
     #[test]
     fn queued_messages_steer_the_next_request_and_follow_ups_continue_the_turn() {

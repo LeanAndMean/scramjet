@@ -25,6 +25,8 @@ pub(super) struct Recorder {
     /// What each call of `steering` and then `follow_up` gives, in order; then nothing.
     pub(super) steering: Vec<Vec<String>>,
     pub(super) follow_ups: Vec<Vec<String>>,
+    /// What each call of `effort` gives, in order; then nothing.
+    pub(super) efforts: Vec<Option<String>>,
 }
 impl AgentUi for Recorder {
     fn waiting(&mut self, purpose: Purpose) {
@@ -98,6 +100,12 @@ impl AgentUi for Recorder {
         match self.follow_ups.is_empty() {
             true => Vec::new(),
             false => self.follow_ups.remove(0),
+        }
+    }
+    fn effort(&mut self) -> Option<String> {
+        match self.efforts.is_empty() {
+            true => None,
+            false => self.efforts.remove(0),
         }
     }
     fn choose(

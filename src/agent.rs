@@ -28,6 +28,7 @@ pub use tools::{
     CODING_TOOLS, DEFAULT_TOOLS, search_program, sequence_diff, shortened, terminal_line,
 };
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
+pub use turn::Shell;
 pub use ui::{AgentUi, Answer, Purpose, ToolDetail, show_items};
 
 use client::ModelInfo;
@@ -73,6 +74,28 @@ pub struct AgentConfig {
     pub retries: u32,
     /// The coding tools the model has, among `CODING_TOOLS`.
     pub tools: Vec<String>,
+}
+
+/// The reasoning effort levels a model's card lists, and the current one, as Shift+Tab cycles
+/// through them.
+#[derive(Clone, Debug, Default)]
+pub struct EffortCycle {
+    levels: Vec<String>,
+    current: Option<String>,
+}
+
+impl EffortCycle {
+    /// Moves to the level after the current one, wrapping around as Scramjet's thinking level
+    /// cycle does, and returns it; `None` when the card lists no levels.
+    pub fn advance(&mut self) -> Option<String> {
+        let levels = &self.levels;
+        let next = (self.current.as_ref())
+            .and_then(|current| levels.iter().position(|level| level == current))
+            .map_or(0, |index| (index + 1) % levels.len());
+        let level = levels.get(next)?.clone();
+        self.current = Some(level.clone());
+        Some(level)
+    }
 }
 
 pub enum SessionChoice {
@@ -443,17 +466,20 @@ impl Agent {
     /// level cycle does, and records the change in the session. Returns the new level; `None`
     /// when the card lists no levels, which keeps the effort.
     pub fn cycle_effort(&mut self) -> Result<Option<String>, AgentError> {
-        let levels = &self.info.levels;
-        if levels.is_empty() {
+        let Some(level) = self.effort_cycle().advance() else {
             return Ok(None);
-        }
-        let current = self.effort().or(self.info.default_level.as_deref());
-        let next = current
-            .and_then(|current| levels.iter().position(|level| level == current))
-            .map_or(0, |index| (index + 1) % levels.len());
-        let level = levels[next].clone();
+        };
         self.set_effort(level.clone())?;
         Ok(Some(level))
+    }
+
+    /// Where Shift+Tab's cycle through the model's effort levels is, for an interface that
+    /// cycles while a turn runs (`AgentUi::effort`).
+    pub fn effort_cycle(&self) -> EffortCycle {
+        EffortCycle {
+            levels: self.info.levels.clone(),
+            current: (self.effort().or(self.info.default_level.as_deref())).map(str::to_owned),
+        }
     }
 
     /// Whether the coding tools of the turns that follow keep out of the user's credential

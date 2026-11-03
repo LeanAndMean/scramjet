@@ -64,6 +64,10 @@ pub trait AgentUi {
     fn follow_up(&mut self) -> Vec<String> {
         Vec::new()
     }
+    /// An effort level the user chose while the turn runs, for the model's next request.
+    fn effort(&mut self) -> Option<String> {
+        None
+    }
     /// Lets the user choose one of `options` under `title`, `recommended` selected at first;
     /// `None` when they cancel.
     fn choose(

@@ -270,9 +270,10 @@ def item_events(index, item):
     return events + [{'type': 'response.output_item.done', 'output_index': index, 'item': item}]
 
 
-def serve_items(responses, gate=None, models=()):
+def serve_items(responses, gate=None, models=(), cards=None, bodies=None):
     """Answers the requests in turn with a response streaming the complete items in `responses`,
-    the first once `gate`, if given, is set, and lists `models` at `/v1/models`."""
+    the first once `gate`, if given, is set, lists `models` at `/v1/models` and `cards` at
+    `/api/model-cards`, and adds each request's body to `bodies`, if given."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -285,6 +286,7 @@ def serve_items(responses, gate=None, models=()):
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
     listing = json.dumps({'data': [{'id': model} for model in models]}).encode()
+    card_listing = json.dumps({'models': cards or []}).encode()
 
     def answer():
         for number, stream in enumerate(streams):
@@ -293,10 +295,16 @@ def serve_items(responses, gate=None, models=()):
                 if request.startswith(b'GET /v1/models') and models:
                     connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n'
                                        b'content-length: %d\r\nconnection: close\r\n\r\n%s' % (len(listing), listing))
+                elif request.startswith(b'GET /api/model-cards') and cards:
+                    connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n'
+                                       b'content-length: %d\r\nconnection: close\r\n\r\n%s'
+                                       % (len(card_listing), card_listing))
                 else:
                     connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
                 connection.close()
                 connection, _ = listener.accept()
+            if bodies is not None:
+                bodies.append(json.loads(request.partition(b'\r\n\r\n')[2]))
             if gate and number == 0:
                 gate.wait(10)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
@@ -1933,6 +1941,41 @@ def fullscreen_queue(read, until, send, output):
     send(b'\x03\x04')
 
 
+def fullscreen_shell_and_effort_during_turn(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('running 1s')
+    # Shift+Tab chooses the effort of the turn's next request.
+    send(b'\x1b[Z')
+    on_screen('Thinking level: high')
+    # A `!` command runs at once, under the conversation until the turn ends.
+    send(b'!echo side$((0+1)); sleep 1; echo side$((1+1))\r')
+    rows = on_screen('side2')
+    assert 'Replied.' not in '\n'.join(rows), rows
+    on_screen('Replied.')
+    rows = on_screen('[2 requests')
+    text = '\n'.join(rows)
+    assert text.index('Replied.') < text.index('[2 requests') < text.index('\u25cf bash echo side$((0+1))'), text
+    assert text.count('side2') == 1, text
+    send(b'again\r')
+    on_screen('running 1s')
+    send(b'!sleep 30\r')
+    on_screen('\u25cf bash sleep 30')
+    send(b'!echo no\r')
+    rows = on_screen('A bash command is already running')
+    assert rows[-2] == '> !echo no', rows
+    send(b'\x15')
+    rows = on_screen('Second.')
+    # Still running when the turn ends; Escape stops it, and it is added then.
+    assert 'Command cancelled' not in '\n'.join(rows), rows
+    send(b'\x1b')
+    rows = on_screen('Command cancelled by the user')
+    text = '\n'.join(rows)
+    assert text.index('Second.') < text.index('\u25cf bash sleep 30'), text
+    send(b'\x04')
+
+
 def fullscreen_mouse(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -2046,6 +2089,24 @@ run(['--fullscreen'], left_the_screen(fullscreen_queue), serve_items([
 (queued,) = set(session_files()) - known
 prompts = [line['content'] for line in map(json.loads, open(queued)) if line.get('role') == 'user']
 assert prompts == ['go', 'steer this', 'after that', 'again'], prompts
+bodies = []
+during = config_home('during')
+known = set(session_files())
+run(['--fullscreen'], left_the_screen(fullscreen_shell_and_effort_during_turn), serve_items([
+    [tool_call('call_1', 'bash', {'command': 'sleep 5'})],
+    [message('Replied.')],
+    [tool_call('call_2', 'bash', {'command': 'sleep 2'})],
+    [message('Second.')],
+], cards=effort_cards, bodies=bodies), variables={'XDG_CONFIG_HOME': during})
+assert [body['reasoning']['effort'] for body in bodies] == ['medium', 'high', 'high', 'high'], bodies
+assert json.load(open(settings_path(during))) == {'defaultThinkingLevel': 'high'}
+(during_session,) = set(session_files()) - known
+items = list(map(json.loads, open(during_session)))
+assert saved_levels(during_session) == ['medium', 'high'], saved_levels(during_session)
+said = [item['content'] if item.get('role') == 'user' else item['content'][0]['text']
+        for item in items if item.get('role') in ('user', 'assistant') or item.get('type') == 'message']
+assert said[:3] == ['go', 'Replied.', 'Ran `echo side$((0+1)); sleep 1; echo side$((1+1))`\n```\nside1\nside2\n```'], said
+assert said[3:5] == ['again', 'Second.'] and said[5].startswith('Ran `sleep 30`'), said
 run(['--fullscreen'], left_the_screen(fullscreen_lists), serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {
         'type': 'select', 'message': 'Which **one**?', 'recommended': 1,

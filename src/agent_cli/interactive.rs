@@ -79,6 +79,7 @@ impl Interactive {
                     hide_thinking.clone(),
                     cancel.clone(),
                     (settings.steering_mode, settings.follow_up_mode),
+                    agent.root().to_path_buf(),
                 )
                 .map_err(|error| format!("cannot show the full screen: {error}"))?,
             ),
@@ -158,7 +159,10 @@ impl Interactive {
 
     /// The next prompt: `dispatched`, a next step to run as if typed, or what the user enters.
     fn read(&mut self, dispatched: Option<String>) -> Result<Read, String> {
-        if let Some(screen) = &self.screen {
+        if let Some(screen) = &mut self.screen {
+            // Those that ended during the turn go before the next prompt, as Scramjet adds them
+            // when the turn ends.
+            add_shells(&mut self.agent, screen);
             if let Some(prompt) = dispatched {
                 return Ok(Read::Prompt(prompt));
             }
@@ -169,6 +173,7 @@ impl Interactive {
                     screen::Input::CycleEffort => {
                         screen.note(cycle_effort(&mut self.agent, &mut self.settings));
                     }
+                    screen::Input::Shells => add_shells(&mut self.agent, screen),
                     screen::Input::End => return Ok(Read::End),
                 }
             }
@@ -247,7 +252,8 @@ impl Interactive {
     /// Runs a model turn, `/compact`, a branch summary or a `!` command with the terminal in its
     /// turn mode, while keys typed meanwhile are read for the editor's next prompt
     /// (`type_ahead`), and Ctrl+O shows the conversation, `prompt` if any, and the turn so far.
-    /// A Ctrl-C from before it starts does not cancel it.
+    /// A Ctrl-C from before it starts does not cancel it. Full screen, an effort that Shift+Tab
+    /// chose meanwhile is set if no request took it, and saved as the settings' default.
     pub(super) fn during_turn<T>(
         &mut self,
         prompt: Option<&str>,
@@ -255,10 +261,21 @@ impl Interactive {
     ) -> T {
         self.cancel.store(false, Ordering::Relaxed);
         if let Some(screen) = &mut self.screen {
-            screen.turn(true);
+            let effort = self.agent.effort().map(str::to_owned);
+            screen.turn(Some(self.agent.effort_cycle()));
             let result = run(&mut self.agent, &mut screen.link, &self.cancel);
-            screen.turn(false);
+            screen.turn(None);
             self.cancel.store(false, Ordering::Relaxed);
+            let unset = (screen.take_effort()).and_then(|level| self.agent.set_effort(level).err());
+            let changed = (self.agent.effort()).filter(|level| effort.as_deref() != Some(level));
+            let unsaved =
+                changed.and_then(|level| self.settings.set_default_thinking_level(level).err());
+            if let Some(error) = unset {
+                self.say(&format!("error: {error}"));
+            }
+            if let Some(error) = unsaved {
+                self.say(&format!("error: settings not saved: {error}"));
+            }
             return result;
         }
         let shown = self.editor.as_ref().map(|_| {
@@ -494,6 +511,16 @@ impl Interactive {
     }
 }
 
+/// Adds the `!` commands that ended while a turn ran to the conversation, shown as they ran.
+fn add_shells(agent: &mut Agent, screen: &mut Handle) {
+    for shell in screen.take_shells() {
+        screen.link.tool_call("bash", shell.command());
+        if let Err(error) = agent.add_shell(shell, &mut screen.link) {
+            screen.say(&format!("error: {error}"));
+        }
+    }
+}
+
 /// A loaded command's row in the `/` list: the argument hint before the description, as
 /// Scramjet's autocomplete shows them.
 fn command_entry(command: &Command) -> (String, String) {
@@ -528,7 +555,7 @@ fn cycle_effort(agent: &mut Agent, settings: &mut Settings) -> String {
 }
 
 /// What a Shift+Tab says under the prompt, as Scramjet reports it.
-fn effort_note(cycled: Result<Option<String>, AgentError>) -> String {
+pub(super) fn effort_note(cycled: Result<Option<String>, AgentError>) -> String {
     match cycled {
         Ok(Some(level)) => format!("Thinking level: {level}"),
         Ok(None) => "Current model does not support thinking".to_owned(),

@@ -10,6 +10,7 @@ use super::editor::{
     Action, ByteSource, Draft, ESCAPE_WAIT, Editor, Key, Mouse, RESIZE_CHECK, RawMode, read_key,
     terminal_size,
 };
+use super::interactive::effort_note;
 use super::record::{self, Event};
 use super::select::Picker;
 use super::settings::Delivery;
@@ -21,12 +22,13 @@ use rustix::{
     io::Errno,
 };
 use scramjet_rs::agent::{
-    self, AgentError, AgentUi, AutoCompaction, Choice, Compaction, Purpose, StreamProgress,
-    ToolDetail,
+    self, AgentError, AgentUi, AutoCompaction, Choice, Compaction, EffortCycle, Purpose, Shell,
+    StreamProgress, ToolDetail,
 };
 use std::{
     fmt::Write as _,
     io::{self, PipeReader, PipeWriter, Read, Write},
+    path::PathBuf,
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -58,14 +60,16 @@ const WHEEL_DOWN: u16 = 65;
 const ALLOW: &str = "Allow? [y/N, a = allow all until exit]";
 const BUSY: &str = "Busy: the session is not ready for a prompt yet";
 const WAITS: &str = "Commands wait for the turn to end: Esc interrupts it";
+const SHELL_BUSY: &str = "A bash command is already running. Press Esc to cancel it first.";
 
 /// What the session asks the screen to show or do.
 enum ToScreen {
     Event(Event),
     /// The session was replaced: the conversation shown starts again.
     Clear,
-    /// A turn, `/compact`, a branch summary or a `!` command starts (`true`) or ends.
-    Turn(bool),
+    /// A turn, `/compact`, a branch summary or a `!` command starts, Shift+Tab cycling the
+    /// effort from where it is, or ends (`None`).
+    Turn(Option<EffortCycle>),
     /// The session waits for what the user enters next.
     Ready,
     SetText(String),
@@ -99,18 +103,35 @@ pub(super) enum Input {
     DoubleEscape,
     /// Shift+Tab.
     CycleEffort,
+    /// A `!` command run during a turn ended: `Link::take_shells` has it.
+    Shells,
     /// Ctrl-C twice or Ctrl-D on an empty prompt, or the screen is gone.
     End,
 }
 
-/// Messages sent while a turn runs, until the agent takes them.
+/// What the user gives while a turn runs, until the agent or the session takes it.
 #[derive(Default)]
 struct Queue {
     steering: Vec<String>,
     follow_ups: Vec<String>,
+    /// The effort level Shift+Tab chose, for the next request.
+    effort: Option<String>,
+    /// `!` commands run during a turn, as typed, until the session adds them to the
+    /// conversation; at most the last one still runs.
+    shells: Vec<Side>,
+}
+
+/// A `!` command run apart from the session.
+struct Side {
+    command: String,
+    /// The end of its output so far.
+    output: String,
+    ended: Option<Shell>,
+    cancel: Arc<AtomicBool>,
 }
 
 impl Queue {
+    /// Whether no message is queued.
     fn is_empty(&self) -> bool {
         self.steering.is_empty() && self.follow_ups.is_empty()
     }
@@ -160,8 +181,21 @@ impl Link {
     pub(super) fn clear(&self) {
         self.send(ToScreen::Clear);
     }
-    pub(super) fn turn(&self, running: bool) {
-        self.send(ToScreen::Turn(running));
+    pub(super) fn turn(&self, efforts: Option<EffortCycle>) {
+        self.send(ToScreen::Turn(efforts));
+    }
+    /// The `!` commands run during a turn that have ended, in the order typed.
+    pub(super) fn take_shells(&self) -> Vec<Shell> {
+        let mut queue = self.queue();
+        let ended = (queue.shells.iter())
+            .take_while(|side| side.ended.is_some())
+            .count();
+        let sides = queue.shells.drain(..ended);
+        sides.filter_map(|side| side.ended).collect()
+    }
+    /// The effort level Shift+Tab chose during a turn that no request took.
+    pub(super) fn take_effort(&self) -> Option<String> {
+        self.queue().effort.take()
     }
     pub(super) fn set_text(&self, text: String) {
         self.send(ToScreen::SetText(text));
@@ -208,12 +242,14 @@ pub(super) struct Handle {
 impl Handle {
     /// Takes the terminal for the screen, `editor` editing the prompts. Escape and Ctrl-C set
     /// `cancel` while a turn runs; Ctrl+T flips `hide_thinking`. The agent takes the messages
-    /// queued during a turn as `modes` (`steeringMode`, `followUpMode`) say.
+    /// queued during a turn as `modes` (`steeringMode`, `followUpMode`) say; `!` commands run
+    /// meanwhile run in `root`.
     pub(super) fn start(
         editor: Editor,
         hide_thinking: Arc<AtomicBool>,
         cancel: Arc<AtomicBool>,
         modes: (Delivery, Delivery),
+        root: PathBuf,
     ) -> io::Result<Self> {
         let (to, messages) = mpsc::channel();
         let (inputs, from) = mpsc::channel();
@@ -222,10 +258,16 @@ impl Handle {
         rustix::fs::fcntl_setfl(&woken, rustix::fs::OFlags::NONBLOCK)?;
         let raw = RawMode::enter()?;
         let queue = Arc::new(Mutex::new(Queue::default()));
+        let woke = wake.try_clone()?;
         let thread = std::thread::Builder::new().name("screen".into()).spawn({
             let queue = queue.clone();
             move || {
-                let app = App::new(editor, hide_thinking, cancel, inputs, queue);
+                let sides = Sides {
+                    root,
+                    wake: woke,
+                    threads: Vec::new(),
+                };
+                let app = App::new(editor, hide_thinking, cancel, inputs, queue, sides);
                 app.run(raw, &messages, woken)
             }
         })?;
@@ -332,6 +374,9 @@ impl AgentUi for Link {
     }
     fn follow_up(&mut self) -> Vec<String> {
         deliver(&mut self.queue().follow_ups, self.modes.1)
+    }
+    fn effort(&mut self) -> Option<String> {
+        self.take_effort()
     }
     fn choose(
         &mut self,
@@ -568,6 +613,14 @@ fn render(
     lines
 }
 
+/// What runs the `!` commands typed during a turn.
+struct Sides {
+    root: PathBuf,
+    /// Wakes the screen when one's output grows or it ends.
+    wake: PipeWriter,
+    threads: Vec<JoinHandle<()>>,
+}
+
 struct App {
     editor: Editor,
     draft: Draft,
@@ -576,6 +629,9 @@ struct App {
     cancel: Arc<AtomicBool>,
     inputs: mpsc::Sender<Input>,
     queue: Arc<Mutex<Queue>>,
+    sides: Sides,
+    /// Where Shift+Tab's cycle is while a turn runs.
+    efforts: EffortCycle,
     /// The session waits for input.
     ready: bool,
     /// A turn runs, with what it does now.
@@ -609,6 +665,7 @@ impl App {
         cancel: Arc<AtomicBool>,
         inputs: mpsc::Sender<Input>,
         queue: Arc<Mutex<Queue>>,
+        sides: Sides,
     ) -> Self {
         Self {
             draft: editor.draft(String::new()),
@@ -618,6 +675,8 @@ impl App {
             cancel,
             inputs,
             queue,
+            sides,
+            efforts: EffortCycle::default(),
             ready: false,
             activity: None,
             dialog: None,
@@ -651,10 +710,18 @@ impl App {
         loop {
             loop {
                 match messages.try_recv() {
-                    Ok(ToScreen::Quit) | Err(TryRecvError::Disconnected) => return Ok(()),
+                    Ok(ToScreen::Quit) | Err(TryRecvError::Disconnected) => {
+                        self.stop_shells();
+                        return Ok(());
+                    }
                     Ok(message) => self.message(message),
                     Err(TryRecvError::Empty) => break,
                 }
+            }
+            if self.ready && (self.queue().shells.first()).is_some_and(|side| side.ended.is_some())
+            {
+                self.ready = false;
+                let _ = self.inputs.send(Input::Shells);
             }
             self.editor.poll(&mut self.draft);
             if let Some(Open {
@@ -746,9 +813,13 @@ impl App {
                 self.top = None;
                 (self.selection, self.edge) = (None, None);
             }
-            ToScreen::Turn(running) => {
+            ToScreen::Turn(efforts) => {
+                let running = efforts.is_some();
                 self.transcript.split();
                 self.activity = running.then(|| Activity::new("working"));
+                if let Some(efforts) = efforts {
+                    self.efforts = efforts;
+                }
                 self.draft.clear_note(WAITS);
                 // What the turn did not take is not sent unasked.
                 if !running {
@@ -818,6 +889,9 @@ impl App {
         if !self.exiting {
             self.exiting = true;
             self.cancel.store(true, Ordering::Relaxed);
+            for side in &self.queue().shells {
+                side.cancel.store(true, Ordering::Relaxed);
+            }
             self.answer(None);
             let _ = self.inputs.send(Input::End);
         }
@@ -860,10 +934,11 @@ impl App {
     }
 
     /// Queues the draft's text while a turn runs: for the model's next request, or, as a
-    /// follow-up, for when the turn would end. A command waits in the editor.
+    /// follow-up, for when the turn would end. A `!` command runs at once, and a command waits
+    /// in the editor.
     fn enqueue(&mut self, follow_up: bool) {
         let text = self.draft.text().trim().to_owned();
-        if text.is_empty() {
+        if text.is_empty() || self.shell(&text) {
             return;
         }
         if self.editor.is_command(&text) {
@@ -879,6 +954,84 @@ impl App {
         drop(queue);
         self.draft = self.editor.draft(String::new());
         self.top = None;
+    }
+
+    /// Runs `typed` if it is a `!` or `!!` command, as Scramjet does during a turn: apart from
+    /// the session, shown under the conversation until the turn ends, then added to it (`!`) or
+    /// only shown (`!!`). Returns whether it was one.
+    fn shell(&mut self, typed: &str) -> bool {
+        let Some(command) = typed.strip_prefix('!') else {
+            return false;
+        };
+        let (include, command) = match command.strip_prefix('!') {
+            Some(command) => (false, command.trim()),
+            None => (true, command.trim()),
+        };
+        if command.is_empty() {
+            return false;
+        }
+        let mut queue = self.queue();
+        if queue.shells.iter().any(|side| side.ended.is_none()) {
+            drop(queue);
+            self.draft.set_note(SHELL_BUSY.to_owned());
+            return true;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        queue.shells.push(Side {
+            command: command.to_owned(),
+            output: String::new(),
+            ended: None,
+            cancel: cancel.clone(),
+        });
+        drop(queue);
+        let started = self.sides.wake.try_clone().and_then(|wake| {
+            let (queue, root) = (self.queue.clone(), self.sides.root.clone());
+            let command = command.to_owned();
+            std::thread::Builder::new()
+                .name("shell".into())
+                .spawn(move || {
+                    let running = |change: &mut dyn FnMut(&mut Side)| {
+                        let mut queue = queue.lock().unwrap_or_else(PoisonError::into_inner);
+                        if let Some(side) =
+                            queue.shells.iter_mut().find(|side| side.ended.is_none())
+                        {
+                            change(side);
+                        }
+                        drop(queue);
+                        let _ = (&wake).write(&[0]);
+                    };
+                    let shell = Shell::run(&root, &command, include, &cancel, &mut |output| {
+                        running(&mut |side| side.output = output.to_owned())
+                    });
+                    let mut shell = Some(shell);
+                    running(&mut |side| side.ended = shell.take());
+                })
+        });
+        match started {
+            Ok(thread) => {
+                self.sides.threads.retain(|thread| !thread.is_finished());
+                self.sides.threads.push(thread);
+                self.editor.remember(typed);
+                self.draft = self.editor.draft(String::new());
+                self.top = None;
+            }
+            Err(error) => {
+                self.queue().shells.pop();
+                self.draft
+                    .set_note(format!("error: cannot run the command: {error}"));
+            }
+        }
+        true
+    }
+
+    /// Stops the `!` commands that still run, and waits for them to end.
+    fn stop_shells(&mut self) {
+        for side in &self.queue().shells {
+            side.cancel.store(true, Ordering::Relaxed);
+        }
+        for thread in self.sides.threads.drain(..) {
+            let _ = thread.join();
+        }
     }
 
     /// The first line of the conversation shown: where the user scrolled to, else the end's. A
@@ -1267,6 +1420,11 @@ impl App {
                 self.cancel.store(true, Ordering::Relaxed);
                 return Flow::Go;
             }
+            let queue = self.queue();
+            if let Some(side) = queue.shells.iter().find(|side| side.ended.is_none()) {
+                side.cancel.store(true, Ordering::Relaxed);
+                return Flow::Go;
+            }
         }
         if key == Key::Interrupt && running {
             self.cancel.store(true, Ordering::Relaxed);
@@ -1308,10 +1466,17 @@ impl App {
                 self.ready = false;
             }
             Action::DoubleEscape => {}
+            Action::CycleEffort if running => {
+                let level = self.efforts.advance();
+                if let Some(level) = &level {
+                    self.queue().effort = Some(level.clone());
+                }
+                self.draft.set_note(effort_note(Ok(level)));
+            }
             Action::CycleEffort if self.ready => {
                 let _ = self.inputs.send(Input::CycleEffort);
             }
-            Action::CycleEffort => self.draft.set_note(WAITS.to_owned()),
+            Action::CycleEffort => self.draft.set_note(BUSY.to_owned()),
             Action::Suspend => return Flow::Suspend,
             Action::External => return Flow::External,
         }
@@ -1372,8 +1537,23 @@ impl App {
 
     /// The rows under the conversation, and where the cursor goes in them.
     fn dock(&self, (width, height): (usize, usize)) -> (Vec<String>, Option<(usize, usize)>) {
-        let mut rows = vec![self.status(width)];
+        let mut rows = Vec::new();
         let queue = self.queue();
+        // Above the status line, as Scramjet shows them.
+        for side in &queue.shells {
+            let output = match &side.ended {
+                Some(shell) => shell.shown().0,
+                None => side.output.clone(),
+            };
+            let events = [
+                Event::ToolCall("bash".to_owned(), side.command.clone()),
+                Event::ToolOutput(output),
+            ];
+            let mut lines = render(&events, (width, false, false), self.hide_thinking.clone());
+            lines.pop();
+            rows.extend(lines);
+        }
+        rows.push(self.status(width));
         let queued = [
             ("Steering", &queue.steering),
             ("Follow-up", &queue.follow_ups),
@@ -1643,6 +1823,7 @@ mod tests {
         let mut queue = Queue {
             steering: vec!["steer".into()],
             follow_ups: vec!["later".into()],
+            ..Queue::default()
         };
         assert_eq!(queue.take(), ["steer", "later"]);
         assert!(queue.is_empty());
