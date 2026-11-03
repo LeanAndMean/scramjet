@@ -1919,16 +1919,19 @@ def fullscreen_queue(read, until, send, output):
     on_screen('running 1s')
     send(b'steer this\r')
     on_screen('Steering: steer this')
+    # A command set's command is queued too, and starts where it is sent.
+    send(b'/demo:greet Ann\r')
+    on_screen('Steering: /demo:greet Ann')
     # Alt+Enter, as terminals send it.
     send(b'after that\x1b\r')
     on_screen('Follow-up: after that')
-    # A command set's command waits in the editor.
-    send(b'/demo:greet Ann\r')
-    on_screen('Commands wait for the turn to end')
-    send(b'\x15')
-    rows = on_screen('Followed.')
+    on_screen('Followed.')
+    # The command's status check, as its turn ended without a report.
+    rows = on_screen('[4 requests')
     text = '\n'.join(rows)
-    assert text.index('> steer this') < text.index('Steered.') < text.index('> after that'), text
+    assert (text.index('> steer this') < text.index('> /demo:greet Ann\n\u2026 (sent as 5 lines')
+            < text.index('Steered.') < text.index('> after that') < text.index('Followed.')
+            < text.index('Checked.')), text
     assert 'Steering:' not in text and 'Follow-up:' not in text, text
     send(b'again\r')
     on_screen('running 1s')
@@ -2202,11 +2205,14 @@ run(['--fullscreen'], left_the_screen(fullscreen_queue), serve_items([
     [tool_call('call_1', 'bash', {'command': 'echo started; sleep 2'})],
     [message('Steered.')],
     [message('Followed.')],
+    [message('Checked.')],
     [tool_call('call_2', 'bash', {'command': 'sleep 30'})],
 ]))
 (queued,) = set(session_files()) - known
-prompts = [line['content'] for line in map(json.loads, open(queued)) if line.get('role') == 'user']
-assert prompts == ['go', 'steer this', 'after that', 'again'], prompts
+users = [line for line in map(json.loads, open(queued)) if line.get('role') == 'user' and '_scramjet_probe' not in line]
+prompts = [line.get('_scramjet_typed', line['content']) for line in users]
+assert prompts == ['go', 'steer this', '/demo:greet Ann', 'after that', 'again'], prompts
+assert users[2]['content'].startswith('<scramjet-command name="demo:greet">\nGreet Ann warmly.'), users[2]
 bodies = []
 known = set(session_files())
 run(['--fullscreen'], left_the_screen(fullscreen_commands_during_turn), serve_items([

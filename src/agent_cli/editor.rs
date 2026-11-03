@@ -1038,23 +1038,6 @@ impl Editor {
         self.text = text;
     }
 
-    /// Whether `text` runs a built-in command, a command set's command or a `!` command, rather
-    /// than going to the model as it is.
-    pub(super) fn is_command(&self, text: &str) -> bool {
-        if text.starts_with('!') {
-            return true;
-        }
-        let Some(name) = text
-            .strip_prefix('/')
-            .and_then(|rest| rest.split_whitespace().next())
-        else {
-            return false;
-        };
-        name == "exit"
-            || SLASH_COMMANDS.iter().any(|(builtin, _)| *builtin == name)
-            || self.commands.iter().any(|(command, _)| command == name)
-    }
-
     /// Makes `prompt` the most recent entry that Up recalls.
     pub fn remember(&mut self, prompt: &str) {
         if self.history.last().is_none_or(|last| last != prompt) {
@@ -1451,11 +1434,6 @@ impl Draft {
 
     pub(super) fn set_note(&mut self, note: String) {
         self.note = Some(note);
-    }
-
-    /// Removes the note if it is `note`.
-    pub(super) fn clear_note(&mut self, note: &str) {
-        self.note.take_if(|shown| shown == note);
     }
 
     /// The completion list's rows, if one is open.

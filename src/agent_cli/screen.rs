@@ -61,7 +61,6 @@ const WHEEL_UP: u16 = 64;
 const WHEEL_DOWN: u16 = 65;
 const ALLOW: &str = "Allow? [y/N, a = allow all until exit]";
 const BUSY: &str = "Busy: the session is not ready for a prompt yet";
-const WAITS: &str = "Commands wait for the turn to end: Esc interrupts it";
 const SHELL_BUSY: &str = "A bash command is already running. Press Esc to cancel it first.";
 
 /// What the session asks the screen to show or do.
@@ -853,7 +852,6 @@ impl App {
                 if let Some(efforts) = efforts {
                     self.efforts = efforts;
                 }
-                self.draft.clear_note(WAITS);
                 // What the turn did not take is not sent unasked.
                 if !running {
                     self.restore();
@@ -967,8 +965,8 @@ impl App {
     }
 
     /// Queues the draft's text while a turn runs: for the model's next request, or, as a
-    /// follow-up, for when the turn would end. A `!` command runs at once, a built-in command
-    /// goes to the session (`command`), and a command set's command waits in the editor.
+    /// follow-up, for when the turn would end; a command set's command starts there. A `!`
+    /// command runs at once, and a built-in command goes to the session (`command`).
     fn enqueue(&mut self, follow_up: bool) {
         let text = self.draft.text().trim().to_owned();
         if text.is_empty() || self.shell(&text) {
@@ -976,10 +974,6 @@ impl App {
         }
         if Builtin::parse(&text).is_some() {
             self.command(text);
-            return;
-        }
-        if self.editor.is_command(&text) {
-            self.draft.set_note(WAITS.to_owned());
             return;
         }
         self.editor.remember(&text);

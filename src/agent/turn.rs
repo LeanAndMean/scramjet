@@ -66,20 +66,23 @@ impl Agent {
     ) -> Result<(), AgentError> {
         self.compact_before_prompt(ui, cancel)?;
         self.completed = None;
-        let command = self
-            .commands
-            .named(prompt)
-            .map(|command| command.name.clone());
-        self.lifecycle.prompted(prompt, command.as_deref());
-        // A command prompt sends its expansion; the prompt as typed is kept for recall and display.
-        let message = match self.commands.expand(prompt) {
-            Some(sent) => json!({"role":"user","content":sent,TYPED:prompt}),
-            None => json!({"role":"user","content":prompt}),
-        };
+        let message = self.user_message(prompt);
         self.add(message)?;
         self.save_command()?;
         self.prompts.push(prompt.to_owned());
         self.resume_turn(ui, cancel)
+    }
+
+    /// The message `prompt` sends, typed or queued during a turn, starting the command it names
+    /// as Scramjet's input handling does: a command prompt sends its expansion, and the prompt
+    /// as typed is kept for recall and display.
+    fn user_message(&mut self, prompt: &str) -> Value {
+        let command = (self.commands.named(prompt)).map(|command| command.name.clone());
+        self.lifecycle.prompted(prompt, command.as_deref());
+        match self.commands.expand(prompt) {
+            Some(sent) => json!({"role":"user","content":sent,TYPED:prompt}),
+            None => json!({"role":"user","content":prompt}),
+        }
     }
 
     /// Goes on with the turn that `turn` or this returned `AgentError::Paused` from, before its
@@ -252,18 +255,28 @@ to a larger-context model)"
         Ok(any)
     }
 
-    /// Adds messages the user queued during the turn as prompts, shown as typed.
+    /// Adds messages the user queued during the turn as typed prompts are added: a command
+    /// starts there, replacing the one running, as in Scramjet.
     fn add_queued(
         &mut self,
         messages: Vec<String>,
         ui: &mut dyn AgentUi,
     ) -> Result<(), AgentError> {
-        for message in messages {
-            ui.user_prompt(&message);
-            self.add(json!({"role":"user","content":message}))?;
-            self.prompts.push(message);
+        if messages.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        for prompt in messages {
+            let message = self.user_message(&prompt);
+            match message.get(TYPED) {
+                Some(_) => {
+                    ui.command_prompt(&prompt, message["content"].as_str().unwrap_or_default())
+                }
+                None => ui.user_prompt(&prompt),
+            }
+            self.add(message)?;
+            self.prompts.push(prompt);
+        }
+        self.save_command()
     }
 
     /// A `!` or `!!` command the user runs without a model turn: `include` adds it to the
@@ -578,6 +591,58 @@ mod tests {
             agent.prompts(),
             ["go", "steer one", "steer two", "and then this"]
         );
+    }
+
+    #[test]
+    fn a_command_queued_during_a_turn_starts_there_in_place_of_the_one_running() {
+        let report = |id: &str, next: &str| {
+            let next = json!([{"message":next,"fresh_session":false,"reason":"More."}]);
+            tool_call(
+                id,
+                status::NAME,
+                json!({"summary":"Done.","status":"completed","next_steps":next}),
+            )
+        };
+        let (endpoint, server) = serve(vec![
+            report("call_1", "/rs:work again"),
+            report("call_2", "/rs:other again"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "queued-command");
+        let commands = agent.root().join(".scramjet/rs/commands");
+        std::fs::create_dir_all(&commands).unwrap();
+        for name in ["work", "other"] {
+            std::fs::write(
+                commands.join(format!("rs:{name}.md")),
+                format!("---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:{name}\n---\nDo $1.\n"),
+            )
+            .unwrap();
+        }
+        agent.commands = Commands::discover(None, &agent.root().join(".scramjet"));
+        agent.autonomy = None;
+        let mut ui = Recorder {
+            // Nothing before the first request; then where the reported turn would end.
+            steering: vec![vec![], vec!["/rs:other now".into()]],
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        agent.turn("/rs:work go", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        let expansion = "<scramjet-command name=\"rs:other\">\nDo now.\n</scramjet-command>";
+        let last = bodies[1]["input"].as_array().unwrap().last().unwrap();
+        assert_eq!(last, &json!({"role":"user","content":expansion}));
+        let shown = format!("command /rs:other now sent {expansion}");
+        assert!(ui.shown.contains(&shown), "{:?}", ui.shown);
+        let completed = agent.take_completed().unwrap();
+        let Next::Offer { steps, .. } = agent.route(&completed, true).next else {
+            panic!("no next step offered");
+        };
+        assert_eq!(steps[0].command.as_deref(), Some("/rs:other again"));
+        assert_eq!(agent.prompts(), ["/rs:work go", "/rs:other now"]);
+        let (_, conversation, resumed) = Session::open(agent.session_path()).unwrap();
+        assert_eq!(resumed, ["/rs:work go", "/rs:other now"]);
+        let mut replay = Recorder::default();
+        show_items(&conversation, &mut replay);
+        assert!(replay.shown.contains(&shown), "{:?}", replay.shown);
     }
 
     #[test]
