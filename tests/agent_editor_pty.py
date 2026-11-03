@@ -910,7 +910,7 @@ def completes_paths_and_commands(read, until, send, output):
     on_screen('error: provider: cannot connect')
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     send(b'/')
-    on_screen('(1/11)')
+    on_screen('(1/12)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -1231,6 +1231,55 @@ def shift_tab_resumed(read, until, send, output):
     send(b'\x04')
 
 
+def setting(label, value):
+    """A row of `/settings`, its label as wide as the widest."""
+    return label.ljust(len('Follow-up messages')) + '  ' + value
+
+
+def settings_menu(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/settings\r')
+    rows = on_screen('Settings  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc close')
+    assert '\u203a ' + setting('Thinking level', 'medium') in rows, rows
+    assert '  ' + setting('Tools', 'read, bash, edit, write') in rows, rows
+    assert rows[-1] == '  start at. Shift+Tab cycles it.', rows
+    # The thinking level is chosen from the card's levels; Enter takes one and goes back.
+    send(b'\r')
+    rows = on_screen('Thinking level  \u2191\u2193 move \u00b7 Enter select \u00b7 Esc back')
+    assert '\u203a medium \u2713' in rows, rows
+    send(b'\x1b[B\r')
+    on_screen(setting('Thinking level', 'high'))
+    # Keys typed at once each reach the list the one before them leaves, none lost between.
+    send(b'\x1b[B\r\x1b[B\r')
+    rows = on_screen(setting('Steering messages', 'one at a time'))
+    assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
+    assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
+                         '  before its next request.'], rows
+    send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
+    rows = on_screen('Tools  \u2191\u2193 move \u00b7 Enter switch on or off \u00b7 Esc back')
+    assert '\u203a [x] read' in rows and '  [ ] grep' in rows and rows[-1] == '  Read file contents', rows
+    send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
+    on_screen('\u203a [x] grep')
+    send(b'\x1b')
+    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep'))
+    send(b'\x1b')
+    ending(read, output, EMPTY)
+    # Typed during a turn, it opens at the turn's next request, which then has what it changed.
+    send(b'go\r')
+    on_screen('running 1s')
+    send(b'/settings\r')
+    on_screen('Command: /settings')
+    on_screen('Settings  \u2191\u2193 move')
+    send(b'\x1b[B' * 6 + b'\r')
+    on_screen('Tools  \u2191\u2193 move')
+    send(b'\x1b[B' * 6 + b'\r\x1b')
+    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))
+    send(b'\x1b')
+    on_screen('Replied.')
+    send(b'\x04')
+
+
 def double_escape_forks(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -1376,6 +1425,22 @@ known = set(session_files())
 run([], started_at('max'), serve_replies([], cards=effort_cards), variables=in_levels)
 (started,) = set(session_files()) - known
 assert saved_levels(started) == ['max'], saved_levels(started)
+menu_home = config_home('menu', '{"theme": "dark", "branchSummary": {"reserveTokens": 16384}}')
+bodies = []
+run([], settings_menu, serve_items([[tool_call('call_1', 'bash', {'command': 'sleep 2'})], [message('Replied.')]],
+                                   cards=effort_cards, bodies=bodies), variables={'XDG_CONFIG_HOME': menu_home})
+# Each change is used at once: the next request has the level and the tools chosen.
+assert bodies[0]['reasoning']['effort'] == 'high', bodies
+coding = ('read', 'bash', 'edit', 'write', 'grep', 'find', 'ls')
+tools = lambda body: [tool['name'] for tool in body['tools'] if tool['name'] in coding]
+assert tools(bodies[0]) == ['read', 'bash', 'edit', 'write', 'grep'], bodies[0]['tools']
+assert '\n- grep: Search file contents' in bodies[0]['instructions'], bodies[0]['instructions']
+assert tools(bodies[1]) == ['read', 'bash', 'edit', 'write', 'grep', 'ls'], bodies[1]['tools']
+assert '\n- ls: List directory contents' in bodies[1]['instructions'], bodies[1]['instructions']
+assert json.load(open(settings_path(menu_home))) == {
+    'theme': 'dark', 'branchSummary': {'reserveTokens': 16384}, 'defaultThinkingLevel': 'high',
+    'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time', 'tools': ['read', 'bash', 'edit', 'write', 'grep', 'ls'],
+}, open(settings_path(menu_home)).read()
 forking_home = config_home('forking', '{"doubleEscapeAction": "fork", "branchSummary": {"skipPrompt": true}}')
 run([], double_escape_forks, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]),
     variables={'XDG_CONFIG_HOME': forking_home})

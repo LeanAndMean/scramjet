@@ -327,16 +327,27 @@ impl Agent {
         let config = &self.config;
         self.sets = Sets::for_project(&config.command_sets, &config.root);
         self.commands = Commands::discover(&self.sets);
-        let agents = subagent::registered(&self.sets, &mut Vec::new());
         self.skills = Skills::discover(&config.skills, &config.root);
         self.agents_directory = subagent::user_directory();
+        self.instruct();
+    }
+
+    fn instruct(&mut self) {
+        let agents = subagent::registered(&self.sets, &mut Vec::new());
         self.instructions = instructions::agent(
-            &config.root,
-            &config.tools,
+            &self.config.root,
+            &self.config.tools,
             &self.commands,
             &agents,
             &self.skills,
         );
+    }
+
+    /// The coding tools of the requests that follow, as the settings' `tools`; the instructions
+    /// are written again for them, the command sets and skills kept as they are.
+    pub fn set_tools(&mut self, tools: Vec<String>) {
+        self.config.tools = tools;
+        self.instruct();
     }
 
     /// The sessions saved next to the current one that have a conversation, and the current one,
@@ -554,6 +565,11 @@ impl Agent {
         self.session.record_effort(&effort)?;
         self.config.effort = Some(effort);
         Ok(())
+    }
+
+    /// The effort levels the model's card lists, in its order; none when it lists none.
+    pub fn effort_levels(&self) -> &[String] {
+        &self.info.levels
     }
 
     /// Shift+Tab: moves the reasoning effort to the next level the model's card lists, after the

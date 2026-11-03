@@ -569,7 +569,8 @@ pub(super) fn terminal_size() -> (usize, usize) {
 }
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
-const SLASH_COMMANDS: [(&str, &str); 11] = [
+const SLASH_COMMANDS: [(&str, &str); 12] = [
+    ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     ("name", "Set session display name"),
     ("session", "Show session info and stats"),
@@ -1543,6 +1544,7 @@ mod tests {
         assert_eq!(
             labels(&list),
             [
+                "/settings",
                 "/model",
                 "/name",
                 "/session",
@@ -1559,17 +1561,17 @@ mod tests {
         assert_eq!(
             plain(list.rows(60)),
             [
-                "→ /model      Select model (opens selector UI)",
+                "→ /settings   Open settings menu",
+                "  /model      Select model (opens selector UI)",
                 "  /name       Set session display name",
                 "  /session    Show session info and stats",
                 "  /fork       Create a new fork from a previous user messa…",
-                "  /tree       Navigate session tree (switch branches)",
-                "  (1/11)",
+                "  (1/12)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
         let mut list = list;
-        for _ in 0..6 {
+        for _ in 0..7 {
             list.select(false);
         }
         assert_eq!(
@@ -1580,7 +1582,7 @@ mod tests {
                 "→ /compact",
                 "  /resume",
                 "  /reload",
-                "  (7/11)"
+                "  (8/12)"
             ]
         );
         for _ in 0..5 {

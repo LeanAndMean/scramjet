@@ -30,14 +30,19 @@ pub(super) struct Picker {
     shape: Shape,
     /// When a question's recommended option is chosen, unless `stop` is called first.
     deadline: Option<Instant>,
+    /// Stays shown once answered, until the session shows another list or none.
+    held: bool,
 }
 
 enum Shape {
     /// A selector's rows, given at the width they take on the terminal when the list opens.
     Rows {
         title: String,
+        hint: &'static str,
         current: Option<usize>,
         rows: Vec<String>,
+        /// Shown under the list for the selected row, when there is one for each row.
+        notes: Vec<String>,
     },
     Question {
         title: String,
@@ -93,7 +98,27 @@ impl Picker {
                 recommended,
             },
             deadline: None,
+            held: false,
         }
+    }
+
+    /// Says `hint` on the keys after the title, and under the rows the selected one's note.
+    pub(super) fn noting(mut self, keys: &'static str, row_notes: Vec<String>) -> Self {
+        if let Shape::Rows { hint, notes, .. } = &mut self.shape {
+            (*hint, *notes) = (keys, row_notes);
+        }
+        self
+    }
+
+    /// Keeps the list shown once answered, so that a session showing another in its place at
+    /// once (`/settings`) does not show the prompt between them.
+    pub(super) fn held(mut self) -> Self {
+        self.held = true;
+        self
+    }
+
+    pub(super) fn is_held(&self) -> bool {
+        self.held
     }
 
     /// Chooses the recommended option of a question after `wait`, unless `stop` is called first,
@@ -152,10 +177,13 @@ impl Picker {
             list,
             shape: Shape::Rows {
                 title: title.to_owned(),
+                hint: HINT,
                 current,
                 rows,
+                notes: Vec::new(),
             },
             deadline: None,
+            held: false,
         }
     }
 
@@ -175,11 +203,29 @@ impl Picker {
         match &self.shape {
             Shape::Rows {
                 title,
+                hint,
                 current,
                 rows,
-            } => lines(title, &self.list, *current, size, &|index, width| {
-                text::clip(&rows[index], width)
-            }),
+                notes,
+            } => {
+                let (width, height) = size;
+                let note =
+                    (self.list.rows.get(self.list.selected)).and_then(|&index| notes.get(index));
+                let mut under = Vec::new();
+                if let Some(note) = note {
+                    under.push(String::new());
+                    let note_width = width.saturating_sub(1).max(8) - 2;
+                    for row in wrapped(note, note_width) {
+                        under.push(format!("  {}{row}{}", style::MUTED, style::RESET));
+                    }
+                }
+                let room = (width, height.saturating_sub(under.len()));
+                let mut shown = lines(title, hint, &self.list, *current, room, &|index, width| {
+                    text::clip(&rows[index], width)
+                });
+                shown.extend(under);
+                shown
+            }
             Shape::Question {
                 title,
                 options,
@@ -209,7 +255,7 @@ struct List {
     selected: usize,
     /// Rows shown at once, and moved by a page.
     visible: usize,
-    search: Option<Search>,
+    search: Option<Box<Search>>,
 }
 
 struct Search {
@@ -233,12 +279,12 @@ impl List {
 
     fn searching(texts: &[String], initial: usize, visible: usize, none: &str) -> Self {
         let mut list = Self::new(texts.len(), initial, visible);
-        list.search = Some(Search {
+        list.search = Some(Box::new(Search {
             query: String::new(),
             texts: texts.iter().map(|text| Haystack::new(text)).collect(),
             none: none.into(),
             initial: list.selected,
-        });
+        }));
         list
     }
 
@@ -303,6 +349,7 @@ impl List {
 /// shown, the selected row's position.
 fn lines(
     title: &str,
+    hint: &str,
     list: &List,
     current: Option<usize>,
     (width, height): (usize, usize),
@@ -323,7 +370,7 @@ fn lines(
         .saturating_sub(visible / 2)
         .min(shown - visible);
     let hint_room = width.saturating_sub(title.width() + 2);
-    let hint = text::clip(HINT, hint_room);
+    let hint = text::clip(hint, hint_room);
     let mut lines = vec![format!(
         "{SELECTOR_TITLE}{title}{RESET}  {MUTED}{hint}{RESET}"
     )];
@@ -504,7 +551,7 @@ mod tests {
     fn shows_ten_rows_around_the_selection_with_its_position() {
         let row = |index: usize, width: usize| text::clip(&format!("row {index}"), width);
         let list = |selected| List::new(25, selected, 10);
-        let shown = plain(lines("Pick", &list(12), Some(9), (50, 24), &row));
+        let shown = plain(lines("Pick", HINT, &list(12), Some(9), (50, 24), &row));
         assert_eq!(
             shown,
             [
@@ -522,21 +569,21 @@ mod tests {
                 "  (13/25)",
             ]
         );
-        let first = plain(lines("Pick", &list(0), None, (50, 24), &row));
+        let first = plain(lines("Pick", HINT, &list(0), None, (50, 24), &row));
         assert_eq!(first[1], "› row 0");
         assert_eq!(first[10], "  row 9");
-        let last = plain(lines("Pick", &list(24), None, (50, 24), &row));
+        let last = plain(lines("Pick", HINT, &list(24), None, (50, 24), &row));
         assert_eq!(last[1], "  row 15");
         assert_eq!(last[10], "› row 24");
         // A short terminal shows fewer rows; a narrow one cuts the hint and the rows.
-        let short = plain(lines("Pick", &list(3), None, (12, 6), &row));
+        let short = plain(lines("Pick", HINT, &list(3), None, (12, 6), &row));
         assert_eq!(
             short,
             ["Pick  ↑↓ m…", "  row 2", "› row 3", "  row 4", "  (4/25)"]
         );
         let few = List::new(2, 1, 10);
         assert_eq!(
-            plain(lines("Pick", &few, None, (50, 24), &row)),
+            plain(lines("Pick", HINT, &few, None, (50, 24), &row)),
             [
                 "Pick  ↑↓ move · Enter select · Esc cancel",
                 "  row 0",
@@ -647,7 +694,7 @@ mod tests {
         .map(String::from);
         let row = |index: usize, width: usize| text::clip(&texts[index], width);
         let mut list = List::searching(&texts, 1, 10, "No matching rows");
-        let shown = |list: &List| plain(lines("Pick", list, Some(0), (50, 24), &row));
+        let shown = |list: &List| plain(lines("Pick", HINT, list, Some(0), (50, 24), &row));
         assert_eq!(shown(&list)[1..3], [">  ", "  fix the parser ✓"]);
         assert_eq!(shown(&list)[3], "› write a haiku");
         for key in [Key::Text("pa".into()), Key::Text("rs".into())] {
@@ -683,7 +730,7 @@ mod tests {
         assert_eq!(list.key(&Key::Escape), Some(None));
         // A query wider than the line shows its end.
         list.key(&Key::Text("a very long query".into()));
-        let narrow = plain(lines("Pick", &list, None, (12, 24), &row));
+        let narrow = plain(lines("Pick", HINT, &list, None, (12, 24), &row));
         assert_eq!(narrow[1], "> ng query ");
     }
 }

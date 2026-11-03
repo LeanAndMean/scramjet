@@ -47,6 +47,70 @@ pub(super) enum Delivery {
     OneAtATime,
 }
 
+/// A row of `/settings`, in the order shown.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Row {
+    ThinkingLevel,
+    ThinkingBlocks,
+    Steering,
+    FollowUp,
+    DoubleEscape,
+    BranchSummary,
+    Tools,
+    Credentials,
+}
+
+pub(super) const ROWS: [Row; 8] = [
+    Row::ThinkingLevel,
+    Row::ThinkingBlocks,
+    Row::Steering,
+    Row::FollowUp,
+    Row::DoubleEscape,
+    Row::BranchSummary,
+    Row::Tools,
+    Row::Credentials,
+];
+
+impl Row {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::ThinkingLevel => "Thinking level",
+            Self::ThinkingBlocks => "Thinking blocks",
+            Self::Steering => "Steering messages",
+            Self::FollowUp => "Follow-up messages",
+            Self::DoubleEscape => "Escape twice",
+            Self::BranchSummary => "Leaving a branch",
+            Self::Tools => "Tools",
+            Self::Credentials => "Credential stores",
+        }
+    }
+
+    /// What the row is about, shown under the list while it is selected.
+    pub(super) fn description(self) -> &'static str {
+        match self {
+            Self::ThinkingLevel => {
+                "How much the model reasons; also the level new sessions start at. Shift+Tab cycles it."
+            }
+            Self::ThinkingBlocks => "The model's reasoning in the conversation. Ctrl+T toggles it.",
+            Self::Steering => {
+                "Sent with Enter during a turn: how many the model gets before its next request."
+            }
+            Self::FollowUp => {
+                "Sent with Alt+Enter during a turn: how many the model gets when it would stop."
+            }
+            Self::DoubleEscape => "Escape pressed twice on an empty prompt.",
+            Self::BranchSummary => {
+                "When /tree moves to another branch: ask whether to summarize the one left behind."
+            }
+            Self::Tools => "The coding tools the agent has. Subagents have their own.",
+            Self::Credentials => {
+                "~/.ssh, ~/.netrc and other known stores, kept from the agent's tools: in turns no one \
+                 started (a next step run at once, -p), always or never. Subagents never see them."
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct Settings {
     /// `None` without `XDG_CONFIG_HOME` and `HOME`: nothing is read or saved.
@@ -347,14 +411,128 @@ impl Settings {
         self.save("defaultThinkingLevel", json!(level))
     }
 
+    /// The value `row` shows in `/settings`; the thinking level is the session's, not one of
+    /// the settings'.
+    pub(super) fn shown(&self, row: Row) -> String {
+        let delivery = |mode| match mode {
+            Delivery::All => "all at once",
+            Delivery::OneAtATime => "one at a time",
+        };
+        match row {
+            Row::ThinkingLevel => String::new(),
+            Row::ThinkingBlocks if self.hide_thinking_block => "hidden".into(),
+            Row::ThinkingBlocks => "shown".into(),
+            Row::Steering => delivery(self.steering_mode).into(),
+            Row::FollowUp => delivery(self.follow_up_mode).into(),
+            Row::DoubleEscape => match self.double_escape {
+                DoubleEscape::Tree => "opens /tree",
+                DoubleEscape::Fork => "opens /fork",
+                DoubleEscape::Nothing => "does nothing",
+            }
+            .into(),
+            Row::BranchSummary if self.skip_branch_summary_prompt => "no summary".into(),
+            Row::BranchSummary => "asks for a summary".into(),
+            Row::Tools if self.tools.is_empty() => "none".into(),
+            Row::Tools => (CODING_TOOLS.iter())
+                .filter(|tool| self.tools.iter().any(|known| known == *tool))
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", "),
+            Row::Credentials => match self.hide_credentials {
+                HideCredentials::Unattended => "hidden when unattended",
+                HideCredentials::Always => "always hidden",
+                HideCredentials::Never => "never hidden",
+            }
+            .into(),
+        }
+    }
+
+    /// Moves `row` to its next value, as Enter in `/settings` does, and saves it. The thinking
+    /// level and the tools, which have lists of their own, stay.
+    pub(super) fn cycle(&mut self, row: Row) -> io::Result<()> {
+        let next = |mode| match mode {
+            Delivery::All => Delivery::OneAtATime,
+            Delivery::OneAtATime => Delivery::All,
+        };
+        let delivery = |mode| match mode {
+            Delivery::All => "all",
+            Delivery::OneAtATime => "one-at-a-time",
+        };
+        match row {
+            Row::ThinkingLevel | Row::Tools => Ok(()),
+            Row::ThinkingBlocks => self.set_hide_thinking_block(!self.hide_thinking_block),
+            Row::Steering => {
+                self.steering_mode = next(self.steering_mode);
+                self.save("steeringMode", json!(delivery(self.steering_mode)))
+            }
+            Row::FollowUp => {
+                self.follow_up_mode = next(self.follow_up_mode);
+                self.save("followUpMode", json!(delivery(self.follow_up_mode)))
+            }
+            Row::DoubleEscape => {
+                let (action, name) = match self.double_escape {
+                    DoubleEscape::Tree => (DoubleEscape::Fork, "fork"),
+                    DoubleEscape::Fork => (DoubleEscape::Nothing, "none"),
+                    DoubleEscape::Nothing => (DoubleEscape::Tree, "tree"),
+                };
+                self.double_escape = action;
+                self.save("doubleEscapeAction", json!(name))
+            }
+            Row::BranchSummary => {
+                self.skip_branch_summary_prompt = !self.skip_branch_summary_prompt;
+                let skip = self.skip_branch_summary_prompt;
+                self.save_in("branchSummary", "skipPrompt", json!(skip))
+            }
+            Row::Credentials => {
+                let (hide, name) = match self.hide_credentials {
+                    HideCredentials::Unattended => (HideCredentials::Always, "always"),
+                    HideCredentials::Always => (HideCredentials::Never, "never"),
+                    HideCredentials::Never => (HideCredentials::Unattended, "unattended"),
+                };
+                self.hide_credentials = hide;
+                self.save("hideCredentials", json!(name))
+            }
+        }
+    }
+
+    /// The agent's coding tools, chosen in `/settings`, saved in `CODING_TOOLS`' order.
+    pub(super) fn set_tools(&mut self, tools: Vec<String>) -> io::Result<()> {
+        let tools: Vec<String> = (CODING_TOOLS.iter())
+            .filter(|tool| tools.iter().any(|chosen| chosen == *tool))
+            .map(|tool| tool.to_string())
+            .collect();
+        let saved = json!(tools);
+        self.tools = tools;
+        self.save("tools", saved)
+    }
+
     /// Sets `key` in the file as it is now, keeping the rest of it; a file that cannot be read
     /// is left as it is.
     fn save(&self, key: &str, value: Value) -> io::Result<()> {
+        self.update(|object| {
+            object.insert(key.to_owned(), value);
+        })
+    }
+
+    /// Sets `key` in the object `parent`, keeping its other keys.
+    fn save_in(&self, parent: &str, key: &str, value: Value) -> io::Result<()> {
+        self.update(|object| {
+            let entry = object.entry(parent).or_insert_with(|| json!({}));
+            if !entry.is_object() {
+                *entry = json!({});
+            }
+            if let Value::Object(inner) = entry {
+                inner.insert(key.to_owned(), value);
+            }
+        })
+    }
+
+    fn update(&self, change: impl FnOnce(&mut Map<String, Value>)) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };
         let mut object = read_object(path).map_err(io::Error::other)?;
-        object.insert(key.to_owned(), value);
+        change(&mut object);
         write_object(path, object).map_err(io::Error::other)
     }
 }
@@ -691,6 +869,82 @@ mod tests {
             std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
             1
         );
+    }
+
+    #[test]
+    fn settings_rows_cycle_through_their_values_and_save_each() {
+        let scratch = Scratch::new("rows");
+        let mut settings = settings_with(&scratch, r#"{"branchSummary": {"reserveTokens": 1}}"#);
+        let path = scratch.0.join("settings.json");
+        let saved =
+            || -> Value { serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap() };
+        let seen = |row: Row, settings: &mut Settings| {
+            let mut values = vec![settings.shown(row)];
+            for _ in 0..3 {
+                settings.cycle(row).unwrap();
+                values.push(settings.shown(row));
+            }
+            values
+        };
+        assert_eq!(
+            seen(Row::DoubleEscape, &mut settings),
+            ["opens /tree", "opens /fork", "does nothing", "opens /tree"]
+        );
+        assert_eq!(
+            seen(Row::Credentials, &mut settings),
+            [
+                "hidden when unattended",
+                "always hidden",
+                "never hidden",
+                "hidden when unattended"
+            ]
+        );
+        assert_eq!(
+            seen(Row::Steering, &mut settings),
+            [
+                "all at once",
+                "one at a time",
+                "all at once",
+                "one at a time"
+            ]
+        );
+        assert_eq!(
+            seen(Row::BranchSummary, &mut settings),
+            [
+                "asks for a summary",
+                "no summary",
+                "asks for a summary",
+                "no summary"
+            ]
+        );
+        assert_eq!(
+            seen(Row::ThinkingBlocks, &mut settings),
+            ["shown", "hidden", "shown", "hidden"]
+        );
+        settings.cycle(Row::FollowUp).unwrap();
+        settings
+            .set_tools(vec!["ls".into(), "read".into()])
+            .unwrap();
+        assert_eq!(settings.shown(Row::Tools), "read, ls");
+        assert_eq!(
+            saved(),
+            json!({
+                "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
+                "doubleEscapeAction": "tree",
+                "hideCredentials": "unattended",
+                "steeringMode": "one-at-a-time",
+                "hideThinkingBlock": true,
+                "followUpMode": "all",
+                "tools": ["read", "ls"],
+            })
+        );
+        let reread = Settings::read(Some(path.clone()));
+        assert!(reread.warnings.is_empty(), "{:?}", reread.warnings);
+        for row in ROWS {
+            assert_eq!(reread.shown(row), settings.shown(row), "{row:?}");
+        }
+        settings.set_tools(Vec::new()).unwrap();
+        assert_eq!(settings.shown(Row::Tools), "none");
     }
 
     #[test]

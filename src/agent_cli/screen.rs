@@ -252,6 +252,10 @@ impl Link {
             }
         }
     }
+    /// Takes away a held list (`Picker::held`) the session no longer shows.
+    pub(super) fn dismiss(&self) {
+        self.send(ToScreen::Dismiss);
+    }
     /// The row chosen from `picker`, `None` when cancelled.
     pub(super) fn pick(&self, picker: Picker) -> Option<usize> {
         self.pick_timed(picker).map(|(row, _)| row)
@@ -484,6 +488,8 @@ struct TextDialog {
 struct Open {
     shown: Shown,
     reply: mpsc::Sender<Answer>,
+    /// A held list was answered: it shows, taking no keys, until the session replaces it.
+    answered: bool,
 }
 
 /// How the conversation is rendered: width, reasoning hidden, tool results whole.
@@ -718,6 +724,9 @@ struct App {
     /// A turn runs, with what it does now.
     activity: Option<Activity>,
     dialog: Option<Open>,
+    /// Keys typed while an answered held list waits for the session's next, which then takes
+    /// them, or the prompt does.
+    held_keys: Vec<(Key, bool)>,
     /// The first line shown, while the user has scrolled away from the end.
     top: Option<Place>,
     /// Tool results are shown whole (Ctrl+O).
@@ -763,6 +772,7 @@ impl App {
             ready: false,
             activity: None,
             dialog: None,
+            held_keys: Vec::new(),
             top: None,
             whole: false,
             selection: None,
@@ -930,7 +940,13 @@ impl App {
                     self.restore();
                 }
             }
-            ToScreen::Ready => self.ready = true,
+            ToScreen::Ready => {
+                self.ready = true;
+                if self.dialog.as_ref().is_some_and(|open| open.answered) {
+                    self.dialog = None;
+                    self.replay();
+                }
+            }
             ToScreen::SetText(text) => self.draft = self.editor.draft(text),
             ToScreen::Remember(prompt) => self.editor.remember(&prompt),
             ToScreen::Note(note) => self.draft.set_note(note),
@@ -955,13 +971,21 @@ impl App {
                     }
                     Dialog::Approve(question) => Shown::Approve(question),
                 };
-                self.dialog = Some(Open { shown, reply });
+                self.dialog = Some(Open {
+                    shown,
+                    reply,
+                    answered: false,
+                });
                 self.top = None;
                 if let Some(activity) = &mut self.activity {
                     *activity = Activity::new("waiting for you");
                 }
+                self.replay();
             }
-            ToScreen::Dismiss => self.dialog = None,
+            ToScreen::Dismiss => {
+                self.dialog = None;
+                self.replay();
+            }
             ToScreen::Quit => {}
         }
     }
@@ -1004,17 +1028,35 @@ impl App {
         }
     }
 
+    /// Gives the keys typed while a held list waited to what is shown now.
+    fn replay(&mut self) {
+        for (key, pending) in std::mem::take(&mut self.held_keys) {
+            // Ctrl-Z and Ctrl-G among them are dropped: only the loop reading keys hands over
+            // the terminal.
+            let _ = self.key(key, pending);
+        }
+    }
+
     /// Answers the open dialog, if any: with `answer`, or as cancelled.
     fn answer(&mut self, answer: Option<Answer>) {
         let Some(open) = self.dialog.take() else {
             return;
         };
+        if open.answered {
+            return;
+        }
         let answer = answer.unwrap_or(match open.shown {
             Shown::Pick(_) => Answer::Picked(None),
             Shown::Text(_) => Answer::Text(None),
             Shown::Approve(_) => Answer::Approved(agent::Answer::Deny),
         });
         let _ = open.reply.send(answer);
+        if !self.exiting && matches!(&open.shown, Shown::Pick(picker) if picker.is_held()) {
+            self.dialog = Some(Open {
+                answered: true,
+                ..open
+            });
+        }
         if let Some(activity) = &mut self.activity {
             *activity = Activity::new("working");
         }
@@ -1675,6 +1717,10 @@ impl App {
     }
 
     fn dialog_key(&mut self, key: Key, pending: bool) -> Flow {
+        if self.dialog.as_ref().is_some_and(|open| open.answered) {
+            self.held_keys.push((key, pending));
+            return Flow::Go;
+        }
         if key == Key::Interrupt
             && matches!(
                 self.dialog,

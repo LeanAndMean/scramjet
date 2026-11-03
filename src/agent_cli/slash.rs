@@ -1,17 +1,37 @@
-//! The built-in commands: `/new`, `/name`, `/session`, `/resume`, `/fork`, `/tree`, `/model`,
-//! `/compact`, `/autopilot`, `/reload`, and `!` commands.
+//! The built-in commands: `/settings`, `/new`, `/name`, `/session`, `/resume`, `/fork`, `/tree`,
+//! `/model`, `/compact`, `/autopilot`, `/reload`, and `!` commands.
 use super::interactive::{Interactive, completions, model_line};
 use super::screen;
+use super::settings::{ROWS, Row};
 use super::terminal::Terminal;
 use super::text::{clip, one_line, visible};
 use super::{editor, select, style, tree};
-use scramjet_rs::agent::{Agent, AgentError, Navigated, SessionInfo};
+use scramjet_rs::agent::{Agent, AgentError, CODING_TOOLS, Navigated, SessionInfo, search_program};
 use std::{sync::atomic::Ordering, time::Duration};
 use unicode_width::UnicodeWidthStr;
+
+const SETTINGS_KEYS: &str = "↑↓ move · Enter change · Esc close";
+const NO_LEVELS: &str = "The model's card lists no thinking levels to choose from.";
+const BACK_KEYS: &str = "↑↓ move · Enter select · Esc back";
+const TOOLS_KEYS: &str = "↑↓ move · Enter switch on or off · Esc back";
+
+/// What a coding tool does, as `/settings` says under its row, in the instructions' words.
+fn tool_note(tool: &str) -> &'static str {
+    match tool {
+        "read" => "Read file contents",
+        "bash" => "Execute bash commands",
+        "edit" => "Make precise file edits with exact text replacement",
+        "write" => "Create or overwrite files",
+        "grep" => "Search file contents for patterns, with ripgrep",
+        "find" => "Find files by glob pattern, with fd",
+        _ => "List directory contents",
+    }
+}
 
 /// A built-in command as typed, with its argument.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Builtin<'a> {
+    Settings,
     New,
     Name(&'a str),
     Session,
@@ -34,6 +54,7 @@ impl<'a> Builtin<'a> {
             .unwrap_or((prompt, ""));
         let argument = argument.trim();
         Some(match name {
+            "/settings" if argument.is_empty() => Self::Settings,
             "/new" if argument.is_empty() => Self::New,
             "/name" => Self::Name(argument),
             "/session" if argument.is_empty() => Self::Session,
@@ -56,7 +77,12 @@ impl<'a> Builtin<'a> {
     pub(super) fn interrupts(self) -> bool {
         !matches!(
             self,
-            Self::Name(_) | Self::Session | Self::Model(_) | Self::Autopilot(_) | Self::Reload
+            Self::Settings
+                | Self::Name(_)
+                | Self::Session
+                | Self::Model(_)
+                | Self::Autopilot(_)
+                | Self::Reload
         )
     }
 }
@@ -69,6 +95,7 @@ impl Interactive {
             return self.bang(command);
         }
         match Builtin::parse(prompt) {
+            Some(Builtin::Settings) => self.settings(),
             Some(Builtin::New) => {
                 self.new_session();
             }
@@ -131,6 +158,160 @@ impl Interactive {
         }
         let state = if self.agent.autopilot() { "on" } else { "off" };
         self.say(&self.ui.dim(&format!("Autopilot is {state}")));
+    }
+
+    /// `/settings`, as Scramjet's: the settings in a list, each changed with Enter, saved and
+    /// used at once. Without the full screen they are printed.
+    fn settings(&mut self) {
+        self.save_hide_thinking();
+        if self.screen.is_none() {
+            let path = self.settings.shown_path();
+            let path = path.unwrap_or_else(|| "not saved: HOME is not set".into());
+            eprintln!("Settings ({path})");
+            for row in self.setting_rows() {
+                eprintln!("  {row}");
+            }
+            return;
+        }
+        let mut at = 0;
+        loop {
+            // Ctrl+T in the list changes the thinking blocks too.
+            self.save_hide_thinking();
+            let Some(screen) = &self.screen else {
+                return;
+            };
+            let rows = self.setting_rows();
+            let levels = !self.agent.effort_levels().is_empty();
+            let notes = (ROWS.iter())
+                .map(|row| match row {
+                    Row::ThinkingLevel if !levels => NO_LEVELS.to_owned(),
+                    row => row.description().to_owned(),
+                })
+                .collect();
+            let picker = select::Picker::select(
+                "Settings",
+                select::VISIBLE,
+                ROWS.len(),
+                at,
+                None,
+                |index, width| clip(&rows[index], width),
+            );
+            let picker = picker.noting(SETTINGS_KEYS, notes).held();
+            let Some(index) = screen.pick(picker) else {
+                break;
+            };
+            at = index;
+            match ROWS[index] {
+                Row::ThinkingLevel => self.choose_thinking_level(),
+                Row::Tools => self.choose_tools(),
+                row => {
+                    if let Err(error) = self.settings.cycle(row) {
+                        self.say(&format!("error: settings not saved: {error}"));
+                    }
+                }
+            }
+            self.hide_thinking
+                .store(self.settings.hide_thinking_block, Ordering::Relaxed);
+            if let Some(screen) = &mut self.screen {
+                (screen.link).reloaded(completions(&self.agent), &self.settings);
+            }
+        }
+        if let Some(screen) = &self.screen {
+            screen.dismiss();
+        }
+    }
+
+    /// `/settings`' rows: each label, as wide as the widest, and its value.
+    fn setting_rows(&self) -> Vec<String> {
+        let width = ROWS.iter().map(|row| row.label().len()).max().unwrap_or(0);
+        let value = |row| match row {
+            Row::ThinkingLevel => self.agent.effort().unwrap_or("model default").to_owned(),
+            row => self.settings.shown(row),
+        };
+        (ROWS.iter())
+            .map(|&row| format!("{:width$}  {}", row.label(), value(row)))
+            .collect()
+    }
+
+    /// The levels of the model's card to choose from; the one chosen is the session's and the
+    /// settings' default, as Shift+Tab sets them.
+    fn choose_thinking_level(&mut self) {
+        let levels = self.agent.effort_levels().to_vec();
+        let Some(screen) = self.screen.as_ref().filter(|_| !levels.is_empty()) else {
+            return;
+        };
+        let current =
+            (self.agent.effort()).and_then(|effort| levels.iter().position(|l| l == effort));
+        let picker = select::Picker::select(
+            "Thinking level",
+            select::VISIBLE,
+            levels.len(),
+            current.unwrap_or(0),
+            current,
+            |index, width| clip(&levels[index], width),
+        );
+        let Some(index) = screen.pick(picker.noting(BACK_KEYS, Vec::new()).held()) else {
+            return;
+        };
+        let level = &levels[index];
+        if let Err(error) = self.agent.set_effort(level.clone()) {
+            return self.say(&format!("error: {error}"));
+        }
+        if let Err(error) = self.settings.set_default_thinking_level(level) {
+            self.say(&format!("error: settings not saved: {error}"));
+        }
+    }
+
+    /// The coding tools, each switched on or off with Enter; the agent has them from its next
+    /// request on. One whose program is not installed stays off.
+    fn choose_tools(&mut self) {
+        let mut at = 0;
+        loop {
+            let Some(screen) = &self.screen else {
+                return;
+            };
+            let on = |tool: &str| self.settings.tools.iter().any(|known| known == tool);
+            let missing = |tool: &str| match tool {
+                "grep" if search_program(tool).is_none() => Some("ripgrep (rg)"),
+                "find" if search_program(tool).is_none() => Some("fd"),
+                _ => None,
+            };
+            let rows: Vec<String> = (CODING_TOOLS.iter())
+                .map(|tool| format!("[{}] {tool}", if on(tool) { "x" } else { " " }))
+                .collect();
+            let notes = (CODING_TOOLS.iter())
+                .map(|tool| match missing(tool) {
+                    Some(program) => format!("Needs {program}, which is not installed."),
+                    None => tool_note(tool).to_owned(),
+                })
+                .collect();
+            let picker = select::Picker::select(
+                "Tools",
+                select::VISIBLE,
+                rows.len(),
+                at,
+                None,
+                |index, width| clip(&rows[index], width),
+            );
+            let Some(index) = screen.pick(picker.noting(TOOLS_KEYS, notes).held()) else {
+                return;
+            };
+            at = index;
+            let tool = CODING_TOOLS[index];
+            if !on(tool) && missing(tool).is_some() {
+                continue;
+            }
+            let mut tools = self.settings.tools.clone();
+            match on(tool) {
+                true => tools.retain(|known| known != tool),
+                false => tools.push(tool.to_owned()),
+            }
+            let saved = self.settings.set_tools(tools);
+            self.agent.set_tools(self.settings.tools.clone());
+            if let Err(error) = saved {
+                self.say(&format!("error: settings not saved: {error}"));
+            }
+        }
     }
 
     /// `/reload`, as Scramjet's: the settings, the command sets with their commands and agents,
