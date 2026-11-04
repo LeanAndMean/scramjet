@@ -1,7 +1,8 @@
 //! `/export` and `--export`: a session's current branch as a web page of its own, as Scramjet
 //! exports one, drawn from the replay of its items that the terminal shows (`show_items`). The
-//! page runs no script and loads nothing: markdown is rendered here, and what the model, a tool
-//! or the user wrote is escaped, its links kept only to the web and to mail.
+//! page runs no script and loads nothing: markdown is rendered here, what the model, a tool or
+//! the user wrote is escaped, its links kept only to the web and to mail, and the images of
+//! prompts and results are in the page.
 
 use super::children::{call, icon, usage_line};
 use super::slash::grouped;
@@ -115,7 +116,7 @@ pub(super) fn page(branch: &Branch, id: &str, setup: Option<Setup>) -> String {
     format!(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'\">\n\
+<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'\">\n\
 <title>{title}</title>\n<style>{CSS}</style>\n</head>\n<body>\n<main>\n<header>\n<h1>{title}</h1>\n\
 <dl>{info}</dl>\n{setup}</header>\n{}</main>\n</body>\n</html>\n",
         html.out,
@@ -149,6 +150,8 @@ struct Html {
     thinking: String,
     /// A tool's block is open: its call was shown and its result is to follow.
     tool: bool,
+    /// The images of the prompt or result shown next.
+    images: String,
 }
 
 impl Html {
@@ -263,7 +266,8 @@ scopes do not overlap; tool calls outside them are not blocked.</div>";
             _ => lines(output, RESULT_LINES),
         };
         let class = if failed { "result failed" } else { "result" };
-        self.out += &format!("<div class=\"{class}\">{body}</div>\n</div>\n");
+        let images = std::mem::take(&mut self.images);
+        self.out += &format!("<div class=\"{class}\">{body}{images}</div>\n</div>\n");
         self.tool = false;
     }
     fn command_started(&mut self, _command: &str, _include: bool) {}
@@ -302,20 +306,33 @@ scopes do not overlap; tool calls outside them are not blocked.</div>";
         self.compaction_summary(&compaction.summary);
     }
     fn compaction_failed(&mut self, _error: &AgentError) {}
+    fn images(&mut self, urls: &[&str]) {
+        let shown: String = (urls.iter())
+            .filter(|url| shown_image(url))
+            .map(|url| format!("<img src=\"{url}\" alt=\"\">"))
+            .collect();
+        if !shown.is_empty() {
+            self.images = format!("<div class=\"images\">{shown}</div>");
+        }
+    }
+    /// Its images first, as Scramjet's page shows a prompt.
     fn user_prompt(&mut self, prompt: &str) {
         self.block();
+        let images = std::mem::take(&mut self.images);
         let prompt = escape(&visible(prompt));
-        self.out += &format!("<div class=\"prompt\"><div class=\"text\">{prompt}</div></div>\n");
+        self.out +=
+            &format!("<div class=\"prompt\">{images}<div class=\"text\">{prompt}</div></div>\n");
     }
     fn command_prompt(&mut self, typed: &str, sent: &str) {
         self.block();
+        let images = std::mem::take(&mut self.images);
         let body = command_body(sent);
         let count = match body.lines().count() {
             1 => "1 line".to_owned(),
             count => format!("{count} lines"),
         };
         self.out += &format!(
-            "<div class=\"prompt\"><div class=\"text\">{}</div>{}</div>\n",
+            "<div class=\"prompt\">{images}<div class=\"text\">{}</div>{}</div>\n",
             escape(&visible(typed)),
             opened(&format!("Sent as {count}"), body),
         );
@@ -512,6 +529,19 @@ fn markdown(text: &str) -> String {
     html
 }
 
+/// Whether the page shows an image from `url`: one in it, of a type `read` sends, which the
+/// browser decodes as an image and nothing else.
+fn shown_image(url: &str) -> bool {
+    let types = ["png", "jpeg", "gif", "webp"];
+    let data = (url.strip_prefix("data:image/")).and_then(|rest| {
+        let (kind, data) = rest.split_once(";base64,")?;
+        types.contains(&kind).then_some(data)
+    });
+    data.is_some_and(|data| {
+        (data.bytes()).all(|byte| byte.is_ascii_alphanumeric() || b"+/=".contains(&byte))
+    })
+}
+
 /// Whether a link to `url` is kept: to the web, to mail, or without a scheme, which stays within
 /// the page or next to it.
 fn linked(url: &str) -> bool {
@@ -570,6 +600,8 @@ blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--border)
 .markdown > :last-child { margin-bottom: 0; }
 .prompt { background: var(--prompt); border-radius: 8px; padding: 10px 14px; margin: 20px 0 12px; }
 .reply { margin: 12px 0; }
+.images img { display: block; max-width: 100%; max-height: 400px; border-radius: 4px;
+  margin: 6px 0; }
 .tool, .command { background: var(--card); border: 1px solid var(--border); border-radius: 6px;
   padding: 8px 12px; margin: 10px 0; }
 .command { border-color: var(--green); }
@@ -747,6 +779,49 @@ mod tests {
             "{page}"
         );
         assert!(page.contains("default-src 'none'"), "{page}");
+    }
+
+    #[test]
+    fn the_images_of_prompts_and_results_are_shown_in_their_blocks() {
+        let image = |url: &str| json!({"type":"input_image","detail":"auto","image_url":url});
+        let png = "data:image/png;base64,iVBORw0K+/8=";
+        let page = page(
+            &branch(vec![
+                json!({"role":"user","_scramjet_typed":"@shot.png what is it?","content":[
+                    {"type":"input_text","text":"<file name=\"shot.png\"></file>\nwhat is it?"},
+                    image(png)]}),
+                call_item("c1", "read", json!({"path":"b.jpg"})),
+                json!({"type":"function_call_output","call_id":"c1","output":[
+                    {"type":"input_text","text":"Read image file [image/jpeg]"},
+                    image("data:image/jpeg;base64,/9j/4A=="),
+                    image("data:image/svg+xml;base64,PHN2Zz4="),
+                    image("data:image/png;base64,AA\" onerror=\"x()"),
+                    image("https://x.dev/track.png")]}),
+                json!({"role":"user","content":"thanks"}),
+            ]),
+            "id",
+            None,
+        );
+        let at = |text: &str| {
+            page.find(text)
+                .unwrap_or_else(|| panic!("{text:?} not in the page:\n{page}"))
+        };
+        let order = [
+            at(&format!(
+                "<div class=\"prompt\"><div class=\"images\"><img src=\"{png}\" alt=\"\"></div>\
+<div class=\"text\">@shot.png what is it?</div>"
+            )),
+            at("<b>read</b> b.jpg"),
+            at("Read image file [image/jpeg]</div><div class=\"images\">\
+<img src=\"data:image/jpeg;base64,/9j/4A==\" alt=\"\"></div></div>"),
+            at("<div class=\"prompt\"><div class=\"text\">thanks</div>"),
+        ];
+        assert!(order.is_sorted(), "{order:?}\n{page}");
+        assert_eq!(page.matches("<img ").count(), 2, "{page}");
+        assert!(!page.contains("svg") && !page.contains("onerror"), "{page}");
+        assert!(!page.contains("x.dev"), "{page}");
+        assert!(page.contains("img-src data:;"), "{page}");
+        assert_eq!(page.matches("<div").count(), page.matches("</div>").count());
     }
 
     #[test]

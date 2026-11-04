@@ -44,6 +44,9 @@ pub trait AgentUi {
     /// The children of the running `subagent` call, each time one starts, does something or
     /// ends.
     fn subagents(&mut self, _children: &Children) {}
+    /// The images, as `data:` URLs, of the stored prompt or tool result shown next, for an
+    /// interface that shows them.
+    fn images(&mut self, _urls: &[&str]) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
     /// `count` calls of a reply start running at the same time: whether this interface shows
@@ -346,6 +349,15 @@ impl ChildRun {
 /// with `None`, none is.
 pub fn show_items(items: &[Value], root: Option<&Path>, ui: &mut dyn AgentUi) {
     let compact = |call: &Call| root.and_then(|root| call.compact(root));
+    let images = |parts: &Value, ui: &mut dyn AgentUi| {
+        let urls: Vec<&str> = (parts.as_array().into_iter().flatten())
+            .filter(|part| part["type"] == "input_image")
+            .filter_map(|part| part["image_url"].as_str())
+            .collect();
+        if !urls.is_empty() {
+            ui.images(&urls);
+        }
+    };
     // A reply's calls are stored before their results, but each showed in turn as it ran.
     let mut calls: Vec<(&str, &str, Option<Call>)> = Vec::new();
     let unanswered = |calls: &mut Vec<(&str, &str, Option<Call>)>, ui: &mut dyn AgentUi| {
@@ -428,6 +440,7 @@ pub fn show_items(items: &[Value], root: Option<&Path>, ui: &mut dyn AgentUi) {
                         .and_then(|call| publish::payload(name, &call.arguments)),
                     (None, None, None) => None,
                 };
+                images(&item["output"], ui);
                 ui.tool_result(name, output, detail.as_ref(), failed);
             }
             Some("turn_stopped") => ui.stopped(item["error"].as_str()),
@@ -452,8 +465,10 @@ pub fn show_items(items: &[Value], root: Option<&Path>, ui: &mut dyn AgentUi) {
                 } else if let Some(command) = command {
                     ui.command_result(&UserCommand::included(command, content, failed));
                 } else if let Some(typed) = item[TYPED].as_str() {
+                    images(&item["content"], ui);
                     ui.command_prompt(typed, content);
                 } else {
+                    images(&item["content"], ui);
                     ui.user_prompt(content);
                 }
             }
