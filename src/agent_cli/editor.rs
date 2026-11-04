@@ -60,6 +60,19 @@ pub(super) enum Key {
     DeleteWordForward,
     KillStart,
     KillEnd,
+    /// Ctrl+Y: the text deleted last, put in again.
+    Yank,
+    /// Alt+Y, after Ctrl+Y: that text replaced with the one deleted before it.
+    YankPop,
+    /// Ctrl+-.
+    Undo,
+    /// Ctrl+] (`true`) or Ctrl+Alt+]: to the next or previous place of the character typed next.
+    Jump(bool),
+    /// Ctrl+L, Scramjet's key to open the model selector.
+    SelectModel,
+    /// Ctrl+Home and Ctrl+End: the conversation's start and end.
+    Top,
+    Bottom,
     Interrupt,
     EndOfInput,
     /// Ctrl+V, Scramjet's key to paste an image, or Alt+V, which still reaches the program in
@@ -124,6 +137,7 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
         6 => Key::Right,
         7 => Key::External,
         11 => Key::KillEnd,
+        12 => Key::SelectModel,
         14 => Key::Down,
         15 => Key::Expand,
         16 => Key::CycleModel(true),
@@ -134,7 +148,11 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
         22 => Key::PasteImage,
         23 => Key::DeleteWordBack,
         24 => Key::ClearAll,
+        25 => Key::Yank,
         26 => Key::Suspend,
+        29 => Key::Jump(true),
+        // Ctrl+_, which terminals also send for Ctrl+-.
+        31 => Key::Undo,
         0x20..=0x7e => Key::Text(char::from(byte).to_string()),
         0xc2..=0xf4 => {
             let length = match byte {
@@ -186,6 +204,8 @@ fn escape(source: &mut impl ByteSource) -> io::Result<Key> {
         Some(b'f') => Key::WordRight,
         Some(b'd') => Key::DeleteWordForward,
         Some(b'v') => Key::PasteImage,
+        Some(b'y') => Key::YankPop,
+        Some(29) => Key::Jump(false),
         Some(_) => Key::Ignored,
     })
 }
@@ -225,6 +245,8 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         (b'D', _) if word => Key::WordLeft,
         (b'C', _) => Key::Right,
         (b'D', _) => Key::Left,
+        (b'H', "1;5") | (b'^', "7") => Key::Top,
+        (b'F', "1;5") | (b'^', "8") => Key::Bottom,
         (b'H', _) | (b'~', "1" | "7") => Key::LineStart,
         (b'F', _) | (b'~', "4" | "8") => Key::LineEnd,
         (b'~', "3") => Key::Delete,
@@ -238,6 +260,12 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         (b'Z', _) | (b'~', "27;2;9") | (b'u', "9;2") => Key::BackTab,
         (b'~', "27;5;112") | (b'u', "112;5") => Key::CycleModel(true),
         (b'~', "27;6;112" | "27;6;80") | (b'u', "112;6") => Key::CycleModel(false),
+        (b'~', "27;5;108") | (b'u', "108;5") => Key::SelectModel,
+        (b'~', "27;5;121") | (b'u', "121;5") => Key::Yank,
+        (b'~', "27;3;121") | (b'u', "121;3") => Key::YankPop,
+        (b'~', "27;5;45") | (b'u', "45;5") => Key::Undo,
+        (b'~', "27;5;93") | (b'u', "93;5") => Key::Jump(true),
+        (b'~', "27;7;93") | (b'u', "93;7") => Key::Jump(false),
         _ => Key::Ignored,
     })
 }
@@ -285,7 +313,7 @@ pub(super) fn clean(text: &str) -> String {
         .collect()
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Buffer {
     text: String,
     /// Byte offset, always on a grapheme boundary.
@@ -338,6 +366,24 @@ impl Buffer {
         self.text[self.cursor..]
             .find('\n')
             .map_or(self.text.len(), |i| self.cursor + i)
+    }
+    /// Moves to the next grapheme after the cursor that starts with `target` (`forward`), or the
+    /// last one before it, as Scramjet's jump to a character; stays when there is none.
+    fn jump(&mut self, target: &str, forward: bool) {
+        let found = match forward {
+            true => {
+                let from = self.next();
+                (self.text[from..].grapheme_indices(true))
+                    .find(|(_, grapheme)| grapheme.starts_with(target))
+                    .map(|(index, _)| from + index)
+            }
+            false => (self.text[..self.cursor].grapheme_indices(true).rev())
+                .find(|(_, grapheme)| grapheme.starts_with(target))
+                .map(|(index, _)| index),
+        };
+        if let Some(at) = found {
+            self.cursor = at;
+        }
     }
     fn apply(&mut self, key: &Key) {
         match key {
@@ -939,6 +985,23 @@ pub struct Editor {
     double_escape: bool,
     /// Edits one text for a question, as Scramjet's dialog editor: Escape or Ctrl-C cancels.
     dialog: bool,
+    /// The texts Ctrl+U, Ctrl+K, Ctrl+W and Alt+D deleted, the latest last, which Ctrl+Y puts
+    /// in again: Scramjet's kill ring, kept from one prompt to the next.
+    kills: Vec<String>,
+}
+
+/// What the last key did, which decides what the next one does to the undo snapshots and
+/// deleted texts, as Scramjet's editor's last action.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Last {
+    #[default]
+    Other,
+    /// Typed a character: a word typed on is undone with it, from the space before it.
+    Typing,
+    /// Deleted text that the next deletion joins.
+    Kill,
+    /// Ctrl+Y or Alt+Y, which Alt+Y can replace.
+    Yank,
 }
 
 impl Editor {
@@ -959,6 +1022,7 @@ impl Editor {
             models,
             double_escape,
             dialog: false,
+            kills: Vec::new(),
         }
     }
 
@@ -1005,9 +1069,19 @@ impl Editor {
         }
     }
 
+    /// Adds `text`, deleted, to the kill ring; it joins the latest one when `join`, before it
+    /// when deleted `backward`, as Scramjet's consecutive kills accumulate.
+    fn kill(&mut self, text: String, backward: bool, join: bool) {
+        match self.kills.last_mut() {
+            Some(last) if join && backward => last.insert_str(0, &text),
+            Some(last) if join => last.push_str(&text),
+            _ => self.kills.push(text),
+        }
+    }
+
     /// Edits `draft` with `key`, or says what the caller should do for it; `pending`: more keys
     /// are already typed, so an `@` search waits for them.
-    pub(super) fn key(&self, draft: &mut Draft, key: Key, pending: bool) -> Action {
+    pub(super) fn key(&mut self, draft: &mut Draft, key: Key, pending: bool) -> Action {
         let key = match key {
             Key::AltEnter => Key::NewLine,
             Key::AltUp => Key::Up,
@@ -1023,17 +1097,99 @@ impl Editor {
             note,
             completion,
             lookup,
+            undo,
+            last,
+            jump,
         } = draft;
         if key == Key::Escape {
             *lookup = None;
         }
         let armed = std::mem::take(exit_armed);
         let noted = note.take();
+        let previous = std::mem::take(last);
+        let prior = buffer.clone();
+        // As Scramjet's, going through history is undone at once, to the text it started from.
+        let browsing_on = browsing.is_some() && matches!(key, Key::Up | Key::Down);
+        let undoing = key == Key::Undo;
         let tab = matches!(&key, Key::Text(text) if text == "\t");
+        // As Scramjet's, a space is undone apart from the word before it, and with the one after.
+        let typed = match &key {
+            Key::Text(text) if !tab => Some(text.starts_with(char::is_whitespace)),
+            _ => None,
+        };
+        let jumping = jump.take();
         let changed = match key {
+            // The jump's key again cancels it; a key that types no character cancels it and
+            // does what it does.
+            Key::Jump(_) if jumping.is_some() => {
+                *last = previous;
+                true
+            }
+            Key::Text(text) if jumping.is_some() && !text.starts_with(char::is_control) => {
+                *completion = None;
+                buffer.jump(&text, jumping == Some(true));
+                true
+            }
+            Key::Jump(forward) => {
+                *jump = Some(forward);
+                *exit_armed = armed;
+                *note = noted;
+                *last = previous;
+                false
+            }
+            Key::Undo => {
+                if let Some(snapshot) = undo.pop() {
+                    *buffer = snapshot;
+                }
+                *completion = None;
+                *browsing = None;
+                true
+            }
+            Key::Yank => {
+                match self.kills.last() {
+                    Some(text) => {
+                        buffer.insert(text);
+                        *last = Last::Yank;
+                        *completion = None;
+                    }
+                    None => *last = previous,
+                }
+                true
+            }
+            Key::YankPop => {
+                let yanked = self.kills.last().map_or(0, String::len);
+                if previous == Last::Yank
+                    && self.kills.len() > 1
+                    && buffer.text[..buffer.cursor].ends_with(&self.kills[self.kills.len() - 1])
+                {
+                    buffer.remove(buffer.cursor - yanked, buffer.cursor);
+                    self.kills.rotate_right(1);
+                    buffer.insert(&self.kills[self.kills.len() - 1]);
+                    *last = Last::Yank;
+                } else {
+                    *last = previous;
+                }
+                true
+            }
+            Key::KillStart | Key::KillEnd | Key::DeleteWordBack | Key::DeleteWordForward => {
+                *completion = None;
+                buffer.apply(&key);
+                let removed = prior.text.len() - buffer.text.len();
+                if removed > 0 {
+                    let text = prior.text[buffer.cursor..buffer.cursor + removed].to_owned();
+                    let backward = matches!(key, Key::KillStart | Key::DeleteWordBack);
+                    self.kill(text, backward, previous == Last::Kill);
+                    *last = Last::Kill;
+                } else {
+                    *last = previous;
+                }
+                true
+            }
             Key::Idle | Key::Suspend => {
                 *exit_armed = armed;
                 *note = noted;
+                *last = previous;
+                *jump = jumping;
                 return match key {
                     Key::Suspend => Action::Suspend,
                     _ => Action::Edited(false),
@@ -1087,14 +1243,18 @@ impl Editor {
             | Key::Mouse(_)
             | Key::BackTab
             | Key::CycleModel(_)
+            | Key::SelectModel
             | Key::Save
             | Key::ClearAll
             | Key::Expand
             | Key::Escape
             | Key::PageUp
-            | Key::PageDown => {
+            | Key::PageDown
+            | Key::Top
+            | Key::Bottom => {
                 *exit_armed = armed;
                 *note = noted;
+                *last = previous;
                 false
             }
             Key::ToggleThinking => {
@@ -1213,6 +1373,15 @@ impl Editor {
                 true
             }
         };
+        if let Some(space) = typed.filter(|_| buffer.text != prior.text) {
+            *last = Last::Typing;
+            if !space && previous == Last::Typing {
+                return Action::Edited(changed);
+            }
+        }
+        if buffer.text != prior.text && !browsing_on && !undoing {
+            undo.push(prior);
+        }
         Action::Edited(changed)
     }
 
@@ -1254,6 +1423,11 @@ pub(super) struct Draft {
     note: Option<String>,
     completion: Option<Completion>,
     lookup: Option<Lookup>,
+    /// The text and cursor before each edit, the latest last, which Ctrl+- restores.
+    undo: Vec<Buffer>,
+    last: Last,
+    /// Ctrl+] (`true`) or Ctrl+Alt+] waits for the character to jump to.
+    jump: Option<bool>,
 }
 
 /// What the caller does for a key the editor does not handle itself.
@@ -1317,10 +1491,24 @@ impl Draft {
         (layout.rows, cursor.row, cursor.column)
     }
 
+    /// Puts `text` in place of the draft's, the cursor at its end, as Scramjet's `setText`:
+    /// Ctrl+- brings back the text it replaced.
+    pub(super) fn replace(&mut self, text: String) {
+        let mut undo = std::mem::take(&mut self.undo);
+        if text != self.buffer.text {
+            undo.push(self.buffer.clone());
+        }
+        *self = Self {
+            undo,
+            ..Self::default()
+        };
+        self.buffer.set(text);
+    }
+
     /// Takes what the external editor did: its text, or the reason it did nothing.
     pub(super) fn edited(&mut self, edited: Result<Option<String>, String>) {
         match edited {
-            Ok(Some(text)) => self.buffer.set(text),
+            Ok(Some(text)) => self.replace(text),
             Ok(None) => {}
             Err(error) => self.note = Some(error),
         }
@@ -1802,7 +1990,7 @@ mod tests {
     #[test]
     fn enter_puts_in_an_argument_without_sending_it() {
         let models = vec!["claude-haiku-5-5".to_owned(), "gpt-6-luna".to_owned()];
-        let editor = Editor::new(
+        let mut editor = Editor::new(
             Vec::new(),
             Arc::default(),
             PathBuf::new(),
@@ -2062,5 +2250,152 @@ mod tests {
         assert_eq!(layout.vertical(2, true), None);
         assert_eq!(layout.vertical(1, false), Some(5));
         assert_eq!(layout.vertical(9, false), None);
+    }
+
+    #[test]
+    fn decodes_scramjets_kill_ring_undo_jump_and_scroll_keys() {
+        assert_eq!(
+            keys(b"\x19\x1by\x1f\x1d\x1b\x1d\x0c\x1b[1;5H\x1b[1;5F\x1b[7^\x1b[8^"),
+            [
+                Key::Yank,
+                Key::YankPop,
+                Key::Undo,
+                Key::Jump(true),
+                Key::Jump(false),
+                Key::SelectModel,
+                Key::Top,
+                Key::Bottom,
+                Key::Top,
+                Key::Bottom,
+            ]
+        );
+        assert_eq!(
+            keys(b"\x1b[121;5u\x1b[121;3u\x1b[45;5u\x1b[93;5u\x1b[27;7;93~\x1b[108;5u\x1b[1H"),
+            [
+                Key::Yank,
+                Key::YankPop,
+                Key::Undo,
+                Key::Jump(true),
+                Key::Jump(false),
+                Key::SelectModel,
+                Key::LineStart,
+            ]
+        );
+    }
+
+    /// Types `input` into `draft`, as the terminal sends it.
+    fn type_in(editor: &mut Editor, draft: &mut Draft, input: &[u8]) {
+        for key in keys(input) {
+            editor.key(draft, key, false);
+        }
+    }
+
+    fn prompt_editor(history: Vec<String>) -> Editor {
+        let root = PathBuf::new();
+        Editor::new(history, Arc::default(), root, Vec::new(), Vec::new(), false)
+    }
+
+    #[test]
+    fn deleted_text_is_put_back_and_cycled_across_prompts() {
+        let mut editor = prompt_editor(Vec::new());
+        let mut draft = editor.draft("one two three".into());
+        // Deletions in a row join, in the order the text had.
+        type_in(&mut editor, &mut draft, b"\x17\x17\x19");
+        assert_eq!(draft.text(), "one two three");
+        type_in(&mut editor, &mut draft, b"\x01\x0b");
+        assert_eq!(draft.text(), "");
+        assert_eq!(editor.kills, ["two three", "one two three"]);
+        // A key between them keeps them apart; Ctrl+D is no deletion that joins.
+        let mut draft = editor.draft("ab cd".into());
+        type_in(&mut editor, &mut draft, b"\x1b[D\x0b\x02\x04\x15");
+        assert_eq!(draft.text(), "");
+        assert_eq!(editor.kills, ["two three", "one two three", "d", "ab "]);
+        // The editor keeps them for the next prompt; Alt+Y right after Ctrl+Y goes back.
+        let mut draft = editor.draft("x".into());
+        type_in(&mut editor, &mut draft, b"\x19");
+        assert_eq!(draft.text(), "xab ");
+        type_in(&mut editor, &mut draft, b"\x1by");
+        assert_eq!(draft.text(), "xd");
+        type_in(&mut editor, &mut draft, b"\x1by\x1by");
+        assert_eq!(draft.text(), "xtwo three");
+        type_in(&mut editor, &mut draft, b"\x1b[D\x1by");
+        assert_eq!(draft.text(), "xtwo three");
+        // One undo takes out what one Alt+Y put in.
+        type_in(&mut editor, &mut draft, b"\x1b[C\x1f");
+        assert_eq!(draft.text(), "xone two three");
+        // Over lines: Ctrl+K at a line's end deletes the line break.
+        let mut draft = editor.draft("ab\ncd".into());
+        type_in(&mut editor, &mut draft, b"\x02\x02\x02\x02\x0b\x0b");
+        assert_eq!(draft.text(), "acd");
+        assert_eq!(editor.kills.last().unwrap(), "b\n");
+        // Without deleted text, Ctrl+Y and Alt+Y do nothing.
+        let mut editor = prompt_editor(Vec::new());
+        let mut draft = editor.draft("a".into());
+        type_in(&mut editor, &mut draft, b"\x19\x1by");
+        assert_eq!(draft.text(), "a");
+    }
+
+    #[test]
+    fn undo_takes_back_words_edits_and_cleared_prompts_as_scramjets() {
+        let mut editor = prompt_editor(vec!["first".into(), "second".into()]);
+        let mut draft = editor.draft(String::new());
+        type_in(&mut editor, &mut draft, b"hello big world");
+        // A word goes with the space before it.
+        type_in(&mut editor, &mut draft, b"\x1f");
+        assert_eq!(draft.text(), "hello big");
+        type_in(&mut editor, &mut draft, b"\x1f");
+        assert_eq!(draft.text(), "hello");
+        // Each deletion is undone on its own, the cursor back where it was.
+        type_in(&mut editor, &mut draft, b"\x7f\x7f\x1f");
+        assert_eq!((draft.text(), draft.buffer.cursor), ("hell", 4));
+        // Ctrl-C's clearing too.
+        type_in(&mut editor, &mut draft, b"\x03");
+        assert_eq!(draft.text(), "");
+        type_in(&mut editor, &mut draft, b"\x1f");
+        assert_eq!(draft.text(), "hell");
+        // Going through history is undone at once.
+        type_in(&mut editor, &mut draft, b"\x1b[A\x1b[A");
+        assert_eq!(draft.text(), "first");
+        type_in(&mut editor, &mut draft, b"\x1f");
+        assert_eq!(draft.text(), "hell");
+        // Back to the start, where Ctrl+- changes nothing.
+        type_in(&mut editor, &mut draft, b"\x1f\x1f\x1f\x1f");
+        assert_eq!(draft.text(), "");
+        // Text put in for the user, as a fork's prompt, is undone too.
+        draft.replace("forked".into());
+        type_in(&mut editor, &mut draft, b"\x1f");
+        assert_eq!(draft.text(), "");
+    }
+
+    #[test]
+    fn jumps_to_the_next_or_previous_character_typed() {
+        let mut editor = prompt_editor(Vec::new());
+        let mut draft = editor.draft("a,b\nc,d".into());
+        let cursor = |draft: &Draft| draft.buffer.cursor;
+        type_in(&mut editor, &mut draft, b"\x01\x1b[A");
+        assert_eq!(cursor(&draft), 0);
+        // Past the character at the cursor, and over lines.
+        type_in(&mut editor, &mut draft, b"\x1d,");
+        assert_eq!(cursor(&draft), 1);
+        type_in(&mut editor, &mut draft, b"\x1d,");
+        assert_eq!(cursor(&draft), 5);
+        // Not found: the cursor stays.
+        type_in(&mut editor, &mut draft, b"\x1d,");
+        assert_eq!(cursor(&draft), 5);
+        type_in(&mut editor, &mut draft, b"\x1b\x1da");
+        assert_eq!(cursor(&draft), 0);
+        assert_eq!(draft.text(), "a,b\nc,d");
+        // The key again cancels, as does a key that types nothing, which then does its own.
+        type_in(&mut editor, &mut draft, b"\x1d\x1db");
+        assert_eq!(draft.text(), "ba,b\nc,d");
+        type_in(&mut editor, &mut draft, b"\x1d\x05");
+        assert_eq!(cursor(&draft), 4);
+        // A character of several bytes, and not inside another's grapheme.
+        let mut draft = editor.draft("e\u{301}x é e".into());
+        type_in(&mut editor, &mut draft, b"\x01");
+        type_in(&mut editor, &mut draft, "\x1d\u{301}\x1dé".as_bytes());
+        assert_eq!(cursor(&draft), "e\u{301}x ".len());
+        type_in(&mut editor, &mut draft, b"\x1de");
+        assert_eq!(cursor(&draft), "e\u{301}x é ".len());
     }
 }

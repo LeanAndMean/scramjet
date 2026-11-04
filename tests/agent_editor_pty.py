@@ -2653,6 +2653,49 @@ def fullscreen_commands_during_turn(read, until, send, output):
     send(b'/quit\r')
 
 
+def prompt_keys(read, until, send, output):
+    """Scramjet's kill ring, undo and jump to a character in the prompt; Ctrl+L, as /model, keeps
+    the draft; Ctrl+Home and Ctrl+End go to the conversation's start and end."""
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'alpha beta gamma')
+    ending(read, output, ['> alpha beta gamma'])
+    # Ctrl+W twice deletes two words, which Ctrl+Y puts back as one, here at the start.
+    send(b'\x17\x17')
+    ending(read, output, ['> alpha'])
+    send(b'\x01\x19')
+    ending(read, output, ['> beta gammaalpha'])
+    # Ctrl+- undoes that; Ctrl+] then p jumps to the p, where X goes in.
+    send(b'\x1f')
+    ending(read, output, ['> alpha'])
+    send(b'\x01\x1dpX')
+    ending(read, output, ['> alXpha'])
+    # Ctrl+L opens the model list in the prompt's place, which is back as it was after it.
+    send(b'\x0c')
+    on_screen('Select model')
+    send(b'\x1b')
+    ending(read, output, ['> alXpha'])
+    # During a turn, it waits for the turn's next request, as /model typed then does.
+    send(b'\x05\x15go\r')
+    on_screen('running 1s')
+    send(b'draft\x0c')
+    rows = on_screen('Command: /model')
+    assert rows[-1] == '> draft', rows
+    on_screen('Select model')
+    send(b'\x1b[B\r')
+    rows = on_screen('Row 40 of the reply.')
+    assert 'Row 1 of the reply.' not in '\n'.join(rows), rows
+    assert rows[-1] == '> draft', rows
+    # Ctrl+Home shows the conversation's start, Ctrl+End its end again.
+    send(b'\x1b[1;5H')
+    rows = on_screen('Row 1 of the reply.')
+    assert '> go' in rows, rows
+    send(b'\x1b[1;5F')
+    rows = on_screen('Row 40 of the reply.')
+    assert 'Row 1 of the reply.' not in '\n'.join(rows), rows
+    send(b'\x03\x04')
+
+
 def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -3001,6 +3044,10 @@ run([], fullscreen_lists, serve_items([
     [message('Chose alpha.')],
 ], models=['gpt-6-luna', 'gpt-6-terra']))
 rows_reply = '\n'.join('Row %d of the reply.' % number for number in range(1, 41))
+bodies = []
+run([], prompt_keys, serve_items([[tool_call('call_1', 'bash', {'command': 'sleep 2'})], [message(rows_reply)]],
+                                 models=['gpt-6-luna', 'gpt-6-terra'], bodies=bodies))
+assert [body['model'] for body in bodies] == ['gpt-6-luna', 'gpt-6-terra'], bodies
 clipboard_bin = os.path.join(work, 'clipboard-bin')
 os.mkdir(clipboard_bin)
 clipboard = os.path.join(work, 'clipboard.txt')

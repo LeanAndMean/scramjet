@@ -1527,9 +1527,15 @@ const HOTKEYS: [(&str, &[(&str, &str)]); 4] = [
             ("Alt+B / Alt+F", "Move by word"),
             ("Home / Ctrl+A", "Start of line"),
             ("End / Ctrl+E", "End of line"),
+            ("Ctrl+]", "Jump forward to character"),
+            ("Ctrl+Alt+]", "Jump backward to character"),
             (
                 "Page Up / Page Down",
                 "Scroll the conversation by page (Escape: to its end)",
+            ),
+            (
+                "Ctrl+Home / Ctrl+End",
+                "Scroll to the conversation's start / end",
             ),
         ],
     ),
@@ -1547,6 +1553,9 @@ const HOTKEYS: [(&str, &[(&str, &str)]); 4] = [
             ("Delete / Ctrl+D", "Delete character forwards"),
             ("Ctrl+U", "Delete to start of line"),
             ("Ctrl+K", "Delete to end of line"),
+            ("Ctrl+Y", "Paste the most-recently-deleted text"),
+            ("Alt+Y", "Cycle through the deleted text after pasting"),
+            ("Ctrl+-", "Undo"),
         ],
     ),
     (
@@ -1563,6 +1572,7 @@ const HOTKEYS: [(&str, &[(&str, &str)]); 4] = [
             ("Ctrl+Z", "Suspend to background"),
             ("Shift+Tab", "Cycle thinking level"),
             ("Ctrl+P / Shift+Ctrl+P", "Cycle models"),
+            ("Ctrl+L", "Open model selector"),
             ("Ctrl+O", "Toggle tool output expansion"),
             ("Ctrl+T", "Toggle thinking block visibility"),
             ("Ctrl+G", "Edit message in external editor"),

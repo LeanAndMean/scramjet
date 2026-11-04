@@ -1041,7 +1041,7 @@ impl App {
                     self.replay();
                 }
             }
-            ToScreen::SetText(text) => self.draft = self.editor.draft(text),
+            ToScreen::SetText(text) => self.draft.replace(text),
             ToScreen::Remember(prompt) => self.editor.remember(&prompt),
             ToScreen::Note(note) => self.draft.set_note(note),
             ToScreen::Reloaded(commands, double_escape) => {
@@ -1164,7 +1164,7 @@ impl App {
             .filter(|text| !text.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        self.draft = self.editor.draft(text);
+        self.draft.replace(text);
         self.draft.set_note(restored(count));
     }
 
@@ -1600,13 +1600,13 @@ impl App {
     }
 
     /// The editor shown, if any: a text dialog's, or the prompt's when no dialog is open.
-    fn editing(&mut self) -> Option<(&Editor, &mut Draft)> {
+    fn editing(&mut self) -> Option<(&mut Editor, &mut Draft)> {
         match &mut self.dialog {
-            None => Some((&self.editor, &mut self.draft)),
+            None => Some((&mut self.editor, &mut self.draft)),
             Some(Open {
                 shown: Shown::Text(text),
                 ..
-            }) => Some((&text.editor, &mut text.draft)),
+            }) => Some((&mut text.editor, &mut text.draft)),
             Some(_) => None,
         }
     }
@@ -1723,6 +1723,14 @@ impl App {
                 self.navigate(if key == Key::PageUp { -page } else { page });
                 return Flow::Go;
             }
+            Key::Top | Key::Bottom => {
+                self.navigate(if key == Key::Top {
+                    isize::MIN
+                } else {
+                    isize::MAX
+                });
+                return Flow::Go;
+            }
             _ => {}
         }
         if self.dialog.is_some() {
@@ -1765,6 +1773,20 @@ impl App {
             }
             // As Scramjet's, Alt+Enter sends between turns as Enter does.
             Key::AltEnter => Key::Enter,
+            // `/model`, as typed, but the draft stays.
+            Key::SelectModel => {
+                let model = "/model".to_owned();
+                if running {
+                    self.queue().commands.push(model);
+                } else if self.ready {
+                    self.ready = false;
+                    self.top = None;
+                    let _ = self.inputs.send(Input::Prompt(model));
+                } else {
+                    self.draft.set_note(BUSY.to_owned());
+                }
+                return Flow::Go;
+            }
             key => key,
         };
         match self.editor.key(&mut self.draft, key, pending) {

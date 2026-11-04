@@ -63,7 +63,10 @@ session's branches and continues from the entry chosen, in the same
 session: from before a prompt, which is put in the prompt for editing, or from after a reply
 or tool result. When that leaves part of the conversation, it asks whether the model should
 summarize that branch, also with your own instructions, for the conversation to continue
-with. Escape twice on an empty prompt opens /tree too. /model chooses a model.
+with. Escape twice on an empty prompt opens /tree too. /model, or Ctrl+L, chooses a model.
+In the prompt, Ctrl+Y puts back the text deleted last, Alt+Y then replaces it with what was
+deleted before; Ctrl+- undoes; Ctrl+] then a character jumps to it, Ctrl+Alt+] backward.
+Ctrl+Home and Ctrl+End scroll to the conversation's start and end.
 Their lists show in the prompt's place and take Up/Down, Page Up/Down, Home/End, Enter, and
 Escape or Ctrl-C to cancel; typed text filters the /resume and /model lists, best match first
 (a \"quoted phrase\" matches as written). With piped input they are printed numbered instead,
