@@ -2075,6 +2075,19 @@ def installed_view(read, until, send, output):
     after = '2 problems in what was loaded: see Installed in /settings'
     rows = on_screen(after)
     assert not any(row.startswith('    agents: ') for row in rows), rows
+    # The settings file opened from its own row comes back on that row, not on its problem's.
+    send(b'\x1b[F')
+    rows = select_row(read, shown, send, settings_path(listing), b'\x1b[A')
+    (selected,) = [row for row in rows if row.startswith('\u203a')]
+    assert not selected.startswith('\u203a   settings: '), rows
+    send(b'\r')
+    end = time.monotonic() + 10
+    while not os.path.exists(settings_opened):
+        assert time.monotonic() < end, shown()
+        read(.05)
+    read(.5)
+    rows = on_screen('Installed  \u2191\u2193 move')
+    assert [row for row in rows if row.startswith('\u203a')] == [selected], rows
     send(b'\x1b')
     on_screen('\u203a ' + setting('Installed', '2 problems'))
     send(b'\x1b')
@@ -2495,12 +2508,15 @@ shutil.rmtree(os.path.join(project, '.scramjet', 'fresh'))
 listing = config_home('installed', '{"followUpMode": "each", "skills": ["missing-skill"]}')
 greet_file = os.path.join(greet, 'demo:greet.md')
 greet_text = open(greet_file).read()
-# Checks it is given the command's file, then changes the command's description.
+# Checks it is given the command's file, then changes the command's description; given the
+# settings file, notes it and leaves it as it is.
 greet_edit = os.path.join(work, 'edit-greet.sh')
+settings_opened = os.path.join(work, 'settings-opened')
 with open(greet_edit, 'w') as script_file:
-    script_file.write('#!/bin/sh\n[ "$1" = "%s" ] || exit 1\n'
+    script_file.write('#!/bin/sh\n[ "$1" = "%s" ] && touch "%s" && exit 0\n'
+                      '[ "$1" = "%s" ] || exit 1\n'
                       'sed -i "s/^description: Greet someone$/description: Greet someone kindly/" "$1"\n'
-                      % greet_file)
+                      % (settings_path(listing), settings_opened, greet_file))
 os.chmod(greet_edit, 0o755)
 stale_directory = os.path.join(work, 'agent-installed')
 stale_agent = os.path.join(stale_directory, 'agents', 'stale.md')

@@ -63,6 +63,14 @@ impl Listing {
             self.files.push(file);
         }
     }
+
+    /// The row showing `file` nearest `near`, as a file can have a problem's row and its own.
+    pub(super) fn row_of(&self, file: &Path, near: usize) -> Option<usize> {
+        (self.files.iter().enumerate())
+            .filter(|(_, row)| row.as_deref() == Some(file))
+            .map(|(at, _)| at)
+            .min_by_key(|at| at.abs_diff(near))
+    }
 }
 
 /// The problems, the command sets, commands, agents, skills, context files and settings files.
@@ -432,6 +440,11 @@ mod tests {
                 (16, &settings),
             ]
         );
+        // After an edit, the list comes back on the row Enter was pressed on, not the
+        // problem's row of the same file.
+        let rows = [16, 1, 10, 3].map(|near| list.row_of(&settings, near));
+        assert_eq!(rows, [Some(16), Some(1), Some(16), Some(1)]);
+        assert_eq!(list.row_of(&base.join("gone.md"), 4), None);
         let opens = format!("settings: x: wrong\nEnter opens {}.", shown(&settings));
         assert_eq!((&list.notes[1], &list.notes[2][..]), (&opens, "skills: y"));
         assert_eq!(

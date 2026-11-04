@@ -864,9 +864,7 @@ impl Interactive {
             let problems = self.problems(&found);
             let listing = installed::listing(&self.loaded(&found, &problems));
             if let Some(file) = edited.take() {
-                at = (listing.files.iter())
-                    .position(|row| row.as_ref() == Some(&file))
-                    .unwrap_or(at);
+                at = listing.row_of(&file, at).unwrap_or(at);
             }
             let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
             let rows = &listing.rows;
