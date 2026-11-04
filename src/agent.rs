@@ -255,6 +255,9 @@ pub enum SessionChoice {
     Open(PathBuf),
     /// A new session of the project with all of this session file's (`Session::fork_from`).
     Fork(PathBuf),
+    /// A new session saved nowhere (`--no-session`): it and those made from it (`/new`,
+    /// `/fork`, …) are kept in a directory of their own until the agent ends.
+    Unsaved,
 }
 
 #[derive(Debug)]
@@ -459,6 +462,8 @@ pub struct Agent {
     /// be read.
     prompt_files: (Vec<(PathBuf, bool)>, Vec<Problem>),
     session: Session,
+    /// With `SessionChoice::Unsaved`, where every session of the run is, removed with the agent.
+    unsaved: Option<session::Unsaved>,
     executor: tokio::runtime::Runtime,
     /// The current model's protocol and limits, from its name until `load_model_card`.
     info: ModelInfo,
@@ -551,8 +556,13 @@ pub struct Inventory {
 impl Agent {
     pub fn start(config: AgentConfig, choice: SessionChoice) -> Result<Self, AgentError> {
         let directory = || session::directory(&config.root);
+        let mut unsaved = None;
         let opened = match choice {
             SessionChoice::New => None,
+            SessionChoice::Unsaved => {
+                unsaved = Some(session::Unsaved::create()?);
+                None
+            }
             SessionChoice::Continue => Session::latest(&directory()?)?.map(|path| (path, false)),
             SessionChoice::Open(path) => Some((path, false)),
             SessionChoice::Fork(source) => Some((
@@ -566,11 +576,14 @@ impl Agent {
                     let _ = std::fs::remove_file(&path);
                 }
             })?,
-            None => (
-                Session::create(&directory()?, &config.root, None)?,
-                Vec::new(),
-                Vec::new(),
-            ),
+            None => {
+                let directory = match &unsaved {
+                    Some(unsaved) => unsaved.path().to_owned(),
+                    None => directory()?,
+                };
+                let created = Session::create(&directory, &config.root, None)?;
+                (created, Vec::new(), Vec::new())
+            }
         };
         let context_tokens = session.context_tokens();
         let lifecycle = status::Lifecycle::restored(session.command());
@@ -606,6 +619,7 @@ impl Agent {
             conversation,
             prompts,
             session,
+            unsaved,
             executor,
             usage: Usage {
                 context_tokens,
@@ -705,6 +719,16 @@ impl Agent {
     fn replace_session(&mut self, session: Session) {
         let left = std::mem::replace(&mut self.session, session);
         let _ = left.discard_if_unused();
+    }
+
+    /// Whether the session is saved: not with `SessionChoice::Unsaved`.
+    pub fn session_saved(&self) -> bool {
+        self.unsaved.is_none()
+    }
+
+    /// With `SessionChoice::Unsaved`, the directory every session of the run is in.
+    pub fn unsaved_directory(&self) -> Option<&Path> {
+        self.unsaved.as_ref().map(session::Unsaved::path)
     }
 
     /// Whether `path` is the current session's file.
@@ -848,7 +872,10 @@ impl Agent {
         let model = &self.config.model;
         self.instructions.clone()
             + &instructions::identity(model, contributors, &self.identities)
-            + &instructions::environment(&self.config.root, self.session.path())
+            + &instructions::environment(
+                &self.config.root,
+                self.session_saved().then(|| self.session.path()),
+            )
     }
 
     /// The definitions of the tools the model's requests offer.

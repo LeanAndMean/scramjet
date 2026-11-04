@@ -2,7 +2,7 @@
 //! `/session`, `/hotkeys`, `/resume`, `/fork`, `/clone`, `/tree`, `/compact`, `/autopilot`,
 //! `/reload`, and `!` commands; `/model` and `/scoped-models` are in `scope.rs`.
 use super::fuzzy::Haystack;
-use super::interactive::{Interactive, completions, model_line};
+use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::screen;
 use super::settings::{ROWS, Row, scramjet_level};
 use super::terminal::{self, Terminal};
@@ -178,8 +178,8 @@ impl Interactive {
     pub(super) fn new_session(&mut self) -> bool {
         match self.agent.new_session() {
             Ok(()) => {
-                let path = self.agent.session_path().display();
-                self.replaced(&format!("✓ New session started\nsession {path}"));
+                let session = saved_line(&self.agent);
+                self.replaced(&format!("✓ New session started\n{session}"));
                 true
             }
             Err(error) => {
@@ -263,9 +263,9 @@ impl Interactive {
                 self.agent.load_model_card();
                 self.remember_prompts();
                 self.replaced(&format!(
-                    "✓ Imported session from {path} · {}\nsession {}",
+                    "✓ Imported session from {path} · {}\n{}",
                     model_line(&self.agent),
-                    self.agent.session_path().display(),
+                    saved_line(&self.agent),
                 ));
             }
             Err(error) => self.say(&format!("error: failed to import the session: {error}")),
@@ -1063,9 +1063,9 @@ impl Interactive {
                 self.agent.load_model_card();
                 self.remember_prompts();
                 self.replaced(&format!(
-                    "✓ Resumed session · {}\nsession {}",
+                    "✓ Resumed session · {}\n{}",
                     model_line(&self.agent),
-                    self.agent.session_path().display(),
+                    saved_line(&self.agent),
                 ));
                 true
             }
@@ -1252,9 +1252,9 @@ impl Interactive {
             Ok(Some(prompt)) => {
                 self.agent.load_model_card();
                 self.replaced(&format!(
-                    "✓ Forked to new session · {}\nsession {}",
+                    "✓ Forked to new session · {}\n{}",
                     model_line(&self.agent),
-                    self.agent.session_path().display(),
+                    saved_line(&self.agent),
                 ));
                 self.set_text(prompt);
             }
@@ -1271,9 +1271,9 @@ impl Interactive {
             Ok(true) => {
                 self.agent.load_model_card();
                 self.replaced(&format!(
-                    "✓ Cloned to new session · {}\nsession {}",
+                    "✓ Cloned to new session · {}\n{}",
                     model_line(&self.agent),
-                    self.agent.session_path().display(),
+                    saved_line(&self.agent),
                 ));
             }
             Ok(false) => self.say("Nothing to clone yet"),
@@ -1737,7 +1737,12 @@ fn session_info(agent: &Agent, ui: &Terminal) -> String {
     if let Some(name) = agent.session_name() {
         info += &row("Name:", name.to_owned());
     }
-    info += &row("File:", agent.session_path().display().to_string());
+    // Scramjet's says `In-memory`.
+    let file = match agent.session_saved() {
+        true => agent.session_path().display().to_string(),
+        false => "not saved (--no-session)".to_owned(),
+    };
+    info += &row("File:", file);
     info += &row("ID:", agent.session_id());
     info += "\n";
     info += &heading("Messages");

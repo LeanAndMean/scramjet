@@ -171,6 +171,7 @@ fn session_choice(start: Start, root: &Path) -> Result<Option<SessionChoice>, St
     Ok(Some(match start {
         Start::New | Start::Resume => SessionChoice::New,
         Start::Continue => SessionChoice::Continue,
+        Start::Unsaved => SessionChoice::Unsaved,
         Start::Fork(named) => SessionChoice::Fork(find(&named)?.path().to_owned()),
         Start::Session(named) => match find(&named)? {
             Found::Here(path) => SessionChoice::Open(path),

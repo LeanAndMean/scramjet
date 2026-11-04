@@ -546,6 +546,64 @@ pub fn directory(root: &Path) -> io::Result<PathBuf> {
     Ok(state_directory()?.join("sessions").join(slug))
 }
 
+/// The directory of the sessions of a run that saves none (`--no-session`): private, in the
+/// temporary directory, and removed with them once dropped, or at exit.
+pub struct Unsaved(PathBuf);
+
+/// The `Unsaved` directories not dropped yet, which `remove_unsaved` removes at exit: one on a
+/// signal (`std::process::exit`) runs no destructors.
+static UNSAVED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+extern "C" fn remove_unsaved() {
+    // A thread holding it as the process exits leaves its directory rather than hang the exit.
+    if let Ok(directories) = UNSAVED.try_lock() {
+        for directory in directories.iter() {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+    }
+}
+
+impl Unsaved {
+    pub fn create() -> io::Result<Self> {
+        use std::os::unix::fs::DirBuilderExt;
+        static AT_EXIT: std::sync::Once = std::sync::Once::new();
+        // SAFETY: `remove_unsaved` neither unwinds nor exits.
+        AT_EXIT.call_once(|| unsafe {
+            libc::atexit(remove_unsaved);
+        });
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700);
+        let mut n = 0u64;
+        loop {
+            let name = format!("scramjet-rs-unsaved-{}-{n}", std::process::id());
+            let path = std::env::temp_dir().join(name);
+            match builder.create(&path) {
+                Ok(()) => {
+                    let unsaved = UNSAVED.lock();
+                    let mut unsaved = unsaved.unwrap_or_else(std::sync::PoisonError::into_inner);
+                    unsaved.push(path.clone());
+                    return Ok(Self(path));
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => n += 1,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Unsaved {
+    fn drop(&mut self) {
+        let unsaved = UNSAVED.lock();
+        let mut unsaved = unsaved.unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsaved.retain(|directory| *directory != self.0);
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// `$XDG_STATE_HOME/scramjet-rs`, by default `~/.local/state/scramjet-rs`.
 pub fn state_directory() -> io::Result<PathBuf> {
     let state = std::env::var_os("XDG_STATE_HOME")

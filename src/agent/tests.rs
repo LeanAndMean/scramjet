@@ -296,15 +296,12 @@ pub(super) fn serve_answering(
     (address, server)
 }
 
-pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
-    let root = std::env::temp_dir().join(format!("scramjet-agent-{name}-{}", std::process::id()));
-    let scratch = ScratchDir::new(root.clone());
-    let path = root.join("session.jsonl");
-    std::fs::write(&path, "{\"type\":\"session\",\"version\":1}\n").unwrap();
-    let config = AgentConfig {
+/// The configuration of an agent of the project `root`, with the model `m`.
+pub(super) fn config(endpoint: SocketAddr, root: &Path) -> AgentConfig {
+    AgentConfig {
         endpoint,
         model: "m".into(),
-        root: root.clone(),
+        root: root.to_owned(),
         effort: None,
         max_output_tokens: None,
         ask: false,
@@ -315,7 +312,15 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
         skills: Vec::new(),
         skill_options: Default::default(),
         prompt: Default::default(),
-    };
+    }
+}
+
+pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
+    let root = std::env::temp_dir().join(format!("scramjet-agent-{name}-{}", std::process::id()));
+    let scratch = ScratchDir::new(root.clone());
+    let path = root.join("session.jsonl");
+    std::fs::write(&path, "{\"type\":\"session\",\"version\":1}\n").unwrap();
+    let config = config(endpoint, &root);
     let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
     // The user's own agents and command sets stay out of the tests.
     agent.agents_directory = None;
@@ -921,6 +926,57 @@ fn sessions_are_renamed_and_deleted_and_unused_new_ones_are_not_left_behind() {
     let last = agent.session_path().to_owned();
     agent.discard_unused_session().unwrap();
     assert!(!last.exists());
+}
+
+#[test]
+fn a_run_that_saves_no_session_keeps_its_sessions_apart_until_it_ends() {
+    let (endpoint, server) = serve(vec![
+        stream(&fixture::text_events("A", fixture::known_usage())),
+        stream(&fixture::text_events("B", fixture::known_usage())),
+    ]);
+    let (saved, scratch) = agent(endpoint, "unsaved");
+    let mut agent = Agent::start(config(endpoint, &scratch.0), SessionChoice::Unsaved).unwrap();
+    let directory = agent.session_path().parent().unwrap().to_owned();
+    let name = directory
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(directory.parent(), Some(std::env::temp_dir().as_path()));
+    assert!(name.starts_with("scramjet-rs-unsaved-"), "{name}");
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(&directory).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700);
+    assert!(saved.session_saved() && !agent.session_saved());
+    // As Scramjet's instructions name no journal for a session in memory.
+    assert!(saved.instructions().contains("\nCurrent session journal: "));
+    assert!(!agent.instructions().contains("\nCurrent session journal: "));
+
+    let mut ui = Recorder::default();
+    let cancel = AtomicBool::new(false);
+    agent.turn("one", &mut ui, &cancel).unwrap();
+    let first = agent.session_path().to_owned();
+    // Those made from it are kept with it, and `/resume` lists only them.
+    agent.new_session().unwrap();
+    assert_eq!(agent.session_path().parent(), Some(directory.as_path()));
+    agent.turn("two", &mut ui, &cancel).unwrap();
+    assert!(agent.fork(0).unwrap().is_some());
+    assert_eq!(agent.session_path().parent(), Some(directory.as_path()));
+    let listed: Vec<_> = (agent.sessions().unwrap().into_iter())
+        .map(|session| session.first_prompt)
+        .collect();
+    assert_eq!(listed, [Some("two".to_owned()), Some("one".to_owned())]);
+    agent.resume_session(&first).unwrap();
+    server.join().unwrap();
+
+    agent.discard_unused_session().unwrap();
+    assert!(!directory.exists());
+    // An agent that ends otherwise takes its directory with it too.
+    let other = Agent::start(config(endpoint, &scratch.0), SessionChoice::Unsaved).unwrap();
+    let directory = other.session_path().parent().unwrap().to_owned();
+    assert!(directory.exists());
+    drop(other);
+    assert!(!directory.exists());
 }
 
 #[test]

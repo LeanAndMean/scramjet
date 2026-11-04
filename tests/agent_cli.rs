@@ -176,6 +176,33 @@ continues it in a new session of this one"
     assert!(!std::fs::read_to_string(&source).unwrap().contains("more"));
 }
 
+#[test]
+fn no_session_saves_none_and_its_directory_goes_at_exit() {
+    let binary = env!("CARGO_BIN_EXE_scramjet-rs");
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-unsaved-{}", std::process::id())));
+    let (project, temporary) = (scratch.0.join("project"), scratch.0.join("tmp"));
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&temporary).unwrap();
+    let output = Command::new(binary)
+        .args(["--endpoint", "127.0.0.1:9", "--retries", "0"])
+        .args(["--no-session", "-p", "hi"])
+        .current_dir(&project)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+        .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        // Where the run keeps its sessions, so that this test finds its own.
+        .env("TMPDIR", &temporary)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("cannot connect to 127.0.0.1:9"), "{error}");
+    assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+    assert!(!scratch.0.join("state/scramjet-rs/sessions").exists());
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {

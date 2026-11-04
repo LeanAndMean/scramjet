@@ -205,14 +205,17 @@ When posting to GitHub, use honest contribution-aware attribution:
 }
 
 /// The facts that end the agent's instructions, as Scramjet's: the date, the directory and the
-/// session's file.
-pub(super) fn environment(root: &Path, journal: &Path) -> String {
-    format!(
-        "\nCurrent date: {}\nCurrent working directory: {}\nCurrent session journal: {}",
+/// session's file, when it is saved.
+pub(super) fn environment(root: &Path, journal: Option<&Path>) -> String {
+    let mut facts = format!(
+        "\nCurrent date: {}\nCurrent working directory: {}",
         today(),
-        root.display(),
-        journal.display()
-    )
+        root.display()
+    );
+    if let Some(journal) = journal {
+        facts += &format!("\nCurrent session journal: {}", journal.display());
+    }
+    facts
 }
 
 /// Pi's list of skills, only for a model that has `read` to load them.

@@ -5,7 +5,7 @@ use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model PATTERN] \
 [--models PATTERNS] [--thinking LEVEL] [--max-output-tokens N] [--retries N]
-[-c | -r | --session FILE|ID | --fork FILE|ID] [--system-prompt TEXT]
+[-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--system-prompt TEXT]
 [--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
 [-t LIST | -nt | -nbt] [--ask] [-p]
 [@FILE...] [MESSAGE...]
@@ -39,6 +39,9 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
                          agree, as in Scramjet
   --fork FILE|ID         continue a copy of that session, its branches and name included, in a
                          new session of this project
+  --no-session           save no session, as Scramjet's: those of this run (/new, /fork,
+                         /clone and /import too) are kept in a private temporary directory
+                         removed at exit, and /resume lists only them
   --system-prompt TEXT   the instructions' opening, in place of the tools and guidelines: TEXT,
                          or the contents of the file it names (default: the project's
                          .scramjet/SYSTEM.md, else ~/.scramjet/agent/SYSTEM.md, else
@@ -155,6 +158,8 @@ pub(super) enum Start {
     Session(String),
     /// `--fork`: the same, continued in a new session of the project.
     Fork(String),
+    /// `--no-session`: a new one that is not saved.
+    Unsaved,
 }
 
 /// What the command line asks for.
@@ -213,7 +218,7 @@ impl Options {
             list_models: None,
             version: false,
         };
-        let mut fork = None;
+        let (mut fork, mut no_session) = (None, false);
         let (mut tools, mut no_tools, mut no_builtin_tools) = (None, false, false);
         // The other options naming the session to start in, which `--fork` cannot be given with.
         let mut chosen = Vec::new();
@@ -271,6 +276,7 @@ impl Options {
                     options.start = Start::Session(value()?)
                 }
                 Some("--fork") => fork = Some(value()?),
+                Some("--no-session") => no_session = true,
                 Some("--system-prompt") => options.prompt.system = Some(value()?),
                 Some("--append-system-prompt") => options.prompt.append.push(value()?),
                 Some("-nc" | "--no-context-files") => options.prompt.no_context_files = true,
@@ -309,17 +315,29 @@ impl Options {
         options.only_tools = tools
             .or_else(|| no_tools.then(Vec::new))
             .or_else(|| no_builtin_tools.then(|| HARNESS_TOOLS.map(String::from).to_vec()));
-        if let Some(fork) = fork {
+        // As Scramjet's, `--fork` cannot be given with the others, `--no-session` included; nor
+        // can `--no-session`, where Scramjet's quietly wins over them.
+        let alone = match (fork, no_session) {
+            (Some(_), true) => {
+                return Err(format!(
+                    "--fork cannot be combined with --no-session\n\n{USAGE}"
+                ));
+            }
+            (Some(fork), false) => Some(("--fork", Start::Fork(fork))),
+            (None, true) => Some(("--no-session", Start::Unsaved)),
+            (None, false) => None,
+        };
+        if let Some((option, start)) = alone {
             if !chosen.is_empty() {
                 let chosen = (["--session", "--continue", "--resume"].into_iter())
                     .filter(|option| chosen.contains(option))
                     .collect::<Vec<_>>()
                     .join(", ");
                 return Err(format!(
-                    "--fork cannot be combined with {chosen}\n\n{USAGE}"
+                    "{option} cannot be combined with {chosen}\n\n{USAGE}"
                 ));
             }
-            options.start = Start::Fork(fork);
+            options.start = start;
         }
         if matches!(options.start, Start::Resume) && options.print {
             return Err(format!("--resume cannot be used with -p\n\n{USAGE}"));
@@ -364,6 +382,22 @@ mod tests {
         }
         let missing = Options::parse(["--tools"].into_iter().map(OsString::from));
         assert!(missing.is_err_and(|error| error.starts_with("--tools requires a value")));
+    }
+
+    #[test]
+    fn no_session_starts_one_not_saved_and_goes_with_no_other_session_option() {
+        let parse = |arguments: &[&str]| Options::parse(arguments.iter().map(OsString::from));
+        let options = parse(&["--no-session", "-p", "hi"]).unwrap().unwrap();
+        assert!(matches!(options.start, Start::Unsaved));
+        let refused = |arguments: &[&str]| parse(arguments).err().unwrap();
+        let error = refused(&["--fork", "abc", "--no-session"]);
+        assert!(error.starts_with("--fork cannot be combined with --no-session\n"));
+        let error = refused(&["--no-session", "-c", "--session", "abc"]);
+        assert!(error.starts_with("--no-session cannot be combined with --session, --continue\n"));
+        let error = refused(&["-r", "--no-session"]);
+        assert!(error.starts_with("--no-session cannot be combined with --resume\n"));
+        let error = refused(&["-c", "--fork", "abc"]);
+        assert!(error.starts_with("--fork cannot be combined with --continue\n"));
     }
 
     #[test]

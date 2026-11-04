@@ -155,10 +155,10 @@ impl Interactive {
         };
         if !resumed {
             self.say(&format!(
-                "scramjet-rs · {} · {}\nsession {}",
+                "scramjet-rs · {} · {}\n{}",
                 model_line(&self.agent),
                 self.agent.root().display(),
-                self.agent.session_path().display(),
+                saved_line(&self.agent),
             ));
             // A tool block ends with a blank line; other output gets one before the prompt.
             self.show_resumed();
@@ -712,6 +712,14 @@ pub(super) fn model_line(agent: &Agent) -> String {
     match thinking(agent) {
         Some(thinking) => format!("{} · {thinking}", agent.model()),
         None => agent.model().to_owned(),
+    }
+}
+
+/// Where the session is saved, as said when it starts or another replaces it.
+pub(super) fn saved_line(agent: &Agent) -> String {
+    match agent.session_saved() {
+        true => format!("session {}", agent.session_path().display()),
+        false => "session not saved (--no-session)".to_owned(),
     }
 }
 
