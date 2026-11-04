@@ -50,8 +50,8 @@ pub use skills::{Skill, Skills};
 pub use status::{Completed, Next, Routing, Source, Step};
 pub use suggest::Suggested;
 pub use tools::{
-    CODING_TOOLS, DEFAULT_TOOLS, READ_MORE, search_program, sequence_diff, shortened,
-    terminal_line, write_replacing,
+    CODING_TOOLS, DEFAULT_TOOLS, HARNESS_TOOLS, READ_MORE, search_program, sequence_diff,
+    shortened, terminal_line, write_replacing,
 };
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use turn::Shell;
@@ -115,8 +115,11 @@ pub struct AgentConfig {
     pub ask: bool,
     /// Extra attempts for a model request that failed transiently (rate limit, overload, network).
     pub retries: u32,
-    /// The coding tools the model has, among `CODING_TOOLS`.
+    /// The coding tools the model has, among `CODING_TOOLS`: the settings' `tools`.
     pub tools: Vec<String>,
+    /// `--tools`, `--no-tools` or `--no-builtin-tools`: the only tools the model has in this run,
+    /// coding tools in place of `tools` and the harness's own, as Scramjet's allowlist.
+    pub only_tools: Option<Vec<String>>,
     /// The directories of the installed command sets, in their order.
     pub command_sets: Vec<PathBuf>,
     /// The skill files and directories the settings list, besides those found by default.
@@ -641,7 +644,7 @@ impl Agent {
         let agents = subagent::registered(&self.sets, &mut Vec::new());
         self.instructions = instructions::agent(
             &config.root,
-            &config.tools,
+            &tools::offered(&config.tools, config.only_tools.as_deref()),
             &self.commands,
             &agents,
             &self.skills,
@@ -848,7 +851,23 @@ impl Agent {
 
     /// The definitions of the tools the model's requests offer.
     pub fn tool_definitions(&self) -> Value {
-        tools::definitions(&self.config.tools)
+        tools::definitions(&self.offered())
+    }
+
+    /// The tools the model has, coding tools first.
+    fn offered(&self) -> Vec<&'static str> {
+        tools::offered(&self.config.tools, self.config.only_tools.as_deref())
+    }
+
+    fn offers(&self, tool: &str) -> bool {
+        self.offered().contains(&tool)
+    }
+
+    /// The coding tools of this run when the command line chose them, in place of the settings'.
+    pub fn command_line_tools(&self) -> Option<Vec<&'static str>> {
+        let only = self.config.only_tools.as_ref()?;
+        let named = |tool: &&str| only.iter().any(|name| name == tool);
+        Some(CODING_TOOLS.into_iter().filter(named).collect())
     }
 
     fn switch_session(

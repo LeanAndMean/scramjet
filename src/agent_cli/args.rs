@@ -1,12 +1,13 @@
 //! The command line: its options and the usage text.
 use super::settings::{LEVELS, card_level};
-use scramjet_rs::agent::SystemPrompt;
+use scramjet_rs::agent::{HARNESS_TOOLS, SystemPrompt};
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model PATTERN] \
 [--models PATTERNS] [--thinking LEVEL] [--max-output-tokens N] [--retries N]
 [-c | -r | --session FILE|ID | --fork FILE|ID] [--system-prompt TEXT]
-[--append-system-prompt TEXT]... [--no-context-files] [--ask] [-p] [@FILE...] [MESSAGE...]
+[--append-system-prompt TEXT]... [--no-context-files] [-t LIST | -nt | -nbt] [--ask] [-p]
+[@FILE...] [MESSAGE...]
        scramjet-rs --list-models [SEARCH] | --export FILE [OUTPUT] | --version
        scramjet-rs install DIR | remove NAME|DIR | list
 
@@ -47,6 +48,15 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   -nc, --no-context-files
                          leave out the AGENTS.md and CLAUDE.md files of ~/.scramjet/agent, the
                          project and the directories above it
+  -t, --tools LIST       the only tools the agent has in this run, comma-separated, as in
+                         Scramjet: coding tools, in place of the settings' tools, and
+                         scramjet-rs's own (subagent, get_scramjet_user_input, delegate,
+                         report_scramjet_command_status…), left out unless named; without
+                         report_scramjet_command_status a command cannot finish, and waits
+                         for you after each reply
+  -nt, --no-tools        no tools at all, unless --tools names some
+  -nbt, --no-builtin-tools
+                         no coding tools, unless --tools names some; scramjet-rs's own stay
   --ask                  ask before each bash command and each write or edit outside the
                          project (answer `a` to stop asking until exit); by default tool
                          calls run without asking, as in Scramjet. Bash is not sandboxed.
@@ -153,6 +163,8 @@ pub(super) struct Options {
     pub(super) max_output_tokens: Option<u64>,
     pub(super) start: Start,
     pub(super) prompt: SystemPrompt,
+    /// `--tools`, `--no-tools` or `--no-builtin-tools`: the only tools of the run.
+    pub(super) only_tools: Option<Vec<String>>,
     pub(super) ask: bool,
     pub(super) retries: u32,
     /// `-p`: run the messages and exit.
@@ -180,6 +192,7 @@ impl Options {
             max_output_tokens: None,
             start: Start::New,
             prompt: SystemPrompt::default(),
+            only_tools: None,
             ask: false,
             retries: 3,
             print: false,
@@ -190,6 +203,7 @@ impl Options {
             version: false,
         };
         let mut fork = None;
+        let (mut tools, mut no_tools, mut no_builtin_tools) = (None, false, false);
         // The other options naming the session to start in, which `--fork` cannot be given with.
         let mut chosen = Vec::new();
         let mut arguments = arguments.peekable();
@@ -249,6 +263,16 @@ impl Options {
                 Some("--system-prompt") => options.prompt.system = Some(value()?),
                 Some("--append-system-prompt") => options.prompt.append.push(value()?),
                 Some("-nc" | "--no-context-files") => options.prompt.no_context_files = true,
+                Some("-t" | "--tools") => {
+                    let names = value()?;
+                    let names = names
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty());
+                    tools = Some(names.map(str::to_owned).collect())
+                }
+                Some("-nt" | "--no-tools") => no_tools = true,
+                Some("-nbt" | "--no-builtin-tools") => no_builtin_tools = true,
                 Some("--export") => options.export = Some(PathBuf::from(value()?)),
                 // As Scramjet's, a search is the next word unless it is an option or a file.
                 Some("--list-models") => {
@@ -268,6 +292,10 @@ impl Options {
                 _ => return Err(format!("unknown argument {argument:?}\n\n{USAGE}")),
             }
         }
+        // As Scramjet's, `--tools` wins over the other two.
+        options.only_tools = tools
+            .or_else(|| no_tools.then(Vec::new))
+            .or_else(|| no_builtin_tools.then(|| HARNESS_TOOLS.map(String::from).to_vec()));
         if let Some(fork) = fork {
             if !chosen.is_empty() {
                 let chosen = (["--session", "--continue", "--resume"].into_iter())
@@ -292,5 +320,36 @@ impl Options {
             ));
         }
         Ok(Some(options))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn only_tools(arguments: &[&str]) -> Option<Vec<String>> {
+        let arguments = arguments.iter().map(OsString::from);
+        Options::parse(arguments).unwrap().unwrap().only_tools
+    }
+
+    #[test]
+    fn tools_options_give_the_only_tools_of_the_run_as_scramjets() {
+        assert_eq!(only_tools(&[]), None);
+        assert_eq!(
+            only_tools(&["-t", " read, grep,,subagent "]),
+            Some(vec!["read".into(), "grep".into(), "subagent".into()])
+        );
+        assert_eq!(only_tools(&["--no-tools"]), Some(Vec::new()));
+        let harness = Some(HARNESS_TOOLS.map(String::from).to_vec());
+        assert_eq!(only_tools(&["-nbt"]), harness);
+        assert_eq!(only_tools(&["-nt", "-nbt"]), Some(Vec::new()));
+        for wins in [
+            ["-nt", "--tools", "ls"],
+            ["--tools", "ls", "--no-builtin-tools"],
+        ] {
+            assert_eq!(only_tools(&wins), Some(vec!["ls".into()]));
+        }
+        let missing = Options::parse(["--tools"].into_iter().map(OsString::from));
+        assert!(missing.is_err_and(|error| error.starts_with("--tools requires a value")));
     }
 }

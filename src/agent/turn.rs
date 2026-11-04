@@ -149,7 +149,18 @@ impl Agent {
                 }
                 Ok(()) => {}
             }
-            let ended = self.lifecycle.turn_ended(&self.commands, self.autopilot);
+            let mut ended = self.lifecycle.turn_ended(&self.commands, self.autopilot);
+            if let status::Ended::Probe(_) = ended
+                && !self.offers(status::NAME)
+                && let Some(name) = self.lifecycle.active().map(str::to_owned)
+            {
+                self.lifecycle.wait();
+                ended = status::Ended::Notice(format!(
+                    "/{name} is waiting for you: {} is not among this run's tools, so it cannot \
+finish and is not checked on. Reply to continue.",
+                    status::NAME
+                ));
+            }
             self.save_command()?;
             match ended {
                 status::Ended::Probe(check) => {
@@ -434,9 +445,10 @@ to a larger-context model)"
             .map(Call::parse)
             .collect::<Result<_, _>>()
             .ok()?;
+        let offered = self.offered();
         let runs = |call: &Call| {
-            let tool = call.name == subagent::NAME
-                || self.config.tools.iter().any(|tool| tool == call.name);
+            let tool = (call.name == subagent::NAME || tools::CODING_TOOLS.contains(&call.name))
+                && offered.contains(&call.name);
             let asks = matches!(call.approval(&self.config.root), Approval::Ask(_));
             tool && !(asks && self.config.ask)
         };
@@ -533,6 +545,11 @@ to a larger-context model)"
         };
         let compact = call.compact(&self.config.root);
         ui.tool_call(call.name, &call.summary(), compact.as_ref());
+        if !self.offers(call.name) {
+            let output = format!("Tool {} not found", call.name);
+            ui.tool_result(call.name, &output, None, true);
+            return (failure(output), false);
+        }
         if call.name == question::NAME {
             let (output, ends) = ask(&call.arguments, &mut self.lifecycle, ui);
             let freetext = question::Question::parse(&call.arguments)
@@ -619,11 +636,6 @@ to a larger-context model)"
                 image: None,
             };
             return (output, ends);
-        }
-        if call.name != subagent::NAME && !self.config.tools.iter().any(|tool| tool == call.name) {
-            let output = format!("Tool {} not found", call.name);
-            ui.tool_result(call.name, &output, None, true);
-            return (failure(output), false);
         }
         let answer = match call.approval(&self.config.root) {
             Approval::Ask(question) if self.config.ask => ui.approve(&question, cancel),
@@ -1503,7 +1515,7 @@ files is added or changed.",
         agent.config.tools = ["ls", "grep", "read"].map(String::from).to_vec();
         agent.instructions = instructions::agent(
             agent.root(),
-            &agent.config.tools,
+            &agent.offered(),
             &agent.commands,
             &[],
             &agent.skills,
@@ -1556,6 +1568,62 @@ interactive session, prefer `suggest_scramjet_next_steps`",
             ["a.txt:1: a needle", "a.txt", "Tool write not found"]
         );
         assert!(!agent.root().join("x.txt").exists());
+    }
+
+    #[test]
+    fn the_tools_the_command_line_gives_are_the_only_ones_offered_and_run() {
+        let (endpoint, server) = serve(vec![
+            tool_calls(&[
+                ("read", json!({"path":"a.txt"})),
+                (subagent::NAME, json!({"agent":"x","task":"y"})),
+            ]),
+            tool_call("call_2", "bash", json!({"command":"touch x.txt"})),
+            tool_call(
+                "call_3",
+                question::NAME,
+                json!({"type":"confirm","message":"Go?"}),
+            ),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "only-tools");
+        agent.config.only_tools = Some(["grep", "read", "nope"].map(String::from).to_vec());
+        agent.instructions = instructions::agent(
+            agent.root(),
+            &agent.offered(),
+            &agent.commands,
+            &[],
+            &agent.skills,
+            &Default::default(),
+        );
+        std::fs::write(agent.root().join("a.txt"), "a\n").unwrap();
+        let mut ui = Recorder::default();
+        agent
+            .turn("look", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        let bodies = server.join().unwrap();
+        let names: Vec<_> = (bodies[0]["tools"].as_array().unwrap().iter())
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["read", "grep"]);
+        let instructions = bodies[0]["instructions"].as_str().unwrap();
+        let listed = "Available tools:\n- read: Read file contents\n- grep: Search file contents for \
+patterns (respects .gitignore)\n\nGuidelines:\n- Use read to examine files instead of cat or \
+sed.\n- Be concise";
+        assert!(instructions.contains(listed), "{instructions}");
+        let outputs: Vec<_> = (agent.conversation().iter())
+            .filter_map(|item| item["output"].as_str())
+            .collect();
+        assert_eq!(
+            outputs,
+            [
+                "a\n",
+                "Tool subagent not found",
+                "Tool bash not found",
+                "Tool get_scramjet_user_input not found"
+            ]
+        );
+        assert!(!agent.root().join("x.txt").exists());
+        assert!(!ui.shown.iter().any(|shown| shown.contains("Go?")));
     }
 
     #[test]
@@ -1711,6 +1779,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
             ask: false,
             retries: 3,
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+            only_tools: None,
             command_sets: Vec::new(),
             skills: Vec::new(),
             prompt: Default::default(),
@@ -1718,7 +1787,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
         let mut agent = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
         agent.instructions = instructions::agent(
             &root,
-            &agent.config.tools,
+            &agent.offered(),
             &agent.commands,
             &[],
             &agent.skills,
@@ -1780,7 +1849,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
         agent.skills = super::super::Skills::in_directory(&scratch.0.join("skills"));
         agent.instructions = instructions::agent(
             agent.root(),
-            &agent.config.tools,
+            &agent.offered(),
             &agent.commands,
             &[],
             &agent.skills,
@@ -2287,6 +2356,7 @@ be a non-empty array for select type. failed",
                 ask: false,
                 retries: 0,
                 tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+                only_tools: None,
                 command_sets: Vec::new(),
                 skills: Vec::new(),
                 prompt: Default::default(),
@@ -2941,6 +3011,28 @@ did not finish or ask you anything. Reply to continue.";
         assert_eq!(
             ui.shown.iter().filter(|s| s.starts_with("notice")).count(),
             1
+        );
+    }
+
+    #[test]
+    fn a_command_without_the_status_tool_waits_for_the_user_unchecked() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let (endpoint, server) = serve(vec![reply("worked"), reply("more")]);
+        let (mut agent, _scratch) = command_agent(endpoint, "unchecked", CLOSED);
+        agent.config.only_tools = Some(vec!["read".into()]);
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("/rs:work a", &mut ui, &cancel).unwrap();
+        let waiting = "notice /rs:work is waiting for you: report_scramjet_command_status is not \
+among this run's tools, so it cannot finish and is not checked on. Reply to continue.";
+        assert_eq!(ui.shown.last().map(String::as_str), Some(waiting));
+        assert_eq!(agent.lifecycle.saved()["command"], "rs:work");
+        agent.turn("go on", &mut ui, &cancel).unwrap();
+        assert_eq!(ui.shown.last().map(String::as_str), Some(waiting));
+        let bodies = server.join().unwrap();
+        assert_eq!(
+            bodies.iter().map(is_check).collect::<Vec<_>>(),
+            [false, false]
         );
     }
 

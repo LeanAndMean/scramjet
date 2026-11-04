@@ -334,9 +334,19 @@ impl Interactive {
             let levels = !self.agent.effort_levels().is_empty();
             let problems = self.agent.next_steps().problems;
             let publishing = self.agent.approvals().problem;
+            let command_line_tools = self.agent.command_line_tools();
             let notes = (ROWS.iter())
                 .map(|row| match row {
                     Row::ThinkingLevel if !levels => NO_LEVELS.to_owned(),
+                    Row::Tools if let Some(tools) = &command_line_tools => format!(
+                        "{} This run has those the command line gave: {}.",
+                        row.description(),
+                        if tools.is_empty() {
+                            "none".to_owned()
+                        } else {
+                            tools.join(", ")
+                        }
+                    ),
                     Row::NextSteps if !problems.is_empty() => {
                         format!("{} {}", row.description(), not_used(&problems))
                     }

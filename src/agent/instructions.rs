@@ -10,24 +10,25 @@ const DIRECTIVES: &str = include_str!("directives.md");
 /// This build's README, which the instructions point to when it is there.
 pub(super) const README: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/README.md");
 
-/// The agent's instructions, in Scramjet's order: Pi's list of its coding `tools` and the
+/// The agent's instructions, in Scramjet's order: Pi's list of the `tools` offered and the
 /// guidelines for them, or the opening `loaded` has in their place, the texts it appends, the
 /// context files, the `skills`, Scramjet's directives, then the subagents and commands. Each
 /// request adds `identity` and `environment`.
 pub(super) fn agent(
     root: &Path,
-    tools: &[String],
+    tools: &[&str],
     commands: &Commands,
     agents: &[subagent::Definition],
     skills: &Skills,
     loaded: &Loaded,
 ) -> String {
+    let has = |tool: &str| tools.contains(&tool);
+    let agents = if has(subagent::NAME) { agents } else { &[] };
     let catalog: String = [subagent::catalog(agents), commands.catalog()]
         .into_iter()
         .filter(|catalog| !catalog.is_empty())
         .map(|catalog| catalog + "\n\n")
         .collect();
-    let has = |tool: &str| tools.iter().any(|name| name == tool);
     let mut listed: Vec<String> = super::tools::CODING_TOOLS
         .into_iter()
         .filter(|tool| has(tool))
@@ -45,14 +46,18 @@ disjoint edits in one call"
         })
         .map(str::to_owned)
         .collect();
-    listed.push(format!("- {}: {}", status::NAME, status::SNIPPET));
-    listed.extend(publish::TOOLS.map(|tool| format!("- {tool}: {}", publish::snippet(tool))));
-    listed.extend([
-        format!("- {}: {}", question::NAME, question::SNIPPET),
-        format!("- {}: {}", subagent::NAME, subagent::SNIPPET),
-        format!("- {}: {}", switch::NAME, switch::SNIPPET),
-        format!("- {}: {}", suggest::NAME, suggest::SNIPPET),
-    ]);
+    let snippets = [(status::NAME, status::SNIPPET.to_owned())].into_iter();
+    let snippets = snippets
+        .chain(publish::TOOLS.map(|tool| (tool, publish::snippet(tool))))
+        .chain([
+            (question::NAME, question::SNIPPET.to_owned()),
+            (subagent::NAME, subagent::SNIPPET.to_owned()),
+            (switch::NAME, switch::SNIPPET.to_owned()),
+            (suggest::NAME, suggest::SNIPPET.to_owned()),
+        ]);
+    listed.extend(
+        (snippets.filter(|(tool, _)| has(tool))).map(|(tool, text)| format!("- {tool}: {text}")),
+    );
     let mut guidelines = Vec::new();
     if has("bash") {
         guidelines.push(match ["grep", "find", "ls"].iter().any(|tool| has(tool)) {
@@ -88,8 +93,10 @@ not pad with large unchanged regions.",
 with relevant checks.",
         );
     }
+    if has(suggest::NAME) {
+        guidelines.push(suggest::GUIDELINE);
+    }
     guidelines.extend([
-        suggest::GUIDELINE,
         "- Be concise in your responses",
         "- Show file paths clearly when working with files",
     ]);
@@ -445,7 +452,10 @@ mod tests {
     fn the_tools_and_guidelines_listed_are_the_configured_ones() {
         let root = Path::new("/nonexistent/scramjet-rs-instructions");
         let commands = Commands::default();
-        let tools = super::super::tools::DEFAULT_TOOLS.map(String::from);
+        let tools = super::super::tools::offered(
+            &super::super::tools::DEFAULT_TOOLS.map(String::from),
+            None,
+        );
         let text = agent(
             root,
             &tools,
@@ -467,7 +477,7 @@ git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use
 
         let text = agent(
             root,
-            &[],
+            &super::super::tools::HARNESS_TOOLS,
             &commands,
             &[],
             &Skills::default(),
@@ -484,7 +494,10 @@ git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use
             suggest::SNIPPET
         );
         assert!(text.contains(&listed), "{text}");
-        let all = super::super::tools::CODING_TOOLS.map(String::from);
+        let all = super::super::tools::offered(
+            &super::super::tools::CODING_TOOLS.map(String::from),
+            None,
+        );
         let text = agent(
             root,
             &all,
@@ -624,7 +637,10 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {README}\
             no_context_files: false,
         };
         let loaded = load(&prompt, &scratch, None);
-        let tools = super::super::tools::DEFAULT_TOOLS.map(String::from);
+        let tools = super::super::tools::offered(
+            &super::super::tools::DEFAULT_TOOLS.map(String::from),
+            None,
+        );
         let text = agent(
             &scratch,
             &tools,

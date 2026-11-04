@@ -1248,6 +1248,7 @@ mod tests {
             ask: false,
             retries: 3,
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+            only_tools: None,
             command_sets: Vec::new(),
             skills: Vec::new(),
             prompt: Default::default(),

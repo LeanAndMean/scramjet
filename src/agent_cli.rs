@@ -28,7 +28,8 @@ mod tree;
 use args::{Options, Start, USAGE};
 use rustix::termios::{self, OptionalActions, QueueSelector};
 use scramjet_rs::agent::{
-    self, Agent, AgentConfig, AgentUi, Attached, Found, ModelOption, Next, Session, SessionChoice,
+    self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
+    Next, Session, SessionChoice,
 };
 use settings::Settings;
 use std::{
@@ -222,6 +223,12 @@ fn start(
     };
     let chosen = named.is_some();
     let chosen_effort = (options.effort.clone()).or_else(|| named.as_ref()?.level.clone());
+    let unknown_tools: Vec<String> = (options.only_tools.iter().flatten())
+        .filter(|name| {
+            !CODING_TOOLS.contains(&name.as_str()) && !HARNESS_TOOLS.contains(&name.as_str())
+        })
+        .map(|name| format!("--tools: {name} is not one of scramjet-rs's tools; ignored"))
+        .collect();
     let config = AgentConfig {
         endpoint: options.endpoint,
         model: named.map_or_else(|| "gpt-6-luna".to_owned(), |named| named.id),
@@ -231,6 +238,7 @@ fn start(
         ask: options.ask,
         retries: options.retries,
         tools: settings.tools.clone(),
+        only_tools: options.only_tools,
         command_sets: settings.command_sets.clone(),
         skills: settings.skills.clone(),
         prompt: options.prompt,
@@ -242,6 +250,7 @@ fn start(
     };
     let mut warnings: Vec<String> = (warnings.iter())
         .map(|warning| format!("{source}: {warning}"))
+        .chain(unknown_tools)
         .collect();
     agent.set_model_scope(scoped.iter().map(|scoped| scoped.id.clone()).collect());
     let new = !chosen && agent.last_model().is_none();

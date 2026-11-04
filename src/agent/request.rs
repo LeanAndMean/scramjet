@@ -23,7 +23,7 @@ impl Agent {
             "model": self.config.model,
             "instructions": self.instructions(),
             "input": self.replay_conversation(),
-            "tools": tools::definitions(&self.config.tools),
+            "tools": self.tool_definitions(),
             "tool_choice": "auto",
             "parallel_tool_calls": true,
             "stream": true,
@@ -38,6 +38,13 @@ impl Agent {
         }
         if let Some(tokens) = self.config.max_output_tokens {
             request["max_output_tokens"] = json!(tokens);
+        }
+        // As Pi's, a request with no tools (`--no-tools`) says nothing of them.
+        if request["tools"].as_array().is_some_and(Vec::is_empty) {
+            let object = request.as_object_mut().unwrap();
+            for key in ["tools", "tool_choice", "parallel_tool_calls"] {
+                object.remove(key);
+            }
         }
         request
     }
@@ -236,6 +243,21 @@ mod tests {
     use crate::provider_fixture as fixture;
 
     #[test]
+    fn a_request_without_tools_says_nothing_of_them() {
+        let (mut agent, _scratch) = agent(([127, 0, 0, 1], 9).into(), "no-tools");
+        agent.config.only_tools = Some(vec!["read".into()]);
+        let request = agent.request();
+        assert_eq!(request["tools"][0]["name"], "read");
+        assert_eq!(request["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(request["tool_choice"], "auto");
+        agent.config.only_tools = Some(Vec::new());
+        let request = agent.request();
+        for key in ["tools", "tool_choice", "parallel_tool_calls"] {
+            assert!(request.get(key).is_none(), "{key}");
+        }
+    }
+
+    #[test]
     fn transient_failures_are_sent_again_without_running_their_tool_calls() {
         let mut failed = fixture::call_events("{}", fixture::known_usage());
         let terminal = failed.last_mut().unwrap();
@@ -367,6 +389,7 @@ response is incomplete; retry the request."});
             ask: false,
             retries: 3,
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+            only_tools: None,
             command_sets: Vec::new(),
             skills: Vec::new(),
             prompt: Default::default(),
@@ -802,6 +825,7 @@ reached the output token limit (max_output_tokens)"),
             ask: false,
             retries: 3,
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+            only_tools: None,
             command_sets: Vec::new(),
             skills: Vec::new(),
             prompt: Default::default(),

@@ -310,6 +310,7 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
         ask: false,
         retries: 3,
         tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+        only_tools: None,
         command_sets: Vec::new(),
         skills: Vec::new(),
         prompt: Default::default(),
@@ -323,7 +324,7 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
     project_sets(&mut agent);
     agent.instructions = instructions::agent(
         &root,
-        &agent.config.tools,
+        &agent.offered(),
         &agent.commands,
         &[],
         &agent.skills,
@@ -715,6 +716,7 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
         ask: false,
         retries: 3,
         tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+        only_tools: None,
         command_sets: Vec::new(),
         skills: Vec::new(),
         prompt: Default::default(),

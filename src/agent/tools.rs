@@ -45,11 +45,33 @@ pub const CODING_TOOLS: [&str; 7] = ["read", "bash", "edit", "write", "grep", "f
 /// Scramjet's, which the agent has unless the settings list others.
 pub const DEFAULT_TOOLS: [&str; 4] = ["read", "bash", "edit", "write"];
 
-/// The definitions of the agent's tools: the coding tools among `names`, then the harness's own.
-pub(super) fn definitions(names: &[String]) -> Value {
-    let mut tools: Vec<Value> = CODING_TOOLS
-        .iter()
-        .filter(|tool| names.iter().any(|name| name == *tool))
+/// The harness's own tools, which the model sees after the coding tools, in this order.
+pub const HARNESS_TOOLS: [&str; 10] = [
+    super::status::NAME,
+    super::publish::TOOLS[0],
+    super::publish::TOOLS[1],
+    super::publish::TOOLS[2],
+    super::publish::TOOLS[3],
+    super::question::NAME,
+    super::delegate::NAME,
+    super::subagent::NAME,
+    super::switch::NAME,
+    super::suggest::NAME,
+];
+
+/// The tools the model has, in the order it sees them: the coding tools `coding` lists, then the
+/// harness's own; with `only` (`--tools`), those it names alone, as Scramjet's allowlist.
+pub(super) fn offered(coding: &[String], only: Option<&[String]>) -> Vec<&'static str> {
+    let named = |names: &[String], tool: &str| names.iter().any(|name| name == tool);
+    let coding = (CODING_TOOLS.into_iter()).filter(|tool| named(only.unwrap_or(coding), tool));
+    let harness =
+        (HARNESS_TOOLS.into_iter()).filter(|tool| only.is_none_or(|only| named(only, tool)));
+    coding.chain(harness).collect()
+}
+
+/// The definitions of the tools `offered` names, in the order `offered` gives them.
+pub(super) fn definitions(offered: &[&str]) -> Value {
+    let mut tools: Vec<Value> = (CODING_TOOLS.iter())
         .map(|tool| definition(tool, false))
         .collect();
     tools.push(super::status::definition());
@@ -59,6 +81,7 @@ pub(super) fn definitions(names: &[String]) -> Value {
     tools.push(super::subagent::definition());
     tools.push(super::switch::definition());
     tools.push(super::suggest::definition());
+    tools.retain(|tool| (tool["name"].as_str()).is_some_and(|name| offered.contains(&name)));
     Value::Array(tools)
 }
 
