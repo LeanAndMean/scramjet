@@ -414,6 +414,7 @@ to a larger-context model)"
                         sets: &self.sets,
                     },
                     skills: &self.skills,
+                    approvals: self.approvals.as_deref(),
                 };
                 subagent::run(&call.arguments, &parent, ui, cancel)
             };
@@ -571,7 +572,7 @@ mod tests {
     use crate::agent::tests::*;
     use crate::agent::{
         AgentConfig, ChildItem, ChildState, Delegation, Navigated, Next, Session, SessionChoice,
-        TreeItem, instructions, messages, show_items,
+        TreeItem, approvals, instructions, messages, show_items,
     };
     use crate::provider_fixture as fixture;
     use std::{sync::Arc, time::Duration};
@@ -1159,13 +1160,90 @@ arguments:\n{received}"
         );
         let asked = format!(
             "question Agents: p\nSource: {}\n\nProject agents are repo-controlled. Only continue \
-for trusted repositories.",
+for trusted repositories. Yes is remembered for this project until one of its agent files is added \
+or changed.",
             project.display()
         );
         assert!(ui.shown.contains(&asked), "{:?}", ui.shown);
         assert!(
             ui.shown
                 .contains(&"choose Run project-local agents? [\"Yes\", \"No\"] None".to_owned())
+        );
+        assert!(!agent.root().join("approved-agents.json").exists());
+    }
+
+    #[test]
+    fn approving_project_agents_is_remembered_until_one_is_added_or_changed() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let call = |id: &str| {
+            let arguments = json!({"agent":"p","task":"go","agentScope":"project"});
+            tool_call(id, subagent::NAME, arguments)
+        };
+        let (endpoint, server) = serve(vec![
+            call("call_1"),
+            reply("p ran"),
+            call("call_2"),
+            reply("p ran again"),
+            reply("one"),
+            call("call_3"),
+            reply("two"),
+            call("call_4"),
+            reply("p ran with q there"),
+            reply("three"),
+            call("call_5"),
+            reply("four"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "subagent-approvals");
+        let project = agent.root().join(".scramjet/agents");
+        std::fs::create_dir_all(&project).unwrap();
+        let p = "---\nname: p\ndescription: P\ntools: read\n---\n";
+        let q = "---\nname: q\ndescription: Q\n---\n";
+        std::fs::write(project.join("p.md"), p).unwrap();
+        let mut ui = Recorder {
+            choices: vec![Some(0), Some(1), Some(0), None],
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        agent.turn("one", &mut ui, &cancel).unwrap();
+        std::fs::write(project.join("q.md"), q).unwrap();
+        agent.turn("two", &mut ui, &cancel).unwrap();
+        agent.turn("three", &mut ui, &cancel).unwrap();
+        std::fs::write(project.join("p.md"), format!("{p}Changed.\n")).unwrap();
+        agent.turn("four", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        let canceled = "Canceled: project-local agents not approved.";
+        let outputs: Vec<String> = [2, 4, 6, 9, 11].map(|i| last_output(&bodies[i])).into();
+        assert_eq!(
+            outputs,
+            [
+                "p ran",
+                "p ran again",
+                canceled,
+                "p ran with q there",
+                canceled
+            ]
+        );
+        let asked = |changed: &str| {
+            format!(
+                "question Agents: p\nSource: {}{changed}\n\nProject agents are repo-controlled. \
+Only continue for trusted repositories. Yes is remembered for this project until one of its agent \
+files is added or changed.",
+                project.display()
+            )
+        };
+        let questions: Vec<&String> = (ui.shown.iter())
+            .filter(|shown| shown.starts_with("question "))
+            .collect();
+        let added = asked("\nAdded or changed since you approved them: q");
+        let changed = asked("\nAdded or changed since you approved them: p");
+        assert_eq!(questions, [&asked(""), &added, &added, &changed]);
+        let remembered =
+            std::fs::read_to_string(agent.root().join("approved-agents.json")).unwrap();
+        let remembered: Value = serde_json::from_str(&remembered).unwrap();
+        let file = |name: &str| project.join(name).display().to_string();
+        assert_eq!(
+            remembered,
+            json!({file("p.md"): approvals::digest(p), file("q.md"): approvals::digest(q)})
         );
     }
 

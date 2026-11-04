@@ -1,6 +1,7 @@
 //! A coding agent that talks to Proxy (Responses for GPT models, Messages for Claude) and works in
 //! a project.
 
+mod approvals;
 mod autonomy;
 mod client;
 mod commands;
@@ -225,6 +226,8 @@ pub struct Agent {
     autonomy_diagnostics: Vec<String>,
     /// Where subagents are found: the user's agent directory and the command sets.
     agents_directory: Option<PathBuf>,
+    /// Where the user's approvals of project agents are remembered.
+    approvals: Option<PathBuf>,
     sets: Sets,
     /// The context files the instructions have, outermost first.
     context_files: Vec<PathBuf>,
@@ -332,6 +335,7 @@ impl Agent {
         let mut agent = Self {
             instructions: String::new(),
             agents_directory: None,
+            approvals: approvals::path(),
             sets: Sets::default(),
             context_files: Vec::new(),
             commands: Commands::default(),

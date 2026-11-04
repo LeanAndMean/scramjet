@@ -269,6 +269,7 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
     let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
     // The user's own agents and command sets stay out of the tests.
     agent.agents_directory = None;
+    agent.approvals = Some(root.join("approved-agents.json"));
     agent.skills = Skills::default();
     project_sets(&mut agent);
     agent.instructions = instructions::agent(

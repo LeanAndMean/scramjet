@@ -7,6 +7,7 @@
 use super::{
     AgentError, AgentUi, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation,
     MAX_STEPS, Skills, ToolDetail, Usage,
+    approvals::{self, Approvals},
     client::{self, ModelInfo},
     commands::{self, Sets},
     instructions,
@@ -89,6 +90,8 @@ pub(super) struct Definition {
     /// `user` or `project` for a loose agent; a command set's scope (`global` or `project`).
     pub source: &'static str,
     pub path: PathBuf,
+    /// The SHA-256 of the file's text, which the user's approval of a project agent records.
+    pub digest: String,
     /// What Scramjet says about frontmatter fields it ignored.
     pub diagnostics: Vec<String>,
 }
@@ -340,6 +343,7 @@ pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<String>) -> Vec<Defi
 /// An agent file as Scramjet's `parseExecutableAgent` reads it, or why it rejects it.
 fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition, String> {
     let shown = path.display();
+    let digest = approvals::digest(content);
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let (frontmatter, body) = commands::split_frontmatter(content);
     let frontmatter = YamlLoader::load_from_str(&frontmatter)
@@ -386,6 +390,7 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
         prompt: body,
         source,
         path: path.to_owned(),
+        digest,
         diagnostics,
     })
 }
@@ -611,6 +616,8 @@ pub(super) struct Parent<'a> {
     /// The agent's skills, which children with `read` are told of, as Scramjet's children load
     /// them.
     pub skills: &'a Skills,
+    /// Where the user's approvals of project agents are remembered (`approvals::path`).
+    pub approvals: Option<&'a Path>,
 }
 
 /// A task given to an agent, ready to run.
@@ -809,6 +816,7 @@ pub(super) fn run(
         return (plain(text, false), Usage::default());
     };
     let find = |name: &str| discovery.agents.iter().find(|agent| agent.name == name);
+    // Unlike Scramjet, approval is remembered for the project's agents as they are then.
     if given.confirm {
         let (mut names, mut directories): (Vec<&str>, Vec<String>) = (Vec::new(), Vec::new());
         for task in mode.tasks() {
@@ -828,10 +836,26 @@ pub(super) fn run(
                 directories.push(directory);
             }
         }
-        if !names.is_empty() {
+        let project: Vec<&Definition> = (discovery.agents.iter())
+            .filter(|agent| agent.source == "project")
+            .collect();
+        let approved = Approvals::read(parent.approvals.filter(|_| !names.is_empty()));
+        let unapproved: Vec<&str> = (project.iter())
+            .filter(|agent| !approved.approved(agent))
+            .map(|agent| agent.name.as_str())
+            .collect();
+        if !names.is_empty() && !unapproved.is_empty() {
+            let changed = match project.iter().any(|agent| approved.known(agent)) {
+                true => format!(
+                    "\nAdded or changed since you approved them: {}",
+                    unapproved.join(", ")
+                ),
+                false => String::new(),
+            };
             ui.question(&format!(
-                "Agents: {}\nSource: {}\n\nProject agents are repo-controlled. Only continue for \
-trusted repositories.",
+                "Agents: {}\nSource: {}{changed}\n\nProject agents are repo-controlled. Only \
+continue for trusted repositories. Yes is remembered for this project until one of its agent files \
+is added or changed.",
                 names.join(", "),
                 directories.join(", ")
             ));
@@ -839,6 +863,14 @@ trusted repositories.",
             if ui.choose("Run project-local agents?", &options, None) != Some(0) {
                 let text = "Canceled: project-local agents not approved.".to_owned();
                 return (plain(text, false), Usage::default());
+            }
+            if let Some(path) = parent.approvals
+                && let Err(error) = approvals::remember(path, &project)
+            {
+                ui.notice(&format!(
+                    "The approval is not remembered: {}: {error}",
+                    path.display()
+                ));
             }
         }
     }
@@ -1519,6 +1551,7 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- z:a: z:a 
             prompt: String::new(),
             source: "user",
             path: PathBuf::from("/x.md"),
+            digest: String::new(),
             diagnostics: vec!["noted".into()],
         };
         let sandbox = Ok(());
