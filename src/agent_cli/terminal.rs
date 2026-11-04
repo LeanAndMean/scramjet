@@ -1,6 +1,7 @@
 //! The agent's output as text: printed as it streams for `-p` and piped input, with a status
 //! line under it on a terminal, or captured for the full screen to show; and the terminal modes
 //! of a `-p` turn.
+use super::editor::NOTE_TIME;
 use super::highlight::{self, Highlighter};
 use super::interactive::thinking;
 use super::settings::MarkdownReads;
@@ -154,8 +155,6 @@ impl Status {
         drawn
     }
 }
-
-const NOTE_TIME: Duration = Duration::from_secs(2);
 
 /// A count of tokens, as Scramjet's footer shows it: `950`, `3.4k`, `53k`, `1.1M`.
 pub(super) fn tokens(n: u64) -> String {

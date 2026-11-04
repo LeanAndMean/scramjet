@@ -1,10 +1,11 @@
 //! Choosing models: `/model`, and the scope Ctrl+P cycles through, as Scramjet's: the models the
 //! patterns of `--models` or the settings' `enabledModels` choose, else all the endpoint's;
 //! `/scoped-models` chooses them.
+use super::editor::Note;
 use super::fuzzy::{self, Haystack};
 use super::interactive::{Interactive, model_line};
 use super::select::{self, Act, Picked, Picker, Spot};
-use super::settings::{Settings, card_level, scramjet_level};
+use super::settings::{Settings, card_level};
 use super::style::{MODEL_OFF, MODEL_ON, MUTED, RESET};
 use super::terminal;
 use super::text::{clip, visible};
@@ -307,14 +308,14 @@ pub(super) fn step<'a>(scope: &'a [Scoped], current: &str, steps: isize) -> Opti
 /// Ctrl+P or Shift+Ctrl+P, `steps` times (negative: back): switches to the next model in the
 /// scope `patterns` choose, or among all the endpoint's models when they choose none, with the
 /// effort a pattern sets. As in Scramjet, the model is remembered for sessions started later
-/// and the effort saved as the settings' default. Returns what to say under the prompt, as
-/// Scramjet's status says it.
+/// and the effort saved as the settings' default. Returns what to say, as Scramjet's status says
+/// it but for a switch, which the footer shows.
 pub(super) fn cycle(
     agent: &mut Agent,
     settings: &mut Settings,
     patterns: &[String],
     steps: isize,
-) -> String {
+) -> Option<Note> {
     let models = agent.model_options();
     let (scoped, _) = resolve(patterns, &models);
     let all = scoped.is_empty();
@@ -328,34 +329,26 @@ pub(super) fn cycle(
         false => scoped,
     };
     let Some(next) = step(&scope, agent.model(), steps) else {
-        return match all {
-            true => "Only one model available".to_owned(),
-            false => "Only one model in scope".to_owned(),
-        };
+        return Some(Note::Info(
+            match all {
+                true => "Only one model available",
+                false => "Only one model in scope",
+            }
+            .to_owned(),
+        ));
     };
     if let Err(error) = agent.set_model(&next.id) {
-        return format!("error: {error}");
+        return Some(Note::Error(format!("error: {error}")));
     }
     agent.load_model_card();
     let mut unsaved = settings.remember_model(agent.root(), &next.id).err();
     if let Some(level) = &next.level {
         if let Err(error) = agent.set_effort(level.clone()) {
-            return format!("error: {error}");
+            return Some(Note::Error(format!("error: {error}")));
         }
         unsaved = unsaved.or(settings.set_default_thinking_level(level).err());
     }
-    let name = (models.iter())
-        .find(|model| model.id == next.id)
-        .and_then(|model| model.name.clone())
-        .unwrap_or_else(|| next.id.clone());
-    let thinking = (agent.effort())
-        .filter(|&effort| agent.reasons() && effort != "none")
-        .map(|effort| format!(" (thinking: {})", scramjet_level(effort)))
-        .unwrap_or_default();
-    match unsaved {
-        Some(error) => format!("Switched to {name}{thinking} (settings not saved: {error})"),
-        None => format!("Switched to {name}{thinking}"),
-    }
+    unsaved.map(|error| Note::Error(format!("error: settings not saved: {error}")))
 }
 
 /// The models `/scoped-models` has on, among `all` (the endpoint's, in its order), as

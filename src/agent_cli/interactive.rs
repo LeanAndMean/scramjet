@@ -1,5 +1,6 @@
 //! The interactive session: prompts read from the editor, the full screen or piped lines, the
 //! built-in commands (`slash.rs`), model turns and a completed command's next step.
+use super::editor::Note;
 use super::record::Event;
 use super::screen::{self, Handle};
 use super::select::Routed;
@@ -229,11 +230,15 @@ impl Interactive {
                     screen::Input::Prompt(prompt) => return Ok(Read::Prompt(prompt)),
                     screen::Input::DoubleEscape => return Ok(Read::DoubleEscape),
                     screen::Input::CycleEffort => {
-                        screen.note(cycle_effort(&mut self.agent, &mut self.settings));
+                        if let Some(note) = cycle_effort(&mut self.agent, &mut self.settings) {
+                            screen.note(note);
+                        }
                     }
                     screen::Input::CycleModel(steps) => {
                         let (agent, settings) = (&mut self.agent, &mut self.settings);
-                        screen.note(scope::cycle(agent, settings, &self.scope, steps));
+                        if let Some(note) = scope::cycle(agent, settings, &self.scope, steps) {
+                            screen.note(note);
+                        }
                     }
                     screen::Input::Shells => add_shells(&mut self.agent, screen),
                     screen::Input::Commands => return Ok(Read::Again),
@@ -372,7 +377,7 @@ impl Interactive {
         self.in_turn = false;
         if steps != 0 {
             let note = scope::cycle(&mut self.agent, &mut self.settings, &self.scope, steps);
-            if let Some(screen) = &self.screen {
+            if let (Some(screen), Some(note)) = (&self.screen, note) {
                 screen.note(note);
             }
         }
@@ -730,25 +735,24 @@ pub(super) fn thinking(agent: &Agent) -> Option<String> {
 }
 
 /// Shift+Tab: the next effort level, saved as the settings' default; returns what to say.
-fn cycle_effort(agent: &mut Agent, settings: &mut Settings) -> String {
+fn cycle_effort(agent: &mut Agent, settings: &mut Settings) -> Option<Note> {
     let cycled = agent.cycle_effort();
-    let unsaved = match &cycled {
-        Ok(Some(level)) => settings.set_default_thinking_level(level).err(),
-        _ => None,
-    };
-    let note = effort_note(cycled);
-    match unsaved {
-        Some(error) => format!("{note} (settings not saved: {error})"),
-        None => note,
+    if let Ok(Some(level)) = &cycled
+        && let Err(error) = settings.set_default_thinking_level(level)
+    {
+        return Some(Note::Error(format!("error: settings not saved: {error}")));
     }
+    effort_note(cycled)
 }
 
-/// What a Shift+Tab says under the prompt, as Scramjet reports it.
-pub(super) fn effort_note(cycled: Result<Option<String>, AgentError>) -> String {
+/// What a Shift+Tab says, as Scramjet reports it but for a level set, which the footer shows.
+pub(super) fn effort_note(cycled: Result<Option<String>, AgentError>) -> Option<Note> {
     match cycled {
-        Ok(Some(level)) => format!("Thinking level: {}", settings::scramjet_level(&level)),
-        Ok(None) => "Current model does not support thinking".to_owned(),
-        Err(error) => format!("error: {error}"),
+        Ok(Some(_)) => None,
+        Ok(None) => Some(Note::Info(
+            "Current model does not support thinking".to_owned(),
+        )),
+        Err(error) => Some(Note::Error(format!("error: {error}"))),
     }
 }
 
@@ -782,14 +786,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn effort_note_says_as_scramjet_does_when_no_levels() {
+    fn effort_note_says_as_scramjet_does_when_no_levels_and_nothing_for_a_level() {
         assert_eq!(
             effort_note(Ok(None)),
-            "Current model does not support thinking"
+            Some(Note::Info(
+                "Current model does not support thinking".to_owned()
+            ))
         );
-        assert_eq!(
-            effort_note(Ok(Some("high".to_owned()))),
-            "Thinking level: high"
-        );
+        assert_eq!(effort_note(Ok(Some("high".to_owned()))), None);
     }
 }

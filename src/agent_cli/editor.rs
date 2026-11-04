@@ -25,6 +25,8 @@ pub(super) const ESCAPE_WAIT: Duration = Duration::from_millis(30);
 pub(super) const RESIZE_CHECK: Duration = Duration::from_millis(250);
 /// The longest time between the two Escapes that open `/tree`, as in Scramjet.
 const DOUBLE_ESCAPE: Duration = Duration::from_millis(500);
+/// How long a note that is not an error stays, if no key comes first.
+pub(super) const NOTE_TIME: Duration = Duration::from_secs(3);
 const TAB: &str = "    ";
 const INDENT: usize = 2;
 
@@ -1304,7 +1306,7 @@ impl Editor {
             }
             Key::ToggleThinking => {
                 let hidden = !self.hide_thinking.fetch_xor(true, Ordering::Relaxed);
-                *note = Some(thinking_note(hidden).to_owned());
+                *note = Some((Note::Info(thinking_note(hidden).to_owned()), Instant::now()));
                 true
             }
             Key::External => {
@@ -1464,8 +1466,8 @@ pub(super) struct Draft {
     saved: String,
     exit_armed: bool,
     last_escape: Option<Instant>,
-    /// Shown under the prompt until the next key.
-    note: Option<String>,
+    /// Shown on the status row until the next key, with when it was set.
+    note: Option<(Note, Instant)>,
     completion: Option<Completion>,
     lookup: Option<Lookup>,
     /// The text and cursor before each edit, the latest last, which Ctrl+- restores.
@@ -1473,6 +1475,14 @@ pub(super) struct Draft {
     last: Last,
     /// Ctrl+] (`true`) or Ctrl+Alt+] waits for the character to jump to.
     jump: Option<bool>,
+}
+
+/// What the status row says until the next key, about a key or what it did.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Note {
+    /// Goes after `NOTE_TIME` too.
+    Info(String),
+    Error(String),
 }
 
 /// What the caller does for a key the editor does not handle itself.
@@ -1510,15 +1520,20 @@ impl Draft {
         self.completion.is_some()
     }
 
-    /// The line under the prompt: how to exit after a first Ctrl-C, or a note.
-    pub(super) fn hint(&self) -> Option<&str> {
-        self.exit_armed
-            .then_some(EXIT_HINT)
-            .or(self.note.as_deref())
+    /// The status row's note: how to exit after a first Ctrl-C, or the note set, while it lasts.
+    pub(super) fn note(&self) -> Option<&str> {
+        if self.exit_armed {
+            return Some(EXIT_HINT);
+        }
+        match &self.note {
+            Some((Note::Error(text), _)) => Some(text),
+            Some((Note::Info(text), at)) if at.elapsed() < NOTE_TIME => Some(text),
+            _ => None,
+        }
     }
 
-    pub(super) fn set_note(&mut self, note: String) {
-        self.note = Some(note);
+    pub(super) fn set_note(&mut self, note: Note) {
+        self.note = Some((note, Instant::now()));
     }
 
     /// The completion list's rows, if one is open.
@@ -1555,7 +1570,7 @@ impl Draft {
         match edited {
             Ok(Some(text)) => self.replace(text),
             Ok(None) => {}
-            Err(error) => self.note = Some(error),
+            Err(error) => self.set_note(Note::Error(error)),
         }
     }
 }
@@ -1569,7 +1584,7 @@ pub(super) fn external(text: &str) -> Result<Option<String>, String> {
     }
 }
 
-const EXIT_HINT: &str = "(Ctrl-C again or Ctrl-D to exit)";
+const EXIT_HINT: &str = "Ctrl-C again or Ctrl-D to exit";
 const NO_EDITOR: &str = "No editor configured. Set $VISUAL or $EDITOR environment variable.";
 
 /// Runs `$VISUAL` or `$EDITOR` on `file` with the terminal as the shell left it, until it
@@ -2367,6 +2382,37 @@ mod tests {
     fn prompt_editor(history: Vec<String>) -> Editor {
         let root = PathBuf::new();
         Editor::new(history, Arc::default(), root, Vec::new(), Vec::new(), false)
+    }
+
+    #[test]
+    fn a_note_goes_at_the_next_key_and_one_not_an_error_after_a_while() {
+        let mut editor = prompt_editor(Vec::new());
+        let mut draft = editor.draft(String::new());
+        draft.set_note(Note::Info("Copied".into()));
+        assert_eq!(draft.note(), Some("Copied"));
+        // Keys that leave the prompt as it is keep it.
+        type_in(&mut editor, &mut draft, b"\x1b[5~");
+        assert_eq!(draft.note(), Some("Copied"));
+        type_in(&mut editor, &mut draft, b"a");
+        assert_eq!(draft.note(), None);
+        let set = |draft: &mut Draft, note, ago| {
+            draft.note = Some((note, Instant::now() - ago));
+        };
+        set(&mut draft, Note::Info("Copied".into()), NOTE_TIME);
+        assert_eq!(draft.note(), None);
+        set(
+            &mut draft,
+            Note::Error("Copy failed".into()),
+            NOTE_TIME * 10,
+        );
+        assert_eq!(draft.note(), Some("Copy failed"));
+        type_in(&mut editor, &mut draft, b"\x7f");
+        assert_eq!(draft.note(), None);
+        // The exit's note lasts as long as the second Ctrl-C would exit.
+        type_in(&mut editor, &mut draft, b"\x15\x03");
+        assert_eq!(draft.note(), Some(EXIT_HINT));
+        type_in(&mut editor, &mut draft, b"b");
+        assert_eq!(draft.note(), None);
     }
 
     #[test]

@@ -7,8 +7,8 @@
 //! to it through a `Handle`.
 
 use super::editor::{
-    Action, ByteSource, Draft, ESCAPE_WAIT, Editor, Key, Mouse, RESIZE_CHECK, RawMode, read_key,
-    terminal_size,
+    Action, ByteSource, Draft, ESCAPE_WAIT, Editor, Key, Mouse, Note, RESIZE_CHECK, RawMode,
+    read_key, terminal_size,
 };
 use super::footer::{self, Footer};
 use super::interactive::effort_note;
@@ -18,7 +18,7 @@ use super::selection::{self, Line};
 use super::settings::{Delivery, DoubleEscape, MarkdownReads, Settings};
 use super::slash::Builtin;
 use super::terminal::{COMMAND_LINES, Terminal, elapsed, waiting_for};
-use super::text::{Wrap, clip, one_line, plain, visible};
+use super::text::{Wrap, clip, columns, one_line, plain, visible};
 use super::{clipboard, editor, job, style};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -65,6 +65,7 @@ const BUSY: &str = "Busy: the session is not ready for a prompt yet";
 const SHELL_BUSY: &str = "A bash command is already running. Press Esc to cancel it first.";
 const RELOAD_BUSY: &str = "Wait for the current response to finish before reloading.";
 const MODEL_NEXT: &str = "The model changes before the next request";
+const NOTHING_QUEUED: &str = "No queued messages to restore";
 
 /// What the session asks the screen to show or do.
 enum ToScreen {
@@ -80,7 +81,7 @@ enum ToScreen {
     Ready,
     SetText(String),
     Remember(String),
-    Note(String),
+    Note(Note),
     /// `/reload` read the commands and skills (the `/` list's rows after the built-in ones),
     /// whether Escape twice on an empty prompt does something, and how Markdown files read show.
     Reloaded(Vec<(String, String)>, bool, MarkdownReads),
@@ -279,7 +280,7 @@ impl Link {
     pub(super) fn remember(&self, prompt: &str) {
         self.send(ToScreen::Remember(prompt.to_owned()));
     }
-    pub(super) fn note(&self, note: String) {
+    pub(super) fn note(&self, note: Note) {
         self.send(ToScreen::Note(note));
     }
     /// What `/reload` read: the commands and skills the `/` list shows, and the `settings`.
@@ -1356,7 +1357,7 @@ impl App {
             .collect::<Vec<_>>()
             .join("\n\n");
         self.draft.replace(text);
-        self.draft.set_note(restored(count));
+        self.draft.set_note(Note::Info(restored(count)));
     }
 
     /// Queues the draft's text while a turn runs: for the model's next request, or, as a
@@ -1391,7 +1392,7 @@ impl App {
             Some(Builtin::Exit) => return self.exit(),
             Some(Builtin::Reload) => {
                 self.draft = self.editor.draft(String::new());
-                return self.draft.set_note(RELOAD_BUSY.to_owned());
+                return self.draft.set_note(Note::Info(RELOAD_BUSY.to_owned()));
             }
             Some(builtin) if builtin.interrupts() => self.cancel.store(true, Ordering::Relaxed),
             _ => {}
@@ -1418,7 +1419,7 @@ impl App {
         let mut queue = self.queue();
         if queue.shells.iter().any(|side| side.ended.is_none()) {
             drop(queue);
-            self.draft.set_note(SHELL_BUSY.to_owned());
+            self.draft.set_note(Note::Info(SHELL_BUSY.to_owned()));
             return true;
         }
         let cancel = Arc::new(AtomicBool::new(false));
@@ -1463,8 +1464,8 @@ impl App {
             }
             Err(error) => {
                 self.queue().shells.pop();
-                self.draft
-                    .set_note(format!("error: cannot run the command: {error}"));
+                let error = format!("error: cannot run the command: {error}");
+                self.draft.set_note(Note::Error(error));
             }
         }
         true
@@ -1838,7 +1839,7 @@ impl App {
             });
         match started {
             Ok(_) => self.copying = Some(outcome),
-            Err(error) => self.draft.set_note(format!("Copy failed: {error}")),
+            Err(error) => self.note(Note::Error(format!("Copy failed: {error}"))),
         }
     }
 
@@ -1857,7 +1858,7 @@ impl App {
                 }
                 self.clear_selection();
             }
-            Err(error) => self.draft.set_note(format!("Copy failed: {error}")),
+            Err(error) => self.note(Note::Error(format!("Copy failed: {error}"))),
         }
         Ok(())
     }
@@ -1894,7 +1895,7 @@ impl App {
             Ok(_) => self.pasting = Some(Pasting { dialog, text, read }),
             Err(error) => {
                 if let Some((_, draft)) = self.editing() {
-                    draft.set_note(format!("Paste failed: {error}"));
+                    draft.set_note(Note::Error(format!("Paste failed: {error}")));
                 }
             }
         }
@@ -1922,7 +1923,7 @@ impl App {
             Ok(text) => {
                 editor.key(draft, Key::Paste(editor::clean(&text)), false);
             }
-            Err(error) => draft.set_note(format!("Paste failed: {error}")),
+            Err(error) => draft.set_note(Note::Error(format!("Paste failed: {error}"))),
         }
     }
 
@@ -2023,9 +2024,7 @@ impl App {
             Key::AltUp => {
                 let empty = self.queue().is_empty();
                 match empty {
-                    true => self
-                        .draft
-                        .set_note("No queued messages to restore".to_owned()),
+                    true => (self.draft).set_note(Note::Info(NOTHING_QUEUED.to_owned())),
                     false => self.restore(),
                 }
                 return Flow::Go;
@@ -2046,7 +2045,7 @@ impl App {
                     self.top = None;
                     let _ = self.inputs.send(Input::Prompt(model));
                 } else {
-                    self.draft.set_note(BUSY.to_owned());
+                    self.draft.set_note(Note::Info(BUSY.to_owned()));
                 }
                 return Flow::Go;
             }
@@ -2066,7 +2065,7 @@ impl App {
                 let _ = self.inputs.send(Input::Prompt(text));
                 self.draft = self.editor.draft(String::new());
             }
-            Action::Submit(_) => self.draft.set_note(BUSY.to_owned()),
+            Action::Submit(_) => self.draft.set_note(Note::Info(BUSY.to_owned())),
             Action::Exit => self.exit(),
             Action::DoubleEscape if self.ready => {
                 let _ = self.inputs.send(Input::DoubleEscape);
@@ -2079,20 +2078,22 @@ impl App {
                     self.queue().effort = Some(level.clone());
                     self.footer.shown.effort = Some(level.clone());
                 }
-                self.draft.set_note(effort_note(Ok(level)));
+                if let Some(note) = effort_note(Ok(level)) {
+                    self.draft.set_note(note);
+                }
             }
             Action::CycleEffort if self.ready => {
                 let _ = self.inputs.send(Input::CycleEffort);
             }
-            Action::CycleEffort => self.draft.set_note(BUSY.to_owned()),
+            Action::CycleEffort => self.draft.set_note(Note::Info(BUSY.to_owned())),
             Action::CycleModel(steps) if running => {
                 self.queue().model_steps += steps;
-                self.draft.set_note(MODEL_NEXT.to_owned());
+                self.draft.set_note(Note::Info(MODEL_NEXT.to_owned()));
             }
             Action::CycleModel(steps) if self.ready => {
                 let _ = self.inputs.send(Input::CycleModel(steps));
             }
-            Action::CycleModel(_) => self.draft.set_note(BUSY.to_owned()),
+            Action::CycleModel(_) => self.draft.set_note(Note::Info(BUSY.to_owned())),
             Action::Suspend => return Flow::Suspend,
             Action::External => return Flow::External,
         }
@@ -2179,20 +2180,49 @@ impl App {
         Flow::Go
     }
 
-    /// The status line: what a running turn does, and how far the view is from the end.
-    fn status(&self, width: usize) -> String {
-        let mut parts = Vec::new();
-        if let Some(activity) = &self.activity {
-            // Escape goes back to the end, lets a selection go or closes completion first.
-            let escape = self.top.is_none() && self.selection.is_none() && !self.draft.completing();
-            parts.push(activity.line(escape));
-        }
+    /// The status line: what a running turn does and the note, and how far the view is from
+    /// the end.
+    fn status(&self, width: usize) -> Vec<String> {
+        // Escape goes back to the end, lets a selection go or closes completion first.
+        let escape = self.top.is_none() && self.selection.is_none() && !self.draft.completing();
+        let activity = self.activity.as_ref().map(|activity| activity.line(escape));
         let below = self.last.saturating_sub(self.shown_top());
-        if below > 0 {
-            parts.push(format!("{below} more lines below · PgDn or Esc to go back"));
+        // A list takes PgDn, and a dialog or the completion list Escape, but not from a selection.
+        let page = !matches!(
+            self.dialog,
+            Some(Open {
+                shown: Shown::Pick(_),
+                ..
+            })
+        );
+        let escape =
+            self.selection.is_some() || (self.dialog.is_none() && !self.draft.completing());
+        let back = match (page, escape) {
+            (true, true) => " · PgDn or Esc to go back",
+            (true, false) => " · PgDn to go back",
+            (false, true) => " · Esc to go back",
+            (false, false) => "",
+        };
+        status_rows(activity, self.shown_draft().note(), below, back, width)
+    }
+
+    /// The draft whose note the status line shows: a text dialog's, else the prompt's.
+    fn shown_draft(&self) -> &Draft {
+        match &self.dialog {
+            Some(Open {
+                shown: Shown::Text(text),
+                ..
+            }) => &text.draft,
+            _ => &self.draft,
         }
-        let line = clip(&parts.join(" · "), width.saturating_sub(1));
-        format!("{}{line}{}", style::STATUS, style::RESET)
+    }
+
+    /// Sets the note of the draft the status line shows.
+    fn note(&mut self, note: Note) {
+        match self.editing() {
+            Some((_, draft)) => draft.set_note(note),
+            None => self.draft.set_note(note),
+        }
     }
 
     /// The rows under the conversation, and where the cursor goes in them.
@@ -2218,7 +2248,7 @@ impl App {
             record::running(events.last(), &mut ui);
             rows.extend(selection::lines(&ui.captured()));
         }
-        rows.push(selection::row(&self.status(width)));
+        rows.extend(selection::rows(&self.status(width)));
         let queued = [
             ("Steering", &queue.steering),
             ("Follow-up", &queue.follow_ups),
@@ -2406,8 +2436,8 @@ fn restored(count: usize) -> String {
     }
 }
 
-/// Adds the prompt's rows to `rows`, at most a share of `room` around the cursor, then its hint
-/// and completion list; returns where the cursor is.
+/// Adds the prompt's rows to `rows`, at most a share of `room` around the cursor, then its
+/// completion list; returns where the cursor is.
 fn prompt_rows(
     draft: &Draft,
     rows: &mut Vec<Line>,
@@ -2419,13 +2449,58 @@ fn prompt_rows(
     let top = (row + 1).saturating_sub(shown).min(text.len() - shown);
     let start = rows.len();
     rows.extend(selection::rows(&text[top..top + shown]));
-    if let Some(hint) = draft.hint() {
-        let mut wrap = Wrap::new(width.saturating_sub(1).max(10));
-        let text = wrap.push(hint) + &wrap.finish();
-        rows.extend(text.split('\n').map(muted));
-    }
     rows.extend(selection::rows(&draft.completion_rows(width)));
     Some((start + row - top, column))
+}
+
+/// The status line's rows, `width` columns wide: `activity`, then `note`, and at the right, as
+/// the footer places the model, the `below` lines past the view and the keys that go back
+/// (`back`), shortened to `↓N`, then left out, where the left needs the room. A note that does
+/// not fit after the activity goes on rows of its own, wrapped, so that it stays in place as the
+/// seconds go by.
+fn status_rows(
+    activity: Option<String>,
+    note: Option<&str>,
+    below: usize,
+    back: &str,
+    width: usize,
+) -> Vec<String> {
+    let room = width.saturating_sub(1);
+    let wrapped = |text: &str| {
+        let mut wrap = Wrap::new(room.max(10));
+        let text = wrap.push(text) + &wrap.finish();
+        text.split('\n').map(str::to_owned).collect::<Vec<_>>()
+    };
+    let line = [activity.as_deref(), note].into_iter().flatten();
+    let line = line.collect::<Vec<_>>().join(" · ");
+    let mut rows = match (activity, note) {
+        (_, None) => vec![clip(&line, room)],
+        (_, Some(note)) if !note.contains('\n') && columns(&line) <= room => vec![line],
+        (None, Some(note)) => wrapped(note),
+        (Some(activity), Some(note)) => [clip(&activity, room)]
+            .into_iter()
+            .chain(wrapped(note))
+            .collect(),
+    };
+    if below > 0 {
+        let first = &mut rows[0];
+        let used = columns(first);
+        // Two columns apart, as the footer's model.
+        let gap = if used == 0 { 0 } else { 2 };
+        let right = [
+            format!("{below} more lines below{back}"),
+            format!("↓{below}"),
+        ]
+        .into_iter()
+        .find(|right| used + gap + columns(right) <= room);
+        if let Some(right) = right {
+            *first += &" ".repeat(room - used - columns(&right));
+            *first += &right;
+        }
+    }
+    (rows.into_iter())
+        .map(|row| format!("{}{row}{}", style::STATUS, style::RESET))
+        .collect()
 }
 
 /// A dock row of `text` in the muted style.
@@ -2592,6 +2667,63 @@ mod tests {
             ..Activity::new("waiting for you")
         };
         assert_eq!(asking.line(true), "… waiting for you");
+    }
+
+    #[test]
+    fn the_status_line_puts_the_note_after_the_activity_and_the_view_at_the_right() {
+        let rows = |activity: Option<&str>, note, below, width| {
+            let back = " · PgDn or Esc to go back";
+            let rows = status_rows(activity.map(str::to_owned), note, below, back, width);
+            rows.iter().map(|row| plain(row)).collect::<Vec<_>>()
+        };
+        // `left`, then `right` ending in the last column but the scrollbar's.
+        let apart = |left: &str, right: &str, width: usize| {
+            let padding = width - 1 - columns(left) - columns(right);
+            format!("{left}{}{right}", " ".repeat(padding))
+        };
+        let working = "… working 2s (Esc to interrupt)";
+        assert_eq!(rows(Some(working), None, 0, 60), [working]);
+        assert_eq!(
+            rows(Some(working), Some("Copied"), 0, 60),
+            ["… working 2s (Esc to interrupt) · Copied"]
+        );
+        assert_eq!(rows(None, Some("Copied"), 0, 60), ["Copied"]);
+        assert_eq!(rows(None, None, 0, 60), [""]);
+        let all = "18 more lines below · PgDn or Esc to go back";
+        assert_eq!(rows(None, None, 18, 60), [apart("", all, 60)]);
+        assert_eq!(
+            rows(Some("… working 2s"), None, 18, 80),
+            [apart("… working 2s", all, 80)]
+        );
+        // Narrower, the activity and the note keep their room, and the view's place is cut short,
+        // then left out.
+        assert_eq!(
+            rows(Some(working), Some("Copied"), 18, 60),
+            [apart("… working 2s (Esc to interrupt) · Copied", "↓18", 60)]
+        );
+        assert_eq!(
+            rows(Some(working), Some("Copied"), 18, 40),
+            [apart(working, "↓18", 40).as_str(), "Copied"]
+        );
+        assert_eq!(rows(Some(working), None, 18, 34), [working]);
+        assert_eq!(rows(Some(working), None, 0, 20), ["… working 2s (Esc …"]);
+        // A note that does not fit after the activity goes under it, wrapped.
+        let long = "A bash command is already running. Press Esc to cancel it first.";
+        assert_eq!(
+            rows(Some(working), Some(long), 18, 60),
+            [
+                apart(working, "↓18", 60).as_str(),
+                "A bash command is already running. Press Esc to cancel it",
+                "first."
+            ]
+        );
+        assert_eq!(
+            rows(None, Some(long), 0, 60),
+            [
+                "A bash command is already running. Press Esc to cancel it",
+                "first."
+            ]
+        );
     }
 
     #[test]

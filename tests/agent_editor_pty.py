@@ -610,6 +610,14 @@ def without_rate(row, columns):
     return stats(*parts, columns) if rated != row and len(parts) == 2 else rated
 
 
+def footer_ends(read, output, model, columns=60, rows=24):
+    """Waits until the footer's second row ends with `model`, the model and its effort."""
+    end = time.monotonic() + 10
+    while not (Screen(output, columns, rows).footer() or ['', ''])[1].endswith(model):
+        assert time.monotonic() < end, (model, Screen(output, columns, rows).footer())
+        read(.05)
+
+
 def stats(left, right, columns=60):
     """The footer's second row: `left`, then `right` at the end of the screen's last column but one."""
     return left + ' ' * (columns - 1 - len(left) - len(right)) + right
@@ -1224,9 +1232,9 @@ def editor_cannot_start(read, until, send, output):
     send(b'kept')
     on_screen('> kept')
     send(b'\x07')
-    # Wrapped under the prompt.
-    ending(read, output, ['> kept', 'cannot start /nonexistent/scramjet-editor: No such file or',
-                          'directory (os error 2)'])
+    # Wrapped on the status line, above the editor.
+    ending(read, output, ['cannot start /nonexistent/scramjet-editor: No such file or',
+                          'directory (os error 2)', '\u2500' * 59, '> kept'])
     send(b'\x15\x04')
 
 
@@ -1236,8 +1244,8 @@ def no_editor_configured(read, until, send, output):
     send(b'kept')
     on_screen('> kept')
     send(b'\x07')
-    ending(read, output, ['> kept', 'No editor configured. Set $VISUAL or $EDITOR environment',
-                          'variable.'])
+    ending(read, output, ['No editor configured. Set $VISUAL or $EDITOR environment', 'variable.',
+                          '\u2500' * 59, '> kept'])
     send(b'\x15\x04')
 
 
@@ -1535,11 +1543,12 @@ def shift_tab_cycles_effort(read, until, send, output):
     on_screen('\u2500' * 20)
     footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 medium')])
     send(b'\x1b[Z')
-    on_screen('Thinking level: high')
-    footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 high')])
+    # The footer says so, and nothing else does.
+    rows = footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 high')])
+    assert shown()[-3:] == ['', '\u2500' * 59, '>'], shown()
     # Inside a prompt it keeps the text and the cursor.
     send(b'ab\x1b[D\x1b[Z')
-    on_screen('Thinking level: xhigh')
+    footer_ends(read, output, 'gpt-6-luna \u2022 xhigh')
     send(b'X\r')
     on_screen('Reply.')
     ended(read, output)
@@ -1558,9 +1567,16 @@ def started_at(level):
     return check
 
 
+class Footer:
+    """What a step of `starts_with` waits for the footer's second row to end with."""
+    def __init__(self, end):
+        self.end = end
+
+
 def starts_with(model, steps=(), notices=(), columns=60):
     """Checks the model the session starts with, in its first line, and `notices` under it; then
-    sends each step's keys and waits for its text, or a moment without one, before quitting."""
+    sends each step's keys and waits for its text, or the footer's end (`Footer`), or a moment
+    without one, before quitting."""
     def check(read, until, send, output):
         shown, on_screen = full_screen(columns)(read, output)
         rows = on_screen('\u2500' * 20)
@@ -1569,7 +1585,9 @@ def starts_with(model, steps=(), notices=(), columns=60):
             assert notice in rows, rows
         for keys, said in steps:
             send(keys)
-            if said:
+            if isinstance(said, Footer):
+                footer_ends(read, output, said.end, columns)
+            elif said:
                 on_screen(said)
             else:
                 # An Escape and a key right after it would be one Alt key.
@@ -1583,7 +1601,12 @@ def started_without_thinking(read, until, send, output):
     rows = on_screen('\u2500' * 20)
     assert rows[0] == 'scramjet-rs \u00b7 gpt-6-luna \u00b7', rows
     send(b'\x1b[Z')
-    on_screen('Current model does not support thinking')
+    rows = on_screen('Current model does not support thinking')
+    # Above the editor, until it goes by itself a few seconds later.
+    assert rows[-3:] == ['Current model does not support thinking', '\u2500' * 59, '>'], rows
+    started = time.monotonic()
+    on_screen('Current model does not support thinking', gone=True)
+    assert 2.5 < time.monotonic() - started < 4, time.monotonic() - started
     send(b'\x04')
 
 
@@ -1592,7 +1615,7 @@ def shift_tab_resumed(read, until, send, output):
     rows = on_screen('\u2500' * 20)
     assert rows[0] == 'scramjet-rs \u00b7 gpt-6-luna \u00b7 thinking xhigh \u00b7', rows
     send(b'\x1b[Z')
-    on_screen('Thinking level: max')
+    footer_ends(read, output, 'gpt-6-luna \u2022 max')
     send(b'\x04')
 
 
@@ -1603,17 +1626,16 @@ def ctrl_p_cycles_models(read, until, send, output):
     assert rows[0].startswith('scramjet-rs \u00b7 gpt-6-terra \u00b7 thinking high \u00b7 /'), rows
     assert 'settings: enabledModels: no models match pattern "nothing"' in '\n'.join(rows), rows
     send(b'\x10')
-    on_screen('Switched to GPT-6 Luna (thinking: low)')
+    footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 low', 80)], columns=80)
+    assert 'Switched' not in '\n'.join(shown()), shown()
     # Shift+Ctrl+P, as a terminal reporting modified keys sends it, goes back.
     send(b'\x1b[112;6u')
-    on_screen('Switched to GPT-6 Terra (thinking: high)')
-    # During a turn, the next request goes to the next model.
+    footer_shows(read, output, [project, stats('0', 'gpt-6-terra \u2022 high', 80)], columns=80)
+    # During a turn, the next request goes to the next model, as the footer says once it starts.
     send(b'go\r')
     on_screen('running 1s')
     send(b'\x10')
     on_screen('The model changes before the next request')
-    on_screen('Switched to GPT-6 Luna (thinking: low)')
-    # The footer says so as the next request starts.
     footer_shows(read, output, [project, stats('?', 'gpt-6-luna \u2022 low', 80)], columns=80)
     on_screen('Switched.')
     ended(read, output, columns=80)
@@ -1633,7 +1655,7 @@ def agent_switches_the_model(read, until, send, output):
     # the one set, and Shift+Tab cycles that card's levels.
     footer_shows(read, output, [project, stats('?', 'gpt-6-terra \u2022 high', 80)], columns=80)
     send(b'\x1b[Z')
-    on_screen('Thinking level: low')
+    footer_shows(read, output, [project, stats('?', 'gpt-6-terra \u2022 low', 80)], columns=80)
     assert 'Terra replied.' not in '\n'.join(shown()), shown()
     switch_gate.set()
     on_screen('Terra replied.')
@@ -1681,9 +1703,9 @@ def scoped_models_list(read, until, send, output):
     on_screen('Models for Ctrl+P', gone=True)
     # Ctrl+P takes them in that order.
     send(b'\x10')
-    on_screen('Switched to GPT-6 Terra')
+    footer_ends(read, output, 'gpt-6-terra \u2022 medium', columns=80)
     send(b'\x10')
-    on_screen('Switched to GPT-6 Luna')
+    footer_ends(read, output, 'gpt-6-luna \u2022 medium', columns=80)
     send(b'\x04')
 
 
@@ -2146,7 +2168,7 @@ run([], starts_with('gpt-6-luna', [(b'/model gpt-6-terra\r', '\u2713 Model set t
 assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-terra'}
 assert json.load(open(remembered_models)) == {here: 'gpt-6-terra'}
 # ... and another project starts with it until one is chosen there.
-run(['--project', other], starts_with('gpt-6-terra', [(b'\x10', 'Switched to GPT-6 Luna')]), both(),
+run(['--project', other], starts_with('gpt-6-terra', [(b'\x10', Footer('gpt-6-luna \u2022 medium'))]), both(),
     variables=in_remembering, forget_models=False)
 assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-luna'}
 assert json.load(open(remembered_models)) == {here: 'gpt-6-terra', there: 'gpt-6-luna'}
@@ -2313,7 +2335,9 @@ def reloads(read, until, send, output):
     # As in Scramjet, not while a turn runs.
     send(b'/reload\r')
     rows = on_screen('Wait for the current response to finish before reloading.')
-    assert rows[-2] == '>', rows
+    # After the status line's activity, above the editor.
+    assert re.fullmatch('\u2026 thinking \\d+s \\(Esc to interrupt\\) \u00b7 Wait for the current response to finish '
+                        'before reloading\\.', rows[-3]) and rows[-1] == '>', rows
     reload_gate.set()
     on_screen('Hi.')
     send(b'\x04')
@@ -3248,7 +3272,7 @@ def fullscreen_queue(read, until, send, output):
     # Escape interrupts the turn and puts what it did not take back in the editor.
     send(b'\x1b')
     rows = on_screen('Restored 1 queued message to editor')
-    assert rows[-2] == '> kept', rows
+    assert rows[-1] == '> kept', rows
     on_screen('(cancelled)')
     send(b'\x03\x04')
 
@@ -3280,7 +3304,7 @@ def fullscreen_commands_during_turn(read, until, send, output):
     send(b'/new\r')
     rows = on_screen('\u2713 New session started')
     assert 'Restored 1 queued message to editor' in '\n'.join(rows), rows
-    assert rows[-2] == '> kept', rows
+    assert rows[-1] == '> kept', rows
     send(b'\x15more\r')
     on_screen('running 1s')
     # `/quit` leaves at once.
@@ -3337,7 +3361,6 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     on_screen('running 1s')
     # Shift+Tab chooses the effort of the turn's next request; the footer says so at once.
     send(b'\x1b[Z')
-    on_screen('Thinking level: high')
     footer_shows(read, output, [project, stats('?', 'gpt-6-luna \u2022 high')])
     # A `!` command runs at once, under the conversation until the turn ends.
     send(b'!echo side$((0+1)); sleep 1; echo side$((1+1))\r')
@@ -3354,7 +3377,8 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     send(b'!sleep 30\r')
     on_screen(' $ sleep 30')
     send(b'!echo no\r')
-    ending(read, output, ['> !echo no', 'A bash command is already running. Press Esc to cancel it', 'first.'])
+    ending(read, output, ['A bash command is already running. Press Esc to cancel it', 'first.', '\u2500' * 59,
+                          '> !echo no'])
     send(b'\x15')
     rows = on_screen('Second.')
     # Still running when the turn ends; Escape stops it, and it is added then.
@@ -3403,9 +3427,14 @@ def fullscreen_mouse(read, until, send, output):
     assert '6 more lines below' in '\n'.join(rows) and 'Ctrl-C again' not in '\n'.join(rows), rows
     # A click selects nothing; Escape lets a selection go and goes back to the end.
     send(b'\x1b[<0;3;3M\x1b[<0;3;3m\x03')
-    on_screen('Ctrl-C again')
+    rows = on_screen('Ctrl-C again')
+    # The note keeps its room, and how far the view is from the end is cut short.
+    assert rows[-3] == 'Ctrl-C again or Ctrl-D to exit' + ' ' * 27 + '\u21936', rows
     send(b'\x1b[<0;1;3M\x1b[<32;4;3M\x1b[<0;4;3m\x1b')
-    on_screen('more lines below', gone=True)
+    on_screen('\u21936', gone=True)
+    # The next key the editor takes lets the note go.
+    send(b'\x15')
+    on_screen('Ctrl-C again', gone=True)
     # In the last column, beside the conversation's rows and not the dock's: at the end, the thumb
     # at the bottom, sized to the share shown.
     at_end = bar()
@@ -3584,7 +3613,8 @@ def fullscreen_paste_image(read, until, send, output):
     # Without an image on the clipboard, the prompt stays as it is and says so.
     send(b'\x16')
     rows = on_screen('Paste failed: No image on the clipboard')
-    assert rows[-2].endswith('.png') and rows[-1] == 'Paste failed: No image on the clipboard', rows
+    rule = rows.index('\u2500' * 159)
+    assert rows[-1].endswith('.png') and rows[rule - 1] == 'Paste failed: No image on the clipboard', rows
     send(b'\r')
     on_screen('Seen.')
     send(b'\x04')
