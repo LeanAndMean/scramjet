@@ -577,13 +577,17 @@ pub(super) fn terminal_size() -> (usize, usize) {
 }
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
-const SLASH_COMMANDS: [(&str, &str); 13] = [
+const SLASH_COMMANDS: [(&str, &str); 14] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     ("copy", "Copy last agent message to clipboard"),
     ("name", "Set session display name"),
     ("session", "Show session info and stats"),
     ("fork", "Create a new fork from a previous user message"),
+    (
+        "clone",
+        "Duplicate the current session at the current position",
+    ),
     ("tree", "Navigate session tree (switch branches)"),
     ("new", "Start a new session"),
     ("compact", "Manually compact the session context"),
@@ -1643,6 +1647,7 @@ mod tests {
                 "/name",
                 "/session",
                 "/fork",
+                "/clone",
                 "/tree",
                 "/new",
                 "/compact",
@@ -1660,7 +1665,7 @@ mod tests {
                 "  /copy       Copy last agent message to clipboard",
                 "  /name       Set session display name",
                 "  /session    Show session info and stats",
-                "  (1/13)",
+                "  (1/14)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -1671,15 +1676,15 @@ mod tests {
         assert_eq!(
             plain(list.rows(24)),
             [
+                "  /clone",
                 "  /tree",
-                "  /new",
-                "→ /compact",
+                "→ /new",
+                "  /compact",
                 "  /resume",
-                "  /reload",
-                "  (9/13)"
+                "  (9/14)"
             ]
         );
-        for _ in 0..5 {
+        for _ in 0..6 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);

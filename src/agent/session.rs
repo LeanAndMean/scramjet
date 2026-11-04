@@ -503,9 +503,30 @@ impl Session {
             return Ok(None);
         };
         let prompt = prompt_text(&fork.value).to_owned();
+        let path = self.branch_file(&entries, fork.parent, root, None)?;
+        Ok(Some((path, prompt)))
+    }
+
+    /// Saves a session for the project `root` next to this one with the entries on the path to
+    /// the leaf and the session's name, as Scramjet's `/clone` duplicates a session at its
+    /// current position. Returns the new file.
+    pub fn clone_at_leaf(&self, root: &Path) -> io::Result<PathBuf> {
+        let entries = read(&self.path)?;
+        self.branch_file(&entries, self.leaf, root, entries.name.as_deref())
+    }
+
+    /// Saves a session next to this one, forked from it, with the entries of `entries` (this
+    /// file's) on the path to `leaf`, then `name` when given.
+    fn branch_file(
+        &self,
+        entries: &Entries,
+        leaf: Option<usize>,
+        root: &Path,
+        name: Option<&str>,
+    ) -> io::Result<PathBuf> {
         let source = std::fs::read(&self.path)?;
         let mut history = Vec::new();
-        for entry in entries.path(fork.parent) {
+        for entry in entries.path(leaf) {
             let line = source
                 .get(entry.bytes.clone())
                 .ok_or_else(|| invalid(&self.path, "changed while it was read"))?;
@@ -514,13 +535,19 @@ impl Session {
                 history.push(b'\n');
             }
         }
+        if let Some(name) = name {
+            history.extend(serde_json::to_vec(
+                &json!({"type":"session_info","name":name}),
+            )?);
+            history.push(b'\n');
+        }
         let directory = self.path.parent().unwrap_or(Path::new("."));
-        let mut forked = Self::create(directory, root, Some(&self.path))?;
-        if let Err(error) = forked.file.write_all(&history) {
-            let _ = std::fs::remove_file(&forked.path);
+        let mut branched = Self::create(directory, root, Some(&self.path))?;
+        if let Err(error) = branched.file.write_all(&history) {
+            let _ = std::fs::remove_file(&branched.path);
             return Err(error);
         }
-        Ok(Some((forked.path, prompt)))
+        Ok(branched.path)
     }
 
     /// Every entry of the session, in file order.

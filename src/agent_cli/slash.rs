@@ -1,5 +1,5 @@
 //! The built-in commands: `/settings`, `/copy`, `/new`, `/name`, `/session`, `/resume`, `/fork`,
-//! `/tree`, `/model`, `/compact`, `/autopilot`, `/reload`, and `!` commands.
+//! `/clone`, `/tree`, `/model`, `/compact`, `/autopilot`, `/reload`, and `!` commands.
 use super::fuzzy::Haystack;
 use super::interactive::{Interactive, completions, model_line};
 use super::screen;
@@ -67,6 +67,7 @@ pub(super) enum Builtin<'a> {
     Session,
     Resume(&'a str),
     Fork(&'a str),
+    Clone,
     Tree(&'a str),
     Model(&'a str),
     Compact(&'a str),
@@ -91,6 +92,7 @@ impl<'a> Builtin<'a> {
             "/session" if argument.is_empty() => Self::Session,
             "/resume" => Self::Resume(argument),
             "/fork" => Self::Fork(argument),
+            "/clone" if argument.is_empty() => Self::Clone,
             "/tree" => Self::Tree(argument),
             "/model" => Self::Model(argument),
             "/compact" => Self::Compact(argument),
@@ -138,6 +140,7 @@ impl Interactive {
                 self.resume(wanted);
             }
             Some(Builtin::Fork(wanted)) => self.fork(wanted),
+            Some(Builtin::Clone) => self.clone_session(),
             Some(Builtin::Tree(wanted)) => self.tree(wanted),
             Some(Builtin::Model(wanted)) => self.model(wanted),
             Some(Builtin::Compact(focus)) => self.compact(focus),
@@ -1029,6 +1032,21 @@ impl Interactive {
         }
     }
 
+    fn clone_session(&mut self) {
+        match self.agent.clone_session() {
+            Ok(true) => {
+                self.agent.load_model_card();
+                self.replaced(&format!(
+                    "✓ Cloned to new session · {}\nsession {}",
+                    model_line(&self.agent),
+                    self.agent.session_path().display(),
+                ));
+            }
+            Ok(false) => self.say("Nothing to clone yet"),
+            Err(error) => self.say(&format!("error: {error}")),
+        }
+    }
+
     fn tree(&mut self, mut wanted: &str) {
         // The row the tree shows again at after its summary question or summary is cancelled.
         let mut reopen = None;
@@ -1680,6 +1698,7 @@ mod tests {
             "/compact keep tests",
             "/resume 2",
             "/fork",
+            "/clone",
             "/tree",
             "/quit",
         ] {
@@ -1689,6 +1708,7 @@ mod tests {
         for prompt in [
             "/session now",
             "/copy all",
+            "/clone it",
             "/new one",
             "/exit now",
             "/reload all",

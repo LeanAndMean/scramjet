@@ -600,6 +600,25 @@ impl Agent {
         Ok(Some(prompt))
     }
 
+    /// Continues in a new session saved next to the current one with the conversation up to
+    /// where it is and the session's name, as Scramjet's `/clone` duplicates a session; the
+    /// current session stays as it is. Returns false, changing nothing, before any conversation
+    /// (Scramjet's clones its model change then). On failure nothing changes.
+    pub fn clone_session(&mut self) -> Result<bool, AgentError> {
+        if self.conversation.is_empty() {
+            return Ok(false);
+        }
+        let path = self.session.clone_at_leaf(&self.config.root)?;
+        match Session::open(&path) {
+            Ok(opened) => self.switch_session(opened)?,
+            Err(error) => {
+                let _ = std::fs::remove_file(&path);
+                return Err(error.into());
+            }
+        }
+        Ok(true)
+    }
+
     fn switch_session(
         &mut self,
         (session, conversation, prompts): (Session, Vec<Value>, Vec<String>),

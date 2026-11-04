@@ -917,7 +917,7 @@ def completes_paths_and_commands(read, until, send, output):
     on_screen('Autopilot is off')
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     send(b'/')
-    on_screen('(1/13)')
+    on_screen('(1/14)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -1093,6 +1093,34 @@ def fork_session(read, until, send, output):
     send(b'\x04')
 
 
+def clone_session(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/clone\r')
+    on_screen('Nothing to clone yet')
+    send(b'first\r')
+    on_screen('Reply one.')
+    send(b'/name Work\r')
+    on_screen('Session name set: Work')
+    send(b'/clone\r')
+    # The conversation is shown again as it was, in the new session.
+    rows = on_screen('\u2713 Cloned to new session \u00b7 gpt-6-luna \u00b7 thinking medium')
+    text = '\n'.join(rows)
+    assert '> first\n\nReply one.\n' in text and 'Session name set' not in text, text
+    ending(read, output, EMPTY)
+    send(b'second\r')
+    on_screen('Reply two.')
+    # The clone, with the name, is under the original, which has kept only the first exchange.
+    send(b'/resume\r')
+    rows = on_screen('Resume session')
+    at = rows.index('\u203a Work (2 items, now)')
+    assert rows[at + 1] == '     \u2514\u2500 Work (4 items, now) \u2713', rows
+    send(b'\r')
+    rows = on_screen('\u2713 Resumed session \u00b7 gpt-6-luna')
+    assert 'Reply one.' in rows and 'Reply two.' not in rows, rows
+    send(b'\x04')
+
+
 def tree_session(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -1218,6 +1246,12 @@ started = sorted(set(session_files()) - known)
 prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
 assert prompts == [['first', 'second'], ['first', 'second again']], prompts
 assert json.loads(open(started[0]).readlines()[-1]) == {'type': 'model_change', 'model': 'claude-haiku-5-5'}
+known = set(session_files())
+run([], clone_session, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]))
+started = sorted(set(session_files()) - known)
+prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
+assert prompts == [['first'], ['first', 'second']], prompts
+assert json.loads(open(started[1]).readline())['parentSession'] == started[0]
 known = set(session_files())
 branching = serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.'),
                            (['The branch said two.'], 'The branch said two.'),

@@ -49,7 +49,8 @@ level the model's Proxy card lists. Both are saved in the settings. /new starts 
 from; in its list Ctrl+R renames the selected session and Ctrl+D deletes it once Enter confirms
 (to the trash when a `trash` command is installed). /fork chooses one of this
 session's prompts and continues in a new session from before it, with it in the prompt for
-editing. /tree shows this session's branches and continues from the entry chosen, in the same
+editing; /clone continues in a new session with the conversation as it is. /tree shows this
+session's branches and continues from the entry chosen, in the same
 session: from before a prompt, which is put in the prompt for editing, or from after a reply
 or tool result. When that leaves part of the conversation, it asks whether the model should
 summarize that branch, also with your own instructions, for the conversation to continue

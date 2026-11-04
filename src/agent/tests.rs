@@ -835,6 +835,84 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
 }
 
 #[test]
+fn a_clone_continues_the_conversation_where_it_is_in_a_new_session() {
+    let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+        "cloned",
+        fixture::known_usage(),
+    ))]);
+    let (mut agent, scratch) = agent(endpoint, "clone");
+    let fresh = agent.session_path().to_owned();
+    assert!(!agent.clone_session().unwrap());
+    assert_eq!(agent.session_path(), fresh);
+
+    let reply = |text: &str, model: &str| {
+        json!({"type":"message","role":"assistant",
+            "content":[{"type":"output_text","text":text}],"_scramjet_model":model})
+    };
+    let original = scratch.0.join("1700000000000-1.jsonl");
+    write_session(
+        &original,
+        &[
+            json!({"type":"session","version":1}),
+            json!({"type":"model_change","model":"a"}),
+            json!({"role":"user","content":"one"}),
+            reply("first", "a"),
+            json!({"type":"session_info","name":"Work"}),
+            json!({"role":"user","content":"two"}),
+            reply("second", "a"),
+            json!({"type":"branch","parent":3}),
+            json!({"type":"model_change","model":"b"}),
+            json!({"role":"user","content":"other"}),
+            reply("another", "b"),
+        ],
+        std::time::SystemTime::now(),
+    );
+    let saved = std::fs::read_to_string(&original).unwrap();
+    agent.resume_session(&original).unwrap();
+    assert!(agent.clone_session().unwrap());
+    let cloned = agent.session_path().to_owned();
+    assert_ne!(cloned, original);
+    assert_eq!(cloned.parent(), original.parent());
+    assert_eq!(std::fs::read_to_string(&original).unwrap(), saved);
+    let saved: Vec<_> = saved.lines().collect();
+    let lines: Vec<String> = std::fs::read_to_string(&cloned)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    // The path to the leaf, without the branch left behind, then the name.
+    let path = [saved[1], saved[2], saved[3], saved[8], saved[9], saved[10]];
+    assert_eq!(lines[1..7], path);
+    assert_eq!(lines[7], r#"{"name":"Work","type":"session_info"}"#);
+    assert_eq!(lines.len(), 8);
+    let header: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(header["parentSession"], json!(original));
+    assert_eq!(agent.session_name(), Some("Work"));
+    assert_eq!(agent.model(), "b");
+    assert_eq!(agent.prompts(), ["one", "other"]);
+
+    let mut ui = Recorder::default();
+    agent
+        .turn("more", &mut ui, &AtomicBool::new(false))
+        .unwrap();
+    let bodies = server.join().unwrap();
+    assert_eq!(bodies[0]["model"], "b");
+    let input = bodies[0]["input"].as_array().unwrap();
+    let texts: Vec<_> = input
+        .iter()
+        .map(|item| match &item["content"] {
+            Value::String(text) => text.as_str(),
+            parts => parts[0]["text"].as_str().unwrap(),
+        })
+        .collect();
+    assert_eq!(texts, ["one", "first", "other", "another", "more"]);
+    assert_eq!(
+        std::fs::read_to_string(&original).unwrap(),
+        saved.join("\n") + "\n"
+    );
+}
+
+#[test]
 fn the_last_reply_is_the_text_of_the_latest_reply_that_has_any() {
     let (endpoint, server) = serve(vec![stream(&fixture::text_events(
         "\n**Done**: it works.\n\n- one\n- two\n\n",
