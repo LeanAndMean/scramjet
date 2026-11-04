@@ -6,8 +6,25 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
+    sync::{Mutex, PoisonError},
     time::SystemTime,
 };
+
+/// Held while lines are written to a session file, so that a process ending on a signal leaves
+/// none cut short, which would make the file unreadable.
+static WRITING: Mutex<()> = Mutex::new(());
+
+/// Writes `bytes` to the session file `file` whole, unless the process ends first.
+fn write_whole(file: &mut File, bytes: &[u8]) -> io::Result<()> {
+    let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+    file.write_all(bytes)
+}
+
+/// Waits for lines being written to a session file, and keeps others from starting, for a
+/// process about to exit.
+pub(super) fn end_writes() {
+    std::mem::forget(WRITING.lock().unwrap_or_else(PoisonError::into_inner));
+}
 
 /// A saved session as `/resume` lists it.
 pub struct SessionInfo {
@@ -699,7 +716,7 @@ impl Session {
         let after_header = bytes.iter().position(|&byte| byte == b'\n');
         let lines = after_header.map_or(&[][..], |end| &bytes[end + 1..]);
         let mut forked = Self::create(directory, root, Some(source))?;
-        if let Err(error) = forked.file.write_all(lines) {
+        if let Err(error) = write_whole(&mut forked.file, lines) {
             let _ = std::fs::remove_file(&forked.path);
             return Err(error);
         }
@@ -716,7 +733,7 @@ impl Session {
         }
         let mut header = serde_json::to_vec(&header)?;
         header.push(b'\n');
-        file.write_all(&header)?;
+        write_whole(&mut file, &header)?;
         let _ = file.lock_shared();
         Ok(Self {
             path,
@@ -842,7 +859,7 @@ impl Session {
         let history = entries.history(&self.path, &source, leaf, name)?;
         let directory = self.path.parent().unwrap_or(Path::new("."));
         let mut branched = Self::create(directory, root, Some(&self.path))?;
-        if let Err(error) = branched.file.write_all(&history) {
+        if let Err(error) = write_whole(&mut branched.file, &history) {
             let _ = std::fs::remove_file(&branched.path);
             return Err(error);
         }
@@ -883,7 +900,7 @@ impl Session {
         })?;
         read(source)?;
         let (path, mut file, _) = new_file(directory)?;
-        if let Err(error) = file.write_all(&bytes) {
+        if let Err(error) = write_whole(&mut file, &bytes) {
             let _ = std::fs::remove_file(&path);
             return Err(error);
         }
@@ -1085,7 +1102,7 @@ impl Session {
 
     /// Writes `lines` at the file's end; callers count them once it returns.
     fn write(&mut self, lines: &[u8]) -> io::Result<()> {
-        self.file.write_all(lines)?;
+        write_whole(&mut self.file, lines)?;
         self.size += lines.len() as u64;
         Ok(())
     }

@@ -3,6 +3,7 @@ mod children;
 mod clipboard;
 mod diff;
 mod editor;
+mod exit;
 mod export;
 mod file_search;
 mod footer;
@@ -26,7 +27,7 @@ mod text;
 mod tree;
 
 use args::{Options, Start, USAGE};
-use rustix::termios::{self, OptionalActions, QueueSelector};
+use rustix::termios::{self, QueueSelector};
 use scramjet_rs::agent::{
     self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
     Next, Session, SessionChoice, SkillOptions,
@@ -354,25 +355,21 @@ fn remembered(settings: &Settings, agent: &Agent, warnings: &mut Vec<String>) ->
 }
 
 /// Ctrl-C sets `cancel`, and a second one while it is set exits; Ctrl+T during a turn (SIGQUIT,
-/// see `InputMode::turn`) flips `hide_thinking`. Ctrl-Z stops and continues as `job` says.
+/// see `InputMode::turn`) flips `hide_thinking`. Ctrl-Z stops and continues as `job` says, and
+/// SIGTERM and SIGHUP exit as `exit` says.
 fn handle_signals(cancel: &Arc<AtomicBool>, hide_thinking: &Arc<AtomicBool>) -> Result<(), String> {
     let startup = termios::tcgetattr(std::io::stdin()).ok();
     job::install(startup.clone()).map_err(|e| e.to_string())?;
+    exit::install(startup).map_err(|e| e.to_string())?;
     let flag = cancel.clone();
-    // SAFETY: the handler only swaps an atomic, calls tcflush, tcsetattr and _exit, all
+    // SAFETY: the handler only swaps an atomic and calls tcflush and `exit::on_signal`, all
     // async-signal-safe.
     unsafe {
         signal_hook::low_level::register(signal_hook::consts::SIGINT, move || {
             // A second Ctrl-C while a cancellation is still pending exits.
             if flag.swap(true, Ordering::Relaxed) {
-                if let Some(startup) = &startup {
-                    let _ = termios::tcsetattr(
-                        BorrowedFd::borrow_raw(0),
-                        OptionalActions::Now,
-                        startup,
-                    );
-                }
-                signal_hook::low_level::exit(130);
+                exit::on_signal(signal_hook::consts::SIGINT);
+                return;
             }
             // Keys typed before it answer nothing and are not left for the shell.
             let _ = termios::tcflush(BorrowedFd::borrow_raw(0), QueueSelector::IFlush);

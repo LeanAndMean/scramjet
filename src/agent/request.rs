@@ -2,8 +2,8 @@
 //! does.
 use super::client::{self, ClientError, ModelInfo, Protocol};
 use super::{
-    Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, pricing, rates,
-    shown_only, tools,
+    Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, pricing, rates, sent,
+    tools,
 };
 use serde_json::{Value, json};
 use std::{
@@ -49,12 +49,13 @@ impl Agent {
         request
     }
 
-    /// The conversation as sent to the current model. As in Scramjet, items another model produced
-    /// lose what only that model accepts: encrypted reasoning, and `fc_` ids paired with it.
+    /// The conversation as sent to the current model: the items a model is sent (`sent`). As in
+    /// Scramjet, items another model produced lose what only that model accepts: encrypted
+    /// reasoning, and `fc_` ids paired with it.
     fn replay_conversation(&self) -> Vec<Value> {
         self.conversation
             .iter()
-            .filter(|item| !shown_only(item))
+            .filter(|item| sent(item))
             .map(|item| {
                 let mut item = item.clone();
                 let producer = item.as_object_mut().and_then(|object| {
@@ -239,7 +240,7 @@ fn without_images(request: &Value) -> Option<Value> {
 mod tests {
     use super::*;
     use crate::agent::tests::*;
-    use crate::agent::{AgentConfig, SessionChoice};
+    use crate::agent::{AgentConfig, Session, SessionChoice};
     use crate::provider_fixture as fixture;
 
     #[test]
@@ -360,6 +361,38 @@ response is incomplete; retry the request."});
         ] {
             assert!(!failure(None, other).overflow, "{other}");
         }
+    }
+
+    #[test]
+    fn replay_sends_only_messages_and_the_items_of_replies() {
+        let (mut agent, scratch) = agent(([127, 0, 0, 1], 9).into(), "allowlist");
+        let path = scratch.0.join("entries.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session\",\"version\":1}\n",
+                "{\"role\":\"user\",\"content\":\"go\"}\n",
+                "{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Done.\",\"_scramjet_model\":\"test-model\"}\n",
+                "{\"type\":\"turn_stopped\",\"error\":\"HTTP 500\"}\n",
+                "{\"type\":\"bang_excluded\",\"command\":\"echo secret\",\"output\":\"secret\\n\"}\n",
+                "{\"type\":\"from_a_later_build\",\"role\":\"user\",\"content\":\"unknown\"}\n",
+                "{\"type\":null,\"role\":\"user\",\"content\":\"untyped\"}\n",
+                "{\"role\":\"assistant\",\"content\":\"not a reply\"}\n",
+                "{\"role\":\"user\",\"content\":\"next\"}\n",
+            ),
+        )
+        .unwrap();
+        let (_, conversation, _) = Session::open(&path).unwrap();
+        assert_eq!(conversation.len(), 8);
+        agent.conversation = conversation;
+        assert_eq!(
+            agent.replay_conversation(),
+            [
+                json!({"role":"user","content":"go"}),
+                json!({"type":"message","role":"assistant","content":"Done."}),
+                json!({"role":"user","content":"next"}),
+            ]
+        );
     }
 
     #[test]

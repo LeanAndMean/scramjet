@@ -100,7 +100,6 @@ pub(super) struct System<'a> {
 
 impl Exec for System<'_> {
     fn run(&mut self, program: &str, args: &[&str], input: Option<&str>) -> Ran {
-        use std::os::unix::process::CommandExt;
         let mut command = Command::new(program);
         command
             .args(args)
@@ -113,9 +112,8 @@ impl Exec for System<'_> {
                 None => Stdio::null(),
             })
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        let Ok(mut child) = command.spawn() else {
+            .stderr(Stdio::piped());
+        let Ok((mut child, group)) = super::tools::Group::spawn(&mut command) else {
             return Ran::default();
         };
         let writer = child.stdin.take().map(|mut stdin| {
@@ -132,9 +130,7 @@ impl Exec for System<'_> {
                 Err(_) => break None,
             }
             if self.cancel.load(Ordering::Relaxed) || started.elapsed() > TIMEOUT {
-                if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
-                    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-                }
+                group.kill();
                 let _ = child.wait();
                 break None;
             }

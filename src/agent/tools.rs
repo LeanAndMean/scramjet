@@ -10,7 +10,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -916,6 +916,50 @@ fn search(root: &Path, path: &Path, program: &Path, hidden: Option<&Hidden>) -> 
     }
 }
 
+/// The process groups of the commands running, which `end_commands` kills.
+static GROUPS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+
+/// A command started in a process group of its own, which `end_commands` kills until this is
+/// dropped. Drop it once the command was waited for.
+pub(super) struct Group(i32);
+
+impl Group {
+    pub(super) fn spawn(command: &mut Command) -> io::Result<(std::process::Child, Self)> {
+        use std::os::unix::process::CommandExt;
+        // Held while spawning, so that none starts once `end_commands` has run.
+        let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
+        let child = command.process_group(0).spawn()?;
+        let group = child.id() as i32;
+        groups.push(group);
+        Ok((child, Self(group)))
+    }
+
+    pub(super) fn kill(&self) {
+        kill_group(self.0);
+    }
+}
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
+        groups.retain(|&group| group != self.0);
+    }
+}
+
+fn kill_group(group: i32) {
+    if let Some(pid) = rustix::process::Pid::from_raw(group) {
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
+}
+
+/// Kills the commands running, as cancelling them does, and keeps any other from starting, for a
+/// process about to exit.
+pub(super) fn end_commands() {
+    let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
+    groups.drain(..).for_each(kill_group);
+    std::mem::forget(groups);
+}
+
 /// Runs `command` until it ends, `cancel` is set or `line` returns false for a line of its
 /// standard output: its exit status, `None` when `line` stopped it, and the start of its
 /// standard error.
@@ -924,21 +968,15 @@ fn run_lines(
     cancel: &AtomicBool,
     mut line: impl FnMut(&[u8]) -> bool,
 ) -> Result<(Option<ExitStatus>, String), String> {
-    use std::{io::BufRead, os::unix::process::CommandExt, sync::mpsc};
+    use std::{io::BufRead, sync::mpsc};
     let program = command.get_program().to_string_lossy().into_owned();
-    let mut child = command
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .map_err(|e| format!("cannot start {program}: {e}"))?;
-    let group = rustix::process::Pid::from_raw(child.id() as i32);
-    let kill = || {
-        if let Some(pid) = group {
-            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-        }
-    };
+        .stderr(Stdio::piped());
+    let (mut child, group) =
+        Group::spawn(&mut command).map_err(|e| format!("cannot start {program}: {e}"))?;
+    let kill = || group.kill();
     let mut errors = child.stderr.take().unwrap();
     let stderr = std::thread::spawn(move || {
         let (mut kept, mut buffer) = (Vec::new(), [0u8; 8192]);
@@ -1225,15 +1263,13 @@ fn run_process(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
-    use std::os::unix::process::CommandExt;
     let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
-    let mut child = {
+    let (mut child, group) = {
         process
             .stdin(Stdio::null())
             .stdout(writer.try_clone().map_err(|e| e.to_string())?)
-            .stderr(writer)
-            .process_group(0);
-        let spawned = process.spawn();
+            .stderr(writer);
+        let spawned = Group::spawn(&mut process);
         // It holds the pipe's write ends, which must close for the output to end.
         drop(process);
         spawned.map_err(|e| format!("cannot start {program}: {e}"))?
@@ -1277,9 +1313,7 @@ fn run_process(
             stopped = Some("timed out");
         }
         if stopped.is_some() {
-            if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
-                let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-            }
+            group.kill();
             break child.wait().map_err(|e| e.to_string())?;
         }
         std::thread::sleep(Duration::from_millis(20));

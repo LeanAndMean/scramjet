@@ -95,14 +95,31 @@ const SUBAGENTS: &str = "_scramjet_subagents";
 /// Stored, as `true`, with Scramjet's status check, a user message the user never typed, so it
 /// is neither shown nor recalled.
 pub(super) const PROBE: &str = "_scramjet_probe";
-/// Items of the conversation that are only shown, never sent to a model, as Scramjet keeps its
-/// failed replies and `!!` output out of the context: how a turn stopped (`turn_stopped`, with
-/// the `error` unless it was cancelled) and a `!!` command (`bang_excluded`, with its `command`
-/// and the `output` shown).
-const SHOWN_ONLY: [&str; 2] = ["turn_stopped", "bang_excluded"];
+/// The response items a model is sent, besides user messages; replies hold only these. Other
+/// items of the conversation are only shown, as Scramjet keeps its failed replies and `!!` output
+/// out of the context: how a turn stopped (`turn_stopped`, with the `error` unless it was
+/// cancelled) and a `!!` command (`bang_excluded`, with its `command` and the `output` shown).
+/// So is an entry of a type this build does not know, as Scramjet's `convertToLlm` drops one.
+const SENT: [&str; 4] = [
+    "message",
+    "reasoning",
+    "function_call",
+    "function_call_output",
+];
 
-fn shown_only(item: &Value) -> bool {
-    (item["type"].as_str()).is_some_and(|kind| SHOWN_ONLY.contains(&kind))
+fn sent(item: &Value) -> bool {
+    match item["type"].as_str() {
+        Some(kind) => SENT.contains(&kind),
+        // A prompt, `!` command, summary or status check: a user message without a type.
+        None => item.get("type").is_none() && item["role"] == "user",
+    }
+}
+
+/// Ends what must not go on, or be cut short, when the process exits on a signal: kills the
+/// commands running and waits for lines being written to a session file. Neither starts again.
+pub fn end() {
+    tools::end_commands();
+    session::end_writes();
 }
 
 pub struct AgentConfig {

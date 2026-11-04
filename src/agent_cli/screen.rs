@@ -2340,8 +2340,13 @@ fn muted(text: &str) -> Line {
 /// drags and wheel reported (SGR), until dropped.
 struct Screen;
 
+/// Set while a `Screen` is shown, from before it is entered until after it is left.
+static SHOWN: AtomicBool = AtomicBool::new(false);
+const LEAVE: &str = "\x1b[?1002l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l";
+
 impl Screen {
     fn enter() -> Self {
+        SHOWN.store(true, Ordering::SeqCst);
         eprint!("\x1b[?1049h\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[2J");
         Self
     }
@@ -2349,9 +2354,17 @@ impl Screen {
 
 impl Drop for Screen {
     fn drop(&mut self) {
-        eprint!("\x1b[?1002l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l");
+        eprint!("{LEAVE}");
         let _ = io::stderr().flush();
+        SHOWN.store(false, Ordering::SeqCst);
     }
+}
+
+/// What gives the terminal back from the screen, when it is shown, for a process exiting without
+/// dropping it: the end of a frame being drawn, bracketed paste off, as `RawMode` turns it off,
+/// and the screen left. Read it holding stderr's lock, so that no frame follows it.
+pub(super) fn leave_on_exit() -> Option<String> {
+    (SHOWN.load(Ordering::SeqCst)).then(|| format!("\x1b[?2026l\x1b[?2004l{LEAVE}"))
 }
 
 /// The terminal's input, and the pipe the session writes to so that the screen looks at what it

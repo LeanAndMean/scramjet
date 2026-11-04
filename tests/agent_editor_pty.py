@@ -10,6 +10,7 @@ import pty
 import re
 import select
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -347,10 +348,11 @@ with open(failing_script, 'w') as script_file:
 os.chmod(failing_script, 0o755)
 
 
-def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, rows=24, forget_models=True):
-    """Runs the agent in `project` on a terminal for `script`. Unless `forget_models` is false, the
-    models chosen are forgotten after it for the project (its `defaultModel` stays in the settings,
-    which a journey that chooses one has of its own)."""
+def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, rows=24, forget_models=True,
+        signal=None):
+    """Runs the agent in `project` on a terminal for `script`, then sends it `signal` if given.
+    Unless `forget_models` is false, the models chosen are forgotten after it for the project (its
+    `defaultModel` stays in the settings, which a journey that chooses one has of its own)."""
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
     before = termios.tcgetattr(slave)
@@ -383,6 +385,8 @@ def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, 
         os.write(master, data)
 
     script(read, until, send, output)
+    if signal:
+        child.send_signal(signal)
     assert child.wait(timeout=10) == status, bytes(output[-2000:])
     if forget_models and os.path.exists(remembered_models):
         os.remove(remembered_models)
@@ -791,6 +795,77 @@ outputs = [item['output'] for item in map(json.loads, open(cancelled)) if item.g
 assert outputs == ['The user cancelled the turn before this tool call ran.'], outputs
 run(['--ask'], approval_shows_hidden_characters, disguised)
 run([], exit_during_turn, calling)
+
+
+def running(command):
+    """Whether a process runs `command`, waiting up to two seconds for it to end."""
+    end = time.monotonic() + 2
+    while subprocess.run(['pgrep', '-f', command], stdout=subprocess.DEVNULL).returncode == 0:
+        if time.monotonic() > end:
+            return True
+        time.sleep(.05)
+    return False
+
+
+def started(command):
+    """Waits until a process runs `command`."""
+    end = time.monotonic() + 10
+    while subprocess.run(['pgrep', '-f', command], stdout=subprocess.DEVNULL).returncode != 0:
+        assert time.monotonic() < end, command
+        time.sleep(.05)
+
+
+def readable_sessions():
+    """Whether every line of every session file is whole."""
+    for path in session_files():
+        for line in open(path):
+            json.loads(line)
+    return True
+
+
+def command_on_screen(command):
+    def script(read, until, send, output):
+        shown, on_screen = full_screen()(read, output)
+        on_screen('\u2500' * 20)
+        send(b'go\r')
+        on_screen('bash ' + command)
+        started(command)
+    return script
+
+
+def screen_idle(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+
+
+def printed_command(command):
+    def script(read, until, send, output):
+        until(b'bash ' + command.encode())
+        started(command)
+    return script
+
+
+def printed_cancelled_twice(read, until, send, output):
+    until(b'bash setsid')
+    read(.3)
+    # The first cancels the turn, the second exits while the cancellation waits for the output.
+    send(b'\x03')
+    read(.3)
+    send(b'\x03')
+
+
+# As Scramjet's shutdown: the command running is killed and the terminal given back, the screen
+# left, with the status of a process killed by the signal. The user's turn sees the credential
+# stores, so its command runs outside the sandbox, which would end it with the agent.
+run([], command_on_screen('sleep 31.25'), serve_call('sleep 31.25'), status=143, signal=signal.SIGTERM)
+assert not running('sleep 31.25')
+assert readable_sessions()
+run([], screen_idle, status=129, signal=signal.SIGHUP)
+visible = config_home('signals', '{"hideCredentials": "never"}')
+run(['-p', 'go'], printed_command('sleep 32.5'), serve_call('sleep 32.5'), status=143, signal=signal.SIGTERM,
+    variables={'XDG_CONFIG_HOME': visible})
+assert not running('sleep 32.5')
+run(['-p', 'go'], printed_cancelled_twice, calling, status=130)
 
 
 def thinking_counts_seconds(read, until, send, output):
