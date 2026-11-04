@@ -6,6 +6,7 @@ use super::interactive::{Interactive, model_line};
 use super::select::{self, Act, Picked, Picker, Spot};
 use super::settings::{Settings, card_level, scramjet_level};
 use super::style::{MODEL_OFF, MODEL_ON, MUTED, RESET};
+use super::terminal;
 use super::text::{clip, visible};
 use scramjet_rs::agent::{Agent, ModelOption};
 
@@ -415,7 +416,8 @@ impl Interactive {
                 let provider = (model.provider.as_deref()).map_or_else(String::new, |provider| {
                     format!(" {MUTED}[{}]{RESET}", visible(provider))
                 });
-                clip(&format!("{}{provider}", visible(&model.id)), width)
+                let rate = shown_rate(model.rate);
+                clip(&format!("{}{provider}{rate}", visible(&model.id)), width)
             };
             let (title, keys) = match (scoped.is_empty(), in_scope) {
                 (true, _) => ("Select model", select::HINT),
@@ -520,12 +522,13 @@ impl Interactive {
                 let provider = (provider(id)).map_or_else(String::new, |provider| {
                     format!(" {MUTED}[{provider}]{RESET}")
                 });
+                let rate = shown_rate(model(id).and_then(|model| model.rate));
                 let mark = match (&chosen.on, chosen.is_on(id)) {
                     (None, _) => String::new(),
                     (Some(_), true) => format!(" {MODEL_ON}✓{RESET}"),
                     (Some(_), false) => format!(" {MODEL_OFF}✗{RESET}"),
                 };
-                clip(&format!("{id}{provider}{mark}"), width)
+                clip(&format!("{id}{provider}{rate}{mark}"), width)
             };
             let picker = Picker::search(
                 "Models for Ctrl+P",
@@ -591,6 +594,13 @@ impl Interactive {
     }
 }
 
+/// A model's output rate after its provider in a list, as Scramjet's selectors show it.
+fn shown_rate(rate: Option<f64>) -> String {
+    rate.map_or_else(String::new, |rate| {
+        format!(" {MUTED}{}{RESET}", terminal::rate(rate))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,6 +613,7 @@ mod tests {
             reasoning: true,
             levels: Vec::new(),
             default_level: None,
+            rate: None,
         }
     }
 

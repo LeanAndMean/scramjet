@@ -86,8 +86,9 @@ enum ToScreen {
     Models(Vec<String>),
     /// What the footer shows of the session now.
     Footer(footer::Shown),
-    /// The session's tokens and how full the context is, after a response or a compaction.
-    Usage(Tokens, Option<u64>),
+    /// The session's tokens, how full the context is and the model's output rate, after a
+    /// response or a compaction.
+    Usage(Tokens, Option<u64>, Option<f64>),
     Dialog(Dialog, mpsc::Sender<Answer>),
     /// The dialog's question is no longer asked.
     Dismiss,
@@ -485,8 +486,8 @@ impl AgentUi for Link {
     fn follow_up(&mut self) -> Vec<String> {
         deliver(&mut self.queue().follow_ups, self.modes.1)
     }
-    fn usage(&mut self, tokens: Tokens, context: Option<u64>) {
-        self.send(ToScreen::Usage(tokens, context));
+    fn usage(&mut self, tokens: Tokens, context: Option<u64>, rate: Option<f64>) {
+        self.send(ToScreen::Usage(tokens, context, rate));
     }
     fn effort(&mut self) -> Option<String> {
         self.take_effort()
@@ -1063,8 +1064,9 @@ impl App {
             }
             ToScreen::Models(models) => self.editor.set_models(models),
             ToScreen::Footer(shown) => self.footer.shown = shown,
-            ToScreen::Usage(tokens, context) => {
-                (self.footer.shown.tokens, self.footer.shown.context) = (tokens, context)
+            ToScreen::Usage(tokens, context, rate) => {
+                let shown = &mut self.footer.shown;
+                (shown.tokens, shown.context, shown.rate) = (tokens, context, rate)
             }
             ToScreen::Dialog(dialog, reply) => {
                 let shown = match dialog {

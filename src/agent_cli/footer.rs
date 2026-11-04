@@ -1,10 +1,10 @@
 //! The two lines under the prompt, as Scramjet's footer: the project's directory with its Git
-//! branch and the session's name, then the session's tokens and cost, how full the context is,
-//! and the model with its effort.
+//! branch and the session's name, then the session's tokens with the model's output rate, the
+//! cost, how full the context is, and the model with its provider and effort.
 
 use super::settings::scramjet_level;
 use super::style::{FOOTER, FOOTER_FULL, FOOTER_NEARLY_FULL, RESET};
-use super::terminal::{context, dollars, tokens};
+use super::terminal::{dollars, rate, tokens};
 use super::text::{clip, one_line, visible};
 use scramjet_rs::agent::{Agent, Tokens};
 use std::{
@@ -26,7 +26,11 @@ pub(super) struct Shown {
     /// How full the context is (`Agent::context_tokens`), out of `window` when known.
     pub(super) context: Option<u64>,
     pub(super) window: Option<u64>,
+    /// The model's median output rate, in tokens a second (`Agent::output_rate`).
+    pub(super) rate: Option<f64>,
     pub(super) model: String,
+    /// The model's provider, when the endpoint has several (`Agent::provider`).
+    pub(super) provider: Option<String>,
     /// The effort level, for a model that reasons.
     pub(super) effort: Option<String>,
 }
@@ -38,7 +42,9 @@ impl Shown {
             tokens: agent.session_tokens(),
             context: agent.context_tokens(),
             window: agent.context_window(),
+            rate: agent.output_rate(),
             model: agent.model().to_owned(),
+            provider: agent.provider().map(str::to_owned),
             effort: (agent.effort())
                 .filter(|_| agent.reasons())
                 .map(str::to_owned),
@@ -98,30 +104,35 @@ impl Footer {
         [format!("{FOOTER}{place}{RESET}"), self.stats(room)]
     }
 
-    /// As Scramjet's: the tokens that are not zero, what was spent, how full the context is (in
-    /// the warning color past 70%, the error color past 90%), and the model with its effort at
-    /// the right when there is room.
+    /// As Scramjet's: the tokens that are not zero, the output's with the model's rate, what was
+    /// spent, how full the context is (in the warning color past 70%, the error color past 90%),
+    /// with `auto` as compaction runs by itself, and at the right when there is room the model
+    /// with its effort, after its provider when that fits too.
     fn stats(&self, room: usize) -> String {
         let shown = &self.shown;
+        let output_rate = (shown.rate).map_or_else(String::new, |r| format!(" ({})", rate(r)));
         let mut counts = Vec::new();
-        for (mark, count) in [
-            ("↑", shown.tokens.input),
-            ("↓", shown.tokens.output),
-            ("R", shown.tokens.cache_read),
-            ("W", shown.tokens.cache_write),
+        for (mark, count, after) in [
+            ("↑", shown.tokens.input, ""),
+            ("↓", shown.tokens.output, output_rate.as_str()),
+            ("R", shown.tokens.cache_read, ""),
+            ("W", shown.tokens.cache_write, ""),
         ] {
             if count > 0 {
-                counts.push(format!("{mark}{}", tokens(count)));
+                counts.push(format!("{mark}{}{after}", tokens(count)));
             }
         }
         counts.extend(dollars(shown.tokens.cost, shown.tokens.unpriced, 3));
         let (full, percent) = match (shown.context, shown.window) {
-            (Some(count), window) => (
-                context(count, window),
-                window.map(|window| count as f64 * 100.0 / window as f64),
-            ),
-            (None, Some(window)) => (format!("?/{} (?%)", tokens(window)), None),
-            (None, None) => ("?".to_owned(), None),
+            (count, Some(window @ 1..)) => {
+                let percent = count.map(|count| count as f64 * 100.0 / window as f64);
+                let count = count.map_or_else(|| "?".to_owned(), tokens);
+                let shown = percent.map_or_else(|| "?".to_owned(), |p| format!("{p:.1}"));
+                let window = tokens(window);
+                (format!("{count}/{window} ({shown}%, auto)"), percent)
+            }
+            (Some(count), _) => (tokens(count), None),
+            (None, _) => ("?".to_owned(), None),
         };
         let before = match counts.is_empty() {
             true => String::new(),
@@ -137,7 +148,12 @@ impl Footer {
             None => shown.model.clone(),
         };
         let model = one_line(&model);
+        let named =
+            (shown.provider.as_deref()).map(|provider| one_line(&format!("({provider}) {model}")));
         let right = match room.checked_sub(left.width() + 2) {
+            Some(fits) if named.as_ref().is_some_and(|named| fits >= named.width()) => {
+                named.unwrap_or_default()
+            }
             Some(fits) if fits >= model.width() => model,
             Some(fits) if fits > 0 => cut(&model, fits),
             _ => String::new(),
@@ -257,20 +273,22 @@ mod tests {
             },
             context: Some(53_000),
             window: Some(1_000_000),
+            rate: None,
             model: "claude-opus-5-5".into(),
+            provider: None,
             effort: Some("high".into()),
         }
     }
 
     #[test]
     fn the_lines_say_where_what_was_spent_and_the_model_as_scramjets() {
-        let [place, stats] = footer(opus()).lines(61).map(|line| plain(&line));
+        let [place, stats] = footer(opus()).lines(67).map(|line| plain(&line));
         assert_eq!(place, "~/repos/project (main) • Refactor");
         assert_eq!(
             stats,
-            "↑12k ↓3.4k R104k 53k/1.0M (5.3%)      claude-opus-5-5 • high"
+            "↑12k ↓3.4k R104k 53k/1.0M (5.3%, auto)      claude-opus-5-5 • high"
         );
-        assert_eq!(stats.width(), 60);
+        assert_eq!(stats.width(), 66);
         // Tokens never counted are left out; `none` is Scramjet's `off`.
         let fresh = Shown {
             name: None,
@@ -282,7 +300,7 @@ mod tests {
         let [place, stats] = footer(fresh).lines(61).map(|line| plain(&line));
         assert_eq!(place, "~/repos/project (main)");
         assert!(
-            stats.starts_with("0/1.0M (0.0%) ")
+            stats.starts_with("0/1.0M (0.0%, auto) ")
                 && stats.ends_with(" claude-opus-5-5 • thinking off"),
             "{stats}"
         );
@@ -308,7 +326,7 @@ mod tests {
         };
         assert_eq!(
             spent(0.4567, false),
-            "↑12k ↓3.4k R104k W2.0k $0.457 53k/1.0M (5.3%)            claude-opus-5-5 • high"
+            "↑12k ↓3.4k R104k W2.0k $0.457 53k/1.0M (5.3%, auto)      claude-opus-5-5 • high"
         );
         // Responses without a price, or saved before costs were, leave the total open.
         assert!(spent(0.4567, true).starts_with("↑12k ↓3.4k R104k W2.0k $0.457+? 53k/1.0M "));
@@ -324,7 +342,7 @@ mod tests {
         };
         let stats = plain(&footer(unknown.clone()).lines(80)[1]);
         assert!(
-            stats.starts_with("↑12k ↓3.4k R104k ?/1.0M (?%) "),
+            stats.starts_with("↑12k ↓3.4k R104k ?/1.0M (?%, auto) "),
             "{stats}"
         );
         let no_card = Shown {
@@ -340,11 +358,39 @@ mod tests {
     }
 
     #[test]
+    fn the_output_shows_the_models_rate_and_the_model_its_provider_when_both_fit() {
+        let shown = Shown {
+            rate: Some(52.4),
+            provider: Some("anthropic".into()),
+            ..opus()
+        };
+        let stats = |shown: &Shown, width| plain(&footer(shown.clone()).lines(width)[1]);
+        assert_eq!(
+            stats(&shown, 85),
+            "↑12k ↓3.4k (52tok/s) R104k 53k/1.0M (5.3%, auto)  (anthropic) claude-opus-5-5 • high"
+        );
+        // Without room for the provider, the model shows without it before it is cut.
+        assert_eq!(
+            stats(&shown, 84),
+            "↑12k ↓3.4k (52tok/s) R104k 53k/1.0M (5.3%, auto)             claude-opus-5-5 • high"
+        );
+        // Nothing written yet shows no rate.
+        let unwritten = Shown {
+            tokens: Tokens::default(),
+            ..shown
+        };
+        assert!(stats(&unwritten, 85).starts_with("53k/1.0M (5.3%, auto) "));
+    }
+
+    #[test]
     fn a_narrow_screen_cuts_the_model_then_the_counts() {
         let stats = |width| plain(&footer(opus()).lines(width)[1]);
         // The model's name is cut without a mark, two columns after the counts.
-        assert_eq!(stats(45), "↑12k ↓3.4k R104k 53k/1.0M (5.3%)  claude-opu");
-        assert_eq!(stats(35), "↑12k ↓3.4k R104k 53k/1.0M (5.3%)");
+        assert_eq!(
+            stats(51),
+            "↑12k ↓3.4k R104k 53k/1.0M (5.3%, auto)  claude-opu"
+        );
+        assert_eq!(stats(41), "↑12k ↓3.4k R104k 53k/1.0M (5.3%, auto)");
         assert_eq!(stats(20), "↑12k ↓3.4k R104k 5…");
         let [place, _] = footer(opus()).lines(16).map(|line| plain(&line));
         assert_eq!(place, "~/repos/projec…");
@@ -360,9 +406,10 @@ mod tests {
             footer(shown).lines(80)[1].clone()
         };
         let styled = |style: &str, text: &str| format!("{style}{text}{RESET}");
-        assert!(at(700_000).contains(&styled(FOOTER, "700k/1.0M (70.0%)")));
-        assert!(at(700_001).contains(&styled(FOOTER_NEARLY_FULL, "700k/1.0M (70.0%)")));
-        assert!(at(950_000).contains(&styled(FOOTER_FULL, "950k/1.0M (95.0%)")));
+        assert!(at(700_000).contains(&styled(FOOTER, "700k/1.0M (70.0%, auto)")));
+        let nearly = styled(FOOTER_NEARLY_FULL, "700k/1.0M (70.0%, auto)");
+        assert!(at(700_001).contains(&nearly));
+        assert!(at(950_000).contains(&styled(FOOTER_FULL, "950k/1.0M (95.0%, auto)")));
     }
 
     #[test]

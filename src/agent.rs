@@ -15,6 +15,7 @@ mod messages;
 mod pricing;
 mod publish;
 mod question;
+mod rates;
 mod request;
 mod sandbox;
 mod session;
@@ -146,10 +147,18 @@ pub struct ModelOption {
     /// The effort levels the card lists, in order.
     pub levels: Vec<String>,
     pub default_level: Option<String>,
+    /// The median rate its last replies were written at, in tokens a second (`rates`).
+    pub rate: Option<f64>,
 }
 
 impl ModelOption {
-    fn new(id: String, name: Option<String>, provider: Option<String>, info: &ModelInfo) -> Self {
+    fn new(
+        id: String,
+        name: Option<String>,
+        provider: Option<String>,
+        info: &ModelInfo,
+        rate: Option<f64>,
+    ) -> Self {
         Self {
             id,
             name,
@@ -157,6 +166,7 @@ impl ModelOption {
             reasoning: info.reasoning,
             levels: info.levels.clone(),
             default_level: info.default_level.clone(),
+            rate,
         }
     }
 
@@ -375,6 +385,8 @@ pub struct Agent {
     agents_directory: Option<PathBuf>,
     /// Where the user's approvals of project agents are remembered.
     approvals: Option<PathBuf>,
+    /// Where replies' output rates are kept (`rates::path`).
+    rates: Option<PathBuf>,
     sets: Sets,
     /// The context files the instructions have, outermost first.
     context_files: Vec<PathBuf>,
@@ -382,6 +394,8 @@ pub struct Agent {
     executor: tokio::runtime::Runtime,
     /// The current model's protocol and limits, from its name until `load_model_card`.
     info: ModelInfo,
+    /// Its card's provider, when the endpoint's cards name several (`provider`).
+    provider: Option<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
     /// Whether a completed command's recommended next step runs without the user choosing it.
@@ -483,6 +497,7 @@ impl Agent {
             instructions: String::new(),
             agents_directory: None,
             approvals: approvals::path(),
+            rates: rates::path(),
             sets: Sets::default(),
             context_files: Vec::new(),
             commands: Commands::default(),
@@ -494,6 +509,7 @@ impl Agent {
             autonomy: autonomy::global_path(),
             autonomy_diagnostics: Vec::new(),
             info: ModelInfo::guess(&config.model),
+            provider: None,
             hide_credentials: false,
             autopilot,
             config,
@@ -876,6 +892,7 @@ impl Agent {
         let model = model.into();
         self.session.record_model(&model)?;
         self.info = ModelInfo::guess(&model);
+        self.provider = None;
         self.config.model = model;
         Ok(())
     }
@@ -1037,6 +1054,7 @@ impl Agent {
         let cards = self
             .executor
             .block_on(client::model_cards(self.config.endpoint));
+        let rates = rates::Rates::read(self.rates.as_deref());
         (ids.into_iter())
             .map(|id| {
                 let guessed;
@@ -1051,7 +1069,8 @@ impl Agent {
                 };
                 let name = card.and_then(|card| card.name.clone());
                 let provider = card.and_then(|card| card.provider.clone());
-                ModelOption::new(id, name, provider, info)
+                let rate = rates.median(&id);
+                ModelOption::new(id, name, provider, info, rate)
             })
             .collect()
     }
@@ -1078,13 +1097,30 @@ impl Agent {
     /// limit and its context window, which is returned. Without a card the model's name decides
     /// the protocol, and the window is unknown (`None`).
     pub fn load_model_card(&mut self) -> Option<u64> {
-        if let Some(info) = self
-            .executor
-            .block_on(client::model_info(self.config.endpoint, &self.config.model))
-        {
-            self.info = info;
+        let cards = (self.executor).block_on(client::model_cards(self.config.endpoint));
+        let mut providers: Vec<&str> = (cards.iter())
+            .filter_map(|card| card.provider.as_deref())
+            .collect();
+        providers.sort_unstable();
+        providers.dedup();
+        let several = providers.len() > 1;
+        if let Some(card) = cards.into_iter().find(|card| card.id == self.config.model) {
+            self.provider = card.provider.filter(|_| several);
+            self.info = card.info;
         }
         self.info.window
+    }
+
+    /// The current model's provider, as its card names it, when the endpoint's models have
+    /// several, as Scramjet's footer names it.
+    pub fn provider(&self) -> Option<&str> {
+        self.provider.as_deref()
+    }
+
+    /// The median rate the current model's last replies were written at, in tokens a second,
+    /// across sessions (`rates`).
+    pub fn output_rate(&self) -> Option<f64> {
+        rates::Rates::read(self.rates.as_deref()).median(&self.config.model)
     }
 
     /// A tool call left without a result (the process stopped mid-call) is answered, never re-run.

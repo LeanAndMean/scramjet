@@ -166,6 +166,11 @@ pub(super) fn tokens(n: u64) -> String {
     }
 }
 
+/// An output rate in tokens a second, as Scramjet shows it: `52tok/s`.
+pub(super) fn rate(rate: f64) -> String {
+    format!("{}tok/s", rate.round())
+}
+
 /// What was spent, as Scramjet shows it (`$0.123` with 3 `decimals`), with `+?` after it when
 /// some of it is not known (`$?` when none is); `None` when nothing was spent or nothing is known.
 pub(super) fn dollars(cost: f64, unpriced: bool, decimals: usize) -> Option<String> {

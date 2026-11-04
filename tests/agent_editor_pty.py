@@ -549,12 +549,23 @@ EMPTY = ['\u2500' * 59, '>']
 
 
 def footer_shows(read, output, expected, columns=60, rows=24):
-    """Waits until the footer's two rows are `expected`; returns them."""
+    """Waits until the footer's two rows are `expected`, where `(RATE)` stands for an output rate
+    measured on scripted replies; returns them."""
     end = time.monotonic() + 10
-    while (shown := Screen(output, columns, rows).footer()) != expected:
+    while True:
+        shown = Screen(output, columns, rows).footer()
+        shown = [without_rate(row, columns) if '(RATE)' in want else row for row, want in zip(shown, expected)]
+        if shown == expected:
+            return shown
         assert time.monotonic() < end, (expected, shown)
         read(.05)
-    return shown
+
+
+def without_rate(row, columns):
+    """`row` with an output rate as `(RATE)`, and the model, at the right, where it was."""
+    rated = re.sub(r' \(\d+tok/s\)', ' (RATE)', row)
+    parts = re.split(r' {2,}', rated)
+    return stats(*parts, columns) if rated != row and len(parts) == 2 else rated
 
 
 def stats(left, right, columns=60):
@@ -1593,8 +1604,10 @@ def name_and_session(read, until, send, output):
 def name_resumed(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
-    # The session's tokens, read from its file, and its name.
-    footer_shows(read, output, [project + ' \u2022 Parser work', stats(SPENT, 'gpt-6-luna \u2022 medium')])
+    # The session's tokens, read from its file, and its name; the model's rate, kept for all
+    # sessions, has the room the model's effort had.
+    spent = SPENT.replace('(RATE)', '(34tok/s)')
+    footer_shows(read, output, [project + ' \u2022 Parser work', stats(spent, 'gpt-6-luna \u2022 med')])
     send(b'/name\r')
     on_screen('Session name: Parser work')
     send(b'/resume\r')
@@ -1814,9 +1827,13 @@ luna_prices = [dict(rates, api='foundry', inputPerMTok=1, cacheWritePerMTok=1.25
                dict(rates, api='agentic', upstreamProvider='azure_openai', inputPerMTok=100, cacheWritePerMTok=200,
                     cacheReadPerMTok=10, outputPerMTok=1000)]
 # 100 input tokens at $100 per million, 100 written at $200, 1,000 read at $10 and 34 output at $1,000.
-SPENT = '\u2191100 \u219334 R1.0k W100 $0.074 1.2k'
+SPENT = '\u2191100 \u219334 (RATE) R1.0k W100 $0.074 1.2k'
 run([], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], cards=luna, usage=usage, prices=luna_prices,
                                         backend='azure_openai'), columns=200, rows=30)
+rates = os.path.join(work, 'state/scramjet-rs/output-rates.json')
+samples = json.load(open(rates))['samples']
+assert [(sample['model'], sample['output_tokens']) for sample in samples] == [('gpt-6-luna', 34)], samples
+json.dump({'version': 1, 'samples': [dict(samples[0], duration_ms=1000)]}, open(rates, 'w'))
 run(['--continue'], name_resumed)
 (named,) = set(session_files()) - known
 infos = [line for line in map(json.loads, open(named)) if line.get('type') == 'session_info']

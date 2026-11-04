@@ -1198,6 +1198,7 @@ mod tests {
             reasoning: !levels.is_empty(),
             levels: levels.iter().map(|level| level.to_string()).collect(),
             default_level: None,
+            rate: None,
         };
         let models = vec![
             model("gpt-6-luna", Some("GPT-6 Luna"), &["none", "low", "high"]),

@@ -102,6 +102,8 @@ pub(super) struct Reply {
     pub backend: Option<String>,
     /// What it cost in dollars, when its model's price cards say (`request::send`).
     pub cost: Option<f64>,
+    /// From its request to its end, retries aside (`request::send`).
+    pub elapsed: Duration,
 }
 
 pub(super) enum ClientError {

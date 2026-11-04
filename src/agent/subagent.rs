@@ -10,7 +10,7 @@ use super::{
     approvals::{self, Approvals},
     client::{self, ModelInfo},
     commands::{self, Sets},
-    instructions,
+    instructions, rates,
     request::{self, Sending},
     sandbox,
     tools::{self, Call, Output},
@@ -618,6 +618,8 @@ pub(super) struct Parent<'a> {
     pub skills: &'a Skills,
     /// Where the user's approvals of project agents are remembered (`approvals::path`).
     pub approvals: Option<&'a Path>,
+    /// Where replies' output rates are kept (`rates::path`).
+    pub rates: Option<&'a Path>,
 }
 
 /// A task given to an agent, ready to run.
@@ -1240,6 +1242,10 @@ fn run_child(
         };
         run.turns += 1;
         run.usage.count(&reply);
+        if let Some(path) = parent.rates {
+            // The rates are only shown; a child goes on without them.
+            let _ = rates::record(path, &job.model, &reply);
+        }
         report(Event::Usage(run.shown_usage()));
         let mut calls = Vec::new();
         for item in reply.items {

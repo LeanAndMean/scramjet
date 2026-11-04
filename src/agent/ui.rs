@@ -82,9 +82,10 @@ pub trait AgentUi {
     fn follow_up(&mut self) -> Vec<String> {
         Vec::new()
     }
-    /// The session's tokens (`Agent::session_tokens`) and how full the context is
-    /// (`Agent::context_tokens`), after a response or a compaction changed them.
-    fn usage(&mut self, _tokens: Tokens, _context: Option<u64>) {}
+    /// The session's tokens (`Agent::session_tokens`), how full the context is
+    /// (`Agent::context_tokens`) and the model's output rate (`Agent::output_rate`), after a
+    /// response or a compaction changed them.
+    fn usage(&mut self, _tokens: Tokens, _context: Option<u64>, _rate: Option<f64>) {}
     /// An effort level the user chose while the turn runs, for the model's next request.
     fn effort(&mut self) -> Option<String> {
         None

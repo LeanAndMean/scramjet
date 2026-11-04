@@ -2,11 +2,15 @@
 //! does.
 use super::client::{self, ClientError, ModelInfo, Protocol};
 use super::{
-    Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, pricing, shown_only,
-    tools,
+    Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, pricing, rates,
+    shown_only, tools,
 };
 use serde_json::{Value, json};
-use std::{net::SocketAddr, sync::atomic::AtomicBool, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::atomic::AtomicBool,
+    time::{Duration, Instant},
+};
 
 /// Scramjet's retry backoff: 2s, 4s, 8s, ...
 const RETRY_DELAY: Duration = Duration::from_secs(2);
@@ -97,6 +101,12 @@ impl Agent {
             },
         )?;
         self.usage.count(&reply);
+        if purpose == Purpose::Reply
+            && let Some(path) = &self.rates
+        {
+            // The rates are only shown; a session goes on without them.
+            let _ = rates::record(path, &self.config.model, &reply);
+        }
         Ok(reply)
     }
 }
@@ -140,6 +150,7 @@ pub(super) fn send(
     let mut attempt = 0;
     loop {
         on(Sending::Attempt);
+        let started = Instant::now();
         let failure = match executor.block_on(client::respond(
             endpoint,
             info.protocol,
@@ -149,6 +160,7 @@ pub(super) fn send(
             &mut |update| on(Sending::Progress(&update)),
         )) {
             Ok(mut reply) => {
+                reply.elapsed = started.elapsed();
                 reply.cost = (reply.usage.as_ref()).and_then(|usage| {
                     (info.prices).cost(usage, reply.backend.as_deref(), pricing::now())
                 });

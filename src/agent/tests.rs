@@ -33,8 +33,9 @@ pub(super) struct Recorder {
     pub(super) children: Vec<Children>,
     /// The details of the results shown.
     pub(super) details: Vec<ToolDetail>,
-    /// Each `usage` call's session tokens and context.
+    /// Each `usage` call's session tokens and context, and the model's output rate.
     pub(super) usage: Vec<(Tokens, Option<u64>)>,
+    pub(super) rates: Vec<Option<f64>>,
 }
 impl AgentUi for Recorder {
     fn waiting(&mut self, purpose: Purpose) {
@@ -143,8 +144,9 @@ impl AgentUi for Recorder {
     fn pause(&mut self) -> bool {
         !self.pauses.is_empty() && self.pauses.remove(0)
     }
-    fn usage(&mut self, tokens: Tokens, context: Option<u64>) {
+    fn usage(&mut self, tokens: Tokens, context: Option<u64>, rate: Option<f64>) {
         self.usage.push((tokens, context));
+        self.rates.push(rate);
     }
     fn choose(
         &mut self,
@@ -348,18 +350,28 @@ pub(super) fn serve_gets(
 #[test]
 fn the_context_window_comes_from_proxy_model_cards() {
     let cards = json!({"models": [
-        {"requestId": "other", "limits": {"context": 1}},
-        {"requestId": "m", "limits": {"context": 1_050_000, "output": 128_000}},
+        {"requestId": "other", "provider": "anthropic", "limits": {"context": 1}},
+        {"requestId": "m", "provider": "openai",
+            "limits": {"context": 1_050_000, "output": 128_000}},
     ]})
     .to_string();
-    let (endpoint, server) = serve_gets(vec![("200 OK", cards), ("404 Not Found", "no".into())]);
+    let alone = json!({"models": [{"requestId": "m", "provider": "openai"}]}).to_string();
+    let (endpoint, server) = serve_gets(vec![
+        ("200 OK", cards),
+        ("200 OK", alone),
+        ("404 Not Found", "no".into()),
+    ]);
     let (mut cards, _scratch) = agent(endpoint, "cards");
     assert_eq!(cards.load_model_card(), Some(1_050_000));
     assert_eq!(cards.info.output, Some(128_000));
+    assert_eq!(cards.provider(), Some("openai"));
     cards.set_model("m").unwrap();
-    assert_eq!(cards.info.output, None);
+    assert_eq!((cards.info.output, cards.provider()), (None, None));
+    // The provider is named only when the endpoint's models have several.
     assert_eq!(cards.load_model_card(), None);
-    assert_eq!(server.join().unwrap(), ["GET /api/model-cards HTTP/1.1"; 2]);
+    assert_eq!(cards.provider(), None);
+    assert_eq!(cards.load_model_card(), None);
+    assert_eq!(server.join().unwrap(), ["GET /api/model-cards HTTP/1.1"; 3]);
     assert_eq!(cards.load_model_card(), None);
     let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let (mut hung, _scratch) = agent(silent.local_addr().unwrap(), "cards-silent");
@@ -1167,6 +1179,7 @@ fn a_next_step_offers_the_endpoints_models_with_their_cards_and_the_current_one(
         reasoning,
         levels: levels.iter().map(|level| level.to_string()).collect(),
         default_level: None,
+        rate: None,
     };
     // The current model, which the endpoint does not list, goes first, as its card says.
     let options = agent.model_options();
@@ -1520,4 +1533,37 @@ fn session_tokens_count_every_response_on_every_branch_and_are_read_again_on_res
     assert_eq!(agent.stats().tokens.input, 107);
     let (session, ..) = Session::open(agent.session_path()).unwrap();
     assert_eq!(session.tokens(), three);
+}
+
+#[test]
+fn replies_keep_their_models_output_rate_for_the_footer_and_the_model_list() {
+    let (endpoint, server) = serve(vec![
+        stream(&fixture::call_events("{}", fixture::known_usage())),
+        stream(&fixture::text_events("done", fixture::known_usage())),
+    ]);
+    let (mut agent, scratch) = agent(endpoint, "rates");
+    let path = scratch.0.join("state/output-rates.json");
+    agent.rates = Some(path.clone());
+    assert_eq!(agent.output_rate(), None);
+    let mut ui = Recorder::default();
+    agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+    server.join().unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let samples = saved["samples"].as_array().unwrap();
+    assert_eq!(samples.len(), 2);
+    for sample in samples {
+        assert_eq!(
+            (&sample["model"], &sample["output_tokens"]),
+            (&json!("m"), &json!(5))
+        );
+        assert!(sample["duration_ms"].as_f64().unwrap() > 0.0);
+    }
+    let rate = agent.output_rate().unwrap();
+    assert!(rate > 0.0);
+    // Each response tells the footer the rate with its usage.
+    assert_eq!(ui.rates.len(), 2);
+    assert!(ui.rates.iter().all(Option::is_some));
+    assert_eq!(ui.rates.last(), Some(&Some(rate)));
+    // The endpoint is gone: the list has the current model, with its rate.
+    assert_eq!(agent.model_options()[0].rate, Some(rate));
 }

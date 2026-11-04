@@ -617,7 +617,11 @@ impl Agent {
         self.delegated.clear();
         // Unknown until the next response reports it.
         self.usage.context_tokens = None;
-        ui.usage(self.session_tokens(), self.context_tokens());
+        ui.usage(
+            self.session_tokens(),
+            self.context_tokens(),
+            self.output_rate(),
+        );
         Ok(Some(Compaction {
             tokens_before,
             kept_items: self.conversation.len() - 1,
@@ -936,7 +940,9 @@ mod tests {
             )),
             stream(&fixture::text_events("continued", fixture::known_usage())),
         ]);
-        let (mut agent, _scratch) = agent(endpoint, "compact");
+        let (mut agent, scratch) = agent(endpoint, "compact");
+        let rates = scratch.0.join("output-rates.json");
+        agent.rates = Some(rates.clone());
         let add_call = |agent: &mut Agent, name: &str, path: &str| {
             let arguments = json!({"path":path}).to_string();
             let id = format!("{name}-{path}");
@@ -970,6 +976,8 @@ mod tests {
         assert_eq!(agent.usage.context_tokens, None);
         // The footer is told the context is not known now.
         assert_eq!(ui.usage.last(), Some(&(Tokens::default(), None)));
+        // A summary's rate is not a reply's, as in Scramjet.
+        assert!(!rates.exists());
         assert_eq!(agent.conversation()[1], recent);
         assert_eq!(
             agent.conversation()[0]["content"],

@@ -271,7 +271,11 @@ to a larger-context model)"
                 }
                 self.add(item)?;
             }
-            ui.usage(self.session_tokens(), self.context_tokens());
+            ui.usage(
+                self.session_tokens(),
+                self.context_tokens(),
+                self.output_rate(),
+            );
             if let Some(message) = reply.incomplete {
                 return Err(AgentError::Provider(message));
             }
@@ -301,7 +305,11 @@ to a larger-context model)"
                 let spent = result.get(SUBAGENTS).is_some();
                 self.add(result)?;
                 if spent {
-                    ui.usage(self.session_tokens(), self.context_tokens());
+                    ui.usage(
+                        self.session_tokens(),
+                        self.context_tokens(),
+                        self.output_rate(),
+                    );
                 }
                 if cancel.load(Ordering::Relaxed) {
                     return Err(AgentError::Cancelled);
@@ -433,6 +441,7 @@ to a larger-context model)"
                     },
                     skills: &self.skills,
                     approvals: self.approvals.as_deref(),
+                    rates: self.rates.as_deref(),
                 };
                 subagent::run(&call.arguments, &parent, ui, cancel)
             };
@@ -871,11 +880,16 @@ You review code.\n",
         agent.agents_directory = Some(agents);
         // The child has the parent's model, and so its prices.
         agent.info.prices = prices(1_000.0, 100.0, 10_000.0);
+        let rates = agent.root().join("output-rates.json");
+        agent.rates = Some(rates.clone());
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent.turn("review", &mut ui, &cancel).unwrap();
         let bodies = server.join().unwrap();
         assert_eq!(bodies.len(), 5);
+        // The child's replies keep their rates with the parent's.
+        let saved: Value = serde_json::from_slice(&std::fs::read(&rates).unwrap()).unwrap();
+        assert_eq!(saved["samples"].as_array().unwrap().len(), 5);
         let parent = bodies[0]["instructions"].as_str().unwrap();
         assert!(parent.contains(&format!("- subagent: {}\n", subagent::SNIPPET)));
         let child = &bodies[1];
