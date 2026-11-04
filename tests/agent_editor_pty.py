@@ -4,6 +4,7 @@ import atexit
 import base64
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import pty
@@ -2438,6 +2439,40 @@ def installed_view(read, until, send, output):
     send(b'\x04')
 
 
+def project_agent_approval(read, until, send, output):
+    shown, on_screen = full_screen(120, 40)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/settings\r')
+    on_screen('Settings  \u2191\u2193 move')
+    send(b'\x1b[A\r')
+    on_screen('Installed  \u2191\u2193 move')
+    rows = select_row(read, shown, send, 'helper', b'\x1b[B')
+    (selected,) = [row for row in rows if row.startswith('\u203a')]
+    assert selected.split() == ['\u203a', 'helper', 'project', 'approved'], rows
+    note = ' '.join(row.strip() for row in rows[rows.index('  ' + helper_agent) + 1:]).strip()
+    assert note.endswith("You approved running this project's agents with this file as it is; Enter opens it or "
+                         'forgets the approval. Helps.'), rows
+    # Enter asks whether to open the file or forget; Escape does neither.
+    send(b'\r')
+    rows = on_screen('Open it, or forget the approval?')
+    assert '\u2192 Open ' + helper_agent in rows, rows
+    assert "  Forget the approval of this project's agents" in rows, rows
+    send(b'\x1b')
+    on_screen('Installed  \u2191\u2193 move')
+    send(b'\r')
+    on_screen('Open it, or forget the approval?')
+    send(b'\x1b[B\r')
+    rows = on_screen("Forgot the approval of this project's agents")
+    (selected,) = [row for row in rows if row.startswith('\u203a')]
+    assert selected.split() == ['\u203a', 'helper', 'project', 'not', 'approved'], rows
+    assert json.load(open(agent_approvals)) == {other_agent: 'f' * 64}
+    send(b'\x1b')
+    on_screen('Settings  \u2191\u2193 move')
+    send(b'\x1b')
+    ending(read, output, ['\u2500' * 119, '>'], columns=120, rows=40)
+    send(b'\x04')
+
+
 def installed_edited_during_turn(read, until, send, output):
     shown, on_screen = full_screen(120, 40)(read, output)
     on_screen('\u2500' * 20)
@@ -2866,6 +2901,19 @@ run([], installed_view, variables={'XDG_CONFIG_HOME': listing, 'VISUAL': greet_e
 assert 'description: Greet someone kindly\n' in open(greet_file).read()
 with open(greet_file, 'w') as file:
     file.write(greet_text)
+approving = os.path.join(work, 'state-approving')
+agent_approvals = os.path.join(approving, 'scramjet-rs', 'approved-agents.json')
+helper_agent = os.path.join(project, '.scramjet', 'agents', 'helper.md')
+other_agent = os.path.join(work, 'other', '.scramjet', 'agents', 'helper.md')
+helper_text = '---\nname: helper\ndescription: Helps.\n---\nHelp.\n'
+os.makedirs(os.path.dirname(helper_agent))
+os.makedirs(os.path.dirname(agent_approvals))
+with open(helper_agent, 'w') as file:
+    file.write(helper_text)
+with open(agent_approvals, 'w') as file:
+    json.dump({helper_agent: hashlib.sha256(helper_text.encode()).hexdigest(), other_agent: 'f' * 64}, file)
+run([], project_agent_approval, variables={'XDG_STATE_HOME': approving}, columns=120, rows=40)
+shutil.rmtree(os.path.dirname(helper_agent))
 run([], installed_edited_during_turn, serve_items([
     [tool_call('call_1', 'bash', {'command': 'sleep 2'})],
     [message('Done.')],

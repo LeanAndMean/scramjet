@@ -557,8 +557,18 @@ pub enum AgentSource {
     Set(String),
     /// The user's agent directory.
     User,
-    /// The project's `.scramjet/agents`.
-    Project,
+    /// The project's `.scramjet/agents`, with what the user's approval of them says of it.
+    Project(ProjectApproval),
+}
+
+/// Whether the user's approval of running the project's agents covers an agent's file.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ProjectApproval {
+    /// As the file is now.
+    Approved,
+    /// As the file was before it changed.
+    Changed,
+    NotApproved,
 }
 
 /// What `inventory` found.
@@ -982,12 +992,19 @@ impl Agent {
             sets: &self.sets,
         };
         let discovery = subagent::discover(&sources, &self.config.root, subagent::Scope::Both);
+        let approvals = approvals::Approvals::read(self.approvals.as_deref());
         let agents = (discovery.agents.into_iter())
             .map(|agent| AgentFile {
                 source: match self.sets.owner(&agent.name) {
                     Some(set) => AgentSource::Set(set.name.clone()),
                     None if agent.source == "user" => AgentSource::User,
-                    None => AgentSource::Project,
+                    None if approvals.approved(&agent) => {
+                        AgentSource::Project(ProjectApproval::Approved)
+                    }
+                    None if approvals.known(&agent) => {
+                        AgentSource::Project(ProjectApproval::Changed)
+                    }
+                    None => AgentSource::Project(ProjectApproval::NotApproved),
                 },
                 name: agent.name,
                 description: agent.description,
@@ -1145,6 +1162,16 @@ impl Agent {
         let steps = self.next_steps();
         let (global, root) = (self.autonomy.as_deref(), &self.config.root);
         autonomy::apply(global, root, &steps.suggested(), scope)
+    }
+
+    /// Forgets the user's approval of running the project's agents, so that the next subagent
+    /// call naming one asks again; how many agent files it covered.
+    pub fn forget_project_agents(&self) -> std::io::Result<usize> {
+        let directory = subagent::project_directory(&self.config.root);
+        match (&self.approvals, directory) {
+            (Some(path), Some(directory)) => approvals::forget(path, &directory),
+            _ => Ok(0),
+        }
     }
 
     /// The publications of the commands whose policy can approve them, with what the user and

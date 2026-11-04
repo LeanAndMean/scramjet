@@ -1669,10 +1669,25 @@ fn installed_says_where_each_comes_from_and_what_is_wrong() {
         agents,
         [
             ("mine", &AgentSource::User),
-            ("ours", &AgentSource::Project),
+            ("ours", &AgentSource::Project(ProjectApproval::NotApproved)),
             ("demo:helper", &AgentSource::Set("demo".into())),
         ]
     );
+    // The project agent's row follows the approval as the agent file changes, until forgotten.
+    let ours = root.join(".scramjet/agents/ours.md");
+    let approval = |agent: &Agent| match &agent.installed().agents[1].source {
+        AgentSource::Project(approval) => *approval,
+        source => panic!("{source:?}"),
+    };
+    let digest = approvals::digest(&agent_file("ours"));
+    let remembered = json!({ours.display().to_string(): digest}).to_string();
+    std::fs::write(root.join("approved-agents.json"), remembered).unwrap();
+    assert_eq!(approval(&agent), ProjectApproval::Approved);
+    write(&ours, &(agent_file("ours") + "Changed.\n"));
+    assert_eq!(approval(&agent), ProjectApproval::Changed);
+    assert_eq!(agent.forget_project_agents().unwrap(), 1);
+    assert_eq!(approval(&agent), ProjectApproval::NotApproved);
+    assert_eq!(agent.forget_project_agents().unwrap(), 0);
     assert_eq!(found.context_files, [root.join("AGENTS.md")]);
     assert_eq!(found.autonomy, (root.join(".scramjet/autonomy.yaml"), None));
     let autonomy = root.join(".scramjet/autonomy.yaml");

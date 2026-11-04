@@ -643,6 +643,7 @@ impl Interactive {
             if let Some(file) = &listing.files[index] {
                 match installed::broken_link(file) {
                     Some(target) => self.remove_link(file, &target),
+                    None if listing.approved[index] && self.forget_approval(file) => {}
                     None => {
                         self.edit_installed(file);
                         edited = Some(file.clone());
@@ -672,6 +673,42 @@ impl Interactive {
                 self.say(&self.ui.dim(&note));
             }
             false => self.reload(),
+        }
+    }
+
+    /// Asks whether to open the project agent `file` or forget the user's approval of running
+    /// the project's agents, and forgets it when chosen; `false`: open the file.
+    fn forget_approval(&mut self, file: &Path) -> bool {
+        let Some(screen) = &self.screen else {
+            return true;
+        };
+        let choices = [
+            Choice {
+                label: format!("Open {}", shortened(&file.display().to_string())),
+                description: None,
+                value: String::new(),
+            },
+            Choice {
+                label: "Forget the approval of this project's agents".to_owned(),
+                description: Some(
+                    "The next subagent call naming one of them asks again before it runs."
+                        .to_owned(),
+                ),
+                value: String::new(),
+            },
+        ];
+        let question = select::Picker::question("Open it, or forget the approval?", &choices, None);
+        match screen.pick(question.held()) {
+            Some(0) => false,
+            Some(_) => {
+                match self.agent.forget_project_agents() {
+                    Ok(0) => self.say("No approval of this project's agents to forget"),
+                    Ok(_) => self.say(&self.ui.dim("Forgot the approval of this project's agents")),
+                    Err(error) => self.say(&format!("Error: the approval stays: {error}")),
+                }
+                true
+            }
+            None => true,
         }
     }
 

@@ -51,6 +51,23 @@ pub(super) fn remember(path: &Path, agents: &[&Definition]) -> io::Result<()> {
     for agent in agents {
         files.insert(key(agent), Value::String(agent.digest.clone()));
     }
+    write(path, files)
+}
+
+/// Forgets the approvals of the agent files in `directory`, keeping the others in `path`; how
+/// many there were.
+pub(super) fn forget(path: &Path, directory: &Path) -> io::Result<usize> {
+    let Approvals(mut files) = Approvals::read(Some(path));
+    let before = files.len();
+    files.retain(|file, _| !Path::new(file).starts_with(directory));
+    let forgotten = before - files.len();
+    if forgotten > 0 {
+        write(path, files)?;
+    }
+    Ok(forgotten)
+}
+
+fn write(path: &Path, files: Map<String, Value>) -> io::Result<()> {
     let text = serde_json::to_string_pretty(&Value::Object(files)).map_err(io::Error::other)?;
     super::tools::write_replacing(path, &(text + "\n"))
 }
@@ -97,5 +114,16 @@ mod tests {
             ..agent.clone()
         };
         assert!(approved.known(&changed) && !approved.approved(&changed));
+        // Forgetting a project's agents keeps those of other projects.
+        let other = Definition {
+            path: PathBuf::from("/other/.scramjet/agents/p.md"),
+            ..agent.clone()
+        };
+        remember(&path, &[&other]).unwrap();
+        let directory = Path::new("/repo/.scramjet/agents");
+        assert_eq!(forget(&path, directory).unwrap(), 1);
+        let left = Approvals::read(Some(&path));
+        assert!(!left.known(&agent) && left.approved(&other));
+        assert_eq!(forget(&path, directory).unwrap(), 0);
     }
 }

@@ -150,7 +150,7 @@ pub(super) struct Discovery {
 /// names belong to the set.
 pub(super) fn discover(sources: &Sources, cwd: &Path, scope: Scope) -> Discovery {
     let mut found = Discovery::default();
-    let project = nearest_project_directory(cwd);
+    let project = project_directory(cwd);
     let mut agents: Vec<Definition> = Vec::new();
     if scope != Scope::Project
         && let Some(user) = sources.user
@@ -192,7 +192,8 @@ tool:\n\n{}",
     )
 }
 
-fn nearest_project_directory(cwd: &Path) -> Option<PathBuf> {
+/// The project's agent directory: the nearest `.scramjet/agents` from `cwd` up.
+pub(super) fn project_directory(cwd: &Path) -> Option<PathBuf> {
     cwd.ancestors()
         .map(|directory| directory.join(".scramjet/agents"))
         .find(|candidate| candidate.is_dir())
