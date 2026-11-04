@@ -520,7 +520,15 @@ class Screen:
                 self.column = min(self.column + 1, columns - 1)
 
     def all_rows(self):
-        return [''.join(row).rstrip() for row in self.grid]
+        """The rows without the last column, which is the scrollbar's and shows nothing else."""
+        bar = self.scrollbar()
+        assert set(bar) <= set(' \u2502\u2588'), bar
+        return [''.join(row[:-1]).rstrip() for row in self.grid]
+
+    def scrollbar(self):
+        """The last column, from the top: ` ` where it shows nothing, then `\u2502` (track) and
+        `\u2588` (thumb)."""
+        return ''.join(row[-1] for row in self.grid)
 
     def rows(self):
         """The rows above the footer: the conversation, and the dock down to the rule over the
@@ -1637,7 +1645,7 @@ def agent_switches_the_model(read, until, send, output):
 def ctrl_p_in_a_scope_of_one(read, until, send, output):
     shown, on_screen = full_screen(columns=80)(read, output)
     rows = on_screen('\u2500' * 20)
-    assert rows[0].startswith('scramjet-rs \u00b7 gpt-6-terra \u00b7 thinking medium \u00b7 /'), rows
+    assert rows[0].startswith('scramjet-rs \u00b7 gpt-6-terra \u00b7 thinking medium \u00b7'), rows
     assert '--models: no models match pattern "x"' in '\n'.join(rows), rows
     send(b'\x10')
     on_screen('Only one model in scope')
@@ -3360,7 +3368,12 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
 
 def fullscreen_mouse(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
+
+    def bar():
+        return Screen(output, 60).scrollbar()
     on_screen('\u2500' * 20)
+    # The scrollbar shows only while the conversation is taller than its rows.
+    assert bar().strip() == '', bar()
     send(b'go\r')
     on_screen('Row 40 of the reply.')
     ended(read, output)
@@ -3393,6 +3406,30 @@ def fullscreen_mouse(read, until, send, output):
     on_screen('Ctrl-C again')
     send(b'\x1b[<0;1;3M\x1b[<32;4;3M\x1b[<0;4;3m\x1b')
     on_screen('more lines below', gone=True)
+    # In the last column, beside the conversation's rows and not the dock's: at the end, the thumb
+    # at the bottom, sized to the share shown.
+    at_end = bar()
+    track = len(at_end.rstrip())
+    thumb = at_end.count('\u2588')
+    assert re.fullmatch('\u2502+\u2588+ +', at_end), at_end
+    # A press on the track puts the thumb's middle there, as far as it goes: at the top, the start.
+    send(b'\x1b[<0;60;1M\x1b[<0;60;1m')
+    rows = on_screen('more lines below')
+    assert rows[0].startswith('scramjet-rs \u00b7 '), rows
+    below = int(re.search(r'(\d+) more lines below', '\n'.join(rows)).group(1))
+    assert thumb == track * track // (track + below), (thumb, track, below)
+    assert bar() == '\u2588' * thumb + '\u2502' * (track - thumb) + at_end[track:], bar()
+    middle = track // 2
+    send(b'\x1b[<0;60;%dM\x1b[<0;60;%dm' % (middle + 1, middle + 1))
+    on_screen('Row 1 of', gone=True)
+    first = middle - thumb // 2
+    assert bar() == '\u2502' * first + '\u2588' * thumb + '\u2502' * (track - first - thumb) + at_end[track:], bar()
+    # Dragging the thumb scrolls with it; dragged to the end, the view follows the conversation again.
+    send(b'\x1b[<0;60;%dM\x1b[<32;60;2M' % (first + 1))
+    on_screen('Row 1 of')
+    send(b'\x1b[<32;60;%dM\x1b[<0;60;%dm' % (track + 5, track + 5))
+    on_screen('more lines below', gone=True)
+    assert bar() == at_end, bar()
     send(b'\x04')
 
 
@@ -3420,7 +3457,7 @@ def fullscreen_copy_into_the_dock(read, until, send, output):
     send(b'go\r')
     on_screen(full_width)
     rows = ended(read, output)
-    # A row as wide as the screen keeps its last column.
+    # A row as wide as the conversation, the screen but for the scrollbar's column, keeps its last.
     assert full_width in rows, rows
     call = rows.index('\u25cf bash for w in a b; do')
     assert rows[call + 1:call + 3] == ['    echo $w', '  done'], rows
@@ -3510,6 +3547,8 @@ def fullscreen_paste_and_clicks(read, until, send, output):
     on_screen('Row 40 of the reply.')
     rows = ended(read, output)
     row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
+    # A right click on the scrollbar's column pastes nothing (the stand-in counts its reads).
+    send(b'\x1b[<2;60;%dM\x1b[<2;60;%dm' % (row, row))
     # A double click selects the word under it, a triple click the line.
     send(b'\x1b[<0;15;%dM\x1b[<0;15;%dm' % (row, row) * 2)
     until(b'\x1b[7mreply')
@@ -3712,7 +3751,7 @@ run([], fullscreen_copy_unwrapped, serve_items([
     [tool_call('call_1', 'bash', {'command': "printf 'one\\n  two\\n'"})], [message(wrapped_reply + code_reply)],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
                'CLIPBOARD': clipboard})
-full_width = 'Copied, and this reply fills every one of the sixty columns.'
+full_width = 'Copied, and this reply fills all fifty-nine of its columns.'
 run([], fullscreen_copy_into_the_dock, serve_items([
     [tool_call('call_1', 'bash', {'command': 'for w in a b; do\n  echo $w\ndone'})], [message(full_width)],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',

@@ -753,6 +753,15 @@ struct Edge {
     scrolled: Instant,
 }
 
+/// The scrollbar's thumb being dragged, as Scramjet's: the row within it that was pressed, and
+/// the rows it can move and the last top line, both kept from when it was pressed.
+#[derive(Clone, Copy)]
+struct Thumb {
+    grab: usize,
+    travel: usize,
+    last: usize,
+}
+
 /// A copy under way: the terminal's sequence that copies, if any, or the failure.
 type Copying = mpsc::Receiver<Result<Option<String>, String>>;
 
@@ -955,6 +964,7 @@ struct App {
     markdown_reads: MarkdownReads,
     selection: Option<Selection>,
     edge: Option<Edge>,
+    thumb: Option<Thumb>,
     copying: Option<Copying>,
     pasting: Option<Pasting>,
     click: Option<Click>,
@@ -1001,6 +1011,7 @@ impl App {
             markdown_reads: MarkdownReads::Rendered,
             selection: None,
             edge: None,
+            thumb: None,
             copying: None,
             pasting: None,
             click: None,
@@ -1488,6 +1499,52 @@ impl App {
         next != top
     }
 
+    /// Shows the conversation from line `line`, or its end.
+    fn scroll_to(&mut self, line: usize) {
+        let line = line.min(self.last);
+        self.top = (line < self.last).then(|| self.transcript.locate(line));
+    }
+
+    /// Whether `column` is the last, the scrollbar's, which shows nothing else.
+    fn on_scrollbar(&self, column: usize) -> bool {
+        self.size.0 > 1 && column + 1 >= self.size.0
+    }
+
+    /// The scrollbar's thumb, its rows and the first of them, while the conversation is taller
+    /// than its rows. As Scramjet's, sized to the share of the conversation shown, and while it
+    /// is dragged, the size it had when taken.
+    fn thumb(&self) -> Option<(usize, usize)> {
+        let (rows, length) = (self.rows, self.transcript.len());
+        if length <= rows || self.size.0 <= 1 {
+            return None;
+        }
+        let share = |line: usize, of: usize, travel: usize| {
+            (line as f64 / of.max(1) as f64 * travel as f64).round() as usize
+        };
+        let top = self.shown_top();
+        let (size, first) = match self.thumb {
+            Some(Thumb { travel, last, .. }) => {
+                let size = rows.saturating_sub(travel).max(1);
+                (size, share(top, last, travel))
+            }
+            None => {
+                let size = (rows * rows / length).clamp(1, rows);
+                (size, share(top, self.last, rows - size))
+            }
+        };
+        Some((size, first.min(rows - size)))
+    }
+
+    /// Scrolls as the thumb taken is dragged to the conversation's row `row`.
+    fn drag_thumb(&mut self, row: usize) {
+        let Some(Thumb { grab, travel, last }) = self.thumb else {
+            return;
+        };
+        let moved = row.saturating_sub(grab).min(travel);
+        let line = (moved as f64 / travel.max(1) as f64 * last as f64).round() as usize;
+        self.scroll_to(line);
+    }
+
     /// Scrolls as the user asks, which leaves the view there when a selection ends.
     fn navigate(&mut self, lines: isize) {
         if let Some(selection) = &mut self.selection {
@@ -1571,7 +1628,8 @@ impl App {
     /// As Scramjet's retained view: the wheel scrolls; the left button selects from where it is
     /// pressed in the conversation to where it is dragged, a drag to an edge scrolling on, and
     /// pressed twice or three times selects a word or the line; a right click copies what is
-    /// selected, else pastes.
+    /// selected, else pastes. In the last column, the scrollbar's, a press scrolls to that place
+    /// and dragging the thumb scrolls with it.
     fn mouse(&mut self, mouse: Mouse) {
         let Mouse {
             button,
@@ -1580,6 +1638,12 @@ impl App {
             release,
         } = mouse;
         if release {
+            // Dragged to the end, it follows the conversation again, however far it grew.
+            if let Some(thumb) = self.thumb.take()
+                && self.shown_top() >= thumb.last
+            {
+                self.top = None;
+            }
             if let Some(click) = &mut self.click
                 && button == LEFT
                 && click.cell == (column, row)
@@ -1610,7 +1674,26 @@ impl App {
                 }
             }
             RIGHT if self.selection.is_some() => self.copy(),
-            RIGHT if self.copying.is_none() => self.paste(clipboard::paste),
+            RIGHT if self.copying.is_none() && !self.on_scrollbar(column) => {
+                self.paste(clipboard::paste);
+            }
+            LEFT if row < self.rows && self.on_scrollbar(column) => {
+                self.click = None;
+                self.clear_selection();
+                if let Some((size, first)) = self.thumb() {
+                    let grab = match (first..first + size).contains(&row) {
+                        true => row - first,
+                        false => size / 2,
+                    };
+                    self.thumb = Some(Thumb {
+                        grab,
+                        travel: self.rows - size,
+                        last: self.last,
+                    });
+                    self.drag_thumb(row);
+                }
+            }
+            DRAG if self.thumb.is_some() => self.drag_thumb(row),
             LEFT => {
                 let previous = self.click.take();
                 self.clear_selection();
@@ -2127,7 +2210,8 @@ impl App {
                     None => Event::ToolOutput(side.output.clone()),
                 },
             ];
-            let mut ui = Terminal::capture_dock(width, self.hide_thinking.clone(), lines);
+            let content = width.saturating_sub(1).max(1);
+            let mut ui = Terminal::capture_dock(content, self.hide_thinking.clone(), lines);
             for event in &events {
                 record::replay(event, &mut ui);
             }
@@ -2189,14 +2273,15 @@ impl App {
                 shown: Shown::Text(text),
                 ..
             }) => {
-                rows.push(selection::row(&format!(
+                let title = format!(
                     "{}{}{}  {}Enter submit · Esc cancel{}",
                     style::SELECTOR_TITLE,
                     text.title,
                     style::RESET,
                     style::MUTED,
                     style::RESET
-                )));
+                );
+                rows.push(selection::row(&clip(&title, width.saturating_sub(1))));
                 prompt_rows(&text.draft, &mut rows, width, room)
             }
             None => {
@@ -2233,12 +2318,15 @@ impl App {
         if (width, height) != self.size {
             self.size = (width, height);
             self.drawn.clear();
+            self.thumb = None;
             out.push_str("\x1b[2J");
         }
         let (dock, cursor) = self.dock((width, height));
         let rows = height.saturating_sub(dock.len()).max(1);
+        // As Scramjet's, the last column is the scrollbar's, whether it shows or not, so that
+        // the conversation does not wrap again when it grows taller than the screen.
         let look = Look {
-            width,
+            width: width.saturating_sub(1).max(1),
             hide_thinking: self.hide_thinking.load(Ordering::Relaxed),
             whole: self.whole,
             markdown_reads: self.markdown_reads,
@@ -2261,6 +2349,15 @@ impl App {
             .map(|(line, at)| shown(line, at))
             .collect();
         frame.resize(rows, String::new());
+        if let Some((size, first)) = self.thumb() {
+            for (row, line) in frame.iter_mut().enumerate() {
+                let cell = match (first..first + size).contains(&row) {
+                    true => '█',
+                    false => '│',
+                };
+                write!(line, "{}\x1b[{};{width}H{cell}", style::RESET, row + 1).unwrap();
+            }
+        }
         let length = self.transcript.len();
         frame.extend((self.docked.iter().zip(length..)).map(|(line, at)| shown(line, at)));
         frame.truncate(height);
