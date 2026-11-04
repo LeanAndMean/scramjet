@@ -42,6 +42,29 @@ User decisions from `/rs:steer` on 2026-11-03:
 - **Project agents.** Their approval is remembered per project and asked again when a project agent file is added or changed.
 - **Command lifecycle** (second steer of 2026-11-03; it follows the decisions the user made on 2026-10-30 for Scramjet's issue #638, which Scramjet has not built, so Scramjet's current lifecycle is not the reference). A started command keeps going until it reports `completed` (its part is over, not that the task succeeded), the user confirms abandoning it, or the user starts another command or types an unknown slash command. Any other stop (Escape, a cancelled question, a freetext question, a failed response) leaves it waiting for the user, and their next message resumes it. A reply that ends without a report gets a short status check (keep working, ask the user, or finish), at most 3 in a row without the user's input, then the command waits with a notice saying so. The statuses are `completed` and `abandoned`; `abandoned` ends the command with no next step, not even a forced one, and only once the user confirms after reading its summary. There is no `blocked`, `incomplete` or `continuing` (the model keeps working by working). Mach 12's text, which still names them, gets a result that steers the model to keep working, ask or abandon.
 
+### Look and themes (2026-11-04)
+
+User decisions from `/rs:steer` on 2026-11-04 ([the task list](TASKS.md) holds the order: after items 4, 5, 8 and 9, before the later work, which makes the theme editor an exception to building beyond Scramjet only once the daily driver is solid):
+
+- **Scrollbar.** Scramjet's: the rightmost column, shown while the conversation is taller than the view, clickable and draggable. It is a visual aid to where the reader is.
+- **The editor's box holds only the prompt and its completion list.** Notes and messages go to the status row above it.
+- **Themes.** Exact colors (24-bit, with a 256-color fallback), and a built-in "Terminal colors" theme that keeps today's 16 terminal colors. A theme may set the main background; otherwise the terminal's own background is used, asked of the terminal so that contrast can be scored. Underneath, a theme is a palette of main colors plus every role, each following one of them or holding its own exact value. The default theme is chosen with the new look.
+- **A distinct look**: a visual language for reasoning, tool calls, prompts and replies. The loop prepares 2–3 variants as captured screens of one scripted session, and the user picks one at a steer. Other work goes on meanwhile.
+- **A theme editor in `/settings`** that lets users with no artistic background discover a theme they like, quickly. It shows a live preview of a sample session with every UI element:
+  1. Choose how many main colors (1–5), then a harmony that fits that number (monochrome, complementary, analogous, triadic, split-complementary, square, rectangle…), each described in one plain line.
+  2. Randomize: a whole theme in that harmony. Text, dim text, borders and block backgrounds are derived at readable contrast and tinted toward the main colors, and every role is filled. Roll again until it is close.
+  3. Lock colors you like; a roll changes only the others, and locked colors anchor the harmony.
+  4. Set any single element to an exact color, or reset it to follow its main color. All roles are one view away; nothing is hidden.
+  5. Bump toward the harmony in small steps, or bump contrast up or down.
+
+  Undo and redo cover rolls and bumps. Scores show as numbers and in plain words ("cohesive 82%", "dim text: a bit faint").
+
+  Harmony is scored on hue only, in a perceptual space where lightness and chroma stay fixed as the hue turns. Each template hue is a sector rather than an exact point. The template's rotation is fitted to the palette, or anchored by locked colors, and each color counts by its chroma, so grays barely count. Repeated bumps converge to a perfect score.
+
+  A contrast guard keeps every text/background pair within a good band, neither too faint nor too harsh: after each step it nudges lightness as little as needed, or the color skips that step. Contrast bumps change only lightness.
+
+  Colors with a meaning (errors, success, warnings, diff added/removed) keep their hue ranges and are pulled toward the harmony only within them; each can be set by hand or have its range switched off. Which color wheel defines "opposite" (the artist's or a perceptual one) and which contrast formula to use (WCAG 2's ratio or APCA) are the loop's choices, judged by how the randomizer's results look, with `Choice:` trailers.
+
 ## Essential responsibilities and invariants
 
 ### Execution and authority
