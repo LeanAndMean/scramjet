@@ -12,7 +12,7 @@ use super::editor::{
 };
 use super::interactive::effort_note;
 use super::record::{self, Event};
-use super::select::{Act, Picked, Picker, Spot};
+use super::select::{Act, Picked, Picker, Routed, Spot};
 use super::selection::{self, Line};
 use super::settings::{Delivery, DoubleEscape, Settings};
 use super::slash::Builtin;
@@ -105,6 +105,8 @@ pub(super) enum Optional {
 
 pub(super) enum Answer {
     Picked(Option<usize>),
+    /// The row chosen from a next step's list, with the model and effort chosen for it.
+    Routed(usize, Routed),
     /// What one of a picker's own keys asked for (`Picker::acting`).
     Acted(Act, usize, Spot),
     /// The row a picker's countdown chose.
@@ -268,7 +270,7 @@ impl Link {
     }
     /// The row chosen from `picker`, `None` when cancelled.
     pub(super) fn pick(&self, picker: Picker) -> Option<usize> {
-        self.pick_timed(picker).map(|(row, _)| row)
+        self.pick_timed(picker).map(|(row, ..)| row)
     }
 
     /// As `pick`, or what one of the list's own keys asked for (`Picker::acting`).
@@ -280,11 +282,13 @@ impl Link {
         }
     }
 
-    /// As `pick`, and whether the picker's countdown chose the row rather than the user.
-    pub(super) fn pick_timed(&self, picker: Picker) -> Option<(usize, bool)> {
+    /// As `pick`, whether the picker's countdown chose the row rather than the user, and the
+    /// model and effort chosen in a next step's list (`Picker::routing`).
+    pub(super) fn pick_timed(&self, picker: Picker) -> Option<(usize, bool, Routed)> {
         match self.ask(Dialog::Pick(Box::new(picker)), None) {
-            Some(Answer::Picked(chosen)) => chosen.map(|row| (row, false)),
-            Some(Answer::Expired(row)) => Some((row, true)),
+            Some(Answer::Picked(chosen)) => chosen.map(|row| (row, false, Routed::default())),
+            Some(Answer::Routed(row, routed)) => Some((row, false, routed)),
+            Some(Answer::Expired(row)) => Some((row, true, Routed::default())),
             _ => None,
         }
     }
@@ -1797,6 +1801,9 @@ impl App {
                 None
             }
             Shown::Pick(picker) => picker.key(&key).map(|picked| match picked {
+                Picked::Row(Some(row)) if let Some(routed) = picker.routed() => {
+                    Answer::Routed(row, routed)
+                }
                 Picked::Row(row) => Answer::Picked(row),
                 Picked::Act(act, row, place) => Answer::Acted(act, row, place),
             }),

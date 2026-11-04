@@ -912,6 +912,51 @@ fn the_model_list_is_the_endpoints() {
 }
 
 #[test]
+fn a_next_step_offers_the_endpoints_models_with_their_cards_and_the_current_one() {
+    let list = json!({"data": [{"id": "gpt"}, {"id": "claude"}]}).to_string();
+    let cards = json!({"models": [
+        {"requestId": "claude", "displayName": "Claude", "reasoning": {"levels": ["low", "high"]}},
+        {"requestId": "m", "displayName": "Current", "reasoning": null},
+    ]})
+    .to_string();
+    let (endpoint, server) = serve_gets(vec![
+        ("200 OK", list),
+        ("200 OK", cards),
+        ("404 Not Found", "no".into()),
+        ("404 Not Found", "no".into()),
+    ]);
+    let (agent, _scratch) = agent(endpoint, "model-options");
+    let option = |id: &str, name: Option<&str>, reasoning, levels: &[&str]| ModelOption {
+        id: id.into(),
+        name: name.map(str::to_owned),
+        reasoning,
+        levels: levels.iter().map(|level| level.to_string()).collect(),
+        default_level: None,
+    };
+    // The current model, which the endpoint does not list, goes first, as its card says.
+    let options = agent.model_options();
+    assert_eq!(
+        options,
+        [
+            option("m", Some("Current"), false, &[]),
+            option("gpt", None, true, &[]),
+            option("claude", Some("Claude"), true, &["low", "high"]),
+        ]
+    );
+    let claude = &options[2];
+    assert_eq!(claude.effort(Some("medium")).as_deref(), Some("high"));
+    assert_eq!(claude.next_effort(Some("medium")).as_deref(), Some("low"));
+    assert_eq!(
+        (claude.effort(None), options[1].next_effort(None)),
+        (None, None)
+    );
+    // Without a list, only the current model, as the agent knows it.
+    assert_eq!(agent.model_options(), [option("m", None, true, &[])]);
+    let requests = ["GET /v1/models HTTP/1.1", "GET /api/model-cards HTTP/1.1"];
+    assert_eq!(server.join().unwrap(), [requests, requests].concat());
+}
+
+#[test]
 fn model_cards_choose_the_protocol_and_names_do_without_one() {
     let cards = json!({"models": [
         {"requestId": "claude-opus-5-5", "supportedProtocols": ["anthropic-messages"],

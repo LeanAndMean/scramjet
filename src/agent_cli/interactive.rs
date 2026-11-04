@@ -2,6 +2,7 @@
 //! built-in commands (`slash.rs`), model turns and a completed command's next step.
 use super::record::Event;
 use super::screen::{self, Handle};
+use super::select::Routed;
 use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
@@ -351,14 +352,14 @@ impl Interactive {
         for notice in &routing.notices {
             self.ui().notice(notice);
         }
-        let (step, start) = match routing.next {
+        let (step, start, routed) = match routing.next {
             Next::Nothing => {
                 self.spaced = true;
                 return None;
             }
             Next::Run { steps, chosen } => {
                 self.record(&routing.source, &steps, Some(chosen));
-                (steps[chosen].clone(), Start::Unattended)
+                (steps[chosen].clone(), Start::Unattended, Routed::default())
             }
             Next::Offer {
                 steps,
@@ -375,28 +376,64 @@ impl Interactive {
                     .collect();
                 let mut picker =
                     select::Picker::question("Select next step", &choices, recommended);
+                if self.screen.is_some() {
+                    let models = self.agent.model_options();
+                    let current = models.iter().position(|m| m.id == self.agent.model());
+                    let effort = self.agent.effort().map(str::to_owned);
+                    let route = select::Route::new(models, current.unwrap_or(0), effort);
+                    picker = picker.routing(route);
+                }
+                // After the models were read, which the countdown does not wait for.
                 if autoselect {
                     picker = picker.counting_down(AUTOSELECT);
                 }
                 let chosen = (self.screen.as_ref()).and_then(|screen| screen.pick_timed(picker));
-                self.record(&routing.source, &steps, chosen.map(|(at, _)| at));
-                let (at, timed) = chosen?;
+                self.record(&routing.source, &steps, chosen.as_ref().map(|(at, ..)| *at));
+                let (at, timed, routed) = chosen?;
                 let start = if timed {
                     Start::Unattended
                 } else {
                     Start::Chosen
                 };
-                (steps[at].clone(), start)
+                (steps[at].clone(), start, routed)
             }
         };
         let Some(command) = step.command else {
+            self.take_route(routed);
             self.set_text(step.message);
             return None;
         };
         if step.fresh_session && !self.new_session() {
             return None;
         }
+        self.take_route(routed);
         Some((command, start))
+    }
+
+    /// Sets the model and effort chosen for a next step, in the session that runs it; the effort
+    /// is saved as the settings' default, as Shift+Tab saves it. A model that cannot be set
+    /// leaves the step to run with the current one, as in Scramjet.
+    fn take_route(&mut self, routed: Routed) {
+        if routed == Routed::default() {
+            return;
+        }
+        if let Some(model) = &routed.model {
+            match self.agent.set_model(model) {
+                Ok(()) => {
+                    self.agent.load_model_card();
+                }
+                Err(error) => self.say(&format!("error: model not set to {model}: {error}")),
+            }
+        }
+        if let Some(level) = &routed.effort {
+            if let Err(error) = self.agent.set_effort(level) {
+                self.say(&format!("error: {error}"));
+            } else if let Err(error) = self.settings.set_default_thinking_level(level) {
+                self.say(&format!("error: settings not saved: {error}"));
+            }
+        }
+        let line = format!("Next step runs with {}", model_line(&self.agent));
+        self.say(&self.ui.dim(&line));
     }
 
     /// What is wrong in the settings, then in what the session `found` (`Agent::installed`).

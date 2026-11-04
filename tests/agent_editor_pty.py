@@ -1754,13 +1754,23 @@ def next_steps(read, until, send, output):
     # The steps the model offered, the recommended one selected, each reason under it.
     rows = on_screen('Select next step')
     text = '\n'.join(rows)
-    for expected in ['\u2192 0: /flow:step two', 'Do the second.', '1: /flow:done']:
+    for expected in ['\u2192 0: /flow:step two', 'Do the second.', '1: /flow:done',
+                     'model: GPT-6 Luna (gpt-6-luna) \u00b7 \u2190/\u2192 change',
+                     'effort: medium \u00b7 Shift+Tab cycle']:
         assert expected in text, (expected, text)
+    # Right chooses the model the step runs with, Shift+Tab its effort, among the model's levels.
+    send(b'\x1b[C')
+    on_screen('model: GPT-6 Sol (gpt-6-sol)')
+    send(b'\x1b[Z\x1b[Z')
+    on_screen('effort: xhigh \u00b7 Shift+Tab cycle')
     send(b'\r')
-    # Run as if typed, in the new session; the status check after its reply offers a step that
-    # the project's edge chains without asking.
+    # Run as if typed, in the new session, with them; the status check after its reply offers a
+    # step that the project's edge chains without asking.
     rows = on_screen('Second done.')
-    assert '> /flow:step two' in rows and 'New session started' in '\n'.join(rows), rows
+    text = '\n'.join(rows)
+    assert '> /flow:step two' in rows and 'New session started' in text, rows
+    assert text.index('New session started') < text.index('Next step runs with gpt-6-sol \u00b7 thinking xhigh') \
+        < text.index('> /flow:step two'), text
     rows = on_screen('All done.')
     text = '\n'.join(rows)
     assert text.index('\u2192 /flow:done \u2014 Finish.') < text.index('> /flow:done') < text.index('All done.'), text
@@ -2067,14 +2077,27 @@ with open(os.path.join(project, '.scramjet', 'autonomy.yaml'), 'w') as file:
     file.write('edges:\n  flow:step:\n    flow:done: chain\n')
 known = set(session_files())
 bodies = []
+routing = config_home('routing')
+route_cards = [{'requestId': model, 'displayName': name, 'supportedProtocols': ['openai-responses'],
+                'reasoning': {'levels': levels, 'default': 'medium'}}
+               for model, name, levels in [('gpt-6-luna', 'GPT-6 Luna', ['low', 'medium', 'high']),
+                                           ('gpt-6-sol', 'GPT-6 Sol', ['low', 'medium', 'high', 'xhigh'])]]
 run([], next_steps, serve_items([
     [report('call_1', [('/flow:step two', True, 'Do the second.'), ('/flow:done', False, 'Stop here.')], 0)],
     [message('Second done.')],
     [report('call_2', [('/flow:done', False, 'Finish.')], 0)],
     [message('All done.'), report('call_3')],
     [report('call_4', [('/flow:step four', False, 'Again.')], 0)],
-], bodies=bodies), rows=50)
+], models=['gpt-6-luna', 'gpt-6-sol'], cards=route_cards, bodies=bodies), variables={'XDG_CONFIG_HOME': routing},
+    rows=50)
 first, second = sorted(set(session_files()) - known)
+# The chosen model and effort take the step's requests and those after it, from the new session.
+routes = [(body['model'], body['reasoning']['effort']) for body in bodies]
+assert routes == [('gpt-6-luna', 'medium')] + [('gpt-6-sol', 'xhigh')] * 4, routes
+switches = lambda path: [line['model'] for line in map(json.loads, open(path)) if line.get('type') == 'model_change']
+assert 'gpt-6-sol' not in switches(first) and switches(second)[-1] == 'gpt-6-sol', (switches(first), switches(second))
+assert saved_levels(second)[-1] == 'xhigh' and 'xhigh' not in saved_levels(first), saved_levels(second)
+assert json.load(open(settings_path(routing))) == {'defaultThinkingLevel': 'xhigh'}
 prompts = lambda path: [line.get('_scramjet_typed') for line in map(json.loads, open(path))
                         if line.get('role') == 'user' and not line.get('_scramjet_probe')]
 assert prompts(first) == ['/flow:step one'], prompts(first)

@@ -264,21 +264,9 @@ impl ModelInfo {
         }
     }
 
-    /// `effort`, or when the card lists levels without it, the nearest higher level it lists, else
-    /// the nearest lower one, as Scramjet clamps a thinking level. An effort not in Scramjet's
-    /// order is left for the endpoint to judge.
+    /// `effort` fitted to the card's levels (`fit`).
     pub(super) fn fit<'a>(&'a self, effort: &'a str) -> &'a str {
-        const ORDER: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
-        let listed = |level: &str| self.levels.iter().any(|listed| listed == level);
-        match ORDER.iter().position(|level| *level == effort) {
-            Some(wanted) if !self.levels.is_empty() && !listed(effort) => ORDER[wanted..]
-                .iter()
-                .chain(ORDER[..wanted].iter().rev())
-                .copied()
-                .find(|level| listed(level))
-                .unwrap_or(effort),
-            _ => effort,
-        }
+        fit(&self.levels, effort)
     }
 
     /// From a Proxy model card: Responses when the card lists it, else Messages when it lists that.
@@ -308,6 +296,36 @@ impl ModelInfo {
             default_level: card["reasoning"]["default"].as_str().map(str::to_owned),
         }
     }
+}
+
+/// `effort`, or when `levels` has others but not it, the nearest higher level among them, else
+/// the nearest lower one, as Scramjet clamps a thinking level. An effort not in Scramjet's order
+/// is left for the endpoint to judge.
+pub(super) fn fit<'a>(levels: &[String], effort: &'a str) -> &'a str {
+    const ORDER: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+    let listed = |level: &str| levels.iter().any(|listed| listed == level);
+    match ORDER.iter().position(|level| *level == effort) {
+        Some(wanted) if !levels.is_empty() && !listed(effort) => ORDER[wanted..]
+            .iter()
+            .chain(ORDER[..wanted].iter().rev())
+            .copied()
+            .find(|level| listed(level))
+            .unwrap_or(effort),
+        _ => effort,
+    }
+}
+
+/// Each Proxy model card's model, display name and what the agent needs to know of it; none when
+/// the endpoint does not serve the cards in time.
+pub(super) async fn model_cards(endpoint: SocketAddr) -> Vec<(String, Option<String>, ModelInfo)> {
+    let cards = cards(endpoint).await.unwrap_or_default();
+    (cards.iter())
+        .filter_map(|card| {
+            let id = card["requestId"].as_str()?.to_owned();
+            let name = card["displayName"].as_str().map(str::to_owned);
+            Some((id, name, ModelInfo::from_card(card)))
+        })
+        .collect()
 }
 
 /// The model's Proxy model card; `None` when the endpoint does not serve the cards in time or does

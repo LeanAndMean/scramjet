@@ -128,6 +128,51 @@ impl EffortCycle {
     }
 }
 
+/// A model to run a next step with, as the endpoint lists it with its card.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelOption {
+    pub id: String,
+    /// The card's display name.
+    pub name: Option<String>,
+    pub reasoning: bool,
+    /// The effort levels the card lists, in order.
+    pub levels: Vec<String>,
+    pub default_level: Option<String>,
+}
+
+impl ModelOption {
+    fn new(id: String, name: Option<String>, info: &ModelInfo) -> Self {
+        Self {
+            id,
+            name,
+            reasoning: info.reasoning,
+            levels: info.levels.clone(),
+            default_level: info.default_level.clone(),
+        }
+    }
+
+    /// The effort its requests have with `set` set, as `Agent::effort` fits it, else the card's
+    /// default; `None` when it does not reason or neither is there.
+    pub fn effort(&self, set: Option<&str>) -> Option<String> {
+        let fitted = set.map(|effort| client::fit(&self.levels, effort));
+        let effort = fitted.or(self.default_level.as_deref())?;
+        self.reasoning.then(|| effort.to_owned())
+    }
+
+    /// Shift+Tab's: the level after `effort(set)` among the card's, wrapping around; `None` when
+    /// it lists fewer than two.
+    pub fn next_effort(&self, set: Option<&str>) -> Option<String> {
+        if self.levels.len() < 2 {
+            return None;
+        }
+        EffortCycle {
+            levels: self.levels.clone(),
+            current: self.effort(set),
+        }
+        .advance()
+    }
+}
+
 pub enum SessionChoice {
     New,
     Continue,
@@ -813,6 +858,31 @@ impl Agent {
     /// The endpoint's models, or `None` if they cannot be listed.
     pub fn models(&self) -> Option<Vec<String>> {
         self.executor.block_on(client::models(self.config.endpoint))
+    }
+
+    /// The endpoint's models in its order, each with what its card says, the current model first
+    /// when the endpoint does not list it: only the current one when they cannot be listed.
+    pub fn model_options(&self) -> Vec<ModelOption> {
+        let endpoint = self.config.endpoint;
+        let mut ids = (self.executor.block_on(client::models(endpoint))).unwrap_or_default();
+        if !ids.contains(&self.config.model) {
+            ids.insert(0, self.config.model.clone());
+        }
+        let cards = self.executor.block_on(client::model_cards(endpoint));
+        (ids.into_iter())
+            .map(|id| {
+                let guessed;
+                let (name, info) = match cards.iter().find(|(card, ..)| *card == id) {
+                    Some((_, name, info)) => (name.clone(), info),
+                    None if id == self.config.model => (None, &self.info),
+                    None => {
+                        guessed = ModelInfo::guess(&id);
+                        (None, &guessed)
+                    }
+                };
+                ModelOption::new(id, name, info)
+            })
+            .collect()
     }
 
     pub fn conversation(&self) -> &[Value] {

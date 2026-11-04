@@ -4,9 +4,10 @@
 
 use super::editor::{Key, terminal_size};
 use super::fuzzy::{self, Haystack};
+use super::settings::scramjet_level;
 use super::style;
 use super::text;
-use scramjet_rs::agent::Choice;
+use scramjet_rs::agent::{Choice, ModelOption};
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -45,6 +46,89 @@ pub(super) struct Spot {
     pub(super) query: String,
     /// The selected row's position among those shown.
     pub(super) position: usize,
+}
+
+/// The model a next step runs with and its effort, which Left/Right and Shift+Tab choose in its
+/// list, as in Scramjet's selector.
+pub(super) struct Route {
+    models: Vec<ModelOption>,
+    /// The chosen model's index in `models`, and the session's.
+    at: usize,
+    current: usize,
+    /// The effort set: the session's, until Shift+Tab chose one.
+    effort: Option<String>,
+    cycled: bool,
+}
+
+/// What a next step's list chose besides the step: `None` keeps the session's.
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct Routed {
+    pub(super) model: Option<String>,
+    pub(super) effort: Option<String>,
+}
+
+impl Route {
+    /// `models`, the session's at `current`, its effort `effort`.
+    pub(super) fn new(models: Vec<ModelOption>, current: usize, effort: Option<String>) -> Self {
+        let current = current.min(models.len().saturating_sub(1));
+        Self {
+            models,
+            at: current,
+            current,
+            effort,
+            cycled: false,
+        }
+    }
+
+    pub(super) fn routed(&self) -> Routed {
+        Routed {
+            model: (self.at != self.current).then(|| self.models[self.at].id.clone()),
+            effort: self.effort.clone().filter(|_| self.cycled),
+        }
+    }
+
+    /// Takes Left, Right and Shift+Tab; whether it took `key`.
+    fn key(&mut self, key: &Key) -> bool {
+        let count = self.models.len();
+        match key {
+            Key::Left if count > 1 => self.at = (self.at + count - 1) % count,
+            Key::Right if count > 1 => self.at = (self.at + 1) % count,
+            Key::BackTab => {
+                let model = &self.models[self.at];
+                if let Some(level) = model.next_effort(self.effort.as_deref()) {
+                    (self.effort, self.cycled) = (Some(level), true);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The chosen model, when there are others, and its effort, with the keys that change them.
+    fn lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        let Some(model) = self.models.get(self.at) else {
+            return lines;
+        };
+        if self.models.len() > 1 {
+            let name = match &model.name {
+                Some(name) => format!("{name} ({})", model.id),
+                None => model.id.clone(),
+            };
+            lines.push(format!("model: {name} · ←/→ change"));
+        }
+        let effort = match model.effort(self.effort.as_deref()) {
+            Some(level) => scramjet_level(&level).to_owned(),
+            None if model.reasoning => "model default".to_owned(),
+            None => "off".to_owned(),
+        };
+        let cycle = match model.next_effort(self.effort.as_deref()) {
+            Some(_) => " · Shift+Tab cycle",
+            None => "",
+        };
+        lines.push(format!("effort: {effort}{cycle}"));
+        lines
+    }
 }
 
 /// What a key ended a list with.
@@ -87,6 +171,8 @@ enum Shape {
         title: String,
         options: Vec<Choice>,
         recommended: Option<usize>,
+        /// A next step's model and effort (`routing`).
+        route: Option<Route>,
     },
 }
 
@@ -135,6 +221,7 @@ impl Picker {
                 title: title.to_owned(),
                 options: options.to_vec(),
                 recommended,
+                route: None,
             },
             deadline: None,
             held: false,
@@ -228,6 +315,25 @@ impl Picker {
         self
     }
 
+    /// Shows a next step's model and effort under a question's options, Left/Right and Shift+Tab
+    /// choosing them.
+    pub(super) fn routing(mut self, chosen: Route) -> Self {
+        if let Shape::Question { route, .. } = &mut self.shape {
+            *route = Some(chosen);
+        }
+        self
+    }
+
+    /// The model and effort chosen in a next step's list.
+    pub(super) fn routed(&self) -> Option<Routed> {
+        match &self.shape {
+            Shape::Question {
+                route: Some(route), ..
+            } => Some(route.routed()),
+            _ => None,
+        }
+    }
+
     /// Stops the countdown, as any key or click in Scramjet's selector does.
     pub(super) fn stop(&mut self) {
         self.deadline = None;
@@ -308,6 +414,13 @@ impl Picker {
             }
             return None;
         }
+        if let Shape::Question {
+            route: Some(route), ..
+        } = &mut self.shape
+            && route.key(key)
+        {
+            return None;
+        }
         match key {
             Key::Rename if self.acts => return row.map(|row| self.act(Act::Rename, row)),
             Key::EndOfInput if self.acts => {
@@ -384,7 +497,9 @@ impl Picker {
                 title,
                 options,
                 recommended,
+                route,
             } => {
+                let mut tail = route.as_ref().map_or_else(Vec::new, Route::lines);
                 let hint = match self.deadline {
                     Some(deadline) => {
                         let left = deadline.saturating_duration_since(Instant::now());
@@ -395,8 +510,9 @@ impl Picker {
                     }
                     None => HINT.to_owned(),
                 };
+                tail.push(hint);
                 let question = (title.as_str(), options.as_slice(), *recommended);
-                question_lines(question, &hint, &self.list, size)
+                question_lines(question, &tail, &self.list, size)
             }
         }
     }
@@ -618,11 +734,11 @@ fn lines(
 }
 
 /// A question's lines for a terminal of `(width, height)`: a rule, the title, the options around
-/// the selected one, the selected one's position when some are not shown, the `hint` on the
-/// keys, a rule.
+/// the selected one, the selected one's position when some are not shown, the `tail` (the hint
+/// on the keys last), a rule.
 fn question_lines(
     (title, options, recommended): (&str, &[Choice], Option<usize>),
-    hint: &str,
+    tail: &[String],
     list: &List,
     (width, height): (usize, usize),
 ) -> Vec<String> {
@@ -636,8 +752,8 @@ fn question_lines(
             option_rows(option, index == selected, recommended == Some(index), width)
         })
         .collect();
-    // The rules, the title and the keys; the rest is for the options and their position.
-    let room = height.saturating_sub(4).max(1);
+    // The rules, the title and the tail; the rest is for the options and their position.
+    let room = height.saturating_sub(3 + tail.len()).max(1);
     let shown = list.visible.clamp(1, count);
     let mut top = selected.saturating_sub(shown / 2).min(count - shown);
     let mut end = top + shown;
@@ -662,7 +778,9 @@ fn question_lines(
     if hidden {
         lines.push(format!("  {MUTED}({}/{count}){RESET}", selected + 1));
     }
-    lines.push(format!("{MUTED}{}{RESET}", text::clip(hint, width)));
+    for line in tail {
+        lines.push(format!("{MUTED}{}{RESET}", text::clip(line, width)));
+    }
     lines.push(rule);
     lines
 }
@@ -902,7 +1020,7 @@ mod tests {
         assert_eq!(
             plain(question_lines(
                 ("Choose", &options, Some(2)),
-                HINT,
+                &[HINT.to_owned()],
                 &list,
                 (31, 24)
             )),
@@ -926,7 +1044,7 @@ mod tests {
         let first = List::new(3, 0, 8);
         let short = plain(question_lines(
             ("Choose", &options, None),
-            HINT,
+            &[HINT.to_owned()],
             &first,
             (31, 8),
         ));
@@ -975,6 +1093,94 @@ mod tests {
             (unrecommended.expired(), unrecommended.next_change()),
             (None, None)
         );
+    }
+
+    #[test]
+    fn a_next_steps_list_chooses_the_model_and_effort_the_step_runs_with() {
+        let model = |id: &str, name: Option<&str>, levels: &[&str]| ModelOption {
+            id: id.into(),
+            name: name.map(str::to_owned),
+            reasoning: !levels.is_empty(),
+            levels: levels.iter().map(|level| level.to_string()).collect(),
+            default_level: None,
+        };
+        let models = vec![
+            model("gpt-6-luna", Some("GPT-6 Luna"), &["none", "low", "high"]),
+            model(
+                "claude-opus-5-5",
+                Some("Claude Opus 5.5"),
+                &["low", "medium", "max"],
+            ),
+            model("claude-haiku-4-5", None, &[]),
+        ];
+        let options = ["/rs:loop", "/rs:steer"].map(|label| Choice {
+            label: label.into(),
+            description: None,
+            value: String::new(),
+        });
+        let route = Route::new(models.clone(), 0, Some("none".into()));
+        let mut picker = Picker::question("Select next step", &options, Some(1)).routing(route);
+        // The lines between the options and the hint.
+        let tail = |picker: &Picker| {
+            let lines = plain(picker.lines((80, 24)));
+            lines[4..lines.len() - 2].to_vec()
+        };
+        assert_eq!(
+            tail(&picker),
+            [
+                "model: GPT-6 Luna (gpt-6-luna) · ←/→ change",
+                "effort: off · Shift+Tab cycle"
+            ]
+        );
+        assert_eq!(picker.routed(), Some(Routed::default()));
+        // The next model has the session's effort fitted to its levels; Shift+Tab cycles them.
+        assert_eq!(picker.key(&Key::Right), None);
+        assert_eq!(
+            tail(&picker),
+            [
+                "model: Claude Opus 5.5 (claude-opus-5-5) · ←/→ change",
+                "effort: low · Shift+Tab cycle"
+            ]
+        );
+        assert_eq!(picker.key(&Key::BackTab), None);
+        assert_eq!(tail(&picker)[1], "effort: medium · Shift+Tab cycle");
+        // Left wraps around to the last, which does not reason: nothing to cycle there.
+        for key in [Key::Left, Key::Left, Key::BackTab] {
+            assert_eq!(picker.key(&key), None);
+        }
+        assert_eq!(
+            tail(&picker),
+            ["model: claude-haiku-4-5 · ←/→ change", "effort: off"]
+        );
+        for key in [Key::Right, Key::Right] {
+            assert_eq!(picker.key(&key), None);
+        }
+        assert_eq!(picker.key(&Key::Enter), Some(Picked::Row(Some(1))));
+        let chosen = Routed {
+            model: Some("claude-opus-5-5".into()),
+            effort: Some("medium".into()),
+        };
+        assert_eq!(picker.routed(), Some(chosen));
+        // Back at the session's model, only the effort changes.
+        picker.key(&Key::Left);
+        let effort = Some("medium".to_owned());
+        let only_effort = Routed {
+            model: None,
+            effort,
+        };
+        assert_eq!(picker.routed(), Some(only_effort));
+        // With one model there is no model line; without an effort set, the card's default.
+        let mut alone = model("gpt-6-luna", None, &["low", "high"]);
+        alone.default_level = Some("high".into());
+        let route = Route::new(vec![alone], 0, None);
+        let mut single = Picker::question("Select next step", &options, None).routing(route);
+        assert_eq!(tail(&single), ["effort: high · Shift+Tab cycle"]);
+        assert_eq!(single.key(&Key::Right), None);
+        assert_eq!(single.routed(), Some(Routed::default()));
+        // Other questions have neither.
+        let question = Picker::question("Which?", &options, None);
+        assert_eq!(question.routed(), None);
+        assert_eq!(plain(question.lines((80, 24))).len(), 6);
     }
 
     #[test]
