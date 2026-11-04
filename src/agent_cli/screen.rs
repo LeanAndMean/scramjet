@@ -6,12 +6,10 @@
 //! retained view. A thread owns the terminal; the session runs on the caller's thread and talks
 //! to it through a `Handle`.
 
-use super::editor::{
-    Action, ByteSource, Draft, ESCAPE_WAIT, Editor, Key, Mouse, Note, RESIZE_CHECK, RawMode,
-    read_key, terminal_size,
-};
+use super::editor::{Action, Draft, Editor, Note, RESIZE_CHECK, terminal_size};
 use super::footer::{self, Footer};
 use super::interactive::effort_note;
+use super::keys::{ByteSource, ESCAPE_WAIT, Key, Mouse, RawMode, read_key};
 use super::record::{self, Event};
 use super::select::{Act, Picked, Picker, Routed, Spot, Toggle};
 use super::selection::{self, Line};
@@ -21,7 +19,7 @@ use super::terminal::{
     COMMAND_LINES, Terminal, elapsed, next_spin, retrying, spinner, waiting_for,
 };
 use super::text::{Wrap, clip, columns, one_line, plain, visible};
-use super::{clipboard, editor, job, style};
+use super::{clipboard, external, job, keys, style};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -1078,7 +1076,7 @@ impl App {
                     Ok(ToScreen::Edit(file, reply)) => {
                         drop(screen);
                         raw.suspend();
-                        let edited = editor::edit_file(&file);
+                        let edited = external::edit_file(&file);
                         raw.resume()?;
                         screen = Screen::enter();
                         self.drawn.clear();
@@ -1185,7 +1183,7 @@ impl App {
                 Flow::External => {
                     drop(screen);
                     raw.suspend();
-                    let edited = editor::external(self.draft.text());
+                    let edited = external::external(self.draft.text());
                     raw.resume()?;
                     screen = Screen::enter();
                     self.drawn.clear();
@@ -1949,7 +1947,7 @@ impl App {
         };
         match read {
             Ok(text) => {
-                editor.key(draft, Key::Paste(editor::clean(&text)), false);
+                editor.key(draft, Key::Paste(keys::clean(&text)), false);
             }
             Err(error) => draft.set_note(Note::Error(format!("Paste failed: {error}"))),
         }

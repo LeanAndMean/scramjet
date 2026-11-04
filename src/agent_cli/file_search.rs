@@ -2,7 +2,7 @@
 //! entries under the project (or a directory the word names) whose names match what follows the
 //! `@`, and the best matches are offered. The text is sent as typed; the model reads the files.
 
-use super::editor::Suggestion;
+use super::completion::Suggestion;
 use std::{
     io::Read,
     path::Path,

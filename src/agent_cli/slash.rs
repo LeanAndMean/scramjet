@@ -5,7 +5,7 @@
 use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal::{self, Terminal};
 use super::text::clip;
-use super::{clipboard, editor, export, style};
+use super::{clipboard, completion, export, style};
 use scramjet_rs::agent::{Agent, AgentError};
 use std::{
     io::IsTerminal,
@@ -47,7 +47,7 @@ impl<'a> Builtin<'a> {
             .split_once(char::is_whitespace)
             .unwrap_or((prompt, ""));
         let argument = argument.trim();
-        Some(match editor::listed(name.strip_prefix('/')?) {
+        Some(match completion::listed(name.strip_prefix('/')?) {
             "settings" if argument.is_empty() => Self::Settings,
             "export" => Self::Export(argument),
             "import" => Self::Import(argument),

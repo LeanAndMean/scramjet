@@ -3,8 +3,9 @@
 //! `/model` and `/tree` search as you type, `/resume`'s renames and deletes sessions, and
 //! `/tree`'s filters its entries, folds their branches and labels them.
 
-use super::editor::{Key, terminal_size};
+use super::editor::terminal_size;
 use super::fuzzy::{self, Haystack};
+use super::keys::Key;
 use super::settings::scramjet_level;
 use super::style;
 use super::text;
