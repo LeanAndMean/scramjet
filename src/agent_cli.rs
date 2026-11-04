@@ -29,6 +29,7 @@ mod slash;
 mod style;
 mod terminal;
 mod text;
+mod theme;
 mod tree;
 
 use args::{Options, Start, USAGE};
@@ -99,6 +100,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     };
     let mut settings = Settings::load();
+    style::set(&settings.theme());
     let (patterns, source) = match options.models.take() {
         Some(patterns) => (patterns, "--models"),
         None => (settings.enabled_models.clone(), "settings: enabledModels"),

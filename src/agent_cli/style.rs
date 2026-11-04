@@ -1,138 +1,275 @@
 //! How the agent's terminal output looks, decided in one place: each kind of text the renderers
-//! show has its escape sequence here, named for what it shows.
+//! show has its style here, named for what it shows, as text attributes plus the color of one of
+//! the theme's tokens. The theme in use decides the escape sequences.
+
+use super::theme::{Color, Mode, TERMINAL_COLORS, Theme, Token};
+use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{LazyLock, RwLock};
 
 pub const RESET: &str = "\x1b[0m";
-
-/// The status line and the running command's output lines above it.
-pub const STATUS: &str = "\x1b[2m";
-/// The status line's spinner, in Scramjet's accent color, and while a request waits to be retried,
-/// in its warning color.
-pub const SPINNER: &str = "\x1b[36m";
-pub const SPINNER_RETRYING: &str = "\x1b[33m";
-/// A subagent's glyph while it runs, once it is done and when it failed, and the name of the
-/// agent or of several children's mode beside it.
-pub const SUBAGENT_RUNNING: &str = "\x1b[33m";
-pub const SUBAGENT_DONE: &str = "\x1b[32m";
-pub const SUBAGENT_FAILED: &str = "\x1b[31m";
-pub const SUBAGENT_NAME: &str = "\x1b[1m";
-/// The footer under the prompt, and how full the context is there past 70%, then past 90%, as
-/// Scramjet's warning and error colors show it.
-pub const FOOTER: &str = "\x1b[2m";
-pub const FOOTER_NEARLY_FULL: &str = "\x1b[33m";
-pub const FOOTER_FULL: &str = "\x1b[31m";
-/// Secondary notes: `Took 1.2s`, `(cancelled)`, why a compaction ran, editor hints.
-pub const MUTED: &str = "\x1b[2m";
-/// A tool's result preview.
-pub const TOOL_OUTPUT: &str = "\x1b[2m";
-/// A failed tool's result preview.
-pub const TOOL_FAILED: &str = "\x1b[31m";
-/// Streamed reasoning summaries.
-pub const REASONING: &str = "\x1b[2m";
-/// The line shown in place of hidden reasoning.
-pub const THINKING_HIDDEN: &str = "\x1b[2;3m";
-/// A compaction summary.
-pub const SUMMARY: &str = "\x1b[2m";
-/// A section heading in an information block such as `/session`'s.
-pub const INFO_HEADING: &str = "\x1b[1m";
-/// A provider failure that is retried.
-pub const WARNING: &str = "\x1b[33m";
-/// What Scramjet notifies the user of about a command, such as a blocked report.
-pub const NOTICE: &str = "\x1b[33m";
-/// The record of a next step chosen or offered after a command completed.
-pub const NEXT_STEP: &str = "\x1b[2m";
-/// A command the user ran, as Scramjet's bash-mode color shows it: the rules around its block
-/// when run with `!`, then with `!!` (kept out of the conversation), and its `$ command` line.
-pub const COMMAND_RULE: &str = "\x1b[32m";
-pub const COMMAND_EXCLUDED_RULE: &str = "\x1b[2m";
-pub const COMMAND_LINE: &str = "\x1b[1;32m";
-/// How a command the user ran ended, if not with exit code 0: failed, or cancelled.
-pub const COMMAND_FAILED: &str = "\x1b[31m";
-pub const COMMAND_CANCELLED: &str = "\x1b[33m";
-
-pub const DIFF_REMOVED: &str = "\x1b[31m";
-pub const DIFF_ADDED: &str = "\x1b[32m";
-pub const DIFF_CONTEXT: &str = "\x1b[2m";
 /// The words a one-line change replaced, within a removed or added line, and where they end
 /// (which must leave the line's own style on).
 pub const DIFF_CHANGED: &str = "\x1b[7m";
 pub const DIFF_CHANGED_END: &str = "\x1b[27m";
 
-/// Markdown `**strong**` text, `*emphasis*`, both (`***`), and `~~struck~~` text.
-pub const STRONG: &str = "\x1b[1m";
-pub const EMPHASIS: &str = "\x1b[3m";
-pub const STRONG_EMPHASIS: &str = "\x1b[1;3m";
-pub const STRUCK: &str = "\x1b[9m";
-/// A markdown link's text, and its address after it when that differs.
-pub const LINK: &str = "\x1b[4;34m";
-pub const LINK_URL: &str = "\x1b[2m";
-/// A markdown block quote's text, and the `│` border before it.
-pub const QUOTE: &str = "\x1b[2;3m";
-pub const QUOTE_BORDER: &str = "\x1b[34m";
-/// A markdown horizontal rule, and a list item's bullet or number.
-pub const HORIZONTAL_RULE: &str = "\x1b[2m";
-pub const LIST_BULLET: &str = "\x1b[36m";
-/// Markdown code spans.
-pub const CODE: &str = "\x1b[36m";
-/// The lines of a fenced code block, and its fence lines.
-pub const CODE_BLOCK: &str = "\x1b[32m";
-pub const CODE_FENCE: &str = "\x1b[2m";
-/// Highlighted code, as near as the terminal's palette comes to Scramjet's colors: comments (and
-/// annotations, diff headers), keywords, function names, variables (and parameters, keys,
-/// attributes), strings, numbers (and literals such as `true`), and types (and built-ins). Diff
-/// lines take `DIFF_ADDED` and `DIFF_REMOVED`; other code is plain.
-pub const SYNTAX_COMMENT: &str = "\x1b[2m";
-pub const SYNTAX_KEYWORD: &str = "\x1b[34m";
-pub const SYNTAX_FUNCTION: &str = "\x1b[33m";
-pub const SYNTAX_VARIABLE: &str = "\x1b[35m";
-pub const SYNTAX_STRING: &str = "\x1b[32m";
-pub const SYNTAX_NUMBER: &str = "\x1b[33m";
-pub const SYNTAX_TYPE: &str = "\x1b[36m";
-/// Markdown headings: level 1, then the others.
-pub const TITLE: &str = "\x1b[1;4;33m";
-pub const HEADING: &str = "\x1b[1;33m";
+const BOLD: u8 = 1;
+const FAINT: u8 = 2;
+const ITALIC: u8 = 3;
+const UNDERLINE: u8 = 4;
+const REVERSE: u8 = 7;
+const STRIKE: u8 = 9;
 
-/// A selector's title, its selected row and the mark before that row.
-pub const SELECTOR_TITLE: &str = "\x1b[1m";
-pub const SELECTED: &str = "\x1b[1m";
-pub const SELECTOR_MARK: &str = "\x1b[36m";
-/// A heading among a selector's rows, over the rows it groups.
-pub const SELECTOR_HEADING: &str = "\x1b[2m";
-/// The tree lines before the rows of forked sessions in `/resume` and of `/tree`'s entries.
-pub const SELECTOR_TREE: &str = "\x1b[2m";
-/// In `/tree`'s rows, as Scramjet's tree colors them: the mark on the current entry's path,
-/// who wrote a message, the error a turn stopped with, compactions, a branch summary's label,
-/// the entries that are not messages (tool calls, commands the user ran, model and thinking
-/// changes) or replies without text, and the labels the user gave entries, with when.
-pub const TREE_PATH: &str = "\x1b[36m";
-pub const TREE_USER: &str = "\x1b[36m";
-pub const TREE_ASSISTANT: &str = "\x1b[32m";
-pub const TREE_ERROR: &str = "\x1b[31m";
-pub const TREE_COMPACTION: &str = "\x1b[36m";
-pub const TREE_SUMMARY: &str = "\x1b[33m";
-pub const TREE_OTHER: &str = "\x1b[2m";
-pub const TREE_LABEL: &str = "\x1b[33m";
-pub const TREE_LABEL_TIME: &str = "\x1b[2m";
-/// What a selector's key asks to confirm with the row it would remove, and why it cannot, as
-/// Scramjet's error color shows them; what it did, in Scramjet's accent color.
-pub const SELECTOR_WARNING: &str = "\x1b[31m";
-pub const SELECTOR_DONE: &str = "\x1b[36m";
-/// Text selected with the mouse in the full screen, as Scramjet's retained view shows it.
-pub const SELECTION: &str = "\x1b[7m";
-/// The cursor block after the query typed in a selector, as Scramjet's input draws it.
-pub const SEARCH_CURSOR: &str = "\x1b[7m";
-/// The selected row of the completion list under the prompt.
-pub const COMPLETION_SELECTED: &str = "\x1b[36m";
-/// The mark after the current session or model in a selector.
-pub const CURRENT: &str = "\x1b[32m";
-/// In `/resume`, the current session's prompt or name, and other sessions' names, in Scramjet's
-/// accent and warning colors.
-pub const SESSION_CURRENT: &str = "\x1b[36m";
-pub const SESSION_NAMED: &str = "\x1b[33m";
-/// A model `/scoped-models` has on, and one it has off.
-pub const MODEL_ON: &str = "\x1b[32m";
-pub const MODEL_OFF: &str = "\x1b[2m";
-/// The rules above and below the list of a question the model asks, its title, and the rows of
-/// the selected option, as Scramjet's border and accent colors show them.
-pub const QUESTION_BORDER: &str = "\x1b[34m";
-pub const QUESTION_TITLE: &str = "\x1b[1;36m";
-pub const QUESTION_SELECTED: &str = "\x1b[36m";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Style(u8);
+
+struct Spec {
+    attributes: &'static [u8],
+    color: Option<Token>,
+}
+
+macro_rules! styles {
+    ($($(#[$doc:meta])* $name:ident: [$($attribute:ident),*] $($token:ident)?;)*) => {
+        #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
+        enum Id { $($name),* }
+        $($(#[$doc])* pub const $name: Style = Style(Id::$name as u8);)*
+        const SPECS: &[Spec] = &[$(Spec {
+            attributes: &[$($attribute),*],
+            color: styles!(@token $($token)?),
+        }),*];
+    };
+    (@token) => { None };
+    (@token $token:ident) => { Some(Token::$token) };
+}
+
+styles! {
+    /// The status line and the running command's output lines above it.
+    STATUS: [] Muted;
+    /// The status line's spinner, in the accent color, and while a request waits to be
+    /// retried, in the warning color.
+    SPINNER: [] Accent;
+    SPINNER_RETRYING: [] Warning;
+    /// A subagent's glyph while it runs, once it is done and when it failed, and the name of
+    /// the agent or of several children's mode beside it.
+    SUBAGENT_RUNNING: [] Warning;
+    SUBAGENT_DONE: [] Success;
+    SUBAGENT_FAILED: [] Error;
+    SUBAGENT_NAME: [BOLD] ToolTitle;
+    /// The footer under the prompt, and how full the context is there past 70%, then past 90%.
+    FOOTER: [] Dim;
+    FOOTER_NEARLY_FULL: [] Warning;
+    FOOTER_FULL: [] Error;
+    /// Secondary notes: `Took 1.2s`, `(cancelled)`, why a compaction ran, editor hints.
+    MUTED: [] Muted;
+    /// A tool's result preview.
+    TOOL_OUTPUT: [] ToolOutput;
+    /// A failed tool's result preview.
+    TOOL_FAILED: [] Error;
+    /// Streamed reasoning summaries.
+    REASONING: [] ThinkingText;
+    /// The line shown in place of hidden reasoning.
+    THINKING_HIDDEN: [ITALIC] ThinkingText;
+    /// A compaction summary.
+    SUMMARY: [] CustomMessageText;
+    /// A section heading in an information block such as `/session`'s.
+    INFO_HEADING: [BOLD];
+    /// A provider failure that is retried.
+    WARNING: [] Warning;
+    /// What Scramjet notifies the user of about a command, such as a blocked report.
+    NOTICE: [] Warning;
+    /// The record of a next step chosen or offered after a command completed.
+    NEXT_STEP: [] Muted;
+    /// A command the user ran, in the bash-mode color: the rules around its block when run with
+    /// `!`, then with `!!` (kept out of the conversation), and its `$ command` line.
+    COMMAND_RULE: [] BashMode;
+    COMMAND_EXCLUDED_RULE: [] Dim;
+    COMMAND_LINE: [BOLD] BashMode;
+    /// How a command the user ran ended, if not with exit code 0: failed, or cancelled.
+    COMMAND_FAILED: [] Error;
+    COMMAND_CANCELLED: [] Warning;
+
+    DIFF_REMOVED: [] ToolDiffRemoved;
+    DIFF_ADDED: [] ToolDiffAdded;
+    DIFF_CONTEXT: [] ToolDiffContext;
+
+    /// Markdown `**strong**` text, `*emphasis*`, both (`***`), and `~~struck~~` text.
+    STRONG: [BOLD];
+    EMPHASIS: [ITALIC];
+    STRONG_EMPHASIS: [BOLD, ITALIC];
+    STRUCK: [STRIKE];
+    /// A markdown link's text, and its address after it when that differs.
+    LINK: [UNDERLINE] MdLink;
+    LINK_URL: [] MdLinkUrl;
+    /// A markdown block quote's text, and the `│` border before it.
+    QUOTE: [ITALIC] MdQuote;
+    QUOTE_BORDER: [] MdQuoteBorder;
+    /// A markdown horizontal rule, and a list item's bullet or number.
+    HORIZONTAL_RULE: [] MdHr;
+    LIST_BULLET: [] MdListBullet;
+    /// Markdown code spans.
+    CODE: [] MdCode;
+    /// The lines of a fenced code block, and its fence lines.
+    CODE_BLOCK: [] MdCodeBlock;
+    CODE_FENCE: [] MdCodeBlockBorder;
+    /// Highlighted code, as Scramjet's theme colors it: comments (and annotations, diff
+    /// headers), keywords, function names, variables (and parameters, keys, attributes),
+    /// strings, numbers (and literals such as `true`), and types (and built-ins). Diff lines
+    /// take `DIFF_ADDED` and `DIFF_REMOVED`; other code is plain.
+    SYNTAX_COMMENT: [] SyntaxComment;
+    SYNTAX_KEYWORD: [] SyntaxKeyword;
+    SYNTAX_FUNCTION: [] SyntaxFunction;
+    SYNTAX_VARIABLE: [] SyntaxVariable;
+    SYNTAX_STRING: [] SyntaxString;
+    SYNTAX_NUMBER: [] SyntaxNumber;
+    SYNTAX_TYPE: [] SyntaxType;
+    /// Markdown headings: level 1, then the others.
+    TITLE: [BOLD, UNDERLINE] MdHeading;
+    HEADING: [BOLD] MdHeading;
+
+    /// A selector's title, its selected row and the mark before that row.
+    SELECTOR_TITLE: [BOLD];
+    SELECTED: [BOLD];
+    SELECTOR_MARK: [] Accent;
+    /// A heading among a selector's rows, over the rows it groups.
+    SELECTOR_HEADING: [] Muted;
+    /// The tree lines before the rows of forked sessions in `/resume` and of `/tree`'s entries.
+    SELECTOR_TREE: [] Dim;
+    /// In `/tree`'s rows, as Scramjet's tree colors them: the mark on the current entry's path,
+    /// who wrote a message, the error a turn stopped with, compactions, a branch summary's
+    /// label, the entries that are not messages (tool calls, commands the user ran, model and
+    /// thinking changes) or replies without text, and the labels the user gave entries, with
+    /// when.
+    TREE_PATH: [] Accent;
+    TREE_USER: [] Accent;
+    TREE_ASSISTANT: [] Success;
+    TREE_ERROR: [] Error;
+    TREE_COMPACTION: [] BorderAccent;
+    TREE_SUMMARY: [] Warning;
+    TREE_OTHER: [] Dim;
+    TREE_LABEL: [] Warning;
+    TREE_LABEL_TIME: [] Muted;
+    /// What a selector's key asks to confirm with the row it would remove, and why it cannot,
+    /// in the error color; what it did, in the accent color.
+    SELECTOR_WARNING: [] Error;
+    SELECTOR_DONE: [] Accent;
+    /// Text selected with the mouse in the full screen, as Scramjet's retained view shows it.
+    SELECTION: [REVERSE];
+    /// The cursor block after the query typed in a selector, as Scramjet's input draws it.
+    SEARCH_CURSOR: [REVERSE];
+    /// The selected row of the completion list under the prompt.
+    COMPLETION_SELECTED: [] Accent;
+    /// The mark after the current session or model in a selector.
+    CURRENT: [] Success;
+    /// In `/resume`, the current session's prompt or name, and other sessions' names, in the
+    /// accent and warning colors.
+    SESSION_CURRENT: [] Accent;
+    SESSION_NAMED: [] Warning;
+    /// A model `/scoped-models` has on, and one it has off.
+    MODEL_ON: [] Success;
+    MODEL_OFF: [] Dim;
+    /// The rules above and below the list of a question the model asks, its title, and the
+    /// rows of the selected option, in the border and accent colors.
+    QUESTION_BORDER: [] Border;
+    QUESTION_TITLE: [BOLD] Accent;
+    QUESTION_SELECTED: [] Accent;
+    /// No style.
+    NONE: [];
+}
+
+impl Style {
+    /// The escape sequence that starts the style in the theme in use; empty when it changes
+    /// nothing.
+    pub fn get(self) -> &'static str {
+        let table = *TABLE
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        &table[self.0 as usize]
+    }
+}
+
+impl fmt::Display for Style {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.get())
+    }
+}
+
+/// The styles' escape sequences in a theme.
+fn table(theme: &Theme, mode: Mode) -> Vec<String> {
+    let sequence = |spec: &Spec| {
+        let mut attributes = spec.attributes.to_vec();
+        let color = match spec.color.map(|token| theme.color(token)) {
+            Some(Color::Faint) => {
+                attributes.push(FAINT);
+                None
+            }
+            color => color.and_then(|color| color.foreground(mode)),
+        };
+        attributes.sort();
+        let attributes = attributes.iter().map(u8::to_string);
+        let parameters: Vec<String> = attributes.chain(color).collect();
+        match parameters.is_empty() {
+            true => String::new(),
+            false => format!("\x1b[{}m", parameters.join(";")),
+        }
+    };
+    SPECS.iter().map(sequence).collect()
+}
+
+static TABLE: LazyLock<RwLock<&'static [String]>> = LazyLock::new(|| {
+    let theme = Theme::built_in(TERMINAL_COLORS).expect("built in");
+    RwLock::new(table(&theme, Mode::TrueColor).leak())
+});
+static GENERATION: AtomicUsize = AtomicUsize::new(0);
+
+/// Shows everything from now on in `theme`'s colors.
+pub(super) fn set(theme: &Theme) {
+    // A few hundred bytes for each theme chosen, which strings already shown may still borrow.
+    let table = table(theme, Mode::detect()).leak();
+    *TABLE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = table;
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// A number that changes with each theme set, for what keeps text rendered in one.
+pub(super) fn generation() -> usize {
+    GENERATION.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_terminal_colors_are_the_16_colors_shown_before_themes() {
+        let theme = Theme::built_in(TERMINAL_COLORS).unwrap();
+        let table = table(&theme, Mode::TrueColor);
+        let shown = |style: Style| table[style.0 as usize].as_str();
+        assert_eq!(shown(STATUS), "\x1b[2m");
+        assert_eq!(shown(SPINNER), "\x1b[36m");
+        assert_eq!(shown(SUBAGENT_NAME), "\x1b[1m");
+        assert_eq!(shown(THINKING_HIDDEN), "\x1b[2;3m");
+        assert_eq!(shown(QUOTE), "\x1b[2;3m");
+        assert_eq!(shown(TITLE), "\x1b[1;4;33m");
+        assert_eq!(shown(LINK), "\x1b[4;34m");
+        assert_eq!(shown(COMMAND_LINE), "\x1b[1;32m");
+        assert_eq!(shown(SYNTAX_VARIABLE), "\x1b[35m");
+        assert_eq!(shown(STRONG_EMPHASIS), "\x1b[1;3m");
+        assert_eq!(shown(SELECTION), "\x1b[7m");
+        assert_eq!(shown(NONE), "");
+        assert_eq!(STATUS.get(), "\x1b[2m");
+    }
+
+    #[test]
+    fn an_exact_theme_sends_24_bit_colors_or_the_nearest_of_256() {
+        let theme = Theme::built_in("scramjet-dark").unwrap();
+        let exact = table(&theme, Mode::TrueColor);
+        let indexed = table(&theme, Mode::Indexed);
+        let shown = |table: &[String], style: Style| table[style.0 as usize].clone();
+        assert_eq!(shown(&exact, SPINNER), "\x1b[38;2;56;225;255m");
+        assert_eq!(shown(&indexed, SPINNER), "\x1b[38;5;81m");
+        assert_eq!(shown(&exact, TITLE), "\x1b[1;4;38;2;255;158;90m");
+        assert_eq!(shown(&exact, SUBAGENT_NAME), "\x1b[1m");
+        assert_eq!(shown(&exact, CODE_BLOCK), "");
+    }
+}

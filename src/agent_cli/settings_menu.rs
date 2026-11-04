@@ -3,7 +3,8 @@
 use super::interactive::{Interactive, completions};
 use super::settings::{ROWS, Row, scramjet_level};
 use super::text::clip;
-use super::{editor, installed, select};
+use super::theme::{BUILT_IN, Mode, TERMINAL_COLORS, Theme};
+use super::{editor, installed, select, style};
 use scramjet_rs::agent::{
     Approval, Approvals, CODING_TOOLS, Choice, Edge, Installed, NextStep, NextSteps, Problem,
     Publication, Scope, Setting, search_program, shortened,
@@ -19,6 +20,7 @@ const NO_LEVELS: &str = "The model's card lists no thinking levels to choose fro
 const BACK_KEYS: &str = "↑↓ move · Enter select · Esc back";
 const TOOLS_KEYS: &str = "↑↓ move · Enter switch on or off · Esc back";
 const CHANGE_KEYS: &str = "↑↓ move · Enter change · Esc back";
+const THEME_KEYS: &str = "↑↓ move · Enter use · Esc back";
 const INSTALLED_KEYS: &str = "↑↓ move · Enter edit · Esc back";
 /// What a next step can be set to, in the order `/settings` offers them.
 const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
@@ -42,6 +44,21 @@ const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
 ];
 const AUTOPILOT_DECIDES: &str = "With autopilot on, the recommended step runs after a 3-second \
     countdown; off, the next steps wait for you to choose.";
+
+/// What a built-in theme is, as `/settings` says under its row.
+fn theme_note(name: &str) -> String {
+    let note = match name {
+        TERMINAL_COLORS => {
+            return "The terminal's own 16 colors, which follow its color scheme.".into();
+        }
+        "scramjet-dark" => "Scramjet's theme, in exact colors, for a dark background.",
+        _ => "Pi's light theme, in exact colors, for a light background.",
+    };
+    match Mode::detect() {
+        Mode::TrueColor => note.into(),
+        Mode::Indexed => format!("{note} This terminal gets the nearest of its 256 colors."),
+    }
+}
 
 /// What a coding tool does, as `/settings` says under its row, in the instructions' words.
 fn tool_note(tool: &str) -> &'static str {
@@ -119,6 +136,7 @@ impl Interactive {
             match ROWS[index] {
                 Row::ThinkingLevel => self.choose_thinking_level(),
                 Row::Tools => self.choose_tools(),
+                Row::Theme => self.choose_theme(),
                 Row::NextSteps => self.choose_next_steps(),
                 Row::Publishing => self.choose_approvals(),
                 Row::Installed => self.show_installed(),
@@ -194,6 +212,38 @@ impl Interactive {
         }
         if let Err(error) = self.settings.set_default_thinking_level(level) {
             self.say(&format!("Error: settings not saved: {error}"));
+        }
+    }
+
+    /// The themes; Enter shows everything in one at once and keeps the list open to try the
+    /// next, and the one chosen last stays.
+    fn choose_theme(&mut self) {
+        let position = |name: &str| BUILT_IN.iter().position(|known| *known == name);
+        let mut at = position(&self.settings.theme).unwrap_or(0);
+        loop {
+            let Some(screen) = &self.screen else {
+                return;
+            };
+            let notes = BUILT_IN.map(theme_note).to_vec();
+            let picker = select::Picker::select(
+                "Theme",
+                select::VISIBLE,
+                BUILT_IN.len(),
+                at,
+                position(&self.settings.theme),
+                |index, width| clip(BUILT_IN[index], width),
+            );
+            let Some(index) = screen.pick(picker.noting(THEME_KEYS, notes).held()) else {
+                return;
+            };
+            at = index;
+            let name = BUILT_IN[index];
+            if name != self.settings.theme {
+                style::set(&Theme::built_in(name).expect("built in"));
+            }
+            if let Err(error) = self.settings.set_theme(name) {
+                self.say(&format!("Error: settings not saved: {error}"));
+            }
         }
     }
 
@@ -670,7 +720,7 @@ impl Interactive {
             true => {
                 let shown = shortened(&file.display().to_string());
                 let note = format!("{shown} changed; run /reload once the turn ends");
-                self.say(&self.ui.dim(&note));
+                self.say_styled(style::MUTED, &note);
             }
             false => self.reload(),
         }
@@ -703,7 +753,8 @@ impl Interactive {
             Some(_) => {
                 match self.agent.forget_project_agents() {
                     Ok(0) => self.say("No approval of this project's agents to forget"),
-                    Ok(_) => self.say(&self.ui.dim("Forgot the approval of this project's agents")),
+                    Ok(_) => self
+                        .say_styled(style::MUTED, "Forgot the approval of this project's agents"),
                     Err(error) => self.say(&format!("Error: the approval stays: {error}")),
                 }
                 true
@@ -744,9 +795,9 @@ impl Interactive {
         if let Err(error) = std::fs::remove_file(file) {
             return self.say(&format!("Error: {link} not removed: {error}"));
         }
-        self.say(&self.ui.dim(&format!("Removed {link}, a link to {target}")));
+        self.say_styled(style::MUTED, &format!("Removed {link}, a link to {target}"));
         match self.in_turn {
-            true => self.say(&self.ui.dim("Run /reload once the turn ends")),
+            true => self.say_styled(style::MUTED, "Run /reload once the turn ends"),
             false => self.reload(),
         }
     }

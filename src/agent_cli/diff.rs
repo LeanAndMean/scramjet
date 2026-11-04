@@ -2,7 +2,9 @@
 //! with the changed words of a line replaced by one other line in inverse. Unchanged lines are
 //! only context, so they are cut to the width.
 
-use super::style::{DIFF_ADDED, DIFF_CHANGED, DIFF_CHANGED_END, DIFF_CONTEXT, DIFF_REMOVED, RESET};
+use super::style::{
+    DIFF_ADDED, DIFF_CHANGED, DIFF_CHANGED_END, DIFF_CONTEXT, DIFF_REMOVED, RESET, Style,
+};
 use super::text::{Wrap, clip, printable};
 use scramjet_rs::agent::sequence_diff;
 use unicode_width::UnicodeWidthStr;
@@ -80,7 +82,7 @@ fn wrapped(
     gutter: &str,
     text: &str,
     width: usize,
-    style: &str,
+    style: Style,
     color: bool,
     marked: bool,
     limit: usize,
@@ -182,7 +184,7 @@ fn words(text: &str) -> Vec<&str> {
     words
 }
 
-fn styled(style: &str, text: &str, color: bool) -> String {
+fn styled(style: Style, text: &str, color: bool) -> String {
     match color {
         true => format!("{style}{text}{RESET}"),
         false => text.to_owned(),

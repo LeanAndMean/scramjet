@@ -4,8 +4,8 @@
 
 use super::markdown::Markdown;
 use super::style::{
-    self, MUTED, SUBAGENT_DONE, SUBAGENT_FAILED, SUBAGENT_NAME, SUBAGENT_RUNNING, TOOL_FAILED,
-    TOOL_OUTPUT, WARNING,
+    self, MUTED, SUBAGENT_DONE, SUBAGENT_FAILED, SUBAGENT_NAME, SUBAGENT_RUNNING, Style,
+    TOOL_FAILED, TOOL_OUTPUT, WARNING,
 };
 use super::text::{Wrap, clip, printable, visible};
 use scramjet_rs::agent::{ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation};
@@ -63,7 +63,7 @@ struct Rows<'a> {
 }
 
 impl Rows<'_> {
-    fn paint(&self, style: &str, text: &str) -> String {
+    fn paint(&self, style: Style, text: &str) -> String {
         match self.look.color && !text.is_empty() {
             true => format!("{style}{text}{}", style::RESET),
             false => text.to_owned(),
@@ -82,7 +82,7 @@ impl Rows<'_> {
     }
 
     /// Each line of `text`, wrapped, in `style`.
-    fn text(&mut self, style: &str, text: &str) {
+    fn text(&mut self, style: Style, text: &str) {
         for line in visible(text.trim_end()).lines() {
             let line = self.paint(style, line);
             self.wrapped(&line);
@@ -90,7 +90,7 @@ impl Rows<'_> {
     }
 
     /// One row, cut to the width.
-    fn clipped(&mut self, style: &str, text: &str) {
+    fn clipped(&mut self, style: Style, text: &str) {
         let row = self.paint(style, &clip(&printable(text), self.look.width));
         self.rows.push(row);
     }
@@ -356,7 +356,7 @@ impl Rows<'_> {
 }
 
 /// The glyph showing how a child is going, and its style.
-pub(super) fn icon(state: &ChildState) -> (&'static str, &'static str) {
+pub(super) fn icon(state: &ChildState) -> (&'static str, Style) {
     match state {
         ChildState::Running => ("⏳", SUBAGENT_RUNNING),
         ChildState::Done => ("✓", SUBAGENT_DONE),

@@ -4,7 +4,7 @@
 //! label shows before it. Its filters, its query and the branches folded choose the entries
 //! shown; an entry whose parent is hidden hangs from its nearest shown ancestor.
 
-use super::style::{RESET, SELECTOR_TREE, TREE_ASSISTANT, TREE_COMPACTION, TREE_ERROR};
+use super::style::{RESET, SELECTOR_TREE, Style, TREE_ASSISTANT, TREE_COMPACTION, TREE_ERROR};
 use super::style::{TREE_LABEL, TREE_LABEL_TIME, TREE_OTHER, TREE_PATH, TREE_SUMMARY, TREE_USER};
 use super::text;
 use scramjet_rs::agent::{Label, SessionTree, TreeEntry, TreeItem};
@@ -325,7 +325,7 @@ impl View {
 
     /// A row's text: its tree lines, with its branch's fold mark, then its entry's.
     fn text(&self, row: &Row, multiple_roots: bool) -> String {
-        let paint = |style: &str, text: &str| match self.color && !text.is_empty() {
+        let paint = |style: Style, text: &str| match self.color && !text.is_empty() {
             true => format!("{style}{text}{RESET}"),
             false => text.to_owned(),
         };
@@ -550,9 +550,9 @@ fn prefix(row: &Row, multiple_roots: bool, fold: char) -> String {
 }
 
 /// An entry's text as Scramjet's tree shows it, on one line, each part in its `paint`.
-fn label(item: &TreeItem, paint: &dyn Fn(&str, &str) -> String) -> String {
+fn label(item: &TreeItem, paint: &dyn Fn(Style, &str) -> String) -> String {
     let clean = |text: &str| text::one_line(&text::visible(text));
-    let assistant = |style: &str, text: &str| {
+    let assistant = |style: Style, text: &str| {
         paint(TREE_ASSISTANT, "assistant: ") + &paint(style, &clean(text))
     };
     match item {
@@ -894,7 +894,7 @@ mod tests {
 
     #[test]
     fn labels_are_one_line_and_long_commands_shortened() {
-        let plain = |_: &str, text: &str| text.to_owned();
+        let plain = |_: Style, text: &str| text.to_owned();
         let label = |item| label(&item, &plain);
         assert_eq!(
             label(TreeItem::Reply("two\nlines".into())),

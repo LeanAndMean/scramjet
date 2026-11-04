@@ -7,7 +7,7 @@ use super::editor::terminal_size;
 use super::fuzzy::{self, Haystack};
 use super::keys::Key;
 use super::settings::scramjet_level;
-use super::style;
+use super::style::{self, Style};
 use super::text;
 use super::tree::{Filter, View};
 use scramjet_rs::agent::{Choice, Label, ModelOption};
@@ -911,7 +911,7 @@ impl List {
 /// one and, when some are not shown or there is a `filter` to name after it, the selected row's
 /// position.
 fn lines(
-    (title, hint, hint_style): (&str, &str, &str),
+    (title, hint, hint_style): (&str, &str, Style),
     list: &List,
     search: Option<(&str, &str)>,
     filter: Option<&str>,
@@ -1059,17 +1059,22 @@ fn question_lines(
 /// An option as Scramjet's question list shows it: `→` before the selected one, its label, then
 /// its description indented under it, each wrapped to at most `OPTION_ROWS` rows.
 fn option_rows(option: &Choice, selected: bool, recommended: bool, width: usize) -> Vec<String> {
-    use style::{MUTED, QUESTION_SELECTED, RESET};
-    let style = |text: String, other: &str| match (selected, other) {
+    use style::{MUTED, NONE, QUESTION_SELECTED, RESET};
+    let style = |text: String, other: Style| match (selected, other) {
         (true, _) => format!("{QUESTION_SELECTED}{text}{RESET}"),
-        (false, "") => text,
+        (false, NONE) => text,
         (false, other) => format!("{other}{text}{RESET}"),
     };
     let mark = if selected { "→ " } else { "  " };
     let mut rows: Vec<String> = wrapped(&option.label, width - 2, OPTION_ROWS)
         .into_iter()
         .enumerate()
-        .map(|(row, text)| style(format!("{}{text}", if row == 0 { mark } else { "  " }), ""))
+        .map(|(row, text)| {
+            style(
+                format!("{}{text}", if row == 0 { mark } else { "  " }),
+                NONE,
+            )
+        })
         .collect();
     if let Some(description) = &option.description {
         // As in Scramjet, only a recommended option's description says it is recommended.

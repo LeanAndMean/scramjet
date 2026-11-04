@@ -1,6 +1,7 @@
 //! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet-rs/settings.json` (by default
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
+use super::theme::{BUILT_IN, TERMINAL_COLORS, Theme};
 use super::tree::Filter;
 use scramjet_rs::agent::{
     CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, shortened, state_directory,
@@ -89,6 +90,7 @@ pub(super) enum Row {
     StartupModel,
     ThinkingBlocks,
     MarkdownReads,
+    Theme,
     Steering,
     FollowUp,
     DoubleEscape,
@@ -102,11 +104,12 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 15] = [
+pub(super) const ROWS: [Row; 16] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
     Row::MarkdownReads,
+    Row::Theme,
     Row::Steering,
     Row::FollowUp,
     Row::DoubleEscape,
@@ -127,6 +130,7 @@ impl Row {
             Self::StartupModel => "Startup model",
             Self::ThinkingBlocks => "Thinking blocks",
             Self::MarkdownReads => "Markdown reads",
+            Self::Theme => "Theme",
             Self::Steering => "Steering messages",
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
@@ -156,6 +160,7 @@ impl Row {
                 "Markdown files the agent reads: shown as documents, or as their source. Ctrl+O \
                  expands either."
             }
+            Self::Theme => "The colors of the conversation and of everything around it.",
             Self::Steering => {
                 "Sent with Enter during a turn: how many the model gets before its next request."
             }
@@ -207,6 +212,8 @@ pub(super) struct Settings {
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
     pub(super) tree_filter: Filter,
     pub(super) markdown_reads: MarkdownReads,
+    /// `theme`: the name of the theme everything is shown in.
+    pub(super) theme: String,
     /// `defaultThinkingLevel`, named as the model cards name levels.
     pub(super) default_thinking_level: Option<String>,
     /// `defaultModel`: the model last chosen in any project, as Scramjet saves it.
@@ -283,6 +290,7 @@ impl Settings {
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             markdown_reads: MarkdownReads::Rendered,
+            theme: TERMINAL_COLORS.to_owned(),
             default_thinking_level: None,
             default_model: None,
             startup_model: StartupModel::PerDirectory,
@@ -347,6 +355,16 @@ impl Settings {
                 self.markdown_reads = MarkdownReads::Source
             }
             Some(Some(_)) => wrong("markdown.toolDisplay", r#""rendered" or "source""#),
+        }
+        match object.get("theme") {
+            None => {}
+            Some(Value::String(name)) if BUILT_IN.contains(&name.as_str()) => {
+                self.theme = name.clone()
+            }
+            Some(_) => wrong(
+                "theme",
+                &BUILT_IN.map(|name| format!("\"{name}\"")).join(", "),
+            ),
         }
         match object
             .get("defaultThinkingLevel")
@@ -555,6 +573,20 @@ impl Settings {
         self.save("hideThinkingBlock", json!(hide))
     }
 
+    /// The theme in `/settings`, saved when it changed.
+    pub(super) fn set_theme(&mut self, name: &str) -> io::Result<()> {
+        if self.theme == name {
+            return Ok(());
+        }
+        self.theme = name.to_owned();
+        self.save("theme", json!(name))
+    }
+
+    /// The theme `theme` names.
+    pub(super) fn theme(&self) -> Theme {
+        Theme::built_in(&self.theme).expect("only a built-in theme is read")
+    }
+
     /// A reasoning effort chosen with Shift+Tab, saved when it changed.
     pub(super) fn set_default_thinking_level(&mut self, level: &str) -> io::Result<()> {
         if self.default_thinking_level.as_deref() == Some(level) {
@@ -632,6 +664,7 @@ impl Settings {
             | Row::NextSteps
             | Row::Publishing
             | Row::Installed => String::new(),
+            Row::Theme => self.theme.clone(),
             Row::StartupModel => match self.startup_model {
                 StartupModel::PerDirectory => "last chosen here",
                 StartupModel::Global => "last chosen anywhere",
@@ -691,6 +724,7 @@ impl Settings {
         match row {
             Row::ThinkingLevel
             | Row::Tools
+            | Row::Theme
             | Row::Autopilot
             | Row::NextSteps
             | Row::Publishing
@@ -958,12 +992,13 @@ mod tests {
             &scratch,
             r#"{"hideThinkingBlock": true, "doubleEscapeAction": "fork",
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
-                "defaultThinkingLevel": "off", "theme": "dark", "treeFilterMode": "labeled-only",
+                "defaultThinkingLevel": "off", "theme": "pi-light", "treeFilterMode": "labeled-only",
                 "steeringMode": "one-at-a-time", "followUpMode": "all",
                 "markdown": {"toolDisplay": "source"}}"#,
         );
         assert_eq!(settings.tree_filter, Filter::Labeled);
         assert_eq!(settings.markdown_reads, MarkdownReads::Source);
+        assert_eq!(settings.theme, "pi-light");
         assert!(settings.hide_thinking_block);
         assert_eq!(settings.steering_mode, Delivery::OneAtATime);
         assert_eq!(settings.follow_up_mode, Delivery::All);
@@ -1011,9 +1046,10 @@ mod tests {
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
-                "markdown": {"toolDisplay": "raw"}}"#,
+                "markdown": {"toolDisplay": "raw"}, "theme": "dark"}"#,
         );
         assert_eq!(settings.tree_filter, Filter::Default);
+        assert_eq!(settings.theme, "terminal-colors");
         assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
         assert!(!settings.hide_thinking_block);
         assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
@@ -1028,6 +1064,9 @@ mod tests {
                     r#"{path}: treeFilterMode must be "default", "no-tools", "user-only", "labeled-only", "all"; ignored"#
                 ),
                 format!(r#"{path}: markdown.toolDisplay must be "rendered" or "source"; ignored"#),
+                format!(
+                    r#"{path}: theme must be "terminal-colors", "scramjet-dark", "pi-light"; ignored"#
+                ),
                 format!(
                     r#"{path}: defaultThinkingLevel must be "off", "minimal", "low", "medium", "high", "xhigh", "max"; ignored"#
                 ),
@@ -1297,6 +1336,9 @@ mod tests {
             .set_tools(vec!["ls".into(), "read".into()])
             .unwrap();
         assert_eq!(settings.shown(Row::Tools), "read, ls");
+        assert_eq!(settings.shown(Row::Theme), "terminal-colors");
+        settings.set_theme("scramjet-dark").unwrap();
+        assert_eq!(settings.shown(Row::Theme), "scramjet-dark");
         assert_eq!(
             saved(),
             json!({
@@ -1309,6 +1351,7 @@ mod tests {
                 "treeFilterMode": "all",
                 "followUpMode": "all",
                 "tools": ["read", "ls"],
+                "theme": "scramjet-dark",
             })
         );
         let reread = Settings::read(Some(path.clone()));

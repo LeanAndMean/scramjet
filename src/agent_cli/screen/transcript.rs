@@ -15,6 +15,8 @@ pub(super) struct Look {
     /// Tool results are shown whole.
     pub(super) whole: bool,
     pub(super) markdown_reads: MarkdownReads,
+    /// `style::generation()`: the theme's.
+    pub(super) theme: usize,
 }
 
 /// A line of the conversation by its part, so that it stays in view as parts before it or it
@@ -180,6 +182,7 @@ mod tests {
             hide_thinking: false,
             whole,
             markdown_reads: MarkdownReads::Rendered,
+            theme: 0,
         }
     }
 

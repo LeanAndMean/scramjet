@@ -534,7 +534,7 @@ impl Interactive {
             }
         }
         let line = format!("Next step runs with {}", model_line(&self.agent));
-        self.say(&self.ui.dim(&line));
+        self.say_styled(style::MUTED, &line);
     }
 
     /// Remembers the session's model as the one chosen last, here and anywhere, which sessions
@@ -597,9 +597,9 @@ impl Interactive {
     }
 
     /// Shows a message in `style`, wrapped to the terminal's width.
-    pub(super) fn say_styled(&self, style: &str, text: &str) {
+    pub(super) fn say_styled(&self, style: style::Style, text: &str) {
         match &self.screen {
-            Some(screen) => screen.say(&self.ui.styled(style, text)),
+            Some(screen) => screen.say_styled(style, text),
             None => eprintln!("{}", self.ui.styled(style, &self.ui.wrapped(text))),
         }
     }

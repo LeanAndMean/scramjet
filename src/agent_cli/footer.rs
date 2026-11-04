@@ -498,7 +498,8 @@ mod tests {
             };
             footer(shown).lines(80)[1].clone()
         };
-        let styled = |style: &str, text: &str| format!("{style}{text}{RESET}");
+        let styled =
+            |style: super::super::style::Style, text: &str| format!("{style}{text}{RESET}");
         assert!(at(700_000).contains(&styled(FOOTER, "700k/1.0M (70.0%, auto)")));
         let nearly = styled(FOOTER_NEARLY_FULL, "700k/1.0M (70.0%, auto)");
         assert!(at(700_001).contains(&nearly));

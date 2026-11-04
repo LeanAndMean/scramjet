@@ -1,6 +1,7 @@
 //! The agent's display calls, kept as events: the full screen keeps the conversation so, and
 //! renders it again from them at its width.
 
+use super::style::Style;
 use super::terminal::Terminal;
 use scramjet_rs::agent::{
     AgentUi, Answer, AutoCompaction, Children, CompactRead, Compaction, Purpose, StreamProgress,
@@ -42,6 +43,8 @@ pub(super) enum Event {
     NextStep(String),
     /// A message of the session's own, such as a command's result, styled but not wrapped.
     Text(String),
+    /// One in a style, which takes the theme it is shown in.
+    Styled(Style, String),
 }
 
 /// Shows `event` on `ui` as it showed when it happened.
@@ -89,6 +92,10 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::Notice(text) => ui.notice(text),
         Event::NextStep(record) => ui.next_step(record),
         Event::Text(text) => ui.said(text),
+        Event::Styled(style, text) => {
+            let text = ui.styled(*style, text);
+            ui.said(&text)
+        }
     }
 }
 

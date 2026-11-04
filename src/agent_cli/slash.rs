@@ -145,12 +145,12 @@ impl Interactive {
     pub(super) fn name(&mut self, name: &str) {
         if name.is_empty() {
             match self.agent.session_name() {
-                Some(current) => self.say(&self.ui.dim(&format!("Session name: {current}"))),
+                Some(current) => self.say_styled(style::MUTED, &format!("Session name: {current}")),
                 None => self.say("Usage: /rename <name>"),
             }
         } else {
             match self.agent.set_session_name(name) {
-                Ok(()) => self.say(&self.ui.dim(&format!("Session name set: {name}"))),
+                Ok(()) => self.say_styled(style::MUTED, &format!("Session name set: {name}")),
                 Err(error) => self.say(&format!("Error: {error}")),
             }
         }
@@ -171,7 +171,7 @@ impl Interactive {
             Ok(Some(path)) => {
                 let path = std::fs::canonicalize(&path).unwrap_or(path);
                 let said = format!("Session exported to: {}", path.display());
-                self.say(&self.ui.dim(&said))
+                self.say_styled(style::MUTED, &said)
             }
             Ok(None) => self.say("Nothing to export yet"),
             Err(error) => self.say(&format!("Error: failed to export the session: {error}")),
@@ -239,7 +239,7 @@ impl Interactive {
                         None => eprint!("{sequence}"),
                     }
                 }
-                self.say(&self.ui.dim("Copied last agent message to clipboard"));
+                self.say_styled(style::MUTED, "Copied last agent message to clipboard");
             }
             Err(error) => self.say(&format!("Error: {error}")),
         }
@@ -260,14 +260,18 @@ impl Interactive {
             return self.say(&format!("Error: {error}"));
         }
         let state = if self.agent.autopilot() { "on" } else { "off" };
-        self.say(&self.ui.dim(&format!("Autopilot is {state}")));
+        self.say_styled(style::MUTED, &format!("Autopilot is {state}"));
     }
 
     /// `/reload`, as Scramjet's: the settings, the command sets with their commands and agents,
     /// the skills and the context files read again, and what is wrong in them said as at start.
     pub(super) fn reload(&mut self) {
         self.save_hide_thinking();
+        let theme = self.settings.theme.clone();
         self.settings.reload();
+        if self.settings.theme != theme {
+            style::set(&self.settings.theme());
+        }
         let settings = &self.settings;
         (self.hide_thinking).store(settings.hide_thinking_block, Ordering::Relaxed);
         self.ui.markdown_reads = settings.markdown_reads;
@@ -284,7 +288,7 @@ impl Interactive {
             self.ui().notice(&notice);
         }
         let done = "Reloaded settings, command sets, agents, skills and context files";
-        self.say(&self.ui.dim(done));
+        self.say_styled(style::MUTED, done);
     }
 
     fn compact(&mut self, focus: &str) {
@@ -292,7 +296,7 @@ impl Interactive {
         match result {
             Ok(Some(compaction)) => self.ui().compacted(&compaction, None),
             Ok(None) => self.say("Nothing to compact: the conversation is all recent."),
-            Err(AgentError::Cancelled) => self.say(&self.ui.dim("(cancelled)")),
+            Err(AgentError::Cancelled) => self.say_styled(style::MUTED, "(cancelled)"),
             Err(error) => self.say(&format!("Error: {error}")),
         }
     }
@@ -594,7 +598,7 @@ mod tests {
     fn hotkeys_line_up_their_actions_within_80_columns() {
         let ui = Terminal::new(std::sync::Arc::default(), false);
         let text = hotkeys(&ui);
-        let text = [style::CODE, style::INFO_HEADING, style::RESET]
+        let text = [style::CODE.get(), style::INFO_HEADING.get(), style::RESET]
             .iter()
             .fold(text, |text, code| text.replace(code, ""));
         let lines: Vec<_> = text.lines().collect();

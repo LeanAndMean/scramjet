@@ -492,7 +492,12 @@ fn named(session: &SessionInfo) -> bool {
 /// A `/resume` line: the session's name or first prompt, in `style` when given, cut to `width`
 /// with its item count and age kept; with `path`, the session file's path after them, cut at its
 /// start where the name or prompt would get fewer than 10 columns, as in Scramjet.
-fn session_line(session: &SessionInfo, width: usize, style: Option<&str>, path: bool) -> String {
+fn session_line(
+    session: &SessionInfo,
+    width: usize,
+    style: Option<style::Style>,
+    path: bool,
+) -> String {
     let age = std::time::SystemTime::now()
         .duration_since(session.modified)
         .unwrap_or_default();

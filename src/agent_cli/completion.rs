@@ -398,8 +398,8 @@ mod tests {
     fn plain(rows: Vec<String>) -> Vec<String> {
         rows.iter()
             .map(|row| {
-                row.replace(crate::agent_cli::style::COMPLETION_SELECTED, "")
-                    .replace(crate::agent_cli::style::MUTED, "")
+                row.replace(crate::agent_cli::style::COMPLETION_SELECTED.get(), "")
+                    .replace(crate::agent_cli::style::MUTED.get(), "")
                     .replace(crate::agent_cli::style::RESET, "")
             })
             .collect()

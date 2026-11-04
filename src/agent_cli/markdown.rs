@@ -333,7 +333,7 @@ impl Markdown {
         }
         let line = match self.line {
             Line::Text(style) => style,
-            Line::Code if self.code.is_none() => CODE_BLOCK,
+            Line::Code if self.code.is_none() => CODE_BLOCK.get(),
             _ => "",
         };
         format!("{}{line}", self.base)
@@ -579,7 +579,7 @@ impl Markdown {
                 *out += &border.repeat(quoted);
                 self.pending = text.to_owned();
                 self.quoted = quoted;
-                Line::Text(QUOTE)
+                Line::Text(QUOTE.get())
             }
             Kind::Text => Line::Text(""),
             Kind::Code => {
@@ -588,14 +588,14 @@ impl Markdown {
                     self.pending.drain(..indent.min(fence.indent));
                 }
                 if self.code.is_none() {
-                    *out += CODE_BLOCK;
+                    *out += CODE_BLOCK.get();
                 }
                 Line::Code
             }
             Kind::Fence => Line::Fence,
             Kind::Held => Line::Held,
             Kind::Heading(level) => {
-                let style = if level == 1 { TITLE } else { HEADING };
+                let style = if level == 1 { TITLE } else { HEADING }.get();
                 *out += &self.pending[..indent];
                 *out += style;
                 if level > 2 {
@@ -624,7 +624,7 @@ impl Markdown {
                     self.quoted = depth;
                 }
                 self.pending = rest.to_owned();
-                Line::Text(QUOTE)
+                Line::Text(QUOTE.get())
             }
             // As Scramjet's, bullets show as `-`, numbers end with `.`, and a task's box is part
             // of its marker.
@@ -759,7 +759,11 @@ impl Markdown {
             let restore = format!("{RESET}{base}{style}");
             format!("{style}{}", complete(&chars, &restore))
         };
-        let header: Vec<String> = table.header.iter().map(|text| cell(text, STRONG)).collect();
+        let header: Vec<String> = table
+            .header
+            .iter()
+            .map(|text| cell(text, STRONG.get()))
+            .collect();
         let body: Vec<Vec<String>> = (rows.iter())
             .map(|row| row.iter().map(|text| cell(text, "")).collect())
             .collect();
@@ -963,7 +967,7 @@ fn spans(chars: &[char], from: usize, ended: bool, restore: &str) -> (String, us
             // address after its text when they differ.
             Span::Link { text, url, end } => {
                 let inside = &chars[text.0..text.1];
-                out += LINK;
+                out += LINK.get();
                 out += &complete(inside, &format!("{restore}{LINK}"));
                 out += restore;
                 let written: String = inside.iter().collect();
@@ -1071,7 +1075,8 @@ fn delimited(chars: &[char], at: usize, ended: bool) -> Span {
         (_, 2) => STRONG,
         (_, 3) => STRONG_EMPHASIS,
         _ => return Span::Literal(n),
-    };
+    }
+    .get();
     let opens = (at == 0 || !chars[at - 1].is_alphanumeric())
         && chars.get(at + n).is_some_and(|c| !c.is_whitespace());
     if !opens {

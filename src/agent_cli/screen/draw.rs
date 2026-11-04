@@ -370,6 +370,7 @@ impl App {
             hide_thinking: self.hide_thinking.load(Ordering::Relaxed),
             whole: self.whole,
             markdown_reads: self.markdown_reads,
+            theme: style::generation(),
         };
         self.transcript.render(look, &self.hide_thinking);
         let last = self.transcript.len().saturating_sub(rows);
@@ -489,7 +490,10 @@ mod tests {
         assert_eq!(rest, " Working (Esc to interrupt)");
         let retry = Event::Retrying("busy".into(), 1, 3, Duration::from_secs(2));
         let retrying = Activity::after(&retry).unwrap().shown(true);
-        assert!(retrying.contains(style::SPINNER_RETRYING), "{retrying:?}");
+        assert!(
+            retrying.contains(style::SPINNER_RETRYING.get()),
+            "{retrying:?}"
+        );
         assert_eq!(plain(&Activity::asking().shown(true)), "Waiting for you");
     }
 

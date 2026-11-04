@@ -8,6 +8,7 @@ use crate::agent_cli::keys::RawMode;
 use crate::agent_cli::record::Event;
 use crate::agent_cli::select::{Picked, Picker, Routed};
 use crate::agent_cli::settings::{Delivery, DoubleEscape, MarkdownReads, Settings};
+use crate::agent_cli::style::Style;
 use scramjet_rs::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, CompactRead, Compaction,
     EffortCycle, Purpose, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
@@ -63,6 +64,9 @@ impl Link {
     /// Shows a message of the session's own, wrapped on the screen.
     pub(in crate::agent_cli) fn say(&self, text: &str) {
         self.event(Event::Text(text.to_owned()));
+    }
+    pub(in crate::agent_cli) fn say_styled(&self, style: Style, text: &str) {
+        self.event(Event::Styled(style, text.to_owned()));
     }
     pub(in crate::agent_cli) fn clear(&self) {
         self.send(ToScreen::Clear);

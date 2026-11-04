@@ -5,8 +5,9 @@ use super::editor::NOTE_TIME;
 use super::highlight::{self, Highlighter};
 use super::interactive::thinking;
 use super::settings::MarkdownReads;
+use super::style::{self, Style};
 use super::text::{FROM, RULE, Wrap, call_line, clip, printable, visible};
-use super::{children, diff, editor, job, markdown, style};
+use super::{children, diff, editor, job, markdown};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -33,7 +34,7 @@ const SPIN: Duration = Duration::from_millis(80);
 static SPUN: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 /// The spinner's frame now, in `color`.
-pub(super) fn spinner(color: &str) -> String {
+pub(super) fn spinner(color: Style) -> String {
     format!("{color}{}{}", frame(SPUN.elapsed()), style::RESET)
 }
 
@@ -315,8 +316,8 @@ impl Terminal {
         let took = (self.tool_started.take()).map(|started| at.saturating_duration_since(started));
         let style = match () {
             _ if !self.color => "",
-            _ if failed => style::TOOL_FAILED,
-            _ => style::TOOL_OUTPUT,
+            _ if failed => style::TOOL_FAILED.get(),
+            _ => style::TOOL_OUTPUT.get(),
         };
         let reset = if style.is_empty() { "" } else { style::RESET };
         let styled = |lines: Vec<String>| -> Vec<String> {
@@ -662,7 +663,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     pub(super) fn dim(&self, text: &str) -> String {
         self.styled(style::MUTED, text)
     }
-    pub(super) fn styled(&self, style: &str, text: &str) -> String {
+    pub(super) fn styled(&self, style: Style, text: &str) -> String {
         if self.color {
             format!("{style}{text}{}", style::RESET)
         } else {
@@ -685,7 +686,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                 _ => self.color,
             };
             let base = if kind == Streaming::Reasoning {
-                style::REASONING
+                style::REASONING.get()
             } else {
                 ""
             };
@@ -1312,7 +1313,7 @@ impl Terminal {
     /// Its first lines while tool results are cut, as Scramjet previews a compaction's.
     fn summary_block(&self, summary: &str) -> String {
         let width = if self.color { self.width() } else { 0 };
-        let mut markdown = self.markdown(self.color, style::SUMMARY, width);
+        let mut markdown = self.markdown(self.color, style::SUMMARY.get(), width);
         let text = markdown.reopen() + &markdown.push(summary.trim_end()) + &markdown.finish();
         let reset = if self.color { style::RESET } else { "" };
         let mut wrap = self.markdown_wrapper(width);
@@ -1669,7 +1670,7 @@ to expand\n(exit 2)"
         assert!(at("  +50 line 50").is_some(), "{lines:?}");
         assert!(!text.contains("more lines") && !text.contains("earlier lines"));
         assert!(at("Counted to 12.").is_some(), "{lines:?}");
-        assert!(text.contains(style::REASONING));
+        assert!(text.contains(style::REASONING.get()));
     }
 
     #[test]

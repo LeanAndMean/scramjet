@@ -4,8 +4,8 @@
 //! part again at each change, so lines are kept once highlighted, each under the lines before it.
 
 use super::style::{
-    DIFF_ADDED, DIFF_REMOVED, RESET, SYNTAX_COMMENT, SYNTAX_FUNCTION, SYNTAX_KEYWORD,
-    SYNTAX_NUMBER, SYNTAX_STRING, SYNTAX_TYPE, SYNTAX_VARIABLE,
+    self, DIFF_ADDED, DIFF_REMOVED, NONE, RESET, SYNTAX_COMMENT, SYNTAX_FUNCTION, SYNTAX_KEYWORD,
+    SYNTAX_NUMBER, SYNTAX_STRING, SYNTAX_TYPE, SYNTAX_VARIABLE, Style,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -22,7 +22,7 @@ use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 /// Scope selectors and the style of what they select, as Scramjet's theme colors highlight.js's
 /// classes; the more specific selector wins. Operators and punctuation stay plain, as
 /// highlight.js rarely marks them.
-const RULES: &[(&str, &str)] = &[
+const RULES: &[(&str, Style)] = &[
     ("comment", SYNTAX_COMMENT),
     (
         "meta.annotation, meta.preprocessor, meta.diff.range, meta.diff.header, \
@@ -35,7 +35,7 @@ punctuation.definition.tag",
         "keyword, storage, variable.language, entity.name.tag",
         SYNTAX_KEYWORD,
     ),
-    ("keyword.operator", ""),
+    ("keyword.operator", NONE),
     (
         "keyword.operator.word, keyword.operator.new, keyword.operator.expression",
         SYNTAX_KEYWORD,
@@ -57,7 +57,7 @@ variable.other.readwrite.shell, punctuation.definition.variable.shell, \
 punctuation.section.expansion.parameter",
         SYNTAX_VARIABLE,
     ),
-    ("variable.parameter.option", ""),
+    ("variable.parameter.option", NONE),
     ("markup.inserted", DIFF_ADDED),
     ("markup.deleted", DIFF_REMOVED),
 ];
@@ -155,7 +155,7 @@ pub(super) struct Highlighter {
 impl Highlighter {
     pub(super) fn new(Language(syntax): Language, base: &'static str) -> Self {
         let mut key = DefaultHasher::new();
-        (&syntax.name, base).hash(&mut key);
+        (&syntax.name, base, style::generation()).hash(&mut key);
         let parse = ParseState::new(syntax);
         let highlight = HighlightState::new(&STYLER, ScopeStack::new());
         Self {
@@ -193,7 +193,7 @@ impl Highlighter {
             }
             let wanted = match style.foreground.r as usize {
                 0 => "",
-                index => RULES[index - 1].1,
+                index => RULES[index - 1].1.get(),
             };
             if wanted != current {
                 if !current.is_empty() {

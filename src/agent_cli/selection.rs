@@ -247,7 +247,7 @@ pub(super) fn highlight(line: &str, left: usize, right: usize) -> String {
             Piece::Cell(cell, width) => {
                 if !opened && (left..right).contains(&at) {
                     shown += style::RESET;
-                    shown += style::SELECTION;
+                    shown += style::SELECTION.get();
                     opened = true;
                 }
                 if opened && !closed && at >= right {

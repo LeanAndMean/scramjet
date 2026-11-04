@@ -1761,7 +1761,7 @@ def settings_menu(read, until, send, output):
     send(b'/settings\r')
     rows = on_screen('Settings  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc close')
     assert '\u203a ' + setting('Thinking level', 'medium') in rows, rows
-    assert '  ' + setting('Tools', 'read, bash, edit, write') in rows, rows
+    assert '  ' + setting('Theme', 'terminal-colors') in rows, rows
     assert rows[-1] == '  start at. Shift+Tab cycles it.', rows
     # The thinking level is chosen from the card's levels; Enter takes one and goes back.
     send(b'\r')
@@ -1770,7 +1770,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B\r')
     on_screen(setting('Thinking level', 'high'))
     # Keys typed at once each reach the list the one before them leaves, none lost between.
-    send(b'\x1b[B\x1b[B\r\x1b[B\x1b[B\r')
+    send(b'\x1b[B\x1b[B\r\x1b[B\x1b[B\x1b[B\r')
     rows = on_screen(setting('Steering messages', 'one at a time'))
     assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
@@ -1790,7 +1790,7 @@ def settings_menu(read, until, send, output):
     send(b'/settings\r')
     on_screen('Command: /settings')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[B' * 9 + b'\r')
+    send(b'\x1b[B' * 10 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))
@@ -1818,6 +1818,50 @@ def markdown_reads(read, until, send, output):
     rows = on_screen('Settings  \u2191\u2193 move', gone=True)
     assert '  Guide' in rows and '  Some bold text.' in rows and '  # Guide' not in rows, rows
     send(b'\x04')
+
+
+def theme_choice(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'hello\r')
+    on_screen('Run ls now.')
+    assert b'\x1b[36mls\x1b[0m' in output, bytes(output[-2000:])
+    send(b'/settings\r')
+    on_screen('Settings  \u2191\u2193 move')
+    rows = select_row(read, shown, send, 'Theme', b'\x1b[B')
+    assert '\u203a ' + setting('Theme', 'terminal-colors') in rows, rows
+    assert note(rows) == 'The colors of the conversation and of everything around it.', rows
+    send(b'\r')
+    rows = on_screen('Theme  \u2191\u2193 move \u00b7 Enter use \u00b7 Esc back')
+    assert '\u203a terminal-colors \u2713' in rows and '  scramjet-dark' in rows and '  pi-light' in rows, rows
+    assert note(rows) == "The terminal's own 16 colors, which follow its color scheme.", rows
+    # Chosen, everything shows in it at once, the conversation behind the list included.
+    since = len(output)
+    send(b'\x1b[B')
+    send(b'\r')
+    until(b'\x1b[38;2;56;225;255mls\x1b[0m', since)
+    rows = on_screen('\u203a scramjet-dark \u2713')
+    assert note(rows) == "Scramjet's theme, in exact colors, for a dark background.", rows
+    send(b'\x1b')
+    on_screen('\u203a ' + setting('Theme', 'scramjet-dark'))
+    send(b'\x1b')
+    ending(read, output, EMPTY)
+    send(b'\x04')
+
+
+def note(rows):
+    """The note under a list, its two last rows joined."""
+    return ' '.join(row.strip() for row in rows[-2:] if row.startswith('  '))
+
+
+def themed_start(expected):
+    def script(read, until, send, output):
+        shown, on_screen = full_screen()(read, output)
+        on_screen('\u2500' * 20)
+        # The footer, in the theme's dim color.
+        until(expected)
+        send(b'\x04')
+    return script
 
 
 def double_escape_forks(read, until, send, output):
@@ -2204,7 +2248,7 @@ run(['--models', 'luna,haiku'], model_list_in_a_scope,
     variables={'XDG_CONFIG_HOME': config_home('model-scope')}, columns=80)
 plain_cards = [{'requestId': 'gpt-6-luna', 'supportedProtocols': ['openai-responses'], 'reasoning': None}]
 run([], started_without_thinking, serve_replies([], cards=plain_cards), variables=in_levels)
-menu_home = config_home('menu', '{"theme": "dark", "branchSummary": {"reserveTokens": 16384}}')
+menu_home = config_home('menu', '{"quietStartup": true, "branchSummary": {"reserveTokens": 16384}}')
 bodies = []
 run([], settings_menu, serve_items([[tool_call('call_1', 'bash', {'command': 'sleep 2'})], [message('Replied.')]],
                                    cards=effort_cards, bodies=bodies), variables={'XDG_CONFIG_HOME': menu_home})
@@ -2217,7 +2261,7 @@ assert '\n- grep: Search file contents' in bodies[0]['instructions'], bodies[0][
 assert tools(bodies[1]) == ['read', 'bash', 'edit', 'write', 'grep', 'ls'], bodies[1]['tools']
 assert '\n- ls: List directory contents' in bodies[1]['instructions'], bodies[1]['instructions']
 assert json.load(open(settings_path(menu_home))) == {
-    'theme': 'dark', 'branchSummary': {'reserveTokens': 16384}, 'defaultThinkingLevel': 'high',
+    'quietStartup': True, 'branchSummary': {'reserveTokens': 16384}, 'defaultThinkingLevel': 'high',
     'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time', 'tools': ['read', 'bash', 'edit', 'write', 'grep', 'ls'],
 }, open(settings_path(menu_home)).read()
 guide = os.path.join(work, 'guide.md')
@@ -2227,6 +2271,14 @@ reads_home = config_home('reads', '{"markdown": {"toolDisplay": "source"}}')
 run([], markdown_reads, serve_items([[tool_call('call_1', 'read', {'path': guide})], [message('Read it.')]]),
     variables={'XDG_CONFIG_HOME': reads_home})
 assert json.load(open(settings_path(reads_home))) == {'markdown': {'toolDisplay': 'rendered'}}
+theme_home = config_home('theme')
+exact = {'XDG_CONFIG_HOME': theme_home, 'COLORTERM': 'truecolor'}
+run([], theme_choice, serve_replies([(['Run `ls` now.'], 'Run `ls` now.')]), variables=exact)
+assert json.load(open(settings_path(theme_home))) == {'theme': 'scramjet-dark'}
+run([], themed_start(b'\x1b[38;2;129;139;157m'), variables=exact)
+# Where the terminal may not show 24-bit colors, the nearest of its 256.
+indexed = dict(exact, COLORTERM='', WT_SESSION='', TERM='screen-256color')
+run([], themed_start(b'\x1b[38;5;103m'), variables=indexed)
 forking_home = config_home('forking', '{"doubleEscapeAction": "fork", "branchSummary": {"skipPrompt": true}}')
 run([], double_escape_forks, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]),
     variables={'XDG_CONFIG_HOME': forking_home})
