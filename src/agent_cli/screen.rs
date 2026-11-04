@@ -114,6 +114,8 @@ pub(super) enum Answer {
     Routed(usize, Routed),
     /// What one of a picker's own keys asked for (`Picker::acting`).
     Acted(Act, usize, Spot),
+    /// Tab in a picker that takes it (`Picker::tabbing`).
+    Tabbed(Spot),
     /// The row a picker's countdown chose.
     Expired(usize),
     Text(Option<String>),
@@ -299,6 +301,7 @@ impl Link {
     pub(super) fn pick_or_act(&self, picker: Picker) -> Picked {
         match self.ask(Dialog::Pick(Box::new(picker)), None) {
             Some(Answer::Acted(act, row, place)) => Picked::Act(act, row, place),
+            Some(Answer::Tabbed(place)) => Picked::Tab(place),
             Some(Answer::Picked(row)) => Picked::Row(row),
             _ => Picked::Row(None),
         }
@@ -1847,6 +1850,7 @@ impl App {
                 }
                 Picked::Row(row) => Answer::Picked(row),
                 Picked::Act(act, row, place) => Answer::Acted(act, row, place),
+                Picked::Tab(place) => Answer::Tabbed(place),
             }),
             Shown::Approve(_) => match key {
                 Key::Text(text) if text.eq_ignore_ascii_case("y") => {

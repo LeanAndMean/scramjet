@@ -1,12 +1,12 @@
 //! The built-in commands: `/settings`, `/copy`, `/new`, `/name`, `/session`, `/resume`, `/fork`,
-//! `/clone`, `/tree`, `/model`, `/compact`, `/autopilot`, `/reload`, and `!` commands;
-//! `/scoped-models` is in `scope.rs`.
+//! `/clone`, `/tree`, `/compact`, `/autopilot`, `/reload`, and `!` commands; `/model` and
+//! `/scoped-models` are in `scope.rs`.
 use super::fuzzy::Haystack;
 use super::interactive::{Interactive, completions, model_line};
 use super::screen;
 use super::settings::{ROWS, Row, scramjet_level};
 use super::terminal::Terminal;
-use super::text::{clip, one_line, visible};
+use super::text::{clip, one_line};
 use super::{clipboard, editor, installed, select, style, tree};
 use scramjet_rs::agent::{
     Agent, AgentError, Approval, Approvals, CODING_TOOLS, Edge, Installed, Navigated, NextStep,
@@ -944,6 +944,11 @@ impl Interactive {
                     return chosen.map(|index| sessions[index].0.path.clone());
                 }
                 select::Picked::Act(act, index, at) => (act, index, at),
+                // Not a key of this list (`Picker::tabbing`).
+                select::Picked::Tab(_) => {
+                    screen.dismiss();
+                    return None;
+                }
             };
             let session = &sessions[index].0;
             let status = match act {
@@ -1152,52 +1157,6 @@ impl Interactive {
                 Err(error) => self.say(&format!("error: {error}")),
             }
             return;
-        }
-    }
-
-    fn model(&mut self, wanted: &str) {
-        let Some(models) = self.agent.models() else {
-            self.say("error: could not list the endpoint's models");
-            return;
-        };
-        let current = models.iter().position(|model| model == self.agent.model());
-        let chosen = match wanted {
-            "" if models.is_empty() => {
-                self.say("The endpoint lists no models");
-                None
-            }
-            "" if self.interactive() => self
-                .search(
-                    "Select model",
-                    select::VISIBLE,
-                    models.iter().map(|model| Haystack::new(model)).collect(),
-                    current.unwrap_or(0),
-                    current,
-                    "No matching models",
-                    |index, width| clip(&visible(&models[index]), width),
-                )
-                .map(|index| models[index].clone()),
-            "" => {
-                for (index, model) in models.iter().enumerate() {
-                    let mark = if current == Some(index) { "*" } else { " " };
-                    eprintln!("{mark} {model}");
-                }
-                None
-            }
-            wanted if models.iter().any(|model| model == wanted) => Some(wanted.to_owned()),
-            wanted => {
-                self.say(&format!("error: no model {wanted} (/model lists them)"));
-                None
-            }
-        };
-        if let Some(model) = chosen {
-            match self.agent.set_model(&model) {
-                Ok(()) => {
-                    self.agent.load_model_card();
-                    self.say(&format!("✓ Model set to {}", model_line(&self.agent)));
-                }
-                Err(error) => self.say(&format!("error: {error}")),
-            }
         }
     }
 

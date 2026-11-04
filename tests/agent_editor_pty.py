@@ -1377,6 +1377,41 @@ def scoped_models_list(read, until, send, output):
     send(b'\x04')
 
 
+def model_list_in_a_scope(read, until, send, output):
+    shown, on_screen = full_screen(columns=80)(read, output)
+    on_screen('\u2500' * 20)
+    # With a scope, /model opens on its models, in its order, with each one's provider.
+    send(b'/model\r')
+    rows = on_screen('Models for Ctrl+P  \u2191\u2193 move \u00b7 Enter select \u00b7 Tab all models \u00b7 Esc cancel')
+    text = '\n'.join(rows)
+    assert '\u203a gpt-6-luna [openai] \u2713\n  claude-haiku-5-5 [anthropic]\n' in text, text
+    assert 'terra' not in text and rows[-1] == '  GPT-6 Luna', rows
+    # Tab shows all of them, the model selected staying so.
+    send(b'\x1b[B\t')
+    rows = on_screen('All models  \u2191\u2193 move \u00b7 Enter select \u00b7 Tab models for Ctrl+P')
+    text = '\n'.join(rows)
+    assert '  gpt-6-luna [openai] \u2713\n  gpt-6-terra [openai]\n\u203a claude-haiku-5-5 [anthropic]' in text, text
+    # The query stays across Tab, matching nothing in the scope.
+    send(b'terra\t')
+    rows = on_screen('No matching models')
+    text = '\n'.join(rows)
+    assert 'Models for Ctrl+P  ' in text and '> terra\n  No matching models' in text, text
+    send(b'\t')
+    on_screen('\u203a gpt-6-terra [openai]')
+    send(b'\r')
+    on_screen('\u2713 Model set to gpt-6-terra \u00b7 thinking medium')
+    # A model named exactly, case aside, is set; another word opens the list with it as the query.
+    send(b'/model OpenAI/GPT-6-Luna\r')
+    on_screen('\u2713 Model set to gpt-6-luna \u00b7 thinking medium')
+    # (One the editor does not complete: the list searches providers too.)
+    send(b'/model anthropic\r')
+    rows = on_screen('\u203a claude-haiku-5-5 [anthropic]')
+    assert '> anthropic' in rows and 'Models for Ctrl+P' in '\n'.join(rows), rows
+    send(b'\r')
+    on_screen('\u2713 Model set to claude-haiku-5-5')
+    send(b'\x04')
+
+
 def setting(label, value):
     """A row of `/settings`, its label as wide as the widest."""
     return label.ljust(len('Follow-up messages')) + '  ' + value
@@ -1684,6 +1719,9 @@ run([], scoped_models_list,
     serve_replies([], models=['gpt-6-luna', 'gpt-6-terra', 'claude-haiku-5-5'], cards=scope_cards + [haiku_card]),
     variables={'XDG_CONFIG_HOME': listed}, columns=80)
 assert json.load(open(settings_path(listed))) == {'enabledModels': ['gpt-6-luna', 'gpt-6-terra']}
+run(['--models', 'luna,haiku'], model_list_in_a_scope,
+    serve_replies([], models=['gpt-6-luna', 'gpt-6-terra', 'claude-haiku-5-5'], cards=scope_cards + [haiku_card]),
+    variables={'XDG_CONFIG_HOME': config_home('model-scope')}, columns=80)
 plain_cards = [{'requestId': 'gpt-6-luna', 'supportedProtocols': ['openai-responses'], 'reasoning': None}]
 run([], started_without_thinking, serve_replies([], cards=plain_cards), variables=in_levels)
 menu_home = config_home('menu', '{"theme": "dark", "branchSummary": {"reserveTokens": 16384}}')

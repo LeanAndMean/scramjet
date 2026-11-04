@@ -13,7 +13,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Rows shown at once, as in Scramjet's selectors other than its tree.
 pub(super) const VISIBLE: usize = 10;
-const HINT: &str = "↑↓ move · Enter select · Esc cancel";
+pub(super) const HINT: &str = "↑↓ move · Enter select · Esc cancel";
 const CONFIRM_DELETE: &str = "Delete session? Enter confirm · Esc cancel";
 /// Options shown at once in a question's list, as in Scramjet.
 const QUESTION_VISIBLE: usize = 8;
@@ -148,6 +148,8 @@ pub(super) enum Picked {
     /// The row chosen with Enter; `None`: cancelled.
     Row(Option<usize>),
     Act(Act, usize, Spot),
+    /// Tab, in a list that shows one of two sets of rows (`Picker::tabbing`).
+    Tab(Spot),
 }
 
 /// A list for a screen that draws it and passes it the keys; it returns the row chosen with
@@ -163,6 +165,8 @@ pub(super) struct Picker {
     acts: bool,
     /// Whether `/scoped-models`' keys do (`scoping`).
     scoping: bool,
+    /// Whether Tab ends the list (`tabbing`).
+    tabs: bool,
     /// Said in place of the keys' hint until the next key: what a key did, or why it could not
     /// (`true`: a warning).
     status: Option<(String, bool)>,
@@ -240,6 +244,7 @@ impl Picker {
             held: false,
             acts: false,
             scoping: false,
+            tabs: false,
             status: None,
         }
     }
@@ -283,6 +288,13 @@ impl Picker {
     /// in Scramjet's list (`Act`); without a row they do nothing.
     pub(super) fn scoping(mut self) -> Self {
         self.scoping = true;
+        self
+    }
+
+    /// Makes Tab end the list where it is, for the session to show the other of two sets of
+    /// rows, as Tab switches between all models and the scope in Scramjet's model selector.
+    pub(super) fn tabbing(mut self) -> Self {
+        self.tabs = true;
         self
     }
 
@@ -415,6 +427,7 @@ impl Picker {
             held: false,
             acts: false,
             scoping: false,
+            tabs: false,
             status: None,
         }
     }
@@ -467,6 +480,9 @@ impl Picker {
             return row.map(|row| self.act(act, row));
         }
         match key {
+            Key::Text(text) if self.tabs && text == "\t" => {
+                return Some(Picked::Tab(self.spot()));
+            }
             Key::Rename if self.acts => return row.map(|row| self.act(Act::Rename, row)),
             Key::EndOfInput if self.acts => {
                 let current = match &self.shape {
@@ -487,18 +503,18 @@ impl Picker {
     }
 
     fn act(&self, act: Act, row: usize) -> Picked {
+        Picked::Act(act, row, self.spot())
+    }
+
+    fn spot(&self) -> Spot {
         let query =
             (self.list.search.as_ref()).map_or_else(String::new, |search| search.query.clone());
         let (position, shown) = (self.list.selected, self.list.rows.clone());
-        Picked::Act(
-            act,
-            row,
-            Spot {
-                query,
-                position,
-                shown,
-            },
-        )
+        Spot {
+            query,
+            position,
+            shown,
+        }
     }
 
     /// The list's lines for a screen of `(width, height)`.
@@ -1303,6 +1319,32 @@ mod tests {
         // A list shown again selects the row acted on, where it is now.
         let again = picker().scoping().on_row(2);
         assert_eq!(plain(again.lines((40, 24)))[4], "› claude-haiku-5-5");
+    }
+
+    #[test]
+    fn tab_ends_a_tabbing_list_where_it_is_even_with_no_row_shown() {
+        let texts = ["gpt-6-luna", "gpt-6-terra", "claude-haiku-5-5"].map(String::from);
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
+        let picker = || Picker::search("Models", 10, haystacks(&texts), 0, None, "None", row);
+        let tab = Key::Text("\t".into());
+        let mut list = picker().tabbing();
+        list.key(&Key::Text("gpt".into()));
+        list.key(&Key::Down);
+        let spot = |query: &str, position, shown: Vec<usize>| Spot {
+            query: query.into(),
+            position,
+            shown,
+        };
+        assert_eq!(
+            list.key(&tab),
+            Some(Picked::Tab(spot("gpt", 1, vec![0, 1])))
+        );
+        list.key(&Key::Text("zzz".into()));
+        assert_eq!(list.key(&tab), Some(Picked::Tab(spot("gptzzz", 0, vec![]))));
+        // Elsewhere Tab is typed into the query, as a space.
+        let mut plain_list = picker();
+        assert_eq!(plain_list.key(&tab), None);
+        assert_eq!(plain_list.key(&Key::Escape), Some(Picked::Row(None)));
     }
 
     #[test]

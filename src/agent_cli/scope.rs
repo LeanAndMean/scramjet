@@ -1,13 +1,16 @@
-//! The models Ctrl+P cycles through, as Scramjet's: those the patterns of `--models` or the
-//! settings' `enabledModels` choose, else all the endpoint's; `/scoped-models` chooses them.
+//! Choosing models: `/model`, and the scope Ctrl+P cycles through, as Scramjet's: the models the
+//! patterns of `--models` or the settings' `enabledModels` choose, else all the endpoint's;
+//! `/scoped-models` chooses them.
 use super::fuzzy::Haystack;
-use super::interactive::Interactive;
+use super::interactive::{Interactive, model_line};
 use super::select::{self, Act, Picked, Picker, Spot};
 use super::settings::{Settings, card_level, scramjet_level};
 use super::style::{MODEL_OFF, MODEL_ON, MUTED, RESET};
-use super::text::clip;
+use super::text::{clip, visible};
 use scramjet_rs::agent::{Agent, ModelOption};
 
+const IN_SCOPE_KEYS: &str = "↑↓ move · Enter select · Tab all models · Esc cancel";
+const ALL_KEYS: &str = "↑↓ move · Enter select · Tab models for Ctrl+P · Esc cancel";
 const SCOPED_KEYS: &str = "↑↓ move · Enter on/off · Ctrl+S save · Esc close";
 const SCOPED_ACTS: &str = "Ctrl+P switches among those on, in this order.\n\
     Ctrl+A/Ctrl+X: all shown on/off · Ctrl+P: its provider's · Alt+↑↓: move it";
@@ -141,6 +144,33 @@ fn set(pattern: &[char]) -> Option<(impl Fn(char) -> bool + '_, &[char])> {
         found != negated
     };
     Some((test, &pattern[end + 1..]))
+}
+
+/// The model `reference` names among `models`, as Scramjet's `findExactModelReferenceMatch`:
+/// the one whose `provider/id`, else whose id, it is, case aside; `None` when none or several are.
+pub(super) fn exact<'a>(reference: &str, models: &'a [ModelOption]) -> Option<&'a ModelOption> {
+    let reference = reference.trim().to_lowercase();
+    if reference.is_empty() {
+        return None;
+    }
+    let full = |model: &ModelOption| {
+        (model.provider.as_ref()).map(|provider| format!("{provider}/{}", model.id).to_lowercase())
+    };
+    let only = |found: Vec<&'a ModelOption>| match found[..] {
+        [model] => Some(model),
+        _ => None,
+    };
+    let canonical: Vec<_> = (models.iter())
+        .filter(|model| full(model).is_some_and(|full| full == reference))
+        .collect();
+    if !canonical.is_empty() {
+        return only(canonical);
+    }
+    only(
+        (models.iter())
+            .filter(|model| model.id.to_lowercase() == reference)
+            .collect(),
+    )
 }
 
 /// The model `steps` Ctrl+P presses move to from `current` in `scope` (negative: Shift+Ctrl+P),
@@ -309,6 +339,135 @@ impl Chosen {
 }
 
 impl Interactive {
+    /// `/model`, as Scramjet's: sets the model `wanted` names (`exact`); otherwise, on the full
+    /// screen, lists the models with `wanted` as the query (see `pick_model`). With piped input
+    /// and nothing wanted, it lists the endpoint's models.
+    pub(super) fn model(&mut self, wanted: &str) {
+        let Some(models) = self.agent.listed_models() else {
+            return self.say("error: could not list the endpoint's models");
+        };
+        let chosen = match exact(wanted, &models) {
+            Some(model) => Some(model.id.clone()),
+            None if models.is_empty() => {
+                self.say("The endpoint lists no models");
+                None
+            }
+            None if self.interactive() => self.pick_model(&models, wanted),
+            None if wanted.is_empty() => {
+                for model in &models {
+                    let mark = if model.id == self.agent.model() {
+                        "*"
+                    } else {
+                        " "
+                    };
+                    eprintln!("{mark} {}", visible(&model.id));
+                }
+                None
+            }
+            None => {
+                self.say(&format!("error: no model {wanted} (/model lists them)"));
+                None
+            }
+        };
+        if let Some(model) = chosen {
+            match self.agent.set_model(&model) {
+                Ok(()) => {
+                    self.agent.load_model_card();
+                    self.say(&format!("✓ Model set to {}", model_line(&self.agent)));
+                }
+                Err(error) => self.say(&format!("error: {error}")),
+            }
+        }
+    }
+
+    /// `/model`'s list, as Scramjet's selector: each model with its provider, and its name under
+    /// the list, searched from `query`. With a scope it shows the scope's models in their order,
+    /// and Tab switches to all the endpoint's and back, keeping the query and the model selected.
+    fn pick_model(&self, models: &[ModelOption], query: &str) -> Option<String> {
+        let screen = self.screen.as_ref()?;
+        let (scoped, _) = resolve(&self.scope, models);
+        let scoped: Vec<&ModelOption> = (scoped.iter())
+            .filter_map(|scoped| models.iter().find(|model| model.id == scoped.id))
+            .collect();
+        let all: Vec<&ModelOption> = models.iter().collect();
+        let current = self.agent.model();
+        let mut in_scope = !scoped.is_empty();
+        let mut spot = Spot {
+            query: query.to_owned(),
+            ..Spot::default()
+        };
+        // The model selected when Tab was pressed, to stay selected in the other list.
+        let mut selected: Option<String> = None;
+        loop {
+            let shown = if in_scope { &scoped } else { &all };
+            let at = |id: &str| shown.iter().position(|model| model.id == id);
+            let texts = (shown.iter())
+                .map(|model| {
+                    let provider = model.provider.as_deref().unwrap_or_default();
+                    Haystack::new(&format!("{} {provider}", model.id))
+                })
+                .collect();
+            let notes = (shown.iter())
+                .map(|model| visible(model.name.as_deref().unwrap_or(&model.id)))
+                .collect();
+            let row = |index: usize, width| {
+                let model = shown[index];
+                let provider = (model.provider.as_deref()).map_or_else(String::new, |provider| {
+                    format!(" {MUTED}[{}]{RESET}", visible(provider))
+                });
+                clip(&format!("{}{provider}", visible(&model.id)), width)
+            };
+            let (title, keys) = match (scoped.is_empty(), in_scope) {
+                (true, _) => ("Select model", select::HINT),
+                (false, true) => ("Models for Ctrl+P", IN_SCOPE_KEYS),
+                (false, false) => ("All models", ALL_KEYS),
+            };
+            let current_row = at(current);
+            let initial = current_row.unwrap_or(0);
+            let none = "No matching models";
+            let picker = Picker::search(
+                title,
+                select::VISIBLE,
+                texts,
+                initial,
+                current_row,
+                none,
+                row,
+            );
+            let keep = match &selected {
+                Some(id) => at(id).or(current_row),
+                // A query starts at its best match.
+                None if spot.query.is_empty() => current_row,
+                None => None,
+            };
+            let mut picker = picker.noting(keys, notes).held().at(spot, None);
+            if !scoped.is_empty() {
+                picker = picker.tabbing();
+            }
+            if let Some(row) = keep {
+                picker = picker.on_row(row);
+            }
+            match screen.pick_or_act(picker) {
+                Picked::Tab(left) => {
+                    let row = left.shown.get(left.position);
+                    selected = row.map(|&row| shown[row].id.clone()).or(selected);
+                    spot = Spot {
+                        query: left.query,
+                        ..Spot::default()
+                    };
+                    in_scope = !in_scope;
+                }
+                picked => {
+                    screen.dismiss();
+                    return match picked {
+                        Picked::Row(Some(row)) => Some(shown[row].id.clone()),
+                        _ => None,
+                    };
+                }
+            }
+        }
+    }
+
     /// `/scoped-models`, as Scramjet's: the endpoint's models, those Ctrl+P cycles through first
     /// in its order, each switched on or off with Enter (with all on, the first leaves only it
     /// on), all shown with Ctrl+A and Ctrl+X, a provider's with Ctrl+P, moved with Alt+Up and
@@ -384,7 +543,7 @@ impl Interactive {
             }
             let (act, index, spot) = match screen.pick_or_act(picker) {
                 Picked::Act(act, index, spot) => (act, index, spot),
-                Picked::Row(_) => return screen.dismiss(),
+                Picked::Row(_) | Picked::Tab(_) => return screen.dismiss(),
             };
             let id = order[index].clone();
             let shown: Vec<String> = spot.shown.iter().map(|&at| order[at].clone()).collect();
@@ -481,6 +640,25 @@ mod tests {
 
     fn just(ids: &[&str]) -> Vec<(String, Option<String>)> {
         ids.iter().map(|id| (id.to_string(), None)).collect()
+    }
+
+    #[test]
+    fn a_reference_names_a_model_by_provider_and_id_or_id_case_aside() {
+        let models = proxy();
+        let found = |reference| exact(reference, &models).map(|model| model.id.as_str());
+        assert_eq!(
+            found("anthropic/claude-haiku-5-5"),
+            Some("claude-haiku-5-5")
+        );
+        assert_eq!(found(" OpenAI/GPT-6-Luna "), Some("gpt-6-luna"));
+        assert_eq!(found("Local:7B"), Some("local:7b"));
+        // Neither part of an id nor an empty reference.
+        assert_eq!(found("haiku"), None);
+        assert_eq!(found(""), None);
+        assert_eq!(found("openai/claude-haiku-5-5"), None);
+        // Several of the same id name none, as in Scramjet.
+        let twice = [models[4].clone(), models[4].clone()];
+        assert_eq!(exact("claude-haiku-5-5", &twice), None);
     }
 
     #[test]

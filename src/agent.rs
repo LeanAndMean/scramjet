@@ -904,12 +904,23 @@ impl Agent {
     /// The endpoint's models in its order, each with what its card says, the current model first
     /// when the endpoint does not list it: only the current one when they cannot be listed.
     pub fn model_options(&self) -> Vec<ModelOption> {
-        let endpoint = self.config.endpoint;
-        let mut ids = (self.executor.block_on(client::models(endpoint))).unwrap_or_default();
+        let mut ids = self.models().unwrap_or_default();
         if !ids.contains(&self.config.model) {
             ids.insert(0, self.config.model.clone());
         }
-        let cards = self.executor.block_on(client::model_cards(endpoint));
+        self.options(ids)
+    }
+
+    /// The endpoint's models in its order, each with what its card says, or `None` if they
+    /// cannot be listed.
+    pub fn listed_models(&self) -> Option<Vec<ModelOption>> {
+        self.models().map(|ids| self.options(ids))
+    }
+
+    fn options(&self, ids: Vec<String>) -> Vec<ModelOption> {
+        let cards = self
+            .executor
+            .block_on(client::model_cards(self.config.endpoint));
         (ids.into_iter())
             .map(|id| {
                 let guessed;

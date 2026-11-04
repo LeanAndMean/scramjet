@@ -585,22 +585,6 @@ impl Interactive {
         self.screen.as_ref()?.pick(picker)
     }
 
-    /// As `select`, searching as `select::Picker::search`.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn search(
-        &self,
-        title: &str,
-        visible: usize,
-        texts: Vec<super::fuzzy::Haystack>,
-        initial: usize,
-        current: Option<usize>,
-        none: &str,
-        row: impl Fn(usize, usize) -> String,
-    ) -> Option<usize> {
-        let picker = select::Picker::search(title, visible, texts, initial, current, none, row);
-        self.screen.as_ref()?.pick(picker)
-    }
-
     /// Shows that the session was replaced, with `message`, then its conversation. Full screen,
     /// the conversation before goes and the message follows the new one.
     pub(super) fn replaced(&mut self, message: &str) {
