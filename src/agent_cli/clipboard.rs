@@ -1,14 +1,17 @@
 //! The desktop's clipboard as Scramjet uses it. Copying: with the platform's tool (`pbcopy`;
 //! `wl-copy` under Wayland, `xclip` or `xsel` under X11), else, and also in a remote session,
 //! through the terminal with OSC 52. Pasting: with PowerShell under WSL, `pbpaste`, `wl-paste`,
-//! `xclip` or `xsel`; never in a remote session, whose clipboard is the terminal's.
+//! `xclip` or `xsel`; never in a remote session, whose clipboard is the terminal's. An image is
+//! pasted as Scramjet pastes it, as the path of a file it is saved to.
 
 use std::{
     env,
+    fs::{self, OpenOptions},
     io::{Read, Write},
-    process::{Child, Command, Stdio},
+    os::unix::fs::OpenOptionsExt,
+    process::{self, Child, Command, Stdio},
     sync::mpsc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 /// How long a clipboard tool may take, as Scramjet's.
@@ -17,6 +20,24 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 const OSC52_MAX: usize = 100_000;
 /// The most text a paste takes, as Scramjet's.
 const PASTE_MAX: usize = 10 * 1024 * 1024;
+/// The most image bytes a paste takes, as Scramjet's.
+const IMAGE_MAX: usize = 50 * 1024 * 1024;
+/// The image types taken, in Scramjet's order of preference, with the extension each is saved
+/// with: those `read` sends to the model.
+const IMAGE_TYPES: [(&str, &str); 4] = [
+    ("image/png", "png"),
+    ("image/jpeg", "jpg"),
+    ("image/webp", "webp"),
+    ("image/gif", "gif"),
+];
+/// Writes the Windows clipboard's image as PNG, as Scramjet's PowerShell command saves it, and
+/// nothing when it holds none.
+const POWERSHELL_IMAGE: &str = "Add-Type -AssemblyName System.Windows.Forms; \
+Add-Type -AssemblyName System.Drawing; \
+$image = [System.Windows.Forms.Clipboard]::GetImage(); \
+if ($image) { $png = New-Object System.IO.MemoryStream; \
+$image.Save($png, [System.Drawing.Imaging.ImageFormat]::Png); \
+$out = [Console]::OpenStandardOutput(); $out.Write($png.ToArray(), 0, $png.Length); $out.Flush() }";
 /// Scramjet's PowerShell command that writes the Windows clipboard's text as UTF-8.
 const POWERSHELL_READ: &str = "Add-Type -AssemblyName System.Windows.Forms; \
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); \
@@ -43,6 +64,93 @@ pub(super) fn paste() -> Result<String, String> {
     (readers(set).into_iter())
         .find_map(|(program, arguments)| read(program, arguments))
         .ok_or_else(|| "Cannot read clipboard text; use your terminal's Paste command".to_owned())
+}
+
+/// Saves the clipboard's image to a new file only the user can read, for its path to be pasted.
+pub(super) fn paste_image() -> Result<String, String> {
+    if remote() {
+        return Err("Images cannot be pasted from the clipboard in remote sessions".to_owned());
+    }
+    if cfg!(target_os = "macos") {
+        return Err("Pasting images is not supported on macOS yet".to_owned());
+    }
+    let (bytes, extension) = image(set).ok_or("No image on the clipboard")?;
+    save(&bytes, extension, &env::temp_dir().to_string_lossy())
+}
+
+/// The clipboard's image and its extension, given which variables are `set`: under WSL Windows'
+/// clipboard, as for text; else with `wl-paste` under Wayland, then `xclip` under X11, in a type
+/// the tool lists among `IMAGE_TYPES`.
+fn image(set: impl Fn(&str) -> bool) -> Option<(Vec<u8>, &'static str)> {
+    let nonempty = |read: Option<(Vec<u8>, _)>| read.filter(|(bytes, _)| !bytes.is_empty());
+    if set("WSL_DISTRO_NAME") || set("WSL_INTEROP") {
+        let arguments = [
+            "-NoProfile",
+            "-NonInteractive",
+            "-STA",
+            "-Command",
+            POWERSHELL_IMAGE,
+        ];
+        let png = output("powershell.exe", &arguments, IMAGE_MAX);
+        return nonempty(png.map(|bytes| (bytes, "png")));
+    }
+    let listed = |program: &str, arguments: &[&str]| {
+        preferred(&String::from_utf8_lossy(&output(
+            program, arguments, PASTE_MAX,
+        )?))
+    };
+    let wayland = || {
+        let (kind, extension) = listed("wl-paste", &["--list-types"])?;
+        let bytes = output("wl-paste", &["--type", kind, "--no-newline"], IMAGE_MAX)?;
+        Some((bytes, extension))
+    };
+    let x11 = || {
+        let (kind, extension) =
+            listed("xclip", &["-selection", "clipboard", "-t", "TARGETS", "-o"])?;
+        let bytes = output(
+            "xclip",
+            &["-selection", "clipboard", "-t", kind, "-o"],
+            IMAGE_MAX,
+        )?;
+        Some((bytes, extension))
+    };
+    nonempty(set("WAYLAND_DISPLAY").then(wayland).flatten())
+        .or_else(|| nonempty(set("DISPLAY").then(x11).flatten()))
+}
+
+/// The first of `IMAGE_TYPES` among the types a tool lists, one a line, ignoring parameters such
+/// as `;charset=`.
+fn preferred(listed: &str) -> Option<(&'static str, &'static str)> {
+    let base = |line: &str| line.split(';').next().unwrap_or_default().trim().to_owned();
+    let listed: Vec<String> = listed.lines().map(base).collect();
+    IMAGE_TYPES
+        .into_iter()
+        .find(|(kind, _)| listed.iter().any(|line| line.eq_ignore_ascii_case(kind)))
+}
+
+/// Writes `bytes` to a new `scramjet-rs-clipboard-…` file in `directory`; never to one that
+/// exists, which in a shared `/tmp` may be another user's.
+fn save(bytes: &[u8], extension: &str, directory: &str) -> Result<String, String> {
+    let stamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let path = format!(
+        "{}/scramjet-rs-clipboard-{}-{stamp:x}.{extension}",
+        directory.trim_end_matches('/'),
+        process::id()
+    );
+    let failed = |error| format!("Cannot save the image to {path}: {error}");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(failed)?;
+    if let Err(error) = file.write_all(bytes) {
+        let _ = fs::remove_file(&path);
+        return Err(failed(error));
+    }
+    Ok(path)
 }
 
 fn remote() -> bool {
@@ -85,6 +193,11 @@ fn readers(set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static [&'static 
 /// What `program` writes, if it succeeds within the time allowed and writes at most `PASTE_MAX`
 /// bytes.
 fn read(program: &str, arguments: &[&str]) -> Option<String> {
+    output(program, arguments, PASTE_MAX).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// What `program` writes, if it succeeds within the time allowed and writes at most `max` bytes.
+fn output(program: &str, arguments: &[&str], max: usize) -> Option<Vec<u8>> {
     let mut child = Command::new(program)
         .args(arguments)
         .stdin(Stdio::null())
@@ -96,15 +209,13 @@ fn read(program: &str, arguments: &[&str]) -> Option<String> {
     let (done, output) = mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        let read = (&mut stdout)
-            .take(PASTE_MAX as u64 + 1)
-            .read_to_end(&mut bytes);
+        let read = (&mut stdout).take(max as u64 + 1).read_to_end(&mut bytes);
         let _ = done.send(read.map(|_| bytes));
     });
     let deadline = Instant::now() + TIMEOUT;
     // Read apart, so that a tool that keeps writing cannot hold the paste past its time.
     let bytes = match output.recv_timeout(TIMEOUT) {
-        Ok(Ok(bytes)) if bytes.len() <= PASTE_MAX => Some(bytes),
+        Ok(Ok(bytes)) if bytes.len() <= max => Some(bytes),
         _ => None,
     };
     let Some(bytes) = bytes else {
@@ -112,7 +223,7 @@ fn read(program: &str, arguments: &[&str]) -> Option<String> {
         let _ = child.wait();
         return None;
     };
-    finished(&mut child, deadline).then(|| String::from_utf8_lossy(&bytes).into_owned())
+    finished(&mut child, deadline).then_some(bytes)
 }
 
 fn by_tool(text: &str) -> bool {
@@ -222,6 +333,45 @@ mod tests {
         assert_eq!(sh("printf partial; exit 1"), None);
         assert_eq!(sh("head -c 10485761 /dev/zero"), None);
         assert_eq!(read("scramjet-rs-no-such-tool", &[]), None);
+    }
+
+    #[test]
+    fn an_image_is_taken_in_the_first_type_read_sends_that_the_tool_lists() {
+        let listed = "TARGETS\ntext/plain\nimage/bmp\nimage/gif\nIMAGE/JPEG; q=1\n";
+        assert_eq!(preferred(listed), Some(("image/jpeg", "jpg")));
+        assert_eq!(
+            preferred("image/png\nimage/webp"),
+            Some(("image/png", "png"))
+        );
+        assert_eq!(preferred("text/plain\nimage/bmp\nimage/tiff"), None);
+        let png = output("sh", &["-c", "printf '\\211PNG\\r\\n\\000'"], IMAGE_MAX);
+        assert_eq!(png.as_deref(), Some(&b"\x89PNG\r\n\0"[..]));
+    }
+
+    #[test]
+    fn a_pasted_image_is_saved_to_a_new_file_only_the_user_reads() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory =
+            env::temp_dir().join(format!("scramjet-rs-clipboard-test-{}", process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let directory = directory.to_string_lossy().into_owned();
+        let first = save(b"one", "png", &format!("{directory}/")).unwrap();
+        let second = save(b"two", "jpg", &directory).unwrap();
+        let read = |path: &str| std::fs::read(path).unwrap();
+        assert_eq!(
+            (read(&first), read(&second)),
+            (b"one".to_vec(), b"two".to_vec())
+        );
+        assert!(first.starts_with(&format!("{directory}/scramjet-rs-clipboard-")));
+        assert!(first.ends_with(".png") && second.ends_with(".jpg"));
+        let mode = std::fs::metadata(&first).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert!(
+            save(b"three", "png", &directory)
+                .unwrap_err()
+                .starts_with("Cannot save the image to ")
+        );
     }
 
     #[test]

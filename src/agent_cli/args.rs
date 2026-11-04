@@ -37,7 +37,8 @@ at once); Escape interrupts the turn and puts them back in the editor, as Alt+Up
 Ctrl-C clears the prompt, and interrupts a turn; on an empty prompt press it twice, or Ctrl-D, or
 type /quit, to quit. Dragging selects text, a double click a word, a triple click the line;
 Ctrl+C or a right click copies it, and a right click without a selection pastes the clipboard
-into the prompt. Ctrl+O shows tool results whole, or cut again. Ctrl+T hides reasoning summaries
+into the prompt. Ctrl+V or Alt+V saves the clipboard's image to a file in the temporary directory
+and pastes its path, for the model to read. Ctrl+O shows tool results whole, or cut again. Ctrl+T hides reasoning summaries
 behind a `Thinking...` line, or shows them again. Shift+Tab sets the reasoning effort to the next
 level the model's Proxy card lists. Both are saved in the settings. /new starts a new session;
 /resume chooses one of this project's sessions to switch to, forks under the session they came

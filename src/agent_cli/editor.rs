@@ -57,6 +57,9 @@ pub(super) enum Key {
     KillEnd,
     Interrupt,
     EndOfInput,
+    /// Ctrl+V, Scramjet's key to paste an image, or Alt+V, which still reaches the program in
+    /// a terminal that takes Ctrl+V to paste text, as Windows Terminal does.
+    PasteImage,
     ToggleThinking,
     /// Shift+Tab, `ESC [ Z`.
     BackTab,
@@ -115,6 +118,7 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
         18 => Key::Rename,
         20 => Key::ToggleThinking,
         21 => Key::KillStart,
+        22 => Key::PasteImage,
         23 => Key::DeleteWordBack,
         26 => Key::Suspend,
         0x20..=0x7e => Key::Text(char::from(byte).to_string()),
@@ -166,6 +170,7 @@ fn escape(source: &mut impl ByteSource) -> io::Result<Key> {
         Some(b'b') => Key::WordLeft,
         Some(b'f') => Key::WordRight,
         Some(b'd') => Key::DeleteWordForward,
+        Some(b'v') => Key::PasteImage,
         Some(_) => Key::Ignored,
     })
 }
@@ -1445,11 +1450,13 @@ mod tests {
             ]
         );
         assert_eq!(
-            keys(b"\x03\x04\x14\x1b\x1b[D\x1b[99;5u\x1b[5~\x1b[6~\x1bx\x1b"),
+            keys(b"\x03\x04\x14\x16\x1bv\x1b\x1b[D\x1b[99;5u\x1b[5~\x1b[6~\x1bx\x1b"),
             [
                 Key::Interrupt,
                 Key::EndOfInput,
                 Key::ToggleThinking,
+                Key::PasteImage,
+                Key::PasteImage,
                 Key::Left,
                 Key::Ignored,
                 Key::PageUp,

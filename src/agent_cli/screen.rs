@@ -639,7 +639,8 @@ struct Edge {
 /// A copy under way: the terminal's sequence that copies, if any, or the failure.
 type Copying = mpsc::Receiver<Result<Option<String>, String>>;
 
-/// The clipboard read for a right click, pasted only into the editor it was for, unchanged.
+/// The clipboard read for a right click, or an image's path for Ctrl+V, pasted only into the
+/// editor it was for, unchanged.
 struct Pasting {
     /// A text dialog's editor, rather than the prompt's.
     dialog: bool,
@@ -1408,7 +1409,7 @@ impl App {
                 }
             }
             RIGHT if self.selection.is_some() => self.copy(),
-            RIGHT if self.copying.is_none() => self.paste(),
+            RIGHT if self.copying.is_none() => self.paste(clipboard::paste),
             LEFT => {
                 let previous = self.click.take();
                 self.clear_selection();
@@ -1591,8 +1592,8 @@ impl App {
         }
     }
 
-    /// Reads the clipboard, on a thread of its own, for the editor shown.
-    fn paste(&mut self) {
+    /// Reads the `clipboard`, on a thread of its own, for the editor shown.
+    fn paste(&mut self, clipboard: fn() -> Result<String, String>) {
         if self.pasting.is_some() {
             return;
         }
@@ -1605,7 +1606,7 @@ impl App {
         let started = std::thread::Builder::new()
             .name("clipboard".into())
             .spawn(move || {
-                let _ = done.send(clipboard::paste());
+                let _ = done.send(clipboard());
             });
         match started {
             Ok(_) => self.pasting = Some(Pasting { dialog, text, read }),
@@ -1682,6 +1683,10 @@ impl App {
         match key {
             Key::Idle => return Flow::Go,
             Key::Suspend => return Flow::Suspend,
+            Key::PasteImage => {
+                self.paste(clipboard::paste_image);
+                return Flow::Go;
+            }
             Key::Expand => {
                 self.whole = !self.whole;
                 return Flow::Go;

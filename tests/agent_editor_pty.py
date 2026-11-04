@@ -2645,6 +2645,27 @@ def fullscreen_paste_and_clicks(read, until, send, output):
     send(b'\x15\x04')
 
 
+def fullscreen_paste_image(read, until, send, output):
+    shown, on_screen = full_screen(columns=160)(read, output)
+    on_screen('\u2500' * 20)
+    # Ctrl+V pastes the clipboard's image as the path of the file it is saved to, as Scramjet does;
+    # so does Alt+V, which Windows Terminal leaves to the program.
+    send(b'look at \x16')
+    on_screen('> look at %s/scramjet-rs-clipboard-' % images)
+    send(b' and \x1bv')
+    end = time.monotonic() + 10
+    while '\n'.join(shown()).count('%s/scramjet-rs-clipboard-' % images) < 2:
+        assert time.monotonic() < end, shown()
+        read(.05)
+    # Without an image on the clipboard, the prompt stays as it is and says so.
+    send(b'\x16')
+    rows = on_screen('Paste failed: No image on the clipboard')
+    assert rows[-2].endswith('.png') and rows[-1] == 'Paste failed: No image on the clipboard', rows
+    send(b'\r')
+    on_screen('Seen.')
+    send(b'\x04')
+
+
 def fullscreen_collapsed(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -2816,6 +2837,34 @@ run([], fullscreen_paste_and_clicks, serve_items([[message(rows_reply)]]), varia
 prompts = [line['content'] for line in map(json.loads, open(pasted)) if line.get('role') == 'user']
 assert prompts == ['x pasted\nsecond \u2014'], prompts
 assert open(pastes).read() == '2\n', open(pastes).read()
+image_bin = os.path.join(work, 'image-bin')
+os.mkdir(image_bin)
+images = os.path.join(work, 'images')
+os.mkdir(images)
+image_reads = os.path.join(work, 'image-reads')
+png = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR'
+# Checks it is asked for the clipboard's image as PNG on standard output; holds one twice, then none.
+with open(os.path.join(image_bin, 'powershell.exe'), 'w') as script_file:
+    script_file.write('#!/bin/sh\n[ "$3" = -STA ] && [ "$4" = -Command ] || exit 1\n'
+                      'case "$5" in *"Clipboard]::GetImage()"*"ImageFormat]::Png"*"OpenStandardOutput()"*) ;;'
+                      ' *) exit 1;; esac\ncount=$(cat "$READS" 2>/dev/null || echo 0)\n'
+                      'echo $((count + 1)) > "$READS"\n'
+                      '[ "$count" -ge 2 ] || printf \'\\211PNG\\r\\n\\032\\n\\000\\000\\000\\rIHDR\'\n')
+os.chmod(os.path.join(image_bin, 'powershell.exe'), 0o755)
+known = set(session_files())
+run([], fullscreen_paste_image, serve_items([[message('Seen.')]]), columns=160, variables={
+    'PATH': image_bin + os.pathsep + env['PATH'], 'WSL_DISTRO_NAME': 'Test', 'TMPDIR': images,
+    'READS': image_reads})
+(pasted,) = set(session_files()) - known
+prompts = [line['content'] for line in map(json.loads, open(pasted)) if line.get('role') == 'user']
+saved = sorted(os.listdir(images))
+assert len(saved) == 2 and all(re.fullmatch(r'scramjet-rs-clipboard-\d+-[0-9a-f]+\.png', name) for name in saved), saved
+assert sorted(re.findall(r'\S+\.png', prompts[0])) == [os.path.join(images, name) for name in saved], prompts
+assert re.fullmatch(r'look at \S+\.png and \S+\.png', prompts[0]), prompts
+for name in saved:
+    path = os.path.join(images, name)
+    assert open(path, 'rb').read() == png and os.stat(path).st_mode & 0o777 == 0o600, path
+assert open(image_reads).read() == '3\n', open(image_reads).read()
 summary = '\n'.join('Point %d of the summary.' % number for number in range(1, 15))
 long_line = "head -c 49000 /dev/zero | tr '\\0' a"
 run([], fullscreen_collapsed, serve_items([
