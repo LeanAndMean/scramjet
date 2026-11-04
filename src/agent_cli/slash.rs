@@ -1227,7 +1227,7 @@ impl Interactive {
     }
 
     fn tree(&mut self, mut wanted: &str) {
-        // The row the tree shows again at after its summary question or summary is cancelled.
+        // The entry the tree shows again at after its summary question or summary is cancelled.
         let mut reopen = None;
         loop {
             let session_tree = match self.agent.tree() {
@@ -1237,7 +1237,9 @@ impl Interactive {
                     return;
                 }
             };
-            let (rows, current) = tree::rows(&session_tree, self.interactive());
+            let lines: Vec<usize> = session_tree.entries.iter().map(|e| e.line).collect();
+            let view = tree::View::new(session_tree, self.interactive());
+            let rows = view.rows();
             let chosen = match wanted {
                 "" if rows.is_empty() => {
                     self.say("No entries in session");
@@ -1246,14 +1248,9 @@ impl Interactive {
                 "" if self.interactive() => {
                     // As Scramjet's tree, half the terminal.
                     let visible = (editor::terminal_size().1 / 2).max(5);
-                    self.select(
-                        "Session Tree",
-                        visible,
-                        rows.len(),
-                        reopen.or(current).unwrap_or(rows.len() - 1),
-                        None,
-                        |index, width| clip(&rows[index].1, width),
-                    )
+                    let initial = reopen.or(view.current());
+                    let picker = select::Picker::tree(view, visible, initial);
+                    self.screen.as_ref().and_then(|screen| screen.pick(picker))
                 }
                 "" => {
                     let digits = rows.len().to_string().len();
@@ -1274,13 +1271,13 @@ impl Interactive {
                         ));
                         None
                     }
-                    Ok(number) => Some(number - 1),
+                    Ok(number) => Some(rows[number - 1].0),
                 },
             };
             let Some(index) = chosen else {
                 return;
             };
-            let line = session_tree.entries[rows[index].0].line;
+            let line = lines[index];
             // As Scramjet asks on the full screen, unless the settings skip the question; piped
             // input moves without one.
             let ask = self.interactive() && !self.settings.skip_branch_summary_prompt;

@@ -1276,10 +1276,40 @@ def tree_session(read, until, send, output):
     rows = on_screen('Session Tree')
     text = '\n'.join(rows)
     for row in ['\u2022 assistant: Reply one.',
-                '\u251c\u2500 \u2022 [branch summary]: The user explored a different',
+                '\u251c\u229f \u2022 [branch summary]: The user explored a different',
                 '\u2502     \u2022 user: second again', '\u2022 assistant: Reply three.',
-                '\u2514\u2500 user: second', '      assistant: Reply two.']:
+                '\u2514\u229f user: second', '      assistant: Reply two.', '(5/7)']:
         assert row in text, (row, text)
+    # As Scramjet's tree, Ctrl+U shows only the prompts, each under the one before it, with the
+    # current entry's nearest shown ancestor selected and the filter named; Ctrl+O and Ctrl+T,
+    # which the screen otherwise takes, choose filters too.
+    send(b'\x15')
+    rows = on_screen('(2/3) [user]')
+    text = '\n'.join(rows[next(at for at, row in enumerate(rows) if 'Session Tree' in row):])
+    for row in ['\u2022 user: first', '\u203a \u251c\u2500 \u2022 user: second again',
+                '\u2514\u2500 user: second']:
+        assert row in text, (row, text)
+    assert 'Reply' not in text, text
+    send(b'\x0f')
+    on_screen('[all]')
+    send(b'\x14')
+    on_screen('[no-tools]')
+    send(b'\x04')
+    on_screen('(4/7)')
+    # Typing searches; Escape clears the query before it cancels.
+    send(b'AGAIN')
+    rows = on_screen('(1/1)')
+    assert '\u203a \u2022 user: second again' in rows, rows
+    send(b'\x1b')
+    on_screen('(4/7)')
+    # Ctrl+Left goes up to where the branch starts, then folds it.
+    send(b'\x1b[1;5D')
+    on_screen('(3/7)')
+    send(b'\x1b[1;5D')
+    rows = on_screen('(3/5)')
+    assert '\u203a \u251c\u229e \u2022 [branch summary]: The user explored a different' in '\n'.join(rows), rows
+    send(b'\x1b[1;5C')
+    on_screen('(3/7)')
     send(b'\x1b')
     ending(read, output, EMPTY)
     # As in Scramjet, Escape twice within half a second on an empty prompt opens the tree in the

@@ -28,12 +28,14 @@ pub enum TreeItem {
     Reply(String),
     /// Where a turn stopped: cancelled (`None`), or failed with the error.
     Stopped(Option<String>),
-    /// A tool call's result, or the call itself, by the call's name and its call line's summary.
+    /// A tool call's result, by the call's name and its call line's summary.
     Tool(String, String),
+    /// A tool call, listed only when it is the current entry, as `Reasoning` is.
+    Call(String, String),
     Compaction(Option<u64>),
     BranchSummary(String),
-    /// Listed only when it is the current entry, as are the three below.
     Reasoning,
+    /// Changes of the model and the effort, which Scramjet's `/tree` shows in its `all` view.
     Model(String),
     Effort(String),
 }
@@ -64,9 +66,10 @@ pub enum Navigated {
 }
 
 impl Agent {
-    /// The current session's entries, as Scramjet's `/tree` lists them by default: prompts,
-    /// replies with text, where turns stopped, tool results, `!` and `!!` commands, compactions
-    /// and branch summaries, and the current entry whatever it is.
+    /// The current session's entries, as Scramjet's `/tree` lists them in its `all` view, which
+    /// its filters choose from: prompts, replies with text, where turns stopped, tool results,
+    /// `!` and `!!` commands, compactions, branch summaries, model and effort changes, and the
+    /// current entry whatever it is.
     pub fn tree(&self) -> Result<SessionTree, AgentError> {
         let entries = self.session.entries()?;
         let leaf = self.session.leaf();
@@ -79,8 +82,8 @@ impl Agent {
                 calls.insert(id, (call.name.to_owned(), call.summary()));
             }
         }
-        let tool = |value: &Value| {
-            let (name, summary) = value["call_id"]
+        let call = |value: &Value| {
+            value["call_id"]
                 .as_str()
                 .and_then(|id| calls.get(id))
                 .cloned()
@@ -89,8 +92,7 @@ impl Agent {
                         value["name"].as_str().unwrap_or("tool").to_owned(),
                         String::new(),
                     )
-                });
-            TreeItem::Tool(name, summary)
+                })
         };
         let mut active = std::collections::HashSet::new();
         let parents: std::collections::HashMap<_, _> = entries
@@ -109,7 +111,10 @@ impl Agent {
             let is_leaf = leaf == Some(entry.line);
             let item = match value["type"].as_str() {
                 Some("message") => Some(TreeItem::Reply(message_text(value))),
-                Some("function_call_output") => Some(tool(value)),
+                Some("function_call_output") => {
+                    let (name, summary) = call(value);
+                    Some(TreeItem::Tool(name, summary))
+                }
                 Some("turn_stopped") => Some(TreeItem::Stopped(
                     value["error"].as_str().map(str::to_owned),
                 )),
@@ -120,12 +125,15 @@ impl Agent {
                 Some("branch_summary") => Some(TreeItem::BranchSummary(
                     value["summary"].as_str().unwrap_or_default().to_owned(),
                 )),
-                Some("function_call") if is_leaf => Some(tool(value)),
+                Some("function_call") if is_leaf => {
+                    let (name, summary) = call(value);
+                    Some(TreeItem::Call(name, summary))
+                }
                 Some("reasoning") if is_leaf => Some(TreeItem::Reasoning),
-                Some("model_change") if is_leaf => Some(TreeItem::Model(
+                Some("model_change") => Some(TreeItem::Model(
                     value["model"].as_str().unwrap_or_default().to_owned(),
                 )),
-                Some("thinking_level_change") if is_leaf => Some(TreeItem::Effort(
+                Some("thinking_level_change") => Some(TreeItem::Effort(
                     value["level"].as_str().unwrap_or_default().to_owned(),
                 )),
                 _ if session::is_prompt(value) => {
@@ -490,7 +498,8 @@ mod tests {
         assert_eq!(
             listed,
             [
-                (2, None, &TreeItem::Prompt("go".into())),
+                (1, None, &TreeItem::Model("a".into())),
+                (2, Some(1), &TreeItem::Prompt("go".into())),
                 (6, Some(2), &tool("read", "x:3-4")),
                 (7, Some(6), &tool("bash", "ls")),
                 (8, Some(7), &TreeItem::Reply("done".into())),
@@ -513,7 +522,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
         let tree = agent.tree().unwrap();
         assert_eq!(tree.current, Some(7));
-        assert_eq!(tree.entries.len(), 6);
+        assert_eq!(tree.entries.len(), 8);
         assert_eq!(
             agent.navigate(7, None, &mut ui, &cancel).unwrap(),
             Navigated::AlreadyThere

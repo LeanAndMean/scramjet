@@ -1829,7 +1829,7 @@ impl App {
                 self.paste(clipboard::paste_image);
                 return Flow::Go;
             }
-            Key::Expand => {
+            Key::Expand if !self.list_takes(&key) => {
                 self.whole = !self.whole;
                 return Flow::Go;
             }
@@ -1959,6 +1959,11 @@ impl App {
         Flow::Go
     }
 
+    /// Whether the list shown takes `key`, which the screen otherwise takes for itself.
+    fn list_takes(&self, key: &Key) -> bool {
+        matches!(&self.dialog, Some(Open { shown: Shown::Pick(picker), .. }) if picker.takes(key))
+    }
+
     fn dialog_key(&mut self, key: Key, pending: bool) -> Flow {
         if self.dialog.as_ref().is_some_and(|open| open.answered) {
             self.held_keys.push((key, pending));
@@ -1986,7 +1991,7 @@ impl App {
             return Flow::Go;
         };
         let answer = match &mut open.shown {
-            Shown::Pick(_) if key == Key::ToggleThinking => {
+            Shown::Pick(picker) if key == Key::ToggleThinking && !picker.takes(&key) => {
                 self.hide_thinking.fetch_xor(true, Ordering::Relaxed);
                 None
             }

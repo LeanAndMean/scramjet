@@ -87,6 +87,9 @@ pub(super) enum Key {
     External,
     /// Ctrl+O, Scramjet's key to expand tool output.
     Expand,
+    /// Shift+Ctrl+O, which cycles `/tree`'s filters backwards; only a terminal reporting modified
+    /// keys tells it apart.
+    ExpandBack,
     /// Ctrl+R, Scramjet's key to rename a session in `/resume`.
     Rename,
     /// Ctrl+S, Scramjet's key to save the models chosen in `/scoped-models`.
@@ -261,6 +264,7 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         (b'~', "27;5;112") | (b'u', "112;5") => Key::CycleModel(true),
         (b'~', "27;6;112" | "27;6;80") | (b'u', "112;6") => Key::CycleModel(false),
         (b'~', "27;5;108") | (b'u', "108;5") => Key::SelectModel,
+        (b'~', "27;6;111" | "27;6;79") | (b'u', "111;6") => Key::ExpandBack,
         (b'~', "27;5;121") | (b'u', "121;5") => Key::Yank,
         (b'~', "27;3;121") | (b'u', "121;3") => Key::YankPop,
         (b'~', "27;5;45") | (b'u', "45;5") => Key::Undo,
