@@ -15,6 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod matching;
+
 const MAX_LINES: usize = 2000;
 const MAX_BYTES: usize = 50 * 1024;
 /// Bash output kept in memory while a command runs; only the tail is shown to the model.
@@ -474,12 +476,32 @@ fn edit(root: &Path, call: &Call) -> Result<Output, String> {
     let path = resolve(root, call.str("path")?);
     let original =
         std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let edits = call.arguments["edits"]
-        .as_array()
-        .ok_or("missing array argument `edits`")?;
+    // As Scramjet's `prepareEditArguments`: `edits` may come as a JSON string, and one edit's
+    // fields beside it.
+    let parsed: Option<Value>;
+    let mut edits: Vec<&Value> = match &call.arguments["edits"] {
+        Value::Array(edits) => edits.iter().collect(),
+        Value::String(text) => {
+            parsed = serde_json::from_str(text).ok();
+            parsed
+                .as_ref()
+                .and_then(Value::as_array)
+                .map_or_else(Vec::new, |edits| edits.iter().collect())
+        }
+        _ => Vec::new(),
+    };
+    if call.arguments["oldText"].is_string() && call.arguments["newText"].is_string() {
+        edits.push(&call.arguments);
+    }
+    if edits.is_empty() {
+        return Err(
+            "Edit tool input is invalid. edits must contain at least one replacement.".into(),
+        );
+    }
     // Scramjet's wording; `edits[N]` rather than `edit N`, which models read as 1-based.
     let single = edits.len() == 1;
     let shown = path.display();
+    let finder = matching::Finder::new(&original);
     let mut spans = Vec::with_capacity(edits.len());
     for (index, edit) in edits.iter().enumerate() {
         let old = edit["oldText"]
@@ -494,32 +516,34 @@ fn edit(root: &Path, call: &Call) -> Result<Output, String> {
                 false => format!("edits[{index}].oldText must not be empty in {shown}."),
             });
         }
-        let Some(start) = original.find(old) else {
-            return Err(match single {
-                true => format!(
-                    "Could not find the exact text in {shown}. The old text must match exactly \
+        let (start, end) = match finder.find(old) {
+            Ok(span) => span,
+            Err(matching::Miss::Absent) => {
+                return Err(match single {
+                    true => format!(
+                        "Could not find the exact text in {shown}. The old text must match exactly \
 including all whitespace and newlines."
-                ),
-                false => format!(
-                    "Could not find edits[{index}] in {shown}. The oldText must match exactly \
+                    ),
+                    false => format!(
+                        "Could not find edits[{index}] in {shown}. The oldText must match exactly \
 including all whitespace and newlines."
-                ),
-            });
-        };
-        let occurrences = original.matches(old).count();
-        if occurrences > 1 {
-            return Err(match single {
-                true => format!(
-                    "Found {occurrences} occurrences of the text in {shown}. The text must be \
+                    ),
+                });
+            }
+            Err(matching::Miss::Many(occurrences)) => {
+                return Err(match single {
+                    true => format!(
+                        "Found {occurrences} occurrences of the text in {shown}. The text must be \
 unique. Please provide more context to make it unique."
-                ),
-                false => format!(
-                    "Found {occurrences} occurrences of edits[{index}] in {shown}. Each oldText \
+                    ),
+                    false => format!(
+                        "Found {occurrences} occurrences of edits[{index}] in {shown}. Each oldText \
 must be unique. Please provide more context to make it unique."
-                ),
-            });
-        }
-        spans.push((start, start + old.len(), new, index));
+                    ),
+                });
+            }
+        };
+        spans.push((start, end, finder.with_endings(new), index));
     }
     spans.sort_by_key(|span| span.0);
     if let Some(pair) = spans.windows(2).find(|pair| pair[0].1 > pair[1].0) {
@@ -530,8 +554,8 @@ disjoint regions.",
         ));
     }
     let spans: Vec<_> = spans
-        .into_iter()
-        .map(|(start, end, new, _)| (start, end, new))
+        .iter()
+        .map(|(start, end, new, _)| (*start, *end, new.as_str()))
         .collect();
     let mut updated = String::with_capacity(original.len());
     let mut cursor = 0;
@@ -541,10 +565,28 @@ disjoint regions.",
         cursor = *end;
     }
     updated.push_str(&original[cursor..]);
+    if updated == original {
+        return Err(match single {
+            true => format!(
+                "No changes made to {shown}. The replacement produced identical content. This \
+might indicate an issue with special characters or the text not existing as expected."
+            ),
+            false => {
+                format!("No changes made to {shown}. The replacements produced identical content.")
+            }
+        });
+    }
     std::fs::write(&path, &updated).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Matches never cover a byte order mark; as in Scramjet, the diff leaves it out.
+    let text = original.strip_prefix('\u{feff}').unwrap_or(&original);
+    let skipped = original.len() - text.len();
+    let text_spans: Vec<_> = spans
+        .iter()
+        .map(|&(start, end, new)| (start - skipped, end - skipped, new))
+        .collect();
     Ok(Output {
         text: format!("Applied {} edit(s) to {}", spans.len(), path.display()),
-        detail: Some(ToolDetail::Diff(diff(&original, &spans))),
+        detail: Some(ToolDetail::Diff(diff(text, &text_spans))),
         failed: false,
         image: None,
     })
@@ -1909,6 +1951,72 @@ to see full lines]",
         assert_eq!(resolve(root, "~"), home);
         assert_eq!(resolve(root, "~other/x"), root.join("~other/x"));
         assert_eq!(resolve(root, "x/~/y"), root.join("x/~/y"));
+    }
+
+    #[test]
+    fn edit_keeps_line_endings_and_replaces_only_what_a_loose_match_covers() {
+        let root =
+            std::env::temp_dir().join(format!("scramjet-agent-edit-loose-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
+        let cancel = AtomicBool::new(false);
+        let file = root.join("f.txt");
+        let path = file.display().to_string();
+        let run = |arguments: Value| call("edit", arguments).run(&root, None, &cancel, &mut |_| {});
+
+        std::fs::write(&file, "\u{feff}one\r\ntwo\nthree\r\n").unwrap();
+        let output = run(json!({"path":"f.txt","edits":[
+            {"oldText":"one\ntwo","newText":"uno\ndos"},
+            {"oldText":"three\n","newText":"tres\r\nfour\n"}]}))
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "\u{feff}uno\r\ndos\ntres\r\nfour\r\n"
+        );
+        let Some(ToolDetail::Diff(diff)) = output.detail else {
+            panic!("no diff")
+        };
+        assert_eq!(
+            diff,
+            "-1 one\n-2 two\n+1 uno\n+2 dos\n-3 three\n+3 tres\n+4 four\n"
+        );
+
+        let code = "say(“hi”) – 1  \nend\t\nsay(“hi”)\n";
+        std::fs::write(&file, code).unwrap();
+        assert_eq!(
+            run(json!({"path":"f.txt","edits":[{"oldText":"say(\"hi\")","newText":"x"}]}))
+                .unwrap_err(),
+            format!(
+                "Found 2 occurrences of the text in {path}. The text must be unique. Please \
+provide more context to make it unique."
+            )
+        );
+        run(json!({"path":"f.txt","edits":[{"oldText":"say(\"hi\") - 1\nend","newText":"say('hi')\nend"}]}))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "say('hi')\nend\t\nsay(“hi”)\n"
+        );
+        assert_eq!(
+            run(json!({"path":"f.txt","edits":[{"oldText":"end","newText":"end"}]})).unwrap_err(),
+            format!(
+                "No changes made to {path}. The replacement produced identical content. This \
+might indicate an issue with special characters or the text not existing as expected."
+            )
+        );
+        assert_eq!(
+            run(json!({"path":"f.txt","edits":[]})).unwrap_err(),
+            "Edit tool input is invalid. edits must contain at least one replacement."
+        );
+        // As in Scramjet, `edits` as a JSON string, and one edit's fields beside it, are taken.
+        run(
+            json!({"path":"f.txt","edits":"[{\"oldText\":\"end\",\"newText\":\"fin\"}]",
+            "oldText":"say('hi')","newText":"go()"}),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "go()\nfin\t\nsay(“hi”)\n"
+        );
     }
 
     #[test]
