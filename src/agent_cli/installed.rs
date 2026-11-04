@@ -1,6 +1,8 @@
 //! `/settings`' Installed: what the session loaded, each with where it comes from, and what is
 //! wrong there, so that the user can find and fix it. Launch says at most one line about it.
-use scramjet_rs::agent::{AgentSource, Command, Installed, Origin, Skill, shortened};
+use scramjet_rs::agent::{
+    AgentSource, Command, Installed, Origin, Problem, ProblemFile, Skill, shortened,
+};
 use std::path::{Path, PathBuf};
 use unicode_width::UnicodeWidthStr;
 
@@ -12,11 +14,11 @@ pub(super) struct Loaded<'a> {
     pub skills: &'a [Skill],
     pub settings: Option<&'a Path>,
     /// Every problem, the settings' first, as `problems` gives them.
-    pub problems: &'a [String],
+    pub problems: &'a [Problem],
 }
 
 /// Rows under headings, with a note for each row and the file it shows, if any, which Enter
-/// opens in the user's editor.
+/// opens in the user's editor, or offers to remove when it is a link that leads nowhere.
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct Listing {
     pub rows: Vec<String>,
@@ -68,7 +70,7 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
     let installed = loaded.installed;
     let mut listing = Listing::default();
     let problems = (loaded.problems.iter())
-        .map(|problem| (vec![home_shortened(problem)], home_shortened(problem), None))
+        .map(|problem| problem_row(problem, loaded.settings))
         .collect();
     listing.section("Needs attention", problems);
     let settings = loaded.settings.map(shown);
@@ -211,6 +213,35 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
     listing
 }
 
+/// A problem's row, with its file when Enter can do something with it.
+fn problem_row(problem: &Problem, settings: Option<&Path>) -> Row {
+    let text = home_shortened(&problem.text);
+    let file = match &problem.file {
+        Some(ProblemFile::Path(path)) => Some(path.as_path()),
+        Some(ProblemFile::Settings) => settings,
+        None => None,
+    };
+    let action = file.and_then(|file| match broken_link(file) {
+        Some(_) => Some("A link that leads nowhere: Enter removes it once you confirm.".to_owned()),
+        None if file.is_file() => Some(format!("Enter opens {}.", shown(file))),
+        None => None,
+    });
+    match action {
+        Some(action) => {
+            let file = file.map(Path::to_path_buf);
+            (vec![text.clone()], format!("{text}\n{action}"), file)
+        }
+        None => (vec![text.clone()], text, None),
+    }
+}
+
+/// Where `path` leads when it is a link to nothing.
+pub(super) fn broken_link(path: &Path) -> Option<PathBuf> {
+    let target = std::fs::read_link(path).ok()?;
+    let missing = std::fs::metadata(path).err()?.kind() == std::io::ErrorKind::NotFound;
+    missing.then_some(target)
+}
+
 /// `/settings`' row: how many problems, sets, commands, agents and skills.
 pub(super) fn summary(loaded: &Loaded) -> String {
     let parts: Vec<String> = [
@@ -235,10 +266,10 @@ pub(super) fn summary(loaded: &Loaded) -> String {
 
 /// What the full screen says about `problems` at start and after `/reload`: the problem when
 /// there is one, else how many there are and where they are listed.
-pub(super) fn attention(problems: &[String]) -> Option<String> {
+pub(super) fn attention(problems: &[Problem]) -> Option<String> {
     match problems {
         [] => None,
-        [problem] => Some(problem.clone()),
+        [problem] => Some(problem.text.clone()),
         problems => Some(format!(
             "{} problems in what was loaded: see Installed in /settings",
             problems.len()
@@ -331,7 +362,10 @@ mod tests {
             ),
             problems: Vec::new(),
         };
-        let problems = ["settings: x: wrong".to_owned(), "skills: y".to_owned()];
+        let problems = [
+            Problem::in_settings("settings: x: wrong"),
+            Problem::new("skills: y"),
+        ];
         let loaded = Loaded {
             installed: &found,
             commands: commands.list(),
@@ -379,15 +413,17 @@ mod tests {
         assert_eq!(headings, [0, 3, 5, 8, 11, 13, 15]);
         assert_eq!(list.notes.len(), list.rows.len());
         assert_eq!(list.files.len(), list.rows.len());
-        // Enter opens the files of commands, agents, skills, context and settings files that
-        // exist; not those of headings, problems, sets or files not written yet.
+        // Enter opens the files of problems, commands, agents, skills, context and settings
+        // files that exist; not those of headings, problems without one, sets or files not
+        // written yet.
         let files: Vec<(usize, &Path)> = (list.files.iter().enumerate())
             .filter_map(|(at, file)| Some((at, file.as_deref()?)))
             .collect();
         assert_eq!(
             files,
             [
-                (6, set.join("commands/demo:greet.md").as_path()),
+                (1, settings.as_path()),
+                (6, &set.join("commands/demo:greet.md")),
                 (7, &set.join("commands/demo:inner.md")),
                 (9, &base.join("user/mine.md")),
                 (10, &set.join("agents/demo:helper.md")),
@@ -396,7 +432,8 @@ mod tests {
                 (16, &settings),
             ]
         );
-        assert_eq!(list.notes[1], "settings: x: wrong");
+        let opens = format!("settings: x: wrong\nEnter opens {}.", shown(&settings));
+        assert_eq!((&list.notes[1], &list.notes[2][..]), (&opens, "skills: y"));
         assert_eq!(
             list.notes[4],
             format!(
@@ -451,14 +488,75 @@ mod tests {
     }
 
     #[test]
+    fn a_problem_opens_its_file_or_offers_to_remove_a_link_that_leads_nowhere() {
+        let base = std::env::temp_dir().join(format!("scramjet-problems-{}", std::process::id()));
+        let _scratch = Scratch(base.clone());
+        let (file, link, gone) = (base.join("a.md"), base.join("b.md"), base.join("gone.md"));
+        write(&file, "x");
+        std::os::unix::fs::symlink(&gone, &link).unwrap();
+        let working = base.join("c.md");
+        std::os::unix::fs::symlink(&file, &working).unwrap();
+        assert_eq!(broken_link(&link), Some(gone.clone()));
+        for not_broken in [&file, &working, &gone] {
+            assert_eq!(broken_link(not_broken), None, "{not_broken:?}");
+        }
+        let problems = [
+            Problem::in_file("agents: a", &file),
+            Problem::in_file("agents: b", &link),
+            Problem::in_file("agents: gone", &gone),
+            Problem::in_settings("skills: listed"),
+            Problem::new("scramjet: directory"),
+        ];
+        let found = Installed {
+            sets: Vec::new(),
+            agents: Vec::new(),
+            context_files: Vec::new(),
+            autonomy: (base.join(".scramjet/autonomy.yaml"), None),
+            problems: Vec::new(),
+        };
+        let loaded = Loaded {
+            installed: &found,
+            commands: &[],
+            skills: &[],
+            settings: None,
+            problems: &problems,
+        };
+        let list = listing(&loaded);
+        let shown = |path: &Path| path.display().to_string();
+        assert_eq!(
+            (&list.files[1..6], &list.notes[1..6]),
+            (
+                &[Some(file.clone()), Some(link.clone()), None, None, None][..],
+                &[
+                    format!("agents: a\nEnter opens {}.", shown(&file)),
+                    "agents: b\nA link that leads nowhere: Enter removes it once you confirm."
+                        .to_owned(),
+                    "agents: gone".to_owned(),
+                    "skills: listed".to_owned(),
+                    "scramjet: directory".to_owned(),
+                ][..]
+            )
+        );
+        // With a settings file, what it lists opens it.
+        let settings = base.join("settings.json");
+        write(&settings, "{}");
+        let loaded = Loaded {
+            settings: Some(&settings),
+            ..loaded
+        };
+        assert_eq!(listing(&loaded).files[4], Some(settings));
+    }
+
+    #[test]
     fn launch_says_one_line_at_most() {
         assert_eq!(attention(&[]), None);
         assert_eq!(
-            attention(&["skills: y".into()]).as_deref(),
+            attention(&[Problem::new("skills: y")]).as_deref(),
             Some("skills: y")
         );
+        let three = ["a", "b", "c"].map(Problem::new);
         assert_eq!(
-            attention(&["a".into(), "b".into(), "c".into()]).as_deref(),
+            attention(&three).as_deref(),
             Some("3 problems in what was loaded: see Installed in /settings")
         );
     }

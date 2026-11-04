@@ -2014,25 +2014,28 @@ def installed_view(read, until, send, output):
     shown, on_screen = full_screen(120, 40)(read, output)
     rows = on_screen('\u2500' * 20)
     # One line about the problems, which /settings lists under Installed.
-    attention = '2 problems in what was loaded: see Installed in /settings'
+    attention = '3 problems in what was loaded: see Installed in /settings'
     assert attention in rows and not any('followUpMode' in row for row in rows), rows
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
     send(b'\x1b[A')
-    rows = on_screen('\u203a ' + setting('Installed', '2 problems \u00b7 2 command sets, 2 commands'))
+    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 2 command sets, 2 commands'))
     assert 'What this session loaded: command sets, commands, agents, skills' in rows[-2], rows
     send(b'\r')
     rows = on_screen('Installed  \u2191\u2193 move \u00b7 Enter edit \u00b7 Esc back')
     at = rows.index('  Needs attention')
     assert rows[at + 1].startswith('\u203a   settings: '), rows
-    assert rows[at + 2].startswith('    skills: skill path does not exist: '), rows
-    assert rows[at + 3] == '  Command sets', rows
-    assert rows[at + 4:at + 6] == ['    tools  global   ' + os.path.join(work, 'commands', 'tools'),
+    assert rows[at + 2].startswith('    agents: %s: failed to read agent file (No such file' % stale_agent), rows
+    assert rows[at + 3].startswith('    skills: skill path does not exist: '), rows
+    assert rows[at + 4] == '  Command sets', rows
+    assert rows[at + 5:at + 7] == ['    tools  global   ' + os.path.join(work, 'commands', 'tools'),
                                    '    demo   project  ' + os.path.join(project, '.scramjet', 'demo')], rows
-    # The note under the list says the whole problem, which the row cuts.
-    note = ' '.join(row.strip() for row in rows[-3:]).strip()
+    # The note under the list says the whole problem, which the row cuts, and that Enter opens the
+    # settings file, which has it.
+    note = ' '.join(row.strip() for row in rows[-4:]).strip()
     assert note.startswith('settings: ' + settings_path(listing)), rows
-    assert note.endswith('followUpMode must be "all" or "one-at-a-time"; ignored'), rows
+    assert note.endswith('followUpMode must be "all" or "one-at-a-time"; ignored Enter opens %s.'
+                         % settings_path(listing)), rows
     send(b'\x1b[F')
     project_file = os.path.join(project, '.scramjet', 'autonomy.yaml')
     rows = on_screen('\n  ' + project_file + '\n')
@@ -2052,13 +2055,33 @@ def installed_view(read, until, send, output):
     rows = on_screen('\u203a   /demo:greet  Greet someone kindly')
     assert 'Reloaded settings, command sets, agents, skills and context files' in rows, rows
     assert rows.count(attention) == 2, rows
+    # On a link that leads nowhere, it asks before removing the link; Escape keeps it.
+    rows = select_row(read, shown, send, 'agents: ', b'\x1b[A')
+    note = ' '.join(row.strip() for row in rows[-3:]).strip()
+    assert note.endswith('A link that leads nowhere: Enter removes it once you confirm.'), rows
+    send(b'\r')
+    rows = on_screen('Remove this broken link?')
+    assert '\u2192 Keep it' in rows and '  Remove ' + stale_agent in rows, rows
+    assert '     It leads to %s, which is not there. Only the link goes.' % stale_target in rows, rows
+    send(b'\x1b')
+    on_screen('Installed  \u2191\u2193 move')
+    assert os.path.islink(stale_agent)
+    send(b'\r')
+    on_screen('Remove this broken link?')
+    send(b'\x1b[B\r')
+    rows = on_screen('Removed %s, a link to %s' % (stale_agent, stale_target))
+    assert not os.path.lexists(stale_agent)
+    # What was loaded is read again, and the list no longer has it.
+    after = '2 problems in what was loaded: see Installed in /settings'
+    rows = on_screen(after)
+    assert not any(row.startswith('    agents: ') for row in rows), rows
     send(b'\x1b')
     on_screen('\u203a ' + setting('Installed', '2 problems'))
     send(b'\x1b')
     ending(read, output, ['\u2500' * 119, '>'], columns=120, rows=40)
     send(b'/reload\r')
     end = time.monotonic() + 10
-    while (rows := shown()).count(attention) < 3:
+    while (rows := shown()).count(after) < 2:
         assert time.monotonic() < end, rows
         read(.05)
     send(b'\x04')
@@ -2479,7 +2502,13 @@ with open(greet_edit, 'w') as script_file:
                       'sed -i "s/^description: Greet someone$/description: Greet someone kindly/" "$1"\n'
                       % greet_file)
 os.chmod(greet_edit, 0o755)
-run([], installed_view, variables={'XDG_CONFIG_HOME': listing, 'VISUAL': greet_edit}, columns=120, rows=40)
+stale_directory = os.path.join(work, 'agent-installed')
+stale_agent = os.path.join(stale_directory, 'agents', 'stale.md')
+stale_target = os.path.join(work, 'gone', 'stale.md')
+os.makedirs(os.path.dirname(stale_agent))
+os.symlink(stale_target, stale_agent)
+run([], installed_view, variables={'XDG_CONFIG_HOME': listing, 'VISUAL': greet_edit,
+                                   'SCRAMJET_CODING_AGENT_DIR': stale_directory}, columns=120, rows=40)
 assert 'description: Greet someone kindly\n' in open(greet_file).read()
 with open(greet_file, 'w') as file:
     file.write(greet_text)

@@ -19,6 +19,9 @@ const CONFIRM_DELETE: &str = "Delete session? Enter confirm · Esc cancel";
 const QUESTION_VISIBLE: usize = 8;
 /// Rows an option's label or description takes at most, as in Scramjet.
 const OPTION_ROWS: usize = 4;
+/// Rows the note under a list takes at most, enough for a long problem in `/settings`'
+/// Installed with what Enter does about it.
+const NOTE_ROWS: usize = 8;
 const DESCRIPTION_INDENT: &str = "     ";
 
 /// The columns a selector's row has, the mark after the current one included, as `lines` gives
@@ -535,7 +538,7 @@ impl Picker {
                 if let Some(note) = note {
                     under.push(String::new());
                     let note_width = width.saturating_sub(1).max(8) - 2;
-                    for row in wrapped(note, note_width) {
+                    for row in wrapped(note, note_width, NOTE_ROWS) {
                         under.push(format!("  {}{row}{}", style::MUTED, style::RESET));
                     }
                 }
@@ -866,7 +869,7 @@ fn option_rows(option: &Choice, selected: bool, recommended: bool, width: usize)
         (false, other) => format!("{other}{text}{RESET}"),
     };
     let mark = if selected { "→ " } else { "  " };
-    let mut rows: Vec<String> = wrapped(&option.label, width - 2)
+    let mut rows: Vec<String> = wrapped(&option.label, width - 2, OPTION_ROWS)
         .into_iter()
         .enumerate()
         .map(|(row, text)| style(format!("{}{text}", if row == 0 { mark } else { "  " }), ""))
@@ -878,25 +881,25 @@ fn option_rows(option: &Choice, selected: bool, recommended: bool, width: usize)
             false => description.clone(),
         };
         let width = width - DESCRIPTION_INDENT.len();
-        for text in wrapped(&text, width) {
+        for text in wrapped(&text, width, OPTION_ROWS) {
             rows.push(style(format!("{DESCRIPTION_INDENT}{text}"), MUTED));
         }
     }
     rows
 }
 
-/// `text` wrapped between words to `width` columns, in at most `OPTION_ROWS` rows, the last
-/// one ending with `…` when there is more.
-fn wrapped(text: &str, width: usize) -> Vec<String> {
+/// `text` wrapped between words to `width` columns, in at most `most` rows, the last one ending
+/// with `…` when there is more.
+fn wrapped(text: &str, width: usize, most: usize) -> Vec<String> {
     let mut rows = Vec::new();
     for line in text.lines() {
         let mut wrap = text::Wrap::new(width.max(1));
         let line = wrap.push(&text::printable(line)) + &wrap.finish();
         rows.extend(line.split('\n').map(str::to_owned));
     }
-    if rows.len() > OPTION_ROWS {
-        rows.truncate(OPTION_ROWS);
-        let last = &mut rows[OPTION_ROWS - 1];
+    if rows.len() > most {
+        rows.truncate(most);
+        let last = &mut rows[most - 1];
         *last = text::clip(&format!("{last}…"), width);
     }
     rows

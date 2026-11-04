@@ -2,7 +2,7 @@
 //! the settings' `commandSets` without being copied, as Pi installs a local path; `list` also
 //! shows the skills.
 use super::settings::Settings;
-use scramjet_rs::agent::{Inventory, Set, inventory, shortened};
+use scramjet_rs::agent::{Inventory, Problem, Set, inventory, shortened};
 use std::path::Path;
 
 pub(super) const USAGE: &str = "Usage: scramjet-rs install DIR | remove NAME|DIR | list";
@@ -30,8 +30,8 @@ fn install(directory: &Path) -> Result<(), String> {
         contents(&found, &set)
     );
     let directory = set.directory.display().to_string();
-    let concerned: Vec<&String> = (found.warnings.iter())
-        .filter(|warning| warning.contains(&directory))
+    let concerned: Vec<&Problem> = (found.warnings.iter())
+        .filter(|warning| warning.text.contains(&directory))
         .collect();
     print_warnings(&concerned);
     Ok(())
@@ -119,7 +119,7 @@ fn contents(found: &Inventory, set: &Set) -> String {
     format!("{}, {}", count(commands, "command"), count(agents, "agent"))
 }
 
-fn print_warnings(warnings: &[&String]) {
+fn print_warnings(warnings: &[&Problem]) {
     if warnings.is_empty() {
         return;
     }
@@ -127,7 +127,7 @@ fn print_warnings(warnings: &[&String]) {
     let home = std::env::home_dir().map(|home| format!("{}/", home.display()));
     for warning in warnings {
         match &home {
-            Some(home) if home != "/" => println!("  {}", warning.replace(home, "~/")),
+            Some(home) if home != "/" => println!("  {}", warning.text.replace(home, "~/")),
             _ => println!("  {warning}"),
         }
     }

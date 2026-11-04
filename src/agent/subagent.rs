@@ -6,7 +6,7 @@
 
 use super::{
     AgentError, AgentUi, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation,
-    MAX_STEPS, Skills, ToolDetail, Usage,
+    MAX_STEPS, Problem, Skills, ToolDetail, Usage,
     approvals::{self, Approvals},
     client::{self, ModelInfo},
     commands::{self, Sets},
@@ -96,6 +96,12 @@ pub(super) struct Definition {
     pub diagnostics: Vec<String>,
 }
 
+impl Definition {
+    fn problems(&self) -> impl Iterator<Item = Problem> {
+        (self.diagnostics.iter()).map(|text| Problem::in_file(text.clone(), &self.path))
+    }
+}
+
 /// Which loose agent directories a call uses, as Scramjet's `agentScope`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Scope {
@@ -134,7 +140,7 @@ pub(super) fn user_directory() -> Option<PathBuf> {
 #[derive(Debug, Default)]
 pub(super) struct Discovery {
     pub agents: Vec<Definition>,
-    pub diagnostics: Vec<String>,
+    pub diagnostics: Vec<Problem>,
 }
 
 /// As Scramjet's `discoverAgents`: the user's loose agents and those of the nearest
@@ -199,16 +205,16 @@ fn loose(
     directory: &Path,
     source: &'static str,
     sets: &Sets,
-    diagnostics: &mut Vec<String>,
+    diagnostics: &mut Vec<Problem>,
 ) -> Vec<Definition> {
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(error) => {
-            diagnostics.push(format!(
+            diagnostics.push(Problem::new(format!(
                 "{}: failed to read agent directory ({error})",
                 directory.display()
-            ));
+            )));
             return Vec::new();
         }
     };
@@ -239,14 +245,15 @@ fn loose(
             Ok(link) => format!(" (a broken link to {})", link.display()),
             Err(_) => String::new(),
         };
-        Some(Some(format!(
+        let text = format!(
             "skipping {source} agent {}{link}: names starting with \"{}:\" belong to the {} \
 command set {}",
             path.display(),
             set.name,
             set.origin.name(),
             set.directory.display()
-        )))
+        );
+        Some(Some(Problem::in_file(text, path)))
     };
     for path in files {
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
@@ -257,10 +264,8 @@ command set {}",
         let content = match std::fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) => {
-                diagnostics.push(format!(
-                    "{}: failed to read agent file ({error})",
-                    path.display()
-                ));
+                let text = format!("{}: failed to read agent file ({error})", path.display());
+                diagnostics.push(Problem::in_file(text, &path));
                 continue;
             }
         };
@@ -268,11 +273,11 @@ command set {}",
             Ok(agent) => match claimed(&agent.name, &path) {
                 Some(skipped) => diagnostics.extend(skipped),
                 None => {
-                    diagnostics.extend(agent.diagnostics.iter().cloned());
+                    diagnostics.extend(agent.problems());
                     agents.push(agent);
                 }
             },
-            Err(error) => diagnostics.push(error),
+            Err(error) => diagnostics.push(Problem::in_file(error, &path)),
         }
     }
     agents
@@ -280,7 +285,7 @@ command set {}",
 
 /// The agents of `sets`, as Scramjet's `buildAgentRegistry`: `<set>/agents/<set>:<name>.md`,
 /// the first of a name kept.
-pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<String>) -> Vec<Definition> {
+pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<Problem>) -> Vec<Definition> {
     let mut agents: Vec<Definition> = Vec::new();
     for set in sets.list() {
         let scope = set.origin.name();
@@ -297,7 +302,9 @@ pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<String>) -> Vec<Defi
         for path in files {
             let file = path.file_name().unwrap_or_default().to_string_lossy();
             let prefix = format!("{}:", set.name);
-            let skipping = |error: String| format!("skipping agent {}: {error}", path.display());
+            let skipping = |error: String| {
+                Problem::in_file(format!("skipping agent {}: {error}", path.display()), &path)
+            };
             let Some(stem) = file.strip_suffix(".md") else {
                 diagnostics.push(skipping(format!("{file}: not a markdown file")));
                 continue;
@@ -325,15 +332,16 @@ pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<String>) -> Vec<Defi
                 }
             };
             if let Some(existing) = agents.iter().find(|known| known.name == agent.name) {
-                diagnostics.push(format!(
+                let text = format!(
                     "skipping {scope} agent {} at {}: name already registered from {}",
                     agent.name,
                     path.display(),
                     existing.path.display()
-                ));
+                );
+                diagnostics.push(Problem::in_file(text, &path));
                 continue;
             }
-            diagnostics.extend(agent.diagnostics.iter().cloned());
+            diagnostics.extend(agent.problems());
             agents.push(agent);
         }
     }
@@ -1298,7 +1306,7 @@ fn run_child(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::tests::ScratchDir;
+    use crate::agent::{ProblemFile, tests::ScratchDir};
 
     fn write(path: &Path, content: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1432,7 +1440,15 @@ mod tests {
                 .collect();
             (agents, discovery.diagnostics)
         };
+        let texts = |problems: Vec<Problem>| -> Vec<String> {
+            problems.into_iter().map(|problem| problem.text).collect()
+        };
         let (user_scope, diagnostics) = found(Scope::User);
+        // Each is about its file, the broken link's too, which `/settings` offers to remove.
+        let gone = Some(ProblemFile::Path(user.join("mach12:gone.md")));
+        assert!(diagnostics.iter().any(|problem| problem.file == gone));
+        assert!(diagnostics.iter().all(|problem| problem.file.is_some()));
+        let diagnostics = texts(diagnostics);
         assert_eq!(
             user_scope,
             [

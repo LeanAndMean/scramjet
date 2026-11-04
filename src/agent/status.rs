@@ -703,7 +703,7 @@ pub(super) fn route(
 ) -> Routing {
     let source = completed.command.clone();
     let report = &completed.report;
-    let mut notices = edges.diagnostics.clone();
+    let mut notices: Vec<String> = edges.diagnostics.iter().map(|d| d.text.clone()).collect();
     let policy = commands
         .get(&source)
         .and_then(|command| command.next.as_ref());

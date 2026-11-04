@@ -1445,16 +1445,22 @@ fn installed_says_where_each_comes_from_and_what_is_wrong() {
     assert_eq!(
         found.problems,
         [
-            format!(
-                "agents: skipping user agent {} (a broken link to {}): names starting with \
-                 \"demo:\" belong to the project command set {}",
-                user.join("demo:old.md").display(),
-                root.join("gone.md").display(),
-                set.display()
+            Problem::in_file(
+                format!(
+                    "agents: skipping user agent {} (a broken link to {}): names starting with \
+                     \"demo:\" belong to the project command set {}",
+                    user.join("demo:old.md").display(),
+                    root.join("gone.md").display(),
+                    set.display()
+                ),
+                &user.join("demo:old.md")
             ),
-            format!(
-                "scramjet: project ({}): unknown source command \"demo:gone\"",
-                autonomy.display()
+            Problem::in_file(
+                format!(
+                    "scramjet: project ({}): unknown source command \"demo:gone\"",
+                    autonomy.display()
+                ),
+                &autonomy
             ),
         ]
     );

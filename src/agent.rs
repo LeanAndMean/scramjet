@@ -14,6 +14,7 @@ mod image;
 mod instructions;
 mod messages;
 mod pricing;
+mod problem;
 mod publish;
 mod question;
 mod rates;
@@ -38,6 +39,7 @@ pub use client::StreamProgress;
 pub use commands::{Command, Commands, Origin, Set, Sets};
 pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
+pub use problem::{Problem, ProblemFile};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
 pub use session::{Branch, Removal, Session, SessionInfo, read_branch};
@@ -388,7 +390,7 @@ pub struct Agent {
     attached: Option<Attached>,
     /// Scramjet's global `autonomy.yaml`, and what was last said about the files.
     autonomy: Option<PathBuf>,
-    autonomy_diagnostics: Vec<String>,
+    autonomy_diagnostics: Vec<Problem>,
     /// Where subagents are found: the user's agent directory and the command sets.
     agents_directory: Option<PathBuf>,
     /// Where the user's approvals of project agents are remembered.
@@ -453,7 +455,7 @@ pub struct Installed {
     pub autonomy: (PathBuf, Option<PathBuf>),
     /// What is wrong in the sets, commands, agents, skills and `autonomy.yaml` files, each
     /// saying which: `scramjet: `, `agents: ` or `skills: ` first.
-    pub problems: Vec<String>,
+    pub problems: Vec<Problem>,
 }
 
 /// An agent a subagent call can name.
@@ -481,7 +483,7 @@ pub struct Inventory {
     /// Every agent a subagent call could name, with its file.
     pub agents: Vec<(String, PathBuf)>,
     /// Why sets, commands and agent files were skipped.
-    pub warnings: Vec<String>,
+    pub warnings: Vec<Problem>,
     pub skills: Skills,
 }
 
@@ -853,16 +855,14 @@ impl Agent {
             .collect();
         let (global, root) = (self.autonomy.as_deref(), &self.config.root);
         let edges = autonomy::Edges::load(global, root, &self.commands);
-        let mut problems: Vec<String> = (self.commands.warnings().iter())
-            .map(|warning| format!("scramjet: {warning}"))
-            .collect();
-        problems.extend(discovery.diagnostics.iter().map(|d| format!("agents: {d}")));
-        problems.extend(
-            self.skills
-                .warnings()
-                .iter()
-                .map(|w| format!("skills: {w}")),
-        );
+        let prefixed = |problems: &[Problem], prefix: &str| {
+            (problems.iter())
+                .map(|problem| problem.clone().prefixed(prefix))
+                .collect::<Vec<_>>()
+        };
+        let mut problems = prefixed(self.commands.warnings(), "scramjet: ");
+        problems.extend(prefixed(&discovery.diagnostics, "agents: "));
+        problems.extend(prefixed(self.skills.warnings(), "skills: "));
         problems.extend(edges.diagnostics);
         Installed {
             sets: self.sets.list().to_vec(),

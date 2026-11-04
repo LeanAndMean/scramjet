@@ -6,6 +6,7 @@
 //! suggests, which hold once the user applies them. `/settings` shows the edges of each
 //! command's next steps (`NextSteps`) and its publications (`Approvals`), and changes them.
 
+use super::Problem;
 use super::commands::{Commands, Policy};
 use super::tools::{shortened, write_replacing};
 use std::path::{Path, PathBuf};
@@ -64,7 +65,7 @@ pub(super) struct Edges {
     layers: Vec<Layer>,
     /// Why a file was not used (then, as in Scramjet, neither is), and the commands a file names
     /// that are not registered.
-    pub diagnostics: Vec<String>,
+    pub diagnostics: Vec<Problem>,
 }
 
 /// The project's file, under its `root`.
@@ -90,7 +91,10 @@ impl Edges {
         let mut invalid = false;
         for (scope, path) in [("project", Some(project.as_path())), ("global", global)] {
             let Some(path) = path else { continue };
-            let note = |message: &str| format!("scramjet: {scope} ({}): {message}", path.display());
+            let note = |message: &str| {
+                let text = format!("scramjet: {scope} ({}): {message}", path.display());
+                Problem::in_file(text, path)
+            };
             let ignored =
                 |message: &str| note(&format!("{message}; edge settings ignored this dispatch"));
             match read(path, scope == "project") {
@@ -838,14 +842,12 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n",
         std::fs::write(&global, "edges:\n  rs:loop:\n    rs:loop: always\n").unwrap();
         let edges = Edges::load(Some(&global), root, &commands());
         assert_eq!(edges.resolve("rs:loop", "rs:loop"), None);
-        assert_eq!(
-            edges.diagnostics,
-            [format!(
-                "scramjet: global ({}): autonomy.yaml: invalid edge setting always for rs:loop → \
+        let text = format!(
+            "scramjet: global ({}): autonomy.yaml: invalid edge setting always for rs:loop → \
 rs:loop; edge settings ignored this dispatch",
-                global.display()
-            )]
+            global.display()
         );
+        assert_eq!(edges.diagnostics, [Problem::in_file(text, &global)]);
         // Without files there are no edges.
         let edges = Edges::load(None, &root.join("none"), &commands());
         assert_eq!(
@@ -1069,13 +1071,8 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
         );
         let commands = Commands::discover(&super::super::Sets::find(&[], None, &root.join("sets")));
         let defaults = root.join("sets/rs/autonomy-defaults.yaml");
-        assert_eq!(
-            commands.warnings(),
-            [format!(
-                "{}: unknown source command \"rs:gone\"",
-                defaults.display()
-            )]
-        );
+        let text = format!("{}: unknown source command \"rs:gone\"", defaults.display());
+        assert_eq!(commands.warnings(), [Problem::in_file(text, &defaults)]);
         let global = root.join("config/autonomy.yaml");
         let project = root.join(".scramjet/autonomy.yaml");
         file(
@@ -1334,14 +1331,13 @@ publications:\n  rs:old:\n    create_pr: auto-approve\n",
         .unwrap();
         let edges = Edges::load(Some(&global), root, &commands());
         let prefix = format!("scramjet: global ({}): ", global.display());
-        assert_eq!(
-            edges.diagnostics,
-            [
-                format!("{prefix}unknown source command \"rs:gone\""),
-                format!("{prefix}unknown target command \"rs:old\" (in rs:loop)"),
-                format!("{prefix}unknown publication command \"rs:old\""),
-            ]
-        );
+        let texts = [
+            "unknown source command \"rs:gone\"",
+            "unknown target command \"rs:old\" (in rs:loop)",
+            "unknown publication command \"rs:old\"",
+        ];
+        let problems = texts.map(|text| Problem::in_file(format!("{prefix}{text}"), &global));
+        assert_eq!(edges.diagnostics, problems);
         // The file is still used.
         assert_eq!(edges.resolve("rs:gone", "rs:loop"), Some(Edge::Chain));
     }

@@ -3,6 +3,7 @@
 //! directory. A prompt `/<set>:<command> args` runs one of their commands as Scramjet sends it:
 //! the arguments are substituted into the body and the result is wrapped in `<scramjet-command>`.
 
+use super::Problem;
 use super::autonomy::{self, Publication, Publications, Suggestion};
 use std::{
     fs,
@@ -70,7 +71,7 @@ impl Set {
 #[derive(Clone, Debug, Default)]
 pub struct Sets {
     list: Vec<Set>,
-    warnings: Vec<String>,
+    warnings: Vec<Problem>,
 }
 
 impl Sets {
@@ -83,17 +84,17 @@ impl Sets {
         for directory in installed {
             match Set::at(directory, Origin::Installed) {
                 Ok(set) => match sets.list.iter().find(|known| known.name == set.name) {
-                    Some(known) => sets.warnings.push(format!(
+                    Some(known) => sets.warnings.push(Problem::in_settings(format!(
                         "skipping installed command set {}: {} is installed from {}",
                         directory.display(),
                         set.name,
                         known.directory.display()
-                    )),
+                    ))),
                     None => sets.list.push(set),
                 },
-                Err(error) => sets
-                    .warnings
-                    .push(format!("skipping installed command set: {error}")),
+                Err(error) => (sets.warnings).push(Problem::in_settings(format!(
+                    "skipping installed command set: {error}"
+                ))),
             }
         }
         let installed = sets.list.len();
@@ -107,13 +108,13 @@ impl Sets {
                     .iter()
                     .find(|known| known.name == set.name)
                 {
-                    Some(known) => sets.warnings.push(format!(
+                    Some(known) => sets.warnings.push(Problem::new(format!(
                         "skipping {} command set {}: {} is installed from {}",
                         origin.name(),
                         set.directory.display(),
                         set.name,
                         known.directory.display()
-                    )),
+                    ))),
                     None => sets.list.push(set),
                 }
             }
@@ -132,7 +133,7 @@ impl Sets {
     }
 
     /// Why sets were skipped.
-    pub fn warnings(&self) -> &[String] {
+    pub fn warnings(&self) -> &[Problem] {
         &self.warnings
     }
 
@@ -192,7 +193,7 @@ pub(super) struct Candidate {
 #[derive(Clone, Debug, Default)]
 pub struct Commands {
     list: Vec<Command>,
-    warnings: Vec<String>,
+    warnings: Vec<Problem>,
     /// Whether their publications ask first, from their sets' `autonomy-defaults.yaml`.
     publications: Publications,
     /// What follows their next steps as their sets suggest it there: source, target (`*`: any
@@ -228,21 +229,31 @@ impl Commands {
             let directory = set.directory.join("commands");
             for (file, content) in command_files(&directory) {
                 let path = directory.join(&file);
-                let command = match parse(&set.name, &file, &content, &mut found.warnings) {
-                    Ok(command) => Command { path, ..command },
+                let mut notices = Vec::new();
+                let parsed = parse(&set.name, &file, &content, &mut notices);
+                let in_file = |text| Problem::in_file(text, &path);
+                found.warnings.extend(notices.into_iter().map(in_file));
+                let command = match parsed {
+                    Ok(command) => Command {
+                        path: path.clone(),
+                        ..command
+                    },
                     Err(error) => {
-                        let path = path.display();
-                        found.warnings.push(format!("skipping {path}: {error}"));
+                        let text = format!("skipping {}: {error}", path.display());
+                        found.warnings.push(Problem::in_file(text, &path));
                         continue;
                     }
                 };
                 match found.list.iter().find(|known| known.name == command.name) {
-                    Some(known) => found.warnings.push(format!(
-                        "skipping {} command {} at {}: name already registered from {}",
-                        set.origin.name(),
-                        command.name,
-                        command.path.display(),
-                        known.path.display()
+                    Some(known) => found.warnings.push(Problem::in_file(
+                        format!(
+                            "skipping {} command {} at {}: name already registered from {}",
+                            set.origin.name(),
+                            command.name,
+                            command.path.display(),
+                            known.path.display()
+                        ),
+                        &path,
                     )),
                     None => found.list.push(command),
                 }
@@ -265,24 +276,23 @@ impl Commands {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
             Err(error) => {
-                (self.warnings).push(format!("could not read {}: {error}", path.display()));
-                return;
+                let text = format!("could not read {}: {error}", path.display());
+                return self.warnings.push(Problem::in_file(text, &path));
             }
         };
         let mut warnings = Vec::new();
         let (edges, defaults) = match autonomy::defaults(&text, &mut warnings) {
             Ok(defaults) => defaults,
             Err(error) => {
-                (self.warnings).push(format!("could not parse {}: {error}", path.display()));
-                return;
+                let text = format!("could not parse {}: {error}", path.display());
+                return self.warnings.push(Problem::in_file(text, &path));
             }
         };
         let shown = path.display();
         warnings.extend(autonomy::unknown_in_edges(&edges, self));
         self.warnings.extend(
-            warnings
-                .into_iter()
-                .map(|warning| format!("{shown}: {warning}")),
+            (warnings.into_iter())
+                .map(|warning| Problem::in_file(format!("{shown}: {warning}"), &path)),
         );
         for (source, targets) in edges {
             for (target, edge) in targets {
@@ -298,8 +308,12 @@ impl Commands {
                 !command.delegate_only && command.path.starts_with(&set.directory)
             });
             let Some(command) = command else {
-                self.warnings.push(format!(
-                    "{shown}: ignored publication defaults for non-owned top-level command \"{name}\""
+                self.warnings.push(Problem::in_file(
+                    format!(
+                        "{shown}: ignored publication defaults for non-owned top-level command \
+                         \"{name}\""
+                    ),
+                    &path,
                 ));
                 continue;
             };
@@ -309,8 +323,11 @@ impl Commands {
             let (kept, undeclared): (Vec<_>, Vec<_>) =
                 tools.into_iter().partition(|(tool, _)| declared(tool));
             for (tool, _) in undeclared {
-                self.warnings.push(format!(
-                    "{shown}: ignored publication default for undeclared tool {name} → {tool}"
+                self.warnings.push(Problem::in_file(
+                    format!(
+                        "{shown}: ignored publication default for undeclared tool {name} → {tool}"
+                    ),
+                    &path,
                 ));
             }
             if !kept.is_empty() {
@@ -339,7 +356,7 @@ impl Commands {
     }
 
     /// Why command files were skipped, as Scramjet warns about them.
-    pub fn warnings(&self) -> &[String] {
+    pub fn warnings(&self) -> &[Problem] {
         &self.warnings
     }
 
@@ -789,6 +806,7 @@ fn split_number(text: &str) -> Option<(usize, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::ProblemFile;
 
     /// A scratch directory removed when dropped, also when a test panics.
     struct Scratch(PathBuf);
@@ -859,28 +877,29 @@ mod tests {
             ]
         );
         let shown = |path: &str| scratch.0.join(path).display().to_string();
+        // The settings list the installed ones, so the problem is there.
         assert_eq!(
             sets.warnings(),
             [
-                format!(
+                Problem::in_settings(format!(
                     "skipping installed command set {}: mach12 is installed from {}",
                     shown("installed/../elsewhere/mach12"),
                     shown("installed/mach12")
-                ),
-                format!(
+                )),
+                Problem::in_settings(format!(
                     "skipping installed command set: {} does not exist",
                     shown("installed/missing")
-                ),
-                format!(
+                )),
+                Problem::in_settings(format!(
                     "skipping installed command set: {} is not a command set: it has no commands \
 or agents directory",
                     shown("installed/empty")
-                ),
-                format!(
+                )),
+                Problem::new(format!(
                     "skipping global command set {}: mach12 is installed from {}",
                     shown("global/mach12"),
                     shown("installed/mach12")
-                ),
+                )),
             ]
         );
         assert_eq!(
@@ -940,20 +959,27 @@ or agents directory",
         let skipped = |file: &str, set: &str| {
             let path = global.join(format!("{set}/commands/{file}"));
             let error = format!("{file}: filename must start with \"{set}:\"");
-            format!("skipping {}: {error}", path.display())
+            Problem::in_file(format!("skipping {}: {error}", path.display()), &path)
         };
+        let project_review = project.join("rs/commands/rs:review.md");
         assert_eq!(
             commands.warnings(),
             [
                 skipped("rs:wrong-set.md", "other"),
                 skipped("notes.md", "rs"),
-                "rs:odd.md: \"delegate-only\" must be exactly true when present (got \"yes\"; \
- treated as absent)"
-                    .into(),
-                format!(
-                    "skipping project command rs:review at {}: name already registered from {}",
-                    project.join("rs/commands/rs:review.md").display(),
-                    review.path.display()
+                Problem::in_file(
+                    "rs:odd.md: \"delegate-only\" must be exactly true when present (got \
+                     \"yes\"; treated as absent)",
+                    &global.join("rs/commands/rs:odd.md")
+                ),
+                Problem::in_file(
+                    format!(
+                        "skipping project command rs:review at {}: name already registered from \
+                         {}",
+                        project_review.display(),
+                        review.path.display()
+                    ),
+                    &project_review
                 ),
             ]
         );
@@ -1020,11 +1046,18 @@ other:x:\n    create_pr: auto-approve\n  rs:gone:\n    create_pr: auto-approve\n
         let rs = file("rs").display().to_string();
         let (first, rest) = commands.warnings().split_at(1);
         assert!(
-            first[0].starts_with(&format!("could not parse {}: ", file("other").display())),
+            (first[0].text).starts_with(&format!("could not parse {}: ", file("other").display())),
             "{first:?}"
         );
+        assert_eq!(first[0].file, Some(ProblemFile::Path(file("other"))));
+        assert!(
+            rest.iter()
+                .all(|w| w.file == Some(ProblemFile::Path(file("rs"))))
+        );
         assert_eq!(
-            rest,
+            rest.iter()
+                .map(|warning| warning.text.clone())
+                .collect::<Vec<_>>(),
             [
                 format!(
                     "{rs}: ignored publication default for undeclared tool rs:post → create_pr"

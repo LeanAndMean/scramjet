@@ -8,8 +8,8 @@ use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
 use super::{editor, footer, installed, scope, select, settings, style};
 use scramjet_rs::agent::{
-    Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Source,
-    Step, Suggested,
+    Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Problem,
+    Source, Step, Suggested,
 };
 use std::{
     io::{BufRead, IsTerminal},
@@ -528,9 +528,9 @@ impl Interactive {
     }
 
     /// What is wrong in the settings, then in what the session `found` (`Agent::installed`).
-    pub(super) fn problems(&self, found: &Installed) -> Vec<String> {
+    pub(super) fn problems(&self, found: &Installed) -> Vec<Problem> {
         (self.settings.warnings.iter())
-            .map(|warning| format!("settings: {warning}"))
+            .map(|warning| Problem::in_settings(format!("settings: {warning}")))
             .chain(found.problems.iter().cloned())
             .collect()
     }
@@ -541,7 +541,7 @@ impl Interactive {
         let problems = self.problems(&self.agent.installed());
         match self.screen {
             Some(_) => installed::attention(&problems).into_iter().collect(),
-            None => problems,
+            None => problems.into_iter().map(|problem| problem.text).collect(),
         }
     }
 

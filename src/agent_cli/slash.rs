@@ -9,8 +9,9 @@ use super::terminal::{self, Terminal};
 use super::text::{clip, one_line};
 use super::{clipboard, editor, export, installed, select, style, tree};
 use scramjet_rs::agent::{
-    Agent, AgentError, Approval, Approvals, CODING_TOOLS, Edge, Installed, Navigated, NextStep,
-    NextSteps, Publication, Removal, Scope, SessionInfo, Setting, search_program, shortened,
+    Agent, AgentError, Approval, Approvals, CODING_TOOLS, Choice, Edge, Installed, Navigated,
+    NextStep, NextSteps, Problem, Publication, Removal, Scope, SessionInfo, Setting,
+    search_program, shortened,
 };
 use std::{
     io::IsTerminal,
@@ -850,7 +851,8 @@ impl Interactive {
 
     /// What the session loaded, each with where it comes from, under headings, the problems
     /// first; the notes say more, and Enter opens a row's file in the user's editor
-    /// (`edit_installed`), the list then showing that file's row again.
+    /// (`edit_installed`), the list then showing that file's row again, or, for a link that
+    /// leads nowhere, offers to remove it (`remove_link`).
     fn show_installed(&mut self) {
         let mut at = 0;
         let mut edited: Option<PathBuf> = None;
@@ -882,8 +884,13 @@ impl Interactive {
             };
             at = index;
             if let Some(file) = &listing.files[index] {
-                self.edit_installed(file);
-                edited = Some(file.clone());
+                match installed::broken_link(file) {
+                    Some(target) => self.remove_link(file, &target),
+                    None => {
+                        self.edit_installed(file);
+                        edited = Some(file.clone());
+                    }
+                }
             }
         }
     }
@@ -911,7 +918,50 @@ impl Interactive {
         }
     }
 
-    fn loaded<'a>(&'a self, found: &'a Installed, problems: &'a [String]) -> installed::Loaded<'a> {
+    /// Removes the link `file`, which leads to `target`, once the user confirms and while it
+    /// still leads nowhere, then reads what was loaded again as `edit_installed` does.
+    fn remove_link(&mut self, file: &Path, target: &Path) {
+        let Some(screen) = &self.screen else {
+            return;
+        };
+        let shown = |path: &Path| shortened(&path.display().to_string());
+        let (link, target) = (shown(file), shown(target));
+        let choices = [
+            Choice {
+                label: "Keep it".to_owned(),
+                description: None,
+                value: String::new(),
+            },
+            Choice {
+                label: format!("Remove {link}"),
+                description: Some(format!(
+                    "It leads to {target}, which is not there. Only the link goes."
+                )),
+                value: String::new(),
+            },
+        ];
+        let question = select::Picker::question("Remove this broken link?", &choices, None);
+        if screen.pick(question.held()) != Some(1) {
+            return;
+        }
+        if installed::broken_link(file).is_none() {
+            return self.say(&format!("{link} no longer leads nowhere; left as it is"));
+        }
+        if let Err(error) = std::fs::remove_file(file) {
+            return self.say(&format!("error: {link} not removed: {error}"));
+        }
+        self.say(&self.ui.dim(&format!("Removed {link}, a link to {target}")));
+        match self.in_turn {
+            true => self.say(&self.ui.dim("Run /reload once the turn ends")),
+            false => self.reload(),
+        }
+    }
+
+    fn loaded<'a>(
+        &'a self,
+        found: &'a Installed,
+        problems: &'a [Problem],
+    ) -> installed::Loaded<'a> {
         installed::Loaded {
             installed: found,
             commands: self.agent.commands().list(),

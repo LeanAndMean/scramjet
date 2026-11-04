@@ -1,6 +1,7 @@
 //! Skills, as Pi loads them (Scramjet's `docs/skills.md`): a directory with a `SKILL.md`, or a
 //! `.md` file at the top of a `.scramjet/skills` directory. The instructions list them for the
 //! model to read when a task matches, and `/skill:<name> args` sends one's instructions.
+use super::Problem;
 use super::commands::split_frontmatter;
 use std::{
     collections::HashSet,
@@ -26,7 +27,7 @@ pub struct Skill {
 #[derive(Clone, Debug, Default)]
 pub struct Skills {
     list: Vec<Skill>,
-    warnings: Vec<String>,
+    warnings: Vec<Problem>,
 }
 
 /// A place skills are looked for.
@@ -96,13 +97,13 @@ impl Skills {
                     vec![path.clone()]
                 }
                 Place::Listed if path.exists() => {
-                    let shown = path.display();
-                    (found.warnings).push(format!("skill path is not a markdown file: {shown}"));
+                    let text = format!("skill path is not a markdown file: {}", path.display());
+                    found.warnings.push(Problem::in_settings(text));
                     continue;
                 }
                 Place::Listed => {
-                    let shown = path.display();
-                    (found.warnings).push(format!("skill path does not exist: {shown}"));
+                    let text = format!("skill path does not exist: {}", path.display());
+                    found.warnings.push(Problem::in_settings(text));
                     continue;
                 }
             };
@@ -111,15 +112,22 @@ impl Skills {
                 if !loaded.insert(file.canonicalize().unwrap_or_else(|_| file.clone())) {
                     continue;
                 }
-                let Some(skill) = load_skill(&file, &mut found.warnings) else {
+                let mut warnings = Vec::new();
+                let loaded = load_skill(&file, &mut warnings);
+                let in_file = |text| Problem::in_file(text, &file);
+                found.warnings.extend(warnings.into_iter().map(in_file));
+                let Some(skill) = loaded else {
                     continue;
                 };
                 match found.list.iter().find(|known| known.name == skill.name) {
-                    Some(known) => found.warnings.push(format!(
-                        "skipping skill {} at {}: name already loaded from {}",
-                        skill.name,
-                        file.display(),
-                        known.path.display()
+                    Some(known) => found.warnings.push(Problem::in_file(
+                        format!(
+                            "skipping skill {} at {}: name already loaded from {}",
+                            skill.name,
+                            file.display(),
+                            known.path.display()
+                        ),
+                        &file,
                     )),
                     None => found.list.push(skill),
                 }
@@ -142,7 +150,7 @@ impl Skills {
     }
 
     /// Why skill files were skipped, and where they break the standard's rules.
-    pub fn warnings(&self) -> &[String] {
+    pub fn warnings(&self) -> &[Problem] {
         &self.warnings
     }
 
@@ -329,7 +337,7 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::ScratchDir;
+    use super::super::{ProblemFile, tests::ScratchDir};
     use super::*;
 
     fn scratch(name: &str) -> ScratchDir {
@@ -478,9 +486,28 @@ mod tests {
         let (malformed, warnings) = found.warnings().split_first().unwrap();
         let bad = shown(agents.join("bad/SKILL.md"));
         assert!(
-            malformed.starts_with(&format!("skipping skill {bad}: malformed frontmatter — ")),
+            (malformed.text)
+                .starts_with(&format!("skipping skill {bad}: malformed frontmatter — ")),
             "{malformed}"
         );
+        assert_eq!(
+            malformed.file,
+            Some(ProblemFile::Path(agents.join("bad/SKILL.md")))
+        );
+        // What the settings list is a problem there.
+        let files: Vec<_> = warnings
+            .iter()
+            .map(|warning| warning.file.clone())
+            .collect();
+        let none = Some(ProblemFile::Path(agents.join("none/SKILL.md")));
+        assert_eq!(
+            (&files[0], files.last().unwrap()),
+            (&none, &Some(ProblemFile::Settings))
+        );
+        let warnings: Vec<&str> = warnings
+            .iter()
+            .map(|warning| warning.text.as_str())
+            .collect();
         assert_eq!(
             warnings,
             [
