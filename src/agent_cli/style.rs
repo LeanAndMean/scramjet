@@ -120,6 +120,10 @@ pub const SEARCH_CURSOR: &str = "\x1b[7m";
 pub const COMPLETION_SELECTED: &str = "\x1b[36m";
 /// The mark after the current session or model in a selector.
 pub const CURRENT: &str = "\x1b[32m";
+/// In `/resume`, the current session's prompt or name, and other sessions' names, in Scramjet's
+/// accent and warning colors.
+pub const SESSION_CURRENT: &str = "\x1b[36m";
+pub const SESSION_NAMED: &str = "\x1b[33m";
 /// A model `/scoped-models` has on, and one it has off.
 pub const MODEL_ON: &str = "\x1b[32m";
 pub const MODEL_OFF: &str = "\x1b[2m";

@@ -50,6 +50,8 @@ pub(super) enum Key {
     AltUp,
     /// Down, but in `/scoped-models`, where it moves a model down.
     AltDown,
+    /// Ctrl+N: Down, but in `/resume`, where it shows only the named sessions, as in Scramjet.
+    CtrlN,
     PageUp,
     PageDown,
     LineStart,
@@ -141,7 +143,7 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
         7 => Key::External,
         11 => Key::KillEnd,
         12 => Key::SelectModel,
-        14 => Key::Down,
+        14 => Key::CtrlN,
         15 => Key::Expand,
         16 => Key::CycleModel(true),
         18 => Key::Rename,
@@ -1094,7 +1096,7 @@ impl Editor {
         let key = match key {
             Key::AltEnter => Key::NewLine,
             Key::AltUp => Key::Up,
-            Key::AltDown => Key::Down,
+            Key::AltDown | Key::CtrlN => Key::Down,
             key => key,
         };
         let Draft {

@@ -1841,7 +1841,7 @@ def manage_sessions(read, until, send, output):
     send(b'mango second\r')
     on_screen('Mango reply.')
     send(b'/resume\r')
-    on_screen('Resume session  \u2191\u2193 move \u00b7 Enter select \u00b7 Ctrl+R rename \u00b7 Ctrl+D delete')
+    on_screen('Resume session (threaded)  Ctrl+S sort \u00b7 Ctrl+N named \u00b7 Ctrl+P path \u00b7 Ctrl+R rename')
     send(b'kiwi')
     on_screen('\u203a kiwi first (2 items, now)')
     # Ctrl+R renames the selected session; the list comes back with its query.
@@ -1850,6 +1850,32 @@ def manage_sessions(read, until, send, output):
     send(b'Kiwi work\r')
     rows = on_screen('\u203a Kiwi work (2 items, now)')
     assert '> kiwi' in rows, rows
+    # As in Scramjet, Ctrl+N shows only the named sessions, Ctrl+S sorts them another way and
+    # Ctrl+P shows their paths; the query and the selected session stay.
+    send(b'\x0e')
+    rows = on_screen('Resume session (named, threaded)')
+    assert '\u203a Kiwi work (2 items, now)' in rows and '> kiwi' in rows, rows
+    send(b'\x7f' * 4 + b'\x13')
+    rows = on_screen('Resume session (named, recent)')
+    listed = rows[[row.startswith('Resume session') for row in rows].index(True):]
+    assert '\u203a Kiwi work (2 items, now)' in listed, rows
+    assert not any('mango second' in row for row in listed), rows
+    send(b'\x0e')
+    rows = on_screen('Resume session (recent)')
+    assert '\u203a Kiwi work (2 items, now)' in rows and '  mango second (2 items, now) \u2713' in rows, rows
+    send(b'\x10')
+    # The path, cut at its start, after the count and age.
+    rows = on_screen('(2 items, now) \u2026')
+    (selected,) = [row for row in rows if row.startswith('\u203a')]
+    assert selected.startswith('\u203a Kiwi work (2 items, now) ') and selected.endswith('.jsonl'), rows
+    assert len(selected) == 99, selected
+    send(b'\x10\x13')
+    on_screen('Resume session (relevance)')
+    on_screen('(2 items, now) \u2026', gone=True)
+    send(b'\x13kiwi')
+    rows = on_screen('Resume session (threaded)')
+    on_screen('> kiwi')
+    rows = on_screen('\u203a Kiwi work (2 items, now)')
     # Ctrl+D asks first; Escape keeps it, Enter deletes it, to the trash.
     send(b'\x04')
     on_screen('Delete session? Enter confirm \u00b7 Esc cancel')

@@ -56,6 +56,17 @@ pub(super) enum Act {
     Save,
 }
 
+/// How the session list's keys ask to show it, as in Scramjet's session selector.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Toggle {
+    /// Ctrl+S: the next order.
+    Sort,
+    /// Ctrl+N: only the named sessions, or all again.
+    Named,
+    /// Ctrl+P: with the sessions' paths, or without.
+    Paths,
+}
+
 /// Where a list was when one of its own keys ended it, so that it shows again there.
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct Spot {
@@ -155,6 +166,8 @@ pub(super) enum Picked {
     /// The row chosen with Enter; `None`: cancelled.
     Row(Option<usize>),
     Act(Act, usize, Spot),
+    /// One of the session list's keys (`Picker::acting`), whatever row is selected.
+    Toggle(Toggle, Spot),
     /// Tab, in a list that shows one of two sets of rows (`Picker::tabbing`).
     Tab(Spot),
     /// Shift+L in `/tree`, to label the entry, an index into the tree's entries.
@@ -170,7 +183,7 @@ pub(super) struct Picker {
     deadline: Option<Instant>,
     /// Stays shown once answered, until the session shows another list or none.
     held: bool,
-    /// Whether Ctrl+R and Ctrl+D act on the selected row (`acting`).
+    /// Whether the session list's keys do (`acting`).
     acts: bool,
     /// Whether `/scoped-models`' keys do (`scoping`).
     scoping: bool,
@@ -339,9 +352,10 @@ impl Picker {
         self.held
     }
 
-    /// Makes Ctrl+R and Ctrl+D act on the selected row, as in Scramjet's session selector: Ctrl+R
-    /// ends the list to rename it; Ctrl+D asks to confirm, and Enter then ends the list to delete
-    /// it. The current row cannot be deleted.
+    /// Gives the list the keys of Scramjet's session selector: Ctrl+R ends it to rename the
+    /// selected row; Ctrl+D asks to confirm, and Enter then ends it to delete the row, unless it
+    /// is the current one; Ctrl+S, Ctrl+N and Ctrl+P end it to show its rows another way
+    /// (`Toggle`). It shows even with no rows, which those keys can bring back.
     pub(super) fn acting(mut self) -> Self {
         self.acts = true;
         self
@@ -358,6 +372,14 @@ impl Picker {
     /// rows, as Tab switches between all models and the scope in Scramjet's model selector.
     pub(super) fn tabbing(mut self) -> Self {
         self.tabs = true;
+        self
+    }
+
+    /// Keeps the rows a query matches in their order, rather than best first.
+    pub(super) fn in_order(mut self) -> Self {
+        if let Some(search) = &mut self.list.search {
+            search.ordered = true;
+        }
         self
     }
 
@@ -498,6 +520,9 @@ impl Picker {
     /// Whether there is nothing to choose from, whatever the query: the screen then returns
     /// nothing at once.
     pub(super) fn is_empty(&self) -> bool {
+        if self.acts {
+            return false;
+        }
         match &self.list.search {
             Some(search) => search.texts.is_empty(),
             None => self.list.rows.is_empty(),
@@ -550,6 +575,11 @@ impl Picker {
                 return Some(Picked::Tab(self.spot()));
             }
             Key::Rename if self.acts => return row.map(|row| self.act(Act::Rename, row)),
+            Key::Save if self.acts => return Some(Picked::Toggle(Toggle::Sort, self.spot())),
+            Key::CtrlN if self.acts => return Some(Picked::Toggle(Toggle::Named, self.spot())),
+            Key::CycleModel(true) if self.acts => {
+                return Some(Picked::Toggle(Toggle::Paths, self.spot()));
+            }
             Key::EndOfInput if self.acts => {
                 let current = match &self.shape {
                     Shape::Rows { current, .. } => *current,
@@ -718,7 +748,13 @@ fn tree_key(
         Key::Left => return list.key(&Key::PageUp).map(|_| Picked::Row(None)),
         Key::Right => return list.key(&Key::PageDown).map(|_| Picked::Row(None)),
         Key::Enter => return shown.map(|entry| Picked::Row(Some(entry))),
-        Key::Up | Key::Down | Key::PageUp | Key::PageDown | Key::LineStart | Key::LineEnd => {
+        Key::Up
+        | Key::Down
+        | Key::CtrlN
+        | Key::PageUp
+        | Key::PageDown
+        | Key::LineStart
+        | Key::LineEnd => {
             return list.key(key).map(|_| Picked::Row(None));
         }
         Key::Escape | Key::Interrupt => return Some(Picked::Row(None)),
@@ -760,6 +796,8 @@ struct Search {
     none: String,
     /// The selection without a query.
     initial: usize,
+    /// Whether the rows a query matches keep their order (`Picker::in_order`).
+    ordered: bool,
 }
 
 impl List {
@@ -801,6 +839,7 @@ impl List {
             texts,
             none: none.into(),
             initial: list.selected,
+            ordered: false,
         }));
         list
     }
@@ -832,8 +871,8 @@ impl List {
         self.selected = match key {
             Key::Up if self.selected == 0 => last,
             Key::Up => self.selected - 1,
-            Key::Down if self.selected == last => 0,
-            Key::Down => self.selected + 1,
+            Key::Down | Key::CtrlN if self.selected == last => 0,
+            Key::Down | Key::CtrlN => self.selected + 1,
             Key::PageUp => self.selected.saturating_sub(page),
             Key::PageDown => (self.selected + page).min(last),
             Key::LineStart | Key::CtrlA => 0,
@@ -858,6 +897,9 @@ impl List {
             self.selected = search.initial;
         } else {
             self.rows = fuzzy::filter(&tokens, &search.texts);
+            if search.ordered {
+                self.rows.sort_unstable();
+            }
             self.selected = 0;
         }
     }
@@ -1059,8 +1101,8 @@ fn wrapped(text: &str, width: usize, most: usize) -> Vec<String> {
     rows
 }
 
-/// The end of `text` that fits in `width` columns, so that the end of a long query shows.
-fn tail(text: &str, width: usize) -> &str {
+/// The end of `text` that fits in `width` columns, so that the end of a long query or path shows.
+pub(super) fn tail(text: &str, width: usize) -> &str {
     let mut used = 0;
     for (at, ch) in text.char_indices().rev() {
         used += ch.width().unwrap_or(0);
@@ -1600,6 +1642,50 @@ mod tests {
         assert_eq!(plain_list.key(&Key::Rename), None);
         assert_eq!(plain_list.key(&Key::EndOfInput), None);
         assert_eq!(plain_list.key(&Key::Enter), Some(Picked::Row(Some(0))));
+    }
+
+    #[test]
+    fn session_view_keys_end_the_list_where_it_is_and_a_query_can_keep_the_rows_order() {
+        let texts = ["parser one", "other", "parse"].map(String::from);
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
+        let picker = || Picker::search("Resume", 10, haystacks(&texts), 0, None, "None", row);
+        let place = |query: &str, position, shown: &[usize]| Spot {
+            query: query.into(),
+            position,
+            shown: shown.to_vec(),
+        };
+        let mut list = picker().acting();
+        list.key(&Key::Text("pars".into()));
+        // Best first: `parse` is the shorter match.
+        assert_eq!(list.spot(), place("pars", 0, &[2, 0]));
+        for (key, toggle) in [
+            (Key::Save, Toggle::Sort),
+            (Key::CtrlN, Toggle::Named),
+            (Key::CycleModel(true), Toggle::Paths),
+        ] {
+            let ended = Some(Picked::Toggle(toggle, place("pars", 0, &[2, 0])));
+            assert_eq!(list.key(&key), ended);
+        }
+        // In order, the first row matching comes first.
+        let mut ordered = picker().acting().in_order();
+        ordered.key(&Key::Text("pars".into()));
+        assert_eq!(ordered.spot(), place("pars", 0, &[0, 2]));
+        // Elsewhere Ctrl+N moves down and the other keys do nothing.
+        let mut plain_list = picker();
+        for key in [Key::CtrlN, Key::Save, Key::CycleModel(true)] {
+            assert_eq!(plain_list.key(&key), None);
+        }
+        assert_eq!(plain_list.key(&Key::Enter), Some(Picked::Row(Some(1))));
+        // A session list without rows shows, saying so, for Ctrl+N to bring them back.
+        let none = |_: usize, _: usize| String::new();
+        let empty = || Picker::search("Resume", 10, Vec::new(), 0, None, "No named", none);
+        assert!(empty().is_empty());
+        let mut named = empty().acting();
+        assert!(!named.is_empty());
+        assert_eq!(plain(named.lines((60, 24)))[2], "  No named");
+        assert_eq!(named.key(&Key::Enter), None);
+        let ended = Some(Picked::Toggle(Toggle::Named, place("", 0, &[])));
+        assert_eq!(named.key(&Key::CtrlN), ended);
     }
 
     #[test]

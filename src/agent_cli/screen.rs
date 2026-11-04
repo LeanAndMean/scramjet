@@ -13,7 +13,7 @@ use super::editor::{
 use super::footer::{self, Footer};
 use super::interactive::effort_note;
 use super::record::{self, Event};
-use super::select::{Act, Picked, Picker, Routed, Spot};
+use super::select::{Act, Picked, Picker, Routed, Spot, Toggle};
 use super::selection::{self, Line};
 use super::settings::{Delivery, DoubleEscape, MarkdownReads, Settings};
 use super::slash::Builtin;
@@ -128,6 +128,8 @@ pub(super) enum Answer {
     Routed(usize, Routed),
     /// What one of a picker's own keys asked for (`Picker::acting`).
     Acted(Act, usize, Spot),
+    /// A key of the session list that shows it another way (`Picker::acting`).
+    Toggled(Toggle, Spot),
     /// Tab in a picker that takes it (`Picker::tabbing`).
     Tabbed(Spot),
     /// Shift+L in `/tree`'s list on an entry, with the list as it was, to show again once the
@@ -338,6 +340,7 @@ impl Link {
     pub(super) fn pick_or_act(&self, picker: Picker) -> Picked {
         match self.ask(Dialog::Pick(Box::new(picker)), None) {
             Some(Answer::Acted(act, row, place)) => Picked::Act(act, row, place),
+            Some(Answer::Toggled(toggle, place)) => Picked::Toggle(toggle, place),
             Some(Answer::Tabbed(place)) => Picked::Tab(place),
             Some(Answer::Picked(row)) => Picked::Row(row),
             _ => Picked::Row(None),
@@ -2055,6 +2058,7 @@ impl App {
                 }
                 Picked::Row(row) => Answer::Picked(row),
                 Picked::Act(act, row, place) => Answer::Acted(act, row, place),
+                Picked::Toggle(toggle, place) => Answer::Toggled(toggle, place),
                 Picked::Tab(place) => Answer::Tabbed(place),
                 Picked::Label(entry) => Answer::Label(entry, None),
             }),

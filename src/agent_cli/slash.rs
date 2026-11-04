@@ -27,7 +27,8 @@ const BACK_KEYS: &str = "↑↓ move · Enter select · Esc back";
 const TOOLS_KEYS: &str = "↑↓ move · Enter switch on or off · Esc back";
 const CHANGE_KEYS: &str = "↑↓ move · Enter change · Esc back";
 const INSTALLED_KEYS: &str = "↑↓ move · Enter edit · Esc back";
-const RESUME_KEYS: &str = "↑↓ move · Enter select · Ctrl+R rename · Ctrl+D delete · Esc cancel";
+const RESUME_KEYS: &str =
+    "Ctrl+S sort · Ctrl+N named · Ctrl+P path · Ctrl+R rename · Ctrl+D delete";
 /// What a next step can be set to, in the order `/settings` offers them.
 const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
     (
@@ -1017,7 +1018,8 @@ impl Interactive {
                 for (index, (session, tree)) in sessions.iter().take(20).enumerate() {
                     let mark = if current == Some(index) { "*" } else { " " };
                     let number = format!("{}{mark} {tree}", index + 1);
-                    let line = session_line(session, width.saturating_sub(number.width()));
+                    let width = width.saturating_sub(number.width());
+                    let line = session_line(session, width, None, false);
                     eprintln!("{number}{line}");
                 }
                 if sessions.len() > 20 {
@@ -1064,13 +1066,27 @@ impl Interactive {
         }
     }
 
-    /// Chooses a session on the full screen, as Scramjet's session selector does: forks under the sessions they came from, a query matching them by their
-    /// prompts and replies, Ctrl+R renaming the selected one and Ctrl+D deleting it.
+    /// Chooses a session on the full screen, as Scramjet's session selector does: forks under
+    /// the sessions they came from, a query matching them by their prompts and replies, Ctrl+S
+    /// sorting them another way, Ctrl+N showing only the named ones, Ctrl+P their paths, Ctrl+R
+    /// renaming the selected one and Ctrl+D deleting it.
     fn choose_session(&mut self) -> Option<std::path::PathBuf> {
         let mut spot = None;
+        let (mut sort, mut named_only, mut paths) = (Sort::Threaded, false, false);
+        // The session selected when a key changed how the list shows, to select again.
+        let mut kept: Option<std::path::PathBuf> = None;
         loop {
             let sessions = match self.agent.sessions() {
-                Ok(sessions) => threaded(sessions),
+                Ok(sessions) => {
+                    let sessions =
+                        (sessions.into_iter()).filter(|session| !named_only || named(session));
+                    match sort {
+                        Sort::Threaded => threaded(sessions.collect()),
+                        Sort::Recent | Sort::Relevance => {
+                            sessions.map(|session| (session, String::new())).collect()
+                        }
+                    }
+                }
                 Err(error) => {
                     self.screen.as_ref()?.dismiss();
                     self.say(&format!("error: {error}"));
@@ -1078,7 +1094,7 @@ impl Interactive {
                 }
             };
             let screen = self.screen.as_ref()?;
-            if sessions.is_empty() {
+            if sessions.is_empty() && !named_only {
                 screen.dismiss();
                 self.say("No sessions to resume");
                 return None;
@@ -1088,31 +1104,58 @@ impl Interactive {
             // Newest first, so the first other than the current one is the likely choice.
             let initial = usize::from(current == Some(0));
             let texts = searched(&sessions);
-            let row = |index: usize, width| session_line(&sessions[index].0, width);
-            let tree = sessions.iter().map(|(_, tree)| tree.clone()).collect();
-            let picker = select::Picker::search(
-                "Resume session",
-                select::VISIBLE,
-                texts,
-                initial,
-                current,
-                "No matching sessions",
-                row,
-            );
-            let picker = (picker.noting(RESUME_KEYS, Vec::new()))
-                .threaded(tree, row)
-                .acting()
-                .held();
-            let picker = match spot.take() {
-                Some((at, status)) => picker.at(at, status),
-                None => picker,
+            let row = |index: usize, width| {
+                let session = &sessions[index].0;
+                let style = match current == Some(index) {
+                    true => Some(style::SESSION_CURRENT),
+                    false => named(session).then_some(style::SESSION_NAMED),
+                };
+                session_line(session, width, style, paths)
             };
+            let title = match named_only {
+                true => format!("Resume session (named, {})", sort.label()),
+                false => format!("Resume session ({})", sort.label()),
+            };
+            let none = match named_only {
+                true => "No named sessions (Ctrl+N shows all)",
+                false => "No matching sessions",
+            };
+            let picker =
+                select::Picker::search(&title, select::VISIBLE, texts, initial, current, none, row);
+            let mut picker = picker.noting(RESUME_KEYS, Vec::new()).acting().held();
+            match sort {
+                Sort::Threaded => {
+                    let tree = sessions.iter().map(|(_, tree)| tree.clone()).collect();
+                    picker = picker.threaded(tree, row);
+                }
+                Sort::Recent => picker = picker.in_order(),
+                Sort::Relevance => {}
+            }
+            if let Some((at, status)) = spot.take() {
+                picker = picker.at(at, status);
+            }
+            let keep = kept.take();
+            if let Some(at) =
+                (sessions.iter()).position(|(session, _)| Some(&session.path) == keep.as_ref())
+            {
+                picker = picker.on_row(at);
+            }
             let (act, index, at) = match screen.pick_or_act(picker) {
                 select::Picked::Row(chosen) => {
                     screen.dismiss();
                     return chosen.map(|index| sessions[index].0.path.clone());
                 }
                 select::Picked::Act(act, index, at) => (act, index, at),
+                select::Picked::Toggle(toggle, at) => {
+                    kept = (at.shown.get(at.position)).map(|&row| sessions[row].0.path.clone());
+                    match toggle {
+                        select::Toggle::Sort => sort = sort.next(),
+                        select::Toggle::Named => named_only = !named_only,
+                        select::Toggle::Paths => paths = !paths,
+                    }
+                    spot = Some((at, None));
+                    continue;
+                }
                 // Not keys of this list (`Picker::tabbing`, `Picker::tree`).
                 select::Picked::Tab(_) | select::Picked::Label(_) => {
                     screen.dismiss();
@@ -1843,9 +1886,45 @@ pub(super) fn grouped(count: u64) -> String {
     grouped
 }
 
-/// A `/resume` line: the session's name or first prompt, cut to `width` with its item count and
-/// age kept.
-fn session_line(session: &SessionInfo, width: usize) -> String {
+/// How `/resume` orders the sessions; Ctrl+S goes to the next, as in Scramjet's session selector.
+#[derive(Clone, Copy, PartialEq)]
+enum Sort {
+    /// Forks under the sessions they came from, newest first at each level; a query's matches
+    /// best first.
+    Threaded,
+    /// Newest first, a query's matches too.
+    Recent,
+    /// Newest first; a query's matches best first.
+    Relevance,
+}
+
+impl Sort {
+    fn next(self) -> Self {
+        match self {
+            Self::Threaded => Self::Recent,
+            Self::Recent => Self::Relevance,
+            Self::Relevance => Self::Threaded,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Threaded => "threaded",
+            Self::Recent => "recent",
+            Self::Relevance => "relevance",
+        }
+    }
+}
+
+/// Whether the session has a name, as `/name` gives one.
+fn named(session: &SessionInfo) -> bool {
+    (session.name.as_deref()).is_some_and(|name| !name.trim().is_empty())
+}
+
+/// A `/resume` line: the session's name or first prompt, in `style` when given, cut to `width`
+/// with its item count and age kept; with `path`, the session file's path after them, cut at its
+/// start where the name or prompt would get fewer than 10 columns, as in Scramjet.
+fn session_line(session: &SessionInfo, width: usize, style: Option<&str>, path: bool) -> String {
     let age = std::time::SystemTime::now()
         .duration_since(session.modified)
         .unwrap_or_default();
@@ -1853,15 +1932,27 @@ fn session_line(session: &SessionInfo, width: usize) -> String {
         1 => "1 item".to_owned(),
         count => format!("{count} items"),
     };
-    let suffix = format!(" ({items}, {})", age_label(age));
+    let mut suffix = format!(" ({items}, {})", age_label(age));
     let label = session
         .name
         .as_deref()
         .or(session.first_prompt.as_deref())
         .unwrap_or("(no messages)");
     let prompt = one_line(label);
+    if path {
+        let path = shortened(&session.path.display().to_string());
+        let room = width.saturating_sub(suffix.width() + 1 + prompt.width().min(10));
+        let path = match path.width() <= room {
+            true => path,
+            false => format!("…{}", select::tail(&path, room.saturating_sub(1))),
+        };
+        suffix = format!("{suffix} {path}");
+    }
     let prompt = clip(&prompt, width.saturating_sub(suffix.width()).max(2));
-    format!("{prompt}{suffix}")
+    match style {
+        Some(style) => format!("{style}{prompt}{}{suffix}", style::RESET),
+        None => format!("{prompt}{suffix}"),
+    }
 }
 
 /// `sessions` (newest first) in the order of Scramjet's threaded session list, with the tree
@@ -2082,9 +2173,12 @@ mod tests {
             modified: std::time::SystemTime::now() - Duration::from_secs(7200),
             parent: None,
         };
-        assert_eq!(session_line(&session, 30), "Fix the parser… (12 items, 2h)");
         assert_eq!(
-            session_line(&session, 80),
+            session_line(&session, 30, None, false),
+            "Fix the parser… (12 items, 2h)"
+        );
+        assert_eq!(
+            session_line(&session, 80, None, false),
             "Fix the parser then run the tests (12 items, 2h)"
         );
         let named = SessionInfo {
@@ -2096,13 +2190,42 @@ mod tests {
             modified: session.modified,
             parent: None,
         };
-        assert_eq!(session_line(&named, 80), "Parser work (12 items, 2h)");
+        let line = session_line(&named, 80, Some(style::SESSION_NAMED), false);
+        assert_eq!(
+            line,
+            format!(
+                "{}Parser work{} (12 items, 2h)",
+                style::SESSION_NAMED,
+                style::RESET
+            )
+        );
         let empty = SessionInfo {
             first_prompt: None,
             item_count: 1,
             ..session
         };
-        assert_eq!(session_line(&empty, 80), "(no messages) (1 item, 2h)");
+        assert_eq!(
+            session_line(&empty, 80, None, false),
+            "(no messages) (1 item, 2h)"
+        );
+        // The path after them, its start cut where the prompt would get fewer than 10 columns.
+        let filed = SessionInfo {
+            path: PathBuf::from("/nonexistent/sessions/project/1793-1.jsonl"),
+            first_prompt: named.first_prompt,
+            text: String::new(),
+            name: None,
+            item_count: 12,
+            modified: named.modified,
+            parent: None,
+        };
+        assert_eq!(
+            session_line(&filed, 100, None, true),
+            "Fix the parser then run the tests (12 items, 2h) /nonexistent/sessions/project/1793-1.jsonl"
+        );
+        assert_eq!(
+            session_line(&filed, 50, None, true),
+            "Fix the p… (12 items, 2h) …ns/project/1793-1.jsonl"
+        );
     }
 
     #[test]

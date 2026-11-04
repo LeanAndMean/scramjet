@@ -63,7 +63,8 @@ the endpoint's models, those Ctrl+P takes first in its order: Enter switches one
 Ctrl+A and Ctrl+X all those shown, Ctrl+P its provider's, Alt+Up/Down moves it, for the session;
 Ctrl+S saves them as enabledModels. /new starts a new session;
 /resume chooses one of this project's sessions to switch to, forks under the session they came
-from; in its list Ctrl+R renames the selected session and Ctrl+D deletes it once Enter confirms
+from; in its list Ctrl+S sorts them (threaded, recent, relevance), Ctrl+N shows only named ones,
+Ctrl+P their paths, Ctrl+R renames the selected session and Ctrl+D deletes it once Enter confirms
 (to the trash when a `trash` command is installed). /fork chooses one of this
 session's prompts and continues in a new session from before it, with it in the prompt for
 editing; /clone continues in a new session with the conversation as it is. /tree shows this
