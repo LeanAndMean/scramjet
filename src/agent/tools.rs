@@ -54,6 +54,7 @@ pub(super) fn definitions(names: &[String]) -> Value {
     tools.push(super::question::definition());
     tools.push(super::delegate::definition());
     tools.push(super::subagent::definition());
+    tools.push(super::switch::definition());
     tools.push(super::suggest::definition());
     Value::Array(tools)
 }
@@ -168,6 +169,7 @@ impl<'a> Call<'a> {
             super::subagent::NAME => super::subagent::summary(&self.arguments),
             super::delegate::NAME => super::delegate::summary(&self.arguments),
             super::suggest::NAME => super::suggest::summary(&self.arguments),
+            super::switch::NAME => super::switch::summary(&self.arguments),
             name if super::publish::TOOLS.contains(&name) => {
                 super::publish::summary(name, &self.arguments)
             }

@@ -24,6 +24,7 @@ mod skills;
 mod status;
 mod subagent;
 mod suggest;
+mod switch;
 mod tools;
 mod tree;
 mod turn;
@@ -406,6 +407,8 @@ pub struct Agent {
     /// The names and providers of the endpoint's models, from their cards, for the Model
     /// Identity; kept when the cards cannot be read again.
     identities: HashMap<String, instructions::Identity>,
+    /// The models of the user's scope (`set_model_scope`); empty: all.
+    model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
     /// Whether a completed command's recommended next step runs without the user choosing it.
@@ -522,6 +525,7 @@ impl Agent {
             info: ModelInfo::guess(&config.model),
             provider: None,
             identities: HashMap::new(),
+            model_scope: Vec::new(),
             hide_credentials: false,
             autopilot,
             config,
@@ -1059,6 +1063,12 @@ impl Agent {
             ids.insert(0, self.config.model.clone());
         }
         self.options(ids)
+    }
+
+    /// The models the user chose for Ctrl+P (`--models`, `enabledModels`, `/scoped-models`),
+    /// which `switch_scramjet_model` lists after an unknown model as Scramjet's; empty: all.
+    pub fn set_model_scope(&mut self, models: Vec<String>) {
+        self.model_scope = models;
     }
 
     /// The endpoint's models in its order, each with what its card says, or `None` if they

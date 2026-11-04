@@ -578,6 +578,7 @@ impl Interactive {
             };
             if changed {
                 self.scope = chosen.scope();
+                self.agent.set_model_scope(chosen.scope());
                 unsaved = true;
             }
             if act == Act::Save {

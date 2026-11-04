@@ -88,6 +88,9 @@ enum ToScreen {
     Models(Vec<String>),
     /// What the footer shows of the session now.
     Footer(footer::Shown),
+    /// The agent switched the model during the turn: the footer, and the levels Shift+Tab
+    /// cycles through from then on.
+    Switched(footer::Shown, EffortCycle),
     /// The session's tokens, how full the context is and the model's output rate, after a
     /// response or a compaction.
     Usage(Tokens, Option<u64>, Option<f64>),
@@ -521,6 +524,12 @@ impl AgentUi for Link {
     }
     fn usage(&mut self, tokens: Tokens, context: Option<u64>, rate: Option<f64>) {
         self.send(ToScreen::Usage(tokens, context, rate));
+    }
+    fn model_switched(&mut self, agent: &agent::Agent) {
+        self.send(ToScreen::Switched(
+            footer::Shown::of(agent),
+            agent.effort_cycle(),
+        ));
     }
     fn effort(&mut self) -> Option<String> {
         self.take_effort()
@@ -1157,6 +1166,10 @@ impl App {
             }
             ToScreen::Models(models) => self.editor.set_models(models),
             ToScreen::Footer(shown) => self.footer.show(shown),
+            ToScreen::Switched(shown, efforts) => {
+                self.footer.show(shown);
+                self.efforts = efforts;
+            }
             ToScreen::Usage(tokens, context, rate) => self.footer.usage(tokens, context, rate),
             ToScreen::Dialog(dialog, reply) => {
                 let shown = match dialog {

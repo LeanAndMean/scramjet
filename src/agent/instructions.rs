@@ -1,5 +1,5 @@
 //! The system instructions of the agent and of its subagents.
-use super::{Commands, Skills, publish, question, status, subagent, suggest};
+use super::{Commands, Skills, publish, question, status, subagent, suggest, switch};
 use std::path::{Path, PathBuf};
 
 const CONTEXT_FILE_BYTES: u64 = 256 << 10;
@@ -46,6 +46,7 @@ disjoint edits in one call"
     listed.extend([
         format!("- {}: {}", question::NAME, question::SNIPPET),
         format!("- {}: {}", subagent::NAME, subagent::SNIPPET),
+        format!("- {}: {}", switch::NAME, switch::SNIPPET),
         format!("- {}: {}", suggest::NAME, suggest::SNIPPET),
     ]);
     let mut guidelines = Vec::new();
@@ -345,7 +346,13 @@ git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use
         assert!(text.contains("Available tools:\n- report_scramjet_command_status:"));
         let guidelines = format!("Guidelines:\n{}\n- Be concise", suggest::GUIDELINE);
         assert!(text.contains(&guidelines), "{text}");
-        let listed = format!("- {}: {}\n\nGuidelines:", suggest::NAME, suggest::SNIPPET);
+        let listed = format!(
+            "- {}: {}\n- {}: {}\n\nGuidelines:",
+            switch::NAME,
+            switch::SNIPPET,
+            suggest::NAME,
+            suggest::SNIPPET
+        );
         assert!(text.contains(&listed), "{text}");
         let all = super::super::tools::CODING_TOOLS.map(String::from);
         let text = agent(root, &all, &commands, &[], &Skills::default());

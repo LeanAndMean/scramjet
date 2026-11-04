@@ -5,7 +5,7 @@ use super::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, CONTEXT, Completed, DIFF, Ending, FAILED,
     MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, Source, Step, Suggested, TYPED,
     ToolDetail, USAGE, Usage, UserCommand, autonomy, batch, delegate, forge, message_text, publish,
-    question, sandbox, status, subagent, suggest,
+    question, sandbox, status, subagent, suggest, switch,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -548,6 +548,23 @@ to a larger-context model)"
                     }
                     Err(refused) => refused,
                 };
+            ui.tool_result(call.name, &text, None, failed);
+            let output = Output {
+                text,
+                detail: None,
+                failed,
+                image: None,
+            };
+            return (output, false);
+        }
+        if call.name == switch::NAME {
+            let (text, failed) = match self.switch_model(&call.arguments) {
+                switch::Switched::To(text) => {
+                    ui.model_switched(self);
+                    (text, false)
+                }
+                switch::Switched::Not(text, failed) => (text, failed),
+            };
             ui.tool_result(call.name, &text, None, failed);
             let output = Output {
                 text,
@@ -1510,6 +1527,7 @@ files is added or changed.",
                 question::NAME,
                 delegate::NAME,
                 subagent::NAME,
+                switch::NAME,
                 suggest::NAME
             ]
         );
@@ -2628,6 +2646,101 @@ auto-dispatches it only when its message is a slash command."
         assert!(tools.iter().any(|tool| tool["name"] == suggest::NAME));
         let instructions = bodies[0]["instructions"].as_str().unwrap();
         assert!(instructions.contains(suggest::GUIDELINE));
+    }
+
+    #[test]
+    fn the_agent_switches_the_model_for_its_next_requests_as_scramjets_tool_does() {
+        let switch = |provider: &str, model: &str| {
+            (switch::NAME, json!({"provider":provider,"model":model}))
+        };
+        let got = |body: Value| {
+            let body = body.to_string();
+            let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", body.len());
+            (head + &body).into_bytes()
+        };
+        let listed = got(json!({"data":[{"id":"m"},{"id":"gpt-x"},{"id":"claude-y"}]}));
+        let cards = got(json!({"models":[
+            {"requestId":"m","provider":"openai","displayName":"M"},
+            {"requestId":"gpt-x","provider":"openai","displayName":"GPT X",
+                "supportedProtocols":["openai-responses"],"limits":{"context":400_000}},
+            {"requestId":"claude-y","provider":"anthropic","displayName":"Claude Y"},
+        ]}));
+        let (endpoint, server) = serve_requests(vec![
+            tool_calls(&[
+                (switch::NAME, json!({"model":3})),
+                switch("anthropic", "gpt-x"),
+                switch("openai", "m"),
+                switch("openai", "gpt-x"),
+            ]),
+            // Each call lists the models with their cards; a switch reads the cards again.
+            listed.clone(),
+            cards.clone(),
+            listed.clone(),
+            cards.clone(),
+            listed,
+            cards.clone(),
+            cards,
+            stream(&fixture::text_events("Done.", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "switch-model");
+        agent.set_model_scope(vec!["m".into(), "claude-y".into()]);
+        let mut ui = Recorder::default();
+        (agent.turn("switch", &mut ui, &AtomicBool::new(false))).unwrap();
+        let requests = server.join().unwrap();
+        let lines: Vec<_> = (requests.iter())
+            .map(|(head, _)| head.lines().next().unwrap())
+            .collect();
+        let (models, cards) = ("get /v1/models http/1.1", "get /api/model-cards http/1.1");
+        let gets = [models, cards, models, cards, models, cards, cards];
+        assert_eq!(lines[1..8], gets);
+
+        let (first, last) = (&requests[0].1, &requests[8].1);
+        assert_eq!(
+            (first["model"].as_str(), last["model"].as_str()),
+            (Some("m"), Some("gpt-x"))
+        );
+        let identity =
+            "Your model for the imminent response is: GPT X (ID: gpt-x, provider: openai).";
+        assert!(last["instructions"].as_str().unwrap().contains(identity));
+        let results: Vec<String> = outputs(last).into_iter().map(|(_, text)| text).collect();
+        assert!(
+            results[0].starts_with(
+                "Validation failed for tool \"switch_scramjet_model\":\n  - provider: must have \
+required property\n  - model: must be string\n\nReceived arguments:"
+            ),
+            "{}",
+            results[0]
+        );
+        // An unknown model lists the user's scope; a model of another provider is unknown.
+        assert_eq!(
+            results[1..],
+            [
+                "Unknown model \"anthropic/gpt-x\". The model was not switched.\nAvailable models \
+(provider/id):\n- anthropic/claude-y (Claude Y)\n- openai/m (M)",
+                "Already on M (openai/m). No switch needed.",
+                "Switched to GPT X (ID: gpt-x, provider: openai).",
+            ]
+        );
+        let failed: Vec<bool> = (agent.conversation().iter())
+            .filter(|item| item["type"] == "function_call_output")
+            .map(|item| item[FAILED] == true)
+            .collect();
+        assert_eq!(failed, [true, false, false, false]);
+
+        // The interface heard of the one switch; the reply after it is the new model's, which
+        // the session keeps for a resume, with its card's window.
+        let switched: Vec<_> = (ui.shown.iter())
+            .filter(|shown| shown.starts_with("switched"))
+            .collect();
+        assert_eq!(switched, ["switched gpt-x"]);
+        let reply = agent.conversation().last().unwrap();
+        assert_eq!(reply[PRODUCER], "gpt-x");
+        assert_eq!(
+            (agent.model(), agent.context_window()),
+            ("gpt-x", Some(400_000))
+        );
+        let (session, ..) = Session::open(agent.session_path()).unwrap();
+        assert_eq!(session.model(), Some("gpt-x"));
     }
 
     /// An agent in a scratch project whose `rs:work` command has `next`, and `rs:other`.

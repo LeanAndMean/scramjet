@@ -1439,6 +1439,28 @@ def ctrl_p_cycles_models(read, until, send, output):
     send(b'\x04')
 
 
+switch_gate = threading.Event()
+
+
+def agent_switches_the_model(read, until, send, output):
+    shown, on_screen = full_screen(columns=80)(read, output)
+    on_screen('\u2500' * 20)
+    footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 medium', 80)], columns=80)
+    send(b'go\r')
+    on_screen('Switched to GPT-6 Terra (ID: gpt-6-terra, provider: openai).')
+    # While its next request runs, the footer names the new model at its card's level nearest
+    # the one set, and Shift+Tab cycles that card's levels.
+    footer_shows(read, output, [project, stats('?', 'gpt-6-terra \u2022 high', 80)], columns=80)
+    send(b'\x1b[Z')
+    on_screen('Thinking level: low')
+    assert 'Terra replied.' not in '\n'.join(shown()), shown()
+    switch_gate.set()
+    on_screen('Terra replied.')
+    ended(read, output, columns=80)
+    footer_shows(read, output, [project, stats('?', 'gpt-6-terra \u2022 low', 80)], columns=80)
+    send(b'\x04')
+
+
 def ctrl_p_in_a_scope_of_one(read, until, send, output):
     shown, on_screen = full_screen(columns=80)(read, output)
     rows = on_screen('\u2500' * 20)
@@ -1826,6 +1848,18 @@ assert [(body['model'], body['reasoning']['effort']) for body in bodies] == [
     ('gpt-6-terra', 'high'), ('gpt-6-luna', 'low')], bodies
 assert json.load(open(settings_path(scoped))) == {
     'enabledModels': ['gpt-6-terra:high', 'luna:low', 'nothing'], 'defaultThinkingLevel': 'low'}
+switch_cards = [dict(scope_cards[0]), dict(scope_cards[1], reasoning={'levels': ['low', 'high'], 'default': 'high'})]
+known, bodies = set(session_files()), []
+run([], agent_switches_the_model, serve_items([
+    [tool_call('call_1', 'switch_scramjet_model', {'provider': 'openai', 'model': 'gpt-6-terra'})],
+    [message('Terra replied.')],
+], gate=switch_gate, gated=1, models=['gpt-6-luna', 'gpt-6-terra'], cards=switch_cards, bodies=bodies),
+    variables={'XDG_CONFIG_HOME': config_home('switching')}, columns=80)
+assert [(body['model'], body['reasoning']['effort']) for body in bodies] == [
+    ('gpt-6-luna', 'medium'), ('gpt-6-terra', 'high')], bodies
+(switched,) = set(session_files()) - known
+changes = [line['model'] for line in map(json.loads, open(switched)) if line.get('type') == 'model_change']
+assert changes == ['gpt-6-luna', 'gpt-6-terra'], changes
 run(['--models', 'terra, x'], ctrl_p_in_a_scope_of_one,
     serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
     variables={'XDG_CONFIG_HOME': config_home('scope-of-one')}, columns=80)

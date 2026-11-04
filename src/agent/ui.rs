@@ -2,8 +2,8 @@
 //! conversation replayed as its turns showed.
 use super::tools::{self, Call};
 use super::{
-    AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, SUBAGENTS, StreamProgress,
-    TYPED, Tokens, compaction, message_text, publish, question, status,
+    Agent, AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, SUBAGENTS,
+    StreamProgress, TYPED, Tokens, compaction, message_text, publish, question, status,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -99,6 +99,8 @@ pub trait AgentUi {
     /// (`Agent::context_tokens`) and the model's output rate (`Agent::output_rate`), after a
     /// response or a compaction changed them.
     fn usage(&mut self, _tokens: Tokens, _context: Option<u64>, _rate: Option<f64>) {}
+    /// The agent switched the model (`switch_scramjet_model`) for the turn's next requests.
+    fn model_switched(&mut self, _agent: &Agent) {}
     /// An effort level the user chose while the turn runs, for the model's next request.
     fn effort(&mut self) -> Option<String> {
         None

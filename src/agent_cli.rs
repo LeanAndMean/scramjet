@@ -151,6 +151,7 @@ fn start(
         true => Default::default(),
         false => scope::resolve(patterns, &agent.model_options()),
     };
+    agent.set_model_scope(scoped.iter().map(|scoped| scoped.id.clone()).collect());
     let first = scoped
         .first()
         .filter(|_| !chosen && agent.last_model().is_none());

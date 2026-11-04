@@ -166,6 +166,9 @@ impl AgentUi for Recorder {
         self.usage.push((tokens, context));
         self.rates.push(rate);
     }
+    fn model_switched(&mut self, agent: &Agent) {
+        self.shown.push(format!("switched {}", agent.model()));
+    }
     fn choose(
         &mut self,
         title: &str,
@@ -274,7 +277,11 @@ pub(super) fn serve_answering(
             }
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
-            let body: Value = serde_json::from_slice(&body).unwrap();
+            // A GET has none.
+            let body: Value = match length {
+                0 => Value::Null,
+                _ => serde_json::from_slice(&body).unwrap(),
+            };
             let response = answer(&body);
             requests.push((head, body));
             reader.get_mut().write_all(&response).unwrap();
