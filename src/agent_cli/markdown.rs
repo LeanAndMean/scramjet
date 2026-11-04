@@ -1,9 +1,9 @@
 //! Turns the markdown of streamed replies into terminal styles, as Scramjet renders them: strong,
 //! emphasized and struck text, code spans, links, headings, list bullets, block quotes, rules,
-//! fenced code blocks, highlighted when they name their language, and tables. A marker is shown as typed unless its span closes on the same
-//! line, so text after an opening marker waits until the span closes or the line ends. A table's
-//! lines wait until it ends, as its columns are fitted to all its rows, and so does a highlighted
-//! code line.
+//! fenced code blocks, highlighted when they name their language, and tables. A marker is shown
+//! as typed unless its span closes on the same line, so text after an opening marker waits until
+//! the span closes or the line ends. A table's lines wait until it ends, as its columns are
+//! fitted to all its rows, and so does a highlighted code line.
 
 use super::highlight::{self, Highlighter};
 use super::selection;
@@ -11,7 +11,7 @@ use super::style::{
     CODE, CODE_BLOCK, CODE_FENCE, EMPHASIS, HEADING, HORIZONTAL_RULE, LINK, LINK_URL, LIST_BULLET,
     QUOTE, QUOTE_BORDER, RESET, STRONG, STRONG_EMPHASIS, STRUCK, TITLE,
 };
-use super::text::{Wrap, columns, plain};
+use super::text::{FROM, JOINED, RULE, SPACE, Wrap, columns, plain};
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -41,8 +41,22 @@ enum Kind {
     Fence,
 }
 
+/// Where an open code block's lines start, as Scramjet indents them under their fence.
+const CODE_INDENT: &str = "  ";
+
+/// The fence of an open code block.
+#[derive(Clone, Copy)]
+struct Fence {
+    marker: char,
+    length: usize,
+    /// The spaces before it, which its lines are shown after, and lose as many of theirs.
+    indent: usize,
+}
+
 pub struct Markdown {
     enabled: bool,
+    /// Code lines' indents are marked as a gutter for the full screen's copy (`text::FROM`).
+    marked: bool,
     /// The style of the whole block, restored after each styled part.
     base: &'static str,
     /// The columns rules and tables fit in; zero leaves them unbounded.
@@ -52,9 +66,8 @@ pub struct Markdown {
     pending: String,
     /// The character before `pending` on its line, which decides whether a marker opens a span.
     before: Option<char>,
-    /// The fence character and length of the open code block, and its highlighter if it names a
-    /// language.
-    block: Option<(char, usize)>,
+    /// The open code block, and its highlighter if it names a language.
+    block: Option<Fence>,
     code: Option<Highlighter>,
     /// The current line was ended (`end_line`) and its newline not yet pushed; and it was held.
     ended: bool,
@@ -108,6 +121,7 @@ impl Markdown {
     pub fn new(enabled: bool, base: &'static str, width: usize) -> Self {
         Self {
             enabled,
+            marked: false,
             base,
             width,
             line: Line::Start,
@@ -121,10 +135,20 @@ impl Markdown {
         }
     }
 
+    /// The renderer, marking the indent of code lines for a copy (`text::FROM`) if `marked`; the
+    /// text it is given then loses its own marks.
+    pub fn marking(self, marked: bool) -> Self {
+        Self { marked, ..self }
+    }
+
     pub fn push(&mut self, text: &str) -> String {
         if !self.enabled {
             return text.to_owned();
         }
+        let text = match self.marked {
+            true => text.replace([FROM, JOINED, SPACE, RULE], ""),
+            false => text.to_owned(),
+        };
         let mut out = String::new();
         let mut lines = text.split('\n');
         if let Some(first) = lines.next() {
@@ -147,28 +171,44 @@ impl Markdown {
         }
         let mut out = self.advance(true);
         match self.line {
+            // A blank line, or one of spaces, which in a code block show after its indent.
             Line::Start => {
                 out += &self.flush_table();
-                let line = std::mem::take(&mut self.pending);
+                let mut line = std::mem::take(&mut self.pending);
+                if let Some(fence) = self.block {
+                    line.drain(..line.len().min(fence.indent));
+                    if !line.is_empty() {
+                        out += &self.code_indent(fence);
+                    }
+                }
                 match &mut self.code {
                     Some(code) => out += &code.line(&line),
                     None => out += &line,
                 }
             }
+            // As Scramjet's, a fence shows as ```, with the info after the opening one.
             Line::Fence => {
                 let fence = std::mem::take(&mut self.pending);
                 let marker = fence.trim_start();
+                let indent = fence.len() - marker.len();
                 let c = marker.chars().next().unwrap_or('`');
-                let run = marker.chars().take_while(|&m| m == c).count();
-                self.block = match self.block {
-                    Some(_) => None,
-                    None => Some((c, run)),
+                let length = marker.chars().take_while(|&m| m == c).count();
+                let info = marker[length..].trim();
+                let opened = Fence {
+                    marker: c,
+                    length,
+                    indent,
                 };
-                let language = self
-                    .block
-                    .and_then(|_| highlight::named(marker[run..].trim()));
+                let (shown, info) = match self.block.take() {
+                    Some(open) => (open, ""),
+                    None => {
+                        self.block = Some(opened);
+                        (opened, info)
+                    }
+                };
+                let language = self.block.and_then(|_| highlight::named(info));
                 self.code = language.map(|language| Highlighter::new(language, self.base));
-                out += &format!("{CODE_FENCE}{fence}{RESET}{}", self.base);
+                out += &self.fence(shown, info);
             }
             Line::Held => {
                 let line = std::mem::take(&mut self.pending);
@@ -185,11 +225,18 @@ impl Markdown {
         out
     }
 
-    /// Renders what is left at the end of the block.
+    /// Renders what is left at the end of the block, and, as Scramjet's, the closing fence of a
+    /// code block left open.
     pub fn finish(&mut self) -> String {
+        let empty = !self.ended && self.line == Line::Start && self.pending.is_empty();
         let mut out = self.end_line();
         out += &self.flush_table();
-        self.block = None;
+        if let Some(fence) = self.block.take() {
+            if !empty {
+                out.push('\n');
+            }
+            out += &self.fence(fence, "");
+        }
         self.code = None;
         self.ended = false;
         self.held = false;
@@ -207,6 +254,22 @@ impl Markdown {
             _ => "",
         };
         format!("{}{line}", self.base)
+    }
+
+    /// A fence line: its indent, then ``` and the info string it was given.
+    fn fence(&self, fence: Fence, info: &str) -> String {
+        let indent = " ".repeat(fence.indent);
+        format!("{indent}{CODE_FENCE}```{info}{RESET}{}", self.base)
+    }
+
+    /// What a line of the code block under `fence` starts with: its fence's indent and two
+    /// columns more, a gutter for a copy.
+    fn code_indent(&self, fence: Fence) -> String {
+        let gutter = " ".repeat(fence.indent) + CODE_INDENT;
+        match self.marked {
+            true => format!("{gutter}{FROM}"),
+            false => gutter,
+        }
     }
 
     /// The newline after an ended line, which waits with a table's line.
@@ -250,12 +313,12 @@ impl Markdown {
         if text.is_empty() {
             return None;
         }
-        if let Some((c, length)) = self.block {
-            let run = text.chars().take_while(|&m| m == c).count();
+        if let Some(fence) = self.block {
+            let run = text.chars().take_while(|&m| m == fence.marker).count();
             if text[run..].trim_end_matches(' ').is_empty() && !ended {
                 return None;
             }
-            let closing = run >= length && text[run..].trim_end_matches(' ').is_empty();
+            let closing = run >= fence.length && text[run..].trim_end_matches(' ').is_empty();
             return Some(if closing { Kind::Fence } else { Kind::Code });
         }
         if text.starts_with("```") || text.starts_with("~~~") {
@@ -320,6 +383,10 @@ impl Markdown {
         match kind {
             Kind::Text => Line::Text(""),
             Kind::Code => {
+                if let Some(fence) = self.block {
+                    *out += &self.code_indent(fence);
+                    self.pending.drain(..indent.min(fence.indent));
+                }
                 if self.code.is_none() {
                     *out += CODE_BLOCK;
                 }
@@ -1037,22 +1104,65 @@ mod tests {
 
     #[test]
     fn code_blocks_show_their_lines_unstyled_inside() {
-        let text = "Run:\n  ```\n  echo **x** `y`\n\n# not a heading\n  ```\n### Three\nafter";
+        // As Scramjet's: lines two columns in from their fence, which is shown as ```; lines lose
+        // as many spaces as the fence has before it.
+        let text =
+            "Run:\n  ```\n  echo **x** `y`\n\n# not a heading\n     deep\n  ```\n### Three\nafter";
         assert_eq!(
-            render(&[text]),
-            "Run:\n\x1b[2m  ```\x1b[0m\n\x1b[32m  echo **x** `y`\x1b[0m\n\n\
-\x1b[32m# not a heading\x1b[0m\n\x1b[2m  ```\x1b[0m\n\x1b[1;33m### Three\x1b[0m\nafter"
+            rendered_alike(80, text),
+            "Run:\n  \x1b[2m```\x1b[0m\n    \x1b[32mecho **x** `y`\x1b[0m\n\n    \
+\x1b[32m# not a heading\x1b[0m\n    \x1b[32m   deep\x1b[0m\n  \x1b[2m```\x1b[0m\n\
+\x1b[1;33m### Three\x1b[0m\nafter"
         );
         assert_eq!(
-            render(&["````\n```\nstill code\n````\n**b**"]),
-            "\x1b[2m````\x1b[0m\n\x1b[32m```\x1b[0m\n\x1b[32mstill code\x1b[0m\n\
-\x1b[2m````\x1b[0m\n\x1b[1mb\x1b[0m"
+            render(&["~~~~  nonsense\n```\nstill code\n~~~~\n**b**"]),
+            "\x1b[2m```nonsense\x1b[0m\n  \x1b[32m```\x1b[0m\n  \x1b[32mstill code\x1b[0m\n\
+\x1b[2m```\x1b[0m\n\x1b[1mb\x1b[0m"
         );
         assert_eq!(
             render(&["```\n| a |\n|---|\n> q\n```"]),
-            "\x1b[2m```\x1b[0m\n\x1b[32m| a |\x1b[0m\n\x1b[32m|---|\x1b[0m\n\
+            "\x1b[2m```\x1b[0m\n  \x1b[32m| a |\x1b[0m\n  \x1b[32m|---|\x1b[0m\n  \
 \x1b[32m> q\x1b[0m\n\x1b[2m```\x1b[0m"
         );
+    }
+
+    #[test]
+    fn a_code_block_left_open_is_closed_at_the_end() {
+        let closed = "\x1b[2m```\x1b[0m";
+        assert_eq!(
+            rendered_alike(80, "```\nx"),
+            format!("{closed}\n  \x1b[32mx\x1b[0m\n{closed}")
+        );
+        assert_eq!(
+            render(&["```\nx\n"]),
+            format!("{closed}\n  \x1b[32mx\x1b[0m\n{closed}")
+        );
+        assert_eq!(render(&["  ```"]), format!("  {closed}\n  {closed}"));
+        // Ended while its newline waits, as a streamed reply's line does.
+        let mut markdown = Markdown::new(true, "", 80);
+        markdown.push("```\nx");
+        markdown.end_line();
+        assert_eq!(markdown.finish(), format!("\n{closed}"));
+    }
+
+    #[test]
+    fn marked_code_lines_start_their_copy_after_the_indent() {
+        let mut markdown = Markdown::new(true, "", 80).marking(true);
+        // The text's own marks are not taken as the renderer's.
+        let text = format!("a{FROM}b{JOINED}{SPACE}{RULE}\n```\n  x\n\n```");
+        assert_eq!(
+            markdown.push(&text) + &markdown.finish(),
+            format!("ab\n\x1b[2m```\x1b[0m\n  {FROM}\x1b[32m  x\x1b[0m\n\n\x1b[2m```\x1b[0m")
+        );
+        // Lines wrapped from one go under its text, and a copy joins them.
+        let mut wrap = Wrap::new(12).marking(true).keeping_gutters();
+        let rows = wrap.push(&format!("  {FROM}  a b c d e")) + &wrap.finish();
+        assert_eq!(rows, format!("  {FROM}  a b c d\n    {JOINED}{SPACE}e"));
+        let lines = selection::lines(&rows);
+        assert_eq!(selection::text(&lines, 0, 99), "  a b c d e");
+        // Other wraps drop them.
+        let mut wrap = Wrap::new(8).marking(true);
+        assert_eq!(wrap.push(&format!("  {FROM}a")) + &wrap.finish(), "  a");
     }
 
     #[test]
@@ -1063,15 +1173,18 @@ mod tests {
         assert_eq!(
             rendered_alike(80, text),
             format!(
-                "\x1b[2m```python title\x1b[0m\ns = {SYNTAX_STRING}\"\"\"a{RESET}\n\n\
+                "\x1b[2m```python title\x1b[0m\n  s = {SYNTAX_STRING}\"\"\"a{RESET}\n\n  \
 {SYNTAX_STRING}b\"\"\"{RESET} {SYNTAX_COMMENT}# c{RESET}\n\
-\x1b[2m```\x1b[0m\n{CODE}x{RESET} ~~~ {EMPHASIS}y{RESET}\n\x1b[2m~~~nonsense\x1b[0m\n\
-{CODE_BLOCK}if{RESET}\n\x1b[2m~~~\x1b[0m"
+\x1b[2m```\x1b[0m\n{CODE}x{RESET} ~~~ {EMPHASIS}y{RESET}\n\x1b[2m```nonsense\x1b[0m\n  \
+{CODE_BLOCK}if{RESET}\n\x1b[2m```\x1b[0m"
             )
         );
         // A line shows once it ends, in the block's style.
         let mut markdown = Markdown::new(true, "\x1b[2m", 80);
-        assert_eq!(markdown.push("```rs\nlet"), "\x1b[2m```rs\x1b[0m\x1b[2m\n");
+        assert_eq!(
+            markdown.push("```rs\nlet"),
+            "\x1b[2m```rs\x1b[0m\x1b[2m\n  "
+        );
         assert_eq!(markdown.reopen(), "\x1b[2m");
         assert_eq!(
             markdown.push(" x\n"),
@@ -1088,7 +1201,7 @@ mod tests {
         );
         assert_eq!(
             markdown.push("```\nx"),
-            "\x1b[2m```\x1b[0m\x1b[2m\n\x1b[32mx"
+            "\x1b[2m```\x1b[0m\x1b[2m\n  \x1b[32mx"
         );
         assert_eq!(markdown.reopen(), "\x1b[2m\x1b[32m");
         let mut plain = Markdown::new(false, "", 80);

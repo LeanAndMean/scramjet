@@ -72,7 +72,11 @@ impl Rows<'_> {
 
     /// `text`, already styled, wrapped to the width.
     fn wrapped(&mut self, text: &str) {
-        let mut wrap = Wrap::new(self.look.width).marking(self.look.marked);
+        let wrap = Wrap::new(self.look.width).marking(self.look.marked);
+        self.wrapped_with(wrap, text);
+    }
+
+    fn wrapped_with(&mut self, mut wrap: Wrap, text: &str) {
         let text = wrap.push(text) + &wrap.finish();
         self.rows.extend(text.split('\n').map(str::to_owned));
     }
@@ -196,9 +200,11 @@ impl Rows<'_> {
 
     /// The child's result, rendered as a reply is.
     fn result(&mut self, text: &str) {
-        let mut markdown = Markdown::new(self.look.color, "", self.look.width);
+        let mut markdown =
+            Markdown::new(self.look.color, "", self.look.width).marking(self.look.marked);
         let text = markdown.push(visible(text).trim_end()) + &markdown.finish();
-        self.wrapped(&text);
+        let wrap = Wrap::new(self.look.width).marking(self.look.marked);
+        self.wrapped_with(wrap.keeping_gutters(), &text);
     }
 
     /// When nothing else shows how it went.

@@ -601,11 +601,18 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     fn wrapper(&self, width: usize) -> Wrap {
         Wrap::new(width).marking(self.marked)
     }
+    /// A markdown renderer for text wrapped to `width`, which a `markdown_wrapper` wraps.
+    fn markdown(&self, enabled: bool, base: &'static str, width: usize) -> markdown::Markdown {
+        markdown::Markdown::new(enabled, base, width).marking(self.marked)
+    }
+    fn markdown_wrapper(&self, width: usize) -> Wrap {
+        self.wrapper(width).keeping_gutters()
+    }
     /// Text from the model as markdown, its hidden characters shown, wrapped to `width`.
     fn markdown_rows(&self, text: &str, width: usize) -> Vec<String> {
-        let mut markdown = markdown::Markdown::new(self.color, "", width);
+        let mut markdown = self.markdown(self.color, "", width);
         let text = markdown.push(visible(text).trim_end()) + &markdown.finish();
-        let mut wrap = self.wrapper(width);
+        let mut wrap = self.markdown_wrapper(width);
         let rows = wrap.push(&text) + &wrap.finish();
         rows.lines().map(str::to_owned).collect()
     }
@@ -647,8 +654,8 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                 ""
             };
             let width = if styled { self.width() } else { 0 };
-            self.markdown = markdown::Markdown::new(styled, base, width);
-            self.wrap = self.wrapper(width);
+            self.markdown = self.markdown(styled, base, width);
+            self.wrap = self.markdown_wrapper(width);
             self.streaming = kind;
             self.text_rows =
                 (kind == Streaming::Text && styled && self.streamed.is_empty()).then_some(0);
@@ -841,9 +848,9 @@ impl AgentUi for Terminal {
                 true => self.width(),
                 false => 0,
             };
-            let mut markdown = markdown::Markdown::new(width > 0, "", width);
+            let mut markdown = self.markdown(width > 0, "", width);
             let text = markdown.push(text.trim_end()) + &markdown.finish();
-            let mut wrap = self.wrapper(width);
+            let mut wrap = self.markdown_wrapper(width);
             let text = wrap.push(&text) + &wrap.finish();
             self.out(&format!("{text}\n\n"));
         }
@@ -1267,10 +1274,11 @@ impl Terminal {
     /// Its first lines while tool results are cut, as Scramjet previews a compaction's.
     fn summary_block(&self, summary: &str) -> String {
         let width = if self.color { self.width() } else { 0 };
-        let mut markdown = markdown::Markdown::new(self.color, style::SUMMARY, width);
+        let mut markdown = self.markdown(self.color, style::SUMMARY, width);
         let text = markdown.reopen() + &markdown.push(summary.trim_end()) + &markdown.finish();
         let reset = if self.color { style::RESET } else { "" };
-        let text = self.wrapped(&text);
+        let mut wrap = self.markdown_wrapper(width);
+        let text = wrap.push(&text) + &wrap.finish();
         let rows: Vec<&str> = text.split('\n').collect();
         if self.full || !self.expandable || rows.len() <= SUMMARY_LINES {
             return format!("{text}{reset}");

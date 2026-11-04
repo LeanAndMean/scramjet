@@ -37,6 +37,8 @@ pub(super) struct Wrap {
     escape: Escape,
     /// The lines it starts at a break are marked with `JOINED`.
     marked: bool,
+    /// The `FROM` marks of its input are kept, where it drops them otherwise.
+    gutters: bool,
 }
 
 /// Where the text is in an escape sequence, which takes no columns.
@@ -77,11 +79,20 @@ impl Wrap {
             lead_columns: 0,
             escape: Escape::None,
             marked: false,
+            gutters: false,
         }
     }
     /// The wrap, its breaks marked for a copy (`JOINED`) if `marked`.
     pub(super) fn marking(self, marked: bool) -> Self {
         Self { marked, ..self }
+    }
+    /// The wrap, keeping the gutters (`FROM`) its input marks, for text whose renderer removed
+    /// the marks from what it was given (`Markdown::marking`).
+    pub(super) fn keeping_gutters(self) -> Self {
+        Self {
+            gutters: true,
+            ..self
+        }
     }
     pub(super) fn push(&mut self, text: &str) -> String {
         if self.width == 0 {
@@ -108,6 +119,13 @@ impl Wrap {
                     self.place(&mut out);
                     self.spaces += if c == '\t' { 4 } else { 1 };
                 }
+                // After the spaces before it, which do not decide where wrapped lines start.
+                FROM if self.marked && self.gutters => {
+                    self.place(&mut out);
+                    out.extend(std::iter::repeat_n(' ', self.spaces));
+                    self.column += std::mem::take(&mut self.spaces);
+                    out.push(FROM);
+                }
                 FROM | JOINED | SPACE if self.marked => {}
                 c => {
                     self.word.push(c);
@@ -133,6 +151,7 @@ impl Wrap {
         self.place(&mut out);
         *self = Self {
             marked: self.marked,
+            gutters: self.gutters,
             ..Self::new(self.width)
         };
         out

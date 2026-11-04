@@ -3240,10 +3240,12 @@ def fullscreen_copy_unwrapped(read, until, send, output):
     one = next(index for index, text in enumerate(rows) if text == '  one')
     end = next(index for index, text in enumerate(rows) if text.endswith('one line.'))
     assert rows[end - 2].startswith('The tests'), rows
+    # As Scramjet's, a code block's lines two columns in from its fence.
+    assert rows[end + 2:end + 6] == ['```sh', '  cargo test \\', '    --all', '```'], rows
     # Dragged from the tool result's gutter to past the end of the reply: the copy leaves the
-    # gutter out and joins the reply's wrapped rows.
-    send(b'\x1b[<0;1;%dM\x1b[<32;60;%dM\x1b[<0;60;%dm\x03' % (one + 1, end + 1, end + 1))
-    copied('one\n  two\n\n' + wrapped_reply)
+    # gutter and the code's indent out and joins the reply's wrapped rows.
+    send(b'\x1b[<0;1;%dM\x1b[<32;60;%dM\x1b[<0;60;%dm\x03' % (one + 1, end + 6, end + 6))
+    copied('one\n  two\n\n' + wrapped_reply + code_reply)
     send(b'\x04')
 
 
@@ -3537,8 +3539,9 @@ run([], fullscreen_mouse, serve_items([[message(rows_reply)]]), variables={
 run([], fullscreen_copied_by_the_terminal, serve_items([[message(rows_reply)]]))
 wrapped_reply = ('The tests ran with cargo test --offline --locked --no-fail-fast, and every one of them '
                  'passed; a copy of this sentence comes out as one line.')
+code_reply = '\n\n```sh\ncargo test \\\n  --all\n```'
 run([], fullscreen_copy_unwrapped, serve_items([
-    [tool_call('call_1', 'bash', {'command': "printf 'one\\n  two\\n'"})], [message(wrapped_reply)],
+    [tool_call('call_1', 'bash', {'command': "printf 'one\\n  two\\n'"})], [message(wrapped_reply + code_reply)],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
                'CLIPBOARD': clipboard})
 full_width = 'Copied, and this reply fills every one of the sixty columns.'
