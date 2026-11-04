@@ -4,7 +4,8 @@
 //! unless its span closes on the same line, so text after an opening marker waits until the span
 //! closes or the line ends. A table's lines wait until it ends, as its columns are fitted to all
 //! its rows, and so does a highlighted code line. A blank line waits for the next, as Scramjet
-//! shows a run of them as one, and none between a list's items.
+//! shows a run of them as one, and none between a list's items; and, as Scramjet's, blocks the
+//! text did not separate are shown with a blank line between them.
 
 use super::highlight::{self, Highlighter};
 use super::selection;
@@ -40,6 +41,30 @@ enum Kind {
     Held,
     Code,
     Fence,
+}
+
+/// The block a line is in, as far as the blank lines between blocks go.
+#[derive(Clone, Copy, PartialEq)]
+enum Block {
+    Paragraph,
+    Heading,
+    Quote,
+    List,
+    Rule,
+    Code,
+    Table,
+}
+
+/// Whether Scramjet shows a blank line between a block after `previous` and the `next` the text
+/// did not separate: after anything but a list, unless a paragraph or quote goes on, or a list
+/// follows a paragraph.
+fn separated(previous: Option<Block>, next: Block) -> bool {
+    match previous {
+        None | Some(Block::List) => false,
+        Some(Block::Paragraph) => !matches!(next, Block::Paragraph | Block::List),
+        Some(Block::Quote) => next != Block::Quote,
+        Some(_) => true,
+    }
 }
 
 /// What a task item's text starts with.
@@ -99,6 +124,13 @@ pub struct Markdown {
     /// The ended line was blank; and the blank lines whose newlines wait for the next line.
     blank: bool,
     blanks: usize,
+    /// The block of the line before, outside the lines of a table not yet shown.
+    previous: Option<Block>,
+    /// The line starting may be shown after a blank line between blocks: none came before it and
+    /// it is not in a list.
+    separable: bool,
+    /// The quotes the line before's text is in, which a line of text goes on in.
+    quoted: usize,
 }
 
 /// A table's lines so far, or the one line that may start a table.
@@ -112,6 +144,8 @@ struct Table {
     rows: Option<Vec<Vec<String>>>,
     /// A newline followed its last line.
     newline: bool,
+    /// A blank line between blocks can go before it (`Markdown::separable`).
+    separable: bool,
 }
 
 enum Span {
@@ -163,6 +197,9 @@ impl Markdown {
             indent: 0,
             blank: false,
             blanks: 0,
+            previous: None,
+            separable: false,
+            quoted: 0,
         }
     }
 
@@ -209,6 +246,7 @@ impl Markdown {
                 let Some(fence) = self.block else {
                     self.blank = true;
                     self.lazy = false;
+                    self.quoted = 0;
                     return self.ended_line(out);
                 };
                 line.drain(..line.len().min(fence.indent));
@@ -283,6 +321,8 @@ impl Markdown {
         self.lazy = false;
         self.blank = false;
         self.blanks = 0;
+        self.previous = None;
+        self.quoted = 0;
         out
     }
 
@@ -340,11 +380,21 @@ impl Markdown {
             if !matches!(kind, Kind::Held) {
                 out += &self.flush_table();
             }
+            let listed = !self.lists.is_empty();
+            let block = self.block_of(&kind);
             let next_item = self.place(&kind);
-            match std::mem::take(&mut self.blanks) {
+            let blanks = std::mem::take(&mut self.blanks);
+            self.separable = blanks == 0 && !listed;
+            match blanks {
+                0 if !listed && block.is_some_and(|b| separated(self.previous, b)) => {
+                    out.push('\n')
+                }
                 0 => {}
                 1 if next_item => {}
                 _ => out.push('\n'),
+            }
+            if let Some(block) = block {
+                self.previous = Some(block);
             }
             self.line = self.start(kind, &mut out);
         }
@@ -436,6 +486,24 @@ impl Markdown {
         Some(Kind::Text)
     }
 
+    /// The block a line starting as `kind` is in, unless it is in a code block or may be in a
+    /// table, which its next line decides.
+    fn block_of(&self, kind: &Kind) -> Option<Block> {
+        if self.block.is_some() {
+            return None;
+        }
+        Some(match kind {
+            Kind::Text if self.quoted > 0 => Block::Quote,
+            Kind::Text => Block::Paragraph,
+            Kind::Heading(_) => Block::Heading,
+            Kind::Quote => Block::Quote,
+            Kind::Item => Block::List,
+            Kind::Rule => Block::Rule,
+            Kind::Fence | Kind::Code => Block::Code,
+            Kind::Held => return None,
+        })
+    }
+
     /// How many of the open lists have a line indented by `indent` within their current item.
     fn within(&self, indent: usize) -> usize {
         let lists = self.lists.iter();
@@ -500,7 +568,19 @@ impl Markdown {
         let text = self.pending.trim_start_matches(' ');
         let indent = self.pending.len() - text.len();
         let base = self.base;
+        let quoted = std::mem::take(&mut self.quoted);
+        let border = format!("{RESET}{base}{QUOTE_BORDER}│{RESET}{base}{QUOTE} ");
         match kind {
+            // As CommonMark's lazy lines, text goes on in the quotes of the text before it.
+            Kind::Text if quoted > 0 => {
+                if !self.lists.is_empty() {
+                    *out += &self.pending[..indent];
+                }
+                *out += &border.repeat(quoted);
+                self.pending = text.to_owned();
+                self.quoted = quoted;
+                Line::Text(QUOTE)
+            }
             Kind::Text => Line::Text(""),
             Kind::Code => {
                 if let Some(fence) = self.block {
@@ -530,14 +610,18 @@ impl Markdown {
                 if !self.lists.is_empty() {
                     *out += &self.pending[..indent];
                 }
-                let mut rest = text;
+                let (mut rest, mut depth) = (text, 0);
                 while let Some(after) = rest.strip_prefix('>') {
-                    *out += &format!("{RESET}{base}{QUOTE_BORDER}│{RESET}{base}{QUOTE} ");
+                    *out += &border;
+                    depth += 1;
                     rest = after.strip_prefix(' ').unwrap_or(after);
                     let next = rest.trim_start_matches(' ');
                     if next.starts_with('>') {
                         rest = next;
                     }
+                }
+                if !rest.trim().is_empty() {
+                    self.quoted = depth;
                 }
                 self.pending = rest.to_owned();
                 Line::Text(QUOTE)
@@ -624,6 +708,7 @@ impl Markdown {
             lines: vec![line],
             rows: None,
             newline: false,
+            separable: self.separable,
         });
         out
     }
@@ -633,7 +718,16 @@ impl Markdown {
         let Some(table) = self.table.take() else {
             return String::new();
         };
-        let mut out = match &table.rows {
+        let block = match table.rows {
+            Some(_) => Block::Table,
+            None => Block::Paragraph,
+        };
+        let mut out = match table.separable && separated(self.previous, block) {
+            true => "\n".to_owned(),
+            false => String::new(),
+        };
+        self.previous = Some(block);
+        out += &match &table.rows {
             Some(rows) => self.table_lines(&table, rows).join("\n"),
             None => {
                 let chars: Vec<char> = table.lines[0].chars().collect();
@@ -1227,8 +1321,8 @@ mod tests {
         let text = "Use **bold `x` text** and `a ** b` here.\n## Plan `p`\n- **Note:** done";
         assert_eq!(
             rendered_alike(80, text),
-            "Use \x1b[1mbold \x1b[36mx\x1b[0m\x1b[1m text\x1b[0m and \x1b[36ma ** b\x1b[0m here.\n\
-\x1b[1;33mPlan \x1b[36mp\x1b[0m\x1b[1;33m\x1b[0m\n\
+            "Use \x1b[1mbold \x1b[36mx\x1b[0m\x1b[1m text\x1b[0m and \x1b[36ma ** b\x1b[0m here.\n\n\
+\x1b[1;33mPlan \x1b[36mp\x1b[0m\x1b[1;33m\x1b[0m\n\n\
 \x1b[36m-\x1b[0m \x1b[1mNote:\x1b[0m done"
         );
         let text = "*it **b** \\* x* and ~~gone~~, x**y** [a *b*](u \"t\") <http://h/_x_>.";
@@ -1261,9 +1355,9 @@ mod tests {
         assert_eq!(markdown.push(" part** now"), "\x1b[1mthis part\x1b[0m now");
         assert_eq!(markdown.push(" `open"), " ");
         assert_eq!(markdown.end_line(), "`open");
-        assert_eq!(markdown.push("\n# T"), "\n\x1b[1;4;33mT");
+        assert_eq!(markdown.push("\n# T"), "\n\n\x1b[1;4;33mT");
         // Whether a marker opens depends on the text before it, already shown.
-        assert_eq!(markdown.push("\nx**"), "\x1b[0m\nx");
+        assert_eq!(markdown.push("\nx**"), "\x1b[0m\n\nx");
         assert_eq!(markdown.push("y** z"), "**y** z");
     }
 
@@ -1275,14 +1369,14 @@ mod tests {
             "Run:\n  ```\n  echo **x** `y`\n\n# not a heading\n     deep\n  ```\n### Three\nafter";
         assert_eq!(
             rendered_alike(80, text),
-            "Run:\n  \x1b[2m```\x1b[0m\n    \x1b[32mecho **x** `y`\x1b[0m\n\n    \
-\x1b[32m# not a heading\x1b[0m\n    \x1b[32m   deep\x1b[0m\n  \x1b[2m```\x1b[0m\n\
-\x1b[1;33m### Three\x1b[0m\nafter"
+            "Run:\n\n  \x1b[2m```\x1b[0m\n    \x1b[32mecho **x** `y`\x1b[0m\n\n    \
+\x1b[32m# not a heading\x1b[0m\n    \x1b[32m   deep\x1b[0m\n  \x1b[2m```\x1b[0m\n\n\
+\x1b[1;33m### Three\x1b[0m\n\nafter"
         );
         assert_eq!(
             render(&["~~~~  nonsense\n```\nstill code\n~~~~\n**b**"]),
             "\x1b[2m```nonsense\x1b[0m\n  \x1b[32m```\x1b[0m\n  \x1b[32mstill code\x1b[0m\n\
-\x1b[2m```\x1b[0m\n\x1b[1mb\x1b[0m"
+\x1b[2m```\x1b[0m\n\n\x1b[1mb\x1b[0m"
         );
         assert_eq!(
             render(&["```\n| a |\n|---|\n> q\n```"]),
@@ -1317,7 +1411,7 @@ mod tests {
         let text = format!("a{FROM}b{JOINED}{SPACE}{RULE}\n```\n  x\n\n```");
         assert_eq!(
             markdown.push(&text) + &markdown.finish(),
-            format!("ab\n\x1b[2m```\x1b[0m\n  {FROM}\x1b[32m  x\x1b[0m\n\n\x1b[2m```\x1b[0m")
+            format!("ab\n\n\x1b[2m```\x1b[0m\n  {FROM}\x1b[32m  x\x1b[0m\n\n\x1b[2m```\x1b[0m")
         );
         // Lines wrapped from one go under its text, and a copy joins them.
         let mut wrap = Wrap::new(12).marking(true).keeping_gutters();
@@ -1340,7 +1434,7 @@ mod tests {
             format!(
                 "\x1b[2m```python title\x1b[0m\n  s = {SYNTAX_STRING}\"\"\"a{RESET}\n\n  \
 {SYNTAX_STRING}b\"\"\"{RESET} {SYNTAX_COMMENT}# c{RESET}\n\
-\x1b[2m```\x1b[0m\n{CODE}x{RESET} ~~~ {EMPHASIS}y{RESET}\n\x1b[2m```nonsense\x1b[0m\n  \
+\x1b[2m```\x1b[0m\n\n{CODE}x{RESET} ~~~ {EMPHASIS}y{RESET}\n\n\x1b[2m```nonsense\x1b[0m\n  \
 {CODE_BLOCK}if{RESET}\n\x1b[2m```\x1b[0m"
             )
         );
@@ -1366,7 +1460,7 @@ mod tests {
         );
         assert_eq!(
             markdown.push("```\nx"),
-            "\x1b[2m```\x1b[0m\x1b[2m\n  \x1b[32mx"
+            "\n\x1b[2m```\x1b[0m\x1b[2m\n  \x1b[32mx"
         );
         assert_eq!(markdown.reopen(), "\x1b[2m\x1b[32m");
         let mut plain = Markdown::new(false, "", 80);
@@ -1383,8 +1477,8 @@ mod tests {
             rendered_alike(20, text),
             format!(
                 "{border}a \x1b[3mb\x1b[0m\x1b[2;3m\x1b[0m\n{border}{border}deep\x1b[0m\n\
-{border}\x1b[0m\n{rule}\n\x1b[36m-\x1b[0m one\n    \x1b[36m-\x1b[0m two\n\
-\x1b[36m12.\x1b[0m three\n{rule}\n\x1b[36m- [x]\x1b[0m done"
+{border}\x1b[0m\n\n{rule}\n\n\x1b[36m-\x1b[0m one\n    \x1b[36m-\x1b[0m two\n\
+\x1b[36m12.\x1b[0m three\n{rule}\n\n\x1b[36m- [x]\x1b[0m done"
             )
         );
         assert!(render(&["___"]).contains(&"─".repeat(80)));
@@ -1423,7 +1517,7 @@ mod tests {
         // Outside lists, a run of blank lines shows as one, except in a code block.
         assert_eq!(
             rendered_alike(80, "a\n\n  \n\nb\n```\n\n\n```"),
-            format!("a\n\nb\n{fence}\n\n\n{fence}")
+            format!("a\n\nb\n\n{fence}\n\n\n{fence}")
         );
         // The blank line before a later item waits for it.
         let mut markdown = Markdown::new(true, "", 80);
@@ -1433,11 +1527,33 @@ mod tests {
     }
 
     #[test]
+    fn blocks_the_text_did_not_separate_show_a_blank_line_between() {
+        // As Scramjet's: after anything but a list, unless a paragraph or quote goes on, or a
+        // list follows a paragraph; none between the blocks in an item.
+        let text = "# T\ntext\n- a\n# U\n```\nx\n```\n---\n> q\nlazy\n# V\n| h |\n|-|\n- b\n  ```\n  y\n  ```\nz\n| not |\nmore";
+        let rule = "─".repeat(30);
+        assert_eq!(
+            plain(&rendered_alike(30, text)),
+            format!(
+                "T\n\ntext\n- a\nU\n\n```\n  x\n```\n\n{rule}\n\n│ q\n│ lazy\n\nV\n\n┌───┐\n│ h │\n├───┤\n└───┘\n\n- b\n  ```\n    y\n  ```\nz\n| not |\nmore"
+            )
+        );
+        // A line of text goes on in the quotes of the text before it, in their style.
+        let border = "\x1b[0m\x1b[34m│\x1b[0m\x1b[2;3m ";
+        assert_eq!(
+            rendered_alike(80, "> > r\n lazy\n>\nnew"),
+            format!(
+                "{border}{border}r\x1b[0m\n{border}{border}lazy\x1b[0m\n{border}\x1b[0m\n\nnew"
+            )
+        );
+    }
+
+    #[test]
     fn tables_are_drawn_once_complete_with_their_columns_fitted() {
         let text = "Before\n| Name | Note |\n|:--|--:|\n| **a** | x |\n| b \\| c | `y` |\n\nafter";
         assert_eq!(
             rendered_alike(40, text),
-            "Before\n\
+            "Before\n\n\
 ┌───────┬──────┐\n\
 │ \x1b[1mName\x1b[0m  │ \x1b[1mNote\x1b[0m │\n\
 ├───────┼──────┤\n\
@@ -1472,7 +1588,7 @@ mod tests {
         );
         assert_eq!(
             render(&["| a |\n| b | c |\n|--|--|"]),
-            "| a |\n┌───┬───┐\n│ \x1b[1mb\x1b[0m │ \x1b[1mc\x1b[0m │\n├───┼───┤\n└───┴───┘"
+            "| a |\n\n┌───┬───┐\n│ \x1b[1mb\x1b[0m │ \x1b[1mc\x1b[0m │\n├───┼───┤\n└───┴───┘"
         );
         // Shown as the line ends, while the reply streams.
         let mut markdown = Markdown::new(true, "", 80);
@@ -1481,7 +1597,7 @@ mod tests {
         assert_eq!(markdown.push("\n"), "");
         assert_eq!(
             markdown.push("text"),
-            "┌───┐\n│ \x1b[1ma\x1b[0m │\n├───┤\n│ 1 │\n└───┘\ntext"
+            "┌───┐\n│ \x1b[1ma\x1b[0m │\n├───┤\n│ 1 │\n└───┘\n\ntext"
         );
     }
 
