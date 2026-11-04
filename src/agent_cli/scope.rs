@@ -338,17 +338,17 @@ pub(super) fn cycle(
         ));
     };
     if let Err(error) = agent.set_model(&next.id) {
-        return Some(Note::Error(format!("error: {error}")));
+        return Some(Note::Error(format!("Error: {error}")));
     }
     agent.load_model_card();
     let mut unsaved = settings.remember_model(agent.root(), &next.id).err();
     if let Some(level) = &next.level {
         if let Err(error) = agent.set_effort(level.clone()) {
-            return Some(Note::Error(format!("error: {error}")));
+            return Some(Note::Error(format!("Error: {error}")));
         }
         unsaved = unsaved.or(settings.set_default_thinking_level(level).err());
     }
-    unsaved.map(|error| Note::Error(format!("error: settings not saved: {error}")))
+    unsaved.map(|error| Note::Error(format!("Error: settings not saved: {error}")))
 }
 
 /// The models `/scoped-models` has on, among `all` (the endpoint's, in its order), as
@@ -456,7 +456,7 @@ impl Interactive {
     /// sessions started later.
     pub(super) fn model(&mut self, wanted: &str) {
         let Some(models) = self.agent.listed_models() else {
-            return self.say("error: could not list the endpoint's models");
+            return self.say("Error: could not list the endpoint's models");
         };
         let chosen = match exact(wanted, &models) {
             Some(model) => Some(model.id.clone()),
@@ -477,7 +477,7 @@ impl Interactive {
                 None
             }
             None => {
-                self.say(&format!("error: no model {wanted} (/model lists them)"));
+                self.say(&format!("Error: no model {wanted} (/model lists them)"));
                 None
             }
         };
@@ -488,7 +488,7 @@ impl Interactive {
                     self.say(&format!("✓ Model set to {}", model_line(&self.agent)));
                     self.remember_model();
                 }
-                Err(error) => self.say(&format!("error: {error}")),
+                Err(error) => self.say(&format!("Error: {error}")),
             }
         }
     }

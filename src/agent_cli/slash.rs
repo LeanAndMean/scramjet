@@ -187,7 +187,7 @@ impl Interactive {
                 true
             }
             Err(error) => {
-                self.say(&format!("error: {error}"));
+                self.say(&format!("Error: {error}"));
                 false
             }
         }
@@ -202,7 +202,7 @@ impl Interactive {
         } else {
             match self.agent.set_session_name(name) {
                 Ok(()) => self.say(&self.ui.dim(&format!("Session name set: {name}"))),
-                Err(error) => self.say(&format!("error: {error}")),
+                Err(error) => self.say(&format!("Error: {error}")),
             }
         }
     }
@@ -225,7 +225,7 @@ impl Interactive {
                 self.say(&self.ui.dim(&said))
             }
             Ok(None) => self.say("Nothing to export yet"),
-            Err(error) => self.say(&format!("error: failed to export the session: {error}")),
+            Err(error) => self.say(&format!("Error: failed to export the session: {error}")),
         }
     }
 
@@ -272,7 +272,7 @@ impl Interactive {
                     saved_line(&self.agent),
                 ));
             }
-            Err(error) => self.say(&format!("error: failed to import the session: {error}")),
+            Err(error) => self.say(&format!("Error: failed to import the session: {error}")),
         }
     }
 
@@ -292,7 +292,7 @@ impl Interactive {
                 }
                 self.say(&self.ui.dim("Copied last agent message to clipboard"));
             }
-            Err(error) => self.say(&format!("error: {error}")),
+            Err(error) => self.say(&format!("Error: {error}")),
         }
     }
 
@@ -308,7 +308,7 @@ impl Interactive {
         if let Some(on) = set
             && let Err(error) = self.agent.set_autopilot(on)
         {
-            return self.say(&format!("error: {error}"));
+            return self.say(&format!("Error: {error}"));
         }
         let state = if self.agent.autopilot() { "on" } else { "off" };
         self.say(&self.ui.dim(&format!("Autopilot is {state}")));
@@ -381,12 +381,12 @@ impl Interactive {
                 Row::Installed => self.show_installed(),
                 Row::Autopilot => {
                     if let Err(error) = self.agent.set_autopilot(!self.agent.autopilot()) {
-                        self.say(&format!("error: {error}"));
+                        self.say(&format!("Error: {error}"));
                     }
                 }
                 row => {
                     if let Err(error) = self.settings.cycle(row) {
-                        self.say(&format!("error: settings not saved: {error}"));
+                        self.say(&format!("Error: settings not saved: {error}"));
                     }
                 }
             }
@@ -447,10 +447,10 @@ impl Interactive {
         };
         let level = &levels[index];
         if let Err(error) = self.agent.set_effort(level.clone()) {
-            return self.say(&format!("error: {error}"));
+            return self.say(&format!("Error: {error}"));
         }
         if let Err(error) = self.settings.set_default_thinking_level(level) {
-            self.say(&format!("error: settings not saved: {error}"));
+            self.say(&format!("Error: settings not saved: {error}"));
         }
     }
 
@@ -501,7 +501,7 @@ impl Interactive {
             let saved = self.settings.set_tools(tools);
             self.agent.set_tools(self.settings.tools.clone());
             if let Err(error) = saved {
-                self.say(&format!("error: settings not saved: {error}"));
+                self.say(&format!("Error: settings not saved: {error}"));
             }
         }
     }
@@ -648,7 +648,7 @@ impl Interactive {
             return;
         };
         if let Err(error) = self.agent.apply_suggestions(choices[index].1) {
-            self.say(&format!("error: suggested settings not saved: {error}"));
+            self.say(&format!("Error: suggested settings not saved: {error}"));
         }
     }
 
@@ -735,7 +735,7 @@ impl Interactive {
         let target = step.target.as_deref();
         let chosen = STEP_CHOICES[index].1;
         if let Err(error) = self.agent.set_next_step(&step.source, target, chosen) {
-            self.say(&format!("error: next step not saved: {error}"));
+            self.say(&format!("Error: next step not saved: {error}"));
         }
     }
 
@@ -861,7 +861,7 @@ impl Interactive {
             .agent
             .set_approval(&approval.command, approval.tool, chosen)
         {
-            self.say(&format!("error: publishing not saved: {error}"));
+            self.say(&format!("Error: publishing not saved: {error}"));
         }
     }
 
@@ -917,7 +917,7 @@ impl Interactive {
         };
         let before = std::fs::read(file).ok();
         if let Err(error) = screen.edit(file) {
-            return self.say(&format!("error: {error}"));
+            return self.say(&format!("Error: {error}"));
         }
         if std::fs::read(file).ok() == before {
             return;
@@ -962,7 +962,7 @@ impl Interactive {
             return self.say(&format!("{link} no longer leads nowhere; left as it is"));
         }
         if let Err(error) = std::fs::remove_file(file) {
-            return self.say(&format!("error: {link} not removed: {error}"));
+            return self.say(&format!("Error: {link} not removed: {error}"));
         }
         self.say(&self.ui.dim(&format!("Removed {link}, a link to {target}")));
         match self.in_turn {
@@ -1015,7 +1015,7 @@ impl Interactive {
         let sessions = match self.agent.sessions() {
             Ok(sessions) => threaded(sessions),
             Err(error) => {
-                self.say(&format!("error: {error}"));
+                self.say(&format!("Error: {error}"));
                 return false;
             }
         };
@@ -1043,17 +1043,17 @@ impl Interactive {
             }
             wanted => match wanted.parse::<usize>() {
                 Err(_) | Ok(0) => {
-                    self.say("error: /resume requires a positive session number");
+                    self.say("Error: /resume requires a positive session number");
                     None
                 }
                 Ok(number) if number > sessions.len() => {
                     self.say(&format!(
-                        "error: no session numbered {number} (/resume lists them)"
+                        "Error: no session numbered {number} (/resume lists them)"
                     ));
                     None
                 }
                 Ok(number) if current == Some(number - 1) => {
-                    self.say(&format!("error: session {number} is the current one"));
+                    self.say(&format!("Error: session {number} is the current one"));
                     None
                 }
                 Ok(number) => Some(sessions[number - 1].0.path.clone()),
@@ -1074,7 +1074,7 @@ impl Interactive {
                 true
             }
             Err(error) => {
-                self.say(&format!("error: {error}"));
+                self.say(&format!("Error: {error}"));
                 false
             }
         }
@@ -1103,7 +1103,7 @@ impl Interactive {
                 }
                 Err(error) => {
                     self.screen.as_ref()?.dismiss();
-                    self.say(&format!("error: {error}"));
+                    self.say(&format!("Error: {error}"));
                     return None;
                 }
             };
@@ -1209,7 +1209,7 @@ impl Interactive {
         let prompts = match self.agent.fork_prompts() {
             Ok(prompts) => prompts,
             Err(error) => {
-                self.say(&format!("error: {error}"));
+                self.say(&format!("Error: {error}"));
                 return;
             }
         };
@@ -1237,12 +1237,12 @@ impl Interactive {
             }
             wanted => match wanted.parse::<usize>() {
                 Err(_) | Ok(0) => {
-                    self.say("error: /fork requires a positive message number");
+                    self.say("Error: /fork requires a positive message number");
                     None
                 }
                 Ok(number) if number > prompts.len() => {
                     self.say(&format!(
-                        "error: no message numbered {number} (/fork lists them)"
+                        "Error: no message numbered {number} (/fork lists them)"
                     ));
                     None
                 }
@@ -1263,10 +1263,10 @@ impl Interactive {
                 self.set_text(prompt);
             }
             Ok(None) => self.say(&format!(
-                "error: no message numbered {} (/fork lists them)",
+                "Error: no message numbered {} (/fork lists them)",
                 index + 1
             )),
-            Err(error) => self.say(&format!("error: {error}")),
+            Err(error) => self.say(&format!("Error: {error}")),
         }
     }
 
@@ -1285,7 +1285,7 @@ impl Interactive {
                 }
             }
             Ok(false) => self.say("Nothing to clone yet"),
-            Err(error) => self.say(&format!("error: {error}")),
+            Err(error) => self.say(&format!("Error: {error}")),
         }
     }
 
@@ -1296,7 +1296,7 @@ impl Interactive {
             let session_tree = match self.agent.tree() {
                 Ok(tree) => tree,
                 Err(error) => {
-                    self.say(&format!("error: {error}"));
+                    self.say(&format!("Error: {error}"));
                     return;
                 }
             };
@@ -1326,12 +1326,12 @@ impl Interactive {
                 }
                 wanted => match wanted.parse::<usize>() {
                     Err(_) | Ok(0) => {
-                        self.say("error: /tree requires a positive entry number");
+                        self.say("Error: /tree requires a positive entry number");
                         None
                     }
                     Ok(number) if number > rows.len() => {
                         self.say(&format!(
-                            "error: no entry numbered {number} (/tree lists them)"
+                            "Error: no entry numbered {number} (/tree lists them)"
                         ));
                         None
                     }
@@ -1355,7 +1355,7 @@ impl Interactive {
                 },
                 None | Some(Ok(false)) => None,
                 Some(Err(error)) => {
-                    self.say(&format!("error: {error}"));
+                    self.say(&format!("Error: {error}"));
                     return;
                 }
             };
@@ -1382,7 +1382,7 @@ impl Interactive {
                     (wanted, reopen) = ("", Some(index));
                     continue;
                 }
-                Err(error) => self.say(&format!("error: {error}")),
+                Err(error) => self.say(&format!("Error: {error}")),
             }
             return;
         }
@@ -1424,7 +1424,7 @@ impl Interactive {
             Ok(Some(compaction)) => self.ui().compacted(&compaction, None),
             Ok(None) => self.say("Nothing to compact: the conversation is all recent."),
             Err(AgentError::Cancelled) => self.say(&self.ui.dim("(cancelled)")),
-            Err(error) => self.say(&format!("error: {error}")),
+            Err(error) => self.say(&format!("Error: {error}")),
         }
     }
 
@@ -1443,7 +1443,7 @@ impl Interactive {
             self.during_turn(|agent, ui, cancel| agent.shell(command, include, ui, cancel));
         match result {
             Ok(()) => self.spaced = true,
-            Err(error) => self.say(&format!("error: {error}")),
+            Err(error) => self.say(&format!("Error: {error}")),
         }
         true
     }

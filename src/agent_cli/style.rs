@@ -5,6 +5,10 @@ pub const RESET: &str = "\x1b[0m";
 
 /// The status line and the running command's output lines above it.
 pub const STATUS: &str = "\x1b[2m";
+/// The status line's spinner, in Scramjet's accent color, and while a request waits to be retried,
+/// in its warning color.
+pub const SPINNER: &str = "\x1b[36m";
+pub const SPINNER_RETRYING: &str = "\x1b[33m";
 /// A subagent's glyph while it runs, once it is done and when it failed, and the name of the
 /// agent or of several children's mode beside it.
 pub const SUBAGENT_RUNNING: &str = "\x1b[33m";
@@ -16,7 +20,7 @@ pub const SUBAGENT_NAME: &str = "\x1b[1m";
 pub const FOOTER: &str = "\x1b[2m";
 pub const FOOTER_NEARLY_FULL: &str = "\x1b[33m";
 pub const FOOTER_FULL: &str = "\x1b[31m";
-/// Secondary notes: `took 1.2s`, `(cancelled)`, why a compaction ran, editor hints.
+/// Secondary notes: `Took 1.2s`, `(cancelled)`, why a compaction ran, editor hints.
 pub const MUTED: &str = "\x1b[2m";
 /// A tool's result preview.
 pub const TOOL_OUTPUT: &str = "\x1b[2m";

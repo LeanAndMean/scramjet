@@ -20,11 +20,35 @@ use scramjet_rs::agent::{
 use std::{
     io::{BufRead, IsTerminal, Write},
     sync::{
-        Arc, Mutex,
+        Arc, LazyLock, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
+
+/// Scramjet's spinner, a frame each `SPIN`.
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPIN: Duration = Duration::from_millis(80);
+/// Counted from one start, so that the spinner turns on evenly as the activity changes.
+static SPUN: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// The spinner's frame now, in `color`.
+pub(super) fn spinner(color: &str) -> String {
+    format!("{color}{}{}", frame(SPUN.elapsed()), style::RESET)
+}
+
+/// How long until the spinner's next frame.
+pub(super) fn next_spin() -> Duration {
+    let spun = SPUN.elapsed();
+    SPIN.saturating_sub(Duration::from_millis(
+        (spun.as_millis() % SPIN.as_millis()) as u64,
+    ))
+}
+
+/// The spinner's frame once it has turned for `spun`.
+fn frame(spun: Duration) -> char {
+    SPINNER[(spun.as_millis() / SPIN.as_millis()) as usize % SPINNER.len()]
+}
 
 /// Changes the terminal's input settings until dropped.
 pub(super) struct InputMode(Option<Termios>);
@@ -102,14 +126,14 @@ impl Status {
         Some(self.activity_line()? + &note)
     }
     /// The line without its note.
-    pub(super) fn activity_line(&self) -> Option<String> {
+    fn activity_line(&self) -> Option<String> {
         let (activity, since) = self.activity.as_ref()?;
         Some(match self.countdown {
             Some(wait) => {
                 let left = wait.saturating_sub(since.elapsed()).as_secs_f64().ceil();
-                format!("… {activity} {left}s")
+                format!("{activity} {left}s")
             }
-            None => format!("… {activity}{}", elapsed(since.elapsed().as_secs())),
+            None => format!("{activity}{}", elapsed(since.elapsed().as_secs())),
         })
     }
     fn draw(&mut self) {
@@ -127,7 +151,12 @@ impl Status {
             .iter()
             .map(|line| format!("  {}{line}{}\n", style::STATUS, style::RESET))
             .collect();
-        block += &format!("{}{}{}", style::STATUS, clip(&text, width), style::RESET);
+        let color = match self.countdown {
+            Some(_) => style::SPINNER_RETRYING,
+            None => style::SPINNER,
+        };
+        let text = clip(&text, width.saturating_sub(2));
+        block += &format!("{} {}{text}{}", spinner(color), style::STATUS, style::RESET);
         if self.drawn.as_deref() == Some(&block) {
             return;
         }
@@ -135,12 +164,11 @@ impl Status {
         self.rows_above = self.output.len();
         self.drawn = Some(block);
     }
-    /// Moves to the first row drawn and clears from there.
+    /// Clears the rows drawn, from the last up to the first, where it leaves the cursor. Row by
+    /// row: tmux keeps a screen cleared to its end from the top left in its history, which on
+    /// the top row would fill it with the spinner's frames.
     fn erase(&self) -> String {
-        match self.rows_above {
-            0 => "\r\x1b[J".into(),
-            rows => format!("\r\x1b[{rows}A\x1b[J"),
-        }
+        "\r\x1b[2K".to_owned() + &"\x1b[A\x1b[2K".repeat(self.rows_above)
     }
     /// Removes the line, the output above it and the activity. Returns whether it was shown.
     fn clear(&mut self) -> bool {
@@ -207,17 +235,20 @@ pub(super) fn context(count: u64, window: Option<u64>) -> String {
     }
 }
 
-/// What the status line says while a request for `purpose` runs, in Scramjet's words.
+/// What the status line says while a request for `purpose` runs, before anything of it arrives.
 pub(super) fn waiting_for(purpose: Purpose) -> &'static str {
     match purpose {
-        Purpose::Reply => "thinking",
-        Purpose::Compaction(None) => "compacting context",
-        Purpose::Compaction(Some(AutoCompaction::Threshold)) => "auto-compacting",
-        Purpose::Compaction(Some(AutoCompaction::Overflow)) => {
-            "context overflow detected, auto-compacting"
-        }
-        Purpose::BranchSummary => "summarizing branch",
+        Purpose::Reply => "Waiting for reply",
+        Purpose::Compaction(None) => "Compacting context",
+        Purpose::Compaction(Some(AutoCompaction::Threshold)) => "Auto-compacting",
+        Purpose::Compaction(Some(AutoCompaction::Overflow)) => "Context overflow, compacting",
+        Purpose::BranchSummary => "Summarizing branch",
     }
+}
+
+/// What the status line says while a request waits to be sent again, before the seconds left.
+pub(super) fn retrying(attempt: u32, retries: u32) -> String {
+    format!("Retrying ({attempt}/{retries}) in")
 }
 
 pub(super) fn elapsed(seconds: u64) -> String {
@@ -455,7 +486,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             }
         }
         if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
-            let took = self.dim(&format!("took {:.1}s", took.as_secs_f64()));
+            let took = self.dim(&format!("Took {:.1}s", took.as_secs_f64()));
             self.err(&format!("{gutter}{took}\n"));
         }
         // As in Scramjet, a blank line separates each tool block from what follows.
@@ -532,7 +563,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             let mut hidden = hide.load(Ordering::Relaxed);
             std::thread::spawn(move || {
                 loop {
-                    std::thread::sleep(Duration::from_millis(200));
+                    std::thread::sleep(next_spin());
                     let mut status = status.lock().unwrap();
                     // Ctrl+T during a turn arrives as a signal; say at once what it did.
                     if hide.load(Ordering::Relaxed) != hidden {
@@ -541,10 +572,9 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                         status.draw();
                     }
                     // An activity set without drawing appears once it has lasted a second.
-                    if status
-                        .activity
-                        .as_ref()
-                        .is_some_and(|(_, since)| since.elapsed() >= Duration::from_secs(1))
+                    if status.drawn.is_some()
+                        || (status.activity.as_ref())
+                            .is_some_and(|(_, since)| since.elapsed() >= Duration::from_secs(1))
                     {
                         status.draw();
                     }
@@ -692,7 +722,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         }
         self.print_streamed(&text);
         if paragraph {
-            self.show("thinking".into(), false);
+            self.show("Thinking".into(), false);
         }
     }
     /// Streams reasoning, or while Ctrl+T hides it, Scramjet's `Thinking...` line in its place.
@@ -720,7 +750,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                 self.err(&format!("{marker}\n\n"));
                 self.streaming = Streaming::Reasoning;
                 self.printed_newlines = 2;
-                self.show("thinking".into(), true);
+                self.show("Thinking".into(), true);
             }
             (true, true) => {}
         }
@@ -809,20 +839,22 @@ impl AgentUi for Terminal {
             }
             StreamProgress::Call(name) => {
                 self.clear();
-                self.show(format!("preparing {name}"), true);
+                self.show(format!("Preparing {name}"), true);
             }
         }
     }
     fn retrying(&mut self, error: &str, attempt: u32, retries: u32, delay: Duration) {
         self.clear();
         let text = format!(
-            "{}\nretrying in {}s ({attempt}/{retries}; Ctrl-C cancels)",
+            "{}\n{} {}s (Ctrl-C to cancel)",
             visible(error),
+            retrying(attempt, retries),
             delay.as_secs_f64().ceil()
         );
         let text = self.styled(style::WARNING, &self.wrapped(&text));
-        self.err(&format!("{text}\n"));
-        self.show_countdown("retrying in".into(), delay);
+        // As every block, it ends with a blank line before what follows.
+        self.err(&format!("{text}\n\n"));
+        self.show_countdown(retrying(attempt, retries), delay);
     }
     fn assistant(&mut self, text: &str) {
         self.clear();
@@ -889,7 +921,7 @@ impl AgentUi for Terminal {
     }
     fn tool_running(&mut self, since: Instant) {
         self.tool_started = Some(since);
-        self.show_since("running".into(), since);
+        self.show_since("Running".into(), since);
     }
     fn tool_output(&mut self, output: &str) {
         if !self.live() {
@@ -928,7 +960,7 @@ impl AgentUi for Terminal {
     }
     fn command_started(&mut self, command: &str, include: bool) {
         self.command = Some((command.to_owned(), include));
-        self.show("running".into(), false);
+        self.show("Running".into(), false);
     }
     fn command_result(&mut self, ran: &UserCommand) {
         self.command = None;
@@ -936,7 +968,7 @@ impl AgentUi for Terminal {
     }
     fn stopped(&mut self, error: Option<&str>) {
         let text = match error {
-            Some(error) => format!("error: {}", visible(error)),
+            Some(error) => format!("Error: {}", visible(error)),
             None => self.dim("(cancelled)"),
         };
         self.said(&text);
@@ -1120,7 +1152,7 @@ impl Terminal {
     }
     pub(super) fn compaction_error(&mut self, error: &str) {
         self.clear();
-        let text = self.wrapped(&format!("error: automatic compaction failed: {error}"));
+        let text = self.wrapped(&format!("Error: automatic compaction failed: {error}"));
         self.err(&format!("{text}\n\n"));
     }
     /// An approval question as it stays on screen once answered.
@@ -1962,20 +1994,30 @@ breaks\\u{{1b}}[2J.\n\n{result}\n"
         assert_eq!(shown, ["", " 1s", " 59s", " 1m 00s", " 3m 05s"]);
         let started = Instant::now() - Duration::from_millis(1500);
         let mut status = Status {
-            activity: Some(("retrying in".into(), started)),
+            activity: Some((retrying(2, 3), started)),
             countdown: Some(Duration::from_secs(4)),
             ..Status::default()
         };
-        assert_eq!(status.line().unwrap(), "… retrying in 3s");
+        assert_eq!(status.line().unwrap(), "Retrying (2/3) in 3s");
         status.countdown = Some(Duration::from_secs(1));
-        assert_eq!(status.line().unwrap(), "… retrying in 0s");
+        assert_eq!(status.line().unwrap(), "Retrying (2/3) in 0s");
+        status.activity = Some(("Thinking".into(), started));
         status.countdown = None;
         status.note = Some(("Thinking blocks: hidden", Instant::now()));
         assert_eq!(
             status.line().unwrap(),
-            "… retrying in 1s · Thinking blocks: hidden"
+            "Thinking 1s · Thinking blocks: hidden"
         );
         status.note = Some(("Thinking blocks: hidden", started - NOTE_TIME));
-        assert_eq!(status.line().unwrap(), "… retrying in 1s");
+        assert_eq!(status.line().unwrap(), "Thinking 1s");
+    }
+    #[test]
+    fn the_spinner_shows_scramjets_frames_in_turn() {
+        let at = |ms| frame(Duration::from_millis(ms));
+        assert_eq!(
+            [0, 79, 80, 160, 799, 800].map(at),
+            ['⠋', '⠋', '⠙', '⠹', '⠏', '⠋']
+        );
+        assert!(next_spin() > Duration::ZERO && next_spin() <= SPIN);
     }
 }

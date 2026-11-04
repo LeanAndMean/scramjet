@@ -623,15 +623,19 @@ def stats(left, right, columns=60):
     return left + ' ' * (columns - 1 - len(left) - len(right)) + right
 
 
+# The status line's spinner, then what the agent does: `\u2839 Running 1s (Esc to interrupt)`.
+SPINNING = '[\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f] '
+
+
 def ended(read, output, columns=60, rows=24):
     """Waits until no turn runs: the status line over the prompt's rule does not say what runs
-    (`\u2026 thinking`, `\u2026 running 1s`, \u2026); returns the rows. Wait for something the turn
-    shows first, as before it starts none runs either."""
+    (`\u2839 Waiting for reply`, `\u2839 Running 1s`, `Waiting for you`, \u2026); returns the rows.
+    Wait for something the turn shows first, as before it starts none runs either."""
     end = time.monotonic() + 10
     while True:
         shown = Screen(output, columns, rows).rows()
         rules = [index for index, row in enumerate(shown) if re.fullmatch('\u2500{20,}', row)]
-        if rules and rules[-1] > 0 and not shown[rules[-1] - 1].startswith('\u2026 '):
+        if rules and rules[-1] > 0 and not re.match(SPINNING + '|Waiting for you', shown[rules[-1] - 1]):
             return shown
         assert time.monotonic() < end, shown
         read(.05)
@@ -652,8 +656,8 @@ def first(read, until, send, output):
     ending(read, output, ['> one', '. two'])
     # Shift+Enter, as kitty's protocol sends it, adds a line; the prompt is sent trimmed.
     send(b'\x1b[13;2uthree\x1b[13;2u\r')
-    rows = on_screen('error: provider: cannot connect')
-    assert '\n> one\n. two\n. three\n\nerror: provider' in '\n'.join(rows), rows
+    rows = on_screen('Error: provider: cannot connect')
+    assert '\n> one\n. two\n. three\n\nError: provider' in '\n'.join(rows), rows
     send(b'\x1b[A')
     ending(read, output, ['> one', '. two', '. three'])
     send(b'\x03')
@@ -685,9 +689,9 @@ def suspend_without_job_control(read, until, send, output):
     send(b'c')
     on_screen('> abc')
     send(b'\x15go\r')
-    on_screen('thinking')
+    on_screen('Waiting for reply')
     send(b'\x1a')
-    on_screen('thinking 2s')
+    on_screen('Waiting for reply 2s')
     send(b'\x1b')
     on_screen('(cancelled)')
     send(b'\x04')
@@ -698,9 +702,9 @@ def cancel_retry(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     # Wrapped, as the full screen cuts what is wider than it.
-    rows = on_screen('retrying in 2s (1/3; Ctrl-C cancels)')
+    rows = on_screen('Retrying (1/3) in 2s (Ctrl-C to cancel)')
     assert 'Connection refused (os error 111) (is Proxy running?)' in ' '.join(rows), rows
-    assert rows[-3].startswith('\u2026 retrying in 2s') or rows[-3].startswith('\u2026 retrying in 1s'), rows
+    assert re.match(SPINNING + 'Retrying \\(1/3\\) in [12]s \\(Esc to cancel\\)', rows[-3]), rows
     send(b'\x03')
     on_screen('(cancelled)')
     send(b'\x04')
@@ -710,7 +714,7 @@ def escape_cancels_command(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'!sleep 30\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'\x1b')
     on_screen(' (cancelled)')
     send(b'\x04')
@@ -739,7 +743,7 @@ def approval_keeps_the_prompt(read, until, send, output):
     send(b'go\r')
     on_screen('Allow? [y/N, a = allow all until exit]')
     send(b'y')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'kept')
     on_screen('> kept')
     # The next question takes the editor's place; the text typed comes back after it.
@@ -884,12 +888,13 @@ assert not running('sleep 32.5')
 run(['-p', 'go'], printed_cancelled_twice, calling, status=130)
 
 
-def thinking_counts_seconds(read, until, send, output):
+def waiting_counts_seconds(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('\u2026 thinking 1s (Esc to interrupt)')
-    on_screen('\u2026 thinking 2s')
+    rows = on_screen('Waiting for reply 1s (Esc to interrupt)')
+    assert re.fullmatch(SPINNING + 'Waiting for reply 1s \\(Esc to interrupt\\)', rows[-3]), rows
+    on_screen('Waiting for reply 2s')
     # A key's escape sequence is not an Escape.
     send(b'\x1b[C')
     read(.3)
@@ -939,7 +944,7 @@ def quiet_after_reasoning_shows_thinking(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     on_screen('the paragraph ends here.')
-    on_screen('\u2026 thinking 1s')
+    on_screen('Thinking 1s')
     send(b'\x1b')
     on_screen('(cancelled)')
     send(b'\x04')
@@ -950,8 +955,8 @@ def running_counts_seconds(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     on_screen('\u25cf bash setsid sleep 5 & sleep 30')
-    on_screen('\u2026 running 1s')
-    on_screen('\u2026 running 2s')
+    on_screen('Running 1s')
+    on_screen('Running 2s')
     send(b'\x1b')
     on_screen('(cancelled)')
     send(b'\x04')
@@ -981,12 +986,12 @@ def calls_running_together_show_at_once(read, until, send, output):
     both = ('\u25cf bash echo one-$((0+1)); sleep 2; echo one-$((1+1))\n  one-1\n\n'
             '\u25cf bash echo two-$((0+1)); sleep 4; echo two-$((1+1))\n  two-1\n')
     assert both in text, text
-    assert '\u2026 running' in text, text
+    assert re.search(SPINNING + 'Running', text), text
     # The first ended above the second, which still runs.
     rows = on_screen('  one-2')
     text = '\n'.join(rows)
     assert text.index('  one-2') < text.index('\u25cf bash echo two'), text
-    assert '  two-1\n' in text and '  two-2' not in text and '\u2026 running' in text, text
+    assert '  two-1\n' in text and '  two-2' not in text and re.search(SPINNING + 'Running', text), text
     rows = on_screen('Both ended.')
     text = '\n'.join(rows)
     assert text.index('  one-2') < text.index('  two-2') < text.index('Both ended.'), text
@@ -1014,7 +1019,7 @@ def suspend_in_shell(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     # In the editor when the agent stops; the shell must not get it.
     send(b'echo LEAK$((1+1))')
     on_screen('> echo LEAK$((1+1))')
@@ -1025,7 +1030,7 @@ def suspend_in_shell(read, until, send, output):
     send(b'fg\r')
     mark = until(b'\x1b[?1049h', mark)
     # The screen again, the turn still running and the text kept.
-    on_screen('running')
+    on_screen('Running')
     ending(read, output, ['> echo LEAK$((1+1))'])
     send(b'\x15')
     send(b'\x1b')
@@ -1050,7 +1055,7 @@ def suspend_in_shell(read, until, send, output):
     assert b'LEAK2' not in output, 'text typed during the turn ran in the shell'
 
 
-run([], thinking_counts_seconds, hanging)
+run([], waiting_counts_seconds, hanging)
 run([], quiet_after_reasoning_shows_thinking, quiet_reasoning)
 hiding = config_home('hiding')
 thought_gate = threading.Event()
@@ -1072,12 +1077,12 @@ def new_session(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'one\r')
-    on_screen('error: provider: cannot connect')
+    on_screen('Error: provider: cannot connect')
     send(b'/clear\r')
     rows = on_screen('\u2713 New session started')
     assert '> one' not in rows, rows
     send(b'two\r')
-    on_screen('error: provider: cannot connect')
+    on_screen('Error: provider: cannot connect')
     # Up recalls the prompts of the session before too.
     send(b'\x1b[A\x1b[A')
     ending(read, output, ['> one'])
@@ -1108,7 +1113,7 @@ def completes_paths_and_commands(read, until, send, output):
     send(b'\r')
     ending(read, output, ['> see completion/alpine-file and completion/unique-file'])
     send(b'\r')
-    on_screen('error: provider: cannot connect')
+    on_screen('Error: provider: cannot connect')
     # `/autopilot`'s argument is completed too, and Enter puts it in without sending it.
     send(b'/autopilot s')
     ending(read, output, ['> /autopilot s', '\u2192 status'])
@@ -1177,7 +1182,7 @@ def bang_commands(read, until, send, output):
     send(b'!!echo secret\r')
     on_screen(' secret')
     send(b'!sleep 30\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'\x03')
     on_screen(' (cancelled)')
     send(b'\x1b[A\x1b[A')
@@ -1189,14 +1194,14 @@ def failed_after_bang(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen(' secret')
     send(b'hello\r')
-    on_screen('error: provider: cannot connect')
+    on_screen('Error: provider: cannot connect')
     send(b'\x03\x04')
 
 
 def resumed_bang_and_error(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
-    rows = '\n'.join(on_screen('error: provider: cannot connect'))
-    assert ' $ echo secret\n\n secret\n' in rows and '> hello\n\nerror: provider: cannot connect' in rows, rows
+    rows = '\n'.join(on_screen('Error: provider: cannot connect'))
+    assert ' $ echo secret\n\n secret\n' in rows and '> hello\n\nError: provider: cannot connect' in rows, rows
     send(b'\x03\x04')
 
 
@@ -1208,7 +1213,7 @@ def edited_in_editor(read, until, send, output):
     send(b'\x07')
     ending(read, output, ['> edited', '. line two'])
     send(b'\r')
-    on_screen('error: provider: cannot connect')
+    on_screen('Error: provider: cannot connect')
     send(b'\x04')
 
 
@@ -1263,7 +1268,7 @@ def fork_session(read, until, send, output):
     send(b'\x1b')
     ending(read, output, EMPTY)
     send(b'/fork 3\r')
-    on_screen('error: no message numbered 3 (/fork lists them)')
+    on_screen('Error: no message numbered 3 (/fork lists them)')
     send(b'/fork\r')
     on_screen('Fork from message')
     send(b'\x1b[B')
@@ -1469,7 +1474,7 @@ def tree_session(read, until, send, output):
     assert 'Session Tree' not in '\n'.join(shown()), shown()
     send(b'\x03')
     send(b'/tree 9\r')
-    on_screen('error: no entry numbered 9 (/tree lists them)')
+    on_screen('Error: no entry numbered 9 (/tree lists them)')
     send(b'\x04')
 
 
@@ -1633,7 +1638,7 @@ def ctrl_p_cycles_models(read, until, send, output):
     footer_shows(read, output, [project, stats('0', 'gpt-6-terra \u2022 high', 80)], columns=80)
     # During a turn, the next request goes to the next model, as the footer says once it starts.
     send(b'go\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'\x10')
     on_screen('The model changes before the next request')
     footer_shows(read, output, [project, stats('?', 'gpt-6-luna \u2022 low', 80)], columns=80)
@@ -1780,7 +1785,7 @@ def settings_menu(read, until, send, output):
     ending(read, output, EMPTY)
     # Typed during a turn, it opens at the turn's next request, which then has what it changed.
     send(b'go\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'/settings\r')
     on_screen('Command: /settings')
     on_screen('Settings  \u2191\u2193 move')
@@ -1865,7 +1870,7 @@ def broken_settings_are_kept(read, until, send, output):
     on_screen('Thinking blocks: hidden')
     send(b'\x04')
     # Once the terminal is back.
-    until(b'error: settings not saved: ', until(b'\x1b[?1049l'))
+    until(b'Error: settings not saved: ', until(b'\x1b[?1049l'))
 
 
 def name_and_session(read, until, send, output):
@@ -2331,13 +2336,13 @@ def reloads(read, until, send, output):
     rows = on_screen('\u2192 /fresh:hi')
     assert rows[-1].split() == ['\u2192', '/fresh:hi', 'Say', 'hi'], rows
     send(b'\tthere\r')
-    on_screen('thinking 1s')
+    on_screen('Waiting for reply 1s')
     # As in Scramjet, not while a turn runs.
     send(b'/reload\r')
     rows = on_screen('Wait for the current response to finish before reloading.')
     # After the status line's activity, above the editor.
-    assert re.fullmatch('\u2026 thinking \\d+s \\(Esc to interrupt\\) \u00b7 Wait for the current response to finish '
-                        'before reloading\\.', rows[-3]) and rows[-1] == '>', rows
+    assert re.fullmatch(SPINNING + 'Waiting for reply \\d+s \\(Esc to interrupt\\) \u00b7 Wait for the current response '
+                        'to finish before reloading\\.', rows[-3]) and rows[-1] == '>', rows
     reload_gate.set()
     on_screen('Hi.')
     send(b'\x04')
@@ -2437,7 +2442,7 @@ def installed_edited_during_turn(read, until, send, output):
     shown, on_screen = full_screen(120, 40)(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     # Opened before the turn's next request, which waits for it; what changed is read once it ends.
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
@@ -3215,11 +3220,11 @@ def fullscreen_typed_during_turn(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     # The editor takes keys while the turn runs, and shows them.
     send(b'next one')
     rows = on_screen('> next one')
-    assert any(row.startswith('\u2026 running') for row in rows), rows
+    assert any(re.match(SPINNING + 'Running', row) for row in rows), rows
     send(b'\x1b')
     rows = on_screen('(cancelled)')
     assert rows[-1] == '> next one', rows
@@ -3247,7 +3252,7 @@ def fullscreen_queue(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'steer this\r')
     on_screen('Steering: steer this')
     # A command set's command is queued too, and starts where it is sent.
@@ -3266,7 +3271,7 @@ def fullscreen_queue(read, until, send, output):
             < text.index('Checked.')), text
     assert 'Steering:' not in text and 'Follow-up:' not in text, text
     send(b'again\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'kept\r')
     on_screen('Steering: kept')
     # Escape interrupts the turn and puts what it did not take back in the editor.
@@ -3281,7 +3286,7 @@ def fullscreen_commands_during_turn(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     # `/status`, typed as Scramjet's `/session`, and `/model` run before the turn's next
     # request, which goes to the model chosen.
     send(b'/session\r/model\r')
@@ -3298,7 +3303,7 @@ def fullscreen_commands_during_turn(read, until, send, output):
     assert text.index('\u2713 Model set to gpt-6-terra') < text.index('Switched.'), text
     # `/new` stops the turn first; what it did not take goes back in the editor.
     send(b'again\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'kept\r')
     on_screen('Steering: kept')
     send(b'/new\r')
@@ -3306,7 +3311,7 @@ def fullscreen_commands_during_turn(read, until, send, output):
     assert 'Restored 1 queued message to editor' in '\n'.join(rows), rows
     assert rows[-1] == '> kept', rows
     send(b'\x15more\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     # `/quit` leaves at once.
     send(b'/quit\r')
 
@@ -3335,7 +3340,7 @@ def prompt_keys(read, until, send, output):
     ending(read, output, ['> alXpha'])
     # During a turn, it waits for the turn's next request, as /model typed then does.
     send(b'\x05\x15go\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'draft\x0c')
     rows = on_screen('Command: /model')
     assert rows[-1] == '> draft', rows
@@ -3358,7 +3363,7 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     # Shift+Tab chooses the effort of the turn's next request; the footer says so at once.
     send(b'\x1b[Z')
     footer_shows(read, output, [project, stats('?', 'gpt-6-luna \u2022 high')])
@@ -3373,7 +3378,7 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     assert text.index('Replied.') < text.index(' $ echo side$((0+1))'), text
     assert text.count('side2') == 1, text
     send(b'again\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'!sleep 30\r')
     on_screen(' $ sleep 30')
     send(b'!echo no\r')
@@ -3542,7 +3547,7 @@ def copy_command(read, until, send, output):
     copied(markdown_reply)
     # Typed during a turn, it copies the latest reply before the turn's next request.
     send(b'again\r')
-    on_screen('running 1s')
+    on_screen('Running 1s')
     send(b'/copy\r')
     on_screen('Command: /copy')
     copied('Checking.')
@@ -3796,7 +3801,7 @@ run([], copy_command_by_the_terminal, serve_items([[message(markdown_reply)]]))
 # With piped input the clipboard tool copies; without one there is no terminal for OSC 52.
 for variables, said in [({'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test',
                           'CLIPBOARD': clipboard}, 'Copied last agent message to clipboard'),
-                        ({}, 'error: Failed to copy to clipboard')]:
+                        ({}, 'Error: Failed to copy to clipboard')]:
     if os.path.exists(clipboard):
         os.remove(clipboard)
     ran = subprocess.run([BINARY, '--endpoint', serve_items([[message('Piped **reply**.')]])], cwd=project,

@@ -131,12 +131,12 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         if agent.model() != model
             && let Err(error) = settings.remember_model(agent.root(), agent.model())
         {
-            eprintln!("error: settings not saved: {error}");
+            eprintln!("Error: settings not saved: {error}");
         }
         result
     });
     if let Err(error) = settings.set_hide_thinking_block(hide_thinking.load(Ordering::Relaxed)) {
-        eprintln!("error: settings not saved: {error}");
+        eprintln!("Error: settings not saved: {error}");
     }
     result
 }

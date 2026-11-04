@@ -292,7 +292,7 @@ scopes do not overlap; tool calls outside them are not blocked.</div>";
         self.block();
         self.out += &match error {
             Some(error) => format!(
-                "<div class=\"error\">error: {}</div>\n",
+                "<div class=\"error\">Error: {}</div>\n",
                 escape(&visible(error))
             ),
             None => "<div class=\"note\">(cancelled)</div>\n".to_owned(),

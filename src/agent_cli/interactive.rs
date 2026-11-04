@@ -355,10 +355,10 @@ impl Interactive {
         let unsaved =
             changed.and_then(|level| self.settings.set_default_thinking_level(level).err());
         if let Some(error) = unset {
-            self.say(&format!("error: {error}"));
+            self.say(&format!("Error: {error}"));
         }
         if let Some(error) = unsaved {
-            self.say(&format!("error: settings not saved: {error}"));
+            self.say(&format!("Error: settings not saved: {error}"));
         }
     }
 
@@ -523,14 +523,14 @@ impl Interactive {
                     self.agent.load_model_card();
                     self.remember_model();
                 }
-                Err(error) => self.say(&format!("error: model not set to {model}: {error}")),
+                Err(error) => self.say(&format!("Error: model not set to {model}: {error}")),
             }
         }
         if let Some(level) = &routed.effort {
             if let Err(error) = self.agent.set_effort(level) {
-                self.say(&format!("error: {error}"));
+                self.say(&format!("Error: {error}"));
             } else if let Err(error) = self.settings.set_default_thinking_level(level) {
-                self.say(&format!("error: settings not saved: {error}"));
+                self.say(&format!("Error: settings not saved: {error}"));
             }
         }
         let line = format!("Next step runs with {}", model_line(&self.agent));
@@ -542,7 +542,7 @@ impl Interactive {
     pub(super) fn remember_model(&mut self) {
         let model = self.agent.model().to_owned();
         if let Err(error) = self.settings.remember_model(self.agent.root(), &model) {
-            self.say(&format!("error: settings not saved: {error}"));
+            self.say(&format!("Error: settings not saved: {error}"));
         }
     }
 
@@ -568,7 +568,7 @@ impl Interactive {
     pub(super) fn save_hide_thinking(&mut self) {
         let hide = self.hide_thinking.load(Ordering::Relaxed);
         if let Err(error) = self.settings.set_hide_thinking_block(hide) {
-            self.say(&format!("error: settings not saved: {error}"));
+            self.say(&format!("Error: settings not saved: {error}"));
         }
     }
 
@@ -579,7 +579,7 @@ impl Interactive {
                 self.ui().next_step(&record);
                 self.spaced = true;
             }
-            Err(error) => self.say(&format!("error: next step not recorded: {error}")),
+            Err(error) => self.say(&format!("Error: next step not recorded: {error}")),
         }
     }
 
@@ -683,7 +683,7 @@ impl Interactive {
 fn add_shells(agent: &mut Agent, screen: &mut Handle) {
     for shell in screen.take_shells() {
         if let Err(error) = agent.add_shell(shell, &mut screen.link) {
-            screen.say(&format!("error: {error}"));
+            screen.say(&format!("Error: {error}"));
         }
     }
 }
@@ -740,7 +740,7 @@ fn cycle_effort(agent: &mut Agent, settings: &mut Settings) -> Option<Note> {
     if let Ok(Some(level)) = &cycled
         && let Err(error) = settings.set_default_thinking_level(level)
     {
-        return Some(Note::Error(format!("error: settings not saved: {error}")));
+        return Some(Note::Error(format!("Error: settings not saved: {error}")));
     }
     effort_note(cycled)
 }
@@ -752,7 +752,7 @@ pub(super) fn effort_note(cycled: Result<Option<String>, AgentError>) -> Option<
         Ok(None) => Some(Note::Info(
             "Current model does not support thinking".to_owned(),
         )),
-        Err(error) => Some(Note::Error(format!("error: {error}"))),
+        Err(error) => Some(Note::Error(format!("Error: {error}"))),
     }
 }
 

@@ -17,7 +17,9 @@ use super::select::{Act, Picked, Picker, Routed, Spot, Toggle};
 use super::selection::{self, Line};
 use super::settings::{Delivery, DoubleEscape, MarkdownReads, Settings};
 use super::slash::Builtin;
-use super::terminal::{COMMAND_LINES, Terminal, elapsed, waiting_for};
+use super::terminal::{
+    COMMAND_LINES, Terminal, elapsed, next_spin, retrying, spinner, waiting_for,
+};
 use super::text::{Wrap, clip, columns, one_line, plain, visible};
 use super::{clipboard, editor, job, style};
 use rustix::{
@@ -41,7 +43,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// How often the status line's seconds are counted while a turn runs.
+/// How often an `@` search is looked at for its entries.
 const TICK: Duration = Duration::from_millis(200);
 /// The shortest time between two frames, so that a fast stream does not redraw for each delta.
 const FRAME: Duration = Duration::from_millis(16);
@@ -449,8 +451,8 @@ impl Drop for Handle {
     fn drop(&mut self) {
         self.link.send(ToScreen::Quit);
         match self.thread.take().map(JoinHandle::join) {
-            Some(Ok(Err(error))) => eprintln!("error: {error}"),
-            Some(Err(_)) => eprintln!("error: the screen failed"),
+            Some(Ok(Err(error))) => eprintln!("Error: {error}"),
+            Some(Err(_)) => eprintln!("Error: the screen failed"),
             _ => {}
         }
     }
@@ -595,7 +597,8 @@ struct Activity {
     since: Instant,
     /// Shows the seconds left of this wait instead of the elapsed seconds.
     countdown: Option<Duration>,
-    /// What Escape does meanwhile, as Scramjet's status says: `interrupt` or `cancel`.
+    /// What Escape does meanwhile, as Scramjet's status says: `interrupt` or `cancel`; `None`
+    /// while the turn waits for the user's answer, when no spinner turns either.
     escape: Option<&'static str>,
 }
 
@@ -616,21 +619,30 @@ impl Activity {
             ..Self::new(what)
         }
     }
+    /// The turn waits for the user to answer a question.
+    fn asking() -> Self {
+        Self {
+            escape: None,
+            ..Self::new("Waiting for you")
+        }
+    }
     /// What the status line says once `event` happened, if that changes it.
     fn after(event: &Event) -> Option<Self> {
         Some(match event {
-            Event::Waiting(Purpose::Reply) => Self::new("thinking"),
+            Event::Waiting(Purpose::Reply) => Self::new(waiting_for(Purpose::Reply)),
             Event::Waiting(purpose) => Self::cancellable(waiting_for(*purpose)),
-            Event::Progress(StreamProgress::Call(name)) => Self::new(format!("preparing {name}")),
+            Event::Progress(StreamProgress::Reasoning(_)) => Self::new("Thinking"),
+            Event::Progress(StreamProgress::Text(_)) => Self::new("Responding"),
+            Event::Progress(StreamProgress::Call(name)) => Self::new(format!("Preparing {name}")),
             Event::ToolRunning(since) => Self {
                 since: *since,
-                ..Self::new("running")
+                ..Self::new("Running")
             },
-            Event::CommandStarted(..) => Self::new("running"),
-            Event::ToolResult(..) | Event::CommandResult(..) => Self::new("working"),
-            Event::Retrying(_, _, _, delay) => Self {
+            Event::CommandStarted(..) => Self::new("Running"),
+            Event::ToolResult(..) | Event::CommandResult(..) => Self::new("Working"),
+            Event::Retrying(_, attempt, retries, delay) => Self {
                 countdown: Some(*delay),
-                ..Self::cancellable("retrying in")
+                ..Self::cancellable(retrying(*attempt, *retries))
             },
             _ => return None,
         })
@@ -644,13 +656,31 @@ impl Activity {
         match self.countdown {
             Some(wait) => {
                 let left = wait.saturating_sub(self.since.elapsed()).as_secs_f64();
-                format!("… {} {}s{hint}", self.what, left.ceil())
+                format!("{} {}s{hint}", self.what, left.ceil())
             }
             None => format!(
-                "… {}{}{hint}",
+                "{}{}{hint}",
                 self.what,
                 elapsed(self.since.elapsed().as_secs())
             ),
+        }
+    }
+    /// The status line's text after the spinner, while the agent works.
+    fn shown(&self, escape: bool) -> String {
+        let color = match self.countdown {
+            Some(_) => style::SPINNER_RETRYING,
+            None => style::SPINNER,
+        };
+        match self.escape {
+            // Out of the status line's dim style, as Scramjet's accent color shows it.
+            Some(_) => format!(
+                "{}{}{} {}",
+                style::RESET,
+                spinner(color),
+                style::STATUS,
+                self.line(escape)
+            ),
+            None => self.line(escape),
         }
     }
 }
@@ -1095,8 +1125,9 @@ impl App {
                 self.edge_scroll();
             }
             let since = self.drawn_at.elapsed();
-            let mut wait = match self.activity.is_some() || self.draft.searching() {
-                true => TICK,
+            let mut wait = match self.activity.is_some() {
+                true => next_spin(),
+                false if self.draft.searching() => TICK,
                 false => RESIZE_CHECK,
             };
             if let Some(edge) = &self.edge {
@@ -1193,7 +1224,7 @@ impl App {
             ToScreen::Turn(efforts) => {
                 let running = efforts.is_some();
                 self.transcript.split();
-                self.activity = running.then(|| Activity::new("working"));
+                self.activity = running.then(|| Activity::new("Working"));
                 if let Some(efforts) = efforts {
                     self.efforts = efforts;
                 }
@@ -1249,10 +1280,7 @@ impl App {
                 });
                 self.top = None;
                 if let Some(activity) = &mut self.activity {
-                    *activity = Activity {
-                        escape: None,
-                        ..Activity::new("waiting for you")
-                    };
+                    *activity = Activity::asking();
                 }
                 self.replay();
             }
@@ -1317,7 +1345,7 @@ impl App {
             ) => {
                 let _ = reply.send(Answer::Label(entry, Some(picker)));
                 if let Some(activity) = &mut self.activity {
-                    *activity = Activity::new("working");
+                    *activity = Activity::new("Working");
                 }
                 return;
             }
@@ -1336,7 +1364,7 @@ impl App {
             });
         }
         if let Some(activity) = &mut self.activity {
-            *activity = Activity::new("working");
+            *activity = Activity::new("Working");
         }
     }
 
@@ -1464,7 +1492,7 @@ impl App {
             }
             Err(error) => {
                 self.queue().shells.pop();
-                let error = format!("error: cannot run the command: {error}");
+                let error = format!("Error: cannot run the command: {error}");
                 self.draft.set_note(Note::Error(error));
             }
         }
@@ -2124,7 +2152,7 @@ impl App {
             self.cancel.store(true, Ordering::Relaxed);
             self.dialog = None;
             if let Some(activity) = &mut self.activity {
-                *activity = Activity::new("working");
+                *activity = Activity::new("Working");
             }
             return Flow::Go;
         }
@@ -2185,7 +2213,10 @@ impl App {
     fn status(&self, width: usize) -> Vec<String> {
         // Escape goes back to the end, lets a selection go or closes completion first.
         let escape = self.top.is_none() && self.selection.is_none() && !self.draft.completing();
-        let activity = self.activity.as_ref().map(|activity| activity.line(escape));
+        let activity = self
+            .activity
+            .as_ref()
+            .map(|activity| activity.shown(escape));
         let below = self.last.saturating_sub(self.shown_top());
         // A list takes PgDn, and a dialog or the completion list Escape, but not from a selection.
         let page = !matches!(
@@ -2638,9 +2669,26 @@ mod tests {
         let said = |event: Event, escape| Activity::after(&event).unwrap().line(escape);
         assert_eq!(
             said(Event::Waiting(Purpose::Reply), true),
-            "… thinking (Esc to interrupt)"
+            "Waiting for reply (Esc to interrupt)"
         );
-        assert_eq!(said(Event::Waiting(Purpose::Reply), false), "… thinking");
+        assert_eq!(
+            said(Event::Waiting(Purpose::Reply), false),
+            "Waiting for reply"
+        );
+        // What arrives says what the model does.
+        let progress = |update| said(Event::Progress(update), true);
+        assert_eq!(
+            [
+                progress(StreamProgress::Reasoning("Let me see".into())),
+                progress(StreamProgress::Text("Sure".into())),
+                progress(StreamProgress::Call("bash".into())),
+            ],
+            [
+                "Thinking (Esc to interrupt)",
+                "Responding (Esc to interrupt)",
+                "Preparing bash (Esc to interrupt)",
+            ]
+        );
         let compaction = |reason| Event::Waiting(Purpose::Compaction(reason));
         assert_eq!(
             [
@@ -2650,23 +2698,31 @@ mod tests {
                 said(Event::Waiting(Purpose::BranchSummary), true),
             ],
             [
-                "… compacting context (Esc to cancel)",
-                "… auto-compacting (Esc to cancel)",
-                "… context overflow detected, auto-compacting (Esc to cancel)",
-                "… summarizing branch (Esc to cancel)",
+                "Compacting context (Esc to cancel)",
+                "Auto-compacting (Esc to cancel)",
+                "Context overflow, compacting (Esc to cancel)",
+                "Summarizing branch (Esc to cancel)",
             ]
         );
         assert_eq!(
             said(Event::ToolRunning(Instant::now()), true),
-            "… running (Esc to interrupt)"
+            "Running (Esc to interrupt)"
         );
+        let retry = Event::Retrying("busy".into(), 2, 3, Duration::from_secs(2));
+        assert_eq!(said(retry, true), "Retrying (2/3) in 2s (Esc to cancel)");
+        assert_eq!(Activity::asking().line(true), "Waiting for you");
+    }
+
+    #[test]
+    fn a_spinner_turns_before_what_the_agent_does_but_not_while_it_waits_for_you() {
+        let working = plain(&Activity::new("Working").shown(true));
+        let (frame, rest) = working.split_at(working.chars().next().unwrap().len_utf8());
+        assert!("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(frame), "{working}");
+        assert_eq!(rest, " Working (Esc to interrupt)");
         let retry = Event::Retrying("busy".into(), 1, 3, Duration::from_secs(2));
-        assert_eq!(said(retry, true), "… retrying in 2s (Esc to cancel)");
-        let asking = Activity {
-            escape: None,
-            ..Activity::new("waiting for you")
-        };
-        assert_eq!(asking.line(true), "… waiting for you");
+        let retrying = Activity::after(&retry).unwrap().shown(true);
+        assert!(retrying.contains(style::SPINNER_RETRYING), "{retrying:?}");
+        assert_eq!(plain(&Activity::asking().shown(true)), "Waiting for you");
     }
 
     #[test]
@@ -2681,32 +2737,32 @@ mod tests {
             let padding = width - 1 - columns(left) - columns(right);
             format!("{left}{}{right}", " ".repeat(padding))
         };
-        let working = "… working 2s (Esc to interrupt)";
+        let working = "⠹ Working 2s (Esc to interrupt)";
         assert_eq!(rows(Some(working), None, 0, 60), [working]);
         assert_eq!(
             rows(Some(working), Some("Copied"), 0, 60),
-            ["… working 2s (Esc to interrupt) · Copied"]
+            ["⠹ Working 2s (Esc to interrupt) · Copied"]
         );
         assert_eq!(rows(None, Some("Copied"), 0, 60), ["Copied"]);
         assert_eq!(rows(None, None, 0, 60), [""]);
         let all = "18 more lines below · PgDn or Esc to go back";
         assert_eq!(rows(None, None, 18, 60), [apart("", all, 60)]);
         assert_eq!(
-            rows(Some("… working 2s"), None, 18, 80),
-            [apart("… working 2s", all, 80)]
+            rows(Some("⠹ Working 2s"), None, 18, 80),
+            [apart("⠹ Working 2s", all, 80)]
         );
         // Narrower, the activity and the note keep their room, and the view's place is cut short,
         // then left out.
         assert_eq!(
             rows(Some(working), Some("Copied"), 18, 60),
-            [apart("… working 2s (Esc to interrupt) · Copied", "↓18", 60)]
+            [apart("⠹ Working 2s (Esc to interrupt) · Copied", "↓18", 60)]
         );
         assert_eq!(
             rows(Some(working), Some("Copied"), 18, 40),
             [apart(working, "↓18", 40).as_str(), "Copied"]
         );
         assert_eq!(rows(Some(working), None, 18, 34), [working]);
-        assert_eq!(rows(Some(working), None, 0, 20), ["… working 2s (Esc …"]);
+        assert_eq!(rows(Some(working), None, 0, 20), ["⠹ Working 2s (Esc …"]);
         // A note that does not fit after the activity goes under it, wrapped.
         let long = "A bash command is already running. Press Esc to cancel it first.";
         assert_eq!(
@@ -2816,7 +2872,7 @@ mod tests {
         transcript.push_call(0, result);
         let ended = shown(&mut transcript);
         // It took what it took when it ended, however late it renders.
-        assert_eq!(ended[2..6], ["● bash seq 1 2", "1", "2", "took 2.0s"]);
+        assert_eq!(ended[2..6], ["● bash seq 1 2", "1", "2", "Took 2.0s"]);
         assert_eq!(ended[ended.len() - 4..], ["", "● bash seq 3 4", "3", ""]);
         // What follows the calls comes after them all.
         transcript.push(Event::Assistant("Done.".into()));
