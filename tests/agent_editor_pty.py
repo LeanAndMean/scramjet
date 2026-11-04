@@ -257,23 +257,26 @@ def item_events(index, item):
     return events + [{'type': 'response.output_item.done', 'output_index': index, 'item': item}]
 
 
-def serve_items(responses, gate=None, models=(), cards=None, bodies=None, gated=0):
-    """Answers the requests in turn with a response streaming the complete items in `responses`,
-    the one at index `gated` once `gate`, if given, is set, lists `models` at `/v1/models` and
-    `cards` at `/api/model-cards`, and adds each request's body to `bodies`, if given."""
+def serve_items(responses, gate=None, models=(), cards=None, bodies=None, gated=0, usages=(), prices=()):
+    """Answers the requests in turn with a response streaming the complete items in `responses`
+    with the usage at the same index in `usages`, if any, the one at index `gated` once `gate`, if
+    given, is set, lists `models` at `/v1/models` and `cards` with the price cards `prices` at
+    `/api/model-cards`, and adds each request's body to `bodies`, if given."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
     streams = []
-    for items in responses:
+    for number, items in enumerate(responses):
         events = [{'type': 'response.created', 'response': {'id': 'resp_1', 'status': 'in_progress', 'output': []}}]
         for index, item in enumerate(items):
             events += item_events(index, item)
-        events.append({'type': 'response.completed', 'response': {'id': 'resp_1', 'status': 'completed', 'output': items}})
+        usage = {'usage': usages[number]} if number < len(usages) else {}
+        events.append({'type': 'response.completed',
+                       'response': {'id': 'resp_1', 'status': 'completed', 'output': items, **usage}})
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
     listing = json.dumps({'data': [{'id': model} for model in models]}).encode()
-    card_listing = json.dumps({'models': cards or []}).encode()
+    card_listing = json.dumps({'models': cards or [], 'priceCards': list(prices)}).encode()
 
     def answer():
         for number, stream in enumerate(streams):
@@ -546,6 +549,14 @@ def ending(read, output, expected, columns=60, rows=24):
 
 # The dock with an empty prompt.
 EMPTY = ['\u2500' * 59, '>']
+
+
+def footer_spent(read, output, expected, columns=60, rows=24):
+    """Waits until the footer says `expected` was spent."""
+    end = time.monotonic() + 10
+    while expected not in (Screen(output, columns, rows).footer() or ['', ''])[1].split():
+        assert time.monotonic() < end, (expected, Screen(output, columns, rows).footer())
+        read(.05)
 
 
 def footer_shows(read, output, expected, columns=60, rows=24):
@@ -3050,8 +3061,12 @@ def fullscreen_subagent(read, until, send, output):
     # The child's row while it runs: how it goes, its model, and what it did so far.
     rows = on_screen('\u2192 ls .')
     assert '\u23f3 scout (user) gpt-6-luna' in '\n'.join(rows), rows
+    # The footer counts what the child spent so far after the parent's reply.
+    footer_spent(read, output, '$0.045')
     subagent_gate.set()
     rows = on_screen('Scouted.')
+    # Once the call's result is in, the session's cost counts the child's once.
+    footer_spent(read, output, '$0.100')
     text = '\n'.join(rows)
     for expected in ['\u25cf subagent scout [user]', '\u2713 scout (user) gpt-6-luna', '  \u2192 ls .\n  Found a.txt.',
                      '  Line 3\n  \u2026 (2 more lines, Ctrl+O to expand)\n  2 turns']:
@@ -3069,6 +3084,7 @@ def fullscreen_subagent(read, until, send, output):
 def fullscreen_subagent_resumed(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     rows = on_screen('Scouted.')
+    footer_spent(read, output, '$0.100')
     assert '  Line 3\n  \u2026 (2 more lines, Ctrl+O to expand)' in '\n'.join(rows), rows
     send(b'\x0f')
     on_screen('Line 5')
@@ -3239,12 +3255,23 @@ os.makedirs(os.path.join(work, 'agent', 'agents'), exist_ok=True)
 with open(os.path.join(work, 'agent', 'agents', 'scout.md'), 'w') as file:
     file.write('---\nname: scout\ndescription: Looks around\ntools: ls\n---\n\nYou look around.\n')
 subagent_gate = threading.Event()
+
+
+def priced(input_tokens, output_tokens):
+    return {'input_tokens': input_tokens, 'output_tokens': output_tokens,
+            'total_tokens': input_tokens + output_tokens,
+            'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}}
+
+
+# At the provider's card: $1 a million input tokens and $5 output: $0.015, the child's $0.03 and
+# $0.04, then $0.015.
 run(['--model', 'gpt-6-luna'], fullscreen_subagent, serve_items([
     [tool_call('call_1', 'subagent', {'agent': 'scout', 'task': 'Look around the project.'})],
     [tool_call('call_2', 'ls', {'path': '.'})],
     [message('Found a.txt.\nLine 2\nLine 3\nLine 4\nLine 5')],
     [message('Scouted.')],
-], gate=subagent_gate, gated=2))
+], gate=subagent_gate, gated=2, cards=luna, prices=luna_prices,
+    usages=[priced(10_000, 1_000), priced(20_000, 2_000), priced(30_000, 2_000), priced(10_000, 1_000)]))
 run(['--continue'], fullscreen_subagent_resumed)
 
 

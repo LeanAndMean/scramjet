@@ -1030,6 +1030,9 @@ impl App {
         match message {
             ToScreen::Event(event) => {
                 self.track(&event);
+                if let Event::Subagents(children) = &event {
+                    self.footer.subagents(children);
+                }
                 self.transcript.push(event);
             }
             ToScreen::Clear => {
@@ -1063,11 +1066,8 @@ impl App {
                 self.editor.reloaded(commands, double_escape)
             }
             ToScreen::Models(models) => self.editor.set_models(models),
-            ToScreen::Footer(shown) => self.footer.shown = shown,
-            ToScreen::Usage(tokens, context, rate) => {
-                let shown = &mut self.footer.shown;
-                (shown.tokens, shown.context, shown.rate) = (tokens, context, rate)
-            }
+            ToScreen::Footer(shown) => self.footer.show(shown),
+            ToScreen::Usage(tokens, context, rate) => self.footer.usage(tokens, context, rate),
             ToScreen::Dialog(dialog, reply) => {
                 let shown = match dialog {
                     Dialog::Pick(picker) if picker.is_empty() => {
