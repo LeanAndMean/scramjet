@@ -37,6 +37,8 @@ pub(super) struct Interactive {
     pub(super) settings: Settings,
     /// The patterns of the models Ctrl+P cycles through (`scope::resolve`); empty: all.
     pub(super) scope: Vec<String>,
+    /// A turn waits for the built-in commands typed during it (`typed_during_turn`).
+    pub(super) in_turn: bool,
 }
 
 /// How a prompt came to run.
@@ -107,6 +109,7 @@ impl Interactive {
             hide_thinking,
             settings,
             scope: Vec::new(),
+            in_turn: false,
         })
     }
 
@@ -355,9 +358,11 @@ impl Interactive {
             return;
         };
         let (commands, steps) = (screen.take_commands(paused), screen.take_model_steps());
+        self.in_turn = paused;
         for command in commands {
             self.builtin(&command);
         }
+        self.in_turn = false;
         if steps != 0 {
             let note = scope::cycle(&mut self.agent, &mut self.settings, &self.scope, steps);
             if let Some(screen) = &self.screen {

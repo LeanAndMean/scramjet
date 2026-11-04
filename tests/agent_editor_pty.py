@@ -522,6 +522,17 @@ class Screen:
         return rows[-2:] if len(rows) >= 3 and re.fullmatch('\u2500{20,}', rows[-3]) else []
 
 
+def select_row(read, shown, send, text, key):
+    """Presses `key` until the list's selected row has `text`; returns the rows."""
+    for _ in range(40):
+        rows = shown()
+        if any(row.startswith('\u203a') and text in row for row in rows):
+            return rows
+        send(key)
+        read(.15)
+    raise AssertionError((text, rows))
+
+
 def full_screen(columns=60, rows=24):
     """`until` and `shown` for the full screen: waiting for a text to be on screen, and the rows."""
 
@@ -1977,7 +1988,7 @@ def installed_view(read, until, send, output):
     rows = on_screen('\u203a ' + setting('Installed', '2 problems \u00b7 2 command sets, 2 commands'))
     assert 'What this session loaded: command sets, commands, agents, skills' in rows[-2], rows
     send(b'\r')
-    rows = on_screen('Installed  \u2191\u2193 move \u00b7 Esc back')
+    rows = on_screen('Installed  \u2191\u2193 move \u00b7 Enter edit \u00b7 Esc back')
     at = rows.index('  Needs attention')
     assert rows[at + 1].startswith('\u203a   settings: '), rows
     assert rows[at + 2].startswith('    skills: skill path does not exist: '), rows
@@ -1997,13 +2008,56 @@ def installed_view(read, until, send, output):
     note = ' '.join(row.strip() for row in rows[rows.index('  ' + project_file) + 1:])
     assert note == "Scramjet's, which it reads too: what follows each command in this project. Not there " \
         "yet: changing a next step for this project writes it.", rows
+    # Enter on a row without a file leaves the list as it was.
+    send(b'\r')
+    read(.3)
+    assert [row for row in shown() if row.startswith('\u203a')] == [selected], shown()
+    # On a command, it opens the command's file in the editor, and the session reads what changed.
+    select_row(read, shown, send, '/demo:greet', b'\x1b[A')
+    send(b'\r')
+    rows = on_screen('\u203a   /demo:greet  Greet someone kindly')
+    assert 'Reloaded settings, command sets, agents, skills and context files' in rows, rows
+    assert rows.count(attention) == 2, rows
     send(b'\x1b')
     on_screen('\u203a ' + setting('Installed', '2 problems'))
     send(b'\x1b')
     ending(read, output, ['\u2500' * 119, '>'], columns=120, rows=40)
     send(b'/reload\r')
-    rows = on_screen('Reloaded settings, command sets, agents, skills and context files')
-    assert rows.count(attention) == 2, rows
+    end = time.monotonic() + 10
+    while (rows := shown()).count(attention) < 3:
+        assert time.monotonic() < end, rows
+        read(.05)
+    send(b'\x04')
+
+
+def installed_edited_during_turn(read, until, send, output):
+    shown, on_screen = full_screen(120, 40)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('running 1s')
+    # Opened before the turn's next request, which waits for it; what changed is read once it ends.
+    send(b'/settings\r')
+    on_screen('Settings  \u2191\u2193 move')
+    send(b'\x1b[A\r')
+    on_screen('Installed  \u2191\u2193 move \u00b7 Enter edit \u00b7 Esc back')
+    select_row(read, shown, send, '/demo:greet', b'\x1b[B')
+    send(b'\r')
+    rows = on_screen(greet_file + ' changed; run /reload once the turn ends')
+    text = '\n'.join(rows)
+    assert 'Reloaded' not in text and 'Done.' not in text, text
+    (selected,) = [row for row in rows if row.startswith('\u203a')]
+    assert selected.split() == ['\u203a', '/demo:greet', 'Greet', 'someone'], rows
+    send(b'\x1b')
+    on_screen('Settings  \u2191\u2193 move')
+    send(b'\x1b')
+    on_screen('Done.')
+    ended(read, output, 120, 40)
+    send(b'/reload\r')
+    on_screen('Reloaded settings, command sets, agents, skills and context files')
+    send(b'/demo:g')
+    on_screen('\u2192 /demo:greet  <name> \u2014 Greet someone kindly')
+    send(b'\x03')
+    ending(read, output, ['\u2500' * 119, '>'], columns=120, rows=40)
     send(b'\x04')
 
 
@@ -2350,7 +2404,25 @@ assert [tool['name'] for tool in bodies[0]['tools']][:2] == ['read', 'bash'], bo
 assert not {'edit', 'write'} & {tool['name'] for tool in bodies[0]['tools']}, bodies[0]['tools']
 shutil.rmtree(os.path.join(project, '.scramjet', 'fresh'))
 listing = config_home('installed', '{"followUpMode": "each", "skills": ["missing-skill"]}')
-run([], installed_view, variables={'XDG_CONFIG_HOME': listing}, columns=120, rows=40)
+greet_file = os.path.join(greet, 'demo:greet.md')
+greet_text = open(greet_file).read()
+# Checks it is given the command's file, then changes the command's description.
+greet_edit = os.path.join(work, 'edit-greet.sh')
+with open(greet_edit, 'w') as script_file:
+    script_file.write('#!/bin/sh\n[ "$1" = "%s" ] || exit 1\n'
+                      'sed -i "s/^description: Greet someone$/description: Greet someone kindly/" "$1"\n'
+                      % greet_file)
+os.chmod(greet_edit, 0o755)
+run([], installed_view, variables={'XDG_CONFIG_HOME': listing, 'VISUAL': greet_edit}, columns=120, rows=40)
+assert 'description: Greet someone kindly\n' in open(greet_file).read()
+with open(greet_file, 'w') as file:
+    file.write(greet_text)
+run([], installed_edited_during_turn, serve_items([
+    [tool_call('call_1', 'bash', {'command': 'sleep 2'})],
+    [message('Done.')],
+]), variables={'VISUAL': greet_edit}, columns=120, rows=40)
+with open(greet_file, 'w') as file:
+    file.write(greet_text)
 question_gate = threading.Event()
 asking = serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {

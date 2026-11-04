@@ -31,7 +31,7 @@ use scramjet_rs::agent::{
 use std::{
     fmt::Write as _,
     io::{self, PipeReader, PipeWriter, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -96,6 +96,9 @@ enum ToScreen {
     Dismiss,
     /// A sequence for the terminal itself: OSC 52's copy.
     Terminal(String),
+    /// Opens the file in `$VISUAL` or `$EDITOR` with the terminal as the shell left it, and
+    /// replies once the editor exited.
+    Edit(PathBuf, mpsc::Sender<Result<(), String>>),
     Quit,
 }
 
@@ -303,6 +306,14 @@ impl Link {
                 }
             }
         }
+    }
+    /// Opens `file` in the user's editor, the screen handing it the terminal until it exits.
+    pub(super) fn edit(&self, file: &Path) -> Result<(), String> {
+        let (reply, edited) = mpsc::channel();
+        self.send(ToScreen::Edit(file.to_path_buf(), reply));
+        edited
+            .recv()
+            .unwrap_or_else(|_| Err("the screen is gone".to_owned()))
     }
     /// Takes away a held list (`Picker::held`) the session no longer shows.
     pub(super) fn dismiss(&self) {
@@ -971,6 +982,15 @@ impl App {
                         return Ok(());
                     }
                     Ok(ToScreen::Terminal(sequence)) => to_terminal(&sequence)?,
+                    Ok(ToScreen::Edit(file, reply)) => {
+                        drop(screen);
+                        raw.suspend();
+                        let edited = editor::edit_file(&file);
+                        raw.resume()?;
+                        screen = Screen::enter();
+                        self.drawn.clear();
+                        let _ = reply.send(edited);
+                    }
                     Ok(message) => self.message(message),
                     Err(TryRecvError::Empty) => break,
                 }
@@ -1172,7 +1192,7 @@ impl App {
                 self.dialog = None;
                 self.replay();
             }
-            ToScreen::Terminal(_) | ToScreen::Quit => {}
+            ToScreen::Terminal(_) | ToScreen::Edit(..) | ToScreen::Quit => {}
         }
     }
 

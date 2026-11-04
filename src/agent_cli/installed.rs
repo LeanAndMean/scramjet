@@ -1,7 +1,7 @@
 //! `/settings`' Installed: what the session loaded, each with where it comes from, and what is
 //! wrong there, so that the user can find and fix it. Launch says at most one line about it.
 use scramjet_rs::agent::{AgentSource, Command, Installed, Origin, Skill, shortened};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use unicode_width::UnicodeWidthStr;
 
 /// What is loaded besides `Installed`: the commands, the skills, and the settings file with
@@ -15,33 +15,38 @@ pub(super) struct Loaded<'a> {
     pub problems: &'a [String],
 }
 
-/// Rows under headings, with a note for each row.
+/// Rows under headings, with a note for each row and the file it shows, if any, which Enter
+/// opens in the user's editor.
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct Listing {
     pub rows: Vec<String>,
     pub headings: Vec<bool>,
     pub notes: Vec<String>,
+    pub files: Vec<Option<PathBuf>>,
 }
 
+/// A row's columns, its note and its file.
+type Row = (Vec<String>, String, Option<PathBuf>);
+
 impl Listing {
-    /// `heading` over `rows` (each its columns and note), the columns but the last as wide as
-    /// the widest of the section; nothing without rows.
-    fn section(&mut self, heading: &str, rows: Vec<(Vec<String>, String)>) {
+    /// `heading` over `rows`, the columns but the last as wide as the widest of the section;
+    /// nothing without rows.
+    fn section(&mut self, heading: &str, rows: Vec<Row>) {
         if rows.is_empty() {
             return;
         }
         self.rows.push(heading.to_owned());
         self.headings.push(true);
         self.notes.push(String::new());
-        let columns = rows.iter().map(|(columns, _)| columns.len()).max();
+        self.files.push(None);
+        let columns = rows.iter().map(|(columns, ..)| columns.len()).max();
         let widths: Vec<usize> = (0..columns.unwrap_or(0).saturating_sub(1))
             .map(|at| {
-                let width =
-                    |(columns, _): &(Vec<String>, String)| columns.get(at).map(|c| c.width());
+                let width = |(columns, ..): &Row| columns.get(at).map(|c| c.width());
                 rows.iter().filter_map(width).max().unwrap_or(0)
             })
             .collect();
-        for (columns, note) in rows {
+        for (columns, note, file) in rows {
             let mut row = String::from(" ");
             for (at, column) in columns.iter().enumerate() {
                 row.push(' ');
@@ -53,6 +58,7 @@ impl Listing {
             self.rows.push(row.trim_end().to_owned());
             self.headings.push(false);
             self.notes.push(note);
+            self.files.push(file);
         }
     }
 }
@@ -62,7 +68,7 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
     let installed = loaded.installed;
     let mut listing = Listing::default();
     let problems = (loaded.problems.iter())
-        .map(|problem| (vec![home_shortened(problem)], home_shortened(problem)))
+        .map(|problem| (vec![home_shortened(problem)], home_shortened(problem), None))
         .collect();
     listing.section("Needs attention", problems);
     let settings = loaded.settings.map(shown);
@@ -97,7 +103,7 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
                 set.origin.name().to_owned(),
                 directory.clone(),
             ];
-            (columns, format!("{directory}\n{contents} {found}"))
+            (columns, format!("{directory}\n{contents} {found}"), None)
         })
         .collect();
     listing.section("Command sets", sets);
@@ -113,7 +119,7 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
                 command.description
             );
             let columns = vec![format!("/{}", command.name), command.description.clone()];
-            (columns, note)
+            (columns, note, Some(command.path.clone()))
         })
         .collect();
     listing.section("Commands", commands);
@@ -129,7 +135,11 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
                 ),
             };
             let note = format!("{}\n{from} {}", shown(&agent.path), agent.description);
-            (vec![agent.name.clone(), source], note)
+            (
+                vec![agent.name.clone(), source],
+                note,
+                Some(agent.path.clone()),
+            )
         })
         .collect();
     listing.section("Agents", agents);
@@ -144,7 +154,11 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
                 "{path}\n{offered}; /skill:{} runs it. {}",
                 skill.name, skill.description
             );
-            (vec![skill.name.clone(), path], note)
+            (
+                vec![skill.name.clone(), path],
+                note,
+                Some(skill.path.clone()),
+            )
         })
         .collect();
     listing.section("Skills", skills);
@@ -152,7 +166,7 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
         .map(|path| {
             let note = "In the instructions as the project's context, outermost first; /reload \
                         reads them again.";
-            (vec![shown(path)], note.to_owned())
+            (vec![shown(path)], note.to_owned(), Some(path.clone()))
         })
         .collect();
     listing.section("Context files", context);
@@ -182,12 +196,15 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
     ));
     let files = (files.into_iter())
         .map(|(path, label, what, change)| {
-            let missing = match path.exists() {
-                true => String::new(),
-                false => format!(" Not there yet: changing {change} writes it."),
+            let (missing, file) = match path.exists() {
+                true => (String::new(), Some(path.to_path_buf())),
+                false => (
+                    format!(" Not there yet: changing {change} writes it."),
+                    None,
+                ),
             };
             let note = format!("{}\n{what}{missing}", shown(path));
-            (vec![shown(path), label.to_owned()], note)
+            (vec![shown(path), label.to_owned()], note, file)
         })
         .collect();
     listing.section("Settings files", files);
@@ -361,6 +378,24 @@ mod tests {
             .collect();
         assert_eq!(headings, [0, 3, 5, 8, 11, 13, 15]);
         assert_eq!(list.notes.len(), list.rows.len());
+        assert_eq!(list.files.len(), list.rows.len());
+        // Enter opens the files of commands, agents, skills, context and settings files that
+        // exist; not those of headings, problems, sets or files not written yet.
+        let files: Vec<(usize, &Path)> = (list.files.iter().enumerate())
+            .filter_map(|(at, file)| Some((at, file.as_deref()?)))
+            .collect();
+        assert_eq!(
+            files,
+            [
+                (6, set.join("commands/demo:greet.md").as_path()),
+                (7, &set.join("commands/demo:inner.md")),
+                (9, &base.join("user/mine.md")),
+                (10, &set.join("agents/demo:helper.md")),
+                (12, &root.join(".scramjet/skills/pdf/SKILL.md")),
+                (14, &root.join("AGENTS.md")),
+                (16, &settings),
+            ]
+        );
         assert_eq!(list.notes[1], "settings: x: wrong");
         assert_eq!(
             list.notes[4],

@@ -25,7 +25,7 @@ const NO_LEVELS: &str = "The model's card lists no thinking levels to choose fro
 const BACK_KEYS: &str = "↑↓ move · Enter select · Esc back";
 const TOOLS_KEYS: &str = "↑↓ move · Enter switch on or off · Esc back";
 const CHANGE_KEYS: &str = "↑↓ move · Enter change · Esc back";
-const VIEW_KEYS: &str = "↑↓ move · Esc back";
+const INSTALLED_KEYS: &str = "↑↓ move · Enter edit · Esc back";
 const RESUME_KEYS: &str = "↑↓ move · Enter select · Ctrl+R rename · Ctrl+D delete · Esc cancel";
 /// What a next step can be set to, in the order `/settings` offers them.
 const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
@@ -849,9 +849,11 @@ impl Interactive {
     }
 
     /// What the session loaded, each with where it comes from, under headings, the problems
-    /// first; the notes say more, and nothing changes here.
+    /// first; the notes say more, and Enter opens a row's file in the user's editor
+    /// (`edit_installed`), the list then showing that file's row again.
     fn show_installed(&mut self) {
         let mut at = 0;
+        let mut edited: Option<PathBuf> = None;
         loop {
             let Some(screen) = &self.screen else {
                 return;
@@ -859,6 +861,11 @@ impl Interactive {
             let found = self.agent.installed();
             let problems = self.problems(&found);
             let listing = installed::listing(&self.loaded(&found, &problems));
+            if let Some(file) = edited.take() {
+                at = (listing.files.iter())
+                    .position(|row| row.as_ref() == Some(&file))
+                    .unwrap_or(at);
+            }
             let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
             let rows = &listing.rows;
             let picker = select::Picker::select(
@@ -869,11 +876,38 @@ impl Interactive {
                 None,
                 |index, width| clip(&rows[index], width),
             );
-            let picker = (picker.headed(listing.headings)).noting(VIEW_KEYS, listing.notes);
+            let picker = (picker.headed(listing.headings)).noting(INSTALLED_KEYS, listing.notes);
             let Some(index) = screen.pick(picker.held()) else {
                 return;
             };
             at = index;
+            if let Some(file) = &listing.files[index] {
+                self.edit_installed(file);
+                edited = Some(file.clone());
+            }
+        }
+    }
+
+    /// Opens `file` in `$VISUAL` or `$EDITOR`; when it changed, reads what was loaded again, as
+    /// `/reload` does, or, while a turn waits (`/reload` waits for turns), says to run it after.
+    fn edit_installed(&mut self, file: &Path) {
+        let Some(screen) = &self.screen else {
+            return;
+        };
+        let before = std::fs::read(file).ok();
+        if let Err(error) = screen.edit(file) {
+            return self.say(&format!("error: {error}"));
+        }
+        if std::fs::read(file).ok() == before {
+            return;
+        }
+        match self.in_turn {
+            true => {
+                let shown = shortened(&file.display().to_string());
+                let note = format!("{shown} changed; run /reload once the turn ends");
+                self.say(&self.ui.dim(&note));
+            }
+            false => self.reload(),
         }
     }
 

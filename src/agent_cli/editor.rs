@@ -1532,6 +1532,13 @@ pub(super) fn external(text: &str) -> Result<Option<String>, String> {
 const EXIT_HINT: &str = "(Ctrl-C again or Ctrl-D to exit)";
 const NO_EDITOR: &str = "No editor configured. Set $VISUAL or $EDITOR environment variable.";
 
+/// Runs `$VISUAL` or `$EDITOR` on `file` with the terminal as the shell left it, until it
+/// exits; an error when none is configured or it could not start.
+pub(super) fn edit_file(file: &Path) -> Result<(), String> {
+    let command = editor_command().ok_or_else(|| NO_EDITOR.to_owned())?;
+    run_on(&command, file).map(drop)
+}
+
 /// `$VISUAL`, else `$EDITOR`, as Scramjet reads them.
 fn editor_command() -> Option<String> {
     ["VISUAL", "EDITOR"].iter().find_map(|name| {
@@ -1541,14 +1548,18 @@ fn editor_command() -> Option<String> {
     })
 }
 
+/// Runs the editor `command`, its words split at spaces as Scramjet splits them, on `file`.
+fn run_on(command: &str, file: &Path) -> Result<std::process::ExitStatus, String> {
+    let mut parts = command.split(' ').filter(|part| !part.is_empty());
+    let program = parts.next().ok_or_else(|| NO_EDITOR.to_owned())?;
+    (Command::new(program).args(parts).arg(file).status())
+        .map_err(|error| format!("cannot start {program}: {error}"))
+}
+
 /// Runs the editor on a temporary file holding `text`. `Ok(None)` when it exits with another
 /// status than 0, which keeps the prompt text. Its file's text, without one trailing newline,
 /// replaces the prompt text.
 fn run_editor(command: &str, text: &str) -> Result<Option<String>, String> {
-    let mut parts = command.split(' ').filter(|part| !part.is_empty());
-    let Some(program) = parts.next() else {
-        return Err(NO_EDITOR.to_owned());
-    };
     let (path, mut file) = create_prompt_file()
         .map_err(|error| format!("cannot create a file for the prompt: {error}"))?;
     let outcome = file
@@ -1556,11 +1567,7 @@ fn run_editor(command: &str, text: &str) -> Result<Option<String>, String> {
         .map_err(|error| error.to_string())
         .and_then(|()| {
             drop(file);
-            let status = Command::new(program)
-                .args(parts)
-                .arg(&path)
-                .status()
-                .map_err(|error| format!("cannot start {program}: {error}"))?;
+            let status = run_on(command, &path)?;
             if !status.success() {
                 return Ok(None);
             }
