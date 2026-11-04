@@ -1200,7 +1200,15 @@ def fork_session(read, until, send, output):
     assert '\u203a gpt-6-luna \u2713' in rows, rows
     send(b'\x1b[B\r')
     on_screen('\u2713 Model set to claude-haiku-5-5')
-    send(b'\x04')
+    # A fork before the first prompt, quit before anything is said in it, is not kept.
+    send(b'/fork\r')
+    on_screen('Fork from message')
+    send(b'\x1b[B')
+    on_screen('\u203a first')
+    send(b'\r')
+    on_screen('\u2713 Forked to new session \u00b7 claude-haiku-5-5')
+    ending(read, output, ['> first'])
+    send(b'\x15\x04')
 
 
 def clone_session(read, until, send, output):

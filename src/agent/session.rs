@@ -897,6 +897,12 @@ impl Session {
         Ok(Removal::Deleted)
     }
 
+    /// Counts this session, a fork this process just wrote without a conversation, as one created
+    /// here, which `discard_if_unused` removes unless something is said in it.
+    pub fn forked_unused(&mut self) {
+        self.unused = true;
+    }
+
     /// Removes the file of a session this process created and left without a conversation, as
     /// Scramjet writes none before the first reply; one another process wrote to or has open stays.
     pub fn discard_if_unused(self) -> io::Result<()> {

@@ -921,8 +921,18 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
     assert_eq!(agent.fork(0).unwrap().as_deref(), Some("one"));
     assert!(agent.conversation().is_empty());
     assert_eq!(agent.model(), "c");
-    let reopened = Session::open(agent.session_path()).unwrap().0;
-    assert_eq!(reopened.model(), Some("c"));
+    let empty = agent.session_path().to_owned();
+    assert_eq!(Session::open(&empty).unwrap().0.model(), Some("c"));
+    // As Scramjet writes no fork without a reply, it is not kept when left before a prompt or on
+    // quitting, so `--continue` takes the conversation before it.
+    agent.resume_session(&original).unwrap();
+    assert!(!empty.exists());
+    let saved = std::fs::read_to_string(&original).unwrap();
+    agent.fork(0).unwrap();
+    let empty = agent.session_path().to_owned();
+    agent.discard_unused_session().unwrap();
+    assert!(!empty.exists());
+    assert_eq!(std::fs::read_to_string(&original).unwrap(), saved);
 }
 
 #[test]

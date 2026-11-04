@@ -617,7 +617,7 @@ impl Agent {
     }
 
     /// Ends the agent, removing its session's file when this process created it and only model
-    /// and effort changes went in, as when a start that was to resume a session resumes none.
+    /// and effort changes went in, as Scramjet writes no session before the first reply.
     pub fn discard_unused_session(self) -> Result<(), AgentError> {
         Ok(self.session.discard_if_unused()?)
     }
@@ -697,9 +697,11 @@ impl Agent {
             return Ok(None);
         };
         let opened = Session::open(&path).and_then(|(mut session, conversation, prompts)| {
-            // As in Scramjet, a fork without a conversation keeps the current model.
+            // As in Scramjet, a fork without a conversation keeps the current model, and is not
+            // written before the first reply (its lines are the current session's).
             if conversation.is_empty() {
                 session.record_model(&self.config.model)?;
+                session.forked_unused();
             }
             Ok((session, conversation, prompts))
         });
