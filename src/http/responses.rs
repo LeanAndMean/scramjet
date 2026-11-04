@@ -50,7 +50,10 @@ pub struct ProviderUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
+    /// Input tokens read from the cache, part of `input_tokens`.
     pub cached_input_tokens: Option<u64>,
+    /// Input tokens written to the cache, part of `input_tokens`.
+    pub cache_write_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
 }
 impl ProviderUsage {
@@ -61,9 +64,10 @@ impl ProviderUsage {
         {
             return Err(Outcome::Framing);
         }
-        if self
-            .cached_input_tokens
-            .is_some_and(|n| self.input_tokens.is_none_or(|input| n > input))
+        let cache = [self.cached_input_tokens, self.cache_write_tokens];
+        let cached = (cache.iter().flatten()).try_fold(0u64, |sum, n| sum.checked_add(*n));
+        if cache.iter().any(Option::is_some)
+            && cached.is_none_or(|n| self.input_tokens.is_none_or(|input| n > input))
             || self
                 .reasoning_tokens
                 .is_some_and(|n| self.output_tokens.is_none_or(|output| n > output))
@@ -273,6 +277,7 @@ fn usage(response: &Value) -> Result<Option<ProviderUsage>, Outcome> {
         output_tokens: number(value, "output_tokens")?,
         total_tokens: number(value, "total_tokens")?,
         cached_input_tokens: number(&value["input_tokens_details"], "cached_tokens")?,
+        cache_write_tokens: number(&value["input_tokens_details"], "cache_write_tokens")?,
         reasoning_tokens: number(&value["output_tokens_details"], "reasoning_tokens")?,
     };
     usage.validate()?;

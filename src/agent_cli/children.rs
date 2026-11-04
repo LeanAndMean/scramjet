@@ -287,12 +287,21 @@ impl Rows<'_> {
             self.paint(SUBAGENT_NAME, title)
         );
         self.wrapped(&header);
-        let mut total = ChildUsage::default();
+        let mut total = ChildUsage {
+            cost: Some(0.0),
+            ..ChildUsage::default()
+        };
         for (index, run) in runs.iter().enumerate() {
             total.turns += run.usage.turns;
             total.input_tokens += run.usage.input_tokens;
             total.cached_input_tokens += run.usage.cached_input_tokens;
+            total.cache_write_tokens += run.usage.cache_write_tokens;
             total.output_tokens += run.usage.output_tokens;
+            total.cost = match (total.cost, run.usage.cost) {
+                (Some(total), Some(cost)) => Some(total + cost),
+                (total, _) if run.usage.turns == 0 => total,
+                _ => None,
+            };
             let before = match mode {
                 Delegation::Chain => format!("─── Step {}: ", index + 1),
                 _ => "─── ".to_owned(),
@@ -359,8 +368,8 @@ pub(super) fn call(name: &str, summary: &str) -> String {
     }
 }
 
-/// As Scramjet's `formatUsageStats`: turns, input not read from the cache, output, cache reads
-/// and the model.
+/// As Scramjet's `formatUsageStats`: turns, input neither read from the cache nor written to it,
+/// output, cache reads and writes, the cost when it is known and the model.
 pub(super) fn usage_line(usage: &ChildUsage, model: Option<&str>) -> String {
     let count = |n: u64| match n {
         0..1_000 => n.to_string(),
@@ -373,7 +382,8 @@ pub(super) fn usage_line(usage: &ChildUsage, model: Option<&str>) -> String {
         let plural = if usage.turns > 1 { "s" } else { "" };
         parts.push(format!("{} turn{plural}", usage.turns));
     }
-    let uncached = usage.input_tokens.saturating_sub(usage.cached_input_tokens);
+    let cache = usage.cached_input_tokens + usage.cache_write_tokens;
+    let uncached = usage.input_tokens.saturating_sub(cache);
     if uncached > 0 {
         parts.push(format!("↑{}", count(uncached)));
     }
@@ -382,6 +392,12 @@ pub(super) fn usage_line(usage: &ChildUsage, model: Option<&str>) -> String {
     }
     if usage.cached_input_tokens > 0 {
         parts.push(format!("R{}", count(usage.cached_input_tokens)));
+    }
+    if usage.cache_write_tokens > 0 {
+        parts.push(format!("W{}", count(usage.cache_write_tokens)));
+    }
+    if let Some(cost) = usage.cost.filter(|cost| *cost > 0.0) {
+        parts.push(format!("${cost:.4}"));
     }
     parts.extend(model.map(str::to_owned));
     parts.join(" ")
@@ -404,7 +420,9 @@ mod tests {
                 turns: 3,
                 input_tokens: 12_400,
                 cached_input_tokens: 8_000,
+                cache_write_tokens: 0,
                 output_tokens: 950,
+                cost: None,
             },
             warnings: Vec::new(),
         }
@@ -426,6 +444,42 @@ mod tests {
             hint: ", Ctrl+O to expand",
         };
         rows(children, &look)
+    }
+
+    #[test]
+    fn usage_shows_cache_writes_and_the_cost_when_it_is_known() {
+        let usage = ChildUsage {
+            turns: 2,
+            input_tokens: 12_400,
+            cached_input_tokens: 8_000,
+            cache_write_tokens: 2_400,
+            output_tokens: 950,
+            cost: Some(0.01234),
+        };
+        assert_eq!(
+            usage_line(&usage, Some("claude-haiku-5-5")),
+            "2 turns ↑2.0k ↓950 R8.0k W2.4k $0.0123 claude-haiku-5-5"
+        );
+        let priced = |cost| ChildRun {
+            usage: ChildUsage { cost, ..usage },
+            ..run("scout", ChildState::Done, Vec::new())
+        };
+        let total = |runs| {
+            let children = Children {
+                mode: Delegation::Parallel,
+                runs,
+            };
+            shown(&children, false).last().unwrap().clone()
+        };
+        assert_eq!(
+            total(vec![priced(Some(0.01)), priced(Some(0.02))]),
+            "Total: 4 turns ↑4.0k ↓1.9k R16k W4.8k $0.0300"
+        );
+        // A child whose cost is not known leaves the total's out.
+        assert_eq!(
+            total(vec![priced(Some(0.01)), priced(None)]),
+            "Total: 4 turns ↑4.0k ↓1.9k R16k W4.8k"
+        );
     }
 
     fn found() -> Vec<ChildItem> {

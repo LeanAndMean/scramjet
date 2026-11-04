@@ -409,6 +409,8 @@ fn failures_preserve_usage_without_executable_items() {
     for usage in [
         json!({"input_tokens":1,"output_tokens":2,"total_tokens":4}),
         json!({"input_tokens":1,"input_tokens_details":{"cached_tokens":2}}),
+        json!({"input_tokens":3,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":2}}),
+        json!({"input_tokens_details":{"cache_write_tokens":0}}),
         json!({"output_tokens":1,"output_tokens_details":{"reasoning_tokens":2}}),
         json!({"input_tokens":-1}),
         json!({"input_tokens":1.5}),
@@ -422,6 +424,14 @@ fn failures_preserve_usage_without_executable_items() {
     ))
     .unwrap();
     assert!(!complete(&parsed.usage.unwrap()));
+    let cache =
+        json!({"input_tokens":5,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":3}});
+    let parsed = parse(&fixture::wire(&fixture::text_events("x", cache), false)).unwrap();
+    let usage = parsed.usage.unwrap();
+    assert_eq!(
+        (usage.cached_input_tokens, usage.cache_write_tokens),
+        (Some(2), Some(3))
+    );
 }
 #[test]
 fn frame_limit_and_malformed_json_reject_without_clipping() {

@@ -5,7 +5,7 @@ use super::fuzzy::Haystack;
 use super::interactive::{Interactive, completions, model_line};
 use super::screen;
 use super::settings::{ROWS, Row, scramjet_level};
-use super::terminal::Terminal;
+use super::terminal::{self, Terminal};
 use super::text::{clip, one_line};
 use super::{clipboard, editor, export, installed, select, style, tree};
 use scramjet_rs::agent::{
@@ -1561,8 +1561,9 @@ fn steps_summary(steps: &NextSteps) -> String {
     }
 }
 
-/// `/session`: the session's name, file and id, its messages and token usage over the current
-/// conversation, as Scramjet's `/session` shows them. Ends with a newline.
+/// `/session`: the session's name, file and id, its messages, token usage and cost over the
+/// current conversation (subagents' too, in the cost), as Scramjet's `/session` shows them. Ends
+/// with a newline.
 fn session_info(agent: &Agent, ui: &Terminal) -> String {
     let stats = agent.stats();
     let row = |label: &str, value: String| format!("{} {value}\n", ui.dim(label));
@@ -1582,13 +1583,22 @@ fn session_info(agent: &Agent, ui: &Terminal) -> String {
     info += &row("Total:", stats.total.to_string());
     info += "\n";
     info += &heading("Tokens");
-    info += &row("Input:", grouped(stats.input));
-    info += &row("Output:", grouped(stats.output));
-    if stats.cache_read > 0 {
-        info += &row("Cache Read:", grouped(stats.cache_read));
+    let tokens = stats.tokens;
+    info += &row("Input:", grouped(tokens.input));
+    info += &row("Output:", grouped(tokens.output));
+    if tokens.cache_read > 0 {
+        info += &row("Cache Read:", grouped(tokens.cache_read));
     }
-    let total = stats.input + stats.output + stats.cache_read;
+    if tokens.cache_write > 0 {
+        info += &row("Cache Write:", grouped(tokens.cache_write));
+    }
+    let total = tokens.input + tokens.output + tokens.cache_read + tokens.cache_write;
     info += &row("Total:", grouped(total));
+    if let Some(spent) = terminal::spent(tokens.cost, tokens.unpriced) {
+        info += "\n";
+        info += &heading("Cost");
+        info += &row("Total:", spent);
+    }
     info
 }
 

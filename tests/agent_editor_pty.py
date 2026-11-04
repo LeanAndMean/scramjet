@@ -179,9 +179,10 @@ def serve_thoughts(gates):
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
-def serve_replies(replies, models=(), cards=None, usage=None):
+def serve_replies(replies, models=(), cards=None, usage=None, prices=(), backend=None):
     """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`
-    (and `usage`, when given), lists `models` at `/v1/models` and `cards` at `/api/model-cards`."""
+    (and `usage`, when given) from `backend` (`x-llm-backend`), lists `models` at `/v1/models` and
+    `cards` with the price cards `prices` at `/api/model-cards`."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -206,7 +207,8 @@ def serve_replies(replies, models=(), cards=None, usage=None):
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
     listing = json.dumps({'data': [{'id': model} for model in models]}).encode()
-    card_listing = json.dumps({'models': cards or []}).encode()
+    card_listing = json.dumps({'models': cards or [], 'priceCards': list(prices)}).encode()
+    served_by = b'x-llm-backend: %s\r\n' % backend.encode() if backend else b''
 
     def answer():
         pending = iter(streams)
@@ -223,8 +225,8 @@ def serve_replies(replies, models=(), cards=None, usage=None):
                 connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
             else:
                 stream = next(pending)
-                connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
-                                   b'connection: close\r\n\r\n%s' % (len(stream), stream))
+                connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n%scontent-length: %d\r\n'
+                                   b'connection: close\r\n\r\n%s' % (served_by, len(stream), stream))
             connection.close()
 
     threading.Thread(target=answer, daemon=True).start()
@@ -1569,20 +1571,20 @@ def name_and_session(read, until, send, output):
     on_screen('Usage: /name <name>')
     send(b'hello\r')
     on_screen('Reply one.')
-    # The tokens not read from the cache, the output and the cache reads, then the context's.
-    footer_shows(read, output, [project, stats('\u2191200 \u219334 R1.0k 1.2k', 'gpt-6-luna \u2022 medium', 200)],
-                 200, 30)
+    # The tokens neither read from the cache nor written to it, the output, the cache reads and
+    # writes, what the agentic backend's card prices them at, then the context's.
+    footer_shows(read, output, [project, stats(SPENT, 'gpt-6-luna \u2022 medium', 200)], 200, 30)
     send(b'/name  Parser work \r')
     on_screen('Session name set: Parser work')
-    footer_shows(read, output, [project + ' \u2022 Parser work',
-                                stats('\u2191200 \u219334 R1.0k 1.2k', 'gpt-6-luna \u2022 medium', 200)], 200, 30)
+    footer_shows(read, output, [project + ' \u2022 Parser work', stats(SPENT, 'gpt-6-luna \u2022 medium', 200)],
+                 200, 30)
     send(b'/session\r')
-    rows = on_screen('Cache Read: 1,000')
+    rows = on_screen('Cost')
     (path,) = set(session_files()) - known
     expected = ['Session Info', '', 'Name: Parser work', 'File: ' + path,
                 'ID: ' + os.path.basename(path)[:-len('.jsonl')], '', 'Messages', 'User: 1', 'Assistant: 1',
-                'Tool Calls: 0', 'Tool Results: 0', 'Total: 2', '', 'Tokens', 'Input: 200', 'Output: 34',
-                'Cache Read: 1,000', 'Total: 1,234']
+                'Tool Calls: 0', 'Tool Results: 0', 'Total: 2', '', 'Tokens', 'Input: 100', 'Output: 34',
+                'Cache Read: 1,000', 'Cache Write: 100', 'Total: 1,234', '', 'Cost', 'Total: $0.0740']
     start = rows.index('Session Info')
     assert rows[start:start + len(expected)] == expected, rows
     send(b'\x04')
@@ -1592,8 +1594,7 @@ def name_resumed(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     # The session's tokens, read from its file, and its name.
-    footer_shows(read, output, [project + ' \u2022 Parser work',
-                                stats('\u2191200 \u219334 R1.0k 1.2k', 'gpt-6-luna \u2022 medium')])
+    footer_shows(read, output, [project + ' \u2022 Parser work', stats(SPENT, 'gpt-6-luna \u2022 medium')])
     send(b'/name\r')
     on_screen('Session name: Parser work')
     send(b'/resume\r')
@@ -1806,8 +1807,16 @@ run([], broken_settings_are_kept, variables={'XDG_CONFIG_HOME': broken}, columns
 assert open(settings_path(broken)).read() == '{"hideThinkingBlock": tru'
 known = set(session_files())
 usage = {'input_tokens': 1200, 'output_tokens': 34, 'total_tokens': 1234,
-         'input_tokens_details': {'cached_tokens': 1000}}
-run([], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], usage=usage), columns=200, rows=30)
+         'input_tokens_details': {'cached_tokens': 1000, 'cache_write_tokens': 100}}
+luna = [{'requestId': 'gpt-6-luna', 'pricingKey': 'luna', 'reasoning': {'levels': ['low', 'medium', 'high']}}]
+rates = {'pricingKey': 'luna', 'effectiveFrom': '2026-01-01T00:00:00.000Z'}
+luna_prices = [dict(rates, api='foundry', inputPerMTok=1, cacheWritePerMTok=1.25, cacheReadPerMTok=0.1, outputPerMTok=5),
+               dict(rates, api='agentic', upstreamProvider='azure_openai', inputPerMTok=100, cacheWritePerMTok=200,
+                    cacheReadPerMTok=10, outputPerMTok=1000)]
+# 100 input tokens at $100 per million, 100 written at $200, 1,000 read at $10 and 34 output at $1,000.
+SPENT = '\u2191100 \u219334 R1.0k W100 $0.074 1.2k'
+run([], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], cards=luna, usage=usage, prices=luna_prices,
+                                        backend='azure_openai'), columns=200, rows=30)
 run(['--continue'], name_resumed)
 (named,) = set(session_files()) - known
 infos = [line for line in map(json.loads, open(named)) if line.get('type') == 'session_info']

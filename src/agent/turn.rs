@@ -253,7 +253,7 @@ to a larger-context model)"
             self.usage.context_tokens = reply.usage.as_ref().and_then(|usage| usage.total_tokens);
             let mut calls = Vec::new();
             let last = reply.items.len().saturating_sub(1);
-            let saved = reply.usage.as_ref().map(saved_usage);
+            let saved = saved_usage(&reply);
             for (index, mut item) in reply.items.into_iter().enumerate() {
                 if let Some(object) = item.as_object_mut() {
                     object.insert(PRODUCER.into(), json!(self.config.model));
@@ -298,7 +298,11 @@ to a larger-context model)"
                     }
                     _ => {}
                 }
+                let spent = result.get(SUBAGENTS).is_some();
                 self.add(result)?;
+                if spent {
+                    ui.usage(self.session_tokens(), self.context_tokens());
+                }
                 if cancel.load(Ordering::Relaxed) {
                     return Err(AgentError::Cancelled);
                 }
@@ -572,15 +576,23 @@ fn ask(
     (output, ends)
 }
 
-/// A response's usage as saved with its last item: input tokens not read from the cache, output
-/// tokens and cache reads, as Scramjet's usage counts them.
-fn saved_usage(usage: &crate::http::responses::ProviderUsage) -> Value {
-    let cached = usage.cached_input_tokens.unwrap_or(0);
-    json!({
-        "input": usage.input_tokens.unwrap_or(0).saturating_sub(cached),
+/// A response's usage as saved with its last item (`USAGE`), as Scramjet's usage counts it:
+/// input tokens neither read from the cache nor written to it, output tokens, cache reads and
+/// writes, and the cost when it is known.
+fn saved_usage(reply: &super::client::Reply) -> Option<Value> {
+    let usage = reply.usage.as_ref()?;
+    let read = usage.cached_input_tokens.unwrap_or(0);
+    let written = usage.cache_write_tokens.unwrap_or(0);
+    let mut saved = json!({
+        "input": usage.input_tokens.unwrap_or(0).saturating_sub(read + written),
         "output": usage.output_tokens.unwrap_or(0),
-        "cache_read": cached,
-    })
+        "cache_read": read,
+        "cache_write": written,
+    });
+    if let Some(cost) = reply.cost {
+        saved["cost"] = json!(cost);
+    }
+    Some(saved)
 }
 
 #[cfg(test)]
@@ -857,6 +869,8 @@ You review code.\n",
         let kept = agent.root().join("kept.txt");
         std::fs::write(&kept, "original\n").unwrap();
         agent.agents_directory = Some(agents);
+        // The child has the parent's model, and so its prices.
+        agent.info.prices = prices(1_000.0, 100.0, 10_000.0);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent.turn("review", &mut ui, &cancel).unwrap();
@@ -931,6 +945,18 @@ here\n\nkept.txt says original";
         );
         assert_eq!((&run.state, &run.items), (&ChildState::Done, &items));
         assert_eq!(run.usage.turns, 3);
+        // Each response: 7 input tokens not from the cache, 3 from it and 5 output tokens.
+        let each = 7e-3 + 3e-4 + 5e-2;
+        close(run.usage.cost.unwrap(), 3.0 * each);
+        // The session's cost has the child's, its tokens only the parent's; the footer is told
+        // after each response and after the child's result.
+        let costs: Vec<_> = ui.usage.iter().map(|(tokens, _)| tokens.cost).collect();
+        assert_eq!(costs.len(), 3);
+        for (cost, expected) in costs.into_iter().zip([1.0, 4.0, 5.0]) {
+            close(cost, expected * each);
+        }
+        assert_eq!(agent.session_tokens().input, 14);
+        close(agent.usage.cost, 5.0 * each);
         assert_eq!(
             run.warnings,
             ["write: left out, as subagents run read-only here"]

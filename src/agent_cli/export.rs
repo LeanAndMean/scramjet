@@ -89,15 +89,22 @@ pub(super) fn page(branch: &Branch, id: &str, setup: Option<Setup>) -> String {
     let messages = format!("{} user, {} assistant", stats.user, stats.assistant);
     info.push(("Messages", messages));
     info.push(("Tool calls", stats.tool_calls.to_string()));
+    let used = stats.tokens;
     let mut tokens = format!(
         "{} input, {} output",
-        grouped(stats.input),
-        grouped(stats.output)
+        grouped(used.input),
+        grouped(used.output)
     );
-    if stats.cache_read > 0 {
-        tokens += &format!(", {} cache read", grouped(stats.cache_read));
+    if used.cache_read > 0 {
+        tokens += &format!(", {} cache read", grouped(used.cache_read));
+    }
+    if used.cache_write > 0 {
+        tokens += &format!(", {} cache write", grouped(used.cache_write));
     }
     info.push(("Tokens", tokens));
+    if let Some(spent) = super::terminal::spent(used.cost, used.unpriced) {
+        info.push(("Cost", spent));
+    }
     let exported = httpdate::fmt_http_date(SystemTime::now());
     info.push(("Exported", escape(&exported)));
     let info: String = (info.iter())
@@ -616,7 +623,7 @@ mod tests {
     #[test]
     fn a_page_shows_the_branch_as_the_terminal_replays_it() {
         let reply = json!({"type":"message","role":"assistant","_scramjet_model":"gpt-6-luna",
-            "_scramjet_usage":{"input":1200,"output":30},
+            "_scramjet_usage":{"input":1200,"output":30,"cache_write":100,"cost":0.0123},
             "content":[{"type":"output_text","text":"Found **two** files:\n\n- `a.rs`\n- b.rs"}]});
         let bash_output = (1..=8).map(|n| format!("line {n}")).collect::<Vec<_>>();
         let page = page(
@@ -647,7 +654,9 @@ mod tests {
         );
         at("<dt>Models</dt><dd>gpt-6-luna</dd>");
         at("<dt>Messages</dt><dd>1 user, 3 assistant</dd><dt>Tool calls</dt><dd>2</dd>");
-        at("<dt>Tokens</dt><dd>1,200 input, 30 output</dd>");
+        at(
+            "<dt>Tokens</dt><dd>1,200 input, 30 output, 100 cache write</dd><dt>Cost</dt><dd>$0.0123</dd>",
+        );
         let order = [
             at("<div class=\"note\">Model: gpt-6-luna</div>"),
             at("<div class=\"text\">list &lt;files&gt;</div>"),

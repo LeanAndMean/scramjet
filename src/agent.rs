@@ -12,6 +12,7 @@ mod forge;
 mod image;
 mod instructions;
 mod messages;
+mod pricing;
 mod publish;
 mod question;
 mod request;
@@ -65,8 +66,9 @@ const PRODUCER: &str = "_scramjet_model";
 /// from saved usage. Never sent.
 const CONTEXT: &str = "_scramjet_context_tokens";
 /// Stored with a response's last item when the response reported its usage: the tokens it counted
-/// (`input` not read from the cache, `output`, `cache_read`), which `/session` sums over the
-/// conversation as Scramjet sums its assistant messages' usage. Never sent.
+/// (`input` neither read from the cache nor written to it, `output`, `cache_read`, `cache_write`)
+/// and, when its model's price cards say, its `cost` in dollars, which `/session` and the footer
+/// sum as Scramjet sums its assistant messages' usage. Never sent.
 const USAGE: &str = "_scramjet_usage";
 /// Stored with a user message whose text is not its prompt as typed (a command's or skill's
 /// expansion, a `!command`'s output, `@` files' contents): the prompt as typed, which is shown and
@@ -223,45 +225,82 @@ pub struct Usage {
     pub requests: u64,
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
+    pub cache_write_tokens: u64,
     pub output_tokens: u64,
+    /// Dollars, of the responses whose cost is known.
+    pub cost: f64,
+    /// Whether a response that reported its usage has no known cost: no price card applies.
+    pub unpriced: bool,
     /// The input and output tokens of the last response, when it reported them: how full the
     /// context was, as Scramjet's footer shows it.
     pub context_tokens: Option<u64>,
 }
 
 impl Usage {
-    /// Counts a response's tokens.
-    fn count(&mut self, usage: &crate::http::responses::ProviderUsage) {
+    /// Counts a response's tokens and cost.
+    fn count(&mut self, reply: &client::Reply) {
+        let Some(usage) = &reply.usage else {
+            return;
+        };
         self.input_tokens += usage.input_tokens.unwrap_or(0);
         self.cached_input_tokens += usage.cached_input_tokens.unwrap_or(0);
+        self.cache_write_tokens += usage.cache_write_tokens.unwrap_or(0);
         self.output_tokens += usage.output_tokens.unwrap_or(0);
+        match reply.cost {
+            Some(cost) => self.cost += cost,
+            None => self.unpriced = true,
+        }
     }
 
-    /// Adds another agent's requests and tokens, not its context.
+    /// Adds another agent's requests, tokens and cost, not its context.
     fn add(&mut self, other: &Usage) {
         self.requests += other.requests;
         self.input_tokens += other.input_tokens;
         self.cached_input_tokens += other.cached_input_tokens;
+        self.cache_write_tokens += other.cache_write_tokens;
         self.output_tokens += other.output_tokens;
+        self.cost += other.cost;
+        self.unpriced |= other.unpriced;
     }
 }
 
-/// The tokens responses saved with their items (`USAGE`), added up.
+/// The tokens responses saved with their items (`USAGE`), added up, and what they and the
+/// subagents saved with their calls' results (`SUBAGENTS`) cost.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Tokens {
-    /// Input tokens not read from the cache.
+    /// Input tokens neither read from the cache nor written to it.
     pub input: u64,
     pub output: u64,
     pub cache_read: u64,
+    pub cache_write: u64,
+    /// Dollars, of the responses whose cost is known.
+    pub cost: f64,
+    /// Whether some response's cost is not known (saved without one, as before costs were).
+    pub unpriced: bool,
 }
 
 impl Tokens {
-    /// Adds what `item` saved, if it is a response's last item.
+    /// Adds what `item` saved, if it is a response's last item or a `subagent` call's result.
     fn add(&mut self, item: &Value) {
         if let Some(usage) = item.get(USAGE) {
             self.input += usage["input"].as_u64().unwrap_or(0);
             self.output += usage["output"].as_u64().unwrap_or(0);
             self.cache_read += usage["cache_read"].as_u64().unwrap_or(0);
+            self.cache_write += usage["cache_write"].as_u64().unwrap_or(0);
+            self.cost(&usage["cost"]);
+        }
+        let runs = item[SUBAGENTS]["runs"].as_array().into_iter().flatten();
+        for usage in runs.map(|run| &run["usage"]) {
+            if usage["turns"].as_u64().unwrap_or(0) > 0 {
+                self.cost(&usage["cost"]);
+            }
+        }
+    }
+
+    fn cost(&mut self, cost: &Value) {
+        match cost.as_f64() {
+            Some(cost) => self.cost += cost,
+            None => self.unpriced = true,
         }
     }
 }
@@ -275,9 +314,7 @@ pub struct Stats {
     pub tool_results: usize,
     /// Every message: the counts above, and the `!` commands and summaries.
     pub total: usize,
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
+    pub tokens: Tokens,
 }
 
 impl Stats {
@@ -287,7 +324,6 @@ impl Stats {
     /// items, such as model changes, are not counted.
     pub fn of(items: &[Value]) -> Self {
         let mut stats = Stats::default();
-        let mut tokens = Tokens::default();
         let mut other = 0;
         let mut in_reply = false;
         for item in items {
@@ -310,10 +346,8 @@ impl Stats {
                 _ if item["role"] == "user" => other += 1,
                 _ => {}
             }
-            tokens.add(item);
+            stats.tokens.add(item);
         }
-        (stats.input, stats.output, stats.cache_read) =
-            (tokens.input, tokens.output, tokens.cache_read);
         stats.total = stats.user + stats.assistant + stats.tool_results + other;
         stats
     }

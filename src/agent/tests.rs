@@ -464,9 +464,14 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
         tool_calls: 1,
         tool_results: 1,
         total: 7,
-        input: 21,
-        output: 15,
-        cache_read: 9,
+        tokens: Tokens {
+            input: 21,
+            output: 15,
+            cache_read: 9,
+            // The model has no card, so no price.
+            unpriced: true,
+            ..Tokens::default()
+        },
     };
     assert_eq!(agent.stats(), stats);
     assert_eq!(agent.session_id(), "session");
@@ -1208,6 +1213,7 @@ fn model_cards_choose_the_protocol_and_names_do_without_one() {
         levels: vec!["high".into()],
         default_level: None,
         images: true,
+        prices: Default::default(),
     };
     assert_eq!(agent.info, expected);
     agent.set_model("both").unwrap();
@@ -1377,6 +1383,98 @@ fn installed_says_where_each_comes_from_and_what_is_wrong() {
     );
 }
 
+/// Prices of a model's provider card, in effect since 1970, in dollars per million tokens.
+pub(super) fn prices(input: f64, cache_read: f64, output: f64) -> pricing::Prices {
+    let card = json!({"api":"foundry","pricingKey":"m","effectiveFrom":"1970-01-01T00:00:00.000Z",
+        "inputPerMTok":input,"cacheWritePerMTok":input * 1.25,"cacheReadPerMTok":cache_read,
+        "outputPerMTok":output});
+    pricing::Prices::of(&[card], Some("m"))
+}
+
+pub(super) fn close(cost: f64, expected: f64) {
+    assert!((cost - expected).abs() < 1e-9, "{cost} != {expected}");
+}
+
+#[test]
+fn each_response_is_priced_by_the_card_of_its_backend_and_resumes_keep_what_it_cost() {
+    let served_by = |backend: Option<&str>| {
+        let usage = json!({"input_tokens":1_000_000,"output_tokens":10_000,"total_tokens":1_010_000,
+            "input_tokens_details":{"cached_tokens":300_000,"cache_write_tokens":100_000}});
+        let response = String::from_utf8(stream(&fixture::text_events("priced", usage))).unwrap();
+        let header = backend.map(|backend| format!("\r\nx-llm-backend: {backend}"));
+        response
+            .replacen("\r\n", &(header.unwrap_or_default() + "\r\n"), 1)
+            .into_bytes()
+    };
+    let (endpoint, server) = serve(vec![
+        served_by(None),
+        served_by(Some(" Bedrock ")),
+        served_by(Some("onehpc")),
+    ]);
+    let (mut agent, _scratch) = agent(endpoint, "priced");
+    let rate = |input: f64, write: f64, read: f64, output: f64| {
+        json!({"inputPerMTok":input,"cacheWritePerMTok":write,"cacheReadPerMTok":read,
+            "outputPerMTok":output,"effectiveFrom":"2026-01-01T00:00:00.000Z","pricingKey":"opus"})
+    };
+    let mut foundry = rate(5.0, 6.25, 0.5, 25.0);
+    foundry["api"] = json!("foundry");
+    let mut bedrock = rate(5.5, 6.875, 0.55, 27.5);
+    (bedrock["api"], bedrock["upstreamProvider"]) = (json!("agentic"), json!("bedrock"));
+    agent.info.prices = pricing::Prices::of(&[foundry, bedrock], Some("opus"));
+    let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
+    agent.turn("one", &mut ui, &cancel).unwrap();
+    // 600k input tokens neither read from the cache nor written to it, 300k read, 100k written.
+    let saved = &agent.conversation().last().unwrap()[USAGE];
+    assert_eq!(
+        (&saved["input"], &saved["cache_read"], &saved["cache_write"]),
+        (&json!(600_000), &json!(300_000), &json!(100_000))
+    );
+    close(saved["cost"].as_f64().unwrap(), 3.0 + 0.625 + 0.15 + 0.25);
+    agent.turn("two", &mut ui, &cancel).unwrap();
+    let both = 4.025 + 3.3 + 0.6875 + 0.165 + 0.275;
+    let tokens = agent.session_tokens();
+    close(tokens.cost, both);
+    assert!(!tokens.unpriced);
+    assert_eq!((tokens.input, tokens.cache_write), (1_200_000, 200_000));
+    // Proxy has no card for this backend: the cost is not known.
+    agent.turn("three", &mut ui, &cancel).unwrap();
+    server.join().unwrap();
+    assert!(
+        agent.conversation().last().unwrap()[USAGE]
+            .get("cost")
+            .is_none()
+    );
+    let tokens = agent.session_tokens();
+    close(tokens.cost, both);
+    assert!(tokens.unpriced);
+    assert_eq!(ui.usage.last().map(|(shown, _)| *shown), Some(tokens));
+    assert_eq!(agent.stats().tokens, tokens);
+    close(agent.usage.cost, both);
+    assert!(agent.usage.unpriced && agent.usage.cache_write_tokens == 300_000);
+    let (session, ..) = Session::open(agent.session_path()).unwrap();
+    assert_eq!(session.tokens(), tokens);
+}
+
+#[test]
+fn subagents_costs_count_in_the_sessions_and_unknown_ones_leave_it_open() {
+    let mut tokens = Tokens::default();
+    tokens.add(
+        &json!({"type":"function_call_output","_scramjet_subagents":{"mode":"parallel",
+        "runs":[{"usage":{"turns":2,"input_tokens":10,"cached_input_tokens":0,"output_tokens":1,
+            "cost":0.25}},
+            {"usage":{"turns":0,"input_tokens":0,"cached_input_tokens":0,"output_tokens":0}}]}}),
+    );
+    // Their tokens stay theirs, as Scramjet's footer counts the session's own.
+    let quarter = Tokens {
+        cost: 0.25,
+        ..Tokens::default()
+    };
+    assert_eq!(tokens, quarter);
+    // Saved before costs were.
+    tokens.add(&json!({"_scramjet_subagents":{"runs":[{"usage":{"turns":1}}]}}));
+    assert!(tokens.unpriced);
+}
+
 #[test]
 fn session_tokens_count_every_response_on_every_branch_and_are_read_again_on_resume() {
     let other = json!({"input_tokens":100,"output_tokens":20,"total_tokens":120});
@@ -1397,6 +1495,8 @@ fn session_tokens_count_every_response_on_every_branch_and_are_read_again_on_res
         input: 14,
         output: 10,
         cache_read: 6,
+        unpriced: true,
+        ..Tokens::default()
     };
     assert_eq!(ui.usage.last(), Some(&(two, Some(15))));
     // Another branch from the first reply adds its response; leaving the second keeps it.
@@ -1412,10 +1512,12 @@ fn session_tokens_count_every_response_on_every_branch_and_are_read_again_on_res
         input: 114,
         output: 30,
         cache_read: 6,
+        unpriced: true,
+        ..Tokens::default()
     };
     assert_eq!(ui.usage.last(), Some(&(three, Some(120))));
     assert_eq!(agent.session_tokens(), three);
-    assert_eq!(agent.stats().input, 107);
+    assert_eq!(agent.stats().tokens.input, 107);
     let (session, ..) = Session::open(agent.session_path()).unwrap();
     assert_eq!(session.tokens(), three);
 }

@@ -285,7 +285,12 @@ pub struct ChildUsage {
     pub turns: u64,
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
     pub output_tokens: u64,
+    /// Dollars; `None` when a response's cost is not known (or it was saved before costs were).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
 }
 
 impl ChildRun {

@@ -2,7 +2,8 @@
 //! does.
 use super::client::{self, ClientError, ModelInfo, Protocol};
 use super::{
-    Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, shown_only, tools,
+    Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, pricing, shown_only,
+    tools,
 };
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::atomic::AtomicBool, time::Duration};
@@ -95,9 +96,7 @@ impl Agent {
                 }
             },
         )?;
-        if let Some(usage) = &reply.usage {
-            self.usage.count(usage);
-        }
+        self.usage.count(&reply);
         Ok(reply)
     }
 }
@@ -149,7 +148,12 @@ pub(super) fn send(
             cancel,
             &mut |update| on(Sending::Progress(&update)),
         )) {
-            Ok(reply) => return Ok(reply),
+            Ok(mut reply) => {
+                reply.cost = (reply.usage.as_ref()).and_then(|usage| {
+                    (info.prices).cost(usage, reply.backend.as_deref(), pricing::now())
+                });
+                return Ok(reply);
+            }
             Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
             Err(ClientError::Failed(failure)) => failure,
         };
@@ -648,7 +652,16 @@ response is incomplete; retry the request."});
         // Input counts cache reads and writes, as Responses input does.
         assert_eq!(agent.usage.input_tokens, 17 + 37);
         assert_eq!(agent.usage.cached_input_tokens, 10);
+        assert_eq!(agent.usage.cache_write_tokens, 4);
         assert_eq!(agent.usage.output_tokens, 24);
+        // Saved apart: the input neither read from the cache nor written to it.
+        let saved: Vec<_> = (agent.conversation().iter())
+            .filter_map(|item| item.get("_scramjet_usage"))
+            .collect();
+        assert_eq!(
+            saved[0],
+            &json!({"input":10,"output":20,"cache_read":5,"cache_write":2})
+        );
         assert_eq!(agent.usage.context_tokens, Some(41));
         assert!(
             agent.conversation()[1..]

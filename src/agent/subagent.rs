@@ -717,7 +717,9 @@ impl Run {
             turns: self.turns,
             input_tokens: self.usage.input_tokens,
             cached_input_tokens: self.usage.cached_input_tokens,
+            cache_write_tokens: self.usage.cache_write_tokens,
             output_tokens: self.usage.output_tokens,
+            cost: (!self.usage.unpriced).then_some(self.usage.cost),
         }
     }
 
@@ -1237,9 +1239,7 @@ fn run_child(
             }
         };
         run.turns += 1;
-        if let Some(usage) = &reply.usage {
-            run.usage.count(usage);
-        }
+        run.usage.count(&reply);
         report(Event::Usage(run.shown_usage()));
         let mut calls = Vec::new();
         for item in reply.items {

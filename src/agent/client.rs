@@ -1,3 +1,4 @@
+use super::pricing::Prices;
 pub use crate::http::responses::StreamProgress;
 use crate::http::responses::{ParserLimits, ResponsesParser};
 use bytes::Bytes;
@@ -90,12 +91,17 @@ const OVERFLOW_PATTERNS: &[&str] = &[
 /// Wording that mentions tokens or limits for another reason, such as throttling.
 const NON_OVERFLOW_WORDS: &[&str] = &["rate limit", "too many requests", "throttl"];
 
+#[derive(Default)]
 pub(super) struct Reply {
     pub items: Vec<Value>,
     pub usage: Option<crate::http::responses::ProviderUsage>,
     /// Why the reply stopped before it was complete, when it reached the output token limit:
     /// `items` then keep its text, but not its tool calls.
     pub incomplete: Option<String>,
+    /// The agentic backend that served it, as Proxy's upstream names it in `x-llm-backend`.
+    pub backend: Option<String>,
+    /// What it cost in dollars, when its model's price cards say (`request::send`).
+    pub cost: Option<f64>,
 }
 
 pub(super) enum ClientError {
@@ -248,6 +254,8 @@ pub(super) struct ModelInfo {
     pub default_level: Option<String>,
     /// Whether the model takes images; a card without `input` says nothing against it.
     pub images: bool,
+    /// The price cards of the card's pricing key.
+    pub prices: Prices,
 }
 
 impl ModelInfo {
@@ -264,6 +272,7 @@ impl ModelInfo {
             levels: Vec::new(),
             default_level: None,
             images: true,
+            prices: Prices::default(),
         }
     }
 
@@ -272,8 +281,9 @@ impl ModelInfo {
         fit(&self.levels, effort)
     }
 
-    /// From a Proxy model card: Responses when the card lists it, else Messages when it lists that.
-    fn from_card(card: &Value) -> Self {
+    /// From a Proxy model card and the document's price cards: Responses when the card lists it,
+    /// else Messages when it lists that.
+    fn from_card(card: &Value, prices: &[Value]) -> Self {
         let lists = |protocol: &str| {
             card["supportedProtocols"]
                 .as_array()
@@ -300,6 +310,7 @@ impl ModelInfo {
             images: card["input"]
                 .as_array()
                 .is_none_or(|input| input.iter().any(|kind| kind == "image")),
+            prices: Prices::of(prices, card["pricingKey"].as_str()),
         }
     }
 }
@@ -324,7 +335,9 @@ pub(super) fn fit<'a>(levels: &[String], effort: &'a str) -> &'a str {
 /// Each Proxy model card's model, display name and what the agent needs to know of it; none when
 /// the endpoint does not serve the cards in time.
 pub(super) async fn model_cards(endpoint: SocketAddr) -> Vec<Card> {
-    let cards = cards(endpoint).await.unwrap_or_default();
+    let Some((cards, prices)) = cards(endpoint).await else {
+        return Vec::new();
+    };
     (cards.iter())
         .filter_map(|card| {
             let text = |key: &str| card[key].as_str().map(str::to_owned);
@@ -332,7 +345,7 @@ pub(super) async fn model_cards(endpoint: SocketAddr) -> Vec<Card> {
                 id: text("requestId")?,
                 name: text("displayName"),
                 provider: text("provider"),
-                info: ModelInfo::from_card(card),
+                info: ModelInfo::from_card(card, &prices),
             })
         })
         .collect()
@@ -349,22 +362,26 @@ pub(super) struct Card {
 /// The model's Proxy model card; `None` when the endpoint does not serve the cards in time or does
 /// not list the model.
 pub(super) async fn model_info(endpoint: SocketAddr, model: &str) -> Option<ModelInfo> {
-    cards(endpoint)
-        .await?
-        .iter()
+    let (cards, prices) = cards(endpoint).await?;
+    (cards.iter())
         .find(|card| card["requestId"] == model)
-        .map(ModelInfo::from_card)
+        .map(|card| ModelInfo::from_card(card, &prices))
 }
 
-async fn cards(endpoint: SocketAddr) -> Option<Vec<Value>> {
+/// The document's model cards and price cards; a document without price cards has none.
+async fn cards(endpoint: SocketAddr) -> Option<(Vec<Value>, Vec<Value>)> {
     let cards = tokio::time::timeout(CARDS_TIMEOUT, get(endpoint, "/api/model-cards"))
         .await
         .ok()??;
     let mut cards: Value = serde_json::from_slice(&cards).ok()?;
-    match cards["models"].take() {
-        Value::Array(cards) => Some(cards),
-        _ => None,
-    }
+    let Value::Array(models) = cards["models"].take() else {
+        return None;
+    };
+    let prices = match cards["priceCards"].take() {
+        Value::Array(prices) => prices,
+        _ => Vec::new(),
+    };
+    Some((models, prices))
 }
 
 async fn get(endpoint: SocketAddr, path: &str) -> Option<Bytes> {
@@ -464,6 +481,10 @@ async fn exchange(
         Some(crate::http::retry_after::RetryWait::Unrepresentable) => Some(Duration::MAX),
         None => None,
     };
+    let backend = (response.headers().get("x-llm-backend"))
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
     let mut body = response.into_body();
     let result = if status != 200 {
         let mut text = Vec::new();
@@ -501,7 +522,7 @@ async fn exchange(
         }
     };
     driver.abort();
-    result
+    result.map(|reply| Reply { backend, ..reply })
 }
 
 /// Passes each received chunk to `feed` until the body ends, `feed` fails or the stream stalls.
@@ -586,6 +607,7 @@ async fn responses_reply(
                     items,
                     usage: parsed.usage,
                     incomplete,
+                    ..Reply::default()
                 })
             }
             None => {

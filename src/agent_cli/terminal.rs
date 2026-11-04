@@ -166,6 +166,28 @@ pub(super) fn tokens(n: u64) -> String {
     }
 }
 
+/// What was spent, as Scramjet shows it (`$0.123` with 3 `decimals`), with `+?` after it when
+/// some of it is not known (`$?` when none is); `None` when nothing was spent or nothing is known.
+pub(super) fn dollars(cost: f64, unpriced: bool, decimals: usize) -> Option<String> {
+    match (cost > 0.0, unpriced) {
+        (true, false) => Some(format!("${cost:.decimals$}")),
+        (true, true) => Some(format!("${cost:.decimals$}+?")),
+        (false, true) => Some("$?".to_owned()),
+        (false, false) => None,
+    }
+}
+
+/// What was spent, in words, as `/session` and `/export` say it (`$0.1234`, `$0.1234 + unknown`
+/// when some of it is not known, `unknown` when none is); `None` when nothing was spent.
+pub(super) fn spent(cost: f64, unpriced: bool) -> Option<String> {
+    match (cost > 0.0, unpriced) {
+        (true, false) => Some(format!("${cost:.4}")),
+        (true, true) => Some(format!("${cost:.4} + unknown")),
+        (false, true) => Some("unknown".to_owned()),
+        (false, false) => None,
+    }
+}
+
 /// How full the context is, as Scramjet's footer shows it: `53k/1.1M (5.0%)`.
 pub(super) fn context(count: u64, window: Option<u64>) -> String {
     match window {
@@ -645,15 +667,23 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     }
 }
 
-/// The usage line after a turn: requests, tokens, how full the context is and the effort.
+/// The usage line after a turn: requests, tokens, what they cost, how full the context is and
+/// the effort.
 pub(super) fn usage_line(agent: &Agent) -> String {
     let usage = agent.usage;
+    let written = match usage.cache_write_tokens {
+        0 => String::new(),
+        n => format!(", {n} written to the cache"),
+    };
     format!(
-        "[{} requests · {} input tokens ({} cached) · {} output tokens{}{}]",
+        "[{} requests · {} input tokens ({} cached{written}) · {} output tokens{}{}{}]",
         usage.requests,
         usage.input_tokens,
         usage.cached_input_tokens,
         usage.output_tokens,
+        dollars(usage.cost, usage.unpriced, 4)
+            .map(|cost| format!(" · {cost}"))
+            .unwrap_or_default(),
         usage
             .context_tokens
             .map(|tokens| format!(" · context {}", context(tokens, agent.context_window())))

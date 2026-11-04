@@ -1,10 +1,10 @@
 //! The two lines under the prompt, as Scramjet's footer: the project's directory with its Git
-//! branch and the session's name, then the session's tokens, how full the context is, and the
-//! model with its effort.
+//! branch and the session's name, then the session's tokens and cost, how full the context is,
+//! and the model with its effort.
 
 use super::settings::scramjet_level;
 use super::style::{FOOTER, FOOTER_FULL, FOOTER_NEARLY_FULL, RESET};
-use super::terminal::{context, tokens};
+use super::terminal::{context, dollars, tokens};
 use super::text::{clip, one_line, visible};
 use scramjet_rs::agent::{Agent, Tokens};
 use std::{
@@ -98,9 +98,9 @@ impl Footer {
         [format!("{FOOTER}{place}{RESET}"), self.stats(room)]
     }
 
-    /// As Scramjet's: the tokens that are not zero, how full the context is (in the warning
-    /// color past 70%, the error color past 90%), and the model with its effort at the right
-    /// when there is room.
+    /// As Scramjet's: the tokens that are not zero, what was spent, how full the context is (in
+    /// the warning color past 70%, the error color past 90%), and the model with its effort at
+    /// the right when there is room.
     fn stats(&self, room: usize) -> String {
         let shown = &self.shown;
         let mut counts = Vec::new();
@@ -108,11 +108,13 @@ impl Footer {
             ("↑", shown.tokens.input),
             ("↓", shown.tokens.output),
             ("R", shown.tokens.cache_read),
+            ("W", shown.tokens.cache_write),
         ] {
             if count > 0 {
                 counts.push(format!("{mark}{}", tokens(count)));
             }
         }
+        counts.extend(dollars(shown.tokens.cost, shown.tokens.unpriced, 3));
         let (full, percent) = match (shown.context, shown.window) {
             (Some(count), window) => (
                 context(count, window),
@@ -251,6 +253,7 @@ mod tests {
                 input: 12_345,
                 output: 3_400,
                 cache_read: 104_000,
+                ..Tokens::default()
             },
             context: Some(53_000),
             window: Some(1_000_000),
@@ -289,6 +292,28 @@ mod tests {
             ..opus()
         };
         assert!(plain(&footer(plain_model).lines(61)[1]).ends_with(" claude-opus-5-5"));
+    }
+
+    #[test]
+    fn cache_writes_and_the_cost_follow_the_tokens_with_what_is_not_known() {
+        let spent = |cost, unpriced| {
+            let tokens = Tokens {
+                cache_write: 2_000,
+                cost,
+                unpriced,
+                ..opus().tokens
+            };
+            let shown = Shown { tokens, ..opus() };
+            plain(&footer(shown).lines(80)[1])
+        };
+        assert_eq!(
+            spent(0.4567, false),
+            "↑12k ↓3.4k R104k W2.0k $0.457 53k/1.0M (5.3%)            claude-opus-5-5 • high"
+        );
+        // Responses without a price, or saved before costs were, leave the total open.
+        assert!(spent(0.4567, true).starts_with("↑12k ↓3.4k R104k W2.0k $0.457+? 53k/1.0M "));
+        assert!(spent(0.0, true).starts_with("↑12k ↓3.4k R104k W2.0k $? 53k/1.0M "));
+        assert!(spent(0.0, false).starts_with("↑12k ↓3.4k R104k W2.0k 53k/1.0M "));
     }
 
     #[test]

@@ -573,6 +573,7 @@ impl Stream {
                 output_tokens: Some(output),
                 total_tokens: Some(input + output),
                 cached_input_tokens: Some(read),
+                cache_write_tokens: Some(write),
                 reasoning_tokens: None,
             }
         });
@@ -580,6 +581,7 @@ impl Stream {
             items,
             usage,
             incomplete,
+            ..Reply::default()
         })
     }
 }
