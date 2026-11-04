@@ -516,7 +516,7 @@ fn edit(root: &Path, call: &Call) -> Result<Output, String> {
                 false => format!("edits[{index}].oldText must not be empty in {shown}."),
             });
         }
-        let (start, end) = match finder.find(old) {
+        let (start, end, new) = match finder.find(old, new) {
             Ok(span) => span,
             Err(matching::Miss::Absent) => {
                 return Err(match single {
@@ -543,7 +543,7 @@ must be unique. Please provide more context to make it unique."
                 });
             }
         };
-        spans.push((start, end, finder.with_endings(new), index));
+        spans.push((start, end, new, index));
     }
     spans.sort_by_key(|span| span.0);
     if let Some(pair) = spans.windows(2).find(|pair| pair[0].1 > pair[1].0) {

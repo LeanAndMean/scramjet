@@ -116,19 +116,47 @@ impl<'a> Finder<'a> {
         }
     }
 
-    /// The range of the original that `old` stands for: the one place it is, line endings
-    /// aside, else the one place it is loosely.
-    pub fn find(&self, old: &str) -> Result<(usize, usize), Miss> {
+    /// The range of the original that `old` stands for, and `new` as it is to be written there.
+    pub fn find(&self, old: &str, new: &str) -> Result<(usize, usize, String), Miss> {
+        // A byte order mark starting `old`, or a `\r` ending it, is the file's, copied from `read`;
+        // the match leaves it in place, so `new` must not bring it again.
+        let (old, new) = match old.strip_prefix('\u{feff}') {
+            Some(old) => (old, new.strip_prefix('\u{feff}').unwrap_or(new)),
+            None => (old, new),
+        };
+        let (old, new) = match old.strip_suffix('\r') {
+            Some(old) => (old, new.strip_suffix('\r').unwrap_or(new)),
+            None => (old, new),
+        };
+        let (start, end) = self.locate(old)?;
+        Ok((start, end, self.with_endings(new)))
+    }
+
+    /// The one place `old` is, line endings aside, else the one place it is loosely.
+    fn locate(&self, old: &str) -> Result<(usize, usize), Miss> {
         match self.exact.find(&View::new(old, false).text) {
             Err(Miss::Absent) => {}
             found => return found,
         }
         let loose = self.loose.get_or_init(|| View::new(self.original, true));
-        loose.find(&View::new(old, true).text)
+        let trimmed = View::new(old, true).text;
+        // Whitespace ending `old` may be the indentation of the file's next line, which `new`
+        // brings again; Scramjet's trimmed form would leave it in the file too.
+        let last = &old[old.rfind('\n').map_or(0, |n| n + 1)..];
+        let tail = &last[last.trim_end().len()..];
+        if !tail.is_empty() {
+            let mut kept = trimmed.clone();
+            kept.extend(tail.chars().map(|c| plain(c).map_or(c, |_| ' ')));
+            match loose.find(&kept) {
+                Err(Miss::Absent) => {}
+                found => return found,
+            }
+        }
+        loose.find(&trimmed)
     }
 
     /// `new` with the line ending of the file's first line, as Scramjet writes it.
-    pub fn with_endings(&self, new: &str) -> String {
+    fn with_endings(&self, new: &str) -> String {
         let new = new.replace("\r\n", "\n");
         let crlf = self
             .original
@@ -143,7 +171,7 @@ mod tests {
     use super::*;
 
     fn found(original: &str, old: &str) -> Option<String> {
-        let (start, end) = Finder::new(original).find(old).ok()?;
+        let (start, end, _) = Finder::new(original).find(old, "").ok()?;
         Some(original[start..end].to_owned())
     }
 
@@ -178,11 +206,52 @@ mod tests {
             Some("now  \n\tthen\u{a0}go\t\n")
         );
         assert!(matches!(
-            Finder::new("“a”\n”a“\n").find("\"a\""),
+            Finder::new("“a”\n”a“\n").find("\"a\"", ""),
             Err(Miss::Many(2))
         ));
-        assert!(matches!(Finder::new("a \n").find("\t"), Err(Miss::Absent)));
-        assert!(matches!(Finder::new("ab").find("b\n"), Err(Miss::Absent)));
+        assert!(matches!(
+            Finder::new("a \n").find("\t", ""),
+            Err(Miss::Absent)
+        ));
+        assert!(matches!(
+            Finder::new("ab").find("b\n", ""),
+            Err(Miss::Absent)
+        ));
+    }
+
+    #[test]
+    fn what_old_text_copies_of_the_file_beyond_its_text_new_text_does_not_add_again() {
+        let replaced = |original: &str, old: &str, new: &str| {
+            let (start, end, new) = Finder::new(original).find(old, new).ok()?;
+            let mut text = original.to_owned();
+            text.replace_range(start..end, &new);
+            Some(text)
+        };
+        let bom = "\u{feff}one\r\ntwo\r\n";
+        assert_eq!(
+            replaced(bom, "\u{feff}one", "\u{feff}uno").as_deref(),
+            Some("\u{feff}uno\r\ntwo\r\n")
+        );
+        let crlf = "x\r\ny\r\nw\r\n";
+        assert_eq!(
+            replaced(crlf, "x\r\ny\r", "x\r\nz\r").as_deref(),
+            Some("x\r\nz\r\nw\r\n")
+        );
+        assert_eq!(
+            replaced(crlf, "y\r", "z").as_deref(),
+            Some("x\r\nz\r\nw\r\n")
+        );
+        // A loose match takes the whitespace ending the old text where the file has it, else
+        // matches without it.
+        let code = "if “a”:\n    go()\n“b” \n";
+        assert_eq!(
+            replaced(code, "if \"a\":\n  ", "if \"x\":\n  ").as_deref(),
+            Some("if \"x\":\n    go()\n“b” \n")
+        );
+        assert_eq!(
+            replaced(code, "\"b\"\u{a0}\t", "c").as_deref(),
+            Some("if “a”:\n    go()\nc \n")
+        );
     }
 
     #[test]
