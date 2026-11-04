@@ -3,6 +3,7 @@ mod children;
 mod clipboard;
 mod diff;
 mod editor;
+mod export;
 mod file_search;
 mod fuzzy;
 mod install;
@@ -50,6 +51,12 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         println!("{USAGE}");
         return Ok(());
     };
+    if let Some(file) = options.export.take() {
+        let output = options.messages.first().map(std::path::PathBuf::from);
+        let written = export::file(&file, output)?;
+        println!("Exported to: {}", written.display());
+        return Ok(());
+    }
     let mut messages = std::mem::take(&mut options.messages);
     let files = match options.files.is_empty() {
         true => None,

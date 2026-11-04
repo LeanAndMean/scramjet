@@ -341,7 +341,7 @@ impl Rows<'_> {
 }
 
 /// The glyph showing how a child is going, and its style.
-fn icon(state: &ChildState) -> (&'static str, &'static str) {
+pub(super) fn icon(state: &ChildState) -> (&'static str, &'static str) {
     match state {
         ChildState::Running => ("⏳", SUBAGENT_RUNNING),
         ChildState::Done => ("✓", SUBAGENT_DONE),
@@ -351,7 +351,7 @@ fn icon(state: &ChildState) -> (&'static str, &'static str) {
 
 /// A child's tool call as Scramjet lists it: a command after `$`, else the tool's name and what
 /// it acts on; only the first line.
-fn call(name: &str, summary: &str) -> String {
+pub(super) fn call(name: &str, summary: &str) -> String {
     let first = summary.lines().next().unwrap_or_default();
     match name {
         "bash" => format!("$ {first}"),
@@ -361,7 +361,7 @@ fn call(name: &str, summary: &str) -> String {
 
 /// As Scramjet's `formatUsageStats`: turns, input not read from the cache, output, cache reads
 /// and the model.
-fn usage_line(usage: &ChildUsage, model: Option<&str>) -> String {
+pub(super) fn usage_line(usage: &ChildUsage, model: Option<&str>) -> String {
     let count = |n: u64| match n {
         0..1_000 => n.to_string(),
         1_000..10_000 => format!("{:.1}k", n as f64 / 1e3),

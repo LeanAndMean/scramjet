@@ -913,6 +913,108 @@ fn a_clone_continues_the_conversation_where_it_is_in_a_new_session() {
 }
 
 #[test]
+fn an_export_holds_the_current_branch_and_an_import_continues_in_a_copy() {
+    let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+        "again",
+        fixture::known_usage(),
+    ))]);
+    let (mut agent, scratch) = agent(endpoint, "export");
+    let exported = scratch.0.join("shared/work.jsonl");
+    assert!(!agent.export_session(&exported).unwrap());
+    assert!(!exported.exists());
+
+    let reply = |text: &str, model: &str| {
+        json!({"type":"message","role":"assistant",
+            "content":[{"type":"output_text","text":text}],"_scramjet_model":model})
+    };
+    let original = scratch.0.join("1700000000000-1.jsonl");
+    write_session(
+        &original,
+        &[
+            json!({"type":"session","version":1,"root":"/work","parentSession":"/old.jsonl"}),
+            json!({"type":"model_change","model":"a"}),
+            json!({"role":"user","content":"one"}),
+            reply("first", "a"),
+            json!({"type":"session_info","name":"Work"}),
+            json!({"role":"user","content":"two"}),
+            reply("second", "a"),
+            json!({"type":"branch","parent":3}),
+            json!({"type":"model_change","model":"b"}),
+            json!({"role":"user","content":"other"}),
+            reply("another", "b"),
+        ],
+        std::time::SystemTime::now(),
+    );
+    let saved = std::fs::read_to_string(&original).unwrap();
+    agent.resume_session(&original).unwrap();
+    assert!(agent.export_session(&exported).unwrap());
+    let lines: Vec<String> = (std::fs::read_to_string(&exported).unwrap().lines())
+        .map(str::to_owned)
+        .collect();
+    // The path to the leaf, without the branch left behind, then the name; the header no longer
+    // names the session it was forked from.
+    let saved_lines: Vec<_> = saved.lines().collect();
+    let path = [1, 2, 3, 8, 9, 10].map(|line| saved_lines[line]);
+    assert_eq!(lines[1..7], path);
+    assert_eq!(lines[7], r#"{"name":"Work","type":"session_info"}"#);
+    assert_eq!(lines.len(), 8);
+    assert_eq!(
+        serde_json::from_str::<Value>(&lines[0]).unwrap(),
+        json!({"type":"session","version":1,"root":"/work"})
+    );
+    let branch = agent.branch().unwrap();
+    let values: Vec<Value> = (path.iter())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(branch.entries, values);
+    assert_eq!(branch.models(), ["a", "b"]);
+    assert_eq!(branch.name.as_deref(), Some("Work"));
+
+    agent.import_session(&exported).unwrap();
+    let copy = agent.session_path().to_owned();
+    assert_ne!(copy, original);
+    assert_eq!(copy.parent(), original.parent());
+    assert_eq!(
+        std::fs::read_to_string(&copy).unwrap(),
+        std::fs::read_to_string(&exported).unwrap()
+    );
+    assert_eq!(agent.session_name(), Some("Work"));
+    assert_eq!(agent.model(), "b");
+    assert_eq!(agent.prompts(), ["one", "other"]);
+    let mut ui = Recorder::default();
+    agent
+        .turn("more", &mut ui, &AtomicBool::new(false))
+        .unwrap();
+    let bodies = server.join().unwrap();
+    let input = bodies[0]["input"].as_array().unwrap();
+    let texts: Vec<_> = (input.iter())
+        .map(|item| match &item["content"] {
+            Value::String(text) => text.as_str(),
+            parts => parts[0]["text"].as_str().unwrap(),
+        })
+        .collect();
+    assert_eq!(texts, ["one", "first", "other", "another", "more"]);
+    assert_eq!(std::fs::read_to_string(&original).unwrap(), saved);
+    assert_eq!(
+        std::fs::read_to_string(&exported).unwrap().lines().count(),
+        8
+    );
+
+    // What is not a session file is not copied, and the session stays.
+    let sessions = || std::fs::read_dir(&scratch.0).unwrap().count();
+    let before = sessions();
+    let notes = scratch.0.join("shared/notes.jsonl");
+    std::fs::write(&notes, "{\"type\":\"note\"}\n").unwrap();
+    let error = agent.import_session(&notes).unwrap_err().to_string();
+    assert!(error.contains("not a scramjet-rs session"), "{error}");
+    let missing = scratch.0.join("shared/missing.jsonl");
+    let error = agent.import_session(&missing).unwrap_err().to_string();
+    assert!(error.contains("missing.jsonl"), "{error}");
+    assert_eq!(sessions(), before);
+    assert_eq!(agent.session_path(), copy);
+}
+
+#[test]
 fn the_last_reply_is_the_text_of_the_latest_reply_that_has_any() {
     let (endpoint, server) = serve(vec![stream(&fixture::text_events(
         "\n**Done**: it works.\n\n- one\n- two\n\n",

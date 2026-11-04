@@ -641,10 +641,15 @@ pub(super) fn terminal_size() -> (usize, usize) {
 }
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
-const SLASH_COMMANDS: [(&str, &str); 16] = [
+const SLASH_COMMANDS: [(&str, &str); 18] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     ("scoped-models", "Enable/disable models for Ctrl+P cycling"),
+    (
+        "export",
+        "Export session (HTML default, or specify path: .html/.jsonl)",
+    ),
+    ("import", "Import and resume a session from a JSONL file"),
     ("copy", "Copy last agent message to clipboard"),
     ("name", "Set session display name"),
     ("session", "Show session info and stats"),
@@ -1807,11 +1812,11 @@ mod tests {
 
     #[test]
     fn completion_rows_escape_control_characters() {
-        let loaded = [("x\x1b[2J".to_owned(), "clears\x1b]0;title\x07".to_owned())];
-        let list = Completion::slash("/x", &loaded).unwrap();
+        let loaded = [("z\x1b[2J".to_owned(), "clears\x1b]0;title\x07".to_owned())];
+        let list = Completion::slash("/z", &loaded).unwrap();
         assert_eq!(
             plain(list.rows(60)),
-            ["→ /x\\u{1b}[2J  clears\\u{1b}]0;title\\u{7}"]
+            ["→ /z\\u{1b}[2J  clears\\u{1b}]0;title\\u{7}"]
         );
     }
 
@@ -1869,6 +1874,8 @@ mod tests {
                 "/settings",
                 "/model",
                 "/scoped-models",
+                "/export",
+                "/import",
                 "/copy",
                 "/name",
                 "/session",
@@ -1890,9 +1897,9 @@ mod tests {
                 "→ /settings       Open settings menu",
                 "  /model          Select model (opens selector UI)",
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
-                "  /copy           Copy last agent message to clipboard",
-                "  /name           Set session display name",
-                "  (1/16)",
+                "  /export         Export session (HTML default, or specify…",
+                "  /import         Import and resume a session from a JSONL…",
+                "  (1/18)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -1903,15 +1910,15 @@ mod tests {
         assert_eq!(
             plain(list.rows(24)),
             [
-                "  /hotkeys",
+                "  /name",
+                "  /session",
+                "→ /hotkeys",
                 "  /fork",
-                "→ /clone",
-                "  /tree",
-                "  /new",
-                "  (9/16)"
+                "  /clone",
+                "  (9/18)"
             ]
         );
-        for _ in 0..8 {
+        for _ in 0..10 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);
@@ -1927,7 +1934,7 @@ mod tests {
         list.apply(&mut buffer);
         assert_eq!((buffer.text.as_str(), buffer.cursor), ("/resume  rest", 8));
 
-        assert!(Completion::slash("/x", &[]).is_none());
+        assert!(Completion::slash("/zz", &[]).is_none());
         assert!(Completion::slash("/model ", &[]).is_none());
         assert!(Completion::slash("a /model", &[]).is_none());
     }

@@ -1245,7 +1245,7 @@ enum Shown {
 }
 
 /// What a command sent, without the `<scramjet-command>` tags around it.
-fn command_body(sent: &str) -> &str {
+pub(super) fn command_body(sent: &str) -> &str {
     let body = sent
         .strip_prefix("<scramjet-command")
         .and_then(|rest| rest.split_once(">\n"))

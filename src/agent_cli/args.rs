@@ -6,6 +6,7 @@ use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model ID] \
 [--models PATTERNS] [--effort LEVEL] [--max-output-tokens N] [--retries N]
 [--continue | -r | --session FILE] [--ask] [-p] [@FILE...] [MESSAGE...]
+       scramjet-rs --export FILE [OUTPUT]
        scramjet-rs install DIR | remove NAME|DIR | list
 
 Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
@@ -32,6 +33,8 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
                          text file's contents, or a PNG, JPEG, GIF or WebP image, scaled down
                          as read scales it; a relative path is from the current directory
   MESSAGE                prompts sent one after another when the session starts
+  --export FILE [OUTPUT] write the session file FILE as a web page to OUTPUT (default:
+                         scramjet-rs-session-<its name>.html here), as /export does, and exit
 The session fills the terminal's alternate screen: the conversation above a status line and the
 prompt. Page Up/Down and the mouse wheel scroll the conversation; Escape goes back to its end.
 In the prompt, Enter or Alt+Enter sends; Shift+Enter, Ctrl-J or a trailing \\ starts a new
@@ -73,7 +76,10 @@ Escape or Ctrl-C to cancel; typed text filters the /resume and /model lists, bes
 for /resume N, /fork N, /tree N and /model ID.
 /name NAME names the session, which /resume then lists by its name; /name alone shows it.
 /session shows the session's file, the messages in its context and the tokens they used.
-/hotkeys lists the keys. /copy copies the last reply's text, as the model wrote it, to the
+/export [PATH] writes the session's current branch as a web page that runs no script and
+loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH ending in .jsonl,
+as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
+with this project's sessions. /hotkeys lists the keys. /copy copies the last reply's text, as the model wrote it, to the
 clipboard. Typed while a turn runs, /session, /hotkeys, /name, /model, /scoped-models and /copy
 run before its next request; the other commands stop it and run once it has.
 As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
@@ -110,6 +116,8 @@ pub(super) struct Options {
     pub(super) files: Vec<String>,
     /// The other words: prompts to send in order; with `-p`, `-` is read from stdin.
     pub(super) messages: Vec<String>,
+    /// `--export FILE`: the session file to write as a page, to the first message if any.
+    pub(super) export: Option<PathBuf>,
 }
 
 impl Options {
@@ -131,6 +139,7 @@ impl Options {
             print: false,
             files: Vec::new(),
             messages: Vec::new(),
+            export: None,
         };
         while let Some(argument) = arguments.next() {
             let mut value = || {
@@ -182,6 +191,7 @@ impl Options {
                     let path = PathBuf::from(value()?);
                     (options.choice, options.resume) = (SessionChoice::Open(path), false)
                 }
+                Some("--export") => options.export = Some(PathBuf::from(value()?)),
                 Some("--ask") => options.ask = true,
                 Some("-p" | "--print") => options.print = true,
                 Some("-h" | "--help") => return Ok(None),

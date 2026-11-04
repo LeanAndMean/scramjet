@@ -24,6 +24,33 @@ pub struct SessionInfo {
     pub parent: Option<PathBuf>,
 }
 
+/// The conversation on a session's current branch, as `/export` shows it.
+pub struct Branch {
+    /// The session file's first line.
+    pub header: Value,
+    /// The entries on the path from the start to the leaf, compactions, branch summaries and
+    /// model changes among them, with the items a compaction summarized before it.
+    pub entries: Vec<Value>,
+    pub name: Option<String>,
+}
+
+impl Branch {
+    /// The models that wrote its replies or that it switched to, in the order they first appear.
+    pub fn models(&self) -> Vec<String> {
+        let mut models: Vec<String> = Vec::new();
+        for entry in &self.entries {
+            let model = match entry["type"].as_str() {
+                Some("model_change") => entry["model"].as_str(),
+                _ => entry[super::PRODUCER].as_str(),
+            };
+            if let Some(model) = model.filter(|model| !models.iter().any(|m| m == model)) {
+                models.push(model.to_owned());
+            }
+        }
+        models
+    }
+}
+
 /// How `delete` removed a session file.
 #[derive(Debug, PartialEq)]
 pub enum Removal {
@@ -104,6 +131,7 @@ struct Entries {
     size: u64,
     /// The header's `parentSession`: the session this one was forked from.
     parent: Option<PathBuf>,
+    header: Value,
 }
 
 /// The conversation on the path from the start to an entry.
@@ -123,6 +151,7 @@ fn read(path: &Path) -> io::Result<Entries> {
     let mut tail = None;
     let mut name = None;
     let mut parent = None;
+    let mut header = Value::Null;
     let mut line = String::new();
     let mut end = 0;
     let mut lines = 0;
@@ -146,6 +175,7 @@ fn read(path: &Path) -> io::Result<Entries> {
                 return Err(invalid(path, "not a scramjet-rs session"));
             }
             parent = value["parentSession"].as_str().map(PathBuf::from);
+            header = value;
         } else if value["type"] == "session_info" {
             name = value["name"]
                 .as_str()
@@ -183,6 +213,7 @@ fn read(path: &Path) -> io::Result<Entries> {
         lines,
         size: end as u64,
         parent,
+        header,
     })
 }
 
@@ -324,6 +355,69 @@ impl Entries {
     fn fork_points(&self) -> impl Iterator<Item = &Entry> {
         self.entries.iter().filter(|entry| is_prompt(&entry.value))
     }
+
+    fn branch(&self, leaf: Option<usize>) -> Branch {
+        Branch {
+            header: self.header.clone(),
+            entries: (self.path(leaf).into_iter())
+                .map(|entry| entry.value.clone())
+                .collect(),
+            name: self.name.clone(),
+        }
+    }
+
+    /// The lines of `file` (this session's bytes) on the path to `leaf`, then a `session_info`
+    /// line naming it `name` when given.
+    fn history(
+        &self,
+        file: &Path,
+        source: &[u8],
+        leaf: Option<usize>,
+        name: Option<&str>,
+    ) -> io::Result<Vec<u8>> {
+        let mut history = Vec::new();
+        for entry in self.path(leaf) {
+            let line = source
+                .get(entry.bytes.clone())
+                .ok_or_else(|| invalid(file, "changed while it was read"))?;
+            history.extend_from_slice(line);
+            if !line.ends_with(b"\n") {
+                history.push(b'\n');
+            }
+        }
+        if let Some(name) = name {
+            history.extend(serde_json::to_vec(
+                &json!({"type":"session_info","name":name}),
+            )?);
+            history.push(b'\n');
+        }
+        Ok(history)
+    }
+}
+
+/// Creates a session file in `directory`, named for the millisecond it is created in and this
+/// process; returns it with that time.
+fn new_file(directory: &Path) -> io::Result<(PathBuf, File, u128)> {
+    std::fs::create_dir_all(directory)?;
+    let mut created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    // A session created in the same millisecond (a quick `/new` or `/fork`) has that name.
+    loop {
+        let path = directory.join(format!("{created}-{}.jsonl", std::process::id()));
+        match OpenOptions::new().append(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((path, file, created)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => created += 1,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// The current branch of the session saved at `path`, where a resume would continue it.
+pub fn read_branch(path: &Path) -> io::Result<Branch> {
+    let entries = read(path)?;
+    Ok(entries.branch(entries.tail))
 }
 
 /// `$XDG_STATE_HOME/scramjet-rs/sessions/<project path with / as ->`.
@@ -386,20 +480,7 @@ impl Session {
     /// Starts a session for the project `root` in `directory`; a fork names the session it came
     /// from, `parent`, in its header, as Scramjet's `parentSession`.
     pub fn create(directory: &Path, root: &Path, parent: Option<&Path>) -> io::Result<Self> {
-        std::fs::create_dir_all(directory)?;
-        let mut created = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        // A session created in the same millisecond (a quick `/new` or `/fork`) has that name.
-        let (path, mut file) = loop {
-            let path = directory.join(format!("{created}-{}.jsonl", std::process::id()));
-            match OpenOptions::new().append(true).create_new(true).open(&path) {
-                Ok(file) => break (path, file),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => created += 1,
-                Err(error) => return Err(error),
-            }
-        };
+        let (path, mut file, created) = new_file(directory)?;
         let mut header = json!({"type":"session","version":1,"root":root,"created":created as u64});
         if let Some(parent) = parent {
             header["parentSession"] = json!(std::path::absolute(parent)?);
@@ -525,22 +606,7 @@ impl Session {
         name: Option<&str>,
     ) -> io::Result<PathBuf> {
         let source = std::fs::read(&self.path)?;
-        let mut history = Vec::new();
-        for entry in entries.path(leaf) {
-            let line = source
-                .get(entry.bytes.clone())
-                .ok_or_else(|| invalid(&self.path, "changed while it was read"))?;
-            history.extend_from_slice(line);
-            if !line.ends_with(b"\n") {
-                history.push(b'\n');
-            }
-        }
-        if let Some(name) = name {
-            history.extend(serde_json::to_vec(
-                &json!({"type":"session_info","name":name}),
-            )?);
-            history.push(b'\n');
-        }
+        let history = entries.history(&self.path, &source, leaf, name)?;
         let directory = self.path.parent().unwrap_or(Path::new("."));
         let mut branched = Self::create(directory, root, Some(&self.path))?;
         if let Err(error) = branched.file.write_all(&history) {
@@ -548,6 +614,47 @@ impl Session {
             return Err(error);
         }
         Ok(branched.path)
+    }
+
+    /// The conversation from the start to the leaf.
+    pub fn branch(&self) -> io::Result<Branch> {
+        Ok(read(&self.path)?.branch(self.leaf))
+    }
+
+    /// Writes the session's current branch to `to` as a session file of its own, as Scramjet's
+    /// `/export` writes a `.jsonl`: its header, without the session it was forked from, the
+    /// entries on the path to the leaf in order, and its name. An existing file is replaced.
+    pub fn export(&self, to: &Path) -> io::Result<()> {
+        let entries = read(&self.path)?;
+        let source = std::fs::read(&self.path)?;
+        let mut header = entries.header.clone();
+        if let Some(header) = header.as_object_mut() {
+            header.remove("parentSession");
+        }
+        let mut lines = serde_json::to_vec(&header)?;
+        lines.push(b'\n');
+        let name = entries.name.as_deref();
+        lines.extend(entries.history(&self.path, &source, self.leaf, name)?);
+        if let Some(directory) = to.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            std::fs::create_dir_all(directory)?;
+        }
+        std::fs::write(to, lines)
+    }
+
+    /// Copies the session file `source` into `directory` under a new session's name, so that it
+    /// is listed and continued as one made there; returns the copy. A file that is not a session
+    /// is not copied.
+    pub fn import(directory: &Path, source: &Path) -> io::Result<PathBuf> {
+        let bytes = std::fs::read(source).map_err(|error| {
+            io::Error::new(error.kind(), format!("{}: {error}", source.display()))
+        })?;
+        read(source)?;
+        let (path, mut file, _) = new_file(directory)?;
+        if let Err(error) = file.write_all(&bytes) {
+            let _ = std::fs::remove_file(&path);
+            return Err(error);
+        }
+        Ok(path)
     }
 
     /// Every entry of the session, in file order.

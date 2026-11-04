@@ -35,7 +35,7 @@ pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
-pub use session::{Removal, Session, SessionInfo};
+pub use session::{Branch, Removal, Session, SessionInfo, read_branch};
 pub use skills::{Skill, Skills};
 pub use status::{Completed, Next, Routing, Step};
 pub use tools::{
@@ -258,6 +258,46 @@ pub struct Stats {
     pub input: u64,
     pub output: u64,
     pub cache_read: u64,
+}
+
+impl Stats {
+    /// The counts over `items`, as Scramjet's session stats count messages: assistant messages
+    /// are the runs of model output between prompts and tool results, as Scramjet has one message
+    /// per response; the usage is what each response saved. Entries that are not conversation
+    /// items, such as model changes, are not counted.
+    pub fn of(items: &[Value]) -> Self {
+        let mut stats = Stats::default();
+        let mut other = 0;
+        let mut in_reply = false;
+        for item in items {
+            let reply = item["role"] == "assistant"
+                || matches!(item["type"].as_str(), Some("reasoning" | "function_call"));
+            if reply && !in_reply {
+                stats.assistant += 1;
+            }
+            in_reply = reply;
+            match item["type"].as_str() {
+                Some("function_call") => stats.tool_calls += 1,
+                Some("function_call_output") => stats.tool_results += 1,
+                _ if item["role"] == "user"
+                    && !session::is_bang(item)
+                    && !compaction::is_summary(item)
+                    && item.get(PROBE).is_none() =>
+                {
+                    stats.user += 1
+                }
+                _ if item["role"] == "user" => other += 1,
+                _ => {}
+            }
+            if let Some(usage) = item.get(USAGE) {
+                stats.input += usage["input"].as_u64().unwrap_or(0);
+                stats.output += usage["output"].as_u64().unwrap_or(0);
+                stats.cache_read += usage["cache_read"].as_u64().unwrap_or(0);
+            }
+        }
+        stats.total = stats.user + stats.assistant + stats.tool_results + other;
+        stats
+    }
 }
 
 pub struct Agent {
@@ -535,41 +575,9 @@ impl Agent {
         self.session.id()
     }
 
-    /// The counts over the current conversation, as `/session` shows them. Assistant messages
-    /// are the runs of model output between prompts and tool results, as Scramjet has one message
-    /// per response; the usage is what each response saved.
+    /// The counts over the current conversation, as `/session` shows them.
     pub fn stats(&self) -> Stats {
-        let mut stats = Stats::default();
-        let mut other = 0;
-        let mut in_reply = false;
-        for item in &self.conversation {
-            let reply = item["role"] == "assistant"
-                || matches!(item["type"].as_str(), Some("reasoning" | "function_call"));
-            if reply && !in_reply {
-                stats.assistant += 1;
-            }
-            in_reply = reply;
-            match item["type"].as_str() {
-                Some("function_call") => stats.tool_calls += 1,
-                Some("function_call_output") => stats.tool_results += 1,
-                _ if item["role"] == "user"
-                    && !session::is_bang(item)
-                    && !compaction::is_summary(item)
-                    && item.get(PROBE).is_none() =>
-                {
-                    stats.user += 1
-                }
-                _ if item["role"] == "user" => other += 1,
-                _ => {}
-            }
-            if let Some(usage) = item.get(USAGE) {
-                stats.input += usage["input"].as_u64().unwrap_or(0);
-                stats.output += usage["output"].as_u64().unwrap_or(0);
-                stats.cache_read += usage["cache_read"].as_u64().unwrap_or(0);
-            }
-        }
-        stats.total = stats.user + stats.assistant + stats.tool_results + other;
-        stats
+        Stats::of(&self.conversation)
     }
 
     /// The prompts the current session can be forked before, oldest first, compacted ones too.
@@ -620,6 +628,46 @@ impl Agent {
             }
         }
         Ok(true)
+    }
+
+    /// The conversation on the session's current branch, from its start, as `/export` shows it.
+    pub fn branch(&self) -> Result<Branch, AgentError> {
+        Ok(self.session.branch()?)
+    }
+
+    /// Writes the session's current branch to `path` as a session file of its own, as Scramjet's
+    /// `/export` writes a `.jsonl` (`Session::export`). Returns false, writing nothing, before any
+    /// conversation.
+    pub fn export_session(&self, path: &Path) -> Result<bool, AgentError> {
+        if self.conversation.is_empty() {
+            return Ok(false);
+        }
+        self.session.export(path)?;
+        Ok(true)
+    }
+
+    /// Continues in a copy of the session file `path`, saved next to the current session, as
+    /// Scramjet's `/import` does; the current session stays as it is. On failure nothing changes.
+    pub fn import_session(&mut self, path: &Path) -> Result<(), AgentError> {
+        let directory = self.session.path().parent().unwrap_or(Path::new("."));
+        let copy = Session::import(directory, path)?;
+        match Session::open(&copy) {
+            Ok(opened) => self.switch_session(opened),
+            Err(error) => {
+                let _ = std::fs::remove_file(&copy);
+                Err(error.into())
+            }
+        }
+    }
+
+    /// The instructions the model's requests start with.
+    pub fn instructions(&self) -> &str {
+        &self.instructions
+    }
+
+    /// The definitions of the tools the model's requests offer.
+    pub fn tool_definitions(&self) -> Value {
+        tools::definitions(&self.config.tools)
     }
 
     fn switch_session(

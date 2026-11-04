@@ -1,18 +1,23 @@
-//! The built-in commands: `/settings`, `/copy`, `/new`, `/name`, `/session`, `/hotkeys`,
-//! `/resume`, `/fork`, `/clone`, `/tree`, `/compact`, `/autopilot`, `/reload`, and `!` commands;
-//! `/model` and `/scoped-models` are in `scope.rs`.
+//! The built-in commands: `/settings`, `/export`, `/import`, `/copy`, `/new`, `/name`,
+//! `/session`, `/hotkeys`, `/resume`, `/fork`, `/clone`, `/tree`, `/compact`, `/autopilot`,
+//! `/reload`, and `!` commands; `/model` and `/scoped-models` are in `scope.rs`.
 use super::fuzzy::Haystack;
 use super::interactive::{Interactive, completions, model_line};
 use super::screen;
 use super::settings::{ROWS, Row, scramjet_level};
 use super::terminal::Terminal;
 use super::text::{clip, one_line};
-use super::{clipboard, editor, installed, select, style, tree};
+use super::{clipboard, editor, export, installed, select, style, tree};
 use scramjet_rs::agent::{
     Agent, AgentError, Approval, Approvals, CODING_TOOLS, Edge, Installed, Navigated, NextStep,
     NextSteps, Publication, Removal, Scope, SessionInfo, Setting, search_program, shortened,
 };
-use std::{io::IsTerminal, sync::atomic::Ordering, time::Duration};
+use std::{
+    io::IsTerminal,
+    path::{Path, PathBuf},
+    sync::atomic::Ordering,
+    time::Duration,
+};
 use unicode_width::UnicodeWidthStr;
 
 const SETTINGS_KEYS: &str = "↑↓ move · Enter change · Esc close";
@@ -62,6 +67,8 @@ fn tool_note(tool: &str) -> &'static str {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Builtin<'a> {
     Settings,
+    Export(&'a str),
+    Import(&'a str),
     Copy,
     New,
     Name(&'a str),
@@ -89,6 +96,8 @@ impl<'a> Builtin<'a> {
         let argument = argument.trim();
         Some(match name {
             "/settings" if argument.is_empty() => Self::Settings,
+            "/export" => Self::Export(argument),
+            "/import" => Self::Import(argument),
             "/copy" if argument.is_empty() => Self::Copy,
             "/new" if argument.is_empty() => Self::New,
             "/name" => Self::Name(argument),
@@ -116,6 +125,7 @@ impl<'a> Builtin<'a> {
         !matches!(
             self,
             Self::Settings
+                | Self::Export(_)
                 | Self::Copy
                 | Self::Name(_)
                 | Self::Session
@@ -137,6 +147,8 @@ impl Interactive {
         }
         match Builtin::parse(prompt) {
             Some(Builtin::Settings) => self.settings(),
+            Some(Builtin::Export(path)) => self.export(path),
+            Some(Builtin::Import(path)) => self.import(path),
             Some(Builtin::Copy) => self.copy_reply(),
             Some(Builtin::New) => {
                 self.new_session();
@@ -186,6 +198,75 @@ impl Interactive {
                 Ok(()) => self.say(&self.ui.dim(&format!("Session name set: {name}"))),
                 Err(error) => self.say(&format!("error: {error}")),
             }
+        }
+    }
+
+    /// `/export [path]`, as Scramjet's: the current branch as a web page, or, to a path ending in
+    /// `.jsonl`, as a session file of its own.
+    fn export(&mut self, argument: &str) {
+        let path = path_argument(argument);
+        let written = match path {
+            _ if self.agent.conversation().is_empty() => Ok(None),
+            Some(path) if path.ends_with(".jsonl") => std::path::absolute(path)
+                .map_err(AgentError::from)
+                .and_then(|path| Ok(self.agent.export_session(&path)?.then_some(path))),
+            path => self.export_page(path).map(Some),
+        };
+        match written {
+            Ok(Some(path)) => {
+                let path = std::fs::canonicalize(&path).unwrap_or(path);
+                let said = format!("Session exported to: {}", path.display());
+                self.say(&self.ui.dim(&said))
+            }
+            Ok(None) => self.say("Nothing to export yet"),
+            Err(error) => self.say(&format!("error: failed to export the session: {error}")),
+        }
+    }
+
+    /// Writes the current branch's page to `path`, by default named for the session in the
+    /// current directory, as Scramjet names it.
+    fn export_page(&self, path: Option<&str>) -> Result<PathBuf, AgentError> {
+        let id = self.agent.session_id();
+        let path = match path {
+            Some(path) => PathBuf::from(path),
+            None => PathBuf::from(format!("scramjet-rs-session-{id}.html")),
+        };
+        let path = std::path::absolute(path)?;
+        let tools = self.agent.tool_definitions();
+        let setup = export::Setup {
+            instructions: self.agent.instructions(),
+            tools: &tools,
+        };
+        let page = export::page(&self.agent.branch()?, &id, Some(setup));
+        std::fs::write(&path, page)?;
+        Ok(path)
+    }
+
+    /// `/import <path.jsonl>`, as Scramjet's: continues in a copy of a session file, once the user
+    /// confirms on the full screen; the current session stays as it is.
+    fn import(&mut self, argument: &str) {
+        let Some(path) = path_argument(argument) else {
+            return self.say("Usage: /import <path.jsonl>");
+        };
+        if self.interactive() {
+            let title = format!("Replace current session with {path}?");
+            let choices = ["Yes", "No"];
+            let row = |index: usize, width| clip(choices[index], width);
+            if self.select(&title, 2, 2, 0, None, row) != Some(0) {
+                return self.say("Import cancelled");
+            }
+        }
+        match self.agent.import_session(Path::new(path)) {
+            Ok(()) => {
+                self.agent.load_model_card();
+                self.remember_prompts();
+                self.replaced(&format!(
+                    "✓ Imported session from {path} · {}\nsession {}",
+                    model_line(&self.agent),
+                    self.agent.session_path().display(),
+                ));
+            }
+            Err(error) => self.say(&format!("error: failed to import the session: {error}")),
         }
     }
 
@@ -1617,7 +1698,18 @@ fn hotkeys(ui: &Terminal) -> String {
 }
 
 /// A count with thousands separators, as Scramjet's `toLocaleString` writes it.
-fn grouped(count: u64) -> String {
+/// The path a command's argument starts with, as Scramjet reads one: up to the first space, or
+/// within quotes; `None` when there is none.
+fn path_argument(argument: &str) -> Option<&str> {
+    let quote = argument.chars().next().filter(|c| matches!(c, '"' | '\''));
+    let path = match quote {
+        Some(quote) => argument[1..].split_once(quote)?.0,
+        None => argument.split_whitespace().next()?,
+    };
+    Some(path).filter(|path| !path.is_empty())
+}
+
+pub(super) fn grouped(count: u64) -> String {
     let digits = count.to_string();
     let mut grouped = String::new();
     for (index, digit) in digits.chars().enumerate() {
@@ -1754,10 +1846,23 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn a_path_argument_is_its_first_word_or_quoted() {
+        assert_eq!(path_argument(""), None);
+        assert_eq!(path_argument("out.html"), Some("out.html"));
+        assert_eq!(path_argument("out.jsonl now"), Some("out.jsonl"));
+        assert_eq!(path_argument("\"my file.html\" x"), Some("my file.html"));
+        assert_eq!(path_argument("'a b.jsonl'"), Some("a b.jsonl"));
+        assert_eq!(path_argument("\"open"), None);
+        assert_eq!(path_argument("\"\""), None);
+    }
+
+    #[test]
     fn builtins_typed_during_a_turn_stop_it_when_they_replace_the_conversation() {
         let stops = |prompt| Builtin::parse(prompt).map(Builtin::interrupts);
         for prompt in [
             "/session",
+            "/export",
+            "/export out.jsonl",
             "/hotkeys",
             "/copy",
             "/name",
@@ -1772,6 +1877,7 @@ mod tests {
         }
         for prompt in [
             "/new",
+            "/import old.jsonl",
             "/compact keep tests",
             "/resume 2",
             "/fork",
