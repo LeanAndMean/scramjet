@@ -1,6 +1,6 @@
-//! The built-in commands: `/settings`, `/copy`, `/new`, `/name`, `/session`, `/resume`, `/fork`,
-//! `/clone`, `/tree`, `/compact`, `/autopilot`, `/reload`, and `!` commands; `/model` and
-//! `/scoped-models` are in `scope.rs`.
+//! The built-in commands: `/settings`, `/copy`, `/new`, `/name`, `/session`, `/hotkeys`,
+//! `/resume`, `/fork`, `/clone`, `/tree`, `/compact`, `/autopilot`, `/reload`, and `!` commands;
+//! `/model` and `/scoped-models` are in `scope.rs`.
 use super::fuzzy::Haystack;
 use super::interactive::{Interactive, completions, model_line};
 use super::screen;
@@ -66,6 +66,7 @@ pub(super) enum Builtin<'a> {
     New,
     Name(&'a str),
     Session,
+    Hotkeys,
     Resume(&'a str),
     Fork(&'a str),
     Clone,
@@ -92,6 +93,7 @@ impl<'a> Builtin<'a> {
             "/new" if argument.is_empty() => Self::New,
             "/name" => Self::Name(argument),
             "/session" if argument.is_empty() => Self::Session,
+            "/hotkeys" if argument.is_empty() => Self::Hotkeys,
             "/resume" => Self::Resume(argument),
             "/fork" => Self::Fork(argument),
             "/clone" if argument.is_empty() => Self::Clone,
@@ -117,6 +119,7 @@ impl<'a> Builtin<'a> {
                 | Self::Copy
                 | Self::Name(_)
                 | Self::Session
+                | Self::Hotkeys
                 | Self::Model(_)
                 | Self::ScopedModels
                 | Self::Autopilot(_)
@@ -140,6 +143,7 @@ impl Interactive {
             }
             Some(Builtin::Name(name)) => self.name(name),
             Some(Builtin::Session) => self.say(session_info(&self.agent, &self.ui).trim_end()),
+            Some(Builtin::Hotkeys) => self.say(hotkeys(&self.ui).trim_end()),
             Some(Builtin::Resume(wanted)) => {
                 self.resume(wanted);
             }
@@ -1507,6 +1511,101 @@ fn session_info(agent: &Agent, ui: &Terminal) -> String {
     info
 }
 
+/// The keys `/hotkeys` lists, in Scramjet's sections and words where the key does what
+/// Scramjet's does.
+const HOTKEYS: [(&str, &[(&str, &str)]); 4] = [
+    (
+        "Navigation",
+        &[
+            (
+                "Up / Down / Left / Right",
+                "Move cursor / browse history (Up on the first line)",
+            ),
+            ("Ctrl+B / Ctrl+F", "Move cursor left / right"),
+            ("Alt+Left / Alt+Right", "Move by word"),
+            ("Ctrl+Left / Ctrl+Right", "Move by word"),
+            ("Alt+B / Alt+F", "Move by word"),
+            ("Home / Ctrl+A", "Start of line"),
+            ("End / Ctrl+E", "End of line"),
+            (
+                "Page Up / Page Down",
+                "Scroll the conversation by page (Escape: to its end)",
+            ),
+        ],
+    ),
+    (
+        "Editing",
+        &[
+            ("Enter", "Send message (during a turn: steer)"),
+            ("Backspace", "Delete character backwards"),
+            (
+                "Shift+Enter / Ctrl+J",
+                "New line (also a trailing \\ and Enter)",
+            ),
+            ("Ctrl+W / Alt+Backspace", "Delete word backwards"),
+            ("Alt+D / Alt+Delete", "Delete word forwards"),
+            ("Delete / Ctrl+D", "Delete character forwards"),
+            ("Ctrl+U", "Delete to start of line"),
+            ("Ctrl+K", "Delete to end of line"),
+        ],
+    ),
+    (
+        "Other",
+        &[
+            ("Tab", "Path completion / accept autocomplete"),
+            ("Escape", "Cancel autocomplete / interrupt the turn"),
+            (
+                "Escape Escape",
+                "Open /tree on an empty prompt (doubleEscapeAction)",
+            ),
+            ("Ctrl+C", "Clear editor (first) / exit (second)"),
+            ("Ctrl+D", "Exit (when editor is empty)"),
+            ("Ctrl+Z", "Suspend to background"),
+            ("Shift+Tab", "Cycle thinking level"),
+            ("Ctrl+P / Shift+Ctrl+P", "Cycle models"),
+            ("Ctrl+O", "Toggle tool output expansion"),
+            ("Ctrl+T", "Toggle thinking block visibility"),
+            ("Ctrl+G", "Edit message in external editor"),
+            ("Alt+Enter", "Queue follow-up message (or send)"),
+            ("Alt+Up", "Restore queued messages"),
+            ("Ctrl+V / Alt+V", "Paste image from clipboard"),
+            ("/", "Slash commands"),
+            ("!", "Run bash command"),
+            ("!!", "Run bash command (excluded from context)"),
+        ],
+    ),
+    (
+        "Mouse",
+        &[
+            ("Wheel", "Scroll the conversation"),
+            ("Drag", "Select text; Ctrl+C or a right click copies it"),
+            ("Double / triple click", "Select a word / the line"),
+            (
+                "Right click",
+                "Paste text into the prompt (with no selection)",
+            ),
+        ],
+    ),
+];
+
+/// `/hotkeys`, as Scramjet's: the keys by section, in two columns.
+fn hotkeys(ui: &Terminal) -> String {
+    let sections = HOTKEYS.iter();
+    let width = (sections.flat_map(|(_, keys)| keys.iter()))
+        .map(|(key, _)| key.width())
+        .max()
+        .unwrap_or(0);
+    let mut text = format!("{}\n", ui.styled(style::INFO_HEADING, "Keyboard Shortcuts"));
+    for (section, keys) in HOTKEYS {
+        text += &format!("\n{}\n", ui.styled(style::INFO_HEADING, section));
+        for (key, action) in keys {
+            let pad = " ".repeat(width - key.width());
+            text += &format!("  {}{pad}  {action}\n", ui.styled(style::CODE, key));
+        }
+    }
+    text
+}
+
 /// A count with thousands separators, as Scramjet's `toLocaleString` writes it.
 fn grouped(count: u64) -> String {
     let digits = count.to_string();
@@ -1649,6 +1748,7 @@ mod tests {
         let stops = |prompt| Builtin::parse(prompt).map(Builtin::interrupts);
         for prompt in [
             "/session",
+            "/hotkeys",
             "/copy",
             "/name",
             "/name  my work ",
@@ -1674,6 +1774,7 @@ mod tests {
         // These go to the model as they are, as before a turn.
         for prompt in [
             "/session now",
+            "/hotkeys all",
             "/copy all",
             "/scoped-models luna",
             "/clone it",
@@ -1691,6 +1792,33 @@ mod tests {
             Some(Builtin::Name("my work"))
         );
         assert_eq!(Builtin::parse("/exit"), Some(Builtin::Quit));
+    }
+
+    #[test]
+    fn hotkeys_line_up_their_actions_within_80_columns() {
+        let ui = Terminal::new(std::sync::Arc::default(), false);
+        let text = hotkeys(&ui);
+        let text = [style::CODE, style::INFO_HEADING, style::RESET]
+            .iter()
+            .fold(text, |text, code| text.replace(code, ""));
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(lines[..3], ["Keyboard Shortcuts", "", "Navigation"]);
+        assert_eq!(
+            lines[3],
+            "  Up / Down / Left / Right  Move cursor / browse history (Up on the first line)"
+        );
+        let rows: Vec<_> = lines.iter().filter(|line| line.starts_with("  ")).collect();
+        assert_eq!(
+            rows.len(),
+            HOTKEYS.map(|(_, keys)| keys.len()).iter().sum::<usize>()
+        );
+        for row in rows {
+            assert!(row.width() <= 80, "{row}");
+            assert!(
+                row[..28].ends_with("  ") && !row[28..].starts_with(' '),
+                "{row}"
+            );
+        }
     }
 
     #[test]

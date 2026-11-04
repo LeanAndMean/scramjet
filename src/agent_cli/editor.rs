@@ -595,13 +595,14 @@ pub(super) fn terminal_size() -> (usize, usize) {
 }
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
-const SLASH_COMMANDS: [(&str, &str); 15] = [
+const SLASH_COMMANDS: [(&str, &str); 16] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     ("scoped-models", "Enable/disable models for Ctrl+P cycling"),
     ("copy", "Copy last agent message to clipboard"),
     ("name", "Set session display name"),
     ("session", "Show session info and stats"),
+    ("hotkeys", "Show all keyboard shortcuts"),
     ("fork", "Create a new fork from a previous user message"),
     (
         "clone",
@@ -1683,6 +1684,7 @@ mod tests {
                 "/copy",
                 "/name",
                 "/session",
+                "/hotkeys",
                 "/fork",
                 "/clone",
                 "/tree",
@@ -1702,7 +1704,7 @@ mod tests {
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /copy           Copy last agent message to clipboard",
                 "  /name           Set session display name",
-                "  (1/15)",
+                "  (1/16)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -1713,15 +1715,15 @@ mod tests {
         assert_eq!(
             plain(list.rows(24)),
             [
+                "  /hotkeys",
                 "  /fork",
-                "  /clone",
-                "→ /tree",
+                "→ /clone",
+                "  /tree",
                 "  /new",
-                "  /compact",
-                "  (9/15)"
+                "  (9/16)"
             ]
         );
-        for _ in 0..7 {
+        for _ in 0..8 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);
