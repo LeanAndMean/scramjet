@@ -719,6 +719,8 @@ fn lines(
         lines.push(if list.is_heading(position) {
             format!("  {SELECTOR_HEADING}{text}{RESET}")
         } else if position == list.selected {
+            // A styled row's resets would end the selection's style.
+            let text = text.replace(RESET, &format!("{RESET}{selected}"));
             format!("{SELECTOR_MARK}›{RESET} {tree}{selected}{text}{RESET}{mark}")
         } else {
             format!("  {tree}{text}{mark}")
@@ -881,6 +883,25 @@ mod tests {
         assert_eq!(list.key(&Key::Enter), Some(Some(24)));
         assert_eq!(list.key(&Key::Escape), Some(None));
         assert_eq!(list.key(&Key::Interrupt), Some(None));
+    }
+
+    #[test]
+    fn a_styled_row_stays_bold_where_selected_and_is_clipped_by_its_text() {
+        let styled = "\x1b[36muser: \x1b[0mhello world";
+        let row = |_: usize, width: usize| text::clip(styled, width);
+        let shown = lines(
+            ("Pick", HINT, style::MUTED),
+            &List::new(2, 0, 10),
+            None,
+            (12, 9),
+            &row,
+        );
+        let (bold, end) = ("\x1b[1m", "\x1b[0m");
+        assert_eq!(
+            shown[1],
+            format!("\x1b[36m›{end} {bold}\x1b[36muser: {end}{bold}he…{end}{bold}{end}")
+        );
+        assert_eq!(shown[2], format!("  \x1b[36muser: {end}he…{end}"));
     }
 
     #[test]

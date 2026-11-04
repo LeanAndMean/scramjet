@@ -65,8 +65,19 @@ pub const SELECTED: &str = "\x1b[1m";
 pub const SELECTOR_MARK: &str = "\x1b[36m";
 /// A heading among a selector's rows, over the rows it groups.
 pub const SELECTOR_HEADING: &str = "\x1b[2m";
-/// The tree lines before the rows of forked sessions in `/resume`.
+/// The tree lines before the rows of forked sessions in `/resume` and of `/tree`'s entries.
 pub const SELECTOR_TREE: &str = "\x1b[2m";
+/// In `/tree`'s rows, as Scramjet's tree colors them: the mark on the current entry's path,
+/// who wrote a message, the error a turn stopped with, compactions, a branch summary's label,
+/// and the entries that are not messages (tool calls, commands the user ran, model and
+/// thinking changes) or replies without text.
+pub const TREE_PATH: &str = "\x1b[36m";
+pub const TREE_USER: &str = "\x1b[36m";
+pub const TREE_ASSISTANT: &str = "\x1b[32m";
+pub const TREE_ERROR: &str = "\x1b[31m";
+pub const TREE_COMPACTION: &str = "\x1b[36m";
+pub const TREE_SUMMARY: &str = "\x1b[33m";
+pub const TREE_OTHER: &str = "\x1b[2m";
 /// What a selector's key asks to confirm with the row it would remove, and why it cannot, as
 /// Scramjet's error color shows them; what it did, in Scramjet's accent color.
 pub const SELECTOR_WARNING: &str = "\x1b[31m";

@@ -329,11 +329,17 @@ impl Lifecycle {
     }
 
     /// After a turn: what follows it; `autopilot` as `/autopilot` is, which the status check
-    /// tells the model.
+    /// tells the model. A command no longer installed (a resumed session's, or one `/reload`
+    /// removed) ends there, as in Scramjet.
     pub fn turn_ended(&mut self, commands: &Commands, autopilot: bool) -> Ended {
         let Some((name, phase)) = &mut self.active else {
             return Ended::Nothing;
         };
+        if commands.get(name).is_none() {
+            let notice = format!("/{name} has ended: no command of that name is installed now.");
+            self.active = None;
+            return Ended::Notice(notice);
+        }
         match phase {
             Phase::Running { checks } if *checks >= CHECK_LIMIT => {
                 *phase = Phase::Waiting;

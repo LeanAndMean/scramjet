@@ -2,6 +2,8 @@
 //! stays in one column, each branch point indents its children under `├─`/`└─` connectors with
 //! `│` gutters, the branch with the current entry comes first, and `• ` marks that entry's path.
 
+use super::style::{RESET, SELECTOR_TREE, TREE_ASSISTANT, TREE_COMPACTION, TREE_ERROR};
+use super::style::{TREE_OTHER, TREE_PATH, TREE_SUMMARY, TREE_USER};
 use super::text;
 use scramjet_rs::agent::{SessionTree, TreeItem};
 
@@ -23,8 +25,12 @@ struct Row {
 }
 
 /// The entries of `tree` in the order shown, as indices into `tree.entries` with each row's text,
-/// and the row of the current entry.
-pub(super) fn rows(tree: &SessionTree) -> (Vec<(usize, String)>, Option<usize>) {
+/// styled when `color`, and the row of the current entry.
+pub(super) fn rows(tree: &SessionTree, color: bool) -> (Vec<(usize, String)>, Option<usize>) {
+    let paint = |style: &str, text: &str| match color && !text.is_empty() {
+        true => format!("{style}{text}{RESET}"),
+        false => text.to_owned(),
+    };
     let entries = &tree.entries;
     let mut children: std::collections::HashMap<Option<usize>, Vec<usize>> = Default::default();
     for (index, entry) in entries.iter().enumerate() {
@@ -96,11 +102,9 @@ pub(super) fn rows(tree: &SessionTree) -> (Vec<(usize, String)>, Option<usize>) 
         .map(|row| {
             let entry = &entries[row.entry];
             let marker = if entry.active { "• " } else { "" };
-            let text = format!(
-                "{}{marker}{}",
-                prefix(row, multiple_roots),
-                label(&entry.item)
-            );
+            let text = paint(SELECTOR_TREE, &prefix(row, multiple_roots))
+                + &paint(TREE_PATH, marker)
+                + &label(&entry.item, &paint);
             (row.entry, text)
         })
         .collect();
@@ -142,35 +146,42 @@ fn prefix(row: &Row, multiple_roots: bool) -> String {
     prefix
 }
 
-/// An entry's text as Scramjet's tree shows it, on one line.
-fn label(item: &TreeItem) -> String {
-    let label = match item {
-        TreeItem::Prompt(text) => format!("user: {text}"),
-        TreeItem::Reply(text) => format!("assistant: {text}"),
-        TreeItem::Reasoning => "assistant: (no content)".into(),
-        TreeItem::Stopped(None) => "assistant: (aborted)".into(),
+/// An entry's text as Scramjet's tree shows it, on one line, each part in its `paint`.
+fn label(item: &TreeItem, paint: &dyn Fn(&str, &str) -> String) -> String {
+    let clean = |text: &str| text::one_line(&text::visible(text));
+    let assistant = |style: &str, text: &str| {
+        paint(TREE_ASSISTANT, "assistant: ") + &paint(style, &clean(text))
+    };
+    match item {
+        TreeItem::Prompt(text) => paint(TREE_USER, "user: ") + &clean(text),
+        TreeItem::Reply(text) => paint(TREE_ASSISTANT, "assistant: ") + &clean(text),
+        TreeItem::Reasoning => assistant(TREE_OTHER, "(no content)"),
+        TreeItem::Stopped(None) => assistant(TREE_OTHER, "(aborted)"),
         TreeItem::Stopped(Some(error)) => {
             let error: String = text::one_line(error).chars().take(80).collect();
-            format!("assistant: {error}")
+            assistant(TREE_ERROR, &error)
         }
-        TreeItem::Command(command) => format!("[bash]: {command}"),
+        TreeItem::Command(command) => paint(TREE_OTHER, &format!("[bash]: {}", clean(command))),
         TreeItem::Tool(name, summary) if name == "bash" => {
             let command = text::one_line(summary);
-            match command.char_indices().nth(50) {
+            let call = match command.char_indices().nth(50) {
                 Some((end, _)) => format!("[bash: {}...]", &command[..end]),
                 None => format!("[bash: {command}]"),
-            }
+            };
+            paint(TREE_OTHER, &clean(&call))
         }
-        TreeItem::Tool(name, summary) => format!("[{name}: {summary}]"),
+        TreeItem::Tool(name, summary) => paint(TREE_OTHER, &clean(&format!("[{name}: {summary}]"))),
         TreeItem::Compaction(Some(tokens)) => {
-            format!("[compaction: {}k tokens]", (tokens + 500) / 1000)
+            let tokens = (tokens + 500) / 1000;
+            paint(TREE_COMPACTION, &format!("[compaction: {tokens}k tokens]"))
         }
-        TreeItem::Compaction(None) => "[compaction]".into(),
-        TreeItem::BranchSummary(summary) => format!("[branch summary]: {summary}"),
-        TreeItem::Model(model) => format!("[model: {model}]"),
-        TreeItem::Effort(level) => format!("[thinking: {level}]"),
-    };
-    text::one_line(&text::visible(&label))
+        TreeItem::Compaction(None) => paint(TREE_COMPACTION, "[compaction]"),
+        TreeItem::BranchSummary(summary) => {
+            paint(TREE_SUMMARY, "[branch summary]: ") + &clean(summary)
+        }
+        TreeItem::Model(model) => paint(TREE_OTHER, &clean(&format!("[model: {model}]"))),
+        TreeItem::Effort(level) => paint(TREE_OTHER, &clean(&format!("[thinking: {level}]"))),
+    }
 }
 
 #[cfg(test)]
@@ -188,7 +199,11 @@ mod tests {
     }
 
     fn shown(tree: &SessionTree) -> Vec<String> {
-        rows(tree).0.into_iter().map(|(_, text)| text).collect()
+        rows(tree, false)
+            .0
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect()
     }
 
     #[test]
@@ -220,8 +235,8 @@ mod tests {
                 "      user: h",
             ]
         );
-        assert_eq!(rows(&tree).1, Some(4));
-        assert_eq!(rows(&tree).0[4].0, 7);
+        assert_eq!(rows(&tree, false).1, Some(4));
+        assert_eq!(rows(&tree, false).0[4].0, 7);
     }
 
     #[test]
@@ -246,8 +261,44 @@ mod tests {
     }
 
     #[test]
+    fn rows_are_colored_as_scramjets_tree() {
+        let item = |line, parent, item, active| TreeEntry {
+            line,
+            parent,
+            item,
+            active,
+        };
+        let tree = SessionTree {
+            entries: vec![
+                item(1, None, TreeItem::Prompt("a".into()), true),
+                item(2, Some(1), TreeItem::Reply("b".into()), true),
+                item(3, Some(1), TreeItem::Stopped(Some("boom".into())), false),
+                item(4, Some(2), TreeItem::BranchSummary("went".into()), true),
+                item(5, Some(4), TreeItem::Compaction(Some(2000)), true),
+                item(6, Some(5), TreeItem::Model("m".into()), true),
+            ],
+            current: Some(6),
+        };
+        let shown: Vec<_> = rows(&tree, true).0.into_iter().map(|row| row.1).collect();
+        let (lines, path, error) = ("\x1b[2m", "\x1b[36m• \x1b[0m", "\x1b[31mboom\x1b[0m");
+        let (assistant, end) = ("\x1b[32massistant: \x1b[0m", "\x1b[0m");
+        assert_eq!(
+            shown,
+            [
+                format!("{path}\x1b[36muser: {end}a"),
+                format!("{lines}├─ {end}{path}{assistant}b"),
+                format!("{lines}│     {end}{path}\x1b[33m[branch summary]: {end}went"),
+                format!("{lines}│     {end}{path}\x1b[36m[compaction: 2k tokens]{end}"),
+                format!("{lines}│     {end}{path}{lines}[model: m]{end}"),
+                format!("{lines}└─ {end}{assistant}{error}"),
+            ]
+        );
+    }
+
+    #[test]
     fn labels_are_one_line_and_long_commands_shortened() {
-        let label = |item| label(&item);
+        let plain = |_: &str, text: &str| text.to_owned();
+        let label = |item| label(&item, &plain);
         assert_eq!(
             label(TreeItem::Reply("two\nlines".into())),
             "assistant: two lines"

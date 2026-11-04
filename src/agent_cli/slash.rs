@@ -1016,7 +1016,7 @@ impl Interactive {
                     return;
                 }
             };
-            let (rows, current) = tree::rows(&session_tree);
+            let (rows, current) = tree::rows(&session_tree, self.interactive());
             let chosen = match wanted {
                 "" if rows.is_empty() => {
                     self.say("No entries in session");

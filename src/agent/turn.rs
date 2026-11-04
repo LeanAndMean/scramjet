@@ -2285,6 +2285,35 @@ did not finish or ask you anything. Reply to continue.";
     }
 
     #[test]
+    fn a_command_no_longer_installed_ends_with_its_turn() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let freetext = json!({"type":"freetext","message":"Which file?"});
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", question::NAME, freetext),
+            reply("used a.txt"),
+        ]);
+        let (mut agent, _scratch) = command_agent(endpoint, "gone", CLOSED);
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("/rs:work", &mut ui, &cancel).unwrap();
+        assert_eq!(agent.lifecycle.active(), Some("rs:work"));
+        std::fs::remove_file(agent.root().join(".scramjet/rs/commands/rs:work.md")).unwrap();
+        project_sets(&mut agent);
+        agent.turn("a.txt", &mut ui, &cancel).unwrap();
+        assert_eq!(agent.lifecycle.active(), None);
+        assert!(agent.take_completed().is_none());
+        // No status check followed the reply.
+        assert_eq!(server.join().unwrap().len(), 2);
+        let notice = "notice /rs:work has ended: no command of that name is installed now.";
+        assert_eq!(ui.shown.last().map(String::as_str), Some(notice));
+        let saved = std::fs::read_to_string(agent.session_path()).unwrap();
+        assert!(
+            saved.ends_with("{\"command\":null,\"type\":\"command_state\"}\n"),
+            "{saved}"
+        );
+    }
+
+    #[test]
     fn a_reply_with_neither_text_nor_tool_calls_gets_the_status_check() {
         let empty = messages_stream(&[
             json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}),

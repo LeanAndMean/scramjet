@@ -241,27 +241,78 @@ pub(super) fn one_line(prompt: &str) -> String {
     line.trim().to_owned()
 }
 
+/// `text` in at most `width` columns, ending with `…` where it is cut. Its style sequences take
+/// none, and a cut text's styles end after the `…`.
 pub(super) fn clip(text: &str, width: usize) -> String {
-    if text.width() <= width {
+    if columns(text) <= width {
         return text.to_owned();
     }
-    let mut clipped = String::new();
-    let mut used = 0;
-    for c in text.chars() {
+    let (mut clipped, mut used, mut styled) = (String::new(), 0, false);
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if let Some(sequence) = style_at(rest) {
+            (clipped, styled) = (clipped + sequence, true);
+            rest = &rest[sequence.len()..];
+            continue;
+        }
         let cells = c.width().unwrap_or(0);
         if used + cells + 1 > width {
             break;
         }
         used += cells;
         clipped.push(c);
+        rest = &rest[c.len_utf8()..];
     }
     clipped.push('…');
+    if styled {
+        clipped += super::style::RESET;
+    }
     clipped
+}
+
+/// The columns `text` takes, but for its style sequences.
+fn columns(text: &str) -> usize {
+    if !text.contains('\x1b') {
+        return text.width();
+    }
+    let (mut plain, mut rest) = (String::new(), text);
+    while let Some(c) = rest.chars().next() {
+        let length = match style_at(rest) {
+            Some(sequence) => sequence.len(),
+            None => {
+                plain.push(c);
+                c.len_utf8()
+            }
+        };
+        rest = &rest[length..];
+    }
+    plain.width()
+}
+
+/// The style sequence (`ESC [ … m`) `text` starts with.
+fn style_at(text: &str) -> Option<&str> {
+    let parameters = text.strip_prefix("\x1b[")?;
+    let end = parameters.find(|c: char| !c.is_ascii_digit() && c != ';')?;
+    parameters[end..].starts_with('m').then(|| &text[..end + 3])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipping_counts_the_text_of_styled_rows() {
+        let styled = "\x1b[2m├─ \x1b[0m\x1b[32mab\x1b[0mcd";
+        assert_eq!(clip(styled, 7), styled);
+        assert_eq!(
+            clip(styled, 6),
+            "\x1b[2m├─ \x1b[0m\x1b[32mab\x1b[0m…\x1b[0m"
+        );
+        assert_eq!(clip(styled, 4), "\x1b[2m├─ \x1b[0m\x1b[32m…\x1b[0m");
+        assert_eq!(clip("\x1b[2mabc", 2), "\x1b[2ma…\x1b[0m");
+        // Escaped text, as `visible` shows it, is text.
+        assert_eq!(clip("\\u{1b}[2m", 4), "\\u{…");
+    }
 
     #[test]
     fn streamed_text_wraps_between_words() {
