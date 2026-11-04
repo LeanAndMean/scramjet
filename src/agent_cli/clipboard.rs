@@ -43,13 +43,14 @@ const POWERSHELL_READ: &str = "Add-Type -AssemblyName System.Windows.Forms; \
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); \
 [Console]::Write([System.Windows.Forms.Clipboard]::GetText())";
 
-/// Copies `text`. `Ok(Some(sequence))`: write `sequence` to the terminal, which copies it.
-pub(super) fn copy(text: &str) -> Result<Option<String>, String> {
+/// Copies `text`. `Ok(Some(sequence))`: write `sequence` to the terminal, which copies it; never
+/// without a `terminal` to write it to.
+pub(super) fn copy(text: &str, terminal: bool) -> Result<Option<String>, String> {
     let copied = by_tool(text);
-    if copied && !remote() {
+    if copied && !(terminal && remote()) {
         return Ok(None);
     }
-    match osc52(text) {
+    match osc52(text).filter(|_| terminal) {
         Some(sequence) => Ok(Some(sequence)),
         None if copied => Ok(None),
         None => Err("Failed to copy to clipboard".to_owned()),

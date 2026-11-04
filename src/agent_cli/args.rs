@@ -60,8 +60,9 @@ Escape or Ctrl-C to cancel; typed text filters the /resume and /model lists, bes
 for /resume N, /fork N, /tree N and /model ID.
 /name NAME names the session, which /resume then lists by its name; /name alone shows it.
 /session shows the session's file, the messages in its context and the tokens they used.
-Typed while a turn runs, /session, /name and /model run before its next request; the other
-commands stop it and run once it has.
+/copy copies the last reply's text, as the model wrote it, to the clipboard.
+Typed while a turn runs, /session, /name, /model and /copy run before its next request; the
+other commands stop it and run once it has.
 As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
 commands/SET:COMMAND.md is sent with the arguments substituted, inside <scramjet-command>. The
 sets are those installed, then those under $XDG_DATA_HOME/scramjet (~/.local/share/scramjet)

@@ -835,6 +835,39 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
 }
 
 #[test]
+fn the_last_reply_is_the_text_of_the_latest_reply_that_has_any() {
+    let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+        "\n**Done**: it works.\n\n- one\n- two\n\n",
+        fixture::known_usage(),
+    ))]);
+    let (mut agent, _scratch) = agent(endpoint, "last-reply");
+    assert_eq!(agent.last_reply(), None);
+    let mut ui = Recorder::default();
+    agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+    server.join().unwrap();
+    let reply = "**Done**: it works.\n\n- one\n- two";
+    assert_eq!(agent.last_reply().as_deref(), Some(reply));
+    // A later reply without text, its calls and the prompts after it leave it the last.
+    agent.conversation.extend([
+        json!({"role":"user","content":"and now?"}),
+        json!({"type":"reasoning","summary":[{"type":"summary_text","text":"Thinking."}]}),
+        json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":" \n"}]}),
+        json!({"type":"function_call","call_id":"call_2","name":"read","arguments":"{}"}),
+        json!({"type":"function_call_output","call_id":"call_2","output":"text"}),
+    ]);
+    assert_eq!(agent.last_reply().as_deref(), Some(reply));
+    agent
+        .conversation
+        .push(json!({"type":"message","role":"assistant","content":[
+            {"type":"output_text","text":"Read "},
+            {"type":"output_text","text":"it."},
+        ]}));
+    assert_eq!(agent.last_reply().as_deref(), Some("Read it."));
+    agent.new_session().unwrap();
+    assert_eq!(agent.last_reply(), None);
+}
+
+#[test]
 fn a_new_session_starts_an_empty_conversation_next_to_the_old_one() {
     let (endpoint, server) = serve(vec![
         stream(&fixture::text_events("first", fixture::known_usage())),

@@ -1,17 +1,17 @@
-//! The built-in commands: `/settings`, `/new`, `/name`, `/session`, `/resume`, `/fork`, `/tree`,
-//! `/model`, `/compact`, `/autopilot`, `/reload`, and `!` commands.
+//! The built-in commands: `/settings`, `/copy`, `/new`, `/name`, `/session`, `/resume`, `/fork`,
+//! `/tree`, `/model`, `/compact`, `/autopilot`, `/reload`, and `!` commands.
 use super::fuzzy::Haystack;
 use super::interactive::{Interactive, completions, model_line};
 use super::screen;
 use super::settings::{ROWS, Row, scramjet_level};
 use super::terminal::Terminal;
 use super::text::{clip, one_line, visible};
-use super::{editor, installed, select, style, tree};
+use super::{clipboard, editor, installed, select, style, tree};
 use scramjet_rs::agent::{
     Agent, AgentError, Approval, Approvals, CODING_TOOLS, Edge, Installed, Navigated, NextStep,
     NextSteps, Publication, Removal, Scope, SessionInfo, Setting, search_program, shortened,
 };
-use std::{sync::atomic::Ordering, time::Duration};
+use std::{io::IsTerminal, sync::atomic::Ordering, time::Duration};
 use unicode_width::UnicodeWidthStr;
 
 const SETTINGS_KEYS: &str = "↑↓ move · Enter change · Esc close";
@@ -61,6 +61,7 @@ fn tool_note(tool: &str) -> &'static str {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Builtin<'a> {
     Settings,
+    Copy,
     New,
     Name(&'a str),
     Session,
@@ -84,6 +85,7 @@ impl<'a> Builtin<'a> {
         let argument = argument.trim();
         Some(match name {
             "/settings" if argument.is_empty() => Self::Settings,
+            "/copy" if argument.is_empty() => Self::Copy,
             "/new" if argument.is_empty() => Self::New,
             "/name" => Self::Name(argument),
             "/session" if argument.is_empty() => Self::Session,
@@ -107,6 +109,7 @@ impl<'a> Builtin<'a> {
         !matches!(
             self,
             Self::Settings
+                | Self::Copy
                 | Self::Name(_)
                 | Self::Session
                 | Self::Model(_)
@@ -125,6 +128,7 @@ impl Interactive {
         }
         match Builtin::parse(prompt) {
             Some(Builtin::Settings) => self.settings(),
+            Some(Builtin::Copy) => self.copy_reply(),
             Some(Builtin::New) => {
                 self.new_session();
             }
@@ -170,6 +174,26 @@ impl Interactive {
                 Ok(()) => self.say(&self.ui.dim(&format!("Session name set: {name}"))),
                 Err(error) => self.say(&format!("error: {error}")),
             }
+        }
+    }
+
+    /// `/copy`, as Scramjet's: the last reply's text, as the model wrote it, to the clipboard.
+    fn copy_reply(&mut self) {
+        let Some(text) = self.agent.last_reply() else {
+            return self.say("No agent messages to copy yet.");
+        };
+        let terminal = self.screen.is_some() || std::io::stderr().is_terminal();
+        match clipboard::copy(&text, terminal) {
+            Ok(sequence) => {
+                if let Some(sequence) = sequence {
+                    match &self.screen {
+                        Some(screen) => screen.to_terminal(sequence),
+                        None => eprint!("{sequence}"),
+                    }
+                }
+                self.say(&self.ui.dim("Copied last agent message to clipboard"));
+            }
+            Err(error) => self.say(&format!("error: {error}")),
         }
     }
 
@@ -1641,6 +1665,7 @@ mod tests {
         let stops = |prompt| Builtin::parse(prompt).map(Builtin::interrupts);
         for prompt in [
             "/session",
+            "/copy",
             "/name",
             "/name  my work ",
             "/model",
@@ -1663,6 +1688,7 @@ mod tests {
         // These go to the model as they are, as before a turn.
         for prompt in [
             "/session now",
+            "/copy all",
             "/new one",
             "/exit now",
             "/reload all",

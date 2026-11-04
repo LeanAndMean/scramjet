@@ -908,6 +908,15 @@ impl Agent {
         &self.conversation
     }
 
+    /// The text of the conversation's last reply that has any, trimmed, as Scramjet's `/copy`
+    /// copies it; reasoning and tool calls are not part of it.
+    pub fn last_reply(&self) -> Option<String> {
+        (self.conversation.iter().rev())
+            .filter(|item| item["type"] == "message")
+            .map(|item| message_text(item).trim().to_owned())
+            .find(|text| !text.is_empty())
+    }
+
     /// Shows the conversation as a resumed session has it, as its turns showed when they ran.
     pub fn show_conversation(&self, ui: &mut dyn AgentUi) {
         show_items(&self.conversation, ui);

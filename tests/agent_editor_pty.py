@@ -917,7 +917,7 @@ def completes_paths_and_commands(read, until, send, output):
     on_screen('Autopilot is off')
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     send(b'/')
-    on_screen('(1/12)')
+    on_screen('(1/13)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -2619,6 +2619,44 @@ def fullscreen_copied_by_the_terminal(read, until, send, output):
     send(b'\x04')
 
 
+markdown_reply = '**Done**: it `works`.\n\n- one\n- two'
+
+
+def copy_command(read, until, send, output):
+    shown, on_screen = full_screen(rows=40)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/copy\r')
+    on_screen('No agent messages to copy yet.')
+    send(b'go\r')
+    on_screen('[1 requests')
+    # The reply as the model wrote it, not as shown.
+    send(b'/copy\r')
+    on_screen('Copied last agent message to clipboard')
+    copied(markdown_reply)
+    # Typed during a turn, it copies the latest reply before the turn's next request.
+    send(b'again\r')
+    on_screen('running 1s')
+    send(b'/copy\r')
+    on_screen('Command: /copy')
+    copied('Checking.')
+    rows = on_screen('Checked.')
+    text = '\n'.join(rows)
+    assert text.count('Copied last agent message to clipboard') == 2, text
+    assert text.index('Checking.') < text.rindex('Copied last') < text.index('Checked.'), text
+    send(b'\x04')
+
+
+def copy_command_by_the_terminal(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('[1 requests')
+    send(b'/copy\r')
+    until(b'\x1b]52;c;%s\x07' % base64.b64encode(markdown_reply.encode()))
+    on_screen('Copied last agent message to clipboard')
+    send(b'\x04')
+
+
 def fullscreen_paste_and_clicks(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -2822,6 +2860,26 @@ run([], fullscreen_copy_into_the_dock, serve_items([
     [tool_call('call_1', 'bash', {'command': 'for w in a b; do\n  echo $w\ndone'})], [message(full_width)],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
                'CLIPBOARD': clipboard})
+run([], copy_command, serve_items([
+    [message(markdown_reply)],
+    [message('Checking.'), tool_call('call_1', 'bash', {'command': 'sleep 2.5'})],
+    [message('Checked.')],
+]), rows=40, variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test',
+                        'DISPLAY': '', 'CLIPBOARD': clipboard})
+run([], copy_command_by_the_terminal, serve_items([[message(markdown_reply)]]))
+# With piped input the clipboard tool copies; without one there is no terminal for OSC 52.
+for variables, said in [({'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test',
+                          'CLIPBOARD': clipboard}, 'Copied last agent message to clipboard'),
+                        ({}, 'error: Failed to copy to clipboard')]:
+    if os.path.exists(clipboard):
+        os.remove(clipboard)
+    ran = subprocess.run([BINARY, '--endpoint', serve_items([[message('Piped **reply**.')]])], cwd=project,
+                         env=dict(env, **variables), input=b'go\n/copy\n', capture_output=True, timeout=30)
+    assert said in ran.stderr.decode() and b'\x1b]52' not in ran.stderr, ran.stderr
+    if variables:
+        copied('Piped **reply**.')
+    else:
+        assert not os.path.exists(clipboard)
 pastes = os.path.join(work, 'pastes')
 # Checks it is asked for the clipboard's text as Scramjet asks; the second time it takes a second.
 with open(os.path.join(clipboard_bin, 'powershell.exe'), 'w') as script_file:

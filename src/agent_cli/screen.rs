@@ -85,6 +85,8 @@ enum ToScreen {
     Dialog(Dialog, mpsc::Sender<Answer>),
     /// The dialog's question is no longer asked.
     Dismiss,
+    /// A sequence for the terminal itself: OSC 52's copy.
+    Terminal(String),
     Quit,
 }
 
@@ -253,6 +255,10 @@ impl Link {
     }
     pub(super) fn models(&self, models: Vec<String>) {
         self.send(ToScreen::Models(models));
+    }
+    /// Writes `sequence` to the terminal between frames.
+    pub(super) fn to_terminal(&self, sequence: String) {
+        self.send(ToScreen::Terminal(sequence));
     }
     /// Shows `dialog` and waits for its answer; `None` once the screen is gone or `cancel` set.
     pub(super) fn ask(&self, dialog: Dialog, cancel: Option<&AtomicBool>) -> Option<Answer> {
@@ -881,6 +887,7 @@ impl App {
                         self.stop_shells();
                         return Ok(());
                     }
+                    Ok(ToScreen::Terminal(sequence)) => to_terminal(&sequence)?,
                     Ok(message) => self.message(message),
                     Err(TryRecvError::Empty) => break,
                 }
@@ -1064,7 +1071,7 @@ impl App {
                 self.dialog = None;
                 self.replay();
             }
-            ToScreen::Quit => {}
+            ToScreen::Terminal(_) | ToScreen::Quit => {}
         }
     }
 
@@ -1550,7 +1557,7 @@ impl App {
         let started = std::thread::Builder::new()
             .name("clipboard".into())
             .spawn(move || {
-                let _ = done.send(clipboard::copy(&text));
+                let _ = done.send(clipboard::copy(&text, true));
             });
         match started {
             Ok(_) => self.copying = Some(outcome),
@@ -1569,9 +1576,7 @@ impl App {
         match outcome {
             Ok(sequence) => {
                 if let Some(sequence) = sequence {
-                    let mut stderr = io::stderr().lock();
-                    stderr.write_all(sequence.as_bytes())?;
-                    stderr.flush()?;
+                    to_terminal(&sequence)?;
                 }
                 self.clear_selection();
             }
@@ -2037,6 +2042,12 @@ impl App {
 /// Whether the built-in command `command`, typed during a turn, waits for the turn to stop.
 fn stops_turn(command: &str) -> bool {
     Builtin::parse(command).is_none_or(Builtin::interrupts)
+}
+
+fn to_terminal(sequence: &str) -> io::Result<()> {
+    let mut stderr = io::stderr().lock();
+    stderr.write_all(sequence.as_bytes())?;
+    stderr.flush()
 }
 
 /// What Alt+Up or Escape says once it put `count` queued messages back in the editor.
