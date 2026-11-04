@@ -3,7 +3,7 @@
 use super::tools::{self, Call};
 use super::{
     AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, SUBAGENTS, StreamProgress,
-    TYPED, compaction, message_text, publish, question, status,
+    TYPED, Tokens, compaction, message_text, publish, question, status,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -82,6 +82,9 @@ pub trait AgentUi {
     fn follow_up(&mut self) -> Vec<String> {
         Vec::new()
     }
+    /// The session's tokens (`Agent::session_tokens`) and how full the context is
+    /// (`Agent::context_tokens`), after a response or a compaction changed them.
+    fn usage(&mut self, _tokens: Tokens, _context: Option<u64>) {}
     /// An effort level the user chose while the turn runs, for the model's next request.
     fn effort(&mut self) -> Option<String> {
         None

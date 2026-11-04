@@ -11,6 +11,11 @@ pub const SUBAGENT_RUNNING: &str = "\x1b[33m";
 pub const SUBAGENT_DONE: &str = "\x1b[32m";
 pub const SUBAGENT_FAILED: &str = "\x1b[31m";
 pub const SUBAGENT_NAME: &str = "\x1b[1m";
+/// The footer under the prompt, and how full the context is there past 70%, then past 90%, as
+/// Scramjet's warning and error colors show it.
+pub const FOOTER: &str = "\x1b[2m";
+pub const FOOTER_NEARLY_FULL: &str = "\x1b[33m";
+pub const FOOTER_FULL: &str = "\x1b[31m";
 /// Secondary notes: `took 1.2s`, `(cancelled)`, why a compaction ran, editor hints.
 pub const MUTED: &str = "\x1b[2m";
 /// A tool's result preview.

@@ -5,6 +5,7 @@ mod diff;
 mod editor;
 mod export;
 mod file_search;
+mod footer;
 mod fuzzy;
 mod install;
 mod installed;
@@ -223,7 +224,7 @@ fn print(
     let result = agent.turn(&prompt, ui, cancel);
     drop(mode);
     ui.clear();
-    ui.usage(agent);
+    ui.print_usage(agent);
     if let Some(completed) = agent.take_completed() {
         let routing = agent.route(&completed, false, true);
         let mut notices = routing.notices;

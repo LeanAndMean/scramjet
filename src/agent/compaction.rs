@@ -617,6 +617,7 @@ impl Agent {
         self.delegated.clear();
         // Unknown until the next response reports it.
         self.usage.context_tokens = None;
+        ui.usage(self.session_tokens(), self.context_tokens());
         Ok(Some(Compaction {
             tokens_before,
             kept_items: self.conversation.len() - 1,
@@ -748,7 +749,7 @@ impl Agent {
 mod tests {
     use super::*;
     use crate::agent::tests::*;
-    use crate::agent::{AgentConfig, Session, SessionChoice};
+    use crate::agent::{AgentConfig, Session, SessionChoice, Tokens};
     use crate::provider_fixture as fixture;
 
     #[test]
@@ -967,6 +968,8 @@ mod tests {
             "first summary\n\n<read-files>\na.rs\n</read-files>\n\n<modified-files>\nb.rs\n</modified-files>"
         );
         assert_eq!(agent.usage.context_tokens, None);
+        // The footer is told the context is not known now.
+        assert_eq!(ui.usage.last(), Some(&(Tokens::default(), None)));
         assert_eq!(agent.conversation()[1], recent);
         assert_eq!(
             agent.conversation()[0]["content"],

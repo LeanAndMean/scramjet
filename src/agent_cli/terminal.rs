@@ -155,23 +155,27 @@ impl Status {
 
 const NOTE_TIME: Duration = Duration::from_secs(2);
 
-/// How full the context is, as Scramjet's footer shows it: `53k/1.1M (5.0%)`.
-fn context(tokens: u64, window: Option<u64>) -> String {
-    let count = |n: u64| match n {
+/// A count of tokens, as Scramjet's footer shows it: `950`, `3.4k`, `53k`, `1.1M`.
+pub(super) fn tokens(n: u64) -> String {
+    match n {
         0..1_000 => n.to_string(),
         1_000..10_000 => format!("{:.1}k", n as f64 / 1e3),
         10_000..1_000_000 => format!("{}k", (n as f64 / 1e3).round()),
         1_000_000..10_000_000 => format!("{:.1}M", n as f64 / 1e6),
         _ => format!("{}M", (n as f64 / 1e6).round()),
-    };
+    }
+}
+
+/// How full the context is, as Scramjet's footer shows it: `53k/1.1M (5.0%)`.
+pub(super) fn context(count: u64, window: Option<u64>) -> String {
     match window {
         Some(window) if window > 0 => format!(
             "{}/{} ({:.1}%)",
-            count(tokens),
-            count(window),
-            tokens as f64 * 100.0 / window as f64
+            tokens(count),
+            tokens(window),
+            count as f64 * 100.0 / window as f64
         ),
-        _ => count(tokens),
+        _ => tokens(count),
     }
 }
 
@@ -636,7 +640,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         self.printed_newlines = 0;
         self.streaming = Streaming::None;
     }
-    pub(super) fn usage(&self, agent: &Agent) {
+    pub(super) fn print_usage(&self, agent: &Agent) {
         eprintln!("{}", self.dim(&self.wrapped(&usage_line(agent))));
     }
 }

@@ -502,8 +502,19 @@ class Screen:
                 self.grid[self.row][self.column] = character
                 self.column = min(self.column + 1, columns - 1)
 
-    def rows(self):
+    def all_rows(self):
         return [''.join(row).rstrip() for row in self.grid]
+
+    def rows(self):
+        """The rows above the footer: the conversation, and the dock down to the rule over the
+        footer."""
+        rows = self.all_rows()
+        return rows[:-3] if len(rows) >= 3 and re.fullmatch('\u2500{20,}', rows[-3]) else rows
+
+    def footer(self):
+        """The footer's two rows under the rule, or none before a frame was drawn."""
+        rows = self.all_rows()
+        return rows[-2:] if len(rows) >= 3 and re.fullmatch('\u2500{20,}', rows[-3]) else []
 
 
 def full_screen(columns=60, rows=24):
@@ -533,6 +544,34 @@ def ending(read, output, expected, columns=60, rows=24):
 
 # The dock with an empty prompt.
 EMPTY = ['\u2500' * 59, '>']
+
+
+def footer_shows(read, output, expected, columns=60, rows=24):
+    """Waits until the footer's two rows are `expected`; returns them."""
+    end = time.monotonic() + 10
+    while (shown := Screen(output, columns, rows).footer()) != expected:
+        assert time.monotonic() < end, (expected, shown)
+        read(.05)
+    return shown
+
+
+def stats(left, right, columns=60):
+    """The footer's second row: `left`, then `right` at the end of the screen's last column but one."""
+    return left + ' ' * (columns - 1 - len(left) - len(right)) + right
+
+
+def ended(read, output, columns=60, rows=24):
+    """Waits until no turn runs: the status line over the prompt's rule does not say what runs
+    (`\u2026 thinking`, `\u2026 running 1s`, \u2026); returns the rows. Wait for something the turn
+    shows first, as before it starts none runs either."""
+    end = time.monotonic() + 10
+    while True:
+        shown = Screen(output, columns, rows).rows()
+        rules = [index for index, row in enumerate(shown) if re.fullmatch('\u2500{20,}', row)]
+        if rules and rules[-1] > 0 and not shown[rules[-1] - 1].startswith('\u2026 '):
+            return shown
+        assert time.monotonic() < end, shown
+        read(.05)
 
 
 def copied(expected):
@@ -802,12 +841,14 @@ def final_texts_replace_lost_deltas(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'one\r')
-    rows = on_screen('[1 requests')
+    on_screen('The start of the reply.')
+    rows = ended(read, output)
     assert 'The start of the reply.' in rows, rows
     send(b'two\r')
     on_screen('Only at the end.')
     send(b'three\r')
-    rows = on_screen('[3 requests')
+    on_screen('Streamed whole.')
+    rows = ended(read, output)
     assert '\n'.join(rows).count('Streamed whole.') == 1, rows
     send(b'\x04')
 
@@ -1270,15 +1311,18 @@ assert prompts == ['first', 'second', 'second again'], prompts
 def shift_tab_cycles_effort(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
+    footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 medium')])
     send(b'\x1b[Z')
     on_screen('Thinking level: high')
+    footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 high')])
     # Inside a prompt it keeps the text and the cursor.
     send(b'ab\x1b[D\x1b[Z')
     on_screen('Thinking level: xhigh')
     send(b'X\r')
-    rows = on_screen('thinking xhigh]')
-    usage = '[1 requests \u00b7 0 input tokens (0 cached) \u00b7 0 output tokens \u00b7\nthinking xhigh]'
-    assert usage in '\n'.join(rows), rows
+    on_screen('Reply.')
+    ended(read, output)
+    # The reply reported no tokens: how full the context is, is not known.
+    footer_shows(read, output, [project, stats('?', 'gpt-6-luna \u2022 xhigh')])
     send(b'\x04')
 
 
@@ -1327,8 +1371,10 @@ def ctrl_p_cycles_models(read, until, send, output):
     send(b'\x10')
     on_screen('The model changes before the next request')
     on_screen('Switched to GPT-6 Luna (thinking: low)')
-    rows = on_screen('[2 requests')
-    assert 'Switched.' in '\n'.join(rows), rows
+    # The footer says so as the next request starts.
+    footer_shows(read, output, [project, stats('?', 'gpt-6-luna \u2022 low', 80)], columns=80)
+    on_screen('Switched.')
+    ended(read, output, columns=80)
     send(b'\x04')
 
 
@@ -1516,14 +1562,20 @@ def broken_settings_are_kept(read, until, send, output):
 
 
 def name_and_session(read, until, send, output):
-    shown, on_screen = full_screen(200)(read, output)
+    shown, on_screen = full_screen(200, 30)(read, output)
     on_screen('\u2500' * 20)
+    footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 medium', 200)], 200, 30)
     send(b'/name\r')
     on_screen('Usage: /name <name>')
     send(b'hello\r')
     on_screen('Reply one.')
+    # The tokens not read from the cache, the output and the cache reads, then the context's.
+    footer_shows(read, output, [project, stats('\u2191200 \u219334 R1.0k 1.2k', 'gpt-6-luna \u2022 medium', 200)],
+                 200, 30)
     send(b'/name  Parser work \r')
     on_screen('Session name set: Parser work')
+    footer_shows(read, output, [project + ' \u2022 Parser work',
+                                stats('\u2191200 \u219334 R1.0k 1.2k', 'gpt-6-luna \u2022 medium', 200)], 200, 30)
     send(b'/session\r')
     rows = on_screen('Cache Read: 1,000')
     (path,) = set(session_files()) - known
@@ -1539,6 +1591,9 @@ def name_and_session(read, until, send, output):
 def name_resumed(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
+    # The session's tokens, read from its file, and its name.
+    footer_shows(read, output, [project + ' \u2022 Parser work',
+                                stats('\u2191200 \u219334 R1.0k 1.2k', 'gpt-6-luna \u2022 medium')])
     send(b'/name\r')
     on_screen('Session name: Parser work')
     send(b'/resume\r')
@@ -1752,7 +1807,7 @@ assert open(settings_path(broken)).read() == '{"hideThinkingBlock": tru'
 known = set(session_files())
 usage = {'input_tokens': 1200, 'output_tokens': 34, 'total_tokens': 1234,
          'input_tokens_details': {'cached_tokens': 1000}}
-run([], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], usage=usage), columns=200)
+run([], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], usage=usage), columns=200, rows=30)
 run(['--continue'], name_resumed)
 (named,) = set(session_files()) - known
 infos = [line for line in map(json.loads, open(named)) if line.get('type') == 'session_info']
@@ -1787,14 +1842,14 @@ def command_sets(read, until, send, output):
 
 def command_sets_resumed(read, until, send, output):
     # The resumed conversation and Up show the prompts as typed.
-    shown, on_screen = full_screen()(read, output)
+    shown, on_screen = full_screen(rows=30)(read, output)
     rows = on_screen('Still here.')
     assert '> /tools:echo a  b\n\u2026 (sent as 1 line, Ctrl+O to expand)' in '\n'.join(rows), rows
     assert '> /demo:greet Ada "the reader"' in rows, rows
     send(b'\x1b[A')
-    ending(read, output, ['> /tools:echo a  b'])
+    ending(read, output, ['> /tools:echo a  b'], rows=30)
     send(b'\x1b[A')
-    ending(read, output, ['> /demo:greet Ada "the reader"'])
+    ending(read, output, ['> /demo:greet Ada "the reader"'], rows=30)
     send(b'\x03\x04')
 
 
@@ -1912,7 +1967,7 @@ def questions(read, until, send, output):
     send(b'\x1b')
     # The turn ends without another request; the server has no response for one.
     on_screen('Cancelled')
-    on_screen('[3 requests')
+    ended(read, output)
     send(b'\x04')
 
 
@@ -2022,7 +2077,8 @@ def abandoned_command(read, until, send, output):
     on_screen('keep /flow:step running')
     on_screen('\u2192 Keep working')
     send(b'\x1b[A\r')
-    rows = on_screen('[2 requests')
+    on_screen('The user confirmed: /flow:step is abandoned')
+    rows = ended(read, output)
     text = '\n'.join(rows)
     assert 'The user confirmed: /flow:step is abandoned' in text, text
     assert 'Select next step' not in text and 'Next step' not in text, text
@@ -2190,7 +2246,7 @@ known = set(session_files())
 run([], command_sets, serve_items([[message('Greeted.')], [report('call_1')], [message('Echoed.')],
                                    [message('Still here.')], [message('Still at it.')],
                                    [message('Nearly there.')]]))
-run(['--continue'], command_sets_resumed)
+run(['--continue'], command_sets_resumed, rows=30)
 (commanded,) = set(session_files()) - known
 lines = list(map(json.loads, open(commanded)))
 checks = [line['content'] for line in lines if line.get('_scramjet_probe')]
@@ -2525,8 +2581,9 @@ def fullscreen_turn(read, until, send, output):
     rows = on_screen('Done, it says two.')
     text = '\n'.join(rows)
     for expected in ['> go', 'Changing the file.', '\u25cf edit a.txt', '+1 two', '\u25cf bash echo checked; exit 2',
-                     'Command exited with code 2', '[3 requests']:
+                     'Command exited with code 2']:
         assert expected in text, (expected, text)
+    rows = ended(read, output)
     # Under the conversation, the editor's prompt, ready for the next one.
     assert rows[-1] == '>', rows
     # Ctrl+T hides the reasoning already shown, and shows it again.
@@ -2603,7 +2660,8 @@ def fullscreen_queue(read, until, send, output):
     on_screen('Follow-up: after that')
     on_screen('Followed.')
     # The command's status check, as its turn ended without a report; the model reports there.
-    rows = on_screen('[4 requests')
+    on_screen('Checked.')
+    rows = ended(read, output)
     text = '\n'.join(rows)
     assert (text.index('> steer this') < text.index('> /demo:greet Ann\n\u2026 (sent as 5 lines')
             < text.index('Steered.') < text.index('> after that') < text.index('Followed.')
@@ -2635,9 +2693,10 @@ def fullscreen_commands_during_turn(read, until, send, output):
     assert 'Tool Results: 1' in text and 'Switched.' not in text, text
     assert 'Command: ' not in text, text
     send(b'\x1b[B\r')
-    rows = on_screen('Switched.')
+    on_screen('Switched.')
+    rows = ended(read, output)
     text = '\n'.join(rows)
-    assert text.index('\u2713 Model set to gpt-6-terra') < text.index('Switched.') < text.index('[2 requests'), text
+    assert text.index('\u2713 Model set to gpt-6-terra') < text.index('Switched.'), text
     # `/new` stops the turn first; what it did not take goes back in the editor.
     send(b'again\r')
     on_screen('running 1s')
@@ -2701,17 +2760,19 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     on_screen('running 1s')
-    # Shift+Tab chooses the effort of the turn's next request.
+    # Shift+Tab chooses the effort of the turn's next request; the footer says so at once.
     send(b'\x1b[Z')
     on_screen('Thinking level: high')
+    footer_shows(read, output, [project, stats('?', 'gpt-6-luna \u2022 high')])
     # A `!` command runs at once, under the conversation until the turn ends.
     send(b'!echo side$((0+1)); sleep 1; echo side$((1+1))\r')
     rows = on_screen('side2')
     assert 'Replied.' not in '\n'.join(rows), rows
     on_screen('Replied.')
-    rows = on_screen('[2 requests')
+    ended(read, output)
+    rows = on_screen(' $ echo side$((0+1))')
     text = '\n'.join(rows)
-    assert text.index('Replied.') < text.index('[2 requests') < text.index(' $ echo side$((0+1))'), text
+    assert text.index('Replied.') < text.index(' $ echo side$((0+1))'), text
     assert text.count('side2') == 1, text
     send(b'again\r')
     on_screen('running 1s')
@@ -2734,8 +2795,8 @@ def fullscreen_mouse(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    rows = on_screen('[1 requests')
-    assert 'Row 40 of the reply.' in '\n'.join(rows), rows
+    on_screen('Row 40 of the reply.')
+    ended(read, output)
     # A notch of the wheel scrolls three lines, wherever the pointer is.
     send(b'\x1b[<64;5;23M')
     on_screen('3 more lines below')
@@ -2772,10 +2833,11 @@ def fullscreen_copy_unwrapped(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    rows = on_screen('[2 requests')
+    on_screen('one line.')
+    rows = ended(read, output)
     one = next(index for index, text in enumerate(rows) if text == '  one')
-    end = next(index for index, text in enumerate(rows) if text.startswith('[2 requests')) - 2
-    assert rows[end - 2].startswith('The tests') and rows[end].endswith('one line.'), rows
+    end = next(index for index, text in enumerate(rows) if text.endswith('one line.'))
+    assert rows[end - 2].startswith('The tests'), rows
     # Dragged from the tool result's gutter to past the end of the reply: the copy leaves the
     # gutter out and joins the reply's wrapped rows.
     send(b'\x1b[<0;1;%dM\x1b[<32;60;%dM\x1b[<0;60;%dm\x03' % (one + 1, end + 1, end + 1))
@@ -2787,7 +2849,8 @@ def fullscreen_copy_into_the_dock(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    rows = on_screen('[2 requests')
+    on_screen(full_width)
+    rows = ended(read, output)
     # A row as wide as the screen keeps its last column.
     assert full_width in rows, rows
     call = rows.index('\u25cf bash for w in a b; do')
@@ -2799,16 +2862,17 @@ def fullscreen_copy_into_the_dock(read, until, send, output):
     send(draft.encode())
     rows = on_screen('alpha end')
     assert rows[-2:] == ['> ' + 'alpha ' * 8 + 'alpha', '  alpha alpha end'], rows
-    usage = next(index for index, text in enumerate(rows) if text.startswith('[2 requests'))
+    reply = rows.index(full_width) + 1
+    # The prompt's last row, over the footer.
+    bottom = len(rows)
     # At the end, a drag goes on into the dock: the blank status line, not the rule, and the
     # prompt's text as typed.
-    send(b'\x1b[<0;1;%dM\x1b[<32;30;%dM\x1b[<32;60;24M\x1b[<0;60;24m' % (usage + 1, usage + 3))
+    send(b'\x1b[<0;1;%dM\x1b[<32;30;%dM\x1b[<32;60;%dM\x1b[<0;60;%dm' % (reply, reply + 2, bottom, bottom))
     until(b'\x1b[7m  alpha alpha end')
     send(b'\x03')
-    # The usage line's wrapped rows are joined.
-    copied('[2 requests \u00b7 0 input tokens (0 cached) \u00b7 0 output tokens \u00b7 thinking medium]\n\n\n' + draft)
+    copied(full_width + '\n\n\n' + draft)
     # A triple click in the dock selects its row.
-    send(b'\x1b[<0;9;24M\x1b[<0;9;24m' * 3 + b'\x03')
+    send(b'\x1b[<0;9;%dM\x1b[<0;9;%dm' % (bottom, bottom) * 3 + b'\x03')
     copied('alpha alpha end')
     send(b'\x15\x04')
 
@@ -2817,7 +2881,8 @@ def fullscreen_copied_by_the_terminal(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    rows = on_screen('[1 requests')
+    on_screen('Row 40 of the reply.')
+    rows = ended(read, output)
     row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
     # Without a clipboard tool, a right click copies with OSC 52.
     send(b'\x1b[<0;1;%dM\x1b[<32;8;%dM\x1b[<0;8;%dm\x1b[<2;1;1M' % (row, row, row))
@@ -2834,7 +2899,8 @@ def copy_command(read, until, send, output):
     send(b'/copy\r')
     on_screen('No agent messages to copy yet.')
     send(b'go\r')
-    on_screen('[1 requests')
+    on_screen('Done')
+    ended(read, output, rows=40)
     # The reply as the model wrote it, not as shown.
     send(b'/copy\r')
     on_screen('Copied last agent message to clipboard')
@@ -2856,7 +2922,8 @@ def copy_command_by_the_terminal(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('[1 requests')
+    on_screen('Done')
+    ended(read, output)
     send(b'/copy\r')
     until(b'\x1b]52;c;%s\x07' % base64.b64encode(markdown_reply.encode()))
     on_screen('Copied last agent message to clipboard')
@@ -2871,7 +2938,8 @@ def fullscreen_paste_and_clicks(read, until, send, output):
     rows = on_screen('second \u2014')
     assert rows[-2:] == ['> x pasted', '. second \u2014'], rows
     send(b'\r')
-    rows = on_screen('[1 requests')
+    on_screen('Row 40 of the reply.')
+    rows = ended(read, output)
     row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
     # A double click selects the word under it, a triple click the line.
     send(b'\x1b[<0;15;%dM\x1b[<0;15;%dm' % (row, row) * 2)
@@ -2936,7 +3004,7 @@ def fullscreen_collapsed(read, until, send, output):
 
 
 def fullscreen_collapsed_resumed(read, until, send, output):
-    shown, on_screen = full_screen()(read, output)
+    shown, on_screen = full_screen(rows=30)(read, output)
     on_screen('\u2026 (sent as 5 lines, Ctrl+O to expand)')
     send(b'\x1b[5~')
     on_screen('more lines below')
@@ -3140,7 +3208,7 @@ run([], fullscreen_collapsed, serve_items([
     [tool_call('call_1', 'bash', {'command': long_line})], [tool_call('call_2', 'bash', {'command': long_line})],
     [message('Printed.')], [message(summary)], [message('Greeted.')], [report('call_3')],
 ]))
-run(['--continue'], fullscreen_collapsed_resumed)
+run(['--continue'], fullscreen_collapsed_resumed, rows=30)
 os.makedirs(os.path.join(work, 'agent', 'agents'), exist_ok=True)
 with open(os.path.join(work, 'agent', 'agents', 'scout.md'), 'w') as file:
     file.write('---\nname: scout\ndescription: Looks around\ntools: ls\n---\n\nYou look around.\n')

@@ -33,6 +33,8 @@ pub(super) struct Recorder {
     pub(super) children: Vec<Children>,
     /// The details of the results shown.
     pub(super) details: Vec<ToolDetail>,
+    /// Each `usage` call's session tokens and context.
+    pub(super) usage: Vec<(Tokens, Option<u64>)>,
 }
 impl AgentUi for Recorder {
     fn waiting(&mut self, purpose: Purpose) {
@@ -140,6 +142,9 @@ impl AgentUi for Recorder {
     }
     fn pause(&mut self) -> bool {
         !self.pauses.is_empty() && self.pauses.remove(0)
+    }
+    fn usage(&mut self, tokens: Tokens, context: Option<u64>) {
+        self.usage.push((tokens, context));
     }
     fn choose(
         &mut self,
@@ -1370,4 +1375,47 @@ fn installed_says_where_each_comes_from_and_what_is_wrong() {
             ),
         ]
     );
+}
+
+#[test]
+fn session_tokens_count_every_response_on_every_branch_and_are_read_again_on_resume() {
+    let other = json!({"input_tokens":100,"output_tokens":20,"total_tokens":120});
+    let (endpoint, server) = serve(vec![
+        stream(&fixture::text_events("one", fixture::known_usage())),
+        stream(&fixture::text_events("two", fixture::known_usage())),
+        stream(&fixture::text_events("three", other)),
+    ]);
+    let (mut agent, _scratch) = agent(endpoint, "session-tokens");
+    assert_eq!(agent.session_tokens(), Tokens::default());
+    // An empty conversation fills none of the context.
+    assert_eq!(agent.context_tokens(), Some(0));
+    let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
+    agent.turn("first", &mut ui, &cancel).unwrap();
+    agent.turn("second", &mut ui, &cancel).unwrap();
+    // Each known usage: 10 input tokens, 3 of them read from the cache, and 5 output tokens.
+    let two = Tokens {
+        input: 14,
+        output: 10,
+        cache_read: 6,
+    };
+    assert_eq!(ui.usage.last(), Some(&(two, Some(15))));
+    // Another branch from the first reply adds its response; leaving the second keeps it.
+    let tree = agent.tree().unwrap();
+    let first = (tree.entries.iter())
+        .find(|entry| entry.item == TreeItem::Reply("one".into()))
+        .unwrap();
+    agent.navigate(first.line, None, &mut ui, &cancel).unwrap();
+    assert_eq!(agent.session_tokens(), two);
+    agent.turn("elsewhere", &mut ui, &cancel).unwrap();
+    server.join().unwrap();
+    let three = Tokens {
+        input: 114,
+        output: 30,
+        cache_read: 6,
+    };
+    assert_eq!(ui.usage.last(), Some(&(three, Some(120))));
+    assert_eq!(agent.session_tokens(), three);
+    assert_eq!(agent.stats().input, 107);
+    let (session, ..) = Session::open(agent.session_path()).unwrap();
+    assert_eq!(session.tokens(), three);
 }

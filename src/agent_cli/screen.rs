@@ -10,6 +10,7 @@ use super::editor::{
     Action, ByteSource, Draft, ESCAPE_WAIT, Editor, Key, Mouse, RESIZE_CHECK, RawMode, read_key,
     terminal_size,
 };
+use super::footer::{self, Footer};
 use super::interactive::effort_note;
 use super::record::{self, Event};
 use super::select::{Act, Picked, Picker, Routed, Spot};
@@ -17,7 +18,7 @@ use super::selection::{self, Line};
 use super::settings::{Delivery, DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{COMMAND_LINES, Terminal, elapsed, waiting_for};
-use super::text::{Wrap, clip, one_line, visible};
+use super::text::{Wrap, clip, one_line, plain, visible};
 use super::{clipboard, editor, job, style};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -25,7 +26,7 @@ use rustix::{
 };
 use scramjet_rs::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, Compaction, EffortCycle, Purpose,
-    Shell, StreamProgress, ToolDetail, UserCommand,
+    Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
 };
 use std::{
     fmt::Write as _,
@@ -83,6 +84,10 @@ enum ToScreen {
     Reloaded(Vec<(String, String)>, bool),
     /// The endpoint's models, which complete `/model`'s argument.
     Models(Vec<String>),
+    /// What the footer shows of the session now.
+    Footer(footer::Shown),
+    /// The session's tokens and how full the context is, after a response or a compaction.
+    Usage(Tokens, Option<u64>),
     Dialog(Dialog, mpsc::Sender<Answer>),
     /// The dialog's question is no longer asked.
     Dismiss,
@@ -266,6 +271,9 @@ impl Link {
     }
     pub(super) fn models(&self, models: Vec<String>) {
         self.send(ToScreen::Models(models));
+    }
+    pub(super) fn footer(&self, shown: footer::Shown) {
+        self.send(ToScreen::Footer(shown));
     }
     /// Writes `sequence` to the terminal between frames.
     pub(super) fn to_terminal(&self, sequence: String) {
@@ -476,6 +484,9 @@ impl AgentUi for Link {
     }
     fn follow_up(&mut self) -> Vec<String> {
         deliver(&mut self.queue().follow_ups, self.modes.1)
+    }
+    fn usage(&mut self, tokens: Tokens, context: Option<u64>) {
+        self.send(ToScreen::Usage(tokens, context));
     }
     fn effort(&mut self) -> Option<String> {
         self.take_effort()
@@ -820,6 +831,7 @@ struct App {
     /// Keys typed while an answered held list waits for the session's next, which then takes
     /// them, or the prompt does.
     held_keys: Vec<(Key, bool)>,
+    footer: Footer,
     /// The first line shown, while the user has scrolled away from the end.
     top: Option<Place>,
     /// Tool results are shown whole (Ctrl+O).
@@ -853,6 +865,7 @@ impl App {
         sides: Sides,
     ) -> Self {
         Self {
+            footer: Footer::new(&sides.root),
             draft: editor.draft(String::new()),
             editor,
             transcript: Transcript::default(),
@@ -934,6 +947,7 @@ impl App {
             }
             self.copied()?;
             self.pasted();
+            self.footer.check_branch();
             if self
                 .edge
                 .as_ref()
@@ -1048,6 +1062,10 @@ impl App {
                 self.editor.reloaded(commands, double_escape)
             }
             ToScreen::Models(models) => self.editor.set_models(models),
+            ToScreen::Footer(shown) => self.footer.shown = shown,
+            ToScreen::Usage(tokens, context) => {
+                (self.footer.shown.tokens, self.footer.shown.context) = (tokens, context)
+            }
             ToScreen::Dialog(dialog, reply) => {
                 let shown = match dialog {
                     Dialog::Pick(picker) if picker.is_empty() => {
@@ -1814,6 +1832,7 @@ impl App {
                 let level = self.efforts.advance();
                 if let Some(level) = &level {
                     self.queue().effort = Some(level.clone());
+                    self.footer.shown.effort = Some(level.clone());
                 }
                 self.draft.set_note(effort_note(Ok(level)));
             }
@@ -1975,7 +1994,10 @@ impl App {
             rows.push(muted(&hint));
         }
         drop(queue);
-        let room = height.saturating_sub(rows.len() + 1).max(1);
+        let footer = self.footer.lines(width);
+        // The rule above the footer, and the footer.
+        let under = 1 + footer.len();
+        let room = height.saturating_sub(rows.len() + 1 + under).max(1);
         let cursor = match &self.dialog {
             Some(Open {
                 shown: Shown::Pick(picker),
@@ -2018,6 +2040,20 @@ impl App {
                 prompt_rows(&self.draft, &mut rows, width, room)
             }
         };
+        // As Scramjet's editor and its lists end with a rule over the footer.
+        let ruled = (rows.last()).is_some_and(|row| {
+            let text = plain(&row.shown);
+            !text.is_empty() && text.chars().all(|c| c == '─')
+        });
+        if !ruled {
+            rows.push(Line::rule(&format!(
+                "{}{}{}",
+                style::MUTED,
+                "─".repeat(width.saturating_sub(1)),
+                style::RESET
+            )));
+        }
+        rows.extend(selection::rows(&footer));
         (rows, cursor)
     }
 

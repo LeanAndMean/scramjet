@@ -36,7 +36,9 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   --export FILE [OUTPUT] write the session file FILE as a web page to OUTPUT (default:
                          scramjet-rs-session-<its name>.html here), as /export does, and exit
 The session fills the terminal's alternate screen: the conversation above a status line and the
-prompt. Page Up/Down and the mouse wheel scroll the conversation; Escape goes back to its end.
+prompt, and under it the project's directory and Git branch, the session's tokens, how full the
+context is and the model, as Scramjet's footer. Page Up/Down and the mouse wheel scroll the
+conversation; Escape goes back to its end.
 In the prompt, Enter or Alt+Enter sends; Shift+Enter, Ctrl-J or a trailing \\ starts a new
 line; pasted text is inserted without sending. Up/Down recall earlier prompts. Ctrl-G edits the
 prompt in $VISUAL or $EDITOR; its text replaces the prompt when the editor exits with 0.

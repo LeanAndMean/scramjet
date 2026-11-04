@@ -271,6 +271,7 @@ to a larger-context model)"
                 }
                 self.add(item)?;
             }
+            ui.usage(self.session_tokens(), self.context_tokens());
             if let Some(message) = reply.incomplete {
                 return Err(AgentError::Provider(message));
             }

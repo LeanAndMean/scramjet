@@ -1,3 +1,4 @@
+use super::Tokens;
 use super::compaction::FileLists;
 use serde_json::{Value, json};
 use std::{
@@ -83,6 +84,8 @@ pub struct Session {
     command: Option<Value>,
     /// The latest `/autopilot` toggle on the path, which a resume restores.
     autopilot: Option<bool>,
+    /// The tokens of every response in the file.
+    tokens: Tokens,
     leaf: Option<usize>,
     /// The entry a line appended without a branch line would continue.
     tail: Option<usize>,
@@ -132,6 +135,7 @@ struct Entries {
     /// The header's `parentSession`: the session this one was forked from.
     parent: Option<PathBuf>,
     header: Value,
+    tokens: Tokens,
 }
 
 /// The conversation on the path from the start to an entry.
@@ -152,6 +156,7 @@ fn read(path: &Path) -> io::Result<Entries> {
     let mut name = None;
     let mut parent = None;
     let mut header = Value::Null;
+    let mut tokens = Tokens::default();
     let mut line = String::new();
     let mut end = 0;
     let mut lines = 0;
@@ -194,6 +199,7 @@ fn read(path: &Path) -> io::Result<Entries> {
                 ),
             };
         } else {
+            tokens.add(&value);
             entries.push(Entry {
                 line: index,
                 parent: tail,
@@ -214,6 +220,7 @@ fn read(path: &Path) -> io::Result<Entries> {
         size: end as u64,
         parent,
         header,
+        tokens,
     })
 }
 
@@ -499,6 +506,7 @@ impl Session {
             context_tokens: None,
             command: None,
             autopilot: None,
+            tokens: Tokens::default(),
             leaf: None,
             tail: None,
             lines: 1,
@@ -554,6 +562,7 @@ impl Session {
                 context_tokens: context.context_tokens,
                 command: context.command,
                 autopilot: context.autopilot,
+                tokens: entries.tokens,
                 leaf: entries.tail,
                 tail: entries.tail,
                 lines: entries.lines,
@@ -831,6 +840,7 @@ impl Session {
             self.tail = entries.tail;
             self.name = entries.name;
             self.size = entries.size;
+            self.tokens = entries.tokens;
             self.unused = false;
         }
         Ok(())
@@ -847,6 +857,11 @@ impl Session {
 
     pub fn context_tokens(&self) -> Option<u64> {
         self.context_tokens
+    }
+
+    /// The tokens of every response in the file, on every branch.
+    pub fn tokens(&self) -> Tokens {
+        self.tokens
     }
 
     /// The latest `command_state` line on the path, if any.
@@ -937,6 +952,7 @@ impl Session {
             self.model = Some(producer.to_owned());
             self.context_tokens = item[super::CONTEXT].as_u64();
         }
+        self.tokens.add(item);
         Ok(())
     }
 }

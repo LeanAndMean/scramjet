@@ -272,9 +272,14 @@ pub(super) fn clip(text: &str, width: usize) -> String {
 
 /// The columns `text` takes, but for its style sequences.
 fn columns(text: &str) -> usize {
-    if !text.contains('\x1b') {
-        return text.width();
+    match text.contains('\x1b') {
+        true => plain(text).width(),
+        false => text.width(),
     }
+}
+
+/// `text` without its style sequences.
+pub(super) fn plain(text: &str) -> String {
     let (mut plain, mut rest) = (String::new(), text);
     while let Some(c) = rest.chars().next() {
         let length = match style_at(rest) {
@@ -286,7 +291,7 @@ fn columns(text: &str) -> usize {
         };
         rest = &rest[length..];
     }
-    plain.width()
+    plain
 }
 
 /// The style sequence (`ESC [ … m`) `text` starts with.

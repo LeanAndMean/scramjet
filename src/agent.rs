@@ -246,6 +246,26 @@ impl Usage {
     }
 }
 
+/// The tokens responses saved with their items (`USAGE`), added up.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Tokens {
+    /// Input tokens not read from the cache.
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+}
+
+impl Tokens {
+    /// Adds what `item` saved, if it is a response's last item.
+    fn add(&mut self, item: &Value) {
+        if let Some(usage) = item.get(USAGE) {
+            self.input += usage["input"].as_u64().unwrap_or(0);
+            self.output += usage["output"].as_u64().unwrap_or(0);
+            self.cache_read += usage["cache_read"].as_u64().unwrap_or(0);
+        }
+    }
+}
+
 /// `/session`'s counts over the current conversation, as Scramjet's session stats count them.
 #[derive(Debug, Default, PartialEq)]
 pub struct Stats {
@@ -267,6 +287,7 @@ impl Stats {
     /// items, such as model changes, are not counted.
     pub fn of(items: &[Value]) -> Self {
         let mut stats = Stats::default();
+        let mut tokens = Tokens::default();
         let mut other = 0;
         let mut in_reply = false;
         for item in items {
@@ -289,12 +310,10 @@ impl Stats {
                 _ if item["role"] == "user" => other += 1,
                 _ => {}
             }
-            if let Some(usage) = item.get(USAGE) {
-                stats.input += usage["input"].as_u64().unwrap_or(0);
-                stats.output += usage["output"].as_u64().unwrap_or(0);
-                stats.cache_read += usage["cache_read"].as_u64().unwrap_or(0);
-            }
+            tokens.add(item);
         }
+        (stats.input, stats.output, stats.cache_read) =
+            (tokens.input, tokens.output, tokens.cache_read);
         stats.total = stats.user + stats.assistant + stats.tool_results + other;
         stats
     }
@@ -578,6 +597,21 @@ impl Agent {
     /// The counts over the current conversation, as `/session` shows them.
     pub fn stats(&self) -> Stats {
         Stats::of(&self.conversation)
+    }
+
+    /// The tokens of every response in the session, on every branch and including those a
+    /// compaction summarized, as Scramjet's footer adds them up.
+    pub fn session_tokens(&self) -> Tokens {
+        self.session.tokens()
+    }
+
+    /// How full the context is: the last response's tokens, none for an empty conversation, and
+    /// `None` when unknown (no response reported them since the last compaction).
+    pub fn context_tokens(&self) -> Option<u64> {
+        match self.conversation.is_empty() {
+            true => Some(0),
+            false => self.usage.context_tokens,
+        }
     }
 
     /// The prompts the current session can be forked before, oldest first, compacted ones too.

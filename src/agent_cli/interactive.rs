@@ -6,7 +6,7 @@ use super::select::Routed;
 use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
-use super::{editor, installed, scope, select, settings, style};
+use super::{editor, footer, installed, scope, select, settings, style};
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Step,
 };
@@ -222,6 +222,7 @@ impl Interactive {
                 return Ok(Read::Prompt(prompt));
             }
             loop {
+                screen.footer(footer::Shown::of(&self.agent));
                 match screen.input() {
                     screen::Input::Prompt(prompt) => return Ok(Read::Prompt(prompt)),
                     screen::Input::DoubleEscape => return Ok(Read::DoubleEscape),
@@ -286,7 +287,10 @@ impl Interactive {
                 None => self.ui.stopped(error.as_deref()),
             }
         }
-        self.say_styled(style::MUTED, &usage_line(&self.agent));
+        // The full screen's footer shows the same.
+        if self.screen.is_none() {
+            self.say_styled(style::MUTED, &usage_line(&self.agent));
+        }
         let completed = self.agent.take_completed()?;
         self.next_step(&completed)
     }
@@ -314,6 +318,7 @@ impl Interactive {
     ) -> T {
         match &mut self.screen {
             Some(screen) => {
+                screen.footer(footer::Shown::of(&self.agent));
                 screen.turn(Some(self.agent.effort_cycle()));
                 run(&mut self.agent, &mut screen.link, &self.cancel)
             }
@@ -358,6 +363,9 @@ impl Interactive {
             if let Some(screen) = &self.screen {
                 screen.note(note);
             }
+        }
+        if let Some(screen) = &self.screen {
+            screen.footer(footer::Shown::of(&self.agent));
         }
     }
 
