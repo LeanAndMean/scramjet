@@ -695,6 +695,11 @@ impl Agent {
         Ok(())
     }
 
+    /// Whether the model reasons, so that an effort applies to it; Proxy's card says when not.
+    pub fn reasons(&self) -> bool {
+        self.info.reasoning
+    }
+
     /// The effort levels the model's card lists, in its order; none when it lists none.
     pub fn effort_levels(&self) -> &[String] {
         &self.info.levels

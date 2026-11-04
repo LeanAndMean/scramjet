@@ -5,7 +5,7 @@ use super::screen::{self, Handle};
 use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
-use super::{editor, installed, select, style};
+use super::{editor, installed, select, settings, style};
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Choice, Command, Completed, Installed, Next, Step,
 };
@@ -582,12 +582,18 @@ fn command_entry(command: &Command) -> (String, String) {
     (command.name.clone(), description)
 }
 
-/// The model, and the reasoning effort when one is set, as Scramjet's footer shows them.
+/// The model, and its reasoning effort, as Scramjet's footer shows them.
 pub(super) fn model_line(agent: &Agent) -> String {
-    match agent.effort() {
-        Some(effort) => format!("{} · thinking {effort}", agent.model()),
+    match thinking(agent) {
+        Some(thinking) => format!("{} · {thinking}", agent.model()),
         None => agent.model().to_owned(),
     }
+}
+
+/// The reasoning effort, as Scramjet's footer says it; `None` for a model that does not reason.
+pub(super) fn thinking(agent: &Agent) -> Option<String> {
+    let effort = agent.effort().filter(|_| agent.reasons())?;
+    Some(format!("thinking {}", settings::scramjet_level(effort)))
 }
 
 /// Shift+Tab: the next effort level, saved as the settings' default; returns what to say.
@@ -607,7 +613,7 @@ fn cycle_effort(agent: &mut Agent, settings: &mut Settings) -> String {
 /// What a Shift+Tab says under the prompt, as Scramjet reports it.
 pub(super) fn effort_note(cycled: Result<Option<String>, AgentError>) -> String {
     match cycled {
-        Ok(Some(level)) => format!("Thinking level: {level}"),
+        Ok(Some(level)) => format!("Thinking level: {}", settings::scramjet_level(&level)),
         Ok(None) => "Current model does not support thinking".to_owned(),
         Err(error) => format!("error: {error}"),
     }

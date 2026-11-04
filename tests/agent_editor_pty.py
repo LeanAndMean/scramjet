@@ -1232,7 +1232,9 @@ def shift_tab_cycles_effort(read, until, send, output):
     send(b'ab\x1b[D\x1b[Z')
     on_screen('Thinking level: xhigh')
     send(b'X\r')
-    on_screen('Reply.')
+    rows = on_screen('thinking xhigh]')
+    usage = '[1 requests \u00b7 0 input tokens (0 cached) \u00b7 0 output tokens \u00b7\nthinking xhigh]'
+    assert usage in '\n'.join(rows), rows
     send(b'\x04')
 
 
@@ -1244,6 +1246,15 @@ def started_at(level):
         assert rows[0] == 'scramjet-rs \u00b7 gpt-6-luna \u00b7 thinking %s \u00b7' % level, rows
         send(b'\x04')
     return check
+
+
+def started_without_thinking(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    rows = on_screen('\u2500' * 20)
+    assert rows[0] == 'scramjet-rs \u00b7 gpt-6-luna \u00b7', rows
+    send(b'\x1b[Z')
+    on_screen('Current model does not support thinking')
+    send(b'\x04')
 
 
 def shift_tab_resumed(read, until, send, output):
@@ -1526,6 +1537,13 @@ known = set(session_files())
 run([], started_at('max'), serve_replies([], cards=effort_cards), variables=in_levels)
 (started,) = set(session_files()) - known
 assert saved_levels(started) == ['max'], saved_levels(started)
+# Scramjet's `off` is the cards' `none`, and is named `off`.
+known = set(session_files())
+run(['--effort', 'off'], started_at('off'), serve_replies([], cards=effort_cards), variables=in_levels)
+(started,) = set(session_files()) - known
+assert saved_levels(started) == ['none'], saved_levels(started)
+plain_cards = [{'requestId': 'gpt-6-luna', 'supportedProtocols': ['openai-responses'], 'reasoning': None}]
+run([], started_without_thinking, serve_replies([], cards=plain_cards), variables=in_levels)
 menu_home = config_home('menu', '{"theme": "dark", "branchSummary": {"reserveTokens": 16384}}')
 bodies = []
 run([], settings_menu, serve_items([[tool_call('call_1', 'bash', {'command': 'sleep 2'})], [message('Replied.')]],
@@ -2541,7 +2559,8 @@ def fullscreen_copy_into_the_dock(read, until, send, output):
     send(b'\x1b[<0;1;%dM\x1b[<32;30;%dM\x1b[<32;60;24M\x1b[<0;60;24m' % (usage + 1, usage + 3))
     until(b'\x1b[7m  alpha alpha end')
     send(b'\x03')
-    copied(rows[usage] + '\n\n\n' + draft)
+    # The usage line's wrapped rows are joined.
+    copied('[2 requests \u00b7 0 input tokens (0 cached) \u00b7 0 output tokens \u00b7 thinking medium]\n\n\n' + draft)
     # A triple click in the dock selects its row.
     send(b'\x1b[<0;9;24M\x1b[<0;9;24m' * 3 + b'\x03')
     copied('alpha alpha end')

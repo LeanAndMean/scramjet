@@ -25,6 +25,16 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         );
         assert!(text.contains("Usage: scramjet-rs"), "{text}");
     }
+    let output = Command::new(binary)
+        .args(["--effort", "hgih", "--endpoint", "127.0.0.1:9"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "scramjet-rs: invalid --effort \"hgih\": valid levels are off, minimal, low, medium, \
+high, xhigh, max\n"
+    );
 }
 
 #[cfg(target_os = "linux")]

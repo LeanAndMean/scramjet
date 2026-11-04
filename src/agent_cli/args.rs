@@ -1,4 +1,5 @@
 //! The command line: its options and the usage text.
+use super::settings::{LEVELS, card_level};
 use scramjet_rs::agent::SessionChoice;
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
@@ -11,7 +12,8 @@ Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses AP
 the Messages API for Claude models (those whose Proxy model card lists only Messages).
   --project DIR          project directory (default: current directory)
   --model ID             model (default: gpt-6-luna, or the one a resumed session last used)
-  --effort LEVEL         reasoning effort, e.g. low, medium, high (default: the one a resumed
+  --effort LEVEL         reasoning effort: off, minimal, low, medium, high, xhigh or max, the
+                         nearest the model's Proxy card lists (default: the one a resumed
                          session last used, else the settings' defaultThinkingLevel, else
                          medium)
   --retries N            resend a request that failed transiently up to N times (default 3)
@@ -118,7 +120,16 @@ impl Options {
                     options.endpoint = value()?.parse().map_err(|_| "invalid --endpoint address")?
                 }
                 Some("--model") => options.model = Some(value()?),
-                Some("--effort") => options.effort = Some(value()?),
+                Some("--effort") => {
+                    let level = value()?;
+                    let Some(level) = card_level(&level) else {
+                        return Err(format!(
+                            "invalid --effort {level:?}: valid levels are {}",
+                            LEVELS.join(", ")
+                        ));
+                    };
+                    options.effort = Some(level.to_owned())
+                }
                 Some("--max-output-tokens") => {
                     options.max_output_tokens = Some(
                         value()?

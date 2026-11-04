@@ -2,7 +2,7 @@
 //! `/model`, `/compact`, `/autopilot`, `/reload`, and `!` commands.
 use super::interactive::{Interactive, completions, model_line};
 use super::screen;
-use super::settings::{ROWS, Row};
+use super::settings::{ROWS, Row, scramjet_level};
 use super::terminal::Terminal;
 use super::text::{clip, one_line, visible};
 use super::{editor, installed, select, style, tree};
@@ -271,7 +271,9 @@ impl Interactive {
     fn setting_rows(&self) -> Vec<String> {
         let width = ROWS.iter().map(|row| row.label().len()).max().unwrap_or(0);
         let value = |row| match row {
-            Row::ThinkingLevel => self.agent.effort().unwrap_or("model default").to_owned(),
+            Row::ThinkingLevel => (self.agent.effort().map(scramjet_level))
+                .unwrap_or("model default")
+                .to_owned(),
             Row::Autopilot if self.agent.autopilot() => "on".into(),
             Row::Autopilot => "off".into(),
             Row::NextSteps => steps_summary(&self.agent.next_steps()),
@@ -303,7 +305,7 @@ impl Interactive {
             levels.len(),
             current.unwrap_or(0),
             current,
-            |index, width| clip(&levels[index], width),
+            |index, width| clip(scramjet_level(&levels[index]), width),
         );
         let Some(index) = screen.pick(picker.noting(BACK_KEYS, Vec::new()).held()) else {
             return;

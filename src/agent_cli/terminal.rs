@@ -1,6 +1,7 @@
 //! The agent's output as text: printed as it streams for `-p` and piped input, with a status
 //! line under it on a terminal, or captured for the full screen to show; and the terminal modes
 //! of a `-p` turn.
+use super::interactive::thinking;
 use super::text::{FROM, Wrap, call_line, clip, printable, visible};
 use super::{children, diff, editor, job, markdown, style};
 use rustix::{
@@ -633,11 +634,11 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     }
 }
 
-/// The usage line after a turn: requests, tokens and how full the context is.
+/// The usage line after a turn: requests, tokens, how full the context is and the effort.
 pub(super) fn usage_line(agent: &Agent) -> String {
     let usage = agent.usage;
     format!(
-        "[{} requests · {} input tokens ({} cached) · {} output tokens{}]",
+        "[{} requests · {} input tokens ({} cached) · {} output tokens{}{}]",
         usage.requests,
         usage.input_tokens,
         usage.cached_input_tokens,
@@ -645,6 +646,9 @@ pub(super) fn usage_line(agent: &Agent) -> String {
         usage
             .context_tokens
             .map(|tokens| format!(" · context {}", context(tokens, agent.context_window())))
+            .unwrap_or_default(),
+        thinking(agent)
+            .map(|thinking| format!(" · {thinking}"))
             .unwrap_or_default()
     )
 }

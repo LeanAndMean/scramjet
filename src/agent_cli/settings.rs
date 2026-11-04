@@ -11,7 +11,21 @@ use std::{
 };
 
 /// Scramjet's thinking levels; its `off` is the `none` of Proxy's model cards.
-const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+pub(super) const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// Scramjet's name for a model card's effort level.
+pub(super) fn scramjet_level(level: &str) -> &str {
+    if level == "none" { "off" } else { level }
+}
+
+/// The model cards' name for one of Scramjet's thinking levels, or for a card's own `none`;
+/// `None` for another word.
+pub(super) fn card_level(level: &str) -> Option<&str> {
+    match level {
+        "off" | "none" => Some("none"),
+        level => LEVELS.contains(&level).then_some(level),
+    }
+}
 
 /// What Escape twice on an empty prompt opens (`doubleEscapeAction`).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -443,8 +457,7 @@ impl Settings {
             return Ok(());
         }
         self.default_thinking_level = Some(level.to_owned());
-        let level = if level == "none" { "off" } else { level };
-        self.save("defaultThinkingLevel", json!(level))
+        self.save("defaultThinkingLevel", json!(scramjet_level(level)))
     }
 
     /// The value `row` shows in `/settings`; the thinking level, autopilot, the next steps,
