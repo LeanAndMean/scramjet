@@ -53,7 +53,7 @@ high, xhigh, max\n"
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {
-    // A guard against a hang: the journeys take about 110 seconds.
+    // A guard against a hang: the journeys take about 130 seconds.
     let output = Command::new("timeout")
         .args([
             "180",

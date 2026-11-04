@@ -76,10 +76,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         Some(patterns) => (patterns, "--models"),
         None => (settings.enabled_models.clone(), "settings: enabledModels"),
     };
-    let (mut agent, scope_warnings) = start(options, &settings, &patterns)?;
-    let scope_warnings: Vec<String> = (scope_warnings.iter())
-        .map(|warning| format!("{source}: {warning}"))
-        .collect();
+    let (mut agent, scope_warnings) = start(options, &settings, (&patterns, source))?;
     let cancel = Arc::new(AtomicBool::new(false));
     let hide_thinking = Arc::new(AtomicBool::new(settings.hide_thinking_block));
     handle_signals(&cancel, &hide_thinking)?;
@@ -104,8 +101,17 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     if let Some(files) = files {
         agent.attach(files);
     }
-    let result =
-        (messages.into_iter()).try_for_each(|prompt| print(&mut agent, &mut ui, prompt, &cancel));
+    let result = (messages.into_iter()).try_for_each(|prompt| {
+        let model = agent.model().to_owned();
+        let result = print(&mut agent, &mut ui, prompt, &cancel);
+        // The agent's `switch_scramjet_model`, remembered as the user's choices are.
+        if agent.model() != model
+            && let Err(error) = settings.remember_model(agent.root(), agent.model())
+        {
+            eprintln!("error: settings not saved: {error}");
+        }
+        result
+    });
     if let Err(error) = settings.set_hide_thinking_block(hide_thinking.load(Ordering::Relaxed)) {
         eprintln!("error: settings not saved: {error}");
     }
@@ -113,14 +119,16 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
 }
 
 /// Starts the agent in the project the options name. A model or effort they give wins over the
-/// one a resumed session last used; a new session without one starts with the first model the
-/// scope `patterns` choose, as Scramjet's, and with the effort its pattern sets. Without one
-/// either, the effort is the settings' default thinking level, else Scramjet's default,
-/// `medium`. Also returns what in `patterns` matched nothing.
+/// one a resumed session last used. As in Scramjet, a new session without one starts with the
+/// model chosen before (`remembered`) when the scope `patterns` choose it or there is no scope,
+/// else with the scope's first model, at the effort its pattern sets; without either, with
+/// `gpt-6-luna`. Without an effort either, the effort is the settings' default thinking level,
+/// else Scramjet's default, `medium`. Also returns what in `patterns` matched nothing, after the
+/// option or setting they come from, and the models remembered that the endpoint lacks.
 fn start(
     options: Options,
     settings: &Settings,
-    patterns: &[String],
+    (patterns, source): (&[String], &str),
 ) -> Result<(Agent, Vec<String>), String> {
     let root = match options.project {
         Some(path) => path,
@@ -151,24 +159,62 @@ fn start(
         true => Default::default(),
         false => scope::resolve(patterns, &agent.model_options()),
     };
+    let mut warnings: Vec<String> = (warnings.iter())
+        .map(|warning| format!("{source}: {warning}"))
+        .collect();
     agent.set_model_scope(scoped.iter().map(|scoped| scoped.id.clone()).collect());
-    let first = scoped
-        .first()
-        .filter(|_| !chosen && agent.last_model().is_none());
+    let new = !chosen && agent.last_model().is_none();
+    let remembered = new
+        .then(|| remembered(settings, &agent, &mut warnings))
+        .flatten();
+    let in_scope = (scoped.iter())
+        .find(|scoped| remembered.as_ref() == Some(&scoped.id))
+        .or(scoped.first())
+        .filter(|_| new);
     let model = match agent.last_model() {
-        _ if let Some(first) = first => first.id.clone(),
+        _ if let Some(scoped) = in_scope => scoped.id.clone(),
+        _ if let Some(remembered) = remembered => remembered,
         Some(last) if !chosen => last.to_owned(),
         _ => agent.model().to_owned(),
     };
     agent.set_model(model).map_err(|e| e.to_string())?;
     let effort = chosen_effort
         .or_else(|| agent.last_effort().map(str::to_owned))
-        .or_else(|| first.and_then(|first| first.level.clone()))
+        .or_else(|| in_scope.and_then(|scoped| scoped.level.clone()))
         .or_else(|| settings.default_thinking_level.clone())
         .unwrap_or_else(|| "medium".to_owned());
     agent.set_effort(effort).map_err(|e| e.to_string())?;
     agent.load_model_card();
     Ok((agent, warnings))
+}
+
+/// The model chosen before that a new session in the agent's project starts with
+/// (`Settings::remembered_models`): the first the endpoint lists, or either when it cannot list
+/// its models. Says in `warnings` which of them it does not list.
+fn remembered(settings: &Settings, agent: &Agent, warnings: &mut Vec<String>) -> Option<String> {
+    let (here, anywhere) = settings.remembered_models(agent.root());
+    let anywhere = anywhere.filter(|model| here.as_ref() != Some(model));
+    if here.is_none() && anywhere.is_none() {
+        return None;
+    }
+    let listed = agent.models();
+    let path = settings.shown_path().unwrap_or_default();
+    let remembered = [
+        here.map(|model| {
+            (
+                format!("{model}, the model last chosen in this project,"),
+                model,
+            )
+        }),
+        anywhere.map(|model| (format!("settings: {path}: defaultModel {model}"), model)),
+    ];
+    for (what, model) in remembered.into_iter().flatten() {
+        if listed.as_ref().is_none_or(|ids| ids.contains(&model)) {
+            return Some(model);
+        }
+        warnings.push(format!("{what} is not one the endpoint lists; not used"));
+    }
+    None
 }
 
 /// Ctrl-C sets `cancel`, and a second one while it is set exits; Ctrl+T during a turn (SIGQUIT,

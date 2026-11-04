@@ -276,10 +276,15 @@ impl Interactive {
         }
         let hide = (self.settings.hide_credentials).hides(start == Start::Unattended);
         self.agent.set_hide_credentials(hide);
+        let model = self.agent.model().to_owned();
         let result = match self.screen.is_some() {
             true => self.turn_on_screen(prompt),
             false => self.during_turn(|agent, ui, cancel| agent.turn(prompt, ui, cancel)),
         };
+        // The agent's `switch_scramjet_model`, remembered as the user's choices are.
+        if self.agent.model() != model {
+            self.remember_model();
+        }
         if let Err(error) = result {
             // As the session saved it, for a resume to show it so.
             let error = match error {
@@ -501,9 +506,10 @@ impl Interactive {
         Some((command, start))
     }
 
-    /// Sets the model and effort chosen for a next step, in the session that runs it; the effort
-    /// is saved as the settings' default, as Shift+Tab saves it. A model that cannot be set
-    /// leaves the step to run with the current one, as in Scramjet.
+    /// Sets the model and effort chosen for a next step, in the session that runs it; the model
+    /// is remembered as `/model` remembers one, and the effort saved as the settings' default, as
+    /// Shift+Tab saves it. A model that cannot be set leaves the step to run with the current
+    /// one, as in Scramjet.
     fn take_route(&mut self, routed: Routed) {
         if routed == Routed::default() {
             return;
@@ -512,6 +518,7 @@ impl Interactive {
             match self.agent.set_model(model) {
                 Ok(()) => {
                     self.agent.load_model_card();
+                    self.remember_model();
                 }
                 Err(error) => self.say(&format!("error: model not set to {model}: {error}")),
             }
@@ -525,6 +532,15 @@ impl Interactive {
         }
         let line = format!("Next step runs with {}", model_line(&self.agent));
         self.say(&self.ui.dim(&line));
+    }
+
+    /// Remembers the session's model as the one chosen last, here and anywhere, which sessions
+    /// started later begin with (`Settings::remember_model`).
+    pub(super) fn remember_model(&mut self) {
+        let model = self.agent.model().to_owned();
+        if let Err(error) = self.settings.remember_model(self.agent.root(), &model) {
+            self.say(&format!("error: settings not saved: {error}"));
+        }
     }
 
     /// What is wrong in the settings, then in what the session `found` (`Agent::installed`).

@@ -497,7 +497,7 @@ pub fn directory(root: &Path) -> io::Result<PathBuf> {
 }
 
 /// `$XDG_STATE_HOME/scramjet-rs`, by default `~/.local/state/scramjet-rs`.
-pub(super) fn state_directory() -> io::Result<PathBuf> {
+pub fn state_directory() -> io::Result<PathBuf> {
     let state = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())

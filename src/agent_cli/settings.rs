@@ -3,10 +3,12 @@
 //! behavior matches.
 use super::tree::Filter;
 use scramjet_rs::agent::{
-    CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, shortened, write_replacing,
+    CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, shortened, state_directory,
+    write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
+    fs::File,
     io,
     path::{Path, PathBuf},
 };
@@ -57,6 +59,14 @@ impl HideCredentials {
     }
 }
 
+/// The model a launch starts a new session with (`startupModel`), as Scramjet's: the one last
+/// chosen in the project, else anywhere, or the one last chosen anywhere.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum StartupModel {
+    PerDirectory,
+    Global,
+}
+
 /// How many queued messages go to the model at once (`steeringMode`, `followUpMode`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Delivery {
@@ -68,6 +78,7 @@ pub(super) enum Delivery {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Row {
     ThinkingLevel,
+    StartupModel,
     ThinkingBlocks,
     Steering,
     FollowUp,
@@ -82,8 +93,9 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 13] = [
+pub(super) const ROWS: [Row; 14] = [
     Row::ThinkingLevel,
+    Row::StartupModel,
     Row::ThinkingBlocks,
     Row::Steering,
     Row::FollowUp,
@@ -102,6 +114,7 @@ impl Row {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::ThinkingLevel => "Thinking level",
+            Self::StartupModel => "Startup model",
             Self::ThinkingBlocks => "Thinking blocks",
             Self::Steering => "Steering messages",
             Self::FollowUp => "Follow-up messages",
@@ -122,6 +135,10 @@ impl Row {
         match self {
             Self::ThinkingLevel => {
                 "How much the model reasons; also the level new sessions start at. Shift+Tab cycles it."
+            }
+            Self::StartupModel => {
+                "The model a new session starts with when scramjet-rs starts, unless --model names \
+                 one: the one last chosen in this project (else anywhere), or anywhere."
             }
             Self::ThinkingBlocks => "The model's reasoning in the conversation. Ctrl+T toggles it.",
             Self::Steering => {
@@ -176,6 +193,12 @@ pub(super) struct Settings {
     pub(super) tree_filter: Filter,
     /// `defaultThinkingLevel`, named as the model cards name levels.
     pub(super) default_thinking_level: Option<String>,
+    /// `defaultModel`: the model last chosen in any project, as Scramjet saves it.
+    pub(super) default_model: Option<String>,
+    pub(super) startup_model: StartupModel,
+    /// The file of the model last chosen in each project, `last-used-models.json` in the state
+    /// directory, as Scramjet keeps it apart from the settings; `None`: none is kept.
+    recall: Option<PathBuf>,
     /// `tools`: the agent's coding tools, Scramjet's by default.
     pub(super) tools: Vec<String>,
     pub(super) hide_credentials: HideCredentials,
@@ -200,7 +223,9 @@ impl Settings {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
             .map(|config| config.join("scramjet-rs/settings.json"));
-        Self::read(path)
+        let mut settings = Self::read(path);
+        settings.recall = (state_directory().ok()).map(|state| state.join("last-used-models.json"));
+        settings
     }
 
     fn read(path: Option<PathBuf>) -> Self {
@@ -225,7 +250,9 @@ impl Settings {
         };
         match read_object(path) {
             Ok(object) => {
+                let recall = self.recall.take();
                 *self = Self::defaults(self.path.take());
+                self.recall = recall;
                 self.apply(&object);
             }
             Err(error) => self.warnings = vec![format!("{error}; kept as they were")],
@@ -240,6 +267,9 @@ impl Settings {
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             default_thinking_level: None,
+            default_model: None,
+            startup_model: StartupModel::PerDirectory,
+            recall: None,
             tools: DEFAULT_TOOLS.map(str::to_owned).to_vec(),
             hide_credentials: HideCredentials::Unattended,
             steering_mode: Delivery::All,
@@ -304,6 +334,19 @@ impl Settings {
                 "defaultThinkingLevel",
                 &LEVELS.map(|l| format!("\"{l}\"")).join(", "),
             ),
+        }
+        match object.get("defaultModel") {
+            None => {}
+            Some(Value::String(model)) if !model.trim().is_empty() => {
+                self.default_model = Some(model.clone())
+            }
+            Some(_) => wrong("defaultModel", "a model's id"),
+        }
+        match object.get("startupModel").map(|value| value.as_str()) {
+            None => {}
+            Some(Some("per-directory")) => self.startup_model = StartupModel::PerDirectory,
+            Some(Some("global")) => self.startup_model = StartupModel::Global,
+            Some(_) => wrong("startupModel", r#""per-directory" or "global""#),
         }
         match object.get("hideCredentials").map(|value| value.as_str()) {
             None => {}
@@ -494,6 +537,51 @@ impl Settings {
         self.save("defaultThinkingLevel", json!(scramjet_level(level)))
     }
 
+    /// The models chosen before that a launch in the project `root` may start a new session
+    /// with, as Scramjet's: the one last chosen there (with `startupModel` `per-directory`),
+    /// and `defaultModel`.
+    pub(super) fn remembered_models(&self, root: &Path) -> (Option<String>, Option<String>) {
+        let here = match (self.startup_model, &self.recall) {
+            (StartupModel::PerDirectory, Some(recall)) => (recalled(recall))
+                .remove(&*root.to_string_lossy())
+                .and_then(|model| model.as_str().map(str::to_owned)),
+            _ => None,
+        };
+        (here, self.default_model.clone())
+    }
+
+    /// A model chosen during a session in the project `root`, remembered as Scramjet remembers
+    /// one: as `defaultModel`, and as the one last chosen there. Saves what changed.
+    pub(super) fn remember_model(&mut self, root: &Path, model: &str) -> io::Result<()> {
+        let recalled = self.recall_model(root, model);
+        let saved = match self.default_model.as_deref() == Some(model) {
+            true => Ok(()),
+            false => {
+                self.default_model = Some(model.to_owned());
+                self.save("defaultModel", json!(model))
+            }
+        };
+        recalled.and(saved)
+    }
+
+    fn recall_model(&self, root: &Path, model: &str) -> io::Result<()> {
+        let Some(path) = &self.recall else {
+            return Ok(());
+        };
+        let key = root.to_string_lossy();
+        if recalled(path).get(&*key).and_then(Value::as_str) == Some(model) {
+            return Ok(());
+        }
+        std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
+        // Another session's choice between the read and the rename would be lost without it.
+        let lock = File::create(path.with_extension("lock"))?;
+        lock.lock()?;
+        let mut models = recalled(path);
+        models.insert(key.into_owned(), json!(model));
+        let text = serde_json::to_string_pretty(&models).map_err(io::Error::other)?;
+        write_replacing(path, &(text + "\n"))
+    }
+
     /// `/scoped-models`' choice: the models Ctrl+P cycles through, in order; none: all of them,
     /// which leaves `enabledModels` out, as Scramjet saves it.
     pub(super) fn set_enabled_models(&mut self, models: Vec<String>) -> io::Result<()> {
@@ -517,6 +605,11 @@ impl Settings {
             | Row::NextSteps
             | Row::Publishing
             | Row::Installed => String::new(),
+            Row::StartupModel => match self.startup_model {
+                StartupModel::PerDirectory => "last chosen here",
+                StartupModel::Global => "last chosen anywhere",
+            }
+            .into(),
             Row::ThinkingBlocks if self.hide_thinking_block => "hidden".into(),
             Row::ThinkingBlocks => "shown".into(),
             Row::Steering => delivery(self.steering_mode).into(),
@@ -570,6 +663,14 @@ impl Settings {
             | Row::NextSteps
             | Row::Publishing
             | Row::Installed => Ok(()),
+            Row::StartupModel => {
+                let (startup, name) = match self.startup_model {
+                    StartupModel::PerDirectory => (StartupModel::Global, "global"),
+                    StartupModel::Global => (StartupModel::PerDirectory, "per-directory"),
+                };
+                self.startup_model = startup;
+                self.save("startupModel", json!(name))
+            }
             Row::ThinkingBlocks => self.set_hide_thinking_block(!self.hide_thinking_block),
             Row::Steering => {
                 self.steering_mode = next(self.steering_mode);
@@ -651,6 +752,14 @@ impl Settings {
         change(&mut object);
         write_object(path, object).map_err(io::Error::other)
     }
+}
+
+/// The models last chosen in each project that the file `path` keeps; none when it cannot be
+/// read, and the next choice replaces it, as they only choose a session's first model.
+fn recalled(path: &Path) -> Map<String, Value> {
+    let text = std::fs::read(path).ok();
+    text.and_then(|text| serde_json::from_slice(&text).ok())
+        .unwrap_or_default()
 }
 
 /// `commandSets`' entries; an error when it is not a list of strings.
@@ -951,6 +1060,77 @@ mod tests {
         assert_eq!(
             (saved(), settings.enabled_models.len()),
             (json!({"theme": "x"}), 0)
+        );
+    }
+
+    #[test]
+    fn a_chosen_model_is_remembered_for_its_project_and_anywhere() {
+        let scratch = Scratch::new("startup-model");
+        let mut settings = settings_with(&scratch, r#"{"theme": "x"}"#);
+        settings.recall = Some(scratch.0.join("state/last-used-models.json"));
+        let (here, there) = (Path::new("/work/here"), Path::new("/work/there"));
+        assert_eq!(settings.remembered_models(here), (None, None));
+        settings.remember_model(here, "claude-opus-5-5").unwrap();
+        settings.remember_model(there, "gpt-6-luna").unwrap();
+        let read = |path: &Path| -> Value {
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+        };
+        let path = scratch.0.join("settings.json");
+        assert_eq!(
+            read(&path),
+            json!({"theme": "x", "defaultModel": "gpt-6-luna"})
+        );
+        let recall = scratch.0.join("state/last-used-models.json");
+        assert_eq!(
+            read(&recall),
+            json!({"/work/here": "claude-opus-5-5", "/work/there": "gpt-6-luna"})
+        );
+        // A later session reads both; another project only the model chosen anywhere.
+        let mut later = Settings::read(Some(path.clone()));
+        later.recall = Some(recall.clone());
+        let anywhere = Some("gpt-6-luna".to_owned());
+        assert_eq!(
+            later.remembered_models(here),
+            (Some("claude-opus-5-5".to_owned()), anywhere.clone())
+        );
+        assert_eq!(
+            later.remembered_models(Path::new("/elsewhere")),
+            (None, anywhere.clone())
+        );
+        // `global` starts every project with the model chosen anywhere.
+        assert_eq!(later.shown(Row::StartupModel), "last chosen here");
+        later.cycle(Row::StartupModel).unwrap();
+        assert_eq!(later.shown(Row::StartupModel), "last chosen anywhere");
+        assert_eq!(later.remembered_models(here), (None, anywhere));
+        assert_eq!(read(&path)["startupModel"], "global");
+        assert_eq!(
+            Settings::read(Some(path.clone())).startup_model,
+            StartupModel::Global
+        );
+        // A file that is not one is replaced by the next choice.
+        std::fs::write(&recall, "[").unwrap();
+        assert_eq!(later.remembered_models(there).0, None);
+        later.cycle(Row::StartupModel).unwrap();
+        later.remember_model(there, "gpt-6-terra").unwrap();
+        assert_eq!(read(&recall), json!({"/work/there": "gpt-6-terra"}));
+        assert_eq!(
+            later.remembered_models(there).0.as_deref(),
+            Some("gpt-6-terra")
+        );
+        let wrong = settings_with(&scratch, r#"{"defaultModel": "", "startupModel": "here"}"#);
+        let shown_path = shown(&path);
+        assert_eq!(
+            (wrong.default_model, wrong.startup_model),
+            (None, StartupModel::PerDirectory)
+        );
+        assert_eq!(
+            wrong.warnings,
+            [
+                format!("{shown_path}: defaultModel must be a model's id; ignored"),
+                format!(
+                    r#"{shown_path}: startupModel must be "per-directory" or "global"; ignored"#
+                ),
+            ]
         );
     }
 

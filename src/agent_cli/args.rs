@@ -12,11 +12,14 @@ pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint A
 Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
 the Messages API for Claude models (those whose Proxy model card lists only Messages).
   --project DIR          project directory (default: current directory)
-  --model ID             model (default: gpt-6-luna, or the one a resumed session last used)
+  --model ID             model (default: the one a resumed session last used; for a new
+                         session, the one last chosen in this project, else anywhere, as in
+                         Scramjet, else gpt-6-luna)
   --models PATTERNS      the models Ctrl+P cycles through, comma-separated, in place of the
                          settings' enabledModels: each a model's id, part of its id or name,
                          or a glob (claude-*), with an optional :LEVEL; a new session without
-                         --model starts with the first, at its level
+                         --model starts with the one last chosen when it is one of them, else
+                         with the first, at its level
   --effort LEVEL         reasoning effort: off, minimal, low, medium, high, xhigh or max, the
                          nearest the model's Proxy card lists (default: the one a resumed
                          session last used, else the settings' defaultThinkingLevel, else
@@ -97,7 +100,10 @@ with Scramjet's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none 
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
 (the entries /tree opens with: default, no-tools, user-only, labeled-only or all) and
 defaultThinkingLevel; tools, the agent's coding tools among read, bash, edit, write (the
-default) and grep, find, ls; and enabledModels, the patterns of the models Ctrl+P cycles through.";
+default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cycles through;
+defaultModel, the model chosen last, which /model, Ctrl+P, a next step's list and the agent
+save; and startupModel: per-directory (new sessions start with the model chosen last in their
+project, kept in $XDG_STATE_HOME/scramjet-rs/last-used-models.json) or global.";
 
 /// What the command line asks for.
 pub(super) struct Options {

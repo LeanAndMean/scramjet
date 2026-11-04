@@ -190,8 +190,9 @@ pub(super) fn step<'a>(scope: &'a [Scoped], current: &str, steps: isize) -> Opti
 
 /// Ctrl+P or Shift+Ctrl+P, `steps` times (negative: back): switches to the next model in the
 /// scope `patterns` choose, or among all the endpoint's models when they choose none, with the
-/// effort a pattern sets, which is saved as the settings' default, as Scramjet's thinking
-/// level. Returns what to say under the prompt, as Scramjet's status says it.
+/// effort a pattern sets. As in Scramjet, the model is remembered for sessions started later
+/// and the effort saved as the settings' default. Returns what to say under the prompt, as
+/// Scramjet's status says it.
 pub(super) fn cycle(
     agent: &mut Agent,
     settings: &mut Settings,
@@ -220,12 +221,12 @@ pub(super) fn cycle(
         return format!("error: {error}");
     }
     agent.load_model_card();
-    let mut unsaved = None;
+    let mut unsaved = settings.remember_model(agent.root(), &next.id).err();
     if let Some(level) = &next.level {
         if let Err(error) = agent.set_effort(level.clone()) {
             return format!("error: {error}");
         }
-        unsaved = settings.set_default_thinking_level(level).err();
+        unsaved = unsaved.or(settings.set_default_thinking_level(level).err());
     }
     let name = (models.iter())
         .find(|model| model.id == next.id)
@@ -342,7 +343,8 @@ impl Chosen {
 impl Interactive {
     /// `/model`, as Scramjet's: sets the model `wanted` names (`exact`); otherwise, on the full
     /// screen, lists the models with `wanted` as the query (see `pick_model`). With piped input
-    /// and nothing wanted, it lists the endpoint's models.
+    /// and nothing wanted, it lists the endpoint's models. The model set is remembered for
+    /// sessions started later.
     pub(super) fn model(&mut self, wanted: &str) {
         let Some(models) = self.agent.listed_models() else {
             return self.say("error: could not list the endpoint's models");
@@ -375,6 +377,7 @@ impl Interactive {
                 Ok(()) => {
                     self.agent.load_model_card();
                     self.say(&format!("✓ Model set to {}", model_line(&self.agent)));
+                    self.remember_model();
                 }
                 Err(error) => self.say(&format!("error: {error}")),
             }

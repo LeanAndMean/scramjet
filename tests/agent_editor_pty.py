@@ -347,7 +347,10 @@ with open(failing_script, 'w') as script_file:
 os.chmod(failing_script, 0o755)
 
 
-def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, rows=24):
+def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, rows=24, forget_models=True):
+    """Runs the agent in `project` on a terminal for `script`. Unless `forget_models` is false, the
+    models chosen are forgotten after it for the project (its `defaultModel` stays in the settings,
+    which a journey that chooses one has of its own)."""
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
     before = termios.tcgetattr(slave)
@@ -381,6 +384,8 @@ def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, 
 
     script(read, until, send, output)
     assert child.wait(timeout=10) == status, bytes(output[-2000:])
+    if forget_models and os.path.exists(remembered_models):
+        os.remove(remembered_models)
     read(.2)
     assert termios.tcgetattr(slave) == before, 'terminal mode was not restored'
     # Never enabled, without an editor (`-p`), or disabled after it was.
@@ -438,6 +443,9 @@ def run_in_shell(script, endpoint):
 
 # Typed into the shell; only the shell's arithmetic makes the reply.
 SAME_MODE = b'stty -g | cmp -s - ../mode && echo restored-$((6*7))\r'
+
+
+remembered_models = os.path.join(work, 'state', 'scramjet-rs', 'last-used-models.json')
 
 
 def session_files():
@@ -1395,7 +1403,7 @@ run([], editor_cannot_start, variables={'VISUAL': '/nonexistent/scramjet-editor'
 run([], no_editor_configured)
 assert os.listdir(scratch) == [], os.listdir(scratch)
 known = set(session_files())
-run([], fork_session, forking)
+run([], fork_session, forking, variables={'XDG_CONFIG_HOME': config_home('fork-session')})
 started = sorted(set(session_files()) - known)
 prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
 assert prompts == [['first', 'second'], ['first', 'second again']], prompts
@@ -1447,6 +1455,26 @@ def started_at(level):
         shown, on_screen = full_screen()(read, output)
         rows = on_screen('\u2500' * 20)
         assert rows[0] == 'scramjet-rs \u00b7 gpt-6-luna \u00b7 thinking %s \u00b7' % level, rows
+        send(b'\x04')
+    return check
+
+
+def starts_with(model, steps=(), notices=(), columns=60):
+    """Checks the model the session starts with, in its first line, and `notices` under it; then
+    sends each step's keys and waits for its text, or a moment without one, before quitting."""
+    def check(read, until, send, output):
+        shown, on_screen = full_screen(columns)(read, output)
+        rows = on_screen('\u2500' * 20)
+        assert rows[0].startswith('scramjet-rs \u00b7 %s \u00b7' % model), rows
+        for notice in notices:
+            assert notice in rows, rows
+        for keys, said in steps:
+            send(keys)
+            if said:
+                on_screen(said)
+            else:
+                # An Escape and a key right after it would be one Alt key.
+                read(.3)
         send(b'\x04')
     return check
 
@@ -1615,7 +1643,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B\r')
     on_screen(setting('Thinking level', 'high'))
     # Keys typed at once each reach the list the one before them leaves, none lost between.
-    send(b'\x1b[B\r\x1b[B\r')
+    send(b'\x1b[B\x1b[B\r\x1b[B\r')
     rows = on_screen(setting('Steering messages', 'one at a time'))
     assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
@@ -1635,7 +1663,7 @@ def settings_menu(read, until, send, output):
     send(b'/settings\r')
     on_screen('Command: /settings')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[B' * 7 + b'\r')
+    send(b'\x1b[B' * 8 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))
@@ -1897,23 +1925,42 @@ bodies = []
 run([], ctrl_p_cycles_models, serve_items([
     [tool_call('call_1', 'bash', {'command': 'sleep 2'})], [message('Switched.')], [message('Unused.')],
 ], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards, bodies=bodies),
-    variables={'XDG_CONFIG_HOME': scoped}, columns=80)
+    variables={'XDG_CONFIG_HOME': scoped}, columns=80, forget_models=False)
 assert [(body['model'], body['reasoning']['effort']) for body in bodies] == [
     ('gpt-6-terra', 'high'), ('gpt-6-luna', 'low')], bodies
 assert json.load(open(settings_path(scoped))) == {
-    'enabledModels': ['gpt-6-terra:high', 'luna:low', 'nothing'], 'defaultThinkingLevel': 'low'}
+    'enabledModels': ['gpt-6-terra:high', 'luna:low', 'nothing'], 'defaultThinkingLevel': 'low',
+    'defaultModel': 'gpt-6-luna'}
+# The model chosen last, when the scope has it, starts the next session, at its pattern's effort.
+run([], starts_with('gpt-6-luna \u00b7 thinking low'), serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'],
+                                                                      cards=scope_cards),
+    variables={'XDG_CONFIG_HOME': scoped})
 switch_cards = [dict(scope_cards[0]), dict(scope_cards[1], reasoning={'levels': ['low', 'high'], 'default': 'high'})]
 known, bodies = set(session_files()), []
+switching = config_home('switching')
 run([], agent_switches_the_model, serve_items([
     [tool_call('call_1', 'switch_scramjet_model', {'provider': 'openai', 'model': 'gpt-6-terra'})],
     [message('Terra replied.')],
 ], gate=switch_gate, gated=1, models=['gpt-6-luna', 'gpt-6-terra'], cards=switch_cards, bodies=bodies),
-    variables={'XDG_CONFIG_HOME': config_home('switching')}, columns=80)
+    variables={'XDG_CONFIG_HOME': switching}, columns=80)
+# As /model, the agent's switch is remembered.
+assert json.load(open(settings_path(switching))) == {'defaultModel': 'gpt-6-terra', 'defaultThinkingLevel': 'low'}
 assert [(body['model'], body['reasoning']['effort']) for body in bodies] == [
     ('gpt-6-luna', 'medium'), ('gpt-6-terra', 'high')], bodies
 (switched,) = set(session_files()) - known
 changes = [line['model'] for line in map(json.loads, open(switched)) if line.get('type') == 'model_change']
 assert changes == ['gpt-6-luna', 'gpt-6-terra'], changes
+# In printed output too.
+printing = config_home('printed-switch')
+ran = subprocess.run([BINARY, '--endpoint', serve_items([
+    [tool_call('call_1', 'switch_scramjet_model', {'provider': 'openai', 'model': 'gpt-6-terra'})],
+    [message('Terra replied.')],
+], models=['gpt-6-luna', 'gpt-6-terra'], cards=switch_cards), '-p', 'go'], cwd=project,
+    env=dict(env, XDG_CONFIG_HOME=printing), capture_output=True, timeout=30)
+assert ran.returncode == 0 and b'Terra replied.' in ran.stdout + ran.stderr, ran
+assert json.load(open(settings_path(printing))) == {'defaultModel': 'gpt-6-terra'}
+assert json.load(open(remembered_models)) == {os.path.realpath(project): 'gpt-6-terra'}
+os.remove(remembered_models)
 run(['--models', 'terra, x'], ctrl_p_in_a_scope_of_one,
     serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
     variables={'XDG_CONFIG_HOME': config_home('scope-of-one')}, columns=80)
@@ -1923,7 +1970,42 @@ haiku_card = {'requestId': 'claude-haiku-5-5', 'displayName': 'Claude Haiku 5.5'
 run([], scoped_models_list,
     serve_replies([], models=['gpt-6-luna', 'gpt-6-terra', 'claude-haiku-5-5'], cards=scope_cards + [haiku_card]),
     variables={'XDG_CONFIG_HOME': listed}, columns=80)
-assert json.load(open(settings_path(listed))) == {'enabledModels': ['gpt-6-luna', 'gpt-6-terra']}
+assert json.load(open(settings_path(listed))) == {'enabledModels': ['gpt-6-luna', 'gpt-6-terra'],
+                                                  'defaultModel': 'gpt-6-luna'}
+remembering = config_home('remembering')
+in_remembering = {'XDG_CONFIG_HOME': remembering}
+other = os.path.join(work, 'other')
+os.mkdir(other)
+here, there = os.path.realpath(project), os.path.realpath(other)
+both = lambda: serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards)
+# As in Scramjet, a model chosen during a session is remembered for its project and anywhere...
+run([], starts_with('gpt-6-luna', [(b'/model gpt-6-terra\r', '\u2713 Model set to gpt-6-terra')]), both(),
+    variables=in_remembering, forget_models=False)
+assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-terra'}
+assert json.load(open(remembered_models)) == {here: 'gpt-6-terra'}
+# ... and another project starts with it until one is chosen there.
+run(['--project', other], starts_with('gpt-6-terra', [(b'\x10', 'Switched to GPT-6 Luna')]), both(),
+    variables=in_remembering, forget_models=False)
+assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-luna'}
+assert json.load(open(remembered_models)) == {here: 'gpt-6-terra', there: 'gpt-6-luna'}
+# The project's own comes first; --model and a resumed session's model win over it and teach nothing.
+run([], starts_with('gpt-6-terra'), both(), variables=in_remembering, forget_models=False)
+run(['--model', 'gpt-6-luna'], starts_with('gpt-6-luna'), both(), variables=in_remembering, forget_models=False)
+run(['--continue'], starts_with('gpt-6-luna'), both(), variables=in_remembering, forget_models=False)
+assert json.load(open(remembered_models)) == {here: 'gpt-6-terra', there: 'gpt-6-luna'}
+assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-luna'}
+# One the endpoint does not list is passed over, saying so.
+unlisted = 'gpt-6-terra, the model last chosen in this project, is not one the endpoint lists; not used'
+run([], starts_with('gpt-6-luna', notices=[unlisted], columns=120),
+    serve_replies([], models=['gpt-6-luna'], cards=scope_cards), variables=in_remembering, columns=120,
+    forget_models=False)
+# With startupModel global, every project starts with the model chosen last anywhere.
+run([], starts_with('gpt-6-terra', [(b'/settings\r', 'Settings  \u2191\u2193 move'),
+                                    (b'\x1b[B\r', setting('Startup model', 'last chosen anywhere')),
+                                    (b'\x1b', None)]),
+    both(), variables=in_remembering, forget_models=False)
+assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-luna', 'startupModel': 'global'}
+run([], starts_with('gpt-6-luna'), both(), variables=in_remembering)
 run(['--models', 'luna,haiku'], model_list_in_a_scope,
     serve_replies([], models=['gpt-6-luna', 'gpt-6-terra', 'claude-haiku-5-5'], cards=scope_cards + [haiku_card]),
     variables={'XDG_CONFIG_HOME': config_home('model-scope')}, columns=80)
@@ -1975,7 +2057,8 @@ run(['--continue'], name_resumed)
 infos = [line for line in map(json.loads, open(named)) if line.get('type') == 'session_info']
 assert infos == [{'type': 'session_info', 'name': 'Parser work'}], infos
 run([], search_selectors, serve_replies([(['Reply one.'], 'Reply one.'), (['Striped reply.'], 'Striped reply.')],
-                                        ['gpt-6-luna', 'claude-haiku-5-5', 'gpt-6.1-sol']))
+                                        ['gpt-6-luna', 'claude-haiku-5-5', 'gpt-6.1-sol']),
+    variables={'XDG_CONFIG_HOME': config_home('searching')})
 
 
 def command_sets(read, until, send, output):
@@ -2633,7 +2716,7 @@ assert routes == [('gpt-6-luna', 'medium')] + [('gpt-6-sol', 'xhigh')] * 4, rout
 switches = lambda path: [line['model'] for line in map(json.loads, open(path)) if line.get('type') == 'model_change']
 assert 'gpt-6-sol' not in switches(first) and switches(second)[-1] == 'gpt-6-sol', (switches(first), switches(second))
 assert saved_levels(second)[-1] == 'xhigh' and 'xhigh' not in saved_levels(first), saved_levels(second)
-assert json.load(open(settings_path(routing))) == {'defaultThinkingLevel': 'xhigh'}
+assert json.load(open(settings_path(routing))) == {'defaultThinkingLevel': 'xhigh', 'defaultModel': 'gpt-6-sol'}
 prompts = lambda path: [line.get('_scramjet_typed') for line in map(json.loads, open(path))
                         if line.get('role') == 'user' and not line.get('_scramjet_probe')]
 assert prompts(first) == ['/flow:step one'], prompts(first)
@@ -3404,7 +3487,7 @@ run([], fullscreen_commands_during_turn, serve_items([
     [message('Switched.')],
     [tool_call('call_2', 'bash', {'command': 'sleep 30'})],
     [tool_call('call_3', 'bash', {'command': 'sleep 30'})],
-], models=['gpt-6-luna', 'gpt-6-terra'], bodies=bodies))
+], models=['gpt-6-luna', 'gpt-6-terra'], bodies=bodies), variables={'XDG_CONFIG_HOME': config_home('during-turn')})
 assert [body['model'] for body in bodies] == ['gpt-6-luna', 'gpt-6-terra', 'gpt-6-terra', 'gpt-6-terra'], bodies
 first, second = sorted(set(session_files()) - known)
 prompts = lambda path: [line['content'] for line in map(json.loads, open(path)) if line.get('role') == 'user']
@@ -3434,11 +3517,12 @@ run([], fullscreen_lists, serve_items([
         'options': [{'value': 'a', 'label': 'Alpha', 'description': 'the first'},
                     {'value': 'b', 'label': 'Beta', 'description': 'the second'}]})],
     [message('Chose alpha.')],
-], models=['gpt-6-luna', 'gpt-6-terra']))
+], models=['gpt-6-luna', 'gpt-6-terra']), variables={'XDG_CONFIG_HOME': config_home('lists')})
 rows_reply = '\n'.join('Row %d of the reply.' % number for number in range(1, 41))
 bodies = []
 run([], prompt_keys, serve_items([[tool_call('call_1', 'bash', {'command': 'sleep 2'})], [message(rows_reply)]],
-                                 models=['gpt-6-luna', 'gpt-6-terra'], bodies=bodies))
+                                 models=['gpt-6-luna', 'gpt-6-terra'], bodies=bodies),
+    variables={'XDG_CONFIG_HOME': config_home('prompt-keys')})
 assert [body['model'] for body in bodies] == ['gpt-6-luna', 'gpt-6-terra'], bodies
 clipboard_bin = os.path.join(work, 'clipboard-bin')
 os.mkdir(clipboard_bin)
