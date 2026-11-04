@@ -34,11 +34,21 @@ pub(super) struct Wrap {
     /// from it start with too, and the columns they take.
     lead: String,
     lead_columns: usize,
+    /// How much of a task's box (`[ ]`, `[x]`) after a list item's marker came: wrapped lines
+    /// start after the box.
+    task: Task,
     escape: Escape,
     /// The lines it starts at a break are marked with `JOINED`.
     marked: bool,
     /// The `FROM` marks of its input are kept, where it drops them otherwise.
     gutters: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Task {
+    None,
+    Marker,
+    Open,
 }
 
 /// Where the text is in an escape sequence, which takes no columns.
@@ -77,6 +87,7 @@ impl Wrap {
             indent: 0,
             lead: String::new(),
             lead_columns: 0,
+            task: Task::None,
             escape: Escape::None,
             marked: false,
             gutters: false,
@@ -111,6 +122,7 @@ impl Wrap {
                     self.column = 0;
                     self.line_start = true;
                     self.indent = 0;
+                    self.task = Task::None;
                     self.lead.clear();
                     self.lead_columns = 0;
                     out.push('\n');
@@ -161,9 +173,25 @@ impl Wrap {
             self.continued = false;
             return;
         }
+        let shown: String = match self.line_start || self.task != Task::None {
+            true => {
+                let mut escape = Escape::None;
+                self.word.chars().filter(|&c| !escape.step(c)).collect()
+            }
+            false => String::new(),
+        };
+        if self.task != Task::None {
+            let boxed = self.spaces == 1 && self.indent + 4 < self.width / 2;
+            self.task = match (self.task, shown.as_str()) {
+                (Task::Marker, "[") if boxed => Task::Open,
+                (Task::Marker, "[x]") | (Task::Open, "]") if boxed => {
+                    self.indent += 4;
+                    Task::None
+                }
+                _ => Task::None,
+            };
+        }
         if self.line_start {
-            let mut escape = Escape::None;
-            let shown: String = self.word.chars().filter(|&c| !escape.step(c)).collect();
             if shown == "│" && self.column + self.spaces + self.word_width < self.width / 2 {
                 let spaces = " ".repeat(std::mem::take(&mut self.spaces));
                 let word = std::mem::take(&mut self.word);
@@ -185,6 +213,9 @@ impl Wrap {
             } else {
                 under_lead
             };
+            if marker && indent < self.width / 2 {
+                self.task = Task::Marker;
+            }
             self.line_start = false;
         }
         if !self.continued {
@@ -395,6 +426,16 @@ mod tests {
             "- one two\n  three\n12. four\n    five six\n  seven\n  eight"
         );
         assert_eq!(wrapped(12, &["-flag one two"]), "-flag one\ntwo");
+        // A task's box is part of its item's marker.
+        assert_eq!(
+            wrapped(
+                14,
+                &["\x1b[36m- [ ]\x1b[0m one two three\n- [x] three four"]
+            ),
+            "\x1b[36m- [ ]\x1b[0m one two\n      three\n- [x] three\n      four"
+        );
+        assert_eq!(wrapped(10, &["- [ ] a b c"]), "- [ ] a b\n  c");
+        assert_eq!(wrapped(12, &["- [  ] a b cd"]), "- [  ] a b\n  cd");
         // A style before the marker takes no columns.
         assert_eq!(
             wrapped(12, &["\x1b[2m- one two three"]),

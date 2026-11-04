@@ -1,9 +1,10 @@
 //! Turns the markdown of streamed replies into terminal styles, as Scramjet renders them: strong,
-//! emphasized and struck text, code spans, links, headings, list bullets, block quotes, rules,
-//! fenced code blocks, highlighted when they name their language, and tables. A marker is shown
-//! as typed unless its span closes on the same line, so text after an opening marker waits until
-//! the span closes or the line ends. A table's lines wait until it ends, as its columns are
-//! fitted to all its rows, and so does a highlighted code line.
+//! emphasized and struck text, code spans, links, headings, lists, block quotes, rules, fenced
+//! code blocks, highlighted when they name their language, and tables. A marker is shown as typed
+//! unless its span closes on the same line, so text after an opening marker waits until the span
+//! closes or the line ends. A table's lines wait until it ends, as its columns are fitted to all
+//! its rows, and so does a highlighted code line. A blank line waits for the next, as Scramjet
+//! shows a run of them as one, and none between a list's items.
 
 use super::highlight::{self, Highlighter};
 use super::selection;
@@ -41,6 +42,9 @@ enum Kind {
     Fence,
 }
 
+/// What a task item's text starts with.
+const TASKS: [&str; 3] = ["[ ] ", "[x] ", "[X] "];
+
 /// Where an open code block's lines start, as Scramjet indents them under their fence.
 const CODE_INDENT: &str = "  ";
 
@@ -49,8 +53,22 @@ const CODE_INDENT: &str = "  ";
 struct Fence {
     marker: char,
     length: usize,
-    /// The spaces before it, which its lines are shown after, and lose as many of theirs.
+    /// The spaces before it, which its lines lose as many of theirs.
     indent: usize,
+    /// The spaces before it as shown, which its lines are shown after.
+    shown: usize,
+}
+
+/// An open list. As Scramjet's, each level is four columns in, an ordered list is numbered from
+/// its first item, and its items' other lines are under their text.
+struct List {
+    /// What its items' markers end with: `-`, `*`, `+`, or the `.` or `)` after a number.
+    marker: char,
+    /// The current item's number, in an ordered list.
+    number: Option<u64>,
+    /// The column the current item's text starts at, as written and as shown.
+    written: usize,
+    shown: usize,
 }
 
 pub struct Markdown {
@@ -73,6 +91,14 @@ pub struct Markdown {
     ended: bool,
     held: bool,
     table: Option<Table>,
+    lists: Vec<List>,
+    /// The line before can go on in a line not indented under its item's text, as a paragraph.
+    lazy: bool,
+    /// The current line's indent as written.
+    indent: usize,
+    /// The ended line was blank; and the blank lines whose newlines wait for the next line.
+    blank: bool,
+    blanks: usize,
 }
 
 /// A table's lines so far, or the one line that may start a table.
@@ -132,6 +158,11 @@ impl Markdown {
             ended: false,
             held: false,
             table: None,
+            lists: Vec::new(),
+            lazy: false,
+            indent: 0,
+            blank: false,
+            blanks: 0,
         }
     }
 
@@ -175,11 +206,14 @@ impl Markdown {
             Line::Start => {
                 out += &self.flush_table();
                 let mut line = std::mem::take(&mut self.pending);
-                if let Some(fence) = self.block {
-                    line.drain(..line.len().min(fence.indent));
-                    if !line.is_empty() {
-                        out += &self.code_indent(fence);
-                    }
+                let Some(fence) = self.block else {
+                    self.blank = true;
+                    self.lazy = false;
+                    return self.ended_line(out);
+                };
+                line.drain(..line.len().min(fence.indent));
+                if !line.is_empty() {
+                    out += &self.code_indent(fence);
                 }
                 match &mut self.code {
                     Some(code) => out += &code.line(&line),
@@ -190,14 +224,14 @@ impl Markdown {
             Line::Fence => {
                 let fence = std::mem::take(&mut self.pending);
                 let marker = fence.trim_start();
-                let indent = fence.len() - marker.len();
                 let c = marker.chars().next().unwrap_or('`');
                 let length = marker.chars().take_while(|&m| m == c).count();
                 let info = marker[length..].trim();
                 let opened = Fence {
                     marker: c,
                     length,
-                    indent,
+                    indent: self.indent,
+                    shown: fence.len() - marker.len(),
                 };
                 let (shown, info) = match self.block.take() {
                     Some(open) => (open, ""),
@@ -219,6 +253,10 @@ impl Markdown {
             Line::Code if self.code.is_some() => {}
             Line::Text(_) | Line::Code => out += &format!("{RESET}{}", self.base),
         }
+        self.ended_line(out)
+    }
+
+    fn ended_line(&mut self, out: String) -> String {
         self.line = Line::Start;
         self.before = None;
         self.ended = true;
@@ -237,9 +275,14 @@ impl Markdown {
             }
             out += &self.fence(fence, "");
         }
+        out += &"\n".repeat(self.blanks);
         self.code = None;
         self.ended = false;
         self.held = false;
+        self.lists.clear();
+        self.lazy = false;
+        self.blank = false;
+        self.blanks = 0;
         out
     }
 
@@ -258,23 +301,27 @@ impl Markdown {
 
     /// A fence line: its indent, then ``` and the info string it was given.
     fn fence(&self, fence: Fence, info: &str) -> String {
-        let indent = " ".repeat(fence.indent);
+        let indent = " ".repeat(fence.shown);
         format!("{indent}{CODE_FENCE}```{info}{RESET}{}", self.base)
     }
 
     /// What a line of the code block under `fence` starts with: its fence's indent and two
     /// columns more, a gutter for a copy.
     fn code_indent(&self, fence: Fence) -> String {
-        let gutter = " ".repeat(fence.indent) + CODE_INDENT;
+        let gutter = " ".repeat(fence.shown) + CODE_INDENT;
         match self.marked {
             true => format!("{gutter}{FROM}"),
             false => gutter,
         }
     }
 
-    /// The newline after an ended line, which waits with a table's line.
+    /// The newline after an ended line, which waits with a table's line or a blank line.
     fn newline(&mut self) -> &'static str {
         self.ended = false;
+        if std::mem::take(&mut self.blank) {
+            self.blanks += 1;
+            return "";
+        }
         if !std::mem::take(&mut self.held) {
             return "\n";
         }
@@ -292,6 +339,12 @@ impl Markdown {
             };
             if !matches!(kind, Kind::Held) {
                 out += &self.flush_table();
+            }
+            let next_item = self.place(&kind);
+            match std::mem::take(&mut self.blanks) {
+                0 => {}
+                1 if next_item => {}
+                _ => out.push('\n'),
             }
             self.line = self.start(kind, &mut out);
         }
@@ -328,7 +381,8 @@ impl Markdown {
             return None;
         }
         let indent = self.pending.len() - text.len();
-        if indent < 4 {
+        let item = self.lists[..self.within(indent)].last();
+        if indent - item.map_or(0, |list| list.written) < 4 {
             if text.starts_with('|') {
                 return Some(Kind::Held);
             }
@@ -365,13 +419,79 @@ impl Markdown {
             _ => 0,
         };
         if marker > 0 {
+            let content = text[marker..].trim_start_matches(' ');
+            let after = |task: &&str| content.strip_prefix(task);
+            let partial = content.is_empty()
+                || (TASKS.iter())
+                    .any(|task| task.len() > content.len() && task.starts_with(content))
+                || (TASKS.iter().filter_map(after))
+                    .any(|rest| rest.trim_start_matches(' ').is_empty());
             match text[marker..].chars().next() {
+                Some(' ') if partial && !ended => return None,
                 Some(' ') => return Some(Kind::Item),
                 None if !ended => return None,
                 _ => {}
             }
         }
         Some(Kind::Text)
+    }
+
+    /// How many of the open lists have a line indented by `indent` within their current item.
+    fn within(&self, indent: usize) -> usize {
+        let lists = self.lists.iter();
+        lists.take_while(|list| indent >= list.written).count()
+    }
+
+    /// Places a line that starts as `kind` in the open lists, ending those it is not within, and
+    /// puts it under the text of the item it is in; returns whether it is the next item of an
+    /// open list.
+    fn place(&mut self, kind: &Kind) -> bool {
+        let text = self.pending.trim_start_matches(' ');
+        let indent = self.pending.len() - text.len();
+        self.indent = indent;
+        if self.block.is_some() {
+            return false;
+        }
+        let lazy = matches!(kind, Kind::Text | Kind::Item | Kind::Quote | Kind::Held);
+        let lazy = std::mem::replace(&mut self.lazy, lazy);
+        let within = self.within(indent);
+        match kind {
+            Kind::Item => {
+                let (marker, number, length) = marker(text);
+                self.lists.truncate(within + 1);
+                let next = match self.lists.get_mut(within) {
+                    Some(list) if list.marker == marker => {
+                        list.number = list.number.map(|number| number + 1);
+                        true
+                    }
+                    _ => false,
+                };
+                if !next {
+                    self.lists.truncate(within);
+                    self.lists.push(List {
+                        marker,
+                        number,
+                        written: 0,
+                        shown: 0,
+                    });
+                }
+                let content = text[length..].trim_start_matches(' ');
+                let spaces = match text.len() - length - content.len() {
+                    spaces if spaces > 4 || content.is_empty() => 1,
+                    spaces => spaces,
+                };
+                if let Some(list) = self.lists.last_mut() {
+                    list.written = indent + length + spaces;
+                }
+                return next;
+            }
+            Kind::Text | Kind::Quote | Kind::Held if lazy => {}
+            _ => self.lists.truncate(within),
+        }
+        if let Some(list) = self.lists.last() {
+            self.pending = " ".repeat(list.shown) + &self.pending[indent..];
+        }
+        false
     }
 
     /// Renders the start of a line of `kind`, its heading marker, quote borders or bullet, and
@@ -407,6 +527,9 @@ impl Markdown {
             }
             // As Scramjet's, a border for each level, the text in the quote's style.
             Kind::Quote => {
+                if !self.lists.is_empty() {
+                    *out += &self.pending[..indent];
+                }
                 let mut rest = text;
                 while let Some(after) = rest.strip_prefix('>') {
                     *out += &format!("{RESET}{base}{QUOTE_BORDER}│{RESET}{base}{QUOTE} ");
@@ -419,25 +542,33 @@ impl Markdown {
                 self.pending = rest.to_owned();
                 Line::Text(QUOTE)
             }
-            // As Scramjet's, `*` and `+` bullets show as `-`.
+            // As Scramjet's, bullets show as `-`, numbers end with `.`, and a task's box is part
+            // of its marker.
             Kind::Item => {
-                let length = text.find(' ').unwrap_or(text.len());
-                let bullet = match &text[..length] {
-                    "*" | "+" => "-",
-                    marker => marker,
-                };
-                *out += &format!(
-                    "{}{LIST_BULLET}{bullet}{RESET}{base}",
-                    &self.pending[..indent]
-                );
-                self.pending = text[length..].to_owned();
+                let (_, _, length) = marker(text);
+                let number = self.lists.last().and_then(|list| list.number);
+                let mut bullet = number.map_or("-".into(), |number| format!("{number}."));
+                let mut content = text[length..].trim_start_matches(' ');
+                if let Some(task) = TASKS.iter().find(|&&task| content.starts_with(task)) {
+                    bullet += &format!(" {}", task.trim_end().to_lowercase());
+                    content = content[task.len()..].trim_start_matches(' ');
+                }
+                let depth = self.lists.len().saturating_sub(1);
+                let lead = " ".repeat(4 * depth);
+                if let Some(list) = self.lists.last_mut() {
+                    list.shown = lead.len() + bullet.len() + 1;
+                }
+                *out += &format!("{lead}{LIST_BULLET}{bullet}{RESET}{base} ");
+                self.pending = content.to_owned();
                 Line::Text("")
             }
             Kind::Rule => {
+                let lead = if self.lists.is_empty() { 0 } else { indent };
                 let width = match self.width {
                     0 => 80,
-                    width => width.min(80),
+                    width => width.saturating_sub(lead).min(80),
                 };
+                *out += &" ".repeat(lead);
                 *out += &format!("{HORIZONTAL_RULE}{}{RESET}{base}", "─".repeat(width));
                 self.pending.clear();
                 Line::Rule
@@ -574,6 +705,14 @@ impl Markdown {
         lines.push(rule("└", "┴", "┘"));
         lines
     }
+}
+
+/// The marker a list item's `text` starts with: what it ends with (`List::marker`), its number,
+/// and its length.
+fn marker(text: &str) -> (char, Option<u64>, usize) {
+    let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+    let end = text[digits..].chars().next().unwrap_or('-');
+    (end, text[..digits].parse().ok(), digits + 1)
 }
 
 /// The cells of a table's line, between its unescaped `|`s.
@@ -1041,7 +1180,26 @@ mod tests {
         out
     }
 
-    /// The text rendered however it arrives: whole, and in three pieces split anywhere.
+    /// The text rendered as a streamed reply's deltas are (`Terminal::stream`): newlines at
+    /// the end of a delta wait for more text, its line ended meanwhile.
+    fn streamed(width: usize, pieces: &[&str]) -> String {
+        let mut markdown = Markdown::new(true, "", width);
+        let (mut out, mut held) = (String::new(), 0);
+        for piece in pieces {
+            let body = piece.trim_end_matches('\n');
+            if !body.is_empty() {
+                out += &markdown.push(&("\n".repeat(std::mem::take(&mut held)) + body));
+            }
+            held += piece.len() - body.len();
+            if held > 0 {
+                out += &markdown.end_line();
+            }
+        }
+        out + &markdown.finish()
+    }
+
+    /// The text rendered however it arrives: whole, and in three pieces split anywhere, pushed
+    /// as they are and as a stream's deltas.
     fn rendered_alike(width: usize, text: &str) -> String {
         let whole = render_in(width, &[text]);
         let chars: Vec<char> = text.chars().collect();
@@ -1052,6 +1210,13 @@ mod tests {
                     .into();
                 let pieces: Vec<&str> = pieces.iter().map(String::as_str).collect();
                 assert_eq!(render_in(width, &pieces), whole, "split at {a} and {b}");
+                if !text.ends_with('\n') {
+                    assert_eq!(
+                        streamed(width, &pieces),
+                        whole,
+                        "streamed, split at {a}, {b}"
+                    );
+                }
             }
         }
         whole
@@ -1218,12 +1383,53 @@ mod tests {
             rendered_alike(20, text),
             format!(
                 "{border}a \x1b[3mb\x1b[0m\x1b[2;3m\x1b[0m\n{border}{border}deep\x1b[0m\n\
-{border}\x1b[0m\n{rule}\n\x1b[36m-\x1b[0m one\n  \x1b[36m-\x1b[0m two\n\
-\x1b[36m12.\x1b[0m three\n{rule}\n\x1b[36m-\x1b[0m [x] done"
+{border}\x1b[0m\n{rule}\n\x1b[36m-\x1b[0m one\n    \x1b[36m-\x1b[0m two\n\
+\x1b[36m12.\x1b[0m three\n{rule}\n\x1b[36m- [x]\x1b[0m done"
             )
         );
         assert!(render(&["___"]).contains(&"─".repeat(80)));
         assert!(render_in(0, &["- - -"]).contains(&"─".repeat(80)));
+    }
+
+    #[test]
+    fn lists_render_as_scramjet_shows_them() {
+        // Each level four columns in, numbered from the first item, a task's box in its marker,
+        // an item's other lines under its text, and no blank line between its items.
+        let text = "1. **a**\n   - b\n     lazy\n1. c\n\n   more c\n\n7. d\n- [ ] e\n  - [X]  f\n\n\nafter";
+        let bullet = |marker: &str| format!("\x1b[36m{marker}\x1b[0m ");
+        assert_eq!(
+            rendered_alike(80, text),
+            format!(
+                "{}\x1b[1ma\x1b[0m\n    {}b\n      lazy\n{}c\n\n   more c\n{}d\n{}e\n    {}f\n\nafter",
+                bullet("1."),
+                bullet("-"),
+                bullet("2."),
+                bullet("3."),
+                bullet("- [ ]"),
+                bullet("- [x]"),
+            )
+        );
+        // Blocks in an item go under its text, and code lines lose the indent of their fence.
+        let text = "- run:\n  ```\n    x\n  ```\n  > q\n  - b\n    ```\n      y\n    ```\n* new";
+        let (fence, border) = ("\x1b[2m```\x1b[0m", "\x1b[0m\x1b[34m│\x1b[0m\x1b[2;3m ");
+        assert_eq!(
+            rendered_alike(80, text),
+            format!(
+                "{0}run:\n  {fence}\n    \x1b[32m  x\x1b[0m\n  {fence}\n  {border}q\x1b[0m\n    {0}b\n      \
+{fence}\n        \x1b[32m  y\x1b[0m\n      {fence}\n{0}new",
+                bullet("-")
+            )
+        );
+        // Outside lists, a run of blank lines shows as one, except in a code block.
+        assert_eq!(
+            rendered_alike(80, "a\n\n  \n\nb\n```\n\n\n```"),
+            format!("a\n\nb\n{fence}\n\n\n{fence}")
+        );
+        // The blank line before a later item waits for it.
+        let mut markdown = Markdown::new(true, "", 80);
+        assert_eq!(markdown.push("- a\n\n"), format!("{}a\n", bullet("-")));
+        assert_eq!(markdown.push("- b"), format!("{}b", bullet("-")));
+        assert_eq!(markdown.push("\n\n") + &markdown.finish(), "\n\n");
     }
 
     #[test]
