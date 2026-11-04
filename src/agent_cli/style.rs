@@ -53,8 +53,20 @@ pub const DIFF_CONTEXT: &str = "\x1b[2m";
 pub const DIFF_CHANGED: &str = "\x1b[7m";
 pub const DIFF_CHANGED_END: &str = "\x1b[27m";
 
-/// Markdown `**strong**` text.
+/// Markdown `**strong**` text, `*emphasis*`, both (`***`), and `~~struck~~` text.
 pub const STRONG: &str = "\x1b[1m";
+pub const EMPHASIS: &str = "\x1b[3m";
+pub const STRONG_EMPHASIS: &str = "\x1b[1;3m";
+pub const STRUCK: &str = "\x1b[9m";
+/// A markdown link's text, and its address after it when that differs.
+pub const LINK: &str = "\x1b[4;34m";
+pub const LINK_URL: &str = "\x1b[2m";
+/// A markdown block quote's text, and the `│` border before it.
+pub const QUOTE: &str = "\x1b[2;3m";
+pub const QUOTE_BORDER: &str = "\x1b[34m";
+/// A markdown horizontal rule, and a list item's bullet or number.
+pub const HORIZONTAL_RULE: &str = "\x1b[2m";
+pub const LIST_BULLET: &str = "\x1b[36m";
 /// Markdown code spans.
 pub const CODE: &str = "\x1b[36m";
 /// The lines of a fenced code block, and its fence lines.

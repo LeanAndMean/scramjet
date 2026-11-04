@@ -196,7 +196,7 @@ impl Rows<'_> {
 
     /// The child's result, rendered as a reply is.
     fn result(&mut self, text: &str) {
-        let mut markdown = Markdown::new(self.look.color, "");
+        let mut markdown = Markdown::new(self.look.color, "", self.look.width);
         let text = markdown.push(visible(text).trim_end()) + &markdown.finish();
         self.wrapped(&text);
     }

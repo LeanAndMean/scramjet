@@ -1,16 +1,41 @@
-//! Turns the markdown of streamed replies into terminal styles, as Scramjet renders them: bold,
-//! code spans, headings and fenced code blocks. A marker is shown as typed unless its span closes
-//! on the same line, so text after an opening marker waits until the span closes or the line ends.
+//! Turns the markdown of streamed replies into terminal styles, as Scramjet renders them: strong,
+//! emphasized and struck text, code spans, links, headings, list bullets, block quotes, rules,
+//! fenced code blocks and tables. A marker is shown as typed unless its span closes on the same
+//! line, so text after an opening marker waits until the span closes or the line ends. A table's
+//! lines wait until it ends, as its columns are fitted to all its rows.
 
-use super::style::{CODE, CODE_BLOCK, CODE_FENCE, HEADING, RESET, STRONG, TITLE};
+use super::selection;
+use super::style::{
+    CODE, CODE_BLOCK, CODE_FENCE, EMPHASIS, HEADING, HORIZONTAL_RULE, LINK, LINK_URL, LIST_BULLET,
+    QUOTE, QUOTE_BORDER, RESET, STRONG, STRONG_EMPHASIS, STRUCK, TITLE,
+};
+use super::text::{Wrap, columns, plain};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Line {
-    /// Not yet known whether the line is text, a heading, code or a fence.
+    /// Not yet known what the line is.
     Start,
+    /// Text in the style of a paragraph (none), a heading or a quote.
     Text(&'static str),
     Code,
     /// A fence line, shown once it ends.
+    Fence,
+    /// A table's line, or one that may start a table, kept whole until the table ends.
+    Held,
+    /// A horizontal rule, already shown.
+    Rule,
+}
+
+/// What the start of a line shows it is.
+enum Kind {
+    Text,
+    Heading(usize),
+    Quote,
+    Item,
+    Rule,
+    Held,
+    Code,
     Fence,
 }
 
@@ -18,11 +43,32 @@ pub struct Markdown {
     enabled: bool,
     /// The style of the whole block, restored after each styled part.
     base: &'static str,
+    /// The columns rules and tables fit in; zero leaves them unbounded.
+    width: usize,
     line: Line,
     /// The part of the current line not yet rendered.
     pending: String,
+    /// The character before `pending` on its line, which decides whether a marker opens a span.
+    before: Option<char>,
     /// The fence character and length of the open code block.
     block: Option<(char, usize)>,
+    /// The current line was ended (`end_line`) and its newline not yet pushed; and it was held.
+    ended: bool,
+    held: bool,
+    table: Option<Table>,
+}
+
+/// A table's lines so far, or the one line that may start a table.
+struct Table {
+    /// The spaces its lines start with.
+    indent: usize,
+    /// Its lines as written, shown as they are when the table cannot fit.
+    lines: Vec<String>,
+    header: Vec<String>,
+    /// Its rows' cells, once its delimiter row came.
+    rows: Option<Vec<Vec<String>>>,
+    /// A newline followed its last line.
+    newline: bool,
 }
 
 enum Span {
@@ -30,25 +76,43 @@ enum Span {
     /// More text is needed to decide.
     Wait,
     Literal(usize),
+    /// A backslash before punctuation, which shows the punctuation as typed.
+    Escaped,
     Code {
         content: String,
         end: usize,
     },
-    Bold {
+    Styled {
+        style: &'static str,
         inner: (usize, usize),
+        end: usize,
+    },
+    Link {
+        text: (usize, usize),
+        url: String,
+        end: usize,
+    },
+    /// An address written as it is linked.
+    Url {
+        url: String,
         end: usize,
     },
 }
 
 impl Markdown {
     /// A disabled renderer passes text through unchanged.
-    pub fn new(enabled: bool, base: &'static str) -> Self {
+    pub fn new(enabled: bool, base: &'static str, width: usize) -> Self {
         Self {
             enabled,
             base,
+            width,
             line: Line::Start,
             pending: String::new(),
+            before: None,
             block: None,
+            ended: false,
+            held: false,
+            table: None,
         }
     }
 
@@ -64,7 +128,7 @@ impl Markdown {
         }
         for line in lines {
             out += &self.end_line();
-            out.push('\n');
+            out += self.newline();
             self.pending.push_str(line);
             out += &self.advance(false);
         }
@@ -73,12 +137,15 @@ impl Markdown {
 
     /// Renders the rest of the current line, which a newline not yet pushed has ended.
     pub fn end_line(&mut self) -> String {
-        if !self.enabled {
+        if !self.enabled || self.ended {
             return String::new();
         }
         let mut out = self.advance(true);
         match self.line {
-            Line::Start => out += &std::mem::take(&mut self.pending),
+            Line::Start => {
+                out += &self.flush_table();
+                out += &std::mem::take(&mut self.pending);
+            }
             Line::Fence => {
                 let fence = std::mem::take(&mut self.pending);
                 let marker = fence.trim_start();
@@ -90,17 +157,27 @@ impl Markdown {
                 };
                 out += &format!("{CODE_FENCE}{fence}{RESET}{}", self.base);
             }
-            Line::Text("") => {}
+            Line::Held => {
+                let line = std::mem::take(&mut self.pending);
+                out += &self.hold(line);
+                self.held = true;
+            }
+            Line::Text("") | Line::Rule => {}
             Line::Text(_) | Line::Code => out += &format!("{RESET}{}", self.base),
         }
         self.line = Line::Start;
+        self.before = None;
+        self.ended = true;
         out
     }
 
     /// Renders what is left at the end of the block.
     pub fn finish(&mut self) -> String {
-        let out = self.end_line();
+        let mut out = self.end_line();
+        out += &self.flush_table();
         self.block = None;
+        self.ended = false;
+        self.held = false;
         out
     }
 
@@ -112,46 +189,44 @@ impl Markdown {
         let line = match self.line {
             Line::Text(style) => style,
             Line::Code => CODE_BLOCK,
-            Line::Start | Line::Fence => "",
+            _ => "",
         };
         format!("{}{line}", self.base)
+    }
+
+    /// The newline after an ended line, which waits with a table's line.
+    fn newline(&mut self) -> &'static str {
+        self.ended = false;
+        if !std::mem::take(&mut self.held) {
+            return "\n";
+        }
+        if let Some(table) = &mut self.table {
+            table.newline = true;
+        }
+        ""
     }
 
     fn advance(&mut self, ended: bool) -> String {
         let mut out = String::new();
         if self.line == Line::Start {
-            let Some(line) = self.decide(ended) else {
+            let Some(kind) = self.decide(ended) else {
                 return out;
             };
-            self.line = line;
-            match line {
-                Line::Code => out += CODE_BLOCK,
-                Line::Text(style) if !style.is_empty() => {
-                    let text = self.pending.trim_start();
-                    let level = text.chars().take_while(|&c| c == '#').count();
-                    let rest = text[level..].trim_start().to_owned();
-                    let indent = self.pending.len() - text.len();
-                    out += &self.pending[..indent];
-                    out += style;
-                    if level > 2 {
-                        out += &text[..level];
-                        out.push(' ');
-                    }
-                    self.pending = rest;
-                }
-                _ => {}
+            if !matches!(kind, Kind::Held) {
+                out += &self.flush_table();
             }
+            self.line = self.start(kind, &mut out);
         }
         match self.line {
-            Line::Start | Line::Fence => {}
+            Line::Start | Line::Fence | Line::Held | Line::Rule => {}
             Line::Code => out += &std::mem::take(&mut self.pending),
             Line::Text(style) => out += &self.inline(ended, style),
         }
         out
     }
 
-    /// The kind of the current line, once its start shows it.
-    fn decide(&self, ended: bool) -> Option<Line> {
+    /// What the current line is, once its start shows it.
+    fn decide(&self, ended: bool) -> Option<Kind> {
         let text = self.pending.trim_start_matches(' ');
         if text.is_empty() {
             return None;
@@ -162,85 +237,432 @@ impl Markdown {
                 return None;
             }
             let closing = run >= length && text[run..].trim_end_matches(' ').is_empty();
-            return Some(if closing { Line::Fence } else { Line::Code });
+            return Some(if closing { Kind::Fence } else { Kind::Code });
         }
         if text.starts_with("```") || text.starts_with("~~~") {
-            return Some(Line::Fence);
+            return Some(Kind::Fence);
         }
         if !ended && ["`", "``", "~", "~~"].contains(&text) {
             return None;
         }
-        let level = text.chars().take_while(|&c| c == '#').count();
         let indent = self.pending.len() - text.len();
-        if (1..=6).contains(&level) && indent < 4 {
-            match text[level..].chars().next() {
+        if indent < 4 {
+            if text.starts_with('|') {
+                return Some(Kind::Held);
+            }
+            if text.starts_with('>') {
+                let markers = text.chars().all(|c| c == '>' || c == ' ');
+                return (ended || !markers).then_some(Kind::Quote);
+            }
+            let first = text.chars().next().filter(|c| matches!(c, '-' | '*' | '_'));
+            if let Some(c) = first.filter(|&c| text.chars().all(|m| m == c || m == ' ')) {
+                if !ended {
+                    return None;
+                }
+                if text.matches(c).count() >= 3 {
+                    return Some(Kind::Rule);
+                }
+            }
+            let level = text.chars().take_while(|&c| c == '#').count();
+            if (1..=6).contains(&level) {
+                match text[level..].chars().next() {
+                    None if !ended => return None,
+                    Some(' ') => return Some(Kind::Heading(level)),
+                    _ => {}
+                }
+            }
+        }
+        let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+        let marker = match text.as_bytes()[0] {
+            b'-' | b'*' | b'+' => 1,
+            _ if digits > 9 => 0,
+            _ if digits == text.len() && !ended => return None,
+            _ if digits > 0 && matches!(text.as_bytes().get(digits), Some(b'.' | b')')) => {
+                digits + 1
+            }
+            _ => 0,
+        };
+        if marker > 0 {
+            match text[marker..].chars().next() {
+                Some(' ') => return Some(Kind::Item),
                 None if !ended => return None,
-                Some(' ') => return Some(Line::Text(if level == 1 { TITLE } else { HEADING })),
                 _ => {}
             }
         }
-        Some(Line::Text(""))
+        Some(Kind::Text)
+    }
+
+    /// Renders the start of a line of `kind`, its heading marker, quote borders or bullet, and
+    /// leaves the rest pending; returns what the line is.
+    fn start(&mut self, kind: Kind, out: &mut String) -> Line {
+        let text = self.pending.trim_start_matches(' ');
+        let indent = self.pending.len() - text.len();
+        let base = self.base;
+        match kind {
+            Kind::Text => Line::Text(""),
+            Kind::Code => {
+                *out += CODE_BLOCK;
+                Line::Code
+            }
+            Kind::Fence => Line::Fence,
+            Kind::Held => Line::Held,
+            Kind::Heading(level) => {
+                let style = if level == 1 { TITLE } else { HEADING };
+                *out += &self.pending[..indent];
+                *out += style;
+                if level > 2 {
+                    *out += &text[..level];
+                    out.push(' ');
+                }
+                self.pending = text[level..].trim_start().to_owned();
+                Line::Text(style)
+            }
+            // As Scramjet's, a border for each level, the text in the quote's style.
+            Kind::Quote => {
+                let mut rest = text;
+                while let Some(after) = rest.strip_prefix('>') {
+                    *out += &format!("{RESET}{base}{QUOTE_BORDER}│{RESET}{base}{QUOTE} ");
+                    rest = after.strip_prefix(' ').unwrap_or(after);
+                    let next = rest.trim_start_matches(' ');
+                    if next.starts_with('>') {
+                        rest = next;
+                    }
+                }
+                self.pending = rest.to_owned();
+                Line::Text(QUOTE)
+            }
+            // As Scramjet's, `*` and `+` bullets show as `-`.
+            Kind::Item => {
+                let length = text.find(' ').unwrap_or(text.len());
+                let bullet = match &text[..length] {
+                    "*" | "+" => "-",
+                    marker => marker,
+                };
+                *out += &format!(
+                    "{}{LIST_BULLET}{bullet}{RESET}{base}",
+                    &self.pending[..indent]
+                );
+                self.pending = text[length..].to_owned();
+                Line::Text("")
+            }
+            Kind::Rule => {
+                let width = match self.width {
+                    0 => 80,
+                    width => width.min(80),
+                };
+                *out += &format!("{HORIZONTAL_RULE}{}{RESET}{base}", "─".repeat(width));
+                self.pending.clear();
+                Line::Rule
+            }
+        }
     }
 
     /// Renders the spans of a text line that are complete, keeping an unclosed one pending.
     fn inline(&mut self, ended: bool, style: &'static str) -> String {
-        let chars: Vec<char> = self.pending.chars().collect();
         let restore = format!("{RESET}{}{style}", self.base);
-        let mut out = String::new();
-        let mut i = 0;
-        let mut plain = 0;
-        while i < chars.len() {
-            match span(&chars, i, ended) {
-                Span::Plain => i += 1,
-                Span::Literal(n) => i += n,
-                Span::Wait => break,
-                Span::Code { content, end } => {
-                    out.extend(&chars[plain..i]);
-                    out += &format!("{CODE}{content}{restore}");
-                    i = end;
-                    plain = i;
-                }
-                Span::Bold { inner, end } => {
-                    out.extend(&chars[plain..i]);
-                    let bold = format!("{restore}{STRONG}");
-                    out += STRONG;
-                    out += &codes(&chars[inner.0..inner.1], &bold);
-                    out += &restore;
-                    i = end;
-                    plain = i;
-                }
-            }
+        let mut chars: Vec<char> = self.before.into_iter().collect();
+        let from = chars.len();
+        chars.extend(self.pending.chars());
+        let (out, at) = spans(&chars, from, ended, &restore);
+        if at > from {
+            self.before = Some(chars[at - 1]);
         }
-        out.extend(&chars[plain..i]);
-        self.pending = chars[i..].iter().collect();
+        self.pending = chars[at..].iter().collect();
         out
+    }
+
+    /// Takes a table's line, or one that may start a table; returns what shows now, the line
+    /// before when it did not start a table.
+    fn hold(&mut self, line: String) -> String {
+        match &mut self.table {
+            Some(Table {
+                rows: Some(rows),
+                header,
+                lines,
+                newline,
+                ..
+            }) => {
+                let mut cells = cells(&line);
+                cells.resize(header.len(), String::new());
+                rows.push(cells);
+                lines.push(line);
+                *newline = false;
+                return String::new();
+            }
+            Some(table) if delimiter(&line, table.header.len()) => {
+                table.rows = Some(Vec::new());
+                table.lines.push(line);
+                table.newline = false;
+                return String::new();
+            }
+            _ => {}
+        }
+        let out = self.flush_table();
+        let text = line.trim_start_matches(' ');
+        self.table = Some(Table {
+            indent: line.len() - text.len(),
+            header: cells(text),
+            lines: vec![line],
+            rows: None,
+            newline: false,
+        });
+        out
+    }
+
+    /// Shows the table so far, or the line that did not start one as text.
+    fn flush_table(&mut self) -> String {
+        let Some(table) = self.table.take() else {
+            return String::new();
+        };
+        let mut out = match &table.rows {
+            Some(rows) => self.table_lines(&table, rows).join("\n"),
+            None => {
+                let chars: Vec<char> = table.lines[0].chars().collect();
+                complete(&chars, &format!("{RESET}{}", self.base))
+            }
+        };
+        if table.newline {
+            out.push('\n');
+        }
+        out
+    }
+
+    /// A table as Scramjet draws it: bordered, its header bold and a rule between its rows, its
+    /// columns narrowed to fit with their cells wrapped; as written when even that cannot fit.
+    fn table_lines(&self, table: &Table, rows: &[Vec<String>]) -> Vec<String> {
+        let base = self.base;
+        let indent = " ".repeat(table.indent);
+        let count = table.header.len();
+        let borders = 3 * count + 1;
+        let room = match self.width {
+            0 => usize::MAX,
+            width => width.saturating_sub(table.indent),
+        };
+        if room < borders + count {
+            return table.lines.clone();
+        }
+        let cell = |text: &str, style: &str| {
+            let chars: Vec<char> = text.chars().collect();
+            let restore = format!("{RESET}{base}{style}");
+            format!("{style}{}", complete(&chars, &restore))
+        };
+        let header: Vec<String> = table.header.iter().map(|text| cell(text, STRONG)).collect();
+        let body: Vec<Vec<String>> = (rows.iter())
+            .map(|row| row.iter().map(|text| cell(text, "")).collect())
+            .collect();
+        let widths = column_widths(&header, &body, room - borders);
+        let rule = |left: &str, middle: &str, right: &str| {
+            let parts: Vec<String> = widths.iter().map(|&width| "─".repeat(width)).collect();
+            format!(
+                "{indent}{left}─{}─{right}",
+                parts.join(&format!("─{middle}─"))
+            )
+        };
+        let row = |cells: &[String], lines: &mut Vec<String>| {
+            let wrapped: Vec<Vec<String>> = (cells.iter().zip(&widths))
+                .map(|(text, &width)| cell_lines(text, width))
+                .collect();
+            let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
+            for at in 0..height {
+                let parts: Vec<String> = (wrapped.iter().zip(&widths))
+                    .map(|(cell, &width)| {
+                        let text = cell.get(at).map_or("", String::as_str);
+                        let pad = " ".repeat(width.saturating_sub(columns(text)));
+                        format!("{text}{base}{pad}")
+                    })
+                    .collect();
+                lines.push(format!("{indent}│ {} │", parts.join(" │ ")));
+            }
+        };
+        let mut lines = vec![rule("┌", "┬", "┐")];
+        row(&header, &mut lines);
+        lines.push(rule("├", "┼", "┤"));
+        for (index, cells) in body.iter().enumerate() {
+            if index > 0 {
+                lines.push(rule("├", "┼", "┤"));
+            }
+            row(cells, &mut lines);
+        }
+        lines.push(rule("└", "┴", "┘"));
+        lines
     }
 }
 
-/// `chars` with its code spans styled, restoring `restore` after each.
-fn codes(chars: &[char], restore: &str) -> String {
+/// The cells of a table's line, between its unescaped `|`s.
+fn cells(line: &str) -> Vec<String> {
+    let line = line.trim();
+    let line = line.strip_prefix('|').unwrap_or(line);
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                cell.push('|');
+                chars.next();
+            }
+            '|' => cells.push(std::mem::take(&mut cell).trim().to_owned()),
+            c => cell.push(c),
+        }
+    }
+    if !cell.trim().is_empty() {
+        cells.push(cell.trim().to_owned());
+    }
+    cells
+}
+
+/// Whether `line` is the delimiter row of a header of `count` cells: `---`, `:--`, `--:` or
+/// `:-:` in each.
+fn delimiter(line: &str, count: usize) -> bool {
+    let cells = cells(line);
+    count > 0
+        && cells.len() == count
+        && cells.iter().all(|cell| {
+            let dashes = cell.strip_prefix(':').unwrap_or(cell);
+            let dashes = dashes.strip_suffix(':').unwrap_or(dashes);
+            !dashes.is_empty() && dashes.bytes().all(|b| b == b'-')
+        })
+}
+
+/// The widths of a table's columns, as Scramjet's: as wide as their cells when they fit in
+/// `room`, else each narrowed toward its longest word (at most 30 columns), growing from there
+/// in proportion to what more it needs.
+fn column_widths(header: &[String], body: &[Vec<String>], room: usize) -> Vec<usize> {
+    let count = header.len();
+    let column =
+        |at: usize| std::iter::once(&header[at]).chain(body.iter().map(move |row| &row[at]));
+    let natural: Vec<usize> = (0..count)
+        .map(|at| column(at).map(|cell| columns(cell)).max().unwrap_or(0))
+        .collect();
+    let words: Vec<usize> = (0..count)
+        .map(|at| {
+            column(at)
+                .map(|cell| longest_word(cell))
+                .max()
+                .unwrap_or(0)
+                .max(1)
+        })
+        .collect();
+    let fitting: Vec<usize> = natural
+        .iter()
+        .zip(&words)
+        .map(|(&n, &w)| n.max(w))
+        .collect();
+    if fitting.iter().sum::<usize>() <= room {
+        return fitting;
+    }
+    let mut least = words.clone();
+    if least.iter().sum::<usize>() > room {
+        // Not even the longest words fit: one column each, the rest shared by their lengths.
+        let spare = room - count;
+        let weight: usize = words.iter().map(|word| word - 1).sum();
+        least = (words.iter())
+            .map(|word| 1 + (word - 1) * spare / weight.max(1))
+            .collect();
+        let left = room - least.iter().sum::<usize>();
+        for width in least.iter_mut().take(left) {
+            *width += 1;
+        }
+    }
+    let wants: usize = natural
+        .iter()
+        .zip(&least)
+        .map(|(n, l)| n.saturating_sub(*l))
+        .sum();
+    let spare = room.saturating_sub(least.iter().sum());
+    let mut widths: Vec<usize> = (least.iter().zip(&natural))
+        .map(|(&l, &n)| l + n.saturating_sub(l) * spare / wants.max(1))
+        .collect();
+    let mut left = room.saturating_sub(widths.iter().sum());
+    while left > 0 {
+        let mut grew = false;
+        for (width, &n) in widths.iter_mut().zip(&natural) {
+            if left > 0 && *width < n {
+                *width += 1;
+                left -= 1;
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    widths
+}
+
+/// The columns of the longest word of a rendered cell, at most 30.
+fn longest_word(cell: &str) -> usize {
+    let words = plain(cell);
+    let longest = words.split_whitespace().map(UnicodeWidthStr::width).max();
+    longest.unwrap_or(0).min(30)
+}
+
+/// A rendered cell wrapped to `width`, each line ending its styles and starting with those
+/// still on from the lines before.
+fn cell_lines(text: &str, width: usize) -> Vec<String> {
+    let mut wrap = Wrap::new(width);
+    let wrapped = wrap.push(text) + &wrap.finish();
+    let lines: Vec<&str> = wrapped.split('\n').collect();
+    (selection::rows(&lines).into_iter())
+        .map(|line| line.shown)
+        .collect()
+}
+
+/// The spans of `chars` from `from` that are complete, rendered, restoring `restore` after each,
+/// and where the first that is not starts.
+fn spans(chars: &[char], from: usize, ended: bool, restore: &str) -> (String, usize) {
     let mut out = String::new();
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            '`' => match code_span(chars, i, true) {
-                Span::Code { content, end } => {
-                    out += &format!("{CODE}{content}{restore}");
-                    i = end;
+    let mut at = from;
+    while at < chars.len() {
+        match span(chars, at, ended) {
+            Span::Plain => {
+                out.push(chars[at]);
+                at += 1;
+            }
+            Span::Literal(n) => {
+                out.extend(&chars[at..at + n]);
+                at += n;
+            }
+            Span::Escaped => {
+                out.push(chars[at + 1]);
+                at += 2;
+            }
+            Span::Wait => break,
+            Span::Code { content, end } => {
+                out += &format!("{CODE}{content}{restore}");
+                at = end;
+            }
+            Span::Styled { style, inner, end } => {
+                out += style;
+                out += &complete(&chars[inner.0..inner.1], &format!("{restore}{style}"));
+                out += restore;
+                at = end;
+            }
+            // As Scramjet shows a link where the terminal is not known to open one: its
+            // address after its text when they differ.
+            Span::Link { text, url, end } => {
+                let inside = &chars[text.0..text.1];
+                out += LINK;
+                out += &complete(inside, &format!("{restore}{LINK}"));
+                out += restore;
+                let written: String = inside.iter().collect();
+                if written != url && url.strip_prefix("mailto:") != Some(written.as_str()) {
+                    out += &format!("{LINK_URL} ({url}){restore}");
                 }
-                _ => {
-                    let n = run(chars, i);
-                    out.extend(&chars[i..i + n]);
-                    i += n;
-                }
-            },
-            c => {
-                out.push(c);
-                i += 1;
+                at = end;
+            }
+            Span::Url { url, end } => {
+                out += &format!("{LINK}{url}{restore}");
+                at = end;
             }
         }
     }
-    out
+    (out, at)
+}
+
+/// Complete text with its spans rendered.
+fn complete(chars: &[char], restore: &str) -> String {
+    spans(chars, 0, true, restore).0
 }
 
 fn run(chars: &[char], at: usize) -> usize {
@@ -249,8 +671,30 @@ fn run(chars: &[char], at: usize) -> usize {
 
 fn span(chars: &[char], at: usize, ended: bool) -> Span {
     match chars[at] {
+        '\\' => match chars.get(at + 1) {
+            None if !ended => Span::Wait,
+            Some(c) if c.is_ascii_punctuation() => Span::Escaped,
+            _ => Span::Plain,
+        },
         '`' => code_span(chars, at, ended),
-        '*' => bold_span(chars, at, ended),
+        '*' | '_' | '~' => delimited(chars, at, ended),
+        '[' => link(chars, at, ended),
+        // An image, of which Scramjet shows the description.
+        '!' => match chars.get(at + 1) {
+            None if !ended => Span::Wait,
+            Some('[') => match link(chars, at + 1, ended) {
+                Span::Wait => Span::Wait,
+                Span::Link { text, end, .. } => Span::Styled {
+                    style: "",
+                    inner: text,
+                    end,
+                },
+                _ => Span::Plain,
+            },
+            _ => Span::Plain,
+        },
+        '<' => autolink(chars, at, ended),
+        'h' => bare_url(chars, at, ended),
         _ => Span::Plain,
     }
 }
@@ -290,20 +734,29 @@ fn code_span(chars: &[char], at: usize, ended: bool) -> Span {
     if ended { Span::Literal(n) } else { Span::Wait }
 }
 
-/// `**` after a non-word character and before text, closed by `**` after text and before a
-/// non-word character. Code spans inside are skipped.
-fn bold_span(chars: &[char], at: usize, ended: bool) -> Span {
+/// Emphasis (`*` or `_`), strong (two) or both (three), or struck text (`~~`): a run of the
+/// marker after a non-word character and before text, closed by the same run after text and
+/// before a non-word character. Code spans and escapes inside are skipped.
+fn delimited(chars: &[char], at: usize, ended: bool) -> Span {
+    let marker = chars[at];
     let n = run(chars, at);
     if at + n == chars.len() && !ended {
         return Span::Wait;
     }
-    let opens = n == 2
-        && (at == 0 || !chars[at - 1].is_alphanumeric())
-        && chars.get(at + 2).is_some_and(|c| !c.is_whitespace());
+    let style = match (marker, n) {
+        ('~', 2) => STRUCK,
+        ('~', _) => return Span::Literal(n),
+        (_, 1) => EMPHASIS,
+        (_, 2) => STRONG,
+        (_, 3) => STRONG_EMPHASIS,
+        _ => return Span::Literal(n),
+    };
+    let opens = (at == 0 || !chars[at - 1].is_alphanumeric())
+        && chars.get(at + n).is_some_and(|c| !c.is_whitespace());
     if !opens {
         return Span::Literal(n);
     }
-    let mut k = at + 2;
+    let mut k = at + n;
     while k < chars.len() {
         match chars[k] {
             '`' => match code_span(chars, k, ended) {
@@ -311,18 +764,20 @@ fn bold_span(chars: &[char], at: usize, ended: bool) -> Span {
                 Span::Code { end, .. } => k = end,
                 _ => k += run(chars, k),
             },
-            '*' => {
+            '\\' => k += 2,
+            c if c == marker => {
                 let m = run(chars, k);
                 if k + m == chars.len() && !ended {
                     return Span::Wait;
                 }
-                let closes = m == 2
+                let closes = m == n
                     && !chars[k - 1].is_whitespace()
-                    && chars.get(k + 2).is_none_or(|c| !c.is_alphanumeric());
+                    && chars.get(k + m).is_none_or(|c| !c.is_alphanumeric());
                 if closes {
-                    return Span::Bold {
-                        inner: (at + 2, k),
-                        end: k + 2,
+                    return Span::Styled {
+                        style,
+                        inner: (at + n, k),
+                        end: k + m,
                     };
                 }
                 k += m;
@@ -330,7 +785,157 @@ fn bold_span(chars: &[char], at: usize, ended: bool) -> Span {
             _ => k += 1,
         }
     }
-    if ended { Span::Literal(2) } else { Span::Wait }
+    if ended { Span::Literal(n) } else { Span::Wait }
+}
+
+/// `[text](address)`, perhaps with a title after the address.
+fn link(chars: &[char], at: usize, ended: bool) -> Span {
+    let unclosed = if ended { Span::Literal(1) } else { Span::Wait };
+    let mut depth = 0;
+    let mut k = at;
+    let close = loop {
+        let Some(&c) = chars.get(k) else {
+            return unclosed;
+        };
+        match c {
+            '[' => depth += 1,
+            ']' if depth == 1 => break k,
+            ']' => depth -= 1,
+            '\\' => k += 1,
+            '`' => match code_span(chars, k, ended) {
+                Span::Wait => return Span::Wait,
+                Span::Code { end, .. } => {
+                    k = end;
+                    continue;
+                }
+                _ => k += run(chars, k) - 1,
+            },
+            _ => {}
+        }
+        k += 1;
+    };
+    match chars.get(close + 1) {
+        None if !ended => return Span::Wait,
+        Some('(') => {}
+        _ => return Span::Literal(1),
+    }
+    let mut k = close + 2;
+    let mut url = String::new();
+    let mut parens = 0;
+    loop {
+        match chars.get(k) {
+            None => return unclosed,
+            Some(')') if parens == 0 => break,
+            Some(c) if c.is_whitespace() => break,
+            Some(&c) => {
+                parens += usize::from(c == '(');
+                parens -= usize::from(c == ')');
+                url.push(c);
+            }
+        }
+        k += 1;
+    }
+    if chars[k] != ')' {
+        let skip = |k: &mut usize| {
+            while chars.get(*k).is_some_and(|c| c.is_whitespace()) {
+                *k += 1;
+            }
+        };
+        skip(&mut k);
+        if let Some(&quote) = chars.get(k).filter(|&&c| c == '"' || c == '\'') {
+            k += 1;
+            while chars.get(k).is_some_and(|&c| c != quote) {
+                k += 1;
+            }
+            k += 1;
+            skip(&mut k);
+        }
+        match chars.get(k) {
+            Some(')') => {}
+            None if !ended => return Span::Wait,
+            _ => return Span::Literal(1),
+        }
+    }
+    Span::Link {
+        text: (at + 1, close),
+        url,
+        end: k + 1,
+    }
+}
+
+const WEB: [&str; 2] = ["https://", "http://"];
+
+/// `<address>`, of a web page or a mail address.
+fn autolink(chars: &[char], at: usize, ended: bool) -> Span {
+    let rest = &chars[at + 1..];
+    let schemes = [WEB[0], WEB[1], "mailto:"];
+    if !schemes.iter().any(|scheme| starts_with(rest, scheme)) {
+        let partial = schemes.iter().any(|scheme| begins(rest, scheme));
+        return if partial && !ended {
+            Span::Wait
+        } else {
+            Span::Plain
+        };
+    }
+    match rest
+        .iter()
+        .position(|&c| c == '>' || c == '<' || c.is_whitespace())
+    {
+        Some(end) if rest[end] == '>' => Span::Url {
+            url: rest[..end].iter().collect(),
+            end: at + end + 2,
+        },
+        None if !ended => Span::Wait,
+        _ => Span::Plain,
+    }
+}
+
+/// An address of a web page in the text, which GFM links, without the punctuation after it.
+fn bare_url(chars: &[char], at: usize, ended: bool) -> Span {
+    if at > 0 && chars[at - 1].is_alphanumeric() {
+        return Span::Plain;
+    }
+    let rest = &chars[at..];
+    let Some(scheme) = WEB.into_iter().find(|scheme| starts_with(rest, scheme)) else {
+        let partial = WEB.iter().any(|scheme| begins(rest, scheme));
+        return if partial && !ended {
+            Span::Wait
+        } else {
+            Span::Plain
+        };
+    };
+    let mut end = (rest.iter())
+        .position(|&c| c.is_whitespace() || c == '<')
+        .unwrap_or(rest.len());
+    if end == rest.len() && !ended {
+        return Span::Wait;
+    }
+    while end > scheme.len() {
+        let url = &rest[..end];
+        let count = |c| url.iter().filter(|&&u| u == c).count();
+        let last = url[end - 1];
+        if !"?!.,:*_~'\";".contains(last) && (last != ')' || count('(') >= count(')')) {
+            break;
+        }
+        end -= 1;
+    }
+    match end > scheme.len() {
+        true => Span::Url {
+            url: rest[..end].iter().collect(),
+            end: at + end,
+        },
+        false => Span::Plain,
+    }
+}
+
+fn starts_with(chars: &[char], prefix: &str) -> bool {
+    let mut chars = chars.iter();
+    prefix.chars().all(|p| chars.next() == Some(&p))
+}
+
+/// Whether `chars` are the start of `word`, but not all of it.
+fn begins(chars: &[char], word: &str) -> bool {
+    chars.len() < word.chars().count() && word.chars().zip(chars).all(|(w, &c)| w == c)
 }
 
 #[cfg(test)]
@@ -338,22 +943,19 @@ mod tests {
     use super::*;
 
     fn render(pieces: &[&str]) -> String {
-        let mut markdown = Markdown::new(true, "");
+        render_in(80, pieces)
+    }
+
+    fn render_in(width: usize, pieces: &[&str]) -> String {
+        let mut markdown = Markdown::new(true, "", width);
         let mut out: String = pieces.iter().map(|piece| markdown.push(piece)).collect();
         out += &markdown.finish();
         out
     }
 
-    #[test]
-    fn spans_render_the_same_however_the_text_arrives() {
-        let text = "Use **bold `x` text** and `a ** b` here.\n## Plan `p`\n- **Note:** done";
-        let whole = render(&[text]);
-        assert_eq!(
-            whole,
-            "Use \x1b[1mbold \x1b[36mx\x1b[0m\x1b[1m text\x1b[0m and \x1b[36ma ** b\x1b[0m here.\n\
-\x1b[1;33mPlan \x1b[36mp\x1b[0m\x1b[1;33m\x1b[0m\n\
-- \x1b[1mNote:\x1b[0m done"
-        );
+    /// The text rendered however it arrives: whole, and in three pieces split anywhere.
+    fn rendered_alike(width: usize, text: &str) -> String {
+        let whole = render_in(width, &[text]);
         let chars: Vec<char> = text.chars().collect();
         for a in 0..chars.len() {
             for b in a..chars.len() {
@@ -361,18 +963,38 @@ mod tests {
                     .map(|part| part.iter().collect())
                     .into();
                 let pieces: Vec<&str> = pieces.iter().map(String::as_str).collect();
-                assert_eq!(render(&pieces), whole, "split at {a} and {b}");
+                assert_eq!(render_in(width, &pieces), whole, "split at {a} and {b}");
             }
         }
+        whole
+    }
+
+    #[test]
+    fn spans_render_the_same_however_the_text_arrives() {
+        let text = "Use **bold `x` text** and `a ** b` here.\n## Plan `p`\n- **Note:** done";
+        assert_eq!(
+            rendered_alike(80, text),
+            "Use \x1b[1mbold \x1b[36mx\x1b[0m\x1b[1m text\x1b[0m and \x1b[36ma ** b\x1b[0m here.\n\
+\x1b[1;33mPlan \x1b[36mp\x1b[0m\x1b[1;33m\x1b[0m\n\
+\x1b[36m-\x1b[0m \x1b[1mNote:\x1b[0m done"
+        );
+        let text = "*it **b** \\* x* and ~~gone~~, x**y** [a *b*](u \"t\") <http://h/_x_>.";
+        assert_eq!(
+            rendered_alike(80, text),
+            "\x1b[3mit \x1b[1mb\x1b[0m\x1b[3m * x\x1b[0m and \x1b[9mgone\x1b[0m, x**y** \
+\x1b[4;34ma \x1b[3mb\x1b[0m\x1b[4;34m\x1b[0m\x1b[2m (u)\x1b[0m \x1b[4;34mhttp://h/_x_\x1b[0m."
+        );
     }
 
     #[test]
     fn unclosed_markers_stay_as_typed() {
         for text in [
             "f(**kwargs) and 2**10 and a ` tick",
-            "** spaced** and **not bold **",
-            "x**y** and *one* and ***three***",
-            "#hashtag and ####### seven",
+            "** spaced** and **not bold ** and * star *",
+            "x**y** and snake_case_name and 3*4*5 and ****four****",
+            "#hashtag and ####### seven and [not a link] (x) and [open",
+            "a ~one~ and ~~~three~~~ and <notalink> and C:\\Users\\me and ![x]",
+            "--- after text, 1.5 and 2) x",
         ] {
             assert_eq!(render(&[text, "\nnext"]), format!("{text}\nnext"));
         }
@@ -381,12 +1003,15 @@ mod tests {
 
     #[test]
     fn text_after_an_open_span_waits_for_it_to_close() {
-        let mut markdown = Markdown::new(true, "");
+        let mut markdown = Markdown::new(true, "", 80);
         assert_eq!(markdown.push("see **this"), "see ");
         assert_eq!(markdown.push(" part** now"), "\x1b[1mthis part\x1b[0m now");
         assert_eq!(markdown.push(" `open"), " ");
         assert_eq!(markdown.end_line(), "`open");
         assert_eq!(markdown.push("\n# T"), "\n\x1b[1;4;33mT");
+        // Whether a marker opens depends on the text before it, already shown.
+        assert_eq!(markdown.push("\nx**"), "\x1b[0m\nx");
+        assert_eq!(markdown.push("y** z"), "**y** z");
     }
 
     #[test]
@@ -402,11 +1027,16 @@ mod tests {
             "\x1b[2m````\x1b[0m\n\x1b[32m```\x1b[0m\n\x1b[32mstill code\x1b[0m\n\
 \x1b[2m````\x1b[0m\n\x1b[1mb\x1b[0m"
         );
+        assert_eq!(
+            render(&["```\n| a |\n|---|\n> q\n```"]),
+            "\x1b[2m```\x1b[0m\n\x1b[32m| a |\x1b[0m\n\x1b[32m|---|\x1b[0m\n\
+\x1b[32m> q\x1b[0m\n\x1b[2m```\x1b[0m"
+        );
     }
 
     #[test]
     fn styles_restore_the_block_style() {
-        let mut markdown = Markdown::new(true, "\x1b[2m");
+        let mut markdown = Markdown::new(true, "\x1b[2m", 80);
         assert_eq!(
             markdown.push("**Title** `c`\n"),
             "\x1b[1mTitle\x1b[0m\x1b[2m \x1b[36mc\x1b[0m\x1b[2m\n"
@@ -416,8 +1046,94 @@ mod tests {
             "\x1b[2m```\x1b[0m\x1b[2m\n\x1b[32mx"
         );
         assert_eq!(markdown.reopen(), "\x1b[2m\x1b[32m");
-        let mut plain = Markdown::new(false, "");
+        let mut plain = Markdown::new(false, "", 80);
         assert_eq!(plain.push("**a** `b`\n```"), "**a** `b`\n```");
         assert_eq!(plain.finish() + &plain.reopen(), "");
+    }
+
+    #[test]
+    fn quotes_rules_and_list_bullets_render_as_scramjet_shows_them() {
+        let text = "> a *b*\n>> deep\n>\n---\n* one\n  + two\n12. three\n***\n- [x] done";
+        let border = "\x1b[0m\x1b[34m│\x1b[0m\x1b[2;3m ";
+        let rule = format!("\x1b[2m{}\x1b[0m", "─".repeat(20));
+        assert_eq!(
+            rendered_alike(20, text),
+            format!(
+                "{border}a \x1b[3mb\x1b[0m\x1b[2;3m\x1b[0m\n{border}{border}deep\x1b[0m\n\
+{border}\x1b[0m\n{rule}\n\x1b[36m-\x1b[0m one\n  \x1b[36m-\x1b[0m two\n\
+\x1b[36m12.\x1b[0m three\n{rule}\n\x1b[36m-\x1b[0m [x] done"
+            )
+        );
+        assert!(render(&["___"]).contains(&"─".repeat(80)));
+        assert!(render_in(0, &["- - -"]).contains(&"─".repeat(80)));
+    }
+
+    #[test]
+    fn tables_are_drawn_once_complete_with_their_columns_fitted() {
+        let text = "Before\n| Name | Note |\n|:--|--:|\n| **a** | x |\n| b \\| c | `y` |\n\nafter";
+        assert_eq!(
+            rendered_alike(40, text),
+            "Before\n\
+┌───────┬──────┐\n\
+│ \x1b[1mName\x1b[0m  │ \x1b[1mNote\x1b[0m │\n\
+├───────┼──────┤\n\
+│ \x1b[1ma\x1b[0m     │ x    │\n\
+├───────┼──────┤\n\
+│ b | c │ \x1b[36my\x1b[0m    │\n\
+└───────┴──────┘\n\nafter"
+        );
+        // Cells wrap when the table is too wide, between words, longest words first.
+        let wide = "| key | what it means |\n|---|---|\n| a | one two three four |";
+        let lines = render_in(20, &[wide]);
+        assert_eq!(
+            lines,
+            "┌─────┬────────────┐\n\
+│ \x1b[1mkey\x1b[0m │ \x1b[1mwhat it\x1b[0m    │\n\
+│     │ \x1b[1mmeans\x1b[0m      │\n\
+├─────┼────────────┤\n\
+│ a   │ one two    │\n\
+│     │ three four │\n\
+└─────┴────────────┘"
+        );
+        assert!(lines.lines().all(|line| columns(line) <= 20));
+        // Too narrow for its columns: as written.
+        assert_eq!(render_in(8, &["|a|b|\n|-|-|"]), "|a|b|\n|-|-|");
+    }
+
+    #[test]
+    fn a_line_that_does_not_start_a_table_is_text() {
+        assert_eq!(
+            render(&["| a **b** |\nnext"]),
+            "| a \x1b[1mb\x1b[0m |\nnext"
+        );
+        assert_eq!(
+            render(&["| a |\n| b | c |\n|--|--|"]),
+            "| a |\n┌───┬───┐\n│ \x1b[1mb\x1b[0m │ \x1b[1mc\x1b[0m │\n├───┼───┤\n└───┴───┘"
+        );
+        // Shown as the line ends, while the reply streams.
+        let mut markdown = Markdown::new(true, "", 80);
+        assert_eq!(markdown.push("| a |\n|-|\n| 1 |"), "");
+        assert_eq!(markdown.end_line(), "");
+        assert_eq!(markdown.push("\n"), "");
+        assert_eq!(
+            markdown.push("text"),
+            "┌───┐\n│ \x1b[1ma\x1b[0m │\n├───┤\n│ 1 │\n└───┘\ntext"
+        );
+    }
+
+    #[test]
+    fn column_widths_share_what_room_there_is() {
+        let row = |cells: &[&str]| {
+            cells
+                .iter()
+                .map(|cell| cell.to_string())
+                .collect::<Vec<_>>()
+        };
+        let header = row(&["ab", "cdefgh"]);
+        assert_eq!(column_widths(&header, &[], 20), [2, 6]);
+        assert_eq!(column_widths(&header, &[row(&["x", "y z"])], 5), [2, 3]);
+        let long = "w".repeat(40);
+        assert_eq!(column_widths(&row(&[&long, "a"]), &[], 20), [19, 1]);
+        assert_eq!(column_widths(&row(&[&long, "a"]), &[], 40), [39, 1]);
     }
 }

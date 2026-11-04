@@ -30,6 +30,10 @@ pub(super) struct Wrap {
     /// Where lines wrapped from the current one start: under the text of a list item, or at
     /// the indentation of an indented line.
     indent: usize,
+    /// The quote borders (`│`) the current line starts with, as written, which lines wrapped
+    /// from it start with too, and the columns they take.
+    lead: String,
+    lead_columns: usize,
     escape: Escape,
     /// The lines it starts at a break are marked with `JOINED`.
     marked: bool,
@@ -69,6 +73,8 @@ impl Wrap {
             continued: false,
             line_start: true,
             indent: 0,
+            lead: String::new(),
+            lead_columns: 0,
             escape: Escape::None,
             marked: false,
         }
@@ -94,6 +100,8 @@ impl Wrap {
                     self.column = 0;
                     self.line_start = true;
                     self.indent = 0;
+                    self.lead.clear();
+                    self.lead_columns = 0;
                     out.push('\n');
                 }
                 ' ' | '\t' => {
@@ -137,12 +145,27 @@ impl Wrap {
         if self.line_start {
             let mut escape = Escape::None;
             let shown: String = self.word.chars().filter(|&c| !escape.step(c)).collect();
+            if shown == "│" && self.column + self.spaces + self.word_width < self.width / 2 {
+                let spaces = " ".repeat(std::mem::take(&mut self.spaces));
+                let word = std::mem::take(&mut self.word);
+                *out += &format!("{spaces}{word}");
+                self.lead += &format!("{spaces}{word}");
+                self.column += spaces.len() + std::mem::take(&mut self.word_width);
+                self.lead_columns = self.column;
+                self.continued = false;
+                return;
+            }
             let marker = matches!(shown.as_str(), "-" | "*" | "+" | "•" | "●")
                 || shown.strip_suffix(['.', ')']).is_some_and(|number| {
                     !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
                 });
-            let indent = self.spaces + if marker { self.word_width + 1 } else { 0 };
-            self.indent = if indent < self.width / 2 { indent } else { 0 };
+            let indent = self.column + self.spaces + if marker { self.word_width + 1 } else { 0 };
+            let under_lead = self.lead_columns + usize::from(self.lead_columns > 0);
+            self.indent = if indent < self.width / 2 {
+                indent
+            } else {
+                under_lead
+            };
             self.line_start = false;
         }
         if !self.continued {
@@ -174,7 +197,11 @@ impl Wrap {
     /// Starts a new line in place of `spaces` spaces.
     fn break_line(&mut self, out: &mut String, spaces: usize) {
         out.push('\n');
-        out.extend(std::iter::repeat_n(' ', self.indent));
+        *out += &self.lead;
+        out.extend(std::iter::repeat_n(
+            ' ',
+            self.indent.saturating_sub(self.lead_columns),
+        ));
         if self.marked {
             out.push(JOINED);
             out.extend(std::iter::repeat_n(SPACE, spaces));
@@ -271,7 +298,7 @@ pub(super) fn clip(text: &str, width: usize) -> String {
 }
 
 /// The columns `text` takes, but for its style sequences.
-fn columns(text: &str) -> usize {
+pub(super) fn columns(text: &str) -> usize {
     match text.contains('\x1b') {
         true => plain(text).width(),
         false => text.width(),
@@ -375,6 +402,20 @@ mod tests {
                 "● bash echo\n  {JOINED}{SPACE}one two\n  {FROM}  echo three\n  {FROM}  {JOINED}{SPACE}four"
             )
         );
+        // Lines wrapped from a quote start with its borders, styled as on its first line.
+        let border = "\x1b[34m│\x1b[0m\x1b[3m";
+        assert_eq!(
+            wrapped(
+                12,
+                &[&format!("{border} {border} one two three\nfour five six")]
+            ),
+            format!("{border} {border} one two\n{border} {border} three\nfour five\nsix")
+        );
+        assert_eq!(
+            wrapped(12, &["│ - one two three"]),
+            "│ - one two\n│   three"
+        );
+        assert_eq!(wrapped(4, &["│ ab cd"]), "│ ab\n│ cd");
         assert_eq!(wrapped(0, &["no  wrap \n"]), "no  wrap \n");
         assert_eq!(
             wrapped(11, &["\x1b[1mhel", "lo\x1b[0m world \x1b[36mfoo"]),
