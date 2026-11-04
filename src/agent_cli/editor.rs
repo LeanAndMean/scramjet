@@ -45,11 +45,16 @@ pub(super) enum Key {
     WordRight,
     Up,
     Down,
-    /// Puts the messages queued during a turn back in the editor; Up in a dialog's text.
+    /// Puts the messages queued during a turn back in the editor; Up in a dialog's text; moves
+    /// a model up in `/scoped-models`.
     AltUp,
+    /// Down, but in `/scoped-models`, where it moves a model down.
+    AltDown,
     PageUp,
     PageDown,
     LineStart,
+    /// Ctrl+A: as Home (`LineStart`), but in `/scoped-models`, where it switches on all models.
+    CtrlA,
     LineEnd,
     DeleteWordBack,
     DeleteWordForward,
@@ -71,6 +76,10 @@ pub(super) enum Key {
     Expand,
     /// Ctrl+R, Scramjet's key to rename a session in `/resume`.
     Rename,
+    /// Ctrl+S, Scramjet's key to save the models chosen in `/scoped-models`.
+    Save,
+    /// Ctrl+X, Scramjet's key to switch off all models in `/scoped-models`.
+    ClearAll,
     Suspend,
     /// A lone Escape.
     Escape,
@@ -107,7 +116,7 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
         b'\n' => Key::NewLine,
         b'\t' => Key::Text("\t".into()),
         0x7f | 8 => Key::Backspace,
-        1 => Key::LineStart,
+        1 => Key::CtrlA,
         2 => Key::Left,
         3 => Key::Interrupt,
         4 => Key::EndOfInput,
@@ -119,10 +128,12 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
         15 => Key::Expand,
         16 => Key::CycleModel(true),
         18 => Key::Rename,
+        19 => Key::Save,
         20 => Key::ToggleThinking,
         21 => Key::KillStart,
         22 => Key::PasteImage,
         23 => Key::DeleteWordBack,
+        24 => Key::ClearAll,
         26 => Key::Suspend,
         0x20..=0x7e => Key::Text(char::from(byte).to_string()),
         0xc2..=0xf4 => {
@@ -156,6 +167,7 @@ fn escape(source: &mut impl ByteSource) -> io::Result<Key> {
         None => Key::Escape,
         Some(b'[') => match csi(source)? {
             Key::Up if alt => Key::AltUp,
+            Key::Down if alt => Key::AltDown,
             key => key,
         },
         Some(b'O') => match source.byte(Some(ESCAPE_WAIT))? {
@@ -206,6 +218,7 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
     let word = matches!(modifier, Some("3" | "5"));
     Ok(match (last, parameters.as_ref()) {
         (b'A', "1;3") => Key::AltUp,
+        (b'B', "1;3") => Key::AltDown,
         (b'A', _) => Key::Up,
         (b'B', _) => Key::Down,
         (b'C', _) if word => Key::WordRight,
@@ -339,7 +352,7 @@ impl Buffer {
             Key::Right => self.cursor = self.next(),
             Key::WordLeft => self.cursor = self.word_start(),
             Key::WordRight => self.cursor = self.word_end(),
-            Key::LineStart => self.cursor = self.line_start(),
+            Key::LineStart | Key::CtrlA => self.cursor = self.line_start(),
             Key::LineEnd => self.cursor = self.line_end(),
             Key::DeleteWordBack => self.remove(self.word_start(), self.cursor),
             Key::DeleteWordForward => {
@@ -582,9 +595,10 @@ pub(super) fn terminal_size() -> (usize, usize) {
 }
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
-const SLASH_COMMANDS: [(&str, &str); 14] = [
+const SLASH_COMMANDS: [(&str, &str); 15] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
+    ("scoped-models", "Enable/disable models for Ctrl+P cycling"),
     ("copy", "Copy last agent message to clipboard"),
     ("name", "Set session display name"),
     ("session", "Show session info and stats"),
@@ -996,6 +1010,7 @@ impl Editor {
         let key = match key {
             Key::AltEnter => Key::NewLine,
             Key::AltUp => Key::Up,
+            Key::AltDown => Key::Down,
             key => key,
         };
         let Draft {
@@ -1071,6 +1086,8 @@ impl Editor {
             | Key::Mouse(_)
             | Key::BackTab
             | Key::CycleModel(_)
+            | Key::Save
+            | Key::ClearAll
             | Key::Expand
             | Key::Escape
             | Key::PageUp
@@ -1662,6 +1679,7 @@ mod tests {
             [
                 "/settings",
                 "/model",
+                "/scoped-models",
                 "/copy",
                 "/name",
                 "/session",
@@ -1679,12 +1697,12 @@ mod tests {
         assert_eq!(
             plain(list.rows(60)),
             [
-                "→ /settings   Open settings menu",
-                "  /model      Select model (opens selector UI)",
-                "  /copy       Copy last agent message to clipboard",
-                "  /name       Set session display name",
-                "  /session    Show session info and stats",
-                "  (1/14)",
+                "→ /settings       Open settings menu",
+                "  /model          Select model (opens selector UI)",
+                "  /scoped-models  Enable/disable models for Ctrl+P cycling",
+                "  /copy           Copy last agent message to clipboard",
+                "  /name           Set session display name",
+                "  (1/15)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -1695,15 +1713,15 @@ mod tests {
         assert_eq!(
             plain(list.rows(24)),
             [
+                "  /fork",
                 "  /clone",
-                "  /tree",
-                "→ /new",
+                "→ /tree",
+                "  /new",
                 "  /compact",
-                "  /resume",
-                "  (9/14)"
+                "  (9/15)"
             ]
         );
-        for _ in 0..6 {
+        for _ in 0..7 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);
@@ -1727,7 +1745,7 @@ mod tests {
     #[test]
     fn slash_commands_match_fuzzily_and_rank_best_matches_first() {
         let list = Completion::slash("/mdl", &[]).unwrap();
-        assert_eq!(labels(&list), ["/model"]);
+        assert_eq!(labels(&list), ["/model", "/scoped-models"]);
 
         let list = Completion::slash("/m", &[]).unwrap();
         assert_eq!(labels(&list)[0], "/model");

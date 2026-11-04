@@ -917,7 +917,7 @@ def completes_paths_and_commands(read, until, send, output):
     on_screen('Autopilot is off')
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     send(b'/')
-    on_screen('(1/14)')
+    on_screen('(1/15)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -1342,6 +1342,41 @@ def ctrl_p_in_a_scope_of_one(read, until, send, output):
     send(b'\x04')
 
 
+def scoped_models_list(read, until, send, output):
+    shown, on_screen = full_screen(columns=80)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'/scoped-models\r')
+    rows = on_screen('Models for Ctrl+P')
+    text = '\n'.join(rows)
+    assert '\u203a gpt-6-luna [openai]\n  gpt-6-terra [openai]\n  claude-haiku-5-5 [anthropic]' in text, text
+    assert 'GPT-6 Luna \u00b7 all on' in text, text
+    # With all on, Enter leaves only the selected one on, which goes first and stays selected.
+    send(b'\x1b[B\r')
+    rows = on_screen('GPT-6 Terra \u00b7 1 of 3 on, for this session until Ctrl+S saves them')
+    text = '\n'.join(rows)
+    assert '\u203a gpt-6-terra [openai] \u2713\n  gpt-6-luna [openai] \u2717' in text, text
+    assert rows[-1] == "  Ctrl+A/Ctrl+X: all shown on/off \u00b7 Ctrl+P: its provider's \u00b7 Alt+\u2191\u2193: move it", rows
+    # A query shows those it matches; Enter switches one on after those on.
+    send(b'luna\r')
+    on_screen('GPT-6 Luna \u00b7 2 of 3 on')
+    send(b'\x7f' * 4)
+    rows = on_screen('\u203a gpt-6-terra [openai] \u2713\n  gpt-6-luna [openai] \u2713')
+    # Alt+Down moves it after the next one on; Ctrl+S saves them.
+    send(b'\x1b[1;3B')
+    on_screen('  gpt-6-luna [openai] \u2713\n\u203a gpt-6-terra [openai] \u2713')
+    send(b'\x13')
+    rows = on_screen('Model selection saved to settings')
+    assert '  GPT-6 Terra \u00b7 2 of 3 on\n' in '\n'.join(rows), rows
+    send(b'\x1b')
+    on_screen('Models for Ctrl+P', gone=True)
+    # Ctrl+P takes them in that order.
+    send(b'\x10')
+    on_screen('Switched to GPT-6 Terra')
+    send(b'\x10')
+    on_screen('Switched to GPT-6 Luna')
+    send(b'\x04')
+
+
 def setting(label, value):
     """A row of `/settings`, its label as wide as the widest."""
     return label.ljust(len('Follow-up messages')) + '  ' + value
@@ -1642,6 +1677,13 @@ assert json.load(open(settings_path(scoped))) == {
 run(['--models', 'terra, x'], ctrl_p_in_a_scope_of_one,
     serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
     variables={'XDG_CONFIG_HOME': config_home('scope-of-one')}, columns=80)
+listed = config_home('listed')
+haiku_card = {'requestId': 'claude-haiku-5-5', 'displayName': 'Claude Haiku 5.5', 'provider': 'anthropic',
+              'supportedProtocols': ['anthropic-messages'], 'reasoning': None}
+run([], scoped_models_list,
+    serve_replies([], models=['gpt-6-luna', 'gpt-6-terra', 'claude-haiku-5-5'], cards=scope_cards + [haiku_card]),
+    variables={'XDG_CONFIG_HOME': listed}, columns=80)
+assert json.load(open(settings_path(listed))) == {'enabledModels': ['gpt-6-luna', 'gpt-6-terra']}
 plain_cards = [{'requestId': 'gpt-6-luna', 'supportedProtocols': ['openai-responses'], 'reasoning': None}]
 run([], started_without_thinking, serve_replies([], cards=plain_cards), variables=in_levels)
 menu_home = config_home('menu', '{"theme": "dark", "branchSummary": {"reserveTokens": 16384}}')

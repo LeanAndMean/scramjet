@@ -38,6 +38,15 @@ pub(super) enum Act {
     Rename,
     /// Ctrl+D, then Enter.
     Delete,
+    /// `/scoped-models`' keys (`Picker::scoping`): Enter, Ctrl+A, Ctrl+X, Ctrl+P, Alt+Up,
+    /// Alt+Down and Ctrl+S.
+    Toggle,
+    EnableAll,
+    ClearAll,
+    Provider,
+    Earlier,
+    Later,
+    Save,
 }
 
 /// Where a list was when one of its own keys ended it, so that it shows again there.
@@ -46,6 +55,8 @@ pub(super) struct Spot {
     pub(super) query: String,
     /// The selected row's position among those shown.
     pub(super) position: usize,
+    /// The rows shown, those matching the query.
+    pub(super) shown: Vec<usize>,
 }
 
 /// The model a next step runs with and its effort, which Left/Right and Shift+Tab choose in its
@@ -150,6 +161,8 @@ pub(super) struct Picker {
     held: bool,
     /// Whether Ctrl+R and Ctrl+D act on the selected row (`acting`).
     acts: bool,
+    /// Whether `/scoped-models`' keys do (`scoping`).
+    scoping: bool,
     /// Said in place of the keys' hint until the next key: what a key did, or why it could not
     /// (`true`: a warning).
     status: Option<(String, bool)>,
@@ -226,6 +239,7 @@ impl Picker {
             deadline: None,
             held: false,
             acts: false,
+            scoping: false,
             status: None,
         }
     }
@@ -262,6 +276,21 @@ impl Picker {
     /// it. The current row cannot be deleted.
     pub(super) fn acting(mut self) -> Self {
         self.acts = true;
+        self
+    }
+
+    /// Makes `/scoped-models`' keys end the list with what they ask for on the selected row, as
+    /// in Scramjet's list (`Act`); without a row they do nothing.
+    pub(super) fn scoping(mut self) -> Self {
+        self.scoping = true;
+        self
+    }
+
+    /// Selects `row`, when it is shown.
+    pub(super) fn on_row(mut self, row: usize) -> Self {
+        if let Some(position) = self.list.rows.iter().position(|&shown| shown == row) {
+            self.list.selected = position;
+        }
         self
     }
 
@@ -385,6 +414,7 @@ impl Picker {
             deadline: None,
             held: false,
             acts: false,
+            scoping: false,
             status: None,
         }
     }
@@ -421,6 +451,21 @@ impl Picker {
         {
             return None;
         }
+        let scoped = match key {
+            Key::Enter => Some(Act::Toggle),
+            Key::CtrlA => Some(Act::EnableAll),
+            Key::ClearAll => Some(Act::ClearAll),
+            Key::CycleModel(true) => Some(Act::Provider),
+            Key::AltUp => Some(Act::Earlier),
+            Key::AltDown => Some(Act::Later),
+            Key::Save => Some(Act::Save),
+            _ => None,
+        };
+        if self.scoping
+            && let Some(act) = scoped
+        {
+            return row.map(|row| self.act(act, row));
+        }
         match key {
             Key::Rename if self.acts => return row.map(|row| self.act(Act::Rename, row)),
             Key::EndOfInput if self.acts => {
@@ -444,8 +489,16 @@ impl Picker {
     fn act(&self, act: Act, row: usize) -> Picked {
         let query =
             (self.list.search.as_ref()).map_or_else(String::new, |search| search.query.clone());
-        let position = self.list.selected;
-        Picked::Act(act, row, Spot { query, position })
+        let (position, shown) = (self.list.selected, self.list.rows.clone());
+        Picked::Act(
+            act,
+            row,
+            Spot {
+                query,
+                position,
+                shown,
+            },
+        )
     }
 
     /// The list's lines for a screen of `(width, height)`.
@@ -619,7 +672,7 @@ impl List {
             Key::Down => self.selected + 1,
             Key::PageUp => self.selected.saturating_sub(page),
             Key::PageDown => (self.selected + page).min(last),
-            Key::LineStart => 0,
+            Key::LineStart | Key::CtrlA => 0,
             Key::LineEnd => last,
             Key::Enter => return Some(Some(self.rows[self.selected])),
             Key::Escape | Key::Interrupt => return Some(None),
@@ -1210,6 +1263,49 @@ mod tests {
     }
 
     #[test]
+    fn scoped_models_keys_act_on_the_selected_row_with_the_rows_shown() {
+        let texts = ["gpt-6-luna", "gpt-6-terra", "claude-haiku-5-5"].map(String::from);
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
+        let picker = || Picker::search("Models", 10, haystacks(&texts), 0, None, "None", row);
+        let mut list = picker().scoping();
+        let spot = |query: &str, position, shown: &[usize]| Spot {
+            query: query.into(),
+            position,
+            shown: shown.to_vec(),
+        };
+        let acts = [
+            (Key::Enter, Act::Toggle),
+            (Key::CtrlA, Act::EnableAll),
+            (Key::ClearAll, Act::ClearAll),
+            (Key::CycleModel(true), Act::Provider),
+            (Key::AltUp, Act::Earlier),
+            (Key::AltDown, Act::Later),
+            (Key::Save, Act::Save),
+        ];
+        for (key, act) in acts {
+            let acted = Some(Picked::Act(act, 0, spot("", 0, &[0, 1, 2])));
+            assert_eq!(list.key(&key), acted, "{key:?}");
+        }
+        for key in [Key::Text("gpt".into()), Key::Down] {
+            assert_eq!(list.key(&key), None);
+        }
+        let acted = Some(Picked::Act(Act::Toggle, 1, spot("gpt", 1, &[0, 1])));
+        assert_eq!(list.key(&Key::Enter), acted);
+        // Nothing shown, nothing to act on; Escape closes.
+        assert_eq!(list.key(&Key::Text("zzz".into())), None);
+        assert_eq!(list.key(&Key::CtrlA), None);
+        assert_eq!(list.key(&Key::Escape), Some(Picked::Row(None)));
+        // Elsewhere Ctrl+A goes to the first row, as Home does, and Enter chooses.
+        let mut plain_list = picker();
+        plain_list.key(&Key::Down);
+        assert_eq!(plain_list.key(&Key::CtrlA), None);
+        assert_eq!(plain_list.key(&Key::Enter), Some(Picked::Row(Some(0))));
+        // A list shown again selects the row acted on, where it is now.
+        let again = picker().scoping().on_row(2);
+        assert_eq!(plain(again.lines((40, 24)))[4], "› claude-haiku-5-5");
+    }
+
+    #[test]
     fn session_keys_rename_and_delete_after_confirming_with_tree_lines_without_a_query() {
         let texts = ["root parser", "fork parser", "other"].map(String::from);
         let row = |index: usize, width: usize| text::clip(&texts[index], width);
@@ -1225,13 +1321,14 @@ mod tests {
             ["› root parser", "     └─ fork parser", "  other ✓"]
         );
         assert_eq!(list.key(&Key::Down), None);
-        let place = |query: &str, position| Spot {
+        let place = |query: &str, position, shown: &[usize]| Spot {
             query: query.into(),
             position,
+            shown: shown.to_vec(),
         };
         assert_eq!(
             list.key(&Key::Rename),
-            Some(Picked::Act(Act::Rename, 1, place("", 1)))
+            Some(Picked::Act(Act::Rename, 1, place("", 1, &[0, 1, 2])))
         );
         // Ctrl+D asks first; Escape takes the question back, and other keys wait for an answer.
         assert_eq!(list.key(&Key::EndOfInput), None);
@@ -1255,7 +1352,7 @@ mod tests {
         }
         assert_eq!(
             list.key(&Key::Enter),
-            Some(Picked::Act(Act::Delete, 1, place("pars", 1)))
+            Some(Picked::Act(Act::Delete, 1, place("pars", 1, &[0, 1])))
         );
         let mut current = picker();
         current.key(&Key::Up);
@@ -1271,9 +1368,12 @@ mod tests {
             "Resume  ↑↓ move · Enter select · Esc cancel"
         );
         // Shown again where it was, with what the key did; without `acting` the keys do nothing.
-        let again = picker().at(place("pars", 5), Some(("Session deleted".into(), false)));
+        let again = picker().at(
+            place("pars", 5, &[]),
+            Some(("Session deleted".into(), false)),
+        );
         let lines = shown(&again);
-        let unmatched = picker().at(place("zzz", 0), None);
+        let unmatched = picker().at(place("zzz", 0, &[]), None);
         assert!(!unmatched.is_empty());
         assert_eq!(shown(&unmatched)[2], "  None");
         assert_eq!(lines[..2], ["Resume  Session deleted", "> pars "]);

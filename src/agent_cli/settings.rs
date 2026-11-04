@@ -470,6 +470,16 @@ impl Settings {
         self.save("defaultThinkingLevel", json!(scramjet_level(level)))
     }
 
+    /// `/scoped-models`' choice: the models Ctrl+P cycles through, in order; none: all of them,
+    /// which leaves `enabledModels` out, as Scramjet saves it.
+    pub(super) fn set_enabled_models(&mut self, models: Vec<String>) -> io::Result<()> {
+        self.enabled_models = models.clone();
+        self.update(|object| match models.is_empty() {
+            true => drop(object.remove("enabledModels")),
+            false => drop(object.insert("enabledModels".into(), json!(models))),
+        })
+    }
+
     /// The value `row` shows in `/settings`; the thinking level, autopilot, the next steps,
     /// publishing and what is installed are the session's, not the settings'.
     pub(super) fn shown(&self, row: Row) -> String {
@@ -869,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn enabled_models_are_a_list_of_patterns() {
+    fn enabled_models_are_patterns_saved_in_order_and_left_out_for_all() {
         let scratch = Scratch::new("enabled-models");
         let mut settings = settings_with(&scratch, r#"{"enabledModels": "sonnet"}"#);
         assert!(settings.enabled_models.is_empty());
@@ -888,6 +898,16 @@ mod tests {
         .unwrap();
         settings.reload();
         assert_eq!(settings.enabled_models, ["sonnet:high", "gpt-*"]);
+        let saved = || -> Value { serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap() };
+        settings
+            .set_enabled_models(vec!["b".into(), "a".into()])
+            .unwrap();
+        assert_eq!(saved(), json!({"theme": "x", "enabledModels": ["b", "a"]}));
+        settings.set_enabled_models(Vec::new()).unwrap();
+        assert_eq!(
+            (saved(), settings.enabled_models.len()),
+            (json!({"theme": "x"}), 0)
+        );
     }
 
     #[test]

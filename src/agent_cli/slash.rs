@@ -1,5 +1,6 @@
 //! The built-in commands: `/settings`, `/copy`, `/new`, `/name`, `/session`, `/resume`, `/fork`,
-//! `/clone`, `/tree`, `/model`, `/compact`, `/autopilot`, `/reload`, and `!` commands.
+//! `/clone`, `/tree`, `/model`, `/compact`, `/autopilot`, `/reload`, and `!` commands;
+//! `/scoped-models` is in `scope.rs`.
 use super::fuzzy::Haystack;
 use super::interactive::{Interactive, completions, model_line};
 use super::screen;
@@ -70,6 +71,7 @@ pub(super) enum Builtin<'a> {
     Clone,
     Tree(&'a str),
     Model(&'a str),
+    ScopedModels,
     Compact(&'a str),
     Autopilot(&'a str),
     Reload,
@@ -95,6 +97,7 @@ impl<'a> Builtin<'a> {
             "/clone" if argument.is_empty() => Self::Clone,
             "/tree" => Self::Tree(argument),
             "/model" => Self::Model(argument),
+            "/scoped-models" if argument.is_empty() => Self::ScopedModels,
             "/compact" => Self::Compact(argument),
             "/autopilot" => Self::Autopilot(argument),
             "/reload" if argument.is_empty() => Self::Reload,
@@ -115,6 +118,7 @@ impl<'a> Builtin<'a> {
                 | Self::Name(_)
                 | Self::Session
                 | Self::Model(_)
+                | Self::ScopedModels
                 | Self::Autopilot(_)
                 | Self::Reload
         )
@@ -143,6 +147,7 @@ impl Interactive {
             Some(Builtin::Clone) => self.clone_session(),
             Some(Builtin::Tree(wanted)) => self.tree(wanted),
             Some(Builtin::Model(wanted)) => self.model(wanted),
+            Some(Builtin::ScopedModels) => self.scoped_models(),
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Reload) => self.reload(),
@@ -962,6 +967,8 @@ impl Interactive {
                     Ok(Removal::Deleted) => ("Session deleted".to_owned(), false),
                     Err(error) => (format!("Failed to delete: {error}"), true),
                 }),
+                // Not keys of this list (`Picker::scoping`).
+                _ => None,
             };
             spot = Some((at, status));
         }
@@ -1688,6 +1695,7 @@ mod tests {
             "/name  my work ",
             "/model",
             "/model gpt-6-terra",
+            "/scoped-models",
             "/autopilot on",
             "/reload",
         ] {
@@ -1708,6 +1716,7 @@ mod tests {
         for prompt in [
             "/session now",
             "/copy all",
+            "/scoped-models luna",
             "/clone it",
             "/new one",
             "/exit now",

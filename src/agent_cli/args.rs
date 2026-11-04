@@ -50,7 +50,10 @@ and pastes its path, for the model to read. Ctrl+O shows tool results whole, or 
 behind a `Thinking...` line, or shows them again. Shift+Tab sets the reasoning effort to the next
 level the model's Proxy card lists. Both are saved in the settings. Ctrl+P switches to the next
 model of --models or enabledModels, else of all the endpoint's, Shift+Ctrl+P (in a terminal
-that reports it) to the one before; during a turn, from its next request. /new starts a new session;
+that reports it) to the one before; during a turn, from its next request. /scoped-models lists
+the endpoint's models, those Ctrl+P takes first in its order: Enter switches one on or off,
+Ctrl+A and Ctrl+X all those shown, Ctrl+P its provider's, Alt+Up/Down moves it, for the session;
+Ctrl+S saves them as enabledModels. /new starts a new session;
 /resume chooses one of this project's sessions to switch to, forks under the session they came
 from; in its list Ctrl+R renames the selected session and Ctrl+D deletes it once Enter confirms
 (to the trash when a `trash` command is installed). /fork chooses one of this
@@ -68,7 +71,8 @@ for /resume N, /fork N, /tree N and /model ID.
 /name NAME names the session, which /resume then lists by its name; /name alone shows it.
 /session shows the session's file, the messages in its context and the tokens they used.
 /copy copies the last reply's text, as the model wrote it, to the clipboard.
-Typed while a turn runs, /session, /name, /model and /copy run before its next request; the
+Typed while a turn runs, /session, /name, /model, /scoped-models and /copy run before its next
+request; the
 other commands stop it and run once it has.
 As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
 commands/SET:COMMAND.md is sent with the arguments substituted, inside <scramjet-command>. The

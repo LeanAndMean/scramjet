@@ -1,7 +1,16 @@
 //! The models Ctrl+P cycles through, as Scramjet's: those the patterns of `--models` or the
-//! settings' `enabledModels` choose, else all the endpoint's.
+//! settings' `enabledModels` choose, else all the endpoint's; `/scoped-models` chooses them.
+use super::fuzzy::Haystack;
+use super::interactive::Interactive;
+use super::select::{self, Act, Picked, Picker, Spot};
 use super::settings::{Settings, card_level, scramjet_level};
+use super::style::{MODEL_OFF, MODEL_ON, MUTED, RESET};
+use super::text::clip;
 use scramjet_rs::agent::{Agent, ModelOption};
+
+const SCOPED_KEYS: &str = "↑↓ move · Enter on/off · Ctrl+S save · Esc close";
+const SCOPED_ACTS: &str = "Ctrl+P switches among those on, in this order.\n\
+    Ctrl+A/Ctrl+X: all shown on/off · Ctrl+P: its provider's · Alt+↑↓: move it";
 
 /// A model in the scope, with the effort its pattern sets (`sonnet:high`), named as the model
 /// cards name levels.
@@ -201,6 +210,228 @@ pub(super) fn cycle(
     }
 }
 
+/// The models `/scoped-models` has on, among `all` (the endpoint's, in its order), as
+/// Scramjet's list keeps them: `on: None` for all of them, else those on, in the order Ctrl+P
+/// takes them.
+#[derive(Debug, PartialEq)]
+struct Chosen {
+    all: Vec<String>,
+    on: Option<Vec<String>>,
+}
+
+impl Chosen {
+    fn is_on(&self, id: &str) -> bool {
+        (self.on.as_ref()).is_none_or(|on| on.iter().any(|known| known == id))
+    }
+
+    /// The models as the list shows them: those on, in their order, then the others.
+    fn order(&self) -> Vec<String> {
+        let on = self.on.clone().unwrap_or_default();
+        let off = (self.all.iter()).filter(|id| !on.contains(id)).cloned();
+        let off: Vec<_> = off.collect();
+        [on, off].concat()
+    }
+
+    /// Enter: switches `id` on or off; with all on, the first leaves only it on, as Scramjet's.
+    fn toggle(&mut self, id: &str) {
+        match &mut self.on {
+            None => self.on = Some(vec![id.to_owned()]),
+            Some(on) => match on.iter().position(|known| known == id) {
+                Some(at) => drop(on.remove(at)),
+                None => on.push(id.to_owned()),
+            },
+        }
+    }
+
+    /// Ctrl+A: switches `ids` on, after those on; all of them on is all on.
+    fn enable(&mut self, ids: &[String]) {
+        let Some(on) = &mut self.on else {
+            return;
+        };
+        for id in ids {
+            if !on.contains(id) {
+                on.push(id.clone());
+            }
+        }
+        if on.len() == self.all.len() {
+            self.on = None;
+        }
+    }
+
+    /// Ctrl+X: switches `ids` off.
+    fn clear(&mut self, ids: &[String]) {
+        let on = self.on.take().unwrap_or_else(|| self.all.clone());
+        self.on = Some(on.into_iter().filter(|id| !ids.contains(id)).collect());
+    }
+
+    /// Ctrl+P: switches `ids`, a provider's models, on, or off when all of them are.
+    fn provider(&mut self, ids: &[String]) {
+        match ids.iter().all(|id| self.is_on(id)) {
+            true => self.clear(ids),
+            false => self.enable(ids),
+        }
+    }
+
+    /// Alt+Up (`-1`) or Alt+Down (`1`): moves `id`, when on, a place among those on. Returns
+    /// whether it moved.
+    fn shift(&mut self, id: &str, by: isize) -> bool {
+        let Some(on) = &mut self.on else {
+            return false;
+        };
+        let Some(at) = on.iter().position(|known| known == id) else {
+            return false;
+        };
+        match at.checked_add_signed(by).filter(|&to| to < on.len()) {
+            Some(to) => {
+                on.swap(at, to);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The scope as the session and the settings keep it: those on, or none for all, which is
+    /// also what none on means, as in Scramjet.
+    fn scope(&self) -> Vec<String> {
+        match &self.on {
+            Some(on) if on.len() < self.all.len() => on.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// How many are on, as the list says.
+    fn count(&self) -> String {
+        match &self.on {
+            None => "all on".to_owned(),
+            Some(on) => format!("{} of {} on", on.len(), self.all.len()),
+        }
+    }
+}
+
+impl Interactive {
+    /// `/scoped-models`, as Scramjet's: the endpoint's models, those Ctrl+P cycles through first
+    /// in its order, each switched on or off with Enter (with all on, the first leaves only it
+    /// on), all shown with Ctrl+A and Ctrl+X, a provider's with Ctrl+P, moved with Alt+Up and
+    /// Alt+Down. Changes apply to the session at once; Ctrl+S saves them as `enabledModels`.
+    /// With piped input it says which they are.
+    pub(super) fn scoped_models(&mut self) {
+        let models = self.agent.model_options();
+        let (scoped, _) = resolve(&self.scope, &models);
+        let mut chosen = Chosen {
+            all: models.iter().map(|model| model.id.clone()).collect(),
+            on: (!scoped.is_empty()).then(|| scoped.into_iter().map(|s| s.id).collect()),
+        };
+        if !self.interactive() {
+            let on = chosen
+                .on
+                .as_ref()
+                .map_or("all".to_owned(), |on| on.join(", "));
+            return self.say(&format!("Models Ctrl+P cycles through: {on}"));
+        }
+        let model = |id: &str| models.iter().find(|model| model.id == id);
+        let provider = |id: &str| model(id).and_then(|model| model.provider.clone());
+        let mut unsaved = false;
+        // Where the list was and the model selected, for it to show again so, and what to say.
+        let mut place: Option<(Spot, String)> = None;
+        let mut status = None;
+        loop {
+            let Some(screen) = &self.screen else {
+                return;
+            };
+            let order = chosen.order();
+            let texts = (order.iter().enumerate())
+                .map(|(rank, id)| {
+                    let provider = provider(id).unwrap_or_default();
+                    Haystack::ranked(&format!("{id} {provider}"), rank)
+                })
+                .collect();
+            let session_only = match unsaved {
+                true => ", for this session until Ctrl+S saves them",
+                false => "",
+            };
+            let notes = (order.iter())
+                .map(|id| {
+                    let name = model(id).and_then(|model| model.name.clone());
+                    let name = name.unwrap_or_else(|| id.clone());
+                    format!("{name} · {}{session_only}\n{SCOPED_ACTS}", chosen.count())
+                })
+                .collect();
+            let row = |index: usize, width| {
+                let id = &order[index];
+                let provider = (provider(id)).map_or_else(String::new, |provider| {
+                    format!(" {MUTED}[{provider}]{RESET}")
+                });
+                let mark = match (&chosen.on, chosen.is_on(id)) {
+                    (None, _) => String::new(),
+                    (Some(_), true) => format!(" {MODEL_ON}✓{RESET}"),
+                    (Some(_), false) => format!(" {MODEL_OFF}✗{RESET}"),
+                };
+                clip(&format!("{id}{provider}{mark}"), width)
+            };
+            let picker = Picker::search(
+                "Models for Ctrl+P",
+                select::VISIBLE,
+                texts,
+                0,
+                None,
+                "No matching models",
+                row,
+            );
+            let mut picker = picker.noting(SCOPED_KEYS, notes).scoping().held();
+            if let Some((spot, id)) = place.take() {
+                let at = order.iter().position(|known| *known == id).unwrap_or(0);
+                picker = picker.at(spot, status.take()).on_row(at);
+            }
+            let (act, index, spot) = match screen.pick_or_act(picker) {
+                Picked::Act(act, index, spot) => (act, index, spot),
+                Picked::Row(_) => return screen.dismiss(),
+            };
+            let id = order[index].clone();
+            let shown: Vec<String> = spot.shown.iter().map(|&at| order[at].clone()).collect();
+            let changed = match act {
+                Act::Toggle => {
+                    chosen.toggle(&id);
+                    true
+                }
+                Act::EnableAll => {
+                    chosen.enable(&shown);
+                    true
+                }
+                Act::ClearAll => {
+                    chosen.clear(&shown);
+                    true
+                }
+                Act::Provider => {
+                    let theirs = provider(&id);
+                    let ids: Vec<String> = (chosen.all.iter())
+                        .filter(|other| provider(other) == theirs)
+                        .cloned()
+                        .collect();
+                    chosen.provider(&ids);
+                    true
+                }
+                Act::Earlier => chosen.shift(&id, -1),
+                Act::Later => chosen.shift(&id, 1),
+                Act::Save | Act::Rename | Act::Delete => false,
+            };
+            if changed {
+                self.scope = chosen.scope();
+                unsaved = true;
+            }
+            if act == Act::Save {
+                status = Some(match self.settings.set_enabled_models(chosen.scope()) {
+                    Ok(()) => {
+                        unsaved = false;
+                        ("Model selection saved to settings".to_owned(), false)
+                    }
+                    Err(error) => (format!("Not saved: {error}"), true),
+                });
+            }
+            place = Some((spot, id));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,6 +552,72 @@ mod tests {
                 ]
             )
         );
+    }
+
+    fn chosen(on: Option<&[&str]>) -> Chosen {
+        let strings = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        Chosen {
+            all: strings(&["a", "b", "c", "d"]),
+            on: on.map(strings),
+        }
+    }
+
+    fn strings(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn the_list_switches_models_as_scramjets_does_and_keeps_those_on_first() {
+        let mut list = chosen(None);
+        assert_eq!(
+            (list.order(), list.count(), list.scope()),
+            (strings(&["a", "b", "c", "d"]), "all on".into(), vec![])
+        );
+        // With all on, the first switch leaves only that one on.
+        list.toggle("c");
+        assert_eq!(
+            (list.order(), list.count(), list.scope()),
+            (
+                strings(&["c", "a", "b", "d"]),
+                "1 of 4 on".into(),
+                strings(&["c"])
+            )
+        );
+        list.toggle("a");
+        assert_eq!(list.order(), strings(&["c", "a", "b", "d"]));
+        list.toggle("c");
+        assert_eq!(list, chosen(Some(&["a"])));
+        // Those shown, switched on after those on; all of them on is all on.
+        list.enable(&strings(&["d", "a", "b"]));
+        assert_eq!(list, chosen(Some(&["a", "d", "b"])));
+        list.enable(&strings(&["c"]));
+        assert_eq!(list, chosen(None));
+        list.clear(&strings(&["b", "d"]));
+        assert_eq!(list, chosen(Some(&["a", "c"])));
+        list.clear(&strings(&["a", "b", "c", "d"]));
+        // None on is no scope, as all on.
+        assert_eq!((list.count(), list.scope()), ("0 of 4 on".into(), vec![]));
+        // A provider's models go on, or off when all of them are on.
+        list.provider(&strings(&["b", "c"]));
+        assert_eq!(list, chosen(Some(&["b", "c"])));
+        list.provider(&strings(&["b", "c"]));
+        assert_eq!(list, chosen(Some(&[])));
+        let mut all = chosen(None);
+        all.provider(&strings(&["b", "c"]));
+        assert_eq!(all, chosen(Some(&["a", "d"])));
+    }
+
+    #[test]
+    fn alt_up_and_down_move_a_model_among_those_on() {
+        let mut list = chosen(Some(&["a", "b", "c"]));
+        assert!(list.shift("c", -1));
+        assert_eq!(list, chosen(Some(&["a", "c", "b"])));
+        assert!(list.shift("a", 1));
+        assert_eq!(list, chosen(Some(&["c", "a", "b"])));
+        // Not past either end, nor one off, nor with all on.
+        assert!(!list.shift("c", -1) && !list.shift("b", 1) && !list.shift("d", -1));
+        assert!(!chosen(None).shift("a", 1));
+        assert_eq!(list, chosen(Some(&["c", "a", "b"])));
     }
 
     #[test]
