@@ -861,6 +861,28 @@ def running_shows_output(read, until, send, output):
     send(b'\x04')
 
 
+def calls_running_together_show_at_once(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    # As in Scramjet, each call's rows show in its place while both run.
+    rows = on_screen('  two-1')
+    text = '\n'.join(rows)
+    both = ('\u25cf bash echo one-$((0+1)); sleep 2; echo one-$((1+1))\n  one-1\n\n'
+            '\u25cf bash echo two-$((0+1)); sleep 4; echo two-$((1+1))\n  two-1\n')
+    assert both in text, text
+    assert '\u2026 running' in text, text
+    # The first ended above the second, which still runs.
+    rows = on_screen('  one-2')
+    text = '\n'.join(rows)
+    assert text.index('  one-2') < text.index('\u25cf bash echo two'), text
+    assert '  two-1\n' in text and '  two-2' not in text and '\u2026 running' in text, text
+    rows = on_screen('Both ended.')
+    text = '\n'.join(rows)
+    assert text.index('  one-2') < text.index('  two-2') < text.index('Both ended.'), text
+    send(b'\x04')
+
+
 def final_texts_replace_lost_deltas(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -929,6 +951,10 @@ run([], hidden_from_the_start, serve_quiet_reasoning(), variables={'XDG_CONFIG_H
 run([], running_counts_seconds, calling)
 run([], running_shows_output, talking)
 run([], final_texts_replace_lost_deltas, replies)
+run([], calls_running_together_show_at_once, serve_items([
+    [tool_call('call_1', 'bash', {'command': 'echo one-$((0+1)); sleep 2; echo one-$((1+1))'}),
+     tool_call('call_2', 'bash', {'command': 'echo two-$((0+1)); sleep 4; echo two-$((1+1))'})],
+    [message('Both ended.')]]))
 run_in_shell(suspend_in_shell, talking)
 
 

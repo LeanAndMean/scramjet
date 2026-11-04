@@ -36,6 +36,9 @@ pub(super) struct Recorder {
     /// Each `usage` call's session tokens and context, and the model's output rate.
     pub(super) usage: Vec<(Tokens, Option<u64>)>,
     pub(super) rates: Vec<Option<f64>>,
+    /// Shows a reply's calls running at the same time each as it runs, `shown` saying whose
+    /// call what follows is (`of N`, `of none`).
+    pub(super) together: bool,
 }
 impl AgentUi for Recorder {
     fn waiting(&mut self, purpose: Purpose) {
@@ -58,6 +61,16 @@ impl AgentUi for Recorder {
         self.calls.push(name.to_owned());
     }
     fn tool_running(&mut self, _: std::time::Instant) {}
+    fn running_calls(&mut self, count: usize) -> bool {
+        if self.together {
+            self.shown.push(format!("{count} calls"));
+        }
+        self.together
+    }
+    fn of_call(&mut self, index: Option<usize>) {
+        let index = index.map_or_else(|| "none".to_owned(), |index| index.to_string());
+        self.shown.push(format!("of {index}"));
+    }
     fn subagents(&mut self, children: &Children) {
         self.children.push(children.clone());
     }

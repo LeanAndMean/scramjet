@@ -1919,6 +1919,85 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
     }
 
     #[test]
+    fn calls_running_together_show_each_as_it_runs_where_the_interface_can() {
+        let meet = |mine: &str, theirs: &str| {
+            json!({"command":format!("touch {mine}; for _ in $(seq 100); do [ -e {theirs} ] && \
+break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
+        };
+        let (endpoint, server) = serve(vec![
+            tool_calls(&[("bash", meet("a", "b")), ("bash", meet("b", "a"))]),
+            stream(&fixture::text_events("met", fixture::known_usage())),
+            tool_calls(&[
+                ("bash", json!({"command":"sleep 0.5; echo slept"})),
+                (
+                    subagent::NAME,
+                    json!({"agent":"p","task":"go","agentScope":"both"}),
+                ),
+            ]),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "calls-shown-together");
+        let mut ui = Recorder {
+            together: true,
+            choices: vec![Some(1)],
+            ..Recorder::default()
+        };
+        agent
+            .turn("meet", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        // Each call's display, after the `of` that says it is that call's.
+        let each = |shown: &[String]| {
+            let mut calls: Vec<Vec<String>> = vec![Vec::new(), Vec::new()];
+            let mut of = None;
+            for shown in shown {
+                match shown.strip_prefix("of ") {
+                    Some(index) => of = index.parse::<usize>().ok(),
+                    None => calls[of.unwrap()]
+                        .push(shown.split(['\n', ':', ';']).next().unwrap().into()),
+                }
+            }
+            calls
+        };
+        let (first, last) = (ui.shown.first().unwrap(), ui.shown.last().unwrap());
+        assert_eq!((first.as_str(), last.as_str()), ("2 calls", "reply met"));
+        let calls = &ui.shown[1..ui.shown.len() - 2];
+        assert_eq!(ui.shown[ui.shown.len() - 2], "of none");
+        let results = calls.iter().filter(|shown| shown.starts_with("result"));
+        assert_eq!(results.count(), 2);
+        // They met: both had started before either ended.
+        let started = calls.iter().rposition(|shown| shown.starts_with("call"));
+        let ended = calls.iter().position(|shown| shown.starts_with("result"));
+        assert!(started < ended, "{calls:?}");
+        let meeting = ["call bash touch a", "result bash met"];
+        assert_eq!(each(calls)[0], meeting);
+        assert_eq!(each(calls)[1], ["call bash touch b", "result bash met"]);
+        // A question among them is asked at once, while the call before it runs.
+        let project = agent.root().join(".scramjet/agents");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("p.md"), "---\nname: p\ndescription: P\n---\n").unwrap();
+        ui.shown.clear();
+        agent.turn("ask", &mut ui, &AtomicBool::new(false)).unwrap();
+        let calls = each(&ui.shown[1..ui.shown.len() - 2]);
+        assert_eq!(calls[0], ["call bash sleep 0.5", "result bash slept"]);
+        assert_eq!(
+            calls[1],
+            [
+                "call subagent p [both]",
+                "question Agents",
+                "choose Run project-local agents? [\"Yes\", \"No\"] None",
+                "result subagent Canceled",
+            ]
+        );
+        let asked = ui
+            .shown
+            .iter()
+            .position(|shown| shown.starts_with("question"));
+        let slept = (ui.shown.iter()).position(|shown| shown.starts_with("result bash slept"));
+        assert!(asked < slept, "{:?}", ui.shown);
+        server.join().unwrap();
+    }
+
+    #[test]
     fn a_stop_during_calls_running_together_stops_each_with_its_own_result() {
         let (endpoint, server) = serve(vec![
             tool_calls(&[

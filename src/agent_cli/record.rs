@@ -20,7 +20,10 @@ pub(super) enum Event {
     ToolOutput(String),
     /// The children of a running `subagent` call, as they are now.
     Subagents(Children),
-    ToolResult(String, String, Option<ToolDetail>, bool),
+    /// A tool's result, and when it came.
+    ToolResult(String, String, Option<ToolDetail>, bool, Instant),
+    /// The calls of a reply that run at the same time, each with its events.
+    Calls(Vec<Vec<Event>>),
     /// A command the user runs with `!` (true) or `!!` starts.
     CommandStarted(String, bool),
     CommandResult(UserCommand),
@@ -53,8 +56,24 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::ToolCall(name, summary) => ui.tool_call(name, summary),
         Event::ToolRunning(since) => ui.tool_running(*since),
         Event::ToolOutput(_) | Event::Subagents(_) => {}
-        Event::ToolResult(name, output, detail, failed) => {
-            ui.tool_result(name, output, detail.as_ref(), *failed)
+        Event::ToolResult(name, output, detail, failed, at) => {
+            ui.tool_ended(name, output, detail.as_ref(), *failed, *at)
+        }
+        // In call order, each as far as it got, a running one's output or children under it.
+        Event::Calls(calls) => {
+            let started: Vec<_> = calls.iter().filter(|events| !events.is_empty()).collect();
+            for (index, events) in started.iter().enumerate() {
+                for event in *events {
+                    replay(event, ui);
+                }
+                if !ended(events) {
+                    running(events.last(), ui);
+                    // As a result's block ends, but the part's end gives the last its blank line.
+                    if index + 1 < started.len() {
+                        ui.blank_line();
+                    }
+                }
+            }
         }
         Event::CommandStarted(command, include) => ui.command_started(command, *include),
         Event::CommandResult(ran) => ui.command_result(ran),
@@ -71,6 +90,13 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::NextStep(record) => ui.next_step(record),
         Event::Text(text) => ui.said(text),
     }
+}
+
+/// Whether the events of a call include its result.
+pub(super) fn ended(events: &[Event]) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, Event::ToolResult(..)))
 }
 
 /// What a tool or command still running shows, when `last` is its latest event: its output so

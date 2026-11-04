@@ -44,6 +44,15 @@ pub trait AgentUi {
     fn subagents(&mut self, _children: &Children) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
+    /// `count` calls of a reply start running at the same time: whether this interface shows
+    /// each in its place as it runs, `of_call` saying whose the display calls that follow are.
+    /// Otherwise each call's display waits until the calls before it have ended.
+    fn running_calls(&mut self, _count: usize) -> bool {
+        false
+    }
+    /// What shows from now on is of call `index` of those `running_calls` started, or, with
+    /// `None` once they all ended, of none.
+    fn of_call(&mut self, _index: Option<usize>) {}
     /// A command the user runs with `!` (`include`) or `!!` starts; `tool_output` follows its
     /// output.
     fn command_started(&mut self, command: &str, include: bool);

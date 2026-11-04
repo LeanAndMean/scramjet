@@ -69,6 +69,8 @@ const MODEL_NEXT: &str = "The model changes before the next request";
 /// What the session asks the screen to show or do.
 enum ToScreen {
     Event(Event),
+    /// An event of call `.0` of the `Event::Calls` shown last.
+    Call(usize, Event),
     /// The session was replaced: the conversation shown starts again.
     Clear,
     /// A turn, `/compact`, a branch summary or a `!` command starts, Shift+Tab cycling the
@@ -201,6 +203,8 @@ pub(super) struct Link {
     queue: Arc<Mutex<Queue>>,
     /// `steeringMode` and `followUpMode`.
     modes: (Delivery, Delivery),
+    /// The call of those running at the same time whose events are sent now.
+    call: Option<usize>,
 }
 
 impl Link {
@@ -214,7 +218,10 @@ impl Link {
         }
     }
     pub(super) fn event(&self, event: Event) {
-        self.send(ToScreen::Event(event));
+        self.send(match self.call {
+            Some(index) => ToScreen::Call(index, event),
+            None => ToScreen::Event(event),
+        });
     }
     /// Shows a message of the session's own, wrapped on the screen.
     pub(super) fn say(&self, text: &str) {
@@ -373,6 +380,7 @@ impl Handle {
                 wake,
                 queue,
                 modes,
+                call: None,
             },
             from,
             thread: Some(thread),
@@ -431,8 +439,22 @@ impl AgentUi for Link {
         self.event(Event::Subagents(shown.clone()));
     }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
-        let event = Event::ToolResult(name.to_owned(), output.to_owned(), detail.cloned(), failed);
-        self.event(event);
+        let (name, output, detail) = (name.to_owned(), output.to_owned(), detail.cloned());
+        self.event(Event::ToolResult(
+            name,
+            output,
+            detail,
+            failed,
+            Instant::now(),
+        ));
+    }
+    /// As Scramjet's, each call's rows show in its place while it runs.
+    fn running_calls(&mut self, count: usize) -> bool {
+        self.event(Event::Calls((0..count).map(|_| Vec::new()).collect()));
+        true
+    }
+    fn of_call(&mut self, index: Option<usize>) {
+        self.call = index;
     }
     fn command_started(&mut self, command: &str, include: bool) {
         self.event(Event::CommandStarted(command.to_owned(), include));
@@ -719,19 +741,30 @@ impl Transcript {
         }
         let part = self.parts.last_mut().expect("pushed above");
         part.version += 1;
-        // Streamed text is kept whole, and only a running tool's latest output.
-        match (part.events.last_mut(), event) {
-            (Some(Event::ToolOutput(last)), Event::ToolOutput(output)) => *last = output,
-            (Some(Event::Subagents(last)), Event::Subagents(shown)) => *last = shown,
-            (
-                Some(Event::Progress(StreamProgress::Text(last))),
-                Event::Progress(StreamProgress::Text(delta)),
-            )
-            | (
-                Some(Event::Progress(StreamProgress::Reasoning(last))),
-                Event::Progress(StreamProgress::Reasoning(delta)),
-            ) => last.push_str(&delta),
-            (_, event) => part.events.push(event),
+        add(&mut part.events, event);
+    }
+
+    /// Adds `event` to call `index` of the calls running at the same time, shown last.
+    fn push_call(&mut self, index: usize, event: Event) {
+        match self.calls_mut().and_then(|calls| calls.get_mut(index)) {
+            Some(events) => add(events, event),
+            None => return self.push(event),
+        }
+        self.parts.last_mut().expect("has the calls").version += 1;
+    }
+
+    /// The calls running at the same time, when they are what was shown last.
+    fn calls(&self) -> Option<&[Vec<Event>]> {
+        match self.parts.last()?.events.last()? {
+            Event::Calls(calls) => Some(calls),
+            _ => None,
+        }
+    }
+
+    fn calls_mut(&mut self) -> Option<&mut Vec<Vec<Event>>> {
+        match self.parts.last_mut()?.events.last_mut()? {
+            Event::Calls(calls) => Some(calls),
+            _ => None,
         }
     }
 
@@ -791,6 +824,24 @@ impl Transcript {
     fn shown(&self, line: usize) -> String {
         let line = self.window(line, 1).pop();
         line.map(|line| line.shown).unwrap_or_default()
+    }
+}
+
+/// Adds `event` to `events`, keeping streamed text whole, and only a running tool's latest
+/// output and children.
+fn add(events: &mut Vec<Event>, event: Event) {
+    match (events.last_mut(), event) {
+        (Some(Event::ToolOutput(last)), Event::ToolOutput(output)) => *last = output,
+        (Some(Event::Subagents(last)), Event::Subagents(shown)) => *last = shown,
+        (
+            Some(Event::Progress(StreamProgress::Text(last))),
+            Event::Progress(StreamProgress::Text(delta)),
+        )
+        | (
+            Some(Event::Progress(StreamProgress::Reasoning(last))),
+            Event::Progress(StreamProgress::Reasoning(delta)),
+        ) => last.push_str(&delta),
+        (_, event) => events.push(event),
     }
 }
 
@@ -1035,9 +1086,21 @@ impl App {
             ToScreen::Event(event) => {
                 self.track(&event);
                 if let Event::Subagents(children) = &event {
-                    self.footer.subagents(children);
+                    self.footer.subagents(0, children);
                 }
                 self.transcript.push(event);
+            }
+            ToScreen::Call(index, event) => {
+                // The status line says `running` until every call has ended.
+                let others = (self.transcript.calls().into_iter().flatten().enumerate())
+                    .any(|(other, events)| other != index && !record::ended(events));
+                if !(others && matches!(event, Event::ToolResult(..))) {
+                    self.track(&event);
+                }
+                if let Event::Subagents(children) = &event {
+                    self.footer.subagents(index, children);
+                }
+                self.transcript.push_call(index, event);
             }
             ToScreen::Clear => {
                 self.transcript = Transcript::default();
@@ -2369,6 +2432,45 @@ mod tests {
     }
 
     #[test]
+    fn calls_running_together_each_show_in_their_place_as_they_run() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::default();
+        transcript.push(Event::UserPrompt("both".into()));
+        transcript.push(Event::Calls(vec![Vec::new(), Vec::new(), Vec::new()]));
+        let ago = |seconds| {
+            Instant::now()
+                .checked_sub(Duration::from_secs(seconds))
+                .unwrap()
+        };
+        for (index, command) in ["seq 1 2", "seq 3 4"].into_iter().enumerate() {
+            transcript.push_call(index, Event::ToolCall("bash".into(), command.into()));
+            transcript.push_call(index, Event::ToolRunning(ago(5)));
+        }
+        transcript.push_call(0, Event::ToolOutput("1".into()));
+        transcript.push_call(1, Event::ToolOutput("3".into()));
+        transcript.push_call(0, Event::ToolOutput("1\n2".into()));
+        let shown = |transcript: &mut Transcript| -> Vec<String> {
+            transcript.render((40, false, false), &hide);
+            let lines = transcript.window(0, 100).into_iter();
+            lines
+                .map(|line| plain(&line.shown).trim().to_owned())
+                .collect()
+        };
+        // The third call has not started: it shows nothing yet.
+        let running = ["● bash seq 1 2", "1", "2", "", "● bash seq 3 4", "3", ""];
+        assert_eq!(shown(&mut transcript)[2..], running);
+        let result = Event::ToolResult("bash".into(), "1\n2\n".into(), None, false, ago(3));
+        transcript.push_call(0, result);
+        let ended = shown(&mut transcript);
+        // It took what it took when it ended, however late it renders.
+        assert_eq!(ended[2..6], ["● bash seq 1 2", "1", "2", "took 2.0s"]);
+        assert_eq!(ended[ended.len() - 4..], ["", "● bash seq 3 4", "3", ""]);
+        // What follows the calls comes after them all.
+        transcript.push(Event::Assistant("Done.".into()));
+        assert_eq!(shown(&mut transcript)[ended.len() - 1..], ["Done.", ""]);
+    }
+
+    #[test]
     fn parts_render_again_only_when_they_or_the_look_change() {
         let hide = Arc::new(AtomicBool::new(false));
         let mut transcript = Transcript::default();
@@ -2380,6 +2482,7 @@ mod tests {
             output.join("\n"),
             None,
             false,
+            Instant::now(),
         ));
         transcript.split();
         transcript.push(Event::Text("✓ done".into()));
@@ -2424,7 +2527,13 @@ mod tests {
         let command = "cargo test --offline --no-fail-fast";
         transcript.push(Event::ToolCall("bash".into(), command.into()));
         let output = "test a ... ok\ntest agent::tests::compaction ... FAILED";
-        transcript.push(Event::ToolResult("bash".into(), output.into(), None, true));
+        transcript.push(Event::ToolResult(
+            "bash".into(),
+            output.into(),
+            None,
+            true,
+            Instant::now(),
+        ));
         transcript.render((24, false, true), &hide);
         let lines = transcript.window(0, 100);
         assert!(lines.len() > 16, "{lines:?}");

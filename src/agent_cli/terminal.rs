@@ -264,12 +264,19 @@ pub(super) struct Terminal {
 }
 
 impl Terminal {
-    /// A tool's result block.
-    fn result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
+    /// A tool's result block, for a result that came `at`.
+    pub(super) fn tool_ended(
+        &mut self,
+        name: &str,
+        output: &str,
+        detail: Option<&ToolDetail>,
+        failed: bool,
+        at: Instant,
+    ) {
         self.clear();
         let width = self.width().saturating_sub(2).max(20);
         let full = self.full;
-        let took = self.tool_started.take().map(|started| started.elapsed());
+        let took = (self.tool_started.take()).map(|started| at.saturating_duration_since(started));
         let style = match () {
             _ if !self.color => "",
             _ if failed => style::TOOL_FAILED,
@@ -816,7 +823,7 @@ impl AgentUi for Terminal {
         }
     }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
-        self.result(name, output, detail, failed);
+        self.tool_ended(name, output, detail, failed, Instant::now());
     }
     fn command_started(&mut self, command: &str, include: bool) {
         self.command = Some((command.to_owned(), include));
@@ -1001,6 +1008,10 @@ fn print(stdout: bool, text: &str) {
 
 impl Terminal {
     /// A message of the session's own, wrapped, as a block ending with a blank line.
+    /// The blank line that separates a running call's rows from the next call's.
+    pub(super) fn blank_line(&mut self) {
+        self.err("\n");
+    }
     pub(super) fn said(&mut self, text: &str) {
         self.clear();
         let text = self.wrapped(text);

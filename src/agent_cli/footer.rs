@@ -59,9 +59,10 @@ pub(super) struct Footer {
     branch: Option<String>,
     checked: Instant,
     pub(super) shown: Shown,
-    /// What the running `subagent` call's children spent so far, in dollars, and whether some
-    /// child's cost is not known: `shown` counts it once the call's result is in.
-    running: (f64, bool),
+    /// What each running `subagent` call's children spent so far, in dollars, and whether some
+    /// child's cost is not known, by the call's place among those running at the same time:
+    /// `shown` counts it once the call's result is in.
+    running: Vec<(f64, bool)>,
 }
 
 impl Footer {
@@ -79,26 +80,27 @@ impl Footer {
             head,
             checked: Instant::now(),
             shown: Shown::default(),
-            running: (0.0, false),
+            running: Vec::new(),
         }
     }
 
-    /// What the session sends of itself, the running call's spending in it.
+    /// What the session sends of itself, the running calls' spending in it.
     pub(super) fn show(&mut self, shown: Shown) {
         self.shown = shown;
-        self.running = (0.0, false);
+        self.running.clear();
     }
 
     /// The session's tokens, how full its context is and the model's output rate after a
-    /// response, a compaction or a subagent call's result, the running call's spending in them.
+    /// response, a compaction or a subagent call's result, the running calls' spending in them.
     pub(super) fn usage(&mut self, tokens: Tokens, context: Option<u64>, rate: Option<f64>) {
         (self.shown.tokens, self.shown.context, self.shown.rate) = (tokens, context, rate);
-        self.running = (0.0, false);
+        self.running.clear();
     }
 
-    /// Counts what the running `subagent` call's `children` spent so far, as Scramjet's footer
-    /// adds a running tool's cost as it goes.
-    pub(super) fn subagents(&mut self, children: &Children) {
+    /// Counts what the `children` of the running `subagent` call `call` (its place among calls
+    /// running at the same time) spent so far, as Scramjet's footer adds a running tool's cost
+    /// as it goes.
+    pub(super) fn subagents(&mut self, call: usize, children: &Children) {
         let mut running = (0.0, false);
         for usage in (children.runs.iter().map(|run| run.usage)).filter(|usage| usage.turns > 0) {
             match usage.cost {
@@ -106,7 +108,10 @@ impl Footer {
                 None => running.1 = true,
             }
         }
-        self.running = running;
+        if self.running.len() <= call {
+            self.running.resize(call + 1, (0.0, false));
+        }
+        self.running[call] = running;
     }
 
     /// Reads the branch again once `BRANCH_CHECK` has passed since it was read.
@@ -153,7 +158,8 @@ impl Footer {
             }
         }
         let (cost, unpriced) = (shown.tokens.cost, shown.tokens.unpriced);
-        let (running, running_unpriced) = self.running;
+        let running: f64 = self.running.iter().map(|(cost, _)| cost).sum();
+        let running_unpriced = self.running.iter().any(|(_, unpriced)| *unpriced);
         counts.extend(dollars(cost + running, unpriced || running_unpriced, 3));
         let (full, percent) = match (shown.context, shown.window) {
             (count, Some(window @ 1..)) => {
@@ -291,7 +297,7 @@ mod tests {
             branch: Some("main".into()),
             checked: Instant::now(),
             shown,
-            running: (0.0, false),
+            running: Vec::new(),
         }
     }
 
@@ -402,18 +408,21 @@ mod tests {
         };
         let mut shown = footer(Shown { tokens, ..opus() });
         // A child that has not replied yet has spent nothing.
-        shown.subagents(&children(vec![child(1, Some(0.03)), child(0, None)]));
+        shown.subagents(0, &children(vec![child(1, Some(0.03)), child(0, None)]));
         assert_eq!(spent(&shown).as_deref(), Some("$0.045"));
-        shown.subagents(&children(vec![child(2, Some(0.07)), child(1, None)]));
+        shown.subagents(0, &children(vec![child(2, Some(0.07)), child(1, None)]));
         assert_eq!(spent(&shown).as_deref(), Some("$0.085+?"));
+        // Another call running at the same time adds its children's.
+        shown.subagents(2, &children(vec![child(1, Some(0.1))]));
+        assert_eq!(spent(&shown).as_deref(), Some("$0.185+?"));
         // The call's result is in the session's tokens, once.
         let ended = Tokens {
-            cost: 0.085,
+            cost: 0.185,
             ..tokens
         };
         shown.usage(ended, Some(53_000), None);
-        assert_eq!(spent(&shown).as_deref(), Some("$0.085"));
-        shown.subagents(&children(vec![child(1, Some(0.01))]));
+        assert_eq!(spent(&shown).as_deref(), Some("$0.185"));
+        shown.subagents(0, &children(vec![child(1, Some(0.01))]));
         shown.show(Shown { tokens, ..opus() });
         assert_eq!(spent(&shown).as_deref(), Some("$0.015"));
     }

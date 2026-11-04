@@ -1,5 +1,6 @@
-//! The tool calls of one reply that run at the same time, as Pi runs them, shown as if they ran
-//! one after another: what a call shows waits until the calls before it have ended.
+//! The tool calls of one reply that run at the same time, as Pi runs them: shown each in its
+//! place as it runs where the interface can (`AgentUi::running_calls`), else as if they ran one
+//! after another, what a call shows waiting until the calls before it have ended.
 use super::tools::{self, Call, Output};
 use super::{AgentUi, Answer, Children, Choice, ToolDetail, Usage};
 use std::collections::{HashMap, VecDeque};
@@ -25,8 +26,8 @@ type Show<'a> = Box<dyn FnOnce(&mut dyn AgentUi) + Send + 'a>;
 
 /// Runs each of `calls` with `run` at the same time, those that change the same file one after
 /// another in their order (`lanes`), and returns their outputs and usage in order. `ui` shows
-/// each call's display as it happens once the calls before it have ended; until then only its
-/// latest output and children are kept.
+/// each call's display as it happens, told whose it is, or, when it cannot, once the calls before
+/// it have ended, only its latest output and children kept until then.
 pub(super) fn run(
     calls: &[Call],
     root: &Path,
@@ -35,6 +36,7 @@ pub(super) fn run(
     cancel: &AtomicBool,
 ) -> Vec<(Output, Usage)> {
     let mut ended: Vec<Option<(Output, Usage)>> = calls.iter().map(|_| None).collect();
+    let together = ui.running_calls(calls.len());
     std::thread::scope(|scope| {
         let (to, from) = mpsc::channel();
         for lane in lanes(calls, root) {
@@ -54,7 +56,21 @@ pub(super) fn run(
         drop(to);
         let mut queues: Vec<VecDeque<Shown>> = calls.iter().map(|_| VecDeque::new()).collect();
         let mut shown = 0;
+        let mut of = None;
         for (index, event) in from {
+            if together {
+                if of != Some(index) {
+                    ui.of_call(Some(index));
+                    of = Some(index);
+                }
+                match event {
+                    Shown::Output(output) => ui.tool_output(&output),
+                    Shown::Subagents(children) => ui.subagents(&children),
+                    Shown::Other(show) => show(ui),
+                    Shown::Ended(output, usage) => ended[index] = Some((output, usage)),
+                }
+                continue;
+            }
             let queue = &mut queues[index];
             match (queue.back_mut(), event) {
                 (Some(Shown::Output(last)), Shown::Output(output)) => *last = output,
@@ -72,6 +88,9 @@ pub(super) fn run(
                     }
                 }
             }
+        }
+        if together {
+            ui.of_call(None);
         }
     });
     let ended = ended
@@ -117,8 +136,9 @@ impl<'a> Relay<'a> {
     fn show(&self, show: impl FnOnce(&mut dyn AgentUi) + Send + 'a) {
         self.send(Shown::Other(Box::new(show)));
     }
-    /// The user's answer to `ask`, which is asked once the calls before this one have ended;
-    /// `None` when the turn was stopped by then.
+    /// The user's answer to `ask`, asked when the interface shows this call's display: at once
+    /// with the calls shown together, else once the calls before this one have ended; `None`
+    /// when the turn was stopped by then.
     fn ask<T: Send + 'a>(&self, ask: impl FnOnce(&mut dyn AgentUi) -> T + Send + 'a) -> Option<T> {
         let (answer, answered) = mpsc::channel();
         let cancel = self.cancel;
