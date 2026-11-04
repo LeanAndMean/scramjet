@@ -4,6 +4,7 @@
 use super::terminal::Terminal;
 use scramjet_rs::agent::{
     AgentUi, Answer, AutoCompaction, Children, Compaction, Purpose, StreamProgress, ToolDetail,
+    UserCommand,
 };
 use std::time::Duration;
 
@@ -19,7 +20,9 @@ pub(super) enum Event {
     /// The children of a running `subagent` call, as they are now.
     Subagents(Children),
     ToolResult(String, String, Option<ToolDetail>, bool),
-    CommandResult(String, bool),
+    /// A command the user runs with `!` (true) or `!!` starts.
+    CommandStarted(String, bool),
+    CommandResult(UserCommand),
     /// A turn stopped before its end: cancelled (`None`), or failed with the error.
     Stopped(Option<String>),
     Compacted(Compaction, Option<AutoCompaction>),
@@ -52,7 +55,8 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::ToolResult(name, output, detail, failed) => {
             ui.tool_result(name, output, detail.as_ref(), *failed)
         }
-        Event::CommandResult(output, failed) => ui.command_result(output, *failed),
+        Event::CommandStarted(command, include) => ui.command_started(command, *include),
+        Event::CommandResult(ran) => ui.command_result(ran),
         Event::Stopped(error) => ui.stopped(error.as_deref()),
         Event::Compacted(compaction, automatic) => ui.compacted(compaction, *automatic),
         Event::CompactionFailed(error) => ui.compaction_error(error),
@@ -68,11 +72,12 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
     }
 }
 
-/// What a tool still running shows, when `last` is its latest event: its output so far, or its
-/// children.
+/// What a tool or command still running shows, when `last` is its latest event: its output so
+/// far, or its children.
 pub(super) fn running(last: Option<&Event>, ui: &mut Terminal) {
     match last {
         Some(Event::ToolOutput(output)) => ui.running_output(output),
+        Some(Event::CommandStarted(..)) => ui.running_output(""),
         Some(Event::Subagents(shown)) => ui.running_subagents(shown),
         _ => {}
     }

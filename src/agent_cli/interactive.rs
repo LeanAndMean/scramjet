@@ -588,7 +588,6 @@ impl Interactive {
 /// Adds the `!` commands that ended while a turn ran to the conversation, shown as they ran.
 fn add_shells(agent: &mut Agent, screen: &mut Handle) {
     for shell in screen.take_shells() {
-        screen.link.tool_call("bash", shell.command());
         if let Err(error) = agent.add_shell(shell, &mut screen.link) {
             screen.say(&format!("error: {error}"));
         }

@@ -42,8 +42,8 @@ pub use tools::{
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use turn::Shell;
 pub use ui::{
-    AgentUi, Answer, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation, Purpose,
-    ToolDetail, publication_choices, show_items,
+    AgentUi, Answer, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation, Ending,
+    Purpose, ToolDetail, UserCommand, publication_choices, show_items,
 };
 
 use client::ModelInfo;

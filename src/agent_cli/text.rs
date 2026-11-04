@@ -6,8 +6,10 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// (`selection::lines`) so that a copy holds what was written rather than how it was laid out.
 /// A line's copy starts after `FROM`, the cells before it being a gutter. A line with `JOINED`
 /// was wrapped from the one before: its copy starts after the mark and follows the untrimmed
-/// copy of the line before with a space for each `SPACE` after the mark, not a line break.
+/// copy of the line before with a space for each `SPACE` after the mark, not a line break. A line
+/// with `RULE` is a rule between blocks, which a copy leaves out.
 pub(super) const FROM: char = '\x1d';
+pub(super) const RULE: char = '\x1c';
 pub(super) const JOINED: char = '\x1e';
 pub(super) const SPACE: char = '\x1f';
 

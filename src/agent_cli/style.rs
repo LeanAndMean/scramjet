@@ -31,6 +31,14 @@ pub const WARNING: &str = "\x1b[33m";
 pub const NOTICE: &str = "\x1b[33m";
 /// The record of a next step chosen or offered after a command completed.
 pub const NEXT_STEP: &str = "\x1b[2m";
+/// A command the user ran, as Scramjet's bash-mode color shows it: the rules around its block
+/// when run with `!`, then with `!!` (kept out of the conversation), and its `$ command` line.
+pub const COMMAND_RULE: &str = "\x1b[32m";
+pub const COMMAND_EXCLUDED_RULE: &str = "\x1b[2m";
+pub const COMMAND_LINE: &str = "\x1b[1;32m";
+/// How a command the user ran ended, if not with exit code 0: failed, or cancelled.
+pub const COMMAND_FAILED: &str = "\x1b[31m";
+pub const COMMAND_CANCELLED: &str = "\x1b[33m";
 
 pub const DIFF_REMOVED: &str = "\x1b[31m";
 pub const DIFF_ADDED: &str = "\x1b[32m";

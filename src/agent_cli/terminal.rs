@@ -2,7 +2,7 @@
 //! line under it on a terminal, or captured for the full screen to show; and the terminal modes
 //! of a `-p` turn.
 use super::interactive::thinking;
-use super::text::{FROM, Wrap, call_line, clip, printable, visible};
+use super::text::{FROM, RULE, Wrap, call_line, clip, printable, visible};
 use super::{children, diff, editor, job, markdown, style};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -11,8 +11,8 @@ use rustix::{
 };
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, Compaction, DELEGATE,
-    DELEGATE_SCOPE_WARNING, PUBLICATION_TOOLS, Purpose, StreamProgress, ToolDetail,
-    publication_choices,
+    DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, StreamProgress, ToolDetail,
+    UserCommand, publication_choices,
 };
 use std::{
     io::{BufRead, IsTerminal, Write},
@@ -214,6 +214,10 @@ pub(super) struct Terminal {
     markdown: markdown::Markdown,
     wrap: Wrap,
     tool_started: Option<Instant>,
+    /// The command the user runs with `!` (true) or `!!`, while it runs.
+    command: Option<(String, bool)>,
+    /// How many of the last lines of a command the user ran its block shows.
+    command_lines: usize,
     pub(super) hide_thinking: Arc<AtomicBool>,
     /// The reasoning streamed in the current block, and whether only its marker is shown.
     reasoning: String,
@@ -229,15 +233,8 @@ pub(super) struct Terminal {
 }
 
 impl Terminal {
-    /// A tool's result block; `bash_lines` is how many of a command's last lines it shows.
-    fn result(
-        &mut self,
-        name: &str,
-        output: &str,
-        detail: Option<&ToolDetail>,
-        failed: bool,
-        bash_lines: usize,
-    ) {
+    /// A tool's result block.
+    fn result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
         self.clear();
         let width = self.width().saturating_sub(2).max(20);
         let full = self.full;
@@ -335,7 +332,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             }
             ("bash", None) => styled(preview(
                 &bash_shown(output, failed),
-                shown(Shown::Last(bash_lines)),
+                shown(Shown::Last(BASH_LINES)),
                 width,
             )),
             _ => styled(preview(output, shown(Shown::First(RESULT_LINES)), width)),
@@ -369,6 +366,14 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         terminal.full = full;
         terminal.expandable = !full;
         terminal.marked = true;
+        terminal
+    }
+    /// As `capture_shown`, cut, for the dock under the conversation, where a command the user
+    /// runs shows at most `lines` lines and Ctrl+O does not expand it.
+    pub(super) fn capture_dock(width: usize, hide_thinking: Arc<AtomicBool>, lines: usize) -> Self {
+        let mut terminal = Self::capture_shown(width, hide_thinking, false);
+        terminal.expandable = false;
+        terminal.command_lines = lines;
         terminal
     }
     /// What was rendered into the buffer, after ending any streamed block.
@@ -448,6 +453,8 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             markdown: markdown::Markdown::new(false, ""),
             wrap: Wrap::new(0),
             tool_started: None,
+            command: None,
+            command_lines: COMMAND_LINES,
             hide_thinking,
             reasoning: String::new(),
             reasoning_hidden: false,
@@ -724,6 +731,7 @@ impl AgentUi for Terminal {
     }
     fn tool_call(&mut self, name: &str, summary: &str) {
         self.clear();
+        self.command = None;
         let width = if self.color { self.width() } else { 0 };
         let line = self.dim(&call_line(name, summary, width, self.marked));
         self.err(&format!("{line}\n"));
@@ -765,10 +773,15 @@ impl AgentUi for Terminal {
         }
     }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
-        self.result(name, output, detail, failed, BASH_LINES);
+        self.result(name, output, detail, failed);
     }
-    fn command_result(&mut self, output: &str, failed: bool) {
-        self.result("bash", output, None, failed, COMMAND_LINES);
+    fn command_started(&mut self, command: &str, include: bool) {
+        self.command = Some((command.to_owned(), include));
+        self.show("running".into(), false);
+    }
+    fn command_result(&mut self, ran: &UserCommand) {
+        self.command = None;
+        self.command_block(&ran.command, ran.include, &ran.output, Some(&ran.ending));
     }
     fn stopped(&mut self, error: Option<&str>) {
         let text = match error {
@@ -990,6 +1003,9 @@ impl Terminal {
         }
     }
     pub(super) fn running_output(&mut self, output: &str) {
+        if let Some((command, include)) = self.command.take() {
+            return self.command_block(&command, include, output, None);
+        }
         let width = self.width().saturating_sub(2).max(20);
         let shown = match self.full {
             true => Shown::All,
@@ -1000,6 +1016,97 @@ impl Terminal {
             let row = self.styled(style::STATUS, &row);
             self.err(&format!("{gutter}{row}\n"));
         }
+    }
+    /// A command the user ran, in Scramjet's block: between rules colored as it was run with `!`
+    /// (`include`) or `!!`, `$ command`, the last lines of its output (all of them when tool
+    /// results are whole), and how it ended (`None` while it runs) if not with exit code 0.
+    fn command_block(
+        &mut self,
+        command: &str,
+        include: bool,
+        output: &str,
+        ending: Option<&Ending>,
+    ) {
+        self.clear();
+        let width = self.width();
+        let inner = width.saturating_sub(2).max(20);
+        let mut rows = Vec::new();
+        for line in visible(command).split('\n') {
+            let mut wrap = self.wrapper(if self.color { inner } else { 0 });
+            let wrapped = wrap.push(&format!("$ {line}")) + &wrap.finish();
+            let header = |row| self.styled(style::COMMAND_LINE, row);
+            rows.extend(wrapped.split('\n').map(header));
+        }
+        let lines: Vec<&str> = output.lines().collect();
+        let earlier = match self.full {
+            true => 0,
+            false => lines.len().saturating_sub(self.command_lines),
+        };
+        if !lines.is_empty() {
+            rows.push(String::new());
+        }
+        for line in &lines[earlier..] {
+            let line = printable(line);
+            let shown = match self.full {
+                true => {
+                    let mut wrap = self.wrapper(inner);
+                    wrap.push(&line) + &wrap.finish()
+                }
+                false => clip(&line, inner),
+            };
+            rows.extend(
+                shown
+                    .split('\n')
+                    .map(|row| self.styled(style::TOOL_OUTPUT, row)),
+            );
+        }
+        let mut status = Vec::new();
+        if earlier > 0 {
+            let hint = if self.expandable { EXPAND_HINT } else { "" };
+            status.push(self.dim(&format!("… {earlier} earlier lines{hint}")));
+        }
+        match ending {
+            Some(Ending::Exited(code)) => {
+                status.push(self.styled(style::COMMAND_FAILED, &format!("(exit {code})")))
+            }
+            Some(Ending::Cancelled) => {
+                status.push(self.styled(style::COMMAND_CANCELLED, "(cancelled)"))
+            }
+            Some(Ending::Failed(why)) => {
+                let why = format!("({})", visible(why));
+                status.push(self.styled(style::COMMAND_FAILED, &why))
+            }
+            Some(Ending::Done) | None => {}
+        }
+        if !status.is_empty() {
+            rows.push(String::new());
+            rows.extend(status);
+        }
+        let rule = self.color.then(|| {
+            let rule_style = match include {
+                true => style::COMMAND_RULE,
+                false => style::COMMAND_EXCLUDED_RULE,
+            };
+            let rule = self.styled(rule_style, &"─".repeat(width.saturating_sub(1)));
+            match self.marked {
+                true => format!("{RULE}{rule}\n"),
+                false => format!("{rule}\n"),
+            }
+        });
+        let pad = if self.marked {
+            format!(" {FROM}")
+        } else {
+            " ".into()
+        };
+        let mut block = rule.clone().unwrap_or_default();
+        for row in rows {
+            match row.is_empty() {
+                true => block.push('\n'),
+                false => block += &format!("{pad}{row}\n"),
+            }
+        }
+        block += &rule.unwrap_or_default();
+        self.err(&format!("{block}\n"));
     }
     /// Removes the last `rows` rows of output, the cursor at the start of the row after them.
     fn rewind(&mut self, rows: usize) {
@@ -1123,7 +1230,7 @@ fn answer(typed: &str) -> Answer {
 /// Scramjet shows the end of bash output, where errors and the exit code are.
 const BASH_LINES: usize = 5;
 /// As Scramjet shows the output of a command the user ran with `!`.
-const COMMAND_LINES: usize = 20;
+pub(super) const COMMAND_LINES: usize = 20;
 const WRITE_LINES: usize = 10;
 const RESULT_LINES: usize = 6;
 const SUMMARY_LINES: usize = 10;
@@ -1242,6 +1349,83 @@ mod tests {
         assert_eq!(clip("abcdefgh", 5), "abcd…");
         assert_eq!(clip("日本語です", 6), "日本…");
         assert_eq!(clip("short", 5), "short");
+    }
+
+    #[test]
+    fn a_users_command_shows_as_scramjets_block_and_copies_without_its_rules() {
+        let plain = |text: &str| {
+            let lines = crate::agent_cli::selection::lines(text);
+            let rows: Vec<String> = (lines.iter())
+                .map(|line| line.shown.replace(style::RESET, ""))
+                .collect();
+            (
+                rows,
+                crate::agent_cli::selection::text(&lines, 0, usize::MAX),
+            )
+        };
+        let hide = Arc::new(AtomicBool::new(false));
+        let output: String = (1..=25).map(|n| format!("{n}\n")).collect();
+        let ran = UserCommand {
+            command: "seq 25; exit 2 # then a long comment".into(),
+            include: true,
+            output: output.clone(),
+            ending: Ending::Exited(2),
+        };
+        let mut ui = Terminal::capture_shown(30, hide.clone(), false);
+        ui.command_result(&ran);
+        let (rows, copied) = plain(&ui.captured());
+        let rule = format!("{}{}", style::COMMAND_RULE, "─".repeat(29));
+        let header = format!(" {}$ seq 25; exit 2 # then a", style::COMMAND_LINE);
+        let output = |n| format!(" {}{n}", style::TOOL_OUTPUT);
+        let wrapped = format!(" {}long comment", style::COMMAND_LINE);
+        let mut expected = vec![rule.clone(), header, wrapped];
+        expected.push(String::new());
+        expected.extend((6..=25).map(output));
+        expected.push(String::new());
+        expected.extend([
+            format!(" {}… 5 earlier lines, Ctrl+O to expand", style::MUTED),
+            format!(" {}(exit 2)", style::COMMAND_FAILED),
+            rule,
+        ]);
+        assert_eq!(rows, expected);
+        let lines: String = (6..=25).map(|n| format!("{n}\n")).collect();
+        assert_eq!(
+            copied,
+            format!(
+                "$ seq 25; exit 2 # then a long comment\n\n{lines}\n… 5 earlier lines, Ctrl+O \
+to expand\n(exit 2)"
+            )
+        );
+        // Expanded, every line; a `!!` command's rules are dim, and a running one has no ending.
+        let mut ui = Terminal::capture_shown(40, hide.clone(), true);
+        ui.command_started("seq 25", false);
+        ui.running_output(&output_text(25));
+        let (rows, _) = plain(&ui.captured());
+        assert_eq!(rows.len(), 1 + 1 + 1 + 25 + 1);
+        assert_eq!(
+            rows[0],
+            format!("{}{}", style::COMMAND_EXCLUDED_RULE, "─".repeat(39))
+        );
+        assert_eq!(rows[3], format!(" {}1", style::TOOL_OUTPUT));
+        let mut ui = Terminal::capture_shown(40, hide, false);
+        let ran = UserCommand {
+            output: String::new(),
+            ending: Ending::Cancelled,
+            ..ran
+        };
+        ui.command_result(&ran);
+        let (rows, _) = plain(&ui.captured());
+        assert_eq!(
+            rows[2..4],
+            [
+                "".into(),
+                format!(" {}(cancelled)", style::COMMAND_CANCELLED)
+            ]
+        );
+    }
+
+    fn output_text(lines: usize) -> String {
+        (1..=lines).map(|n| format!("{n}\n")).collect()
     }
 
     #[test]

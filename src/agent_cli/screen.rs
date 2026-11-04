@@ -16,7 +16,7 @@ use super::select::{Act, Picked, Picker, Routed, Spot};
 use super::selection::{self, Line};
 use super::settings::{Delivery, DoubleEscape, Settings};
 use super::slash::Builtin;
-use super::terminal::{Terminal, elapsed, waiting_for};
+use super::terminal::{COMMAND_LINES, Terminal, elapsed, waiting_for};
 use super::text::{Wrap, clip, one_line, visible};
 use super::{clipboard, editor, job, style};
 use rustix::{
@@ -25,7 +25,7 @@ use rustix::{
 };
 use scramjet_rs::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, Compaction, EffortCycle, Purpose,
-    Shell, StreamProgress, ToolDetail,
+    Shell, StreamProgress, ToolDetail, UserCommand,
 };
 use std::{
     fmt::Write as _,
@@ -147,6 +147,8 @@ struct Queue {
 /// A `!` command run apart from the session.
 struct Side {
     command: String,
+    /// Run with `!`, rather than `!!`.
+    include: bool,
     /// The end of its output so far.
     output: String,
     ended: Option<Shell>,
@@ -400,8 +402,11 @@ impl AgentUi for Link {
         let event = Event::ToolResult(name.to_owned(), output.to_owned(), detail.cloned(), failed);
         self.event(event);
     }
-    fn command_result(&mut self, output: &str, failed: bool) {
-        self.event(Event::CommandResult(output.to_owned(), failed));
+    fn command_started(&mut self, command: &str, include: bool) {
+        self.event(Event::CommandStarted(command.to_owned(), include));
+    }
+    fn command_result(&mut self, ran: &UserCommand) {
+        self.event(Event::CommandResult(ran.clone()));
     }
     fn stopped(&mut self, error: Option<&str>) {
         self.event(Event::Stopped(error.map(str::to_owned)));
@@ -505,7 +510,7 @@ impl Activity {
             Event::Waiting(Purpose::Reply) => Self::new("thinking"),
             Event::Waiting(purpose) => Self::cancellable(waiting_for(*purpose)),
             Event::Progress(StreamProgress::Call(name)) => Self::new(format!("preparing {name}")),
-            Event::ToolRunning => Self::new("running"),
+            Event::ToolRunning | Event::CommandStarted(..) => Self::new("running"),
             Event::ToolResult(..) | Event::CommandResult(..) => Self::new("working"),
             Event::Retrying(_, _, _, delay) => Self {
                 countdown: Some(*delay),
@@ -1200,6 +1205,7 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         queue.shells.push(Side {
             command: command.to_owned(),
+            include,
             output: String::new(),
             ended: None,
             cancel: cancel.clone(),
@@ -1861,19 +1867,23 @@ impl App {
     fn dock(&self, (width, height): (usize, usize)) -> (Vec<Line>, Option<(usize, usize)>) {
         let mut rows = Vec::new();
         let queue = self.queue();
-        // Above the status line, as Scramjet shows them.
+        // Above the status line, as Scramjet shows them, each in at most about half the screen
+        // (Scramjet's view scrolls instead, and its editor stays).
+        let lines = (height / 2).saturating_sub(6).clamp(1, COMMAND_LINES);
         for side in &queue.shells {
-            let output = match &side.ended {
-                Some(shell) => shell.shown().0,
-                None => side.output.clone(),
-            };
             let events = [
-                Event::ToolCall("bash".to_owned(), side.command.clone()),
-                Event::ToolOutput(output),
+                Event::CommandStarted(side.command.clone(), side.include),
+                match &side.ended {
+                    Some(shell) => Event::CommandResult(shell.shown()),
+                    None => Event::ToolOutput(side.output.clone()),
+                },
             ];
-            let mut lines = render(&events, (width, false, false), self.hide_thinking.clone());
-            lines.pop();
-            rows.extend(lines);
+            let mut ui = Terminal::capture_dock(width, self.hide_thinking.clone(), lines);
+            for event in &events {
+                record::replay(event, &mut ui);
+            }
+            record::running(events.last(), &mut ui);
+            rows.extend(selection::lines(&ui.captured()));
         }
         rows.push(selection::row(&self.status(width)));
         let queued = [

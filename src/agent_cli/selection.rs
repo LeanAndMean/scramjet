@@ -4,7 +4,7 @@
 //! Lines are the screen's (`lines`), which hold only style sequences besides the text.
 
 use super::style;
-use super::text::{FROM, JOINED, SPACE};
+use super::text::{FROM, JOINED, RULE, SPACE};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -58,7 +58,7 @@ fn split<'a>(rows: impl Iterator<Item = &'a str>) -> Vec<Line> {
     let mut lines: Vec<Line> = Vec::new();
     for line in rows {
         let mut shown = active.clone();
-        let (mut column, mut from, mut joined) = (0, 0, None::<String>);
+        let (mut column, mut from, mut joined, mut rule) = (0, 0, None::<String>, false);
         let mut chars = line.chars().peekable();
         while let Some(c) = chars.next() {
             match c {
@@ -85,6 +85,7 @@ fn split<'a>(rows: impl Iterator<Item = &'a str>) -> Vec<Line> {
                     column += 4;
                 }
                 FROM => from = column,
+                RULE => rule = true,
                 JOINED => {
                     from = column;
                     joined = Some(String::new());
@@ -107,7 +108,7 @@ fn split<'a>(rows: impl Iterator<Item = &'a str>) -> Vec<Line> {
             shown,
             from,
             joined: None,
-            rule: false,
+            rule,
         });
     }
     lines

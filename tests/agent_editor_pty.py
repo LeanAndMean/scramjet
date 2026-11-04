@@ -610,7 +610,7 @@ def escape_cancels_command(read, until, send, output):
     send(b'!sleep 30\r')
     on_screen('running 1s')
     send(b'\x1b')
-    on_screen('Command cancelled by the user')
+    on_screen(' (cancelled)')
     send(b'\x04')
 
 
@@ -961,14 +961,17 @@ def bang_commands(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'!echo hi; exit 3\r')
-    rows = on_screen('Command exited with code 3')
-    assert '\u25cf bash echo hi; exit 3\n  hi\n' in '\n'.join(rows), rows
+    rows = on_screen(' (exit 3)')
+    rule = '\u2500' * 20
+    assert re.search(rule + '+\n \\$ echo hi; exit 3\n\n hi\n\n \\(exit 3\\)\n' + rule, '\n'.join(rows)), rows
+    # Scramjet's colors: green rules and command, dim output, the exit code red.
+    assert b'\x1b[1;32m$ echo hi; exit 3' in output and b'\x1b[31m(exit 3)' in output, output
     send(b'!!echo secret\r')
-    on_screen('  secret')
+    on_screen(' secret')
     send(b'!sleep 30\r')
     on_screen('running 1s')
     send(b'\x03')
-    on_screen('Command cancelled by the user')
+    on_screen(' (cancelled)')
     send(b'\x1b[A\x1b[A')
     ending(read, output, ['> !!echo secret'])
     send(b'\x03\x04')
@@ -976,7 +979,7 @@ def bang_commands(read, until, send, output):
 
 def failed_after_bang(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
-    on_screen('  secret')
+    on_screen(' secret')
     send(b'hello\r')
     on_screen('error: provider: cannot connect')
     send(b'\x03\x04')
@@ -985,7 +988,7 @@ def failed_after_bang(read, until, send, output):
 def resumed_bang_and_error(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     rows = '\n'.join(on_screen('error: provider: cannot connect'))
-    assert '\u25cf bash echo secret\n  secret\n' in rows and '> hello\n\nerror: provider: cannot connect' in rows, rows
+    assert ' $ echo secret\n\n secret\n' in rows and '> hello\n\nerror: provider: cannot connect' in rows, rows
     send(b'\x03\x04')
 
 
@@ -2488,22 +2491,22 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     on_screen('Replied.')
     rows = on_screen('[2 requests')
     text = '\n'.join(rows)
-    assert text.index('Replied.') < text.index('[2 requests') < text.index('\u25cf bash echo side$((0+1))'), text
+    assert text.index('Replied.') < text.index('[2 requests') < text.index(' $ echo side$((0+1))'), text
     assert text.count('side2') == 1, text
     send(b'again\r')
     on_screen('running 1s')
     send(b'!sleep 30\r')
-    on_screen('\u25cf bash sleep 30')
+    on_screen(' $ sleep 30')
     send(b'!echo no\r')
     ending(read, output, ['> !echo no', 'A bash command is already running. Press Esc to cancel it', 'first.'])
     send(b'\x15')
     rows = on_screen('Second.')
     # Still running when the turn ends; Escape stops it, and it is added then.
-    assert 'Command cancelled' not in '\n'.join(rows), rows
+    assert '(cancelled)' not in '\n'.join(rows), rows
     send(b'\x1b')
-    rows = on_screen('Command cancelled by the user')
+    rows = on_screen(' (cancelled)')
     text = '\n'.join(rows)
-    assert text.index('Second.') < text.index('\u25cf bash sleep 30'), text
+    assert text.index('Second.') < text.index(' $ sleep 30'), text
     send(b'\x04')
 
 

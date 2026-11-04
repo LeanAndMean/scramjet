@@ -2,9 +2,10 @@
 //! runs, and the `!` commands the user runs without one.
 use super::tools::{self, Approval, Call, Output};
 use super::{
-    Agent, AgentError, AgentUi, Answer, AutoCompaction, CONTEXT, Completed, DIFF, FAILED,
+    Agent, AgentError, AgentUi, Answer, AutoCompaction, CONTEXT, Completed, DIFF, Ending, FAILED,
     MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, Step, TYPED, ToolDetail, USAGE,
-    autonomy, delegate, forge, message_text, publish, question, sandbox, status, subagent,
+    UserCommand, autonomy, delegate, forge, message_text, publish, question, sandbox, status,
+    subagent,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,18 +37,23 @@ impl Shell {
         }
     }
 
-    pub fn command(&self) -> &str {
-        &self.command
-    }
-
-    /// What it showed, as its result shows it, and whether it failed.
-    pub fn shown(&self) -> (String, bool) {
+    /// How it ran, as its block shows it, live and on a resume: from the text kept for it.
+    pub fn shown(&self) -> UserCommand {
         match &self.ran {
+            Ok(ran) if self.include => {
+                let failed = ran.tool_output().failed;
+                UserCommand::included(&self.command, &ran.message(&self.command), failed)
+            }
             Ok(ran) => {
                 let shown = ran.tool_output();
-                (shown.text, shown.failed)
+                UserCommand::excluded(&self.command, &shown.text, shown.failed)
             }
-            Err(error) => (format!("Error: {error}"), true),
+            Err(error) => UserCommand::new(
+                &self.command,
+                self.include,
+                "",
+                Ending::Failed(error.clone()),
+            ),
         }
     }
 }
@@ -347,8 +353,7 @@ to a larger-context model)"
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
-        ui.tool_call("bash", command);
-        ui.tool_running();
+        ui.command_started(command, include);
         let shell = Shell::run(&self.config.root, command, include, cancel, &mut |output| {
             ui.tool_output(output)
         });
@@ -358,11 +363,11 @@ to a larger-context model)"
     /// Shows how `shell`, run apart from the agent, ended, and adds it to the conversation as
     /// `shell` says: for the model (`!`), or only to be shown again on a resume (`!!`).
     pub fn add_shell(&mut self, shell: Shell, ui: &mut dyn AgentUi) -> Result<(), AgentError> {
-        let (text, failed) = shell.shown();
-        ui.command_result(&text, failed);
+        ui.command_result(&shell.shown());
         let Ok(ran) = &shell.ran else {
             return Ok(());
         };
+        let Output { text, failed, .. } = ran.tool_output();
         let prompt = format!("!{}", shell.command);
         let mut item = match shell.include {
             true => json!({"role":"user","content":ran.message(&shell.command),TYPED:prompt}),
@@ -1415,7 +1420,19 @@ files is added or changed.",
         let typed = format!("!{command}");
         agent.shell(command, true, &mut ui, &cancel).unwrap();
         agent.shell("echo secret", false, &mut ui, &cancel).unwrap();
-        assert_eq!(ui.calls, ["bash", "bash"]);
+        let blocks = [
+            format!("!{command} \"hi\\n100%\" Exited(3)"),
+            "!!echo secret \"secret\\n\" Done".into(),
+        ];
+        assert_eq!(
+            ui.shown,
+            [
+                format!("started {command} true"),
+                blocks[0].clone(),
+                "started echo secret false".into(),
+                blocks[1].clone(),
+            ]
+        );
         assert_eq!(agent.usage.requests, 0);
         let message = format!("Ran `{command}`\n```\nhi\n100%\n```\n\nCommand exited with code 3");
         assert_eq!(
@@ -1441,15 +1458,8 @@ files is added or changed.",
         assert_eq!(prompts, [typed.as_str(), "next"]);
         let mut shown = Recorder::default();
         show_items(&conversation, &mut shown);
-        assert_eq!(
-            shown.shown[..4],
-            [
-                format!("call bash {command}"),
-                "command hi\n100%\n\nCommand exited with code 3 failed".into(),
-                "call bash echo secret".into(),
-                "command secret\n".into(),
-            ]
-        );
+        // A resume shows them as they ended.
+        assert_eq!(shown.shown[..2], blocks);
         let tree = agent.tree().unwrap();
         let items: Vec<_> = tree.entries.iter().map(|entry| &entry.item).collect();
         assert_eq!(items[1], &TreeItem::Command("echo secret".into()));

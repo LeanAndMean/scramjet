@@ -40,8 +40,11 @@ pub trait AgentUi {
     fn subagents(&mut self, _children: &Children) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
-    /// The result of a command the user ran with `!` or `!!`.
-    fn command_result(&mut self, output: &str, failed: bool);
+    /// A command the user runs with `!` (`include`) or `!!` starts; `tool_output` follows its
+    /// output.
+    fn command_started(&mut self, command: &str, include: bool);
+    /// How a command the user ran with `!` or `!!` ended, live or in a resumed conversation.
+    fn command_result(&mut self, ran: &UserCommand);
     /// A turn stopped before its end: cancelled (`None`), or failed with `error`.
     fn stopped(&mut self, error: Option<&str>);
     /// Shows a finished compaction; `automatic` says why the agent ran it without `/compact`.
@@ -135,6 +138,82 @@ pub enum ToolDetail {
     Subagents(Children),
     /// What a publication call proposed, each field under a markdown heading.
     Publication(String),
+}
+
+/// A command the user ran with `!` or `!!`, as its block shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UserCommand {
+    pub command: String,
+    /// Added to the conversation (`!`), or only shown (`!!`).
+    pub include: bool,
+    /// What it printed, without how it ended.
+    pub output: String,
+    pub ending: Ending,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ending {
+    /// With exit code 0.
+    Done,
+    Exited(i32),
+    Cancelled,
+    /// Otherwise: killed by a signal (`terminated`), or it could not start (why).
+    Failed(String),
+}
+
+impl UserCommand {
+    /// From the content of a `!` command's message (`tools::Ran::message`).
+    pub(super) fn included(command: &str, content: &str, failed: bool) -> Self {
+        let rest = content
+            .strip_prefix(&format!("Ran `{command}`"))
+            .map_or(content, |rest| rest.strip_prefix('\n').unwrap_or(rest));
+        let (output, ending) = match rest
+            .strip_prefix("```\n")
+            .and_then(|fenced| fenced.rsplit_once("\n```"))
+        {
+            Some(split) => split,
+            None => match rest.strip_prefix("(no output)") {
+                Some(ending) => ("", ending),
+                None => (rest, ""),
+            },
+        };
+        let ending = Ending::said(ending.trim_start_matches('\n'), failed);
+        Self::new(command, true, output, ending)
+    }
+
+    /// From what a `!!` command's item keeps, the text of its result
+    /// (`tools::Ran::tool_output`): after a failure's output, a blank line and how it ended.
+    pub(super) fn excluded(command: &str, text: &str, failed: bool) -> Self {
+        let (output, ending) = match failed {
+            true => text.rsplit_once("\n\n").unwrap_or(("", text)),
+            false if text == "(no output)" => ("", ""),
+            false => (text, ""),
+        };
+        Self::new(command, false, output, Ending::said(ending, failed))
+    }
+
+    pub(super) fn new(command: &str, include: bool, output: &str, ending: Ending) -> Self {
+        Self {
+            command: command.to_owned(),
+            include,
+            output: output.to_owned(),
+            ending,
+        }
+    }
+}
+
+impl Ending {
+    /// From the words a command's text ends with, which a command killed by a signal lacks.
+    fn said(words: &str, failed: bool) -> Self {
+        let code = words.strip_prefix("Command exited with code ");
+        match code.and_then(|code| code.parse().ok()) {
+            Some(code) => Self::Exited(code),
+            None if words == "(command cancelled)" => Self::Cancelled,
+            None if words.starts_with("Command cancelled") => Self::Cancelled,
+            None if !failed => Self::Done,
+            None => Self::Failed("terminated".into()),
+        }
+    }
 }
 
 /// The children of a `subagent` call as the user sees them, as Scramjet's tool details keep
@@ -298,10 +377,11 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                 ui.tool_result(name, output, detail.as_ref(), failed);
             }
             Some("turn_stopped") => ui.stopped(item["error"].as_str()),
-            Some("bang_excluded") => {
-                ui.tool_call("bash", item["command"].as_str().unwrap_or_default());
-                ui.command_result(item["output"].as_str().unwrap_or_default(), failed);
-            }
+            Some("bang_excluded") => ui.command_result(&UserCommand::excluded(
+                item["command"].as_str().unwrap_or_default(),
+                item["output"].as_str().unwrap_or_default(),
+                failed,
+            )),
             // Scramjet's status check is not shown, as the user never typed it.
             _ if item.get(PROBE).is_some() => {}
             _ if item["role"] == "user" => {
@@ -314,11 +394,7 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                 } else if let Some(summary) = compaction::branch_summary(item) {
                     ui.branch_summary(summary);
                 } else if let Some(command) = command {
-                    ui.tool_call("bash", command);
-                    let output = content
-                        .strip_prefix(&format!("Ran `{command}`\n"))
-                        .map_or_else(|| content.to_owned(), command_output);
-                    ui.command_result(&output, failed);
+                    ui.command_result(&UserCommand::included(command, content, failed));
                 } else if let Some(typed) = item[TYPED].as_str() {
                     ui.command_prompt(typed, content);
                 } else {
@@ -329,18 +405,6 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
         }
     }
     unanswered(&mut calls, ui);
-}
-
-/// The output of a `!` command from its stored message, which fences the output and ends with
-/// how the command ended, as the live result shows it.
-fn command_output(message: &str) -> String {
-    match message
-        .strip_prefix("```\n")
-        .and_then(|rest| rest.rsplit_once("\n```"))
-    {
-        Some((output, ending)) => format!("{output}{ending}"),
-        None => message.to_owned(),
-    }
 }
 
 #[cfg(test)]
@@ -409,8 +473,7 @@ mod tests {
                 "result edit Edited Diff(\"-1 a\")",
                 "call write b.rs",
                 "result write Wrote Written(\"b\\n\")",
-                "call bash ls",
-                "command a.rs\n\nCommand exited with code 2 failed",
+                "!ls \"a.rs\" Exited(2)",
                 "result bash Error: invalid failed",
                 "call write /",
                 "result write Error: dir failed",
@@ -427,8 +490,45 @@ Comment\\n\\nMe too.\")",
                 "prompt next",
             ]
         );
-        assert_eq!(command_output("(no output)"), "(no output)");
-        assert_eq!(command_output("```\n\n```"), "");
+    }
+
+    #[test]
+    fn a_users_command_is_shown_from_the_text_kept_for_it() {
+        let shown = |ran: UserCommand| (ran.output, ran.ending);
+        let included = |content, failed| shown(UserCommand::included("ls", content, failed));
+        let ended = |words: &str| (String::new(), Ending::Failed(words.into()));
+        assert_eq!(
+            included("Ran `ls`\n(no output)", false),
+            ("".into(), Ending::Done)
+        );
+        assert_eq!(
+            included("Ran `ls`\n```\na\n\nb\n```", false),
+            ("a\n\nb".into(), Ending::Done)
+        );
+        assert_eq!(
+            included("Ran `ls`\n(no output)\n\n(command cancelled)", true),
+            ("".into(), Ending::Cancelled)
+        );
+        // Killed by a signal, it has no words of its ending.
+        assert_eq!(included("Ran `ls`\n(no output)", true), ended("terminated"));
+        let excluded = |text, failed| shown(UserCommand::excluded("ls", text, failed));
+        assert_eq!(excluded("(no output)", false), ("".into(), Ending::Done));
+        assert_eq!(
+            excluded("a\n\nb\n", false),
+            ("a\n\nb\n".into(), Ending::Done)
+        );
+        assert_eq!(
+            excluded("a\n\nb\n\nCommand exited with code 4", true),
+            ("a\n\nb".into(), Ending::Exited(4))
+        );
+        assert_eq!(
+            excluded("Command cancelled by the user after 2s", true),
+            ("".into(), Ending::Cancelled)
+        );
+        assert_eq!(
+            excluded("Command terminated (signal: 9 (SIGKILL))", true),
+            ended("terminated")
+        );
     }
 
     #[test]

@@ -67,9 +67,19 @@ impl AgentUi for Recorder {
         self.shown
             .push(format!("result {name} {output}{failed}{detail}"));
     }
-    fn command_result(&mut self, output: &str, failed: bool) {
-        let failed = if failed { " failed" } else { "" };
-        self.shown.push(format!("command {output}{failed}"));
+    fn command_started(&mut self, command: &str, include: bool) {
+        self.shown.push(format!("started {command} {include}"));
+    }
+    fn command_result(&mut self, ran: &UserCommand) {
+        let UserCommand {
+            command,
+            include,
+            output,
+            ending,
+        } = ran;
+        let mark = if *include { "!" } else { "!!" };
+        self.shown
+            .push(format!("{mark}{command} {output:?} {ending:?}"));
     }
     fn stopped(&mut self, error: Option<&str>) {
         self.shown
