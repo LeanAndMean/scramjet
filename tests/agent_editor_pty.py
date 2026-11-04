@@ -1930,13 +1930,10 @@ assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max', 'low'], saved_
 assert json.load(open(settings_path(levels))) == {'defaultThinkingLevel': 'max'}
 known = set(session_files())
 run([], started_at('max'), serve_replies([], cards=effort_cards), variables=in_levels)
-(started,) = set(session_files()) - known
-assert saved_levels(started) == ['max'], saved_levels(started)
 # Scramjet's `off` is the cards' `none`, and is named `off`.
-known = set(session_files())
 run(['--effort', 'off'], started_at('off'), serve_replies([], cards=effort_cards), variables=in_levels)
-(started,) = set(session_files()) - known
-assert saved_levels(started) == ['none'], saved_levels(started)
+# Quit before a prompt, neither session was kept, as Scramjet writes none before the first reply.
+assert set(session_files()) == known, set(session_files()) - known
 scope_cards = [{'requestId': model, 'displayName': name, 'provider': 'openai',
                 'supportedProtocols': ['openai-responses'],
                 'reasoning': {'levels': ['none', 'low', 'medium', 'high'], 'default': 'medium'}}
@@ -2009,9 +2006,12 @@ run(['--project', other], starts_with('gpt-6-terra', [(b'\x10', 'Switched to GPT
     variables=in_remembering, forget_models=False)
 assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-luna'}
 assert json.load(open(remembered_models)) == {here: 'gpt-6-terra', there: 'gpt-6-luna'}
-# The project's own comes first; --model and a resumed session's model win over it and teach nothing.
+# --model and a resumed session's model win over the project's own and teach nothing.
+run(['--model', 'gpt-6-luna'], starts_with('gpt-6-luna', [(b'hi\r', 'Luna reply.')]),
+    serve_replies([(['Luna reply.'], 'Luna reply.')], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
+    variables=in_remembering, forget_models=False)
 run([], starts_with('gpt-6-terra'), both(), variables=in_remembering, forget_models=False)
-run(['--model', 'gpt-6-luna'], starts_with('gpt-6-luna'), both(), variables=in_remembering, forget_models=False)
+# The session just quit without a prompt is not kept, so --continue takes the one before it.
 run(['--continue'], starts_with('gpt-6-luna'), both(), variables=in_remembering, forget_models=False)
 assert json.load(open(remembered_models)) == {here: 'gpt-6-terra', there: 'gpt-6-luna'}
 assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-luna'}

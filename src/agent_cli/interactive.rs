@@ -117,9 +117,9 @@ impl Interactive {
 
     /// Reads and runs prompts until the user quits or the input ends; with `resume`, after
     /// choosing a session to resume (`--resume`), unless none is chosen on the full screen, which
-    /// ends the session without saving it, as in Scramjet. The command line's `messages` run
-    /// first, as if typed, the first with its `files`. `notices` are shown at the start, with
-    /// the problems found.
+    /// ends the session. The command line's `messages` run first, as if typed, the first with its
+    /// `files`. `notices` are shown at the start, with the problems found. A session file left
+    /// without a conversation is removed at the end (`Agent::discard_unused_session`).
     pub(super) fn run(
         mut self,
         resume: bool,
@@ -131,16 +131,13 @@ impl Interactive {
         // The terminal is given back first, so that an error saving the settings shows.
         self.screen = None;
         self.save_hide_thinking();
-        match result {
-            Ok(Ended::NothingResumed) => {
-                eprintln!("{}", self.ui.dim("No session selected"));
-                self.agent
-                    .discard_unused_session()
-                    .map_err(|e| e.to_string())
-            }
-            Ok(Ended::Quit) => Ok(()),
-            Err(error) => Err(error),
+        if let Ok(Ended::NothingResumed) = result {
+            eprintln!("{}", self.ui.dim("No session selected"));
         }
+        // As Scramjet writes no session before the first reply: `--continue` then passes over it.
+        let discarded = self.agent.discard_unused_session();
+        result?;
+        discarded.map_err(|e| e.to_string())
     }
 
     fn read_and_run(
