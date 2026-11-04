@@ -5,6 +5,7 @@ mod approvals;
 mod attached;
 mod autonomy;
 mod batch;
+mod calls;
 mod client;
 mod commands;
 mod compaction;
@@ -21,6 +22,7 @@ mod rates;
 mod request;
 mod sandbox;
 mod session;
+mod shell;
 mod skills;
 mod status;
 mod subagent;
@@ -46,6 +48,7 @@ pub use session::{
     Branch, Found, Label, Removal, Session, SessionInfo, directory as session_directory,
     read_branch, state_directory,
 };
+pub use shell::Shell;
 pub use skills::{Skill, SkillOptions, Skills};
 pub use status::{Completed, Next, Routing, Source, Step};
 pub use suggest::Suggested;
@@ -54,7 +57,6 @@ pub use tools::{
     shortened, terminal_line, write_replacing,
 };
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
-pub use turn::Shell;
 pub use ui::{
     AgentUi, Answer, ChildItem, ChildRun, ChildState, ChildUsage, Children, CompactRead,
     Delegation, Ending, Purpose, ToolDetail, UserCommand, publication_choices, show_items,
