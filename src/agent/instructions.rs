@@ -141,11 +141,20 @@ delegation, as Scramjet does. Mach 12 is one such command set (the issue → pla
 implement → PR → ship methodology); other sets can sit alongside it.
 "
     .to_owned();
-    if Path::new(README).is_file() {
+    let readme = Path::new(README).is_file().then(|| README.to_owned());
+    let help = std::env::current_exe().ok().map(|exe| {
+        format!(
+            "`{} --help` (every option, key and built-in command)",
+            exe.display()
+        )
+    });
+    let docs: Vec<String> = [readme, help].into_iter().flatten().collect();
+    if !docs.is_empty() {
         text += &format!(
             "\nscramjet-rs documentation (read only when the user asks about scramjet-rs itself — \
 its commands, command sets, next steps, delegation, settings, keys or the /autopilot on/off \
-flag): {README}\n"
+flag): {}\n",
+            docs.join("; ")
         );
     }
     text
@@ -560,7 +569,9 @@ earlier causes version conflicts between parallel PRs."
         ));
         assert!(text.contains(&format!(
             "about scramjet-rs itself — its commands, command sets, \
-next steps, delegation, settings, keys or the /autopilot on/off flag): {README}\n"
+next steps, delegation, settings, keys or the /autopilot on/off flag): {README}; `{} --help` \
+(every option, key and built-in command)\n",
+            std::env::current_exe().unwrap().display()
         )));
     }
 

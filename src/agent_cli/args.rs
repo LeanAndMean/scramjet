@@ -3,7 +3,8 @@ use super::settings::{LEVELS, card_level};
 use scramjet_rs::agent::{HARNESS_TOOLS, SystemPrompt};
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
-pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model PATTERN] \
+pub(super) const USAGE: &str =
+    "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model PATTERN]
 [--models PATTERNS] [--thinking LEVEL] [--max-output-tokens N] [--retries N]
 [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--system-prompt TEXT]
 [--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
@@ -15,6 +16,7 @@ pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint A
 Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
 the Messages API for Claude models (those whose Proxy model card lists only Messages).
   --project DIR          project directory (default: current directory)
+  --endpoint ADDR        Proxy's address (default: 127.0.0.1:18080)
   --model PATTERN        model, as Scramjet finds it: the one whose id or provider/id PATTERN
                          is, else the newest whose id or name contains it (after provider/,
                          among that provider's), with an optional :LEVEL that sets the
@@ -30,6 +32,7 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
                          xhigh or max, the nearest the model's Proxy card lists (default: the
                          one --model's :LEVEL sets, else the one a resumed session last used,
                          else the settings' defaultThinkingLevel, else medium)
+  --max-output-tokens N  the most tokens a reply may have (default: the model's limit)
   --retries N            resend a request that failed transiently up to N times (default 3)
   -c, --continue         resume the session for this project written to last
   -r, --resume           choose one of this project's sessions to resume, as /resume does
@@ -95,11 +98,12 @@ Ctrl-C clears the prompt, and interrupts a turn; on an empty prompt press it twi
 type /exit, to quit. Dragging selects text, a double click a word, a triple click the line;
 Ctrl+C or a right click copies it, and a right click without a selection pastes the clipboard
 into the prompt. Ctrl+V or Alt+V saves the clipboard's image to a file in the temporary directory
-and pastes its path, for the model to read. Ctrl+O shows tool results whole, or cut again. Ctrl+T hides reasoning summaries
-behind a `Thinking...` line, or shows them again. Shift+Tab sets the reasoning effort to the next
-level the model's Proxy card lists. Both are saved in the settings. Ctrl+P switches to the next
-model of --models or enabledModels, else of all the endpoint's, Shift+Ctrl+P (in a terminal
-that reports it) to the one before; during a turn, from its next request. /scoped-models lists
+and pastes its path, for the model to read. Ctrl+O shows tool results whole, or cut again. Ctrl+T
+hides reasoning summaries behind a `Thinking...` line, or shows them again. Shift+Tab sets the
+reasoning effort to the next level the model's Proxy card lists. Both are saved in the settings.
+/model, or Ctrl+L, chooses a model. Ctrl+P switches to the next model of --models or
+enabledModels, else of all the endpoint's, Shift+Ctrl+P (in a terminal that reports it) to the
+one before; during a turn, from its next request. /scoped-models lists
 the endpoint's models, those Ctrl+P takes first in its order: Enter switches one on or off,
 Ctrl+A and Ctrl+X all those shown, Ctrl+P its provider's, Alt+Up/Down moves it, for the session;
 Ctrl+S saves them as enabledModels. /clear [NAME] starts a new session;
@@ -113,22 +117,28 @@ editing; /branch [NAME] continues in a new session with the conversation as it i
 from before a prompt, which is put in the prompt for editing, or from after a reply
 or tool result. When that leaves part of the conversation, it asks whether the model should
 summarize that branch, also with your own instructions, for the conversation to continue
-with; Shift+L there labels the selected entry. Escape twice on an empty prompt opens /tree too. /model, or Ctrl+L, chooses a model.
+with; Shift+L there labels the selected entry. Escape twice on an empty prompt opens /tree too.
+The lists of /resume, /fork, /tree and /model show in the prompt's place and take Up/Down,
+Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; typed text filters the /resume
+and /model lists, best match first (a \"quoted phrase\" matches as written). With piped input
+they are printed numbered instead, for /resume N, /fork N, /tree N and /model ID.
 In the prompt, Ctrl+Y puts back the text deleted last, Alt+Y then replaces it with what was
 deleted before; Ctrl+- undoes; Ctrl+] then a character jumps to it, Ctrl+Alt+] backward.
 Ctrl+Home and Ctrl+End scroll to the conversation's start and end.
-Their lists show in the prompt's place and take Up/Down, Page Up/Down, Home/End, Enter, and
-Escape or Ctrl-C to cancel; typed text filters the /resume and /model lists, best match first
-(a \"quoted phrase\" matches as written). With piped input they are printed numbered instead,
-for /resume N, /fork N, /tree N and /model ID.
 /rename NAME names the session, which /resume then lists by its name; /rename alone shows it.
 /status shows the session's file, the messages in its context, the tokens they used and the cost.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
-with this project's sessions. /hotkeys lists the keys. /copy copies the last reply's text, as the model wrote it, to the
-clipboard. Typed while a turn runs, /status, /hotkeys, /rename, /model, /scoped-models and /copy
-run before its next request; the other commands stop it and run once it has.
+with this project's sessions. /copy copies the last reply's text, as the model wrote it, to the
+clipboard. /hotkeys lists the keys. /settings lists the settings, each with what it does, and
+changes them; it also shows each command's next steps, publication approval, and what the
+session loaded from where, with any problems. /reload reads the settings, command sets, agents,
+skills and context files again. /skill:NAME ARGS sends a skill's instructions with ARGS.
+/autopilot on|off|status: when on, a finished command's recommended next step runs after 3s.
+Typed while a turn runs, /status, /hotkeys, /rename, /model, /scoped-models, /copy, /export,
+/settings and /autopilot run before its next request, /reload is refused, and the other
+commands stop the turn and run once it has.
 Scramjet's names of the commands named otherwise here are accepted too (/new, /quit, /name,
 /session, /clone), and so are Claude Code's /reset, /config, /continue, /usage and /help.
 As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
