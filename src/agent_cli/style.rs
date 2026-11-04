@@ -72,6 +72,17 @@ pub const CODE: &str = "\x1b[36m";
 /// The lines of a fenced code block, and its fence lines.
 pub const CODE_BLOCK: &str = "\x1b[32m";
 pub const CODE_FENCE: &str = "\x1b[2m";
+/// Highlighted code, as near as the terminal's palette comes to Scramjet's colors: comments (and
+/// annotations, diff headers), keywords, function names, variables (and parameters, keys,
+/// attributes), strings, numbers (and literals such as `true`), and types (and built-ins). Diff
+/// lines take `DIFF_ADDED` and `DIFF_REMOVED`; other code is plain.
+pub const SYNTAX_COMMENT: &str = "\x1b[2m";
+pub const SYNTAX_KEYWORD: &str = "\x1b[34m";
+pub const SYNTAX_FUNCTION: &str = "\x1b[33m";
+pub const SYNTAX_VARIABLE: &str = "\x1b[35m";
+pub const SYNTAX_STRING: &str = "\x1b[32m";
+pub const SYNTAX_NUMBER: &str = "\x1b[33m";
+pub const SYNTAX_TYPE: &str = "\x1b[36m";
 /// Markdown headings: level 1, then the others.
 pub const TITLE: &str = "\x1b[1;4;33m";
 pub const HEADING: &str = "\x1b[1;33m";

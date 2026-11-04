@@ -154,8 +154,10 @@ pub enum ToolDetail {
     /// The lines an edit changed, each marked ` ` (unchanged), `-` or `+` and numbered, with
     /// `...` for skipped lines.
     Diff(String),
-    /// The content a write put in the file.
-    Written(String),
+    /// The content a write put in the file, and the path it was given.
+    Written { path: String, content: String },
+    /// The path a read was given, whose name says the language of the text it returned.
+    Read(String),
     /// What the user answered a question, as Scramjet's result row shows it.
     Answer(String),
     /// The children of a `subagent` call, as they ended.
@@ -394,10 +396,17 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                         Some(ToolDetail::Answer(answer))
                     }
                     // A write's preview is the content it was given.
-                    (None, None, None) if name == "write" && !failed => call
-                        .as_ref()
-                        .and_then(|call| call.arguments["content"].as_str())
-                        .map(|content| ToolDetail::Written(content.to_owned())),
+                    (None, None, None) if name == "write" && !failed => {
+                        call.as_ref().and_then(|call| {
+                            Some(ToolDetail::Written {
+                                path: call.arguments["path"].as_str()?.to_owned(),
+                                content: call.arguments["content"].as_str()?.to_owned(),
+                            })
+                        })
+                    }
+                    (None, None, None) if name == "read" && !failed => (call.as_ref())
+                        .and_then(|call| call.arguments["path"].as_str())
+                        .map(|path| ToolDetail::Read(path.to_owned())),
                     (None, None, None) if publish::TOOLS.contains(&name) => call
                         .as_ref()
                         .and_then(|call| publish::payload(name, &call.arguments)),
@@ -499,11 +508,11 @@ mod tests {
                 "thinking \n\n",
                 "reply Reading.",
                 "call read a.rs",
-                "result read fn main() {}",
+                "result read fn main() {} Read(\"a.rs\")",
                 "call edit a.rs",
                 "result edit Edited Diff(\"-1 a\")",
                 "call write b.rs",
-                "result write Wrote Written(\"b\\n\")",
+                "result write Wrote Written { path: \"b.rs\", content: \"b\\n\" }",
                 "!ls \"a.rs\" Exited(2)",
                 "result bash Error: invalid failed",
                 "call write /",

@@ -460,7 +460,8 @@ response is incomplete; retry the request."});
         // A model whose card lists no image input gets the text with a note.
         agent.info.images = false;
         agent.turn("And now?", &mut ui, &cancel).unwrap();
-        assert_eq!(ui.shown[1], "result read Read image file [image/png]");
+        let shown = "result read Read image file [image/png] Read(\"shot.png\")";
+        assert_eq!(ui.shown[1], shown);
         let bodies = server.join().unwrap();
         let result = |body: &Value| {
             let input = body["input"].as_array().unwrap();
@@ -493,7 +494,6 @@ response is incomplete; retry the request."});
         assert_eq!(saved.unwrap()["output"], sent);
         let mut replay = Recorder::default();
         crate::agent::show_items(agent.conversation(), &mut replay);
-        let shown = "result read Read image file [image/png]";
         assert!(
             replay.shown.iter().any(|line| line == shown),
             "{:?}",

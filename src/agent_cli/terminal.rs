@@ -1,6 +1,7 @@
 //! The agent's output as text: printed as it streams for `-p` and piped input, with a status
 //! line under it on a terminal, or captured for the full screen to show; and the terminal modes
 //! of a `-p` turn.
+use super::highlight::{self, Highlighter};
 use super::interactive::thinking;
 use super::text::{FROM, RULE, Wrap, call_line, clip, printable, visible};
 use super::{children, diff, editor, job, markdown, style};
@@ -11,8 +12,8 @@ use rustix::{
 };
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, Compaction, DELEGATE,
-    DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, StreamProgress, ToolDetail,
-    UserCommand, publication_choices,
+    DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE, StreamProgress,
+    ToolDetail, UserCommand, publication_choices,
 };
 use std::{
     io::{BufRead, IsTerminal, Write},
@@ -291,17 +292,47 @@ impl Terminal {
         let hint = if self.expandable { EXPAND_HINT } else { "" };
         let marked = self.marked;
         let preview = |text: &str, shown: Shown, width| preview(text, shown, width, hint, marked);
+        // As Scramjet's, a file's text in its language when its name shows one: the lines of
+        // `source` it starts with, the rest and the note on what was cut in the tool's style.
+        let code = |text: &str, path: &str, source: &str, limited: Shown| {
+            let language = highlight::of_path(path).filter(|_| self.color)?;
+            let mut highlighter = Highlighter::new(language, "");
+            let (mut index, lines) = (0, source.lines().count());
+            let mut show = |line: &str| {
+                index += 1;
+                match index <= lines {
+                    true => highlighter.line(&printable(line)),
+                    false => format!("{style}{}{reset}", printable(line)),
+                }
+            };
+            let shown = shown(limited);
+            let mut rows = preview_shown(text, shown, width, hint, marked, &mut show);
+            if matches!(shown, Shown::First(n) if text.lines().count() > n) {
+                let note = rows.pop().unwrap_or_default();
+                rows.push(format!("{style}{note}{reset}"));
+            }
+            Some(rows)
+        };
         let rows = match (name, detail) {
             (_, Some(ToolDetail::Diff(diff))) => {
                 let limit = if full { usize::MAX } else { diff::ROWS };
                 diff::rows(diff, width, self.color, marked, limit, hint)
             }
             // As in Scramjet, trailing blank lines of a written file are not counted.
-            (_, Some(ToolDetail::Written(content))) => styled(preview(
-                content.trim_end_matches(['\n', '\r']),
-                shown(Shown::First(WRITE_LINES)),
-                width,
-            )),
+            (_, Some(ToolDetail::Written { path, content })) => {
+                let content = content.trim_end_matches(['\n', '\r']);
+                let limited = Shown::First(WRITE_LINES);
+                (code(content, path, content, limited))
+                    .unwrap_or_else(|| styled(preview(content, shown(limited), width)))
+            }
+            // The note after a cut read is not code.
+            (_, Some(ToolDetail::Read(path))) => {
+                let limited = Shown::First(RESULT_LINES);
+                let more = output.rfind(&format!("\n{READ_MORE}"));
+                let source = more.map_or(output, |at| &output[..at]);
+                (code(output, path, source, limited))
+                    .unwrap_or_else(|| styled(preview(output, shown(limited), width)))
+            }
             // The user's own answer, not dimmed as tool output is.
             (_, Some(ToolDetail::Answer(answer))) => answer
                 .lines()
@@ -1293,6 +1324,7 @@ const SUMMARY_LINES: usize = 10;
 /// Ends the note about the lines a preview leaves out, as Scramjet's does.
 const EXPAND_HINT: &str = ", Ctrl+O to expand";
 
+#[derive(Clone, Copy)]
 enum Shown {
     First(usize),
     Last(usize),
@@ -1324,8 +1356,22 @@ fn bash_shown(output: &str, failed: bool) -> String {
 /// The lines of a tool result to show, made safe for the terminal and cut to `width` cells,
 /// with a note for lines left out that ends with `hint`; lines wrapped are `marked` for a copy.
 fn preview(text: &str, shown: Shown, width: usize, hint: &str, marked: bool) -> Vec<String> {
+    preview_shown(text, shown, width, hint, marked, &mut |line| {
+        printable(line)
+    })
+}
+
+/// As `preview`, each line it keeps shown by `show`, in order.
+fn preview_shown(
+    text: &str,
+    shown: Shown,
+    width: usize,
+    hint: &str,
+    marked: bool,
+    show: &mut dyn FnMut(&str) -> String,
+) -> Vec<String> {
     let lines: Vec<&str> = text.lines().collect();
-    let fit = |line: &&str| clip(&printable(line), width);
+    let fit = |line: &&str| clip(&show(line), width);
     match shown {
         Shown::First(n) if lines.len() > n => {
             let mut kept: Vec<String> = lines[..n].iter().map(fit).collect();
@@ -1345,7 +1391,7 @@ fn preview(text: &str, shown: Shown, width: usize, hint: &str, marked: bool) -> 
             .iter()
             .flat_map(|line| {
                 let mut wrap = Wrap::new(width).marking(marked);
-                let rows = wrap.push(&printable(line)) + &wrap.finish();
+                let rows = wrap.push(&show(line)) + &wrap.finish();
                 rows.split('\n').map(str::to_owned).collect::<Vec<_>>()
             })
             .collect(),
@@ -1517,6 +1563,62 @@ to expand\n(exit 2)"
         assert!(!text.contains("more lines") && !text.contains("earlier lines"));
         assert!(at("Counted to 12.").is_some(), "{lines:?}");
         assert!(text.contains(style::REASONING));
+    }
+
+    #[test]
+    fn files_read_and_written_show_in_the_language_their_names_show() {
+        use style::{
+            RESET, SYNTAX_COMMENT, SYNTAX_FUNCTION, SYNTAX_KEYWORD, SYNTAX_STRING, SYNTAX_TYPE,
+        };
+        let mut ui = Terminal::capture_shown(80, Arc::new(AtomicBool::new(false)), false);
+        let read = format!("fn a() {{}}\n// x\n\n{READ_MORE}1-2 of 9. Use offset=3 to continue.]");
+        ui.tool_result(
+            "read",
+            &read,
+            Some(&ToolDetail::Read("src/a.rs".into())),
+            false,
+        );
+        let content: String = (1..=12).map(|n| format!("print('{n}')\n")).collect();
+        let path = "b.py".to_owned();
+        let written = ToolDetail::Written { path, content };
+        ui.tool_result("write", "Wrote", Some(&written), false);
+        let plain = ToolDetail::Read("notes.txt".into());
+        ui.tool_result("read", "fn a() {}", Some(&plain), false);
+        let text = ui.captured().replace(FROM, "");
+        let lines: Vec<&str> = text.lines().collect();
+        let dim = |text: &str| format!("{}{text}{RESET}", style::TOOL_OUTPUT);
+        let print = |n| format!("  {SYNTAX_TYPE}print{RESET}({SYNTAX_STRING}'{n}'{RESET})");
+        let mut expected = vec![
+            format!("  {SYNTAX_KEYWORD}fn{RESET} {SYNTAX_FUNCTION}a{RESET}() {{}}"),
+            format!("  {SYNTAX_COMMENT}// x{RESET}"),
+            format!("  {}", dim("")),
+            format!(
+                "  {}",
+                dim("[Showing lines 1-2 of 9. Use offset=3 to continue.]")
+            ),
+            String::new(),
+        ];
+        expected.extend((1..=10).map(print));
+        expected.push(format!(
+            "  {}",
+            dim("… (2 more lines, 12 total, Ctrl+O to expand)")
+        ));
+        expected.extend([
+            String::new(),
+            format!("  {}", dim("fn a() {}")),
+            String::new(),
+        ]);
+        assert_eq!(lines, expected);
+        // Without colors, as written.
+        let mut ui = Terminal::new(Arc::new(AtomicBool::new(false)), false);
+        ui.capture = Some((String::new(), 80));
+        ui.tool_result(
+            "read",
+            "fn a() {}",
+            Some(&ToolDetail::Read("a.rs".into())),
+            false,
+        );
+        assert_eq!(ui.captured(), "  fn a() {}\n\n");
     }
 
     #[test]

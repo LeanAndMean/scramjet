@@ -1,9 +1,11 @@
 //! Turns the markdown of streamed replies into terminal styles, as Scramjet renders them: strong,
 //! emphasized and struck text, code spans, links, headings, list bullets, block quotes, rules,
-//! fenced code blocks and tables. A marker is shown as typed unless its span closes on the same
+//! fenced code blocks, highlighted when they name their language, and tables. A marker is shown as typed unless its span closes on the same
 //! line, so text after an opening marker waits until the span closes or the line ends. A table's
-//! lines wait until it ends, as its columns are fitted to all its rows.
+//! lines wait until it ends, as its columns are fitted to all its rows, and so does a highlighted
+//! code line.
 
+use super::highlight::{self, Highlighter};
 use super::selection;
 use super::style::{
     CODE, CODE_BLOCK, CODE_FENCE, EMPHASIS, HEADING, HORIZONTAL_RULE, LINK, LINK_URL, LIST_BULLET,
@@ -50,8 +52,10 @@ pub struct Markdown {
     pending: String,
     /// The character before `pending` on its line, which decides whether a marker opens a span.
     before: Option<char>,
-    /// The fence character and length of the open code block.
+    /// The fence character and length of the open code block, and its highlighter if it names a
+    /// language.
     block: Option<(char, usize)>,
+    code: Option<Highlighter>,
     /// The current line was ended (`end_line`) and its newline not yet pushed; and it was held.
     ended: bool,
     held: bool,
@@ -110,6 +114,7 @@ impl Markdown {
             pending: String::new(),
             before: None,
             block: None,
+            code: None,
             ended: false,
             held: false,
             table: None,
@@ -144,7 +149,11 @@ impl Markdown {
         match self.line {
             Line::Start => {
                 out += &self.flush_table();
-                out += &std::mem::take(&mut self.pending);
+                let line = std::mem::take(&mut self.pending);
+                match &mut self.code {
+                    Some(code) => out += &code.line(&line),
+                    None => out += &line,
+                }
             }
             Line::Fence => {
                 let fence = std::mem::take(&mut self.pending);
@@ -155,6 +164,10 @@ impl Markdown {
                     Some(_) => None,
                     None => Some((c, run)),
                 };
+                let language = self
+                    .block
+                    .and_then(|_| highlight::named(marker[run..].trim()));
+                self.code = language.map(|language| Highlighter::new(language, self.base));
                 out += &format!("{CODE_FENCE}{fence}{RESET}{}", self.base);
             }
             Line::Held => {
@@ -163,6 +176,7 @@ impl Markdown {
                 self.held = true;
             }
             Line::Text("") | Line::Rule => {}
+            Line::Code if self.code.is_some() => {}
             Line::Text(_) | Line::Code => out += &format!("{RESET}{}", self.base),
         }
         self.line = Line::Start;
@@ -176,6 +190,7 @@ impl Markdown {
         let mut out = self.end_line();
         out += &self.flush_table();
         self.block = None;
+        self.code = None;
         self.ended = false;
         self.held = false;
         out
@@ -188,7 +203,7 @@ impl Markdown {
         }
         let line = match self.line {
             Line::Text(style) => style,
-            Line::Code => CODE_BLOCK,
+            Line::Code if self.code.is_none() => CODE_BLOCK,
             _ => "",
         };
         format!("{}{line}", self.base)
@@ -219,7 +234,11 @@ impl Markdown {
         }
         match self.line {
             Line::Start | Line::Fence | Line::Held | Line::Rule => {}
-            Line::Code => out += &std::mem::take(&mut self.pending),
+            Line::Code => match &mut self.code {
+                None => out += &std::mem::take(&mut self.pending),
+                Some(code) if ended => out += &code.line(&std::mem::take(&mut self.pending)),
+                Some(_) => {}
+            },
             Line::Text(style) => out += &self.inline(ended, style),
         }
         out
@@ -301,7 +320,9 @@ impl Markdown {
         match kind {
             Kind::Text => Line::Text(""),
             Kind::Code => {
-                *out += CODE_BLOCK;
+                if self.code.is_none() {
+                    *out += CODE_BLOCK;
+                }
                 Line::Code
             }
             Kind::Fence => Line::Fence,
@@ -1016,10 +1037,10 @@ mod tests {
 
     #[test]
     fn code_blocks_show_their_lines_unstyled_inside() {
-        let text = "Run:\n  ```sh\n  echo **x** `y`\n\n# not a heading\n  ```\n### Three\nafter";
+        let text = "Run:\n  ```\n  echo **x** `y`\n\n# not a heading\n  ```\n### Three\nafter";
         assert_eq!(
             render(&[text]),
-            "Run:\n\x1b[2m  ```sh\x1b[0m\n\x1b[32m  echo **x** `y`\x1b[0m\n\n\
+            "Run:\n\x1b[2m  ```\x1b[0m\n\x1b[32m  echo **x** `y`\x1b[0m\n\n\
 \x1b[32m# not a heading\x1b[0m\n\x1b[2m  ```\x1b[0m\n\x1b[1;33m### Three\x1b[0m\nafter"
         );
         assert_eq!(
@@ -1031,6 +1052,30 @@ mod tests {
             render(&["```\n| a |\n|---|\n> q\n```"]),
             "\x1b[2m```\x1b[0m\n\x1b[32m| a |\x1b[0m\n\x1b[32m|---|\x1b[0m\n\
 \x1b[32m> q\x1b[0m\n\x1b[2m```\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn code_blocks_that_name_their_language_are_highlighted_line_by_line() {
+        use crate::agent_cli::style::{SYNTAX_COMMENT, SYNTAX_KEYWORD, SYNTAX_STRING};
+        let text =
+            "```python title\ns = \"\"\"a\n\nb\"\"\" # c\n```\n`x` ~~~ *y*\n~~~nonsense\nif\n~~~";
+        assert_eq!(
+            rendered_alike(80, text),
+            format!(
+                "\x1b[2m```python title\x1b[0m\ns = {SYNTAX_STRING}\"\"\"a{RESET}\n\n\
+{SYNTAX_STRING}b\"\"\"{RESET} {SYNTAX_COMMENT}# c{RESET}\n\
+\x1b[2m```\x1b[0m\n{CODE}x{RESET} ~~~ {EMPHASIS}y{RESET}\n\x1b[2m~~~nonsense\x1b[0m\n\
+{CODE_BLOCK}if{RESET}\n\x1b[2m~~~\x1b[0m"
+            )
+        );
+        // A line shows once it ends, in the block's style.
+        let mut markdown = Markdown::new(true, "\x1b[2m", 80);
+        assert_eq!(markdown.push("```rs\nlet"), "\x1b[2m```rs\x1b[0m\x1b[2m\n");
+        assert_eq!(markdown.reopen(), "\x1b[2m");
+        assert_eq!(
+            markdown.push(" x\n"),
+            format!("{SYNTAX_KEYWORD}let{RESET}\x1b[2m x\n")
         );
     }
 

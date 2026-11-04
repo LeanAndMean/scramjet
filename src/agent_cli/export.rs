@@ -226,7 +226,7 @@ impl AgentUi for Html {
         let body = match (name, detail) {
             (_, Some(ToolDetail::Diff(diff))) => diff_lines(diff),
             // As the terminal shows a write: what it wrote, trailing blank lines left out.
-            (_, Some(ToolDetail::Written(content))) => {
+            (_, Some(ToolDetail::Written { content, .. })) => {
                 lines(content.trim_end_matches(['\n', '\r']), RESULT_LINES)
             }
             (_, Some(ToolDetail::Answer(answer))) => {

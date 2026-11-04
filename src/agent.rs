@@ -47,8 +47,8 @@ pub use skills::{Skill, Skills};
 pub use status::{Completed, Next, Routing, Source, Step};
 pub use suggest::Suggested;
 pub use tools::{
-    CODING_TOOLS, DEFAULT_TOOLS, search_program, sequence_diff, shortened, terminal_line,
-    write_replacing,
+    CODING_TOOLS, DEFAULT_TOOLS, READ_MORE, search_program, sequence_diff, shortened,
+    terminal_line, write_replacing,
 };
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use turn::Shell;

@@ -19,6 +19,8 @@ mod matching;
 
 const MAX_LINES: usize = 2000;
 const MAX_BYTES: usize = 50 * 1024;
+/// How the line that says what a cut read left out starts.
+pub const READ_MORE: &str = "[Showing lines ";
 /// Bash output kept in memory while a command runs; only the tail is shown to the model.
 const CAPTURE_BYTES: usize = 4 << 20;
 /// How often a running command's output is passed on to be shown, as in Scramjet.
@@ -392,7 +394,8 @@ pub(super) fn resolve(root: &Path, path: &str) -> PathBuf {
 }
 
 fn read(root: &Path, call: &Call) -> Result<Output, String> {
-    let path = resolve(root, call.str("path")?);
+    let given = call.str("path")?;
+    let path = resolve(root, given);
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (text, image) = match image::mime(&bytes) {
         Some(mime) => read_image(&bytes, mime),
@@ -400,7 +403,7 @@ fn read(root: &Path, call: &Call) -> Result<Output, String> {
     };
     Ok(Output {
         text,
-        detail: None,
+        detail: Some(ToolDetail::Read(given.to_owned())),
         failed: false,
         image,
     })
@@ -453,7 +456,7 @@ fn read_text(bytes: Vec<u8>, call: &Call, path: &Path) -> Result<String, String>
     let last = offset - 1 + shown;
     if last < lines.len() {
         output.push_str(&format!(
-            "\n[Showing lines {offset}-{last} of {}. Use offset={} to continue.]",
+            "\n{READ_MORE}{offset}-{last} of {}. Use offset={} to continue.]",
             lines.len(),
             last + 1
         ));
@@ -462,7 +465,8 @@ fn read_text(bytes: Vec<u8>, call: &Call, path: &Path) -> Result<String, String>
 }
 
 fn write(root: &Path, call: &Call) -> Result<Output, String> {
-    let path = resolve(root, call.str("path")?);
+    let given = call.str("path")?;
+    let path = resolve(root, given);
     let content = call.str("content")?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
@@ -470,7 +474,10 @@ fn write(root: &Path, call: &Call) -> Result<Output, String> {
     std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(Output {
         text: format!("Wrote {} bytes to {}", content.len(), path.display()),
-        detail: Some(ToolDetail::Written(content.to_owned())),
+        detail: Some(ToolDetail::Written {
+            path: given.to_owned(),
+            content: content.to_owned(),
+        }),
         failed: false,
         image: None,
     })
@@ -1446,7 +1453,13 @@ disjoint regions."
             written.text,
             format!("Wrote 5 bytes to {}", root.join("new/g.txt").display())
         );
-        assert_eq!(written.detail, Some(ToolDetail::Written("é\nx\n".into())));
+        assert_eq!(
+            written.detail,
+            Some(ToolDetail::Written {
+                path: "new/g.txt".into(),
+                content: "é\nx\n".into()
+            })
+        );
         assert_eq!(
             std::fs::read_to_string(root.join("new/g.txt")).unwrap(),
             "é\nx\n"
