@@ -82,6 +82,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let hide_thinking = Arc::new(AtomicBool::new(settings.hide_thinking_block));
     handle_signals(&cancel, &hide_thinking)?;
     let mut ui = Terminal::new(hide_thinking.clone(), true);
+    ui.markdown_reads = settings.markdown_reads;
     if !print_only {
         let mut interactive =
             interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings)?;

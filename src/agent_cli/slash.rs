@@ -377,6 +377,7 @@ impl Interactive {
             }
             self.hide_thinking
                 .store(self.settings.hide_thinking_block, Ordering::Relaxed);
+            self.ui.markdown_reads = self.settings.markdown_reads;
             if let Some(screen) = &mut self.screen {
                 (screen.link).reloaded(completions(&self.agent), &self.settings);
             }
@@ -976,6 +977,7 @@ impl Interactive {
         self.settings.reload();
         let settings = &self.settings;
         (self.hide_thinking).store(settings.hide_thinking_block, Ordering::Relaxed);
+        self.ui.markdown_reads = settings.markdown_reads;
         self.agent.reload(
             settings.tools.clone(),
             settings.command_sets.clone(),

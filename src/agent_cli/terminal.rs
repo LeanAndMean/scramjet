@@ -3,6 +3,7 @@
 //! of a `-p` turn.
 use super::highlight::{self, Highlighter};
 use super::interactive::thinking;
+use super::settings::MarkdownReads;
 use super::text::{FROM, RULE, Wrap, call_line, clip, printable, visible};
 use super::{children, diff, editor, job, markdown, style};
 use rustix::{
@@ -253,6 +254,7 @@ pub(super) struct Terminal {
     /// How many of the last lines of a command the user ran its block shows.
     command_lines: usize,
     pub(super) hide_thinking: Arc<AtomicBool>,
+    pub(super) markdown_reads: MarkdownReads,
     /// The reasoning streamed in the current block, and whether only its marker is shown.
     reasoning: String,
     reasoning_hidden: bool,
@@ -331,7 +333,11 @@ impl Terminal {
             }
             // As Scramjet's, a Markdown file's first lines rendered as a document, and the note
             // after a cut read in the tool's style.
-            (_, Some(ToolDetail::Read(path))) if self.color && highlight::is_markdown(path) => {
+            (_, Some(ToolDetail::Read(path)))
+                if self.color
+                    && self.markdown_reads == MarkdownReads::Rendered
+                    && highlight::is_markdown(path) =>
+            {
                 let more = output.rfind(&format!("\n{READ_MORE}"));
                 let source = more.map_or(output, |at| &output[..at]);
                 let mut lines: Vec<String> = source.lines().map(printable).collect();
@@ -562,6 +568,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             command: None,
             command_lines: COMMAND_LINES,
             hide_thinking,
+            markdown_reads: MarkdownReads::Rendered,
             reasoning: String::new(),
             reasoning_hidden: false,
             capture: None,
@@ -1724,6 +1731,23 @@ to expand\n(exit 2)"
         whole.extend((11..=12).map(bullet));
         whole.extend([String::new(), note, String::new()]);
         assert_eq!(shown(true).lines().collect::<Vec<_>>(), whole);
+        // markdown.toolDisplay "source": its source, as other files read.
+        let mut ui = Terminal::capture_shown(80, Arc::new(AtomicBool::new(false)), false);
+        ui.markdown_reads = MarkdownReads::Source;
+        ui.tool_result("read", &read, Some(&detail), false);
+        let plain = crate::agent_cli::text::plain(&ui.captured().replace(FROM, ""));
+        let mut source: Vec<String> = ["# Title", "", "Some **bold** text."]
+            .map(String::from)
+            .into();
+        source.extend((4..=10).map(|n| format!("- item {n}")));
+        let mut expected: Vec<String> = (source.iter())
+            .map(|line| format!("  {line}").trim_end().to_owned())
+            .collect();
+        expected.extend([
+            "  … (4 more lines, 14 total, Ctrl+O to expand)".into(),
+            String::new(),
+        ]);
+        assert_eq!(plain.lines().collect::<Vec<_>>(), expected);
         // Without colors, its source.
         let mut ui = Terminal::new(Arc::new(AtomicBool::new(false)), false);
         ui.capture = Some((String::new(), 80));

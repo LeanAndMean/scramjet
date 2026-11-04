@@ -1643,7 +1643,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B\r')
     on_screen(setting('Thinking level', 'high'))
     # Keys typed at once each reach the list the one before them leaves, none lost between.
-    send(b'\x1b[B\x1b[B\r\x1b[B\r')
+    send(b'\x1b[B\x1b[B\r\x1b[B\x1b[B\r')
     rows = on_screen(setting('Steering messages', 'one at a time'))
     assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
@@ -1663,12 +1663,33 @@ def settings_menu(read, until, send, output):
     send(b'/settings\r')
     on_screen('Command: /settings')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[B' * 8 + b'\r')
+    send(b'\x1b[B' * 9 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))
     send(b'\x1b')
     on_screen('Replied.')
+    send(b'\x04')
+
+
+def markdown_reads(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'read the guide\r')
+    rows = on_screen('Read it.')
+    assert '  # Guide' in rows and '  Some **bold** text.' in rows, rows
+    # Changed in /settings, the file read shows as a document at once.
+    send(b'/settings\r')
+    on_screen('Settings  \u2191\u2193 move')
+    rows = select_row(read, shown, send, 'Markdown reads', b'\x1b[B')
+    assert '\u203a ' + setting('Markdown reads', 'source') in rows, rows
+    assert rows[-2:] == ['  Markdown files the agent reads: shown as documents, or as',
+                         '  their source. Ctrl+O expands either.'], rows
+    send(b'\r')
+    on_screen('\u203a ' + setting('Markdown reads', 'rendered'))
+    send(b'\x1b')
+    rows = on_screen('Settings  \u2191\u2193 move', gone=True)
+    assert '  Guide' in rows and '  Some bold text.' in rows and '  # Guide' not in rows, rows
     send(b'\x04')
 
 
@@ -2027,6 +2048,13 @@ assert json.load(open(settings_path(menu_home))) == {
     'theme': 'dark', 'branchSummary': {'reserveTokens': 16384}, 'defaultThinkingLevel': 'high',
     'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time', 'tools': ['read', 'bash', 'edit', 'write', 'grep', 'ls'],
 }, open(settings_path(menu_home)).read()
+guide = os.path.join(work, 'guide.md')
+with open(guide, 'w') as file:
+    file.write('# Guide\n\nSome **bold** text.\n')
+reads_home = config_home('reads', '{"markdown": {"toolDisplay": "source"}}')
+run([], markdown_reads, serve_items([[tool_call('call_1', 'read', {'path': guide})], [message('Read it.')]]),
+    variables={'XDG_CONFIG_HOME': reads_home})
+assert json.load(open(settings_path(reads_home))) == {'markdown': {'toolDisplay': 'rendered'}}
 forking_home = config_home('forking', '{"doubleEscapeAction": "fork", "branchSummary": {"skipPrompt": true}}')
 run([], double_escape_forks, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]),
     variables={'XDG_CONFIG_HOME': forking_home})

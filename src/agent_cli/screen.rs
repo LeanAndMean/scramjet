@@ -15,7 +15,7 @@ use super::interactive::effort_note;
 use super::record::{self, Event};
 use super::select::{Act, Picked, Picker, Routed, Spot};
 use super::selection::{self, Line};
-use super::settings::{Delivery, DoubleEscape, Settings};
+use super::settings::{Delivery, DoubleEscape, MarkdownReads, Settings};
 use super::slash::Builtin;
 use super::terminal::{COMMAND_LINES, Terminal, elapsed, waiting_for};
 use super::text::{Wrap, clip, one_line, plain, visible};
@@ -81,9 +81,9 @@ enum ToScreen {
     SetText(String),
     Remember(String),
     Note(String),
-    /// `/reload` read the commands and skills (the `/` list's rows after the built-in ones)
-    /// and whether Escape twice on an empty prompt does something.
-    Reloaded(Vec<(String, String)>, bool),
+    /// `/reload` read the commands and skills (the `/` list's rows after the built-in ones),
+    /// whether Escape twice on an empty prompt does something, and how Markdown files read show.
+    Reloaded(Vec<(String, String)>, bool, MarkdownReads),
     /// The endpoint's models, which complete `/model`'s argument.
     Models(Vec<String>),
     /// What the footer shows of the session now.
@@ -284,7 +284,11 @@ impl Link {
     pub(super) fn reloaded(&mut self, commands: Vec<(String, String)>, settings: &Settings) {
         self.modes = (settings.steering_mode, settings.follow_up_mode);
         let double_escape = settings.double_escape != DoubleEscape::Nothing;
-        self.send(ToScreen::Reloaded(commands, double_escape));
+        self.send(ToScreen::Reloaded(
+            commands,
+            double_escape,
+            settings.markdown_reads,
+        ));
     }
     pub(super) fn models(&self, models: Vec<String>) {
         self.send(ToScreen::Models(models));
@@ -376,12 +380,13 @@ impl Handle {
     /// Takes the terminal for the screen, `editor` editing the prompts. Escape and Ctrl-C set
     /// `cancel` while a turn runs; Ctrl+T flips `hide_thinking`. The agent takes the messages
     /// queued during a turn as `modes` (`steeringMode`, `followUpMode`) say; `!` commands run
-    /// meanwhile run in `root`.
+    /// meanwhile run in `root`. Markdown files read show as `markdown_reads` says.
     pub(super) fn start(
         editor: Editor,
         hide_thinking: Arc<AtomicBool>,
         cancel: Arc<AtomicBool>,
         modes: (Delivery, Delivery),
+        markdown_reads: MarkdownReads,
         root: PathBuf,
     ) -> io::Result<Self> {
         let (to, messages) = mpsc::channel();
@@ -401,6 +406,10 @@ impl Handle {
                     threads: Vec::new(),
                 };
                 let app = App::new(editor, hide_thinking, cancel, inputs, queue, sides);
+                let app = App {
+                    markdown_reads,
+                    ..app
+                };
                 app.run(raw, &messages, woken)
             }
         })?;
@@ -662,8 +671,15 @@ struct Open {
     answered: bool,
 }
 
-/// How the conversation is rendered: width, reasoning hidden, tool results whole.
-type Look = (usize, bool, bool);
+/// How the conversation is rendered.
+#[derive(Clone, Copy, PartialEq)]
+struct Look {
+    width: usize,
+    hide_thinking: bool,
+    /// Tool results are shown whole.
+    whole: bool,
+    markdown_reads: MarkdownReads,
+}
 
 /// A line of the conversation by its part, so that it stays in view as parts before it or it
 /// render to more or fewer lines.
@@ -886,8 +902,9 @@ fn add(events: &mut Vec<Event>, event: Event) {
 }
 
 /// The lines of `events` as `Terminal` renders them at the look's width.
-fn render(events: &[Event], (width, _, whole): Look, hide_thinking: Arc<AtomicBool>) -> Vec<Line> {
-    let mut ui = Terminal::capture_shown(width, hide_thinking, whole);
+fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> Vec<Line> {
+    let mut ui = Terminal::capture_shown(look.width, hide_thinking, look.whole);
+    ui.markdown_reads = look.markdown_reads;
     for event in events {
         record::replay(event, &mut ui);
     }
@@ -932,6 +949,7 @@ struct App {
     top: Option<Place>,
     /// Tool results are shown whole (Ctrl+O).
     whole: bool,
+    markdown_reads: MarkdownReads,
     selection: Option<Selection>,
     edge: Option<Edge>,
     copying: Option<Copying>,
@@ -977,6 +995,7 @@ impl App {
             held_keys: Vec::new(),
             top: None,
             whole: false,
+            markdown_reads: MarkdownReads::Rendered,
             selection: None,
             edge: None,
             copying: None,
@@ -1178,8 +1197,9 @@ impl App {
             ToScreen::SetText(text) => self.draft.replace(text),
             ToScreen::Remember(prompt) => self.editor.remember(&prompt),
             ToScreen::Note(note) => self.draft.set_note(note),
-            ToScreen::Reloaded(commands, double_escape) => {
-                self.editor.reloaded(commands, double_escape)
+            ToScreen::Reloaded(commands, double_escape, markdown_reads) => {
+                self.editor.reloaded(commands, double_escape);
+                self.markdown_reads = markdown_reads;
             }
             ToScreen::Models(models) => self.editor.set_models(models),
             ToScreen::Footer(shown) => self.footer.show(shown),
@@ -2213,11 +2233,12 @@ impl App {
         }
         let (dock, cursor) = self.dock((width, height));
         let rows = height.saturating_sub(dock.len()).max(1);
-        let look = (
+        let look = Look {
             width,
-            self.hide_thinking.load(Ordering::Relaxed),
-            self.whole,
-        );
+            hide_thinking: self.hide_thinking.load(Ordering::Relaxed),
+            whole: self.whole,
+            markdown_reads: self.markdown_reads,
+        };
         self.transcript.render(look, &self.hide_thinking);
         let last = self.transcript.len().saturating_sub(rows);
         (self.rows, self.last) = (rows, last);
@@ -2401,6 +2422,16 @@ impl ByteSource for Source {
 mod tests {
     use super::*;
 
+    /// Rendered `width` columns wide, the tool results `whole` or cut.
+    fn look(width: usize, whole: bool) -> Look {
+        Look {
+            width,
+            hide_thinking: false,
+            whole,
+            markdown_reads: MarkdownReads::Rendered,
+        }
+    }
+
     fn text(part: &Part) -> Vec<&str> {
         part.events
             .iter()
@@ -2526,7 +2557,7 @@ mod tests {
         transcript.push_call(1, Event::ToolOutput("3".into()));
         transcript.push_call(0, Event::ToolOutput("1\n2".into()));
         let shown = |transcript: &mut Transcript| -> Vec<String> {
-            transcript.render((40, false, false), &hide);
+            transcript.render(look(40, false), &hide);
             let lines = transcript.window(0, 100).into_iter();
             lines
                 .map(|line| plain(&line.shown).trim().to_owned())
@@ -2562,7 +2593,7 @@ mod tests {
         ));
         transcript.split();
         transcript.push(Event::Text("✓ done".into()));
-        transcript.render((40, false, false), &hide);
+        transcript.render(look(40, false), &hide);
         let window = |transcript: &Transcript, top, count| -> Vec<String> {
             let lines = transcript.window(top, count).into_iter();
             lines.map(|line| line.shown).collect()
@@ -2575,9 +2606,9 @@ mod tests {
         );
         assert_eq!(cut[cut.len() - 2..], ["✓ done", ""]);
         transcript.parts[0].lines.clear();
-        transcript.render((40, false, false), &hide);
+        transcript.render(look(40, false), &hide);
         assert!(transcript.parts[0].lines.is_empty());
-        transcript.render((40, false, true), &hide);
+        transcript.render(look(40, true), &hide);
         let whole = window(&transcript, 0, 100);
         assert!(whole.len() > cut.len() && !whole.iter().any(|line| line.contains("earlier")));
         assert_eq!(transcript.len(), whole.len());
@@ -2586,7 +2617,7 @@ mod tests {
         let done = Place { part: 1, line: 0 };
         assert_eq!(transcript.locate(whole.len() - 2), done);
         assert_eq!(transcript.line(done), whole.len() - 2);
-        transcript.render((40, false, false), &hide);
+        transcript.render(look(40, false), &hide);
         assert_eq!(transcript.line(done), cut.len() - 2);
         assert_eq!(window(&transcript, transcript.line(done), 1), ["✓ done"]);
     }
@@ -2610,7 +2641,7 @@ mod tests {
             true,
             Instant::now(),
         ));
-        transcript.render((24, false, true), &hide);
+        transcript.render(look(24, true), &hide);
         let lines = transcript.window(0, 100);
         assert!(lines.len() > 16, "{lines:?}");
         assert_eq!(
@@ -2621,7 +2652,7 @@ mod tests {
             )
         );
         // Cut previews are copied as shown.
-        transcript.render((24, false, false), &hide);
+        transcript.render(look(24, false), &hide);
         let lines = transcript.window(0, 100);
         let failed = lines.iter().position(|line| line.shown.contains("agent::"));
         let failed = failed.expect("the failed test's line");

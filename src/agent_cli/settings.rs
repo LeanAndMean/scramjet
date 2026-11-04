@@ -67,6 +67,14 @@ pub(super) enum StartupModel {
     Global,
 }
 
+/// How a Markdown file the agent reads shows (`markdown.toolDisplay`), as Scramjet's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum MarkdownReads {
+    /// As a document.
+    Rendered,
+    Source,
+}
+
 /// How many queued messages go to the model at once (`steeringMode`, `followUpMode`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Delivery {
@@ -80,6 +88,7 @@ pub(super) enum Row {
     ThinkingLevel,
     StartupModel,
     ThinkingBlocks,
+    MarkdownReads,
     Steering,
     FollowUp,
     DoubleEscape,
@@ -93,10 +102,11 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 14] = [
+pub(super) const ROWS: [Row; 15] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
+    Row::MarkdownReads,
     Row::Steering,
     Row::FollowUp,
     Row::DoubleEscape,
@@ -116,6 +126,7 @@ impl Row {
             Self::ThinkingLevel => "Thinking level",
             Self::StartupModel => "Startup model",
             Self::ThinkingBlocks => "Thinking blocks",
+            Self::MarkdownReads => "Markdown reads",
             Self::Steering => "Steering messages",
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
@@ -141,6 +152,10 @@ impl Row {
                  one: the one last chosen in this project (else anywhere), or anywhere."
             }
             Self::ThinkingBlocks => "The model's reasoning in the conversation. Ctrl+T toggles it.",
+            Self::MarkdownReads => {
+                "Markdown files the agent reads: shown as documents, or as their source. Ctrl+O \
+                 expands either."
+            }
             Self::Steering => {
                 "Sent with Enter during a turn: how many the model gets before its next request."
             }
@@ -191,6 +206,7 @@ pub(super) struct Settings {
     pub(super) skip_branch_summary_prompt: bool,
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
     pub(super) tree_filter: Filter,
+    pub(super) markdown_reads: MarkdownReads,
     /// `defaultThinkingLevel`, named as the model cards name levels.
     pub(super) default_thinking_level: Option<String>,
     /// `defaultModel`: the model last chosen in any project, as Scramjet saves it.
@@ -266,6 +282,7 @@ impl Settings {
             double_escape: DoubleEscape::Tree,
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
+            markdown_reads: MarkdownReads::Rendered,
             default_thinking_level: None,
             default_model: None,
             startup_model: StartupModel::PerDirectory,
@@ -320,6 +337,16 @@ impl Settings {
                     .map(|f| format!("\"{}\"", f.setting()))
                     .join(", "),
             ),
+        }
+        match object.get("markdown").map(|value| value.get("toolDisplay")) {
+            None | Some(None) => {}
+            Some(Some(Value::String(mode))) if mode == "rendered" => {
+                self.markdown_reads = MarkdownReads::Rendered
+            }
+            Some(Some(Value::String(mode))) if mode == "source" => {
+                self.markdown_reads = MarkdownReads::Source
+            }
+            Some(Some(_)) => wrong("markdown.toolDisplay", r#""rendered" or "source""#),
         }
         match object
             .get("defaultThinkingLevel")
@@ -612,6 +639,11 @@ impl Settings {
             .into(),
             Row::ThinkingBlocks if self.hide_thinking_block => "hidden".into(),
             Row::ThinkingBlocks => "shown".into(),
+            Row::MarkdownReads => match self.markdown_reads {
+                MarkdownReads::Rendered => "rendered",
+                MarkdownReads::Source => "source",
+            }
+            .into(),
             Row::Steering => delivery(self.steering_mode).into(),
             Row::FollowUp => delivery(self.follow_up_mode).into(),
             Row::DoubleEscape => match self.double_escape {
@@ -672,6 +704,14 @@ impl Settings {
                 self.save("startupModel", json!(name))
             }
             Row::ThinkingBlocks => self.set_hide_thinking_block(!self.hide_thinking_block),
+            Row::MarkdownReads => {
+                let (reads, name) = match self.markdown_reads {
+                    MarkdownReads::Rendered => (MarkdownReads::Source, "source"),
+                    MarkdownReads::Source => (MarkdownReads::Rendered, "rendered"),
+                };
+                self.markdown_reads = reads;
+                self.save_in("markdown", "toolDisplay", json!(name))
+            }
             Row::Steering => {
                 self.steering_mode = next(self.steering_mode);
                 self.save("steeringMode", json!(delivery(self.steering_mode)))
@@ -848,6 +888,7 @@ mod tests {
         assert_eq!(settings.double_escape, DoubleEscape::Tree);
         assert!(!settings.skip_branch_summary_prompt);
         assert_eq!(settings.tree_filter, Filter::Default);
+        assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
         assert_eq!(settings.default_thinking_level, None);
         assert_eq!(settings.tools, ["read", "bash", "edit", "write"]);
         assert_eq!(settings.hide_credentials, HideCredentials::Unattended);
@@ -918,9 +959,11 @@ mod tests {
             r#"{"hideThinkingBlock": true, "doubleEscapeAction": "fork",
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
                 "defaultThinkingLevel": "off", "theme": "dark", "treeFilterMode": "labeled-only",
-                "steeringMode": "one-at-a-time", "followUpMode": "all"}"#,
+                "steeringMode": "one-at-a-time", "followUpMode": "all",
+                "markdown": {"toolDisplay": "source"}}"#,
         );
         assert_eq!(settings.tree_filter, Filter::Labeled);
+        assert_eq!(settings.markdown_reads, MarkdownReads::Source);
         assert!(settings.hide_thinking_block);
         assert_eq!(settings.steering_mode, Delivery::OneAtATime);
         assert_eq!(settings.follow_up_mode, Delivery::All);
@@ -967,9 +1010,11 @@ mod tests {
         let settings = settings_with(
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
-                "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user"}"#,
+                "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
+                "markdown": {"toolDisplay": "raw"}}"#,
         );
         assert_eq!(settings.tree_filter, Filter::Default);
+        assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
         assert!(!settings.hide_thinking_block);
         assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
         assert_eq!(settings.default_thinking_level, None);
@@ -982,6 +1027,7 @@ mod tests {
                 format!(
                     r#"{path}: treeFilterMode must be "default", "no-tools", "user-only", "labeled-only", "all"; ignored"#
                 ),
+                format!(r#"{path}: markdown.toolDisplay must be "rendered" or "source"; ignored"#),
                 format!(
                     r#"{path}: defaultThinkingLevel must be "off", "minimal", "low", "medium", "high", "xhigh", "max"; ignored"#
                 ),
@@ -1232,6 +1278,10 @@ mod tests {
             ["shown", "hidden", "shown", "hidden"]
         );
         assert_eq!(
+            seen(Row::MarkdownReads, &mut settings),
+            ["rendered", "source", "rendered", "source"]
+        );
+        assert_eq!(
             seen(Row::TreeFilter, &mut settings),
             [
                 "all but model changes",
@@ -1251,6 +1301,7 @@ mod tests {
             saved(),
             json!({
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
+                "markdown": {"toolDisplay": "source"},
                 "doubleEscapeAction": "tree",
                 "hideCredentials": "unattended",
                 "steeringMode": "one-at-a-time",
