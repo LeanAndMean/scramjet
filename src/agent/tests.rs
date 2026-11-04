@@ -512,6 +512,152 @@ fn sessions_are_listed_and_continued_by_their_last_write() {
 }
 
 #[test]
+fn a_session_is_found_by_the_start_of_its_id_here_before_elsewhere() {
+    let sessions = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-find-{}", std::process::id())),
+    );
+    let [here, other, third] = ["here", "other", "third"].map(|name| sessions.0.join(name));
+    for directory in [&here, &other, &third] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let now = std::time::SystemTime::now();
+    let ago = |minutes: u64| now - Duration::from_secs(60 * minutes);
+    let save = |path: &Path, root: Option<&str>, modified| {
+        let mut header = json!({"type":"session","version":1});
+        if let Some(root) = root {
+            header["root"] = json!(root);
+        }
+        write_session(
+            path,
+            &[header, json!({"role":"user","content":"hello"})],
+            modified,
+        );
+    };
+    save(&here.join("1000-1.jsonl"), Some("/work/here"), ago(30));
+    save(&here.join("1001-1.jsonl"), Some("/work/here"), ago(20));
+    // Without a conversation (another process's, just started), or not a session at all.
+    write_session(
+        &here.join("1002-1.jsonl"),
+        &[json!({"type":"session","version":1})],
+        ago(1),
+    );
+    std::fs::write(here.join("1003-1.jsonl"), "not a session\n").unwrap();
+    save(&other.join("2000-5.jsonl"), Some("/work/other"), ago(30));
+    save(&third.join("2000-6.jsonl"), None, ago(10));
+    // Newer elsewhere, but one of the project's matches.
+    save(&here.join("3000-1.jsonl"), Some("/work/here"), ago(40));
+    save(&other.join("3000-2.jsonl"), Some("/work/other"), ago(5));
+    std::fs::write(sessions.0.join("2000-7.jsonl"), "").unwrap();
+
+    let find = |prefix| Session::find(&here, prefix).unwrap();
+    assert_eq!(find("100"), Some(Found::Here(here.join("1001-1.jsonl"))));
+    assert_eq!(find("1000"), Some(Found::Here(here.join("1000-1.jsonl"))));
+    assert_eq!(find("1000-1"), Some(Found::Here(here.join("1000-1.jsonl"))));
+    assert_eq!(find("1002"), None);
+    assert_eq!(find("3"), Some(Found::Here(here.join("3000-1.jsonl"))));
+    // The newest of the other projects'; a header without the project names its directory.
+    assert_eq!(
+        find("2000"),
+        Some(Found::Elsewhere {
+            path: third.join("2000-6.jsonl"),
+            root: third.clone()
+        })
+    );
+    assert_eq!(
+        find("2000-5"),
+        Some(Found::Elsewhere {
+            path: other.join("2000-5.jsonl"),
+            root: PathBuf::from("/work/other")
+        })
+    );
+    assert_eq!(find("9"), None);
+    // A project without sessions yet.
+    let new = sessions.0.join("new");
+    assert_eq!(
+        Session::find(&new, "3000").unwrap(),
+        Some(Found::Elsewhere {
+            path: other.join("3000-2.jsonl"),
+            root: PathBuf::from("/work/other")
+        })
+    );
+}
+
+#[test]
+fn a_fork_from_a_session_file_holds_all_of_it_in_a_new_session_of_the_project() {
+    let scratch = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-fork-from-{}", std::process::id())),
+    );
+    let reply = |text: &str| {
+        json!({"type":"message","role":"assistant",
+            "content":[{"type":"output_text","text":text}],"_scramjet_model":"a"})
+    };
+    let source = scratch.0.join("other/1700000000000-1.jsonl");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    write_session(
+        &source,
+        &[
+            json!({"type":"session","version":1,"root":"/work/other","parentSession":"/old.jsonl"}),
+            json!({"role":"user","content":"one"}),
+            reply("first"),
+            json!({"type":"session_info","name":"Work"}),
+            json!({"role":"user","content":"two"}),
+            reply("second"),
+            json!({"type":"branch","parent":2}),
+            json!({"role":"user","content":"other"}),
+            reply("another"),
+            json!({"type":"label","target":4,"label":"kept","time":1}),
+        ],
+        std::time::SystemTime::now(),
+    );
+    let saved = std::fs::read_to_string(&source).unwrap();
+    let here = scratch.0.join("here");
+    let root = Path::new("/work/here");
+
+    let forked = Session::fork_from(&here, root, &source).unwrap();
+    assert_eq!(forked.parent(), Some(here.as_path()));
+    let text = std::fs::read_to_string(&forked).unwrap();
+    let (header, lines) = text.split_once('\n').unwrap();
+    let header: Value = serde_json::from_str(header).unwrap();
+    assert_eq!(header["root"], "/work/here");
+    assert_eq!(header["parentSession"], json!(source));
+    assert_eq!(lines, saved.split_once('\n').unwrap().1);
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), saved);
+
+    let (session, conversation, prompts) = Session::open(&forked).unwrap();
+    assert_eq!(session.name(), Some("Work"));
+    // Up/Down recalls the prompts of every branch.
+    assert_eq!(prompts, ["one", "two", "other"]);
+    let texts: Vec<_> = (conversation.iter())
+        .map(|item| match &item["content"] {
+            Value::String(text) => text.as_str(),
+            parts => parts[0]["text"].as_str().unwrap(),
+        })
+        .collect();
+    assert_eq!(texts, ["one", "first", "other", "another"]);
+    let (entries, labels) = session.labeled_entries().unwrap();
+    assert_eq!(entries.len(), 6);
+    assert_eq!(labels[&4].text, "kept");
+    assert_eq!(
+        Session::list(&here).unwrap()[0].parent.as_ref(),
+        Some(&source)
+    );
+
+    // What is not a session file is not copied.
+    let notes = scratch.0.join("notes.jsonl");
+    std::fs::write(&notes, "{\"type\":\"note\"}\n").unwrap();
+    let error = Session::fork_from(&here, root, &notes)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not a scramjet-rs session"), "{error}");
+    let missing = scratch.0.join("missing.jsonl");
+    let error = Session::fork_from(&here, root, &missing)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("missing.jsonl"), "{error}");
+    assert_eq!(std::fs::read_dir(&here).unwrap().count(), 1);
+}
+
+#[test]
 fn a_session_name_and_stats_stay_out_of_the_conversation() {
     let (endpoint, server) = serve(vec![
         stream(&fixture::call_events("{}", fixture::known_usage())),

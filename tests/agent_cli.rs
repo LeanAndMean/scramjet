@@ -70,6 +70,112 @@ medium, high, xhigh, max\n"
     );
 }
 
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn session_and_fork_find_a_session_by_the_start_of_its_id() {
+    let binary = env!("CARGO_BIN_EXE_scramjet-rs");
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-sessions-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = project.canonicalize().unwrap();
+    let sessions = scratch.0.join("state/scramjet-rs/sessions");
+    let slug = project
+        .to_str()
+        .unwrap()
+        .trim_matches('/')
+        .replace('/', "-");
+    let (here, other) = (sessions.join(slug), sessions.join("work-other"));
+    let source = other.join("1700000000000-7.jsonl");
+    let theirs = "{\"role\":\"user\",\"content\":\"one\"}\n";
+    let ours = here.join("1600000000000-3.jsonl");
+    for (path, root, lines) in [
+        (&source, "/work/other", theirs),
+        (
+            &ours,
+            project.to_str().unwrap(),
+            "{\"role\":\"user\",\"content\":\"here\"}\n",
+        ),
+    ] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let header = format!("{{\"type\":\"session\",\"version\":1,\"root\":{root:?}}}\n");
+        std::fs::write(path, header + lines).unwrap();
+    }
+    let run = |arguments: &[&str]| {
+        let output = Command::new(binary)
+            .args(["--endpoint", "127.0.0.1:9", "--retries", "0"])
+            .args(arguments)
+            .current_dir(&project)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8(output.stderr).unwrap();
+        error.lines().last().unwrap_or_default().to_owned()
+    };
+    let first_line = |arguments: &[&str]| {
+        let output = Command::new(binary).args(arguments).output().unwrap();
+        let error = String::from_utf8(output.stderr).unwrap();
+        error.lines().next().unwrap_or_default().to_owned()
+    };
+    assert_eq!(
+        first_line(&["--fork", "x", "-c"]),
+        "scramjet-rs: --fork cannot be combined with --continue"
+    );
+    assert_eq!(
+        first_line(&["-r", "--session", "a", "--fork", "b", "-c"]),
+        "scramjet-rs: --fork cannot be combined with --session, --continue, --resume"
+    );
+    for option in ["--session", "--fork"] {
+        assert_eq!(
+            run(&[option, "1999", "-p", "hi"]),
+            "scramjet-rs: no session found matching \"1999\""
+        );
+    }
+    // Another project's is forked here only once the user agrees on a terminal.
+    assert_eq!(
+        run(&["--session", "1700", "-p", "hi"]),
+        "scramjet-rs: session \"1700\" belongs to another project, /work/other; --fork \"1700\" \
+continues it in a new session of this one"
+    );
+    let listed = || std::fs::read_dir(&here).unwrap().count();
+    assert_eq!(listed(), 1);
+
+    // The requests fail (no endpoint), after the prompt is saved in the session.
+    let refused = "scramjet-rs: provider: cannot connect to 127.0.0.1:9";
+    assert!(run(&["--session", "16", "-p", "again"]).starts_with(refused));
+    let saved = std::fs::read_to_string(&ours).unwrap();
+    assert!(saved.contains("\"content\":\"again\""), "{saved}");
+    assert!(run(&["--fork", "1700", "-p", "more"]).starts_with(refused));
+    assert_eq!(listed(), 2);
+    let forked = (std::fs::read_dir(&here).unwrap())
+        .map(|entry| entry.unwrap().path())
+        .find(|path| *path != ours)
+        .unwrap();
+    let text = std::fs::read_to_string(forked).unwrap();
+    let (header, lines) = text.split_once('\n').unwrap();
+    assert!(lines.starts_with(theirs), "{text}");
+    assert!(lines.contains("\"content\":\"more\""), "{text}");
+    let parent = format!("\"parentSession\":{:?}", source.to_str().unwrap());
+    let root = format!("\"root\":{:?}", project.to_str().unwrap());
+    assert!(
+        header.contains(&parent) && header.contains(&root),
+        "{header}"
+    );
+    assert!(!std::fs::read_to_string(&source).unwrap().contains("more"));
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {

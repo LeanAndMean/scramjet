@@ -61,6 +61,56 @@ pub struct Label {
     pub time: u64,
 }
 
+/// The saved session `Session::find` found.
+#[derive(Debug, PartialEq)]
+pub enum Found {
+    /// One of the project's.
+    Here(PathBuf),
+    /// One of another project's, `root`, as its header names it.
+    Elsewhere { path: PathBuf, root: PathBuf },
+}
+
+impl Found {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Here(path) | Self::Elsewhere { path, .. } => path,
+        }
+    }
+}
+
+/// The sessions in `directory` whose id starts with `prefix` and that hold a conversation, the
+/// newest first, with when they were written to and their headers.
+fn matching(directory: &Path, prefix: &str) -> io::Result<Vec<(SystemTime, PathBuf, Value)>> {
+    let listed = match std::fs::read_dir(directory) {
+        Ok(listed) => listed,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut candidates = Vec::new();
+    for entry in listed.flatten() {
+        let path = entry.path();
+        let named = (path.file_name().and_then(|name| name.to_str()))
+            .and_then(|name| name.strip_suffix(".jsonl"))
+            .is_some_and(|id| id.starts_with(prefix));
+        if let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified())
+            && named
+        {
+            candidates.push((modified, path));
+        }
+    }
+    candidates.sort_by(|a, b| b.cmp(a));
+    let mut found = Vec::new();
+    for (modified, path) in candidates {
+        let Ok(entries) = read(&path) else {
+            continue;
+        };
+        if (entries.context(&path, entries.tail)).is_ok_and(|context| !context.items.is_empty()) {
+            found.push((modified, path, entries.header));
+        }
+    }
+    Ok(found)
+}
+
 /// How `delete` removed a session file.
 #[derive(Debug, PartialEq)]
 pub enum Removal {
@@ -545,6 +595,57 @@ impl Session {
                 .then_with(|| b.path.cmp(&a.path))
         });
         Ok(sessions)
+    }
+
+    /// The saved session whose id starts with `prefix`, as Scramjet's `--session` and `--fork`
+    /// find one by part of its id: the newest of the project's, in `directory`, else the newest
+    /// of the other projects', in the directories next to it. Sessions without a conversation
+    /// (one another process just started) are left out, as Scramjet writes none.
+    pub fn find(directory: &Path, prefix: &str) -> io::Result<Option<Found>> {
+        if let Some((_, path, _)) = matching(directory, prefix)?.into_iter().next() {
+            return Ok(Some(Found::Here(path)));
+        }
+        let Some(listed) = (directory.parent()).and_then(|all| std::fs::read_dir(all).ok()) else {
+            return Ok(None);
+        };
+        let mut found = Vec::new();
+        for entry in listed.flatten() {
+            let other = entry.path();
+            if other != directory {
+                // As Scramjet's, a project whose sessions cannot be read is passed over.
+                found.extend(matching(&other, prefix).unwrap_or_default());
+            }
+        }
+        let newest = found
+            .into_iter()
+            .max_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        Ok(newest.map(|(_, path, header)| {
+            let root = match header["root"].as_str() {
+                Some(root) => PathBuf::from(root),
+                None => path.parent().unwrap_or(Path::new(".")).to_owned(),
+            };
+            Found::Elsewhere { path, root }
+        }))
+    }
+
+    /// Saves a session for the project `root` in `directory` with every entry, branch, name and
+    /// label of the session file `source`, forked from it, as Scramjet's `--fork` copies a
+    /// session. Returns the new file; a file that is not a session is not copied.
+    pub fn fork_from(directory: &Path, root: &Path, source: &Path) -> io::Result<PathBuf> {
+        let bytes = std::fs::read(source).map_err(|error| {
+            io::Error::new(error.kind(), format!("{}: {error}", source.display()))
+        })?;
+        read(source)?;
+        // The header is line 0; the lines after it keep their numbers, which branches and labels
+        // refer to.
+        let after_header = bytes.iter().position(|&byte| byte == b'\n');
+        let lines = after_header.map_or(&[][..], |end| &bytes[end + 1..]);
+        let mut forked = Self::create(directory, root, Some(source))?;
+        if let Err(error) = forked.file.write_all(lines) {
+            let _ = std::fs::remove_file(&forked.path);
+            return Err(error);
+        }
+        Ok(forked.path)
     }
 
     /// Starts a session for the project `root` in `directory`; a fork names the session it came

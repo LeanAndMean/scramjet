@@ -1,12 +1,12 @@
 //! The command line: its options and the usage text.
 use super::settings::{LEVELS, card_level};
-use scramjet_rs::agent::{SessionChoice, SystemPrompt};
+use scramjet_rs::agent::SystemPrompt;
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model PATTERN] \
 [--models PATTERNS] [--thinking LEVEL] [--max-output-tokens N] [--retries N]
-[-c | -r | --session FILE] [--system-prompt TEXT] [--append-system-prompt TEXT]...
-[--no-context-files] [--ask] [-p] [@FILE...] [MESSAGE...]
+[-c | -r | --session FILE|ID | --fork FILE|ID] [--system-prompt TEXT]
+[--append-system-prompt TEXT]... [--no-context-files] [--ask] [-p] [@FILE...] [MESSAGE...]
        scramjet-rs --list-models [SEARCH] | --export FILE [OUTPUT] | --version
        scramjet-rs install DIR | remove NAME|DIR | list
 
@@ -31,7 +31,12 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   --retries N            resend a request that failed transiently up to N times (default 3)
   -c, --continue         resume the session for this project written to last
   -r, --resume           choose one of this project's sessions to resume, as /resume does
-  --session FILE         resume a specific session file
+  --session FILE|ID      resume a session file (a word with a / or ending in .jsonl), or the
+                         newest session of this project whose id (as /session shows it) starts
+                         with ID, else of another project, which is forked here once you
+                         agree, as in Scramjet
+  --fork FILE|ID         continue a copy of that session, its branches and name included, in a
+                         new session of this project
   --system-prompt TEXT   the instructions' opening, in place of the tools and guidelines: TEXT,
                          or the contents of the file it names (default: the project's
                          .scramjet/SYSTEM.md, else ~/.scramjet/agent/SYSTEM.md, else
@@ -124,6 +129,19 @@ defaultModel, the model chosen last, which /model, Ctrl+P, a next step's list an
 save; and startupModel: per-directory (new sessions start with the model chosen last in their
 project, kept in $XDG_STATE_HOME/scramjet-rs/last-used-models.json) or global.";
 
+/// The session the agent starts in.
+pub(super) enum Start {
+    New,
+    /// `-c`: the project's session written to last.
+    Continue,
+    /// `-r`: a new one, which a choice of the project's sessions then replaces.
+    Resume,
+    /// `--session`: a session file, or the start of a saved session's id.
+    Session(String),
+    /// `--fork`: the same, continued in a new session of the project.
+    Fork(String),
+}
+
 /// What the command line asks for.
 pub(super) struct Options {
     pub(super) project: Option<PathBuf>,
@@ -133,10 +151,8 @@ pub(super) struct Options {
     pub(super) models: Option<Vec<String>>,
     pub(super) effort: Option<String>,
     pub(super) max_output_tokens: Option<u64>,
-    pub(super) choice: SessionChoice,
+    pub(super) start: Start,
     pub(super) prompt: SystemPrompt,
-    /// `--resume`: the session starts by choosing one to resume.
-    pub(super) resume: bool,
     pub(super) ask: bool,
     pub(super) retries: u32,
     /// `-p`: run the messages and exit.
@@ -162,9 +178,8 @@ impl Options {
             models: None,
             effort: None,
             max_output_tokens: None,
-            choice: SessionChoice::New,
+            start: Start::New,
             prompt: SystemPrompt::default(),
-            resume: false,
             ask: false,
             retries: 3,
             print: false,
@@ -174,6 +189,9 @@ impl Options {
             list_models: None,
             version: false,
         };
+        let mut fork = None;
+        // The other options naming the session to start in, which `--fork` cannot be given with.
+        let mut chosen = Vec::new();
         let mut arguments = arguments.peekable();
         while let Some(argument) = arguments.next() {
             let mut value = || {
@@ -216,15 +234,18 @@ impl Options {
                     options.retries = value()?.parse().map_err(|_| "invalid --retries")?
                 }
                 Some("-c" | "--continue") => {
-                    (options.choice, options.resume) = (SessionChoice::Continue, false)
+                    chosen.push("--continue");
+                    options.start = Start::Continue
                 }
                 Some("-r" | "--resume") => {
-                    (options.choice, options.resume) = (SessionChoice::New, true)
+                    chosen.push("--resume");
+                    options.start = Start::Resume
                 }
                 Some("--session") => {
-                    let path = PathBuf::from(value()?);
-                    (options.choice, options.resume) = (SessionChoice::Open(path), false)
+                    chosen.push("--session");
+                    options.start = Start::Session(value()?)
                 }
+                Some("--fork") => fork = Some(value()?),
                 Some("--system-prompt") => options.prompt.system = Some(value()?),
                 Some("--append-system-prompt") => options.prompt.append.push(value()?),
                 Some("-nc" | "--no-context-files") => options.prompt.no_context_files = true,
@@ -247,7 +268,19 @@ impl Options {
                 _ => return Err(format!("unknown argument {argument:?}\n\n{USAGE}")),
             }
         }
-        if options.resume && options.print {
+        if let Some(fork) = fork {
+            if !chosen.is_empty() {
+                let chosen = (["--session", "--continue", "--resume"].into_iter())
+                    .filter(|option| chosen.contains(option))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "--fork cannot be combined with {chosen}\n\n{USAGE}"
+                ));
+            }
+            options.start = Start::Fork(fork);
+        }
+        if matches!(options.start, Start::Resume) && options.print {
             return Err(format!("--resume cannot be used with -p\n\n{USAGE}"));
         }
         if options.print && options.messages.is_empty() && options.files.is_empty() {

@@ -25,13 +25,17 @@ mod terminal;
 mod text;
 mod tree;
 
-use args::{Options, USAGE};
+use args::{Options, Start, USAGE};
 use rustix::termios::{self, OptionalActions, QueueSelector};
-use scramjet_rs::agent::{self, Agent, AgentConfig, AgentUi, Attached, ModelOption, Next};
+use scramjet_rs::agent::{
+    self, Agent, AgentConfig, AgentUi, Attached, Found, ModelOption, Next, Session, SessionChoice,
+};
 use settings::Settings;
 use std::{
     ffi::OsString,
+    io::IsTerminal,
     os::fd::BorrowedFd,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -80,13 +84,19 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     if files.is_some() && messages.is_empty() {
         messages.push(String::new());
     }
-    let (print_only, resume) = (options.print, options.resume);
+    let (print_only, resume) = (options.print, matches!(options.start, Start::Resume));
+    let root = project_root(options.project.take())?;
+    let Some(choice) = session_choice(std::mem::replace(&mut options.start, Start::New), &root)?
+    else {
+        eprintln!("Aborted.");
+        return Ok(());
+    };
     let mut settings = Settings::load();
     let (patterns, source) = match options.models.take() {
         Some(patterns) => (patterns, "--models"),
         None => (settings.enabled_models.clone(), "settings: enabledModels"),
     };
-    let (mut agent, scope_warnings) = start(options, &settings, (&patterns, source))?;
+    let (mut agent, scope_warnings) = start(options, root, choice, &settings, (&patterns, source))?;
     let cancel = Arc::new(AtomicBool::new(false));
     let hide_thinking = Arc::new(AtomicBool::new(settings.hide_thinking_block));
     handle_signals(&cancel, &hide_thinking)?;
@@ -129,20 +139,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     result
 }
 
-/// Starts the agent in the project the options name. A model or effort they give (`--model`'s
-/// `:level` too, unless `--thinking` gives one) wins over the one a resumed session last used,
-/// and a model pattern naming none of the endpoint's is refused. As in Scramjet, a new session without one starts with the
-/// model chosen before (`remembered`) when the scope `patterns` choose it or there is no scope,
-/// else with the scope's first model, at the effort its pattern sets; without either, with
-/// `gpt-6-luna`. Without an effort either, the effort is the settings' default thinking level,
-/// else Scramjet's default, `medium`. Also returns what in `patterns` matched nothing, after the
-/// option or setting they come from, and the models remembered that the endpoint lacks.
-fn start(
-    options: Options,
-    settings: &Settings,
-    (patterns, source): (&[String], &str),
-) -> Result<(Agent, Vec<String>), String> {
-    let root = match options.project {
+/// The project directory `--project` names, else the current one, as an absolute path.
+fn project_root(project: Option<PathBuf>) -> Result<PathBuf, String> {
+    let root = match project {
         Some(path) => path,
         None => std::env::current_dir().map_err(|e| e.to_string())?,
     };
@@ -152,6 +151,70 @@ fn start(
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
     }
+    Ok(root)
+}
+
+/// The session the agent starts in for the project `root`, the one `--session` or `--fork` names
+/// found as Scramjet finds it; `None` when the user declines to fork one of another project here.
+fn session_choice(start: Start, root: &Path) -> Result<Option<SessionChoice>, String> {
+    let find = |named: &str| -> Result<Found, String> {
+        // As Scramjet's, a word that looks like a path is a session file, wherever it is.
+        if named.contains(['/', '\\']) || named.ends_with(".jsonl") {
+            return Ok(Found::Here(PathBuf::from(named)));
+        }
+        let directory = agent::session_directory(root).map_err(|e| e.to_string())?;
+        Session::find(&directory, named)
+            .map_err(|error| format!("{}: {error}", directory.display()))?
+            .ok_or_else(|| format!("no session found matching {named:?}"))
+    };
+    Ok(Some(match start {
+        Start::New | Start::Resume => SessionChoice::New,
+        Start::Continue => SessionChoice::Continue,
+        Start::Fork(named) => SessionChoice::Fork(find(&named)?.path().to_owned()),
+        Start::Session(named) => match find(&named)? {
+            Found::Here(path) => SessionChoice::Open(path),
+            Found::Elsewhere { path, root } => match fork_here(&named, &root)? {
+                true => SessionChoice::Fork(path),
+                false => return Ok(None),
+            },
+        },
+    }))
+}
+
+/// Asks, as Scramjet does, whether to fork the session `named` of the project `other` into this
+/// one; when the input is not a terminal, says how to instead.
+fn fork_here(named: &str, other: &Path) -> Result<bool, String> {
+    if !std::io::stdin().is_terminal() {
+        return Err(format!(
+            "session {named:?} belongs to another project, {}; --fork {named:?} continues it in \
+a new session of this one",
+            other.display()
+        ));
+    }
+    eprintln!("Session found in different project: {}", other.display());
+    eprint!("Fork this session into this project? [y/N] ");
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .map_err(|e| e.to_string())?;
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
+}
+
+/// Starts the agent in the project `root`, in the session `choice`. A model or effort the options
+/// give (`--model`'s `:level` too, unless `--thinking` gives one) wins over the one a resumed
+/// session last used, and a model pattern naming none of the endpoint's is refused. As in
+/// Scramjet, a new session without one starts with the model chosen before (`remembered`) when the scope `patterns` choose it or there is no scope,
+/// else with the scope's first model, at the effort its pattern sets; without either, with
+/// `gpt-6-luna`. Without an effort either, the effort is the settings' default thinking level,
+/// else Scramjet's default, `medium`. Also returns what in `patterns` matched nothing, after the
+/// option or setting they come from, and the models remembered that the endpoint lacks.
+fn start(
+    options: Options,
+    root: PathBuf,
+    choice: SessionChoice,
+    settings: &Settings,
+    (patterns, source): (&[String], &str),
+) -> Result<(Agent, Vec<String>), String> {
     // Before the session starts, so that a pattern naming no model leaves none behind.
     let named = match &options.model {
         Some(pattern) => Some(named_model(pattern, options.endpoint)?),
@@ -172,7 +235,7 @@ fn start(
         skills: settings.skills.clone(),
         prompt: options.prompt,
     };
-    let mut agent = Agent::start(config, options.choice).map_err(|e| e.to_string())?;
+    let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
     let (scoped, warnings) = match patterns.is_empty() {
         true => Default::default(),
         false => scope::resolve(patterns, &agent.model_options()),

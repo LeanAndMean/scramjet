@@ -42,7 +42,10 @@ pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use problem::{Problem, ProblemFile};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
-pub use session::{Branch, Label, Removal, Session, SessionInfo, read_branch, state_directory};
+pub use session::{
+    Branch, Found, Label, Removal, Session, SessionInfo, directory as session_directory,
+    read_branch, state_directory,
+};
 pub use skills::{Skill, Skills};
 pub use status::{Completed, Next, Routing, Source, Step};
 pub use suggest::Suggested;
@@ -245,6 +248,8 @@ pub enum SessionChoice {
     New,
     Continue,
     Open(PathBuf),
+    /// A new session of the project with all of this session file's (`Session::fork_from`).
+    Fork(PathBuf),
 }
 
 #[derive(Debug)]
@@ -540,15 +545,24 @@ pub struct Inventory {
 
 impl Agent {
     pub fn start(config: AgentConfig, choice: SessionChoice) -> Result<Self, AgentError> {
+        let directory = || session::directory(&config.root);
         let opened = match choice {
             SessionChoice::New => None,
-            SessionChoice::Continue => Session::latest(&session::directory(&config.root)?)?,
-            SessionChoice::Open(path) => Some(path),
+            SessionChoice::Continue => Session::latest(&directory()?)?.map(|path| (path, false)),
+            SessionChoice::Open(path) => Some((path, false)),
+            SessionChoice::Fork(source) => Some((
+                Session::fork_from(&directory()?, &config.root, &source)?,
+                true,
+            )),
         };
         let (session, conversation, prompts) = match opened {
-            Some(path) => Session::open(&path)?,
+            Some((path, forked)) => Session::open(&path).inspect_err(|_| {
+                if forked {
+                    let _ = std::fs::remove_file(&path);
+                }
+            })?,
             None => (
-                Session::create(&session::directory(&config.root)?, &config.root, None)?,
+                Session::create(&directory()?, &config.root, None)?,
                 Vec::new(),
                 Vec::new(),
             ),
