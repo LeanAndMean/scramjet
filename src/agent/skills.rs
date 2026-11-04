@@ -23,6 +23,15 @@ pub struct Skill {
     pub listed: bool,
 }
 
+/// What the command line says about skills, as Scramjet's `--skill` and `--no-skills`.
+#[derive(Clone, Debug, Default)]
+pub struct SkillOptions {
+    /// `--skill`: files and directories looked in after all the others.
+    pub paths: Vec<PathBuf>,
+    /// `--no-skills`: only those `paths`, none found by default or listed in the settings.
+    pub no_skills: bool,
+}
+
 /// The skills a session has, in order of precedence, and why files were skipped.
 #[derive(Clone, Debug, Default)]
 pub struct Skills {
@@ -37,17 +46,25 @@ enum Place {
     Directory { top_files: bool },
     /// A file or directory the settings' `skills` list, which should exist.
     Listed,
+    /// A file or directory `--skill` names, which should exist.
+    Given,
 }
 
 /// Where Pi looks, first wins: the project's `.scramjet/skills` and the `.agents/skills` of the
 /// project and the directories above it up to its Git root, the settings' `listed` paths, then
-/// the user's `skills` in Scramjet's agent directory and `~/.agents/skills`.
+/// the user's `skills` in Scramjet's agent directory and `~/.agents/skills`; then, as
+/// Scramjet's, the paths `--skill` gives, which are all with `--no-skills`.
 fn places(
     listed: &[PathBuf],
+    options: &SkillOptions,
     root: &Path,
     agent_directory: Option<&Path>,
     home: Option<&Path>,
 ) -> Vec<(PathBuf, Place)> {
+    let given = (options.paths.iter()).map(|path| (path.clone(), Place::Given));
+    if options.no_skills {
+        return given.collect();
+    }
     let user_agents = home.map(|home| home.join(".agents/skills"));
     let mut places = vec![(
         root.join(".scramjet/skills"),
@@ -70,16 +87,19 @@ fn places(
         ));
     }
     places.extend(user_agents.map(|skills| (skills, Place::Directory { top_files: false })));
+    places.extend(given);
     places
 }
 
 impl Skills {
-    /// The skills of a session in `root`, with the settings' `listed` files and directories.
-    pub fn discover(listed: &[PathBuf], root: &Path) -> Self {
+    /// The skills of a session in `root`, with the settings' `listed` files and directories and
+    /// the command line's `options`.
+    pub fn discover(listed: &[PathBuf], options: &SkillOptions, root: &Path) -> Self {
         let agent_directory = super::subagent::agent_directory();
         let home = std::env::home_dir();
         Self::load(&places(
             listed,
+            options,
             root,
             agent_directory.as_deref(),
             home.as_deref(),
@@ -92,18 +112,22 @@ impl Skills {
         for (path, place) in places {
             let files = match place {
                 Place::Directory { top_files } => skill_files(path, *top_files),
-                Place::Listed if path.is_dir() => skill_files(path, true),
-                Place::Listed if path.is_file() && path.extension() == Some("md".as_ref()) => {
+                _ if path.is_dir() => skill_files(path, true),
+                _ if path.is_file() && path.extension() == Some("md".as_ref()) => {
                     vec![path.clone()]
                 }
-                Place::Listed if path.exists() => {
-                    let text = format!("skill path is not a markdown file: {}", path.display());
-                    found.warnings.push(Problem::in_settings(text));
-                    continue;
-                }
-                Place::Listed => {
-                    let text = format!("skill path does not exist: {}", path.display());
-                    found.warnings.push(Problem::in_settings(text));
+                _ => {
+                    let wrong = match path.exists() {
+                        true => "is not a markdown file",
+                        false => "does not exist",
+                    };
+                    let shown = path.display();
+                    found.warnings.push(match place {
+                        Place::Given => {
+                            Problem::new(format!("skill path given with --skill {wrong}: {shown}"))
+                        }
+                        _ => Problem::in_settings(format!("skill path {wrong}: {shown}")),
+                    });
                     continue;
                 }
             };
@@ -361,6 +385,7 @@ mod tests {
         let root = Path::new("/nonexistent/repo/sub");
         let found = places(
             &[PathBuf::from("/listed")],
+            &SkillOptions::default(),
             root,
             Some(Path::new("/home/u/.scramjet/agent")),
             Some(Path::new("/home/u")),
@@ -393,7 +418,7 @@ mod tests {
         let project = home.join("repo/sub");
         fs::create_dir_all(home.join("repo/.git")).unwrap();
         fs::create_dir_all(&project).unwrap();
-        let found = places(&[], &project, None, Some(&home));
+        let found = places(&[], &SkillOptions::default(), &project, None, Some(&home));
         let found: Vec<_> = found.iter().map(|(path, _)| path.clone()).collect();
         assert_eq!(
             found,
@@ -405,7 +430,7 @@ mod tests {
             ]
         );
         // The user's `~/.agents/skills` is never also a project's.
-        let found = places(&[], &home, None, Some(&home));
+        let found = places(&[], &SkillOptions::default(), &home, None, Some(&home));
         let user = home.join(".agents/skills");
         assert_eq!(found.iter().filter(|(path, _)| path == &user).count(), 1);
         assert_eq!(found.last().unwrap().0, user);
@@ -536,6 +561,115 @@ hyphens only)",
                 format!(
                     "skill path does not exist: {}",
                     shown(scratch.0.join("missing"))
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn skill_options_add_paths_after_all_others_and_no_skills_leaves_only_them() {
+        let given = SkillOptions {
+            paths: vec![PathBuf::from("/given"), PathBuf::from("/more.md")],
+            no_skills: false,
+        };
+        let found = places(
+            &[PathBuf::from("/listed")],
+            &given,
+            Path::new("/"),
+            None,
+            Some(Path::new("/home/u")),
+        );
+        let last: Vec<_> = found.iter().rev().take(3).rev().collect();
+        assert_eq!(
+            last,
+            [
+                &(
+                    PathBuf::from("/home/u/.agents/skills"),
+                    Place::Directory { top_files: false }
+                ),
+                &(PathBuf::from("/given"), Place::Given),
+                &(PathBuf::from("/more.md"), Place::Given),
+            ]
+        );
+        let only = SkillOptions {
+            no_skills: true,
+            ..given
+        };
+        let found = places(
+            &[PathBuf::from("/listed")],
+            &only,
+            Path::new("/"),
+            None,
+            None,
+        );
+        assert_eq!(
+            found,
+            [
+                (PathBuf::from("/given"), Place::Given),
+                (PathBuf::from("/more.md"), Place::Given),
+            ]
+        );
+        assert!(
+            places(
+                &[],
+                &SkillOptions {
+                    no_skills: true,
+                    ..Default::default()
+                },
+                Path::new("/"),
+                None,
+                None
+            )
+            .is_empty()
+        );
+
+        // A name loaded before wins; a path that is no skill is a problem of no file.
+        let scratch = scratch("given");
+        write(
+            &scratch.0.join("found/pdf/SKILL.md"),
+            &skill("pdf", "Found."),
+        );
+        write(
+            &scratch.0.join("given/pdf/SKILL.md"),
+            &skill("pdf", "Given."),
+        );
+        write(
+            &scratch.0.join("given/csv/SKILL.md"),
+            &skill("csv", "Given."),
+        );
+        write(&scratch.0.join("notes.txt"), "");
+        let found = Skills::load(&[
+            (
+                scratch.0.join("found"),
+                Place::Directory { top_files: true },
+            ),
+            (scratch.0.join("given"), Place::Given),
+            (scratch.0.join("notes.txt"), Place::Given),
+            (scratch.0.join("missing"), Place::Given),
+        ]);
+        let skills: Vec<_> = (found.list().iter())
+            .map(|skill| (skill.name.as_str(), skill.description.as_str()))
+            .collect();
+        assert_eq!(skills, [("pdf", "Found."), ("csv", "Given.")]);
+        let problems: Vec<_> = (found.warnings().iter().skip(1))
+            .map(|problem| (problem.text.clone(), problem.file.clone()))
+            .collect();
+        assert_eq!(
+            problems,
+            [
+                (
+                    format!(
+                        "skill path given with --skill is not a markdown file: {}",
+                        scratch.0.join("notes.txt").display()
+                    ),
+                    None
+                ),
+                (
+                    format!(
+                        "skill path given with --skill does not exist: {}",
+                        scratch.0.join("missing").display()
+                    ),
+                    None
                 ),
             ]
         );

@@ -29,7 +29,7 @@ use args::{Options, Start, USAGE};
 use rustix::termios::{self, OptionalActions, QueueSelector};
 use scramjet_rs::agent::{
     self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
-    Next, Session, SessionChoice,
+    Next, Session, SessionChoice, SkillOptions,
 };
 use settings::Settings;
 use std::{
@@ -229,6 +229,13 @@ fn start(
         })
         .map(|name| format!("--tools: {name} is not one of scramjet-rs's tools; ignored"))
         .collect();
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let skill_options = SkillOptions {
+        paths: (options.skills.iter())
+            .map(|path| given_path(path, &cwd))
+            .collect(),
+        no_skills: options.no_skills,
+    };
     let config = AgentConfig {
         endpoint: options.endpoint,
         model: named.map_or_else(|| "gpt-6-luna".to_owned(), |named| named.id),
@@ -241,6 +248,7 @@ fn start(
         only_tools: options.only_tools,
         command_sets: settings.command_sets.clone(),
         skills: settings.skills.clone(),
+        skill_options,
         prompt: options.prompt,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
@@ -276,6 +284,18 @@ fn start(
     agent.set_effort(effort).map_err(|e| e.to_string())?;
     agent.load_model_card();
     Ok((agent, warnings))
+}
+
+/// A path the command line gives, as Scramjet resolves `--skill`'s: `~` is the home directory,
+/// and a relative path is from `cwd`.
+fn given_path(path: &str, cwd: &Path) -> PathBuf {
+    let path = path.trim();
+    match std::env::home_dir() {
+        Some(home) if path == "~" || path.starts_with("~/") => {
+            home.join(path[1..].trim_start_matches('/'))
+        }
+        _ => cwd.join(path),
+    }
 }
 
 /// The endpoint's models, or why they cannot be listed.

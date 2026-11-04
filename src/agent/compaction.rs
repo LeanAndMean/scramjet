@@ -1251,6 +1251,7 @@ mod tests {
             only_tools: None,
             command_sets: Vec::new(),
             skills: Vec::new(),
+            skill_options: Default::default(),
             prompt: Default::default(),
         };
         let mut resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();

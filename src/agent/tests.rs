@@ -313,6 +313,7 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
         only_tools: None,
         command_sets: Vec::new(),
         skills: Vec::new(),
+        skill_options: Default::default(),
         prompt: Default::default(),
     };
     let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
@@ -719,6 +720,7 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
         only_tools: None,
         command_sets: Vec::new(),
         skills: Vec::new(),
+        skill_options: Default::default(),
         prompt: Default::default(),
     };
     let resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();

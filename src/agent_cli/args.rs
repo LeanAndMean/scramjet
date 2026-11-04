@@ -6,7 +6,8 @@ use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model PATTERN] \
 [--models PATTERNS] [--thinking LEVEL] [--max-output-tokens N] [--retries N]
 [-c | -r | --session FILE|ID | --fork FILE|ID] [--system-prompt TEXT]
-[--append-system-prompt TEXT]... [--no-context-files] [-t LIST | -nt | -nbt] [--ask] [-p]
+[--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
+[-t LIST | -nt | -nbt] [--ask] [-p]
 [@FILE...] [MESSAGE...]
        scramjet-rs --list-models [SEARCH] | --export FILE [OUTPUT] | --version
        scramjet-rs install DIR | remove NAME|DIR | list
@@ -48,6 +49,10 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   -nc, --no-context-files
                          leave out the AGENTS.md and CLAUDE.md files of ~/.scramjet/agent, the
                          project and the directories above it
+  --skill PATH           a skill file, or a directory of skills, looked in after the others
+                         (repeatable); a relative PATH is from the current directory
+  -ns, --no-skills       no skills but those --skill names: none from the skill directories
+                         or the settings' skills
   -t, --tools LIST       the only tools the agent has in this run, comma-separated, as in
                          Scramjet: coding tools, in place of the settings' tools, and
                          scramjet-rs's own (subagent, get_scramjet_user_input, delegate,
@@ -163,6 +168,10 @@ pub(super) struct Options {
     pub(super) max_output_tokens: Option<u64>,
     pub(super) start: Start,
     pub(super) prompt: SystemPrompt,
+    /// `--skill`: as typed, resolved once the session starts.
+    pub(super) skills: Vec<String>,
+    /// `--no-skills`.
+    pub(super) no_skills: bool,
     /// `--tools`, `--no-tools` or `--no-builtin-tools`: the only tools of the run.
     pub(super) only_tools: Option<Vec<String>>,
     pub(super) ask: bool,
@@ -192,6 +201,8 @@ impl Options {
             max_output_tokens: None,
             start: Start::New,
             prompt: SystemPrompt::default(),
+            skills: Vec::new(),
+            no_skills: false,
             only_tools: None,
             ask: false,
             retries: 3,
@@ -263,6 +274,8 @@ impl Options {
                 Some("--system-prompt") => options.prompt.system = Some(value()?),
                 Some("--append-system-prompt") => options.prompt.append.push(value()?),
                 Some("-nc" | "--no-context-files") => options.prompt.no_context_files = true,
+                Some("--skill") => options.skills.push(value()?),
+                Some("-ns" | "--no-skills") => options.no_skills = true,
                 Some("-t" | "--tools") => {
                     let names = value()?;
                     let names = names
@@ -351,5 +364,22 @@ mod tests {
         }
         let missing = Options::parse(["--tools"].into_iter().map(OsString::from));
         assert!(missing.is_err_and(|error| error.starts_with("--tools requires a value")));
+    }
+
+    #[test]
+    fn skill_options_are_scramjets() {
+        let parse = |arguments: &[&str]| {
+            let arguments = arguments.iter().map(OsString::from);
+            let options = Options::parse(arguments).unwrap().unwrap();
+            (options.skills, options.no_skills, options.messages)
+        };
+        assert_eq!(parse(&[]), (vec![], false, vec![]));
+        assert_eq!(
+            parse(&["--skill", "a", "-ns", "--skill", "~/b.md", "go"]),
+            (vec!["a".into(), "~/b.md".into()], true, vec!["go".into()])
+        );
+        assert!(parse(&["--no-skills"]).1);
+        let missing = Options::parse(["--skill"].into_iter().map(OsString::from));
+        assert!(missing.is_err_and(|error| error.starts_with("--skill requires a value")));
     }
 }

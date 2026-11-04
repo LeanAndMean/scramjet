@@ -1782,6 +1782,7 @@ sed.\n- Be concise";
             only_tools: None,
             command_sets: Vec::new(),
             skills: Vec::new(),
+            skill_options: Default::default(),
             prompt: Default::default(),
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
@@ -2359,6 +2360,7 @@ be a non-empty array for select type. failed",
                 only_tools: None,
                 command_sets: Vec::new(),
                 skills: Vec::new(),
+                skill_options: Default::default(),
                 prompt: Default::default(),
             };
             let path = agent.session_path().to_owned();

@@ -46,7 +46,7 @@ pub use session::{
     Branch, Found, Label, Removal, Session, SessionInfo, directory as session_directory,
     read_branch, state_directory,
 };
-pub use skills::{Skill, Skills};
+pub use skills::{Skill, SkillOptions, Skills};
 pub use status::{Completed, Next, Routing, Source, Step};
 pub use suggest::Suggested;
 pub use tools::{
@@ -124,6 +124,8 @@ pub struct AgentConfig {
     pub command_sets: Vec<PathBuf>,
     /// The skill files and directories the settings list, besides those found by default.
     pub skills: Vec<PathBuf>,
+    /// `--skill` and `--no-skills`.
+    pub skill_options: SkillOptions,
     pub prompt: SystemPrompt,
 }
 
@@ -496,7 +498,7 @@ pub fn inventory(installed: &[PathBuf], listed: &[PathBuf], root: &Path) -> Inve
         commands,
         agents,
         warnings,
-        skills: Skills::discover(listed, root),
+        skills: Skills::discover(listed, &SkillOptions::default(), root),
     }
 }
 
@@ -631,7 +633,7 @@ impl Agent {
         let config = &self.config;
         self.sets = Sets::for_project(&config.command_sets, &config.root);
         self.commands = Commands::discover(&self.sets);
-        self.skills = Skills::discover(&config.skills, &config.root);
+        self.skills = Skills::discover(&config.skills, &config.skill_options, &config.root);
         self.agents_directory = subagent::user_directory();
         self.agent_directory = subagent::agent_directory();
         self.instruct();

@@ -370,7 +370,7 @@ mod tests {
         write(&settings, "{}");
         let sets = Sets::find(std::slice::from_ref(&set), None, &root.join(".scramjet"));
         let commands = Commands::discover(&sets);
-        let skills = Skills::discover(&[], &root);
+        let skills = Skills::discover(&[], &Default::default(), &root);
         let agent = |name: &str, path: PathBuf, source| AgentFile {
             name: name.to_owned(),
             description: format!("Does {name}."),

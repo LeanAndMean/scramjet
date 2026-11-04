@@ -392,6 +392,7 @@ response is incomplete; retry the request."});
             only_tools: None,
             command_sets: Vec::new(),
             skills: Vec::new(),
+            skill_options: Default::default(),
             prompt: Default::default(),
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
@@ -828,6 +829,7 @@ reached the output token limit (max_output_tokens)"),
             only_tools: None,
             command_sets: Vec::new(),
             skills: Vec::new(),
+            skill_options: Default::default(),
             prompt: Default::default(),
         };
         let agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
