@@ -177,6 +177,9 @@ pub(super) struct Settings {
     pub(super) command_sets: Vec<PathBuf>,
     /// `skills`: skill files and directories besides those found by default, as `commandSets`'.
     pub(super) skills: Vec<PathBuf>,
+    /// `enabledModels`: the patterns of the models Ctrl+P cycles through (`scope::resolve`);
+    /// empty: all.
+    pub(super) enabled_models: Vec<String>,
     /// What is wrong in the file; those keys keep their defaults.
     pub(super) warnings: Vec<String>,
 }
@@ -233,6 +236,7 @@ impl Settings {
             follow_up_mode: Delivery::OneAtATime,
             command_sets: Vec::new(),
             skills: Vec::new(),
+            enabled_models: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -317,6 +321,12 @@ impl Settings {
             }
             Err(()) => self.warnings.push(format!(
                 "{path}: skills must be a list of files and directories; ignored"
+            )),
+        }
+        match paths(object, "enabledModels") {
+            Ok(patterns) => self.enabled_models = patterns,
+            Err(()) => self.warnings.push(format!(
+                "{path}: enabledModels must be a list of model patterns; ignored"
             )),
         }
     }
@@ -856,6 +866,28 @@ mod tests {
         );
         // Changes are still saved to that file.
         assert_eq!(settings.path.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn enabled_models_are_a_list_of_patterns() {
+        let scratch = Scratch::new("enabled-models");
+        let mut settings = settings_with(&scratch, r#"{"enabledModels": "sonnet"}"#);
+        assert!(settings.enabled_models.is_empty());
+        let path = scratch.0.join("settings.json");
+        assert_eq!(
+            settings.warnings,
+            [format!(
+                "{}: enabledModels must be a list of model patterns; ignored",
+                shown(&path)
+            )]
+        );
+        std::fs::write(
+            &path,
+            r#"{"theme": "x", "enabledModels": ["sonnet:high", "gpt-*"]}"#,
+        )
+        .unwrap();
+        settings.reload();
+        assert_eq!(settings.enabled_models, ["sonnet:high", "gpt-*"]);
     }
 
     #[test]

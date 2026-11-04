@@ -63,6 +63,7 @@ const ALLOW: &str = "Allow? [y/N, a = allow all until exit]";
 const BUSY: &str = "Busy: the session is not ready for a prompt yet";
 const SHELL_BUSY: &str = "A bash command is already running. Press Esc to cancel it first.";
 const RELOAD_BUSY: &str = "Wait for the current response to finish before reloading.";
+const MODEL_NEXT: &str = "The model changes before the next request";
 
 /// What the session asks the screen to show or do.
 enum ToScreen {
@@ -126,6 +127,8 @@ pub(super) enum Input {
     DoubleEscape,
     /// Shift+Tab.
     CycleEffort,
+    /// Ctrl+P presses, or Shift+Ctrl+P (negative), each a model further (`scope::cycle`).
+    CycleModel(isize),
     /// A `!` command run during a turn ended: `Link::take_shells` has it.
     Shells,
     /// A built-in command typed during a turn waits: `Link::take_commands` has it.
@@ -141,6 +144,8 @@ struct Queue {
     follow_ups: Vec<String>,
     /// The effort level Shift+Tab chose, for the next request.
     effort: Option<String>,
+    /// The models Ctrl+P (positive) or Shift+Ctrl+P moved on by, for the next request.
+    model_steps: isize,
     /// `!` commands run during a turn, as typed, until the session adds them to the
     /// conversation; at most the last one still runs.
     shells: Vec<Side>,
@@ -237,6 +242,10 @@ impl Link {
     /// The effort level Shift+Tab chose during a turn that no request took.
     pub(super) fn take_effort(&self) -> Option<String> {
         self.queue().effort.take()
+    }
+    /// The models Ctrl+P and Shift+Ctrl+P moved on by during a turn, which no request took.
+    pub(super) fn take_model_steps(&self) -> isize {
+        std::mem::take(&mut self.queue().model_steps)
     }
     pub(super) fn set_text(&self, text: String) {
         self.send(ToScreen::SetText(text));
@@ -469,7 +478,9 @@ impl AgentUi for Link {
         self.take_effort()
     }
     fn pause(&mut self) -> bool {
-        (self.queue().commands.first()).is_some_and(|command| !stops_turn(command))
+        let queue = self.queue();
+        queue.model_steps != 0
+            || (queue.commands.first()).is_some_and(|command| !stops_turn(command))
     }
     fn choose(
         &mut self,
@@ -1785,6 +1796,14 @@ impl App {
                 let _ = self.inputs.send(Input::CycleEffort);
             }
             Action::CycleEffort => self.draft.set_note(BUSY.to_owned()),
+            Action::CycleModel(steps) if running => {
+                self.queue().model_steps += steps;
+                self.draft.set_note(MODEL_NEXT.to_owned());
+            }
+            Action::CycleModel(steps) if self.ready => {
+                let _ = self.inputs.send(Input::CycleModel(steps));
+            }
+            Action::CycleModel(_) => self.draft.set_note(BUSY.to_owned()),
             Action::Suspend => return Flow::Suspend,
             Action::External => return Flow::External,
         }

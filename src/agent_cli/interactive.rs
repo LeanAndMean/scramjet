@@ -6,7 +6,7 @@ use super::select::Routed;
 use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
-use super::{editor, installed, select, settings, style};
+use super::{editor, installed, scope, select, settings, style};
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Step,
 };
@@ -35,6 +35,8 @@ pub(super) struct Interactive {
     pub(super) cancel: Arc<AtomicBool>,
     pub(super) hide_thinking: Arc<AtomicBool>,
     pub(super) settings: Settings,
+    /// The patterns of the models Ctrl+P cycles through (`scope::resolve`); empty: all.
+    pub(super) scope: Vec<String>,
 }
 
 /// How a prompt came to run.
@@ -104,20 +106,23 @@ impl Interactive {
             cancel,
             hide_thinking,
             settings,
+            scope: Vec::new(),
         })
     }
 
     /// Reads and runs prompts until the user quits or the input ends; with `resume`, after
     /// choosing a session to resume (`--resume`), unless none is chosen on the full screen, which
     /// ends the session without saving it, as in Scramjet. The command line's `messages` run
-    /// first, as if typed, the first with its `files`.
+    /// first, as if typed, the first with its `files`. `notices` are shown at the start, with
+    /// the problems found.
     pub(super) fn run(
         mut self,
         resume: bool,
         messages: Vec<String>,
         files: Option<Attached>,
+        notices: Vec<String>,
     ) -> Result<(), String> {
-        let result = self.read_and_run(resume, messages, files);
+        let result = self.read_and_run(resume, messages, files, notices);
         // The terminal is given back first, so that an error saving the settings shows.
         self.screen = None;
         self.save_hide_thinking();
@@ -138,6 +143,7 @@ impl Interactive {
         resume: bool,
         messages: Vec<String>,
         files: Option<Attached>,
+        mut notices: Vec<String>,
     ) -> Result<Ended, String> {
         // As Scramjet's `--resume` shows the sessions before the session itself.
         let resumed = match resume && self.interactive() {
@@ -155,7 +161,7 @@ impl Interactive {
             // A tool block ends with a blank line; other output gets one before the prompt.
             self.show_resumed();
         }
-        let notices = self.problem_notices();
+        notices.splice(0..0, self.problem_notices());
         if !notices.is_empty() {
             if !std::mem::take(&mut self.spaced) {
                 self.blank();
@@ -221,6 +227,10 @@ impl Interactive {
                     screen::Input::DoubleEscape => return Ok(Read::DoubleEscape),
                     screen::Input::CycleEffort => {
                         screen.note(cycle_effort(&mut self.agent, &mut self.settings));
+                    }
+                    screen::Input::CycleModel(steps) => {
+                        let (agent, settings) = (&mut self.agent, &mut self.settings);
+                        screen.note(scope::cycle(agent, settings, &self.scope, steps));
                     }
                     screen::Input::Shells => add_shells(&mut self.agent, screen),
                     screen::Input::Commands => return Ok(Read::Again),
@@ -334,13 +344,20 @@ impl Interactive {
 
     /// Runs the built-in commands typed in the full screen while a turn ran, in order;
     /// `paused`: the turn paused for them, and those from the first that stops it on wait for
-    /// it to end.
+    /// it to end. Then the model changes as the Ctrl+P presses meanwhile ask.
     fn typed_during_turn(&mut self, paused: bool) {
         let Some(screen) = &self.screen else {
             return;
         };
-        for command in screen.take_commands(paused) {
+        let (commands, steps) = (screen.take_commands(paused), screen.take_model_steps());
+        for command in commands {
             self.builtin(&command);
+        }
+        if steps != 0 {
+            let note = scope::cycle(&mut self.agent, &mut self.settings, &self.scope, steps);
+            if let Some(screen) = &self.screen {
+                screen.note(note);
+            }
         }
     }
 

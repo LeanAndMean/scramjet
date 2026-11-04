@@ -1036,7 +1036,8 @@ fn the_model_list_is_the_endpoints() {
 fn a_next_step_offers_the_endpoints_models_with_their_cards_and_the_current_one() {
     let list = json!({"data": [{"id": "gpt"}, {"id": "claude"}]}).to_string();
     let cards = json!({"models": [
-        {"requestId": "claude", "displayName": "Claude", "reasoning": {"levels": ["low", "high"]}},
+        {"requestId": "claude", "displayName": "Claude", "provider": "anthropic",
+            "reasoning": {"levels": ["low", "high"]}},
         {"requestId": "m", "displayName": "Current", "reasoning": null},
     ]})
     .to_string();
@@ -1050,6 +1051,7 @@ fn a_next_step_offers_the_endpoints_models_with_their_cards_and_the_current_one(
     let option = |id: &str, name: Option<&str>, reasoning, levels: &[&str]| ModelOption {
         id: id.into(),
         name: name.map(str::to_owned),
+        provider: (id == "claude").then(|| "anthropic".to_owned()),
         reasoning,
         levels: levels.iter().map(|level| level.to_string()).collect(),
         default_level: None,

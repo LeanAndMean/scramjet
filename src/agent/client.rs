@@ -323,15 +323,27 @@ pub(super) fn fit<'a>(levels: &[String], effort: &'a str) -> &'a str {
 
 /// Each Proxy model card's model, display name and what the agent needs to know of it; none when
 /// the endpoint does not serve the cards in time.
-pub(super) async fn model_cards(endpoint: SocketAddr) -> Vec<(String, Option<String>, ModelInfo)> {
+pub(super) async fn model_cards(endpoint: SocketAddr) -> Vec<Card> {
     let cards = cards(endpoint).await.unwrap_or_default();
     (cards.iter())
         .filter_map(|card| {
-            let id = card["requestId"].as_str()?.to_owned();
-            let name = card["displayName"].as_str().map(str::to_owned);
-            Some((id, name, ModelInfo::from_card(card)))
+            let text = |key: &str| card[key].as_str().map(str::to_owned);
+            Some(Card {
+                id: text("requestId")?,
+                name: text("displayName"),
+                provider: text("provider"),
+                info: ModelInfo::from_card(card),
+            })
         })
         .collect()
+}
+
+/// What a Proxy model card says of a model.
+pub(super) struct Card {
+    pub id: String,
+    pub name: Option<String>,
+    pub provider: Option<String>,
+    pub info: ModelInfo,
 }
 
 /// The model's Proxy model card; `None` when the endpoint does not serve the cards in time or does

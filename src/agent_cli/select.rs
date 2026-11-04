@@ -1125,6 +1125,7 @@ mod tests {
         let model = |id: &str, name: Option<&str>, levels: &[&str]| ModelOption {
             id: id.into(),
             name: name.map(str::to_owned),
+            provider: None,
             reasoning: !levels.is_empty(),
             levels: levels.iter().map(|level| level.to_string()).collect(),
             default_level: None,

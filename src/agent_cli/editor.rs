@@ -63,6 +63,9 @@ pub(super) enum Key {
     ToggleThinking,
     /// Shift+Tab, `ESC [ Z`.
     BackTab,
+    /// Ctrl+P, Scramjet's key to switch to the next model; `false`: Shift+Ctrl+P, to the one
+    /// before, which only a terminal reporting modified keys tells apart.
+    CycleModel(bool),
     External,
     /// Ctrl+O, Scramjet's key to expand tool output.
     Expand,
@@ -114,7 +117,7 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
         11 => Key::KillEnd,
         14 => Key::Down,
         15 => Key::Expand,
-        16 => Key::Up,
+        16 => Key::CycleModel(true),
         18 => Key::Rename,
         20 => Key::ToggleThinking,
         21 => Key::KillStart,
@@ -220,6 +223,8 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         (b'~', "27;3;13") | (b'u', "13;3") => Key::AltEnter,
         (b'u', "13") => Key::Enter,
         (b'Z', _) | (b'~', "27;2;9") | (b'u', "9;2") => Key::BackTab,
+        (b'~', "27;5;112") | (b'u', "112;5") => Key::CycleModel(true),
+        (b'~', "27;6;112" | "27;6;80") | (b'u', "112;6") => Key::CycleModel(false),
         _ => Key::Ignored,
     })
 }
@@ -1059,9 +1064,13 @@ impl Editor {
                 false
             }
             Key::BackTab if !self.dialog => return Action::CycleEffort,
+            Key::CycleModel(forward) if !self.dialog => {
+                return Action::CycleModel(if forward { 1 } else { -1 });
+            }
             Key::Ignored
             | Key::Mouse(_)
             | Key::BackTab
+            | Key::CycleModel(_)
             | Key::Expand
             | Key::Escape
             | Key::PageUp
@@ -1242,6 +1251,8 @@ pub(super) enum Action {
     DoubleEscape,
     /// Shift+Tab.
     CycleEffort,
+    /// Ctrl+P (1) or Shift+Ctrl+P (-1).
+    CycleModel(isize),
     /// Ctrl-Z.
     Suspend,
     /// Ctrl-G: edit the text with `$VISUAL` or `$EDITOR` (see `Draft::edited`).
@@ -1505,6 +1516,14 @@ mod tests {
             keys(b"\x1b[Z\x1b[27;2;9~\x1b[9;2u"),
             [Key::BackTab, Key::BackTab, Key::BackTab]
         );
+    }
+
+    #[test]
+    fn ctrl_p_cycles_models_and_with_shift_back_where_the_terminal_tells_them_apart() {
+        let forward = keys(b"\x10\x1b[112;5u\x1b[27;5;112~");
+        assert_eq!(forward, [const { Key::CycleModel(true) }; 3]);
+        let back = keys(b"\x1b[112;6u\x1b[27;6;112~\x1b[27;6;80~");
+        assert_eq!(back, [const { Key::CycleModel(false) }; 3]);
     }
 
     #[test]

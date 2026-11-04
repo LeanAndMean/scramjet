@@ -1310,6 +1310,38 @@ def shift_tab_resumed(read, until, send, output):
     send(b'\x04')
 
 
+def ctrl_p_cycles_models(read, until, send, output):
+    shown, on_screen = full_screen(columns=80)(read, output)
+    rows = on_screen('\u2500' * 20)
+    # A new session starts with the first model in the scope, at the effort its pattern sets.
+    assert rows[0].startswith('scramjet-rs \u00b7 gpt-6-terra \u00b7 thinking high \u00b7 /'), rows
+    assert 'settings: enabledModels: no models match pattern "nothing"' in '\n'.join(rows), rows
+    send(b'\x10')
+    on_screen('Switched to GPT-6 Luna (thinking: low)')
+    # Shift+Ctrl+P, as a terminal reporting modified keys sends it, goes back.
+    send(b'\x1b[112;6u')
+    on_screen('Switched to GPT-6 Terra (thinking: high)')
+    # During a turn, the next request goes to the next model.
+    send(b'go\r')
+    on_screen('running 1s')
+    send(b'\x10')
+    on_screen('The model changes before the next request')
+    on_screen('Switched to GPT-6 Luna (thinking: low)')
+    rows = on_screen('[2 requests')
+    assert 'Switched.' in '\n'.join(rows), rows
+    send(b'\x04')
+
+
+def ctrl_p_in_a_scope_of_one(read, until, send, output):
+    shown, on_screen = full_screen(columns=80)(read, output)
+    rows = on_screen('\u2500' * 20)
+    assert rows[0].startswith('scramjet-rs \u00b7 gpt-6-terra \u00b7 thinking medium \u00b7 /'), rows
+    assert '--models: no models match pattern "x"' in '\n'.join(rows), rows
+    send(b'\x10')
+    on_screen('Only one model in scope')
+    send(b'\x04')
+
+
 def setting(label, value):
     """A row of `/settings`, its label as wide as the widest."""
     return label.ljust(len('Follow-up messages')) + '  ' + value
@@ -1593,6 +1625,23 @@ known = set(session_files())
 run(['--effort', 'off'], started_at('off'), serve_replies([], cards=effort_cards), variables=in_levels)
 (started,) = set(session_files()) - known
 assert saved_levels(started) == ['none'], saved_levels(started)
+scope_cards = [{'requestId': model, 'displayName': name, 'provider': 'openai',
+                'supportedProtocols': ['openai-responses'],
+                'reasoning': {'levels': ['none', 'low', 'medium', 'high'], 'default': 'medium'}}
+               for model, name in [('gpt-6-luna', 'GPT-6 Luna'), ('gpt-6-terra', 'GPT-6 Terra')]]
+scoped = config_home('scoped', '{"enabledModels": ["gpt-6-terra:high", "luna:low", "nothing"]}')
+bodies = []
+run([], ctrl_p_cycles_models, serve_items([
+    [tool_call('call_1', 'bash', {'command': 'sleep 2'})], [message('Switched.')], [message('Unused.')],
+], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards, bodies=bodies),
+    variables={'XDG_CONFIG_HOME': scoped}, columns=80)
+assert [(body['model'], body['reasoning']['effort']) for body in bodies] == [
+    ('gpt-6-terra', 'high'), ('gpt-6-luna', 'low')], bodies
+assert json.load(open(settings_path(scoped))) == {
+    'enabledModels': ['gpt-6-terra:high', 'luna:low', 'nothing'], 'defaultThinkingLevel': 'low'}
+run(['--models', 'terra, x'], ctrl_p_in_a_scope_of_one,
+    serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
+    variables={'XDG_CONFIG_HOME': config_home('scope-of-one')}, columns=80)
 plain_cards = [{'requestId': 'gpt-6-luna', 'supportedProtocols': ['openai-responses'], 'reasoning': None}]
 run([], started_without_thinking, serve_replies([], cards=plain_cards), variables=in_levels)
 menu_home = config_home('menu', '{"theme": "dark", "branchSummary": {"reserveTokens": 16384}}')

@@ -4,14 +4,18 @@ use scramjet_rs::agent::SessionChoice;
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model ID] \
-[--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | -r | --session FILE]
-[--ask] [-p] [@FILE...] [MESSAGE...]
+[--models PATTERNS] [--effort LEVEL] [--max-output-tokens N] [--retries N]
+[--continue | -r | --session FILE] [--ask] [-p] [@FILE...] [MESSAGE...]
        scramjet-rs install DIR | remove NAME|DIR | list
 
 Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
 the Messages API for Claude models (those whose Proxy model card lists only Messages).
   --project DIR          project directory (default: current directory)
   --model ID             model (default: gpt-6-luna, or the one a resumed session last used)
+  --models PATTERNS      the models Ctrl+P cycles through, comma-separated, in place of the
+                         settings' enabledModels: each a model's id, part of its id or name,
+                         or a glob (claude-*), with an optional :LEVEL; a new session without
+                         --model starts with the first, at its level
   --effort LEVEL         reasoning effort: off, minimal, low, medium, high, xhigh or max, the
                          nearest the model's Proxy card lists (default: the one a resumed
                          session last used, else the settings' defaultThinkingLevel, else
@@ -44,7 +48,9 @@ Ctrl+C or a right click copies it, and a right click without a selection pastes 
 into the prompt. Ctrl+V or Alt+V saves the clipboard's image to a file in the temporary directory
 and pastes its path, for the model to read. Ctrl+O shows tool results whole, or cut again. Ctrl+T hides reasoning summaries
 behind a `Thinking...` line, or shows them again. Shift+Tab sets the reasoning effort to the next
-level the model's Proxy card lists. Both are saved in the settings. /new starts a new session;
+level the model's Proxy card lists. Both are saved in the settings. Ctrl+P switches to the next
+model of --models or enabledModels, else of all the endpoint's, Shift+Ctrl+P (in a terminal
+that reports it) to the one before; during a turn, from its next request. /new starts a new session;
 /resume chooses one of this project's sessions to switch to, forks under the session they came
 from; in its list Ctrl+R renames the selected session and Ctrl+D deletes it once Enter confirms
 (to the trash when a `trash` command is installed). /fork chooses one of this
@@ -75,14 +81,16 @@ this also happens by itself when the context nears the model's window.
 Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scramjet-rs/),
 with Scramjet's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary) and
-defaultThinkingLevel; and tools, the agent's coding tools among read, bash, edit, write (the
-default) and grep, find, ls.";
+defaultThinkingLevel; tools, the agent's coding tools among read, bash, edit, write (the
+default) and grep, find, ls; and enabledModels, the patterns of the models Ctrl+P cycles through.";
 
 /// What the command line asks for.
 pub(super) struct Options {
     pub(super) project: Option<PathBuf>,
     pub(super) endpoint: SocketAddr,
     pub(super) model: Option<String>,
+    /// `--models`: the patterns of the models Ctrl+P cycles through, for the session.
+    pub(super) models: Option<Vec<String>>,
     pub(super) effort: Option<String>,
     pub(super) max_output_tokens: Option<u64>,
     pub(super) choice: SessionChoice,
@@ -107,6 +115,7 @@ impl Options {
             project: None,
             endpoint: ([127, 0, 0, 1], 18080).into(),
             model: None,
+            models: None,
             effort: None,
             max_output_tokens: None,
             choice: SessionChoice::New,
@@ -133,6 +142,10 @@ impl Options {
                     options.endpoint = value()?.parse().map_err(|_| "invalid --endpoint address")?
                 }
                 Some("--model") => options.model = Some(value()?),
+                Some("--models") => {
+                    let patterns = value()?.split(',').map(|p| p.trim().to_owned()).collect();
+                    options.models = Some(patterns)
+                }
                 Some("--effort") => {
                     let level = value()?;
                     let Some(level) = card_level(&level) else {

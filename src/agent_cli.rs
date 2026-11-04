@@ -11,6 +11,7 @@ mod interactive;
 mod job;
 mod markdown;
 mod record;
+mod scope;
 mod screen;
 mod select;
 mod selection;
@@ -63,18 +64,33 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     }
     let (print_only, resume) = (options.print, options.resume);
     let mut settings = Settings::load();
-    let mut agent = start(options, &settings)?;
+    let (patterns, source) = match options.models.take() {
+        Some(patterns) => (patterns, "--models"),
+        None => (settings.enabled_models.clone(), "settings: enabledModels"),
+    };
+    let (mut agent, scope_warnings) = start(options, &settings, &patterns)?;
+    let scope_warnings: Vec<String> = (scope_warnings.iter())
+        .map(|warning| format!("{source}: {warning}"))
+        .collect();
     let cancel = Arc::new(AtomicBool::new(false));
     let hide_thinking = Arc::new(AtomicBool::new(settings.hide_thinking_block));
     handle_signals(&cancel, &hide_thinking)?;
     let mut ui = Terminal::new(hide_thinking.clone(), true);
     if !print_only {
-        let interactive =
+        let mut interactive =
             interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings)?;
-        return interactive.run(resume, messages, files);
+        interactive.scope = patterns;
+        return interactive.run(resume, messages, files, scope_warnings);
     }
-    for warning in std::mem::take(&mut settings.warnings) {
-        ui.notice(&format!("settings: {warning}"));
+    let settings_warnings = std::mem::take(&mut settings.warnings);
+    for warning in settings_warnings
+        .iter()
+        .map(|warning| format!("settings: {warning}"))
+    {
+        ui.notice(&warning);
+    }
+    for warning in &scope_warnings {
+        ui.notice(warning);
     }
     agent.set_hide_credentials(settings.hide_credentials.hides(true));
     if let Some(files) = files {
@@ -89,9 +105,15 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
 }
 
 /// Starts the agent in the project the options name. A model or effort they give wins over the
-/// one a resumed session last used; without either, the effort is the settings' default
-/// thinking level, else Scramjet's default, `medium`.
-fn start(options: Options, settings: &Settings) -> Result<Agent, String> {
+/// one a resumed session last used; a new session without one starts with the first model the
+/// scope `patterns` choose, as Scramjet's, and with the effort its pattern sets. Without one
+/// either, the effort is the settings' default thinking level, else Scramjet's default,
+/// `medium`. Also returns what in `patterns` matched nothing.
+fn start(
+    options: Options,
+    settings: &Settings,
+    patterns: &[String],
+) -> Result<(Agent, Vec<String>), String> {
     let root = match options.project {
         Some(path) => path,
         None => std::env::current_dir().map_err(|e| e.to_string())?,
@@ -117,18 +139,27 @@ fn start(options: Options, settings: &Settings) -> Result<Agent, String> {
         skills: settings.skills.clone(),
     };
     let mut agent = Agent::start(config, options.choice).map_err(|e| e.to_string())?;
+    let (scoped, warnings) = match patterns.is_empty() {
+        true => Default::default(),
+        false => scope::resolve(patterns, &agent.model_options()),
+    };
+    let first = scoped
+        .first()
+        .filter(|_| !chosen && agent.last_model().is_none());
     let model = match agent.last_model() {
+        _ if let Some(first) = first => first.id.clone(),
         Some(last) if !chosen => last.to_owned(),
         _ => agent.model().to_owned(),
     };
     agent.set_model(model).map_err(|e| e.to_string())?;
     let effort = chosen_effort
         .or_else(|| agent.last_effort().map(str::to_owned))
+        .or_else(|| first.and_then(|first| first.level.clone()))
         .or_else(|| settings.default_thinking_level.clone())
         .unwrap_or_else(|| "medium".to_owned());
     agent.set_effort(effort).map_err(|e| e.to_string())?;
     agent.load_model_card();
-    Ok(agent)
+    Ok((agent, warnings))
 }
 
 /// Ctrl-C sets `cancel`, and a second one while it is set exits; Ctrl+T during a turn (SIGQUIT,

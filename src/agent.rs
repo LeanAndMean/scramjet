@@ -138,6 +138,8 @@ pub struct ModelOption {
     pub id: String,
     /// The card's display name.
     pub name: Option<String>,
+    /// The card's provider: `anthropic`, `openai`…
+    pub provider: Option<String>,
     pub reasoning: bool,
     /// The effort levels the card lists, in order.
     pub levels: Vec<String>,
@@ -145,10 +147,11 @@ pub struct ModelOption {
 }
 
 impl ModelOption {
-    fn new(id: String, name: Option<String>, info: &ModelInfo) -> Self {
+    fn new(id: String, name: Option<String>, provider: Option<String>, info: &ModelInfo) -> Self {
         Self {
             id,
             name,
+            provider,
             reasoning: info.reasoning,
             levels: info.levels.clone(),
             default_level: info.default_level.clone(),
@@ -910,15 +913,18 @@ impl Agent {
         (ids.into_iter())
             .map(|id| {
                 let guessed;
-                let (name, info) = match cards.iter().find(|(card, ..)| *card == id) {
-                    Some((_, name, info)) => (name.clone(), info),
-                    None if id == self.config.model => (None, &self.info),
+                let card = cards.iter().find(|card| card.id == id);
+                let info = match card {
+                    Some(card) => &card.info,
+                    None if id == self.config.model => &self.info,
                     None => {
                         guessed = ModelInfo::guess(&id);
-                        (None, &guessed)
+                        &guessed
                     }
                 };
-                ModelOption::new(id, name, info)
+                let name = card.and_then(|card| card.name.clone());
+                let provider = card.and_then(|card| card.provider.clone());
+                ModelOption::new(id, name, provider, info)
             })
             .collect()
     }
