@@ -1,5 +1,5 @@
-//! The built-in commands: `/settings`, `/export`, `/import`, `/copy`, `/new`, `/name`,
-//! `/session`, `/hotkeys`, `/resume`, `/fork`, `/clone`, `/tree`, `/compact`, `/autopilot`,
+//! The built-in commands: `/settings`, `/export`, `/import`, `/copy`, `/clear`, `/rename`,
+//! `/status`, `/hotkeys`, `/resume`, `/fork`, `/branch`, `/tree`, `/compact`, `/autopilot`,
 //! `/reload`, and `!` commands; `/model` and `/scoped-models` are in `scope.rs`.
 use super::fuzzy::Haystack;
 use super::interactive::{Interactive, completions, model_line, saved_line};
@@ -72,20 +72,22 @@ pub(super) enum Builtin<'a> {
     Export(&'a str),
     Import(&'a str),
     Copy,
-    New,
-    Name(&'a str),
-    Session,
+    /// With the new session's name, if given.
+    Clear(&'a str),
+    Rename(&'a str),
+    Status,
     Hotkeys,
     Resume(&'a str),
     Fork(&'a str),
-    Clone,
+    /// With the new session's name, if given.
+    Branch(&'a str),
     Tree(&'a str),
     Model(&'a str),
     ScopedModels,
     Compact(&'a str),
     Autopilot(&'a str),
     Reload,
-    Quit,
+    Exit,
 }
 
 impl<'a> Builtin<'a> {
@@ -96,25 +98,25 @@ impl<'a> Builtin<'a> {
             .split_once(char::is_whitespace)
             .unwrap_or((prompt, ""));
         let argument = argument.trim();
-        Some(match name {
-            "/settings" if argument.is_empty() => Self::Settings,
-            "/export" => Self::Export(argument),
-            "/import" => Self::Import(argument),
-            "/copy" if argument.is_empty() => Self::Copy,
-            "/new" if argument.is_empty() => Self::New,
-            "/name" => Self::Name(argument),
-            "/session" if argument.is_empty() => Self::Session,
-            "/hotkeys" if argument.is_empty() => Self::Hotkeys,
-            "/resume" => Self::Resume(argument),
-            "/fork" => Self::Fork(argument),
-            "/clone" if argument.is_empty() => Self::Clone,
-            "/tree" => Self::Tree(argument),
-            "/model" => Self::Model(argument),
-            "/scoped-models" if argument.is_empty() => Self::ScopedModels,
-            "/compact" => Self::Compact(argument),
-            "/autopilot" => Self::Autopilot(argument),
-            "/reload" if argument.is_empty() => Self::Reload,
-            "/exit" | "/quit" if argument.is_empty() => Self::Quit,
+        Some(match editor::listed(name.strip_prefix('/')?) {
+            "settings" if argument.is_empty() => Self::Settings,
+            "export" => Self::Export(argument),
+            "import" => Self::Import(argument),
+            "copy" if argument.is_empty() => Self::Copy,
+            "clear" => Self::Clear(argument),
+            "rename" => Self::Rename(argument),
+            "status" if argument.is_empty() => Self::Status,
+            "hotkeys" if argument.is_empty() => Self::Hotkeys,
+            "resume" => Self::Resume(argument),
+            "fork" => Self::Fork(argument),
+            "branch" => Self::Branch(argument),
+            "tree" => Self::Tree(argument),
+            "model" => Self::Model(argument),
+            "scoped-models" if argument.is_empty() => Self::ScopedModels,
+            "compact" => Self::Compact(argument),
+            "autopilot" => Self::Autopilot(argument),
+            "reload" if argument.is_empty() => Self::Reload,
+            "exit" if argument.is_empty() => Self::Exit,
             _ => return None,
         })
     }
@@ -129,8 +131,8 @@ impl<'a> Builtin<'a> {
             Self::Settings
                 | Self::Export(_)
                 | Self::Copy
-                | Self::Name(_)
-                | Self::Session
+                | Self::Rename(_)
+                | Self::Status
                 | Self::Hotkeys
                 | Self::Model(_)
                 | Self::ScopedModels
@@ -141,7 +143,7 @@ impl<'a> Builtin<'a> {
 }
 
 impl Interactive {
-    /// Runs `prompt` if it is a built-in command other than `/quit`, or a `!` command; returns
+    /// Runs `prompt` if it is a built-in command other than `/exit`, or a `!` command; returns
     /// whether it was.
     pub(super) fn builtin(&mut self, prompt: &str) -> bool {
         if let Some(command) = prompt.strip_prefix('!') {
@@ -152,29 +154,31 @@ impl Interactive {
             Some(Builtin::Export(path)) => self.export(path),
             Some(Builtin::Import(path)) => self.import(path),
             Some(Builtin::Copy) => self.copy_reply(),
-            Some(Builtin::New) => {
-                self.new_session();
+            Some(Builtin::Clear(name)) => {
+                if self.new_session() && !name.is_empty() {
+                    self.name(name);
+                }
             }
-            Some(Builtin::Name(name)) => self.name(name),
-            Some(Builtin::Session) => self.say(session_info(&self.agent, &self.ui).trim_end()),
+            Some(Builtin::Rename(name)) => self.name(name),
+            Some(Builtin::Status) => self.say(session_info(&self.agent, &self.ui).trim_end()),
             Some(Builtin::Hotkeys) => self.say(hotkeys(&self.ui).trim_end()),
             Some(Builtin::Resume(wanted)) => {
                 self.resume(wanted);
             }
             Some(Builtin::Fork(wanted)) => self.fork(wanted),
-            Some(Builtin::Clone) => self.clone_session(),
+            Some(Builtin::Branch(name)) => self.clone_session(name),
             Some(Builtin::Tree(wanted)) => self.tree(wanted),
             Some(Builtin::Model(wanted)) => self.model(wanted),
             Some(Builtin::ScopedModels) => self.scoped_models(),
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Reload) => self.reload(),
-            Some(Builtin::Quit) | None => return false,
+            Some(Builtin::Exit) | None => return false,
         }
         true
     }
 
-    /// `/new`, also before a next step that wants a fresh session. Returns whether it started.
+    /// `/clear`, also before a next step that wants a fresh session. Returns whether it started.
     pub(super) fn new_session(&mut self) -> bool {
         match self.agent.new_session() {
             Ok(()) => {
@@ -193,7 +197,7 @@ impl Interactive {
         if name.is_empty() {
             match self.agent.session_name() {
                 Some(current) => self.say(&self.ui.dim(&format!("Session name: {current}"))),
-                None => self.say("Usage: /name <name>"),
+                None => self.say("Usage: /rename <name>"),
             }
         } else {
             match self.agent.set_session_name(name) {
@@ -1266,7 +1270,8 @@ impl Interactive {
         }
     }
 
-    fn clone_session(&mut self) {
+    /// `/branch`, with the session's name, or `name` when given.
+    fn clone_session(&mut self, name: &str) {
         match self.agent.clone_session() {
             Ok(true) => {
                 self.agent.load_model_card();
@@ -1275,6 +1280,9 @@ impl Interactive {
                     model_line(&self.agent),
                     saved_line(&self.agent),
                 ));
+                if !name.is_empty() {
+                    self.name(name);
+                }
             }
             Ok(false) => self.say("Nothing to clone yet"),
             Err(error) => self.say(&format!("error: {error}")),
@@ -2088,13 +2096,13 @@ mod tests {
     fn builtins_typed_during_a_turn_stop_it_when_they_replace_the_conversation() {
         let stops = |prompt| Builtin::parse(prompt).map(Builtin::interrupts);
         for prompt in [
-            "/session",
+            "/status",
             "/export",
             "/export out.jsonl",
             "/hotkeys",
             "/copy",
-            "/name",
-            "/name  my work ",
+            "/rename",
+            "/rename  my work ",
             "/model",
             "/model gpt-6-terra",
             "/scoped-models",
@@ -2104,38 +2112,66 @@ mod tests {
             assert_eq!(stops(prompt), Some(false), "{prompt}");
         }
         for prompt in [
-            "/new",
+            "/clear",
             "/import old.jsonl",
             "/compact keep tests",
             "/resume 2",
             "/fork",
-            "/clone",
+            "/branch",
             "/tree",
-            "/quit",
+            "/exit",
         ] {
             assert_eq!(stops(prompt), Some(true), "{prompt}");
         }
         // These go to the model as they are, as before a turn.
         for prompt in [
-            "/session now",
+            "/status now",
             "/hotkeys all",
             "/copy all",
             "/scoped-models luna",
-            "/clone it",
-            "/new one",
             "/exit now",
+            "/quit now",
             "/reload all",
             "/sessions",
+            "/Clear",
             "/rs:loop",
+            "clear",
             "!ls",
         ] {
             assert_eq!(stops(prompt), None, "{prompt}");
         }
         assert_eq!(
-            Builtin::parse("/name  my work "),
-            Some(Builtin::Name("my work"))
+            Builtin::parse("/rename  my work "),
+            Some(Builtin::Rename("my work"))
         );
-        assert_eq!(Builtin::parse("/exit"), Some(Builtin::Quit));
+        // A new session's name, as Claude Code's `/clear [name]` and `/branch [name]` take one.
+        assert_eq!(
+            Builtin::parse("/clear  next "),
+            Some(Builtin::Clear("next"))
+        );
+        assert_eq!(Builtin::parse("/branch try"), Some(Builtin::Branch("try")));
+    }
+
+    #[test]
+    fn other_names_typed_run_the_listed_commands() {
+        for (typed, listed) in [
+            ("/new", Builtin::Clear("")),
+            ("/reset", Builtin::Clear("")),
+            ("/new one", Builtin::Clear("one")),
+            ("/quit", Builtin::Exit),
+            ("/name my work", Builtin::Rename("my work")),
+            ("/session", Builtin::Status),
+            ("/usage", Builtin::Status),
+            ("/cost", Builtin::Status),
+            ("/stats", Builtin::Status),
+            ("/config", Builtin::Settings),
+            ("/clone", Builtin::Branch("")),
+            ("/continue 2", Builtin::Resume("2")),
+            ("/help", Builtin::Hotkeys),
+        ] {
+            assert_eq!(Builtin::parse(typed), Some(listed), "{typed}");
+        }
+        assert_eq!(Builtin::parse("/session now"), None);
     }
 
     #[test]

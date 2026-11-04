@@ -1057,7 +1057,7 @@ def new_session(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'one\r')
     on_screen('error: provider: cannot connect')
-    send(b'/new\r')
+    send(b'/clear\r')
     rows = on_screen('\u2713 New session started')
     assert '> one' not in rows, rows
     send(b'two\r')
@@ -1115,7 +1115,7 @@ def completes_paths_and_commands(read, until, send, output):
     read(.7)
     assert 'Session Tree' not in '\n'.join(shown()), shown()
     # Enter on a command inserts and sends it.
-    send(b'/qu\r')
+    send(b'/exi\r')
 
 
 def completes_file_references(read, until, send, output):
@@ -1295,7 +1295,7 @@ def clone_session(read, until, send, output):
     on_screen('Reply one.')
     send(b'/name Work\r')
     on_screen('Session name set: Work')
-    send(b'/clone\r')
+    send(b'/branch\r')
     # The conversation is shown again as it was, in the new session.
     rows = on_screen('\u2713 Cloned to new session \u00b7 gpt-6-luna \u00b7 thinking medium')
     text = '\n'.join(rows)
@@ -1311,6 +1311,14 @@ def clone_session(read, until, send, output):
     send(b'\r')
     rows = on_screen('\u2713 Resumed session \u00b7 gpt-6-luna')
     assert 'Reply one.' in rows and 'Reply two.' not in rows, rows
+    # As Claude Code's `/branch [name]`, a name given names the new session.
+    send(b'/branch Other try\r')
+    on_screen('Session name set: Other try')
+    send(b'/resume\r')
+    rows = on_screen('Resume session')
+    assert 'Other try (2 items, now) \u2713' in '\n'.join(rows), rows
+    send(b'\x1b')
+    ending(read, output, EMPTY)
     send(b'\x04')
 
 
@@ -1495,8 +1503,8 @@ known = set(session_files())
 run([], clone_session, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]))
 started = sorted(set(session_files()) - known)
 prompts = [[item['content'] for item in map(json.loads, open(path)) if item.get('role') == 'user'] for path in started]
-assert prompts == [['first'], ['first', 'second']], prompts
-assert json.loads(open(started[1]).readline())['parentSession'] == started[0]
+assert prompts == [['first'], ['first', 'second'], ['first']], prompts
+assert [json.loads(open(path).readline()).get('parentSession') for path in started[1:]] == [started[0]] * 2
 known = set(session_files())
 branching = serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.'),
                            (['The branch said two.'], 'The branch said two.'),
@@ -1834,8 +1842,8 @@ def name_and_session(read, until, send, output):
     shown, on_screen = full_screen(200, 30)(read, output)
     on_screen('\u2500' * 20)
     footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 medium', 200)], 200, 30)
-    send(b'/name\r')
-    on_screen('Usage: /name <name>')
+    send(b'/rename\r')
+    on_screen('Usage: /rename <name>')
     send(b'hello\r')
     on_screen('Reply one.')
     # The tokens neither read from the cache nor written to it, the output, the cache reads and
@@ -1845,7 +1853,7 @@ def name_and_session(read, until, send, output):
     on_screen('Session name set: Parser work')
     footer_shows(read, output, [project + ' \u2022 Parser work', stats(SPENT, 'gpt-6-luna \u2022 medium', 200)],
                  200, 30)
-    send(b'/session\r')
+    send(b'/status\r')
     rows = on_screen('Cost')
     (path,) = set(session_files()) - known
     expected = ['Session Info', '', 'Name: Parser work', 'File: ' + path,
@@ -3242,10 +3250,11 @@ def fullscreen_commands_during_turn(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     on_screen('running 1s')
-    # `/session` and `/model` run before the turn's next request, which goes to the model chosen.
+    # `/status`, typed as Scramjet's `/session`, and `/model` run before the turn's next
+    # request, which goes to the model chosen.
     send(b'/session\r/model\r')
     rows = on_screen('Command: /model')
-    assert 'Command: /session' in '\n'.join(rows), rows
+    assert 'Command: /status' in '\n'.join(rows), rows
     rows = on_screen('Select model')
     text = '\n'.join(rows)
     assert 'Tool Results: 1' in text and 'Switched.' not in text, text
@@ -3510,6 +3519,9 @@ def fullscreen_paste_and_clicks(read, until, send, output):
     until(b'\x1b[7mRow 30 of the reply.')
     send(b'\x03')
     copied('Row 30 of the reply.')
+    # The selection goes once the screen sees the copy end, after the stand-in has written it;
+    # a right click before then does nothing.
+    read(.3)
     # The clipboard read takes a second this time: the prompt changes meanwhile, so it is not pasted.
     send(b'\x1b[<2;5;5M\x1b[<2;5;5mz')
     on_screen('> z')

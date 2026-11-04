@@ -1372,12 +1372,12 @@ impl App {
     }
 
     /// Takes the built-in command `text` typed while a turn runs, as Scramjet runs it at once:
-    /// `/quit` exits, `/reload` is refused, a command that replaces or rewrites the conversation
+    /// `/exit` exits, `/reload` is refused, a command that replaces or rewrites the conversation
     /// stops the turn and runs once it has, and the others run before the turn's next request
     /// (`AgentUi::pause`).
     fn command(&mut self, text: String) {
         match Builtin::parse(&text) {
-            Some(Builtin::Quit) => return self.exit(),
+            Some(Builtin::Exit) => return self.exit(),
             Some(Builtin::Reload) => {
                 self.draft = self.editor.draft(String::new());
                 return self.draft.set_note(RELOAD_BUSY.to_owned());

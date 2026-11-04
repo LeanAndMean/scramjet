@@ -34,13 +34,13 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   -c, --continue         resume the session for this project written to last
   -r, --resume           choose one of this project's sessions to resume, as /resume does
   --session FILE|ID      resume a session file (a word with a / or ending in .jsonl), or the
-                         newest session of this project whose id (as /session shows it) starts
+                         newest session of this project whose id (as /status shows it) starts
                          with ID, else of another project, which is forked here once you
                          agree, as in Scramjet
   --fork FILE|ID         continue a copy of that session, its branches and name included, in a
                          new session of this project
-  --no-session           save no session, as Scramjet's: those of this run (/new, /fork,
-                         /clone and /import too) are kept in a private temporary directory
+  --no-session           save no session, as Scramjet's: those of this run (/clear, /fork,
+                         /branch and /import too) are kept in a private temporary directory
                          removed at exit, and /resume lists only them
   --system-prompt TEXT   the instructions' opening, in place of the tools and guidelines: TEXT,
                          or the contents of the file it names (default: the project's
@@ -92,7 +92,7 @@ The prompt stays while a turn runs: Enter then queues a message for the model's 
 Alt+Enter one for when the turn would end (steeringMode and followUpMode: all or one-at-a-time
 at once); Escape interrupts the turn and puts them back in the editor, as Alt+Up does.
 Ctrl-C clears the prompt, and interrupts a turn; on an empty prompt press it twice, or Ctrl-D, or
-type /quit, to quit. Dragging selects text, a double click a word, a triple click the line;
+type /exit, to quit. Dragging selects text, a double click a word, a triple click the line;
 Ctrl+C or a right click copies it, and a right click without a selection pastes the clipboard
 into the prompt. Ctrl+V or Alt+V saves the clipboard's image to a file in the temporary directory
 and pastes its path, for the model to read. Ctrl+O shows tool results whole, or cut again. Ctrl+T hides reasoning summaries
@@ -102,15 +102,15 @@ model of --models or enabledModels, else of all the endpoint's, Shift+Ctrl+P (in
 that reports it) to the one before; during a turn, from its next request. /scoped-models lists
 the endpoint's models, those Ctrl+P takes first in its order: Enter switches one on or off,
 Ctrl+A and Ctrl+X all those shown, Ctrl+P its provider's, Alt+Up/Down moves it, for the session;
-Ctrl+S saves them as enabledModels. /new starts a new session;
+Ctrl+S saves them as enabledModels. /clear [NAME] starts a new session;
 /resume chooses one of this project's sessions to switch to, forks under the session they came
 from; in its list Ctrl+S sorts them (threaded, recent, relevance), Ctrl+N shows only named ones,
 Ctrl+P their paths, Ctrl+R renames the selected session and Ctrl+D deletes it once Enter confirms
 (to the trash when a `trash` command is installed). /fork chooses one of this
 session's prompts and continues in a new session from before it, with it in the prompt for
-editing; /clone continues in a new session with the conversation as it is. /tree shows this
-session's branches and continues from the entry chosen, in the same
-session: from before a prompt, which is put in the prompt for editing, or from after a reply
+editing; /branch [NAME] continues in a new session with the conversation as it is.
+/tree shows this session's branches and continues from the entry chosen, in the same session:
+from before a prompt, which is put in the prompt for editing, or from after a reply
 or tool result. When that leaves part of the conversation, it asks whether the model should
 summarize that branch, also with your own instructions, for the conversation to continue
 with; Shift+L there labels the selected entry. Escape twice on an empty prompt opens /tree too. /model, or Ctrl+L, chooses a model.
@@ -121,14 +121,16 @@ Their lists show in the prompt's place and take Up/Down, Page Up/Down, Home/End,
 Escape or Ctrl-C to cancel; typed text filters the /resume and /model lists, best match first
 (a \"quoted phrase\" matches as written). With piped input they are printed numbered instead,
 for /resume N, /fork N, /tree N and /model ID.
-/name NAME names the session, which /resume then lists by its name; /name alone shows it.
-/session shows the session's file, the messages in its context and the tokens they used.
+/rename NAME names the session, which /resume then lists by its name; /rename alone shows it.
+/status shows the session's file, the messages in its context, the tokens they used and the cost.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
 with this project's sessions. /hotkeys lists the keys. /copy copies the last reply's text, as the model wrote it, to the
-clipboard. Typed while a turn runs, /session, /hotkeys, /name, /model, /scoped-models and /copy
+clipboard. Typed while a turn runs, /status, /hotkeys, /rename, /model, /scoped-models and /copy
 run before its next request; the other commands stop it and run once it has.
+Scramjet's names of the commands named otherwise here are accepted too (/new, /quit, /name,
+/session, /clone), and so are Claude Code's /reset, /config, /continue, /usage and /help.
 As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
 commands/SET:COMMAND.md is sent with the arguments substituted, inside <scramjet-command>. The
 sets are those installed, then those under $XDG_DATA_HOME/scramjet (~/.local/share/scramjet)

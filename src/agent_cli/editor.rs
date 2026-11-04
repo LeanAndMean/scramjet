@@ -646,7 +646,8 @@ pub(super) fn terminal_size() -> (usize, usize) {
         })
 }
 
-/// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions.
+/// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
+/// as in Claude Code or Codex where they name the same action differently.
 const SLASH_COMMANDS: [(&str, &str); 18] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
@@ -657,16 +658,16 @@ const SLASH_COMMANDS: [(&str, &str); 18] = [
     ),
     ("import", "Import and resume a session from a JSONL file"),
     ("copy", "Copy last agent message to clipboard"),
-    ("name", "Set session display name"),
-    ("session", "Show session info and stats"),
+    ("rename", "Set session display name"),
+    ("status", "Show session info and stats"),
     ("hotkeys", "Show all keyboard shortcuts"),
     ("fork", "Create a new fork from a previous user message"),
     (
-        "clone",
+        "branch",
         "Duplicate the current session at the current position",
     ),
     ("tree", "Navigate session tree (switch branches)"),
-    ("new", "Start a new session"),
+    ("clear", "Start a new session"),
     ("compact", "Manually compact the session context"),
     ("resume", "Resume a different session"),
     (
@@ -677,8 +678,33 @@ const SLASH_COMMANDS: [(&str, &str); 18] = [
         "autopilot",
         "Toggle command auto-continuation: /autopilot on|off|status",
     ),
-    ("quit", "Quit scramjet-rs"),
+    ("exit", "Quit scramjet-rs"),
 ];
+
+/// Other names of the listed commands, accepted but not listed: Scramjet's, and Claude Code's
+/// and Codex's for the same action.
+const ALIASES: [(&str, &str); 12] = [
+    ("new", "clear"),
+    ("reset", "clear"),
+    ("quit", "exit"),
+    ("name", "rename"),
+    ("session", "status"),
+    ("usage", "status"),
+    ("cost", "status"),
+    ("stats", "status"),
+    ("config", "settings"),
+    ("clone", "branch"),
+    ("continue", "resume"),
+    ("help", "hotkeys"),
+];
+
+/// The listed name of the built-in command typed as `name` (without its `/`).
+pub(super) fn listed(name: &str) -> &str {
+    ALIASES
+        .iter()
+        .find(|&&(alias, _)| alias == name)
+        .map_or(name, |&(_, listed)| listed)
+}
 
 /// Rows of the completion list, as Scramjet's autocomplete shows at most.
 const COMPLETION_ROWS: usize = 5;
@@ -753,8 +779,16 @@ impl Completion {
             .iter()
             .map(|(name, _)| super::fuzzy::Haystack::new(name))
             .collect();
-        let items = super::fuzzy::filter(&super::fuzzy::parse(typed), &names)
-            .into_iter()
+        let mut indices = super::fuzzy::filter(&super::fuzzy::parse(typed), &names);
+        // Enter runs the first, so another name typed in full puts its command there, before
+        // a set's command its letters match too.
+        let aliased = listed(typed);
+        if aliased != typed {
+            let at = commands.iter().position(|&(name, _)| name == aliased);
+            indices.retain(|&index| Some(index) != at);
+            indices.splice(0..0, at);
+        }
+        let items = (indices.into_iter())
             .map(|index| {
                 let (name, description) = commands[index];
                 Suggestion {
@@ -1890,18 +1924,18 @@ mod tests {
                 "/export",
                 "/import",
                 "/copy",
-                "/name",
-                "/session",
+                "/rename",
+                "/status",
                 "/hotkeys",
                 "/fork",
-                "/clone",
+                "/branch",
                 "/tree",
-                "/new",
+                "/clear",
                 "/compact",
                 "/resume",
                 "/reload",
                 "/autopilot",
-                "/quit",
+                "/exit",
             ]
         );
         assert_eq!(
@@ -1923,11 +1957,11 @@ mod tests {
         assert_eq!(
             plain(list.rows(24)),
             [
-                "  /name",
-                "  /session",
+                "  /rename",
+                "  /status",
                 "→ /hotkeys",
                 "  /fork",
-                "  /clone",
+                "  /branch",
                 "  (9/18)"
             ]
         );
@@ -1936,7 +1970,7 @@ mod tests {
         }
         assert_eq!(list.selected, 0);
         list.select(true);
-        assert_eq!(list.items[list.selected].label, "/quit");
+        assert_eq!(list.items[list.selected].label, "/exit");
 
         let mut buffer = Buffer {
             text: "/res rest".into(),
@@ -1964,6 +1998,26 @@ mod tests {
     }
 
     #[test]
+    fn another_name_typed_in_full_lists_its_command_first() {
+        let loaded = [("mach12:pr-review-assessment".to_owned(), String::new())];
+        let first = |typed| labels(&Completion::slash(typed, &loaded).unwrap())[0].to_owned();
+        // `reset`'s letters are in the set's command too, which Enter would otherwise run.
+        assert_eq!(first("/reset"), "/clear");
+        assert_eq!(first("/new"), "/clear");
+        assert_eq!(first("/name"), "/rename");
+        assert_eq!(first("/stats"), "/status");
+        assert_eq!(first("/quit"), "/exit");
+        // Unlisted names are not in the list until typed in full.
+        assert!(Completion::slash("/qui", &loaded).is_none());
+        let all = Completion::slash("/", &loaded).unwrap();
+        assert!(
+            !labels(&all)
+                .iter()
+                .any(|label| ["/new", "/quit", "/name"].contains(label))
+        );
+    }
+
+    #[test]
     fn built_in_arguments_complete_as_scramjets() {
         let models = ["gpt-6-luna", "claude-haiku-5-5", "gpt-6.1-sol"].map(String::from);
         // The models in the endpoint's order, then those matching what is typed, best first.
@@ -1980,7 +2034,7 @@ mod tests {
         let list = Completion::argument("/model gpt", &gpt).unwrap();
         assert_eq!(labels(&list), ["gpt-6-luna", "gpt-6.1-sol"]);
         let list = Completion::slash("/se", &[]).unwrap();
-        assert_eq!(labels(&list)[..2], ["/session", "/settings"]);
+        assert_eq!(labels(&list)[0], "/settings");
         let mut buffer = Buffer {
             text: "/model hai".into(),
             cursor: 10,

@@ -205,7 +205,7 @@ impl Interactive {
             if prompt.is_empty() {
                 continue;
             }
-            if Builtin::parse(prompt) == Some(Builtin::Quit) {
+            if Builtin::parse(prompt) == Some(Builtin::Exit) {
                 return Ok(Ended::Quit);
             }
             if !self.builtin(prompt) {
