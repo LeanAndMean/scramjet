@@ -776,6 +776,7 @@ pub(super) fn run(
         text,
         detail: None,
         failed,
+        image: None,
     };
     let given = match arguments(call_arguments) {
         Ok(given) => given,
@@ -1001,6 +1002,7 @@ is added or changed.",
         text,
         detail: Some(ToolDetail::Subagents(shown)),
         failed,
+        image: None,
     };
     (output, usage)
 }
@@ -1271,12 +1273,12 @@ fn run_child(
                     match tools.contains(&call.name) {
                         true => call
                             .run_read_only(&job.cwd, cancel)
-                            .map(|output| output.text)
-                            .unwrap_or_else(|error| format!("Error: {error}")),
-                        false => format!("Tool {} not found", call.name),
+                            .map(|output| output.sent())
+                            .unwrap_or_else(|error| json!(format!("Error: {error}"))),
+                        false => json!(format!("Tool {} not found", call.name)),
                     }
                 }
-                Err(error) => format!("Error: {error}"),
+                Err(error) => json!(format!("Error: {error}")),
             };
             input.push(
                 json!({"type":"function_call_output","call_id":item["call_id"],"output":output}),

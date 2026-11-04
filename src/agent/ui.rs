@@ -1,6 +1,6 @@
 //! How the agent shows its work: what it reports to the interface, and a saved
 //! conversation replayed as its turns showed.
-use super::tools::Call;
+use super::tools::{self, Call};
 use super::{
     AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, SUBAGENTS, StreamProgress,
     TYPED, compaction, message_text, publish, question, status,
@@ -342,7 +342,7 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                     }
                     None => ("", None),
                 };
-                let output = item["output"].as_str().unwrap_or_default();
+                let output = &tools::result_text(&item["output"]);
                 if name == status::RECORD && !failed {
                     ui.next_step(output);
                     continue;

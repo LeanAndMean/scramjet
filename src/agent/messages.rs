@@ -229,14 +229,35 @@ fn block(item: &Value) -> Option<(&'static str, Value)> {
             json!({"type":"tool_use","id":tool_id(&item["call_id"]),"name":item["name"],"input":input})
         }
         (_, Some("function_call_output")) => {
+            let content = match &item["output"] {
+                Value::Array(parts) => parts.iter().filter_map(content_block).collect(),
+                output => output.clone(),
+            };
             return Some((
                 "user",
-                json!({"type":"tool_result","tool_use_id":tool_id(&item["call_id"]),"content":item["output"]}),
+                json!({"type":"tool_result","tool_use_id":tool_id(&item["call_id"]),"content":content}),
             ));
         }
         _ => return None,
     };
     Some((role, block))
+}
+
+/// A Responses content part of a tool result as a Messages content block: text, or an image
+/// given as a data URL.
+fn content_block(part: &Value) -> Option<Value> {
+    match part["type"].as_str()? {
+        "input_text" => {
+            let text = part["text"].as_str().filter(|text| !text.is_empty())?;
+            Some(json!({"type":"text","text":text}))
+        }
+        "input_image" => {
+            let url = part["image_url"].as_str()?.strip_prefix("data:")?;
+            let (mime, data) = url.split_once(";base64,")?;
+            Some(json!({"type":"image","source":{"type":"base64","media_type":mime,"data":data}}))
+        }
+        _ => None,
+    }
 }
 
 /// Anthropic accepts tool ids of at most 64 letters, digits, `_` and `-`; other models' ids are
@@ -574,6 +595,26 @@ mod tests {
         ] {
             assert!(!adaptive_thinking(model), "{model}");
         }
+    }
+
+    #[test]
+    fn an_image_in_a_tool_result_is_sent_as_an_image_block() {
+        let output = json!([
+            {"type":"input_text","text":"Read image file [image/png]"},
+            {"type":"input_image","detail":"auto","image_url":"data:image/png;base64,iVBORw0K"},
+        ]);
+        let request = json!({"model":"claude-opus-5-5","input":[
+            {"type":"function_call","call_id":"c","name":"read","arguments":"{\"path\":\"a.png\"}"},
+            {"type":"function_call_output","call_id":"c","output":output},
+        ]});
+        let body = super::request(&request, 9, false).unwrap();
+        assert_eq!(
+            body["messages"][1],
+            json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[
+                {"type":"text","text":"Read image file [image/png]"},
+                {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0K"}},
+            ],"cache_control":{"type":"ephemeral","ttl":"1h"}}]})
+        );
     }
 
     #[test]

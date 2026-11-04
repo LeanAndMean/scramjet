@@ -8,6 +8,7 @@ mod commands;
 mod compaction;
 mod delegate;
 mod forge;
+mod image;
 mod instructions;
 mod messages;
 mod publish;

@@ -970,9 +970,10 @@ fn a_next_step_offers_the_endpoints_models_with_their_cards_and_the_current_one(
 fn model_cards_choose_the_protocol_and_names_do_without_one() {
     let cards = json!({"models": [
         {"requestId": "claude-opus-5-5", "supportedProtocols": ["anthropic-messages"],
-         "limits": {"context": 1_000_000, "output": 128_000}, "reasoning": {"levels": ["high"]}},
+         "limits": {"context": 1_000_000, "output": 128_000}, "reasoning": {"levels": ["high"]},
+         "input": ["text", "image", "pdf"]},
         {"requestId": "both", "supportedProtocols": ["openai-responses", "anthropic-messages"],
-         "reasoning": null},
+         "reasoning": null, "input": ["text"]},
     ]})
     .to_string();
     let (endpoint, server) = serve_gets(vec![("200 OK", cards.clone()), ("200 OK", cards)]);
@@ -986,12 +987,14 @@ fn model_cards_choose_the_protocol_and_names_do_without_one() {
         reasoning: true,
         levels: vec!["high".into()],
         default_level: None,
+        images: true,
     };
     assert_eq!(agent.info, expected);
     agent.set_model("both").unwrap();
     agent.load_model_card();
     assert_eq!(agent.info.protocol, Protocol::Responses);
     assert!(!agent.info.reasoning);
+    assert!(!agent.info.images);
     server.join().unwrap();
     assert_eq!(ModelInfo::guess("claude-new").protocol, Protocol::Messages);
     assert_eq!(ModelInfo::guess("gpt-new").protocol, Protocol::Responses);

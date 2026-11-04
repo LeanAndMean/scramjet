@@ -1,5 +1,6 @@
 use super::{
     ToolDetail,
+    image::{self, Image},
     sandbox::{self, Hidden},
 };
 use serde_json::{Value, json};
@@ -68,7 +69,7 @@ pub(super) fn child_definitions(names: &[&str]) -> Value {
 fn definition(name: &str, sandboxed: bool) -> Value {
     match name {
         "read" => json!({"type":"function","name":"read","strict":false,
-         "description":"Read a text file. Output is truncated to 2000 lines or 50KB; use offset/limit (1-based line numbers) to read large files in parts.",
+         "description":"Read a text file or an image (jpg, png, gif, webp), which is sent as an attachment. Text is truncated to 2000 lines or 50KB; use offset/limit (1-based line numbers) to read large files in parts.",
          "parameters":{"type":"object","properties":{
             "path":{"type":"string","description":"File path, relative to the project directory or absolute"},
             "offset":{"type":"integer","description":"First line to read (1-based)"},
@@ -213,7 +214,7 @@ impl<'a> Call<'a> {
             self.check_path(root, hidden)?;
         }
         let text = match self.name {
-            "read" => read(root, self)?,
+            "read" => return read(root, self),
             "ls" => ls(root, self)?,
             "grep" => grep(root, self, hidden, cancel)?,
             "find" => find(root, self, hidden, cancel)?,
@@ -226,6 +227,7 @@ impl<'a> Call<'a> {
             text,
             detail: None,
             failed: false,
+            image: None,
         })
     }
 
@@ -243,7 +245,7 @@ impl<'a> Call<'a> {
     ) -> Result<Output, String> {
         self.check_path(root, hidden)?;
         let text = match self.name {
-            "read" => read(root, self)?,
+            "read" => return read(root, self),
             "ls" => ls(root, self)?,
             "grep" => grep(root, self, Some(hidden), cancel)?,
             "find" => find(root, self, Some(hidden), cancel)?,
@@ -264,6 +266,7 @@ impl<'a> Call<'a> {
             text,
             detail: None,
             failed: false,
+            image: None,
         })
     }
 
@@ -281,11 +284,41 @@ impl<'a> Call<'a> {
 
 #[derive(Debug)]
 pub(super) struct Output {
-    /// What the model receives.
+    /// What the model receives, with `image`.
     pub text: String,
     pub detail: Option<ToolDetail>,
     /// The tool ran but reports failure, such as a command's non-zero exit.
     pub failed: bool,
+    pub image: Option<Image>,
+}
+
+impl Output {
+    /// The result's `output` as the conversation keeps it: the text, or with an image the
+    /// Responses content parts.
+    pub fn sent(&self) -> Value {
+        match &self.image {
+            None => json!(self.text),
+            Some(image) => json!([{"type":"input_text","text":self.text}, image.part()]),
+        }
+    }
+}
+
+/// The text of a tool result's `output`, without the images it may have.
+pub(super) fn result_text(output: &Value) -> String {
+    match output {
+        Value::Array(parts) => (parts.iter())
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        output => output.as_str().unwrap_or_default().to_owned(),
+    }
+}
+
+/// How many images a tool result's `output` has.
+pub(super) fn result_images(output: &Value) -> usize {
+    (output.as_array().into_iter().flatten())
+        .filter(|part| part["type"] == "input_image")
+        .count()
 }
 
 /// Writes `text` to a file beside `path`'s target and renames it over the target, so a reader
@@ -347,9 +380,42 @@ pub(super) fn resolve(root: &Path, path: &str) -> PathBuf {
     resolved
 }
 
-fn read(root: &Path, call: &Call) -> Result<String, String> {
+fn read(root: &Path, call: &Call) -> Result<Output, String> {
     let path = resolve(root, call.str("path")?);
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (text, image) = match image::mime(&bytes) {
+        Some(mime) => read_image(&bytes, mime),
+        None => (read_text(bytes, call, &path)?, None),
+    };
+    Ok(Output {
+        text,
+        detail: None,
+        failed: false,
+        image,
+    })
+}
+
+/// Scramjet's text for an image, which says how it was scaled or why it is left out.
+fn read_image(bytes: &[u8], mime: &'static str) -> (String, Option<Image>) {
+    match image::fit(bytes, mime) {
+        Some(fitted) => {
+            let mut text = format!("Read image file [{}]", fitted.image.mime);
+            if let Some(note) = fitted.note() {
+                text = format!("{text}\n{note}");
+            }
+            (text, Some(fitted.image))
+        }
+        None => (
+            format!(
+                "Read image file [{mime}]\n[Image omitted: could not be resized below the \
+inline image size limit.]"
+            ),
+            None,
+        ),
+    }
+}
+
+fn read_text(bytes: Vec<u8>, call: &Call, path: &Path) -> Result<String, String> {
     let text = String::from_utf8(bytes)
         .map_err(|_| format!("{} is not a UTF-8 text file", path.display()))?;
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
@@ -395,6 +461,7 @@ fn write(root: &Path, call: &Call) -> Result<Output, String> {
         text: format!("Wrote {} bytes to {}", content.len(), path.display()),
         detail: Some(ToolDetail::Written(content.to_owned())),
         failed: false,
+        image: None,
     })
 }
 
@@ -474,6 +541,7 @@ disjoint regions.",
         text: format!("Applied {} edit(s) to {}", spans.len(), path.display()),
         detail: Some(ToolDetail::Diff(diff(&original, &spans))),
         failed: false,
+        image: None,
     })
 }
 
@@ -1154,6 +1222,7 @@ impl Ran {
                     },
                     detail: None,
                     failed: false,
+                    image: None,
                 };
             }
             (None, Some(code)) => format!("Command exited with code {code}"),
@@ -1167,6 +1236,7 @@ impl Ran {
             text,
             detail: None,
             failed: true,
+            image: None,
         }
     }
 
@@ -1329,6 +1399,51 @@ disjoint regions."
         assert_eq!(
             std::fs::read_to_string(root.join("new/g.txt")).unwrap(),
             "é\nx\n"
+        );
+    }
+
+    #[test]
+    fn read_sends_an_image_with_its_text_and_says_why_one_is_left_out() {
+        let root =
+            std::env::temp_dir().join(format!("scramjet-agent-image-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
+        let png = crate::agent::image::tests::png(3, 2);
+        std::fs::write(root.join("shot.png"), &png).unwrap();
+        std::fs::write(root.join("bad.jpg"), b"\xff\xd8\xff\xe0 cut short").unwrap();
+        let cancel = AtomicBool::new(false);
+        let read = |path: &str| {
+            call("read", json!({"path":path}))
+                .run_read_only(&root, &cancel)
+                .unwrap()
+        };
+        let shot = read("shot.png");
+        assert_eq!(shot.text, "Read image file [image/png]");
+        let image = shot.image.as_ref().unwrap();
+        assert_eq!(image.mime, "image/png");
+        let output = shot.sent();
+        assert_eq!(
+            output[0],
+            json!({"type":"input_text","text":"Read image file [image/png]"})
+        );
+        assert_eq!(output[1]["type"], "input_image");
+        assert_eq!(
+            output[1]["image_url"],
+            format!("data:image/png;base64,{}", image.data)
+        );
+        assert_eq!(result_text(&output), shot.text);
+        assert_eq!(
+            (result_images(&output), result_images(&json!("text"))),
+            (1, 0)
+        );
+        let bad = read("bad.jpg");
+        assert_eq!(
+            (bad.text.as_str(), bad.image.is_none(), bad.sent()),
+            (
+                "Read image file [image/jpeg]\n[Image omitted: could not be resized below the \
+inline image size limit.]",
+                true,
+                json!(bad.text),
+            )
         );
     }
 

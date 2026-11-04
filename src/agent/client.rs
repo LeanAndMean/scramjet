@@ -246,6 +246,8 @@ pub(super) struct ModelInfo {
     pub levels: Vec<String>,
     /// The card's default reasoning effort.
     pub default_level: Option<String>,
+    /// Whether the model takes images; a card without `input` says nothing against it.
+    pub images: bool,
 }
 
 impl ModelInfo {
@@ -261,6 +263,7 @@ impl ModelInfo {
             reasoning: true,
             levels: Vec::new(),
             default_level: None,
+            images: true,
         }
     }
 
@@ -294,6 +297,9 @@ impl ModelInfo {
                 })
                 .unwrap_or_default(),
             default_level: card["reasoning"]["default"].as_str().map(str::to_owned),
+            images: card["input"]
+                .as_array()
+                .is_none_or(|input| input.iter().any(|kind| kind == "image")),
         }
     }
 }

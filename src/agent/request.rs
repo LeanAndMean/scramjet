@@ -122,6 +122,8 @@ pub(super) fn send(
     cancel: &AtomicBool,
     on: &mut dyn FnMut(Sending),
 ) -> Result<client::Reply, AgentError> {
+    let without_images = (!info.images).then(|| without_images(request)).flatten();
+    let request = without_images.as_ref().unwrap_or(request);
     let (body, betas) = match info.protocol {
         Protocol::Responses => (serde_json::to_vec(request), None),
         Protocol::Messages => {
@@ -179,6 +181,27 @@ pub(super) fn send(
             return Err(AgentError::Cancelled);
         }
     }
+}
+
+/// `request` for a model that takes no images, when it has any: each tool result's images become
+/// a note after its text. `None` when it has none.
+fn without_images(request: &Value) -> Option<Value> {
+    let has_images = |item: &Value| tools::result_images(&item["output"]) > 0;
+    if !request["input"].as_array()?.iter().any(has_images) {
+        return None;
+    }
+    let mut request = request.clone();
+    for item in request["input"].as_array_mut()? {
+        let images = tools::result_images(&item["output"]);
+        if images > 0 {
+            let mut text = tools::result_text(&item["output"]);
+            for _ in 0..images {
+                text.push_str("\n[Image omitted: the current model does not support images.]");
+            }
+            item["output"] = json!(text);
+        }
+    }
+    Some(request)
 }
 
 #[cfg(test)]
@@ -392,6 +415,65 @@ response is incomplete; retry the request."});
         assert!(
             matches!(&error, AgentError::Provider(message) if message.starts_with("Insufficient output space for Anthropic thinking")),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn an_image_read_goes_to_the_model_with_its_result_and_stays_in_the_session() {
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", "read", json!({"path":"shot.png"})),
+            stream(&fixture::text_events("A gradient.", fixture::known_usage())),
+            stream(&fixture::text_events("Noted.", fixture::known_usage())),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "image-read");
+        let png = crate::agent::image::tests::png(3, 2);
+        std::fs::write(scratch.0.join("shot.png"), &png).unwrap();
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("What is in shot.png?", &mut ui, &cancel)
+            .unwrap();
+        // A model whose card lists no image input gets the text with a note.
+        agent.info.images = false;
+        agent.turn("And now?", &mut ui, &cancel).unwrap();
+        assert_eq!(ui.shown[1], "result read Read image file [image/png]");
+        let bodies = server.join().unwrap();
+        let result = |body: &Value| {
+            let input = body["input"].as_array().unwrap();
+            let result = input
+                .iter()
+                .find(|item| item["type"] == "function_call_output");
+            result.unwrap()["output"].clone()
+        };
+        let sent = result(&bodies[1]);
+        assert_eq!(
+            sent,
+            json!([
+                {"type":"input_text","text":"Read image file [image/png]"},
+                {"type":"input_image","detail":"auto",
+                 "image_url":format!("data:image/png;base64,{}", crate::agent::image::base64(&png))},
+            ])
+        );
+        assert_eq!(
+            result(&bodies[2]),
+            "Read image file [image/png]\n[Image omitted: the current model does not support images.]"
+        );
+        let saved = std::fs::read_to_string(agent.session_path()).unwrap();
+        let saved: Vec<Value> = saved
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let saved = saved
+            .iter()
+            .find(|line| line["type"] == "function_call_output");
+        assert_eq!(saved.unwrap()["output"], sent);
+        let mut replay = Recorder::default();
+        crate::agent::show_items(agent.conversation(), &mut replay);
+        let shown = "result read Read image file [image/png]";
+        assert!(
+            replay.shown.iter().any(|line| line == shown),
+            "{:?}",
+            replay.shown
         );
     }
 

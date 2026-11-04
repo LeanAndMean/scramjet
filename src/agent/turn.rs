@@ -279,7 +279,7 @@ to a larger-context model)"
             for item in calls {
                 let (output, ends_turn) = self.call(&item, ui, cancel);
                 ends &= ends_turn;
-                let mut result = json!({"type":"function_call_output","call_id":item["call_id"],"output":output.text});
+                let mut result = json!({"type":"function_call_output","call_id":item["call_id"],"output":output.sent()});
                 if output.failed {
                     result[FAILED] = json!(true);
                 }
@@ -390,6 +390,7 @@ to a larger-context model)"
             text,
             detail: None,
             failed: true,
+            image: None,
         };
         let call = match Call::parse(item) {
             Ok(call) => call,
@@ -469,6 +470,7 @@ to a larger-context model)"
                 text,
                 detail: None,
                 failed,
+                image: None,
             };
             return (output, ends);
         }
@@ -526,6 +528,7 @@ fn ask(
                 text: error,
                 detail: None,
                 failed: true,
+                image: None,
             };
             return (output, false);
         }
@@ -556,6 +559,7 @@ fn ask(
         text,
         detail,
         failed: false,
+        image: None,
     };
     (output, ends)
 }

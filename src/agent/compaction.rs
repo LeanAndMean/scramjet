@@ -2,7 +2,7 @@
 //! items, and the agent replacing older history with a summary, on `/compact` or when the context
 //! fills.
 use super::client::Protocol;
-use super::{Agent, AgentError, AgentUi, PRODUCER, Purpose, message_text};
+use super::{Agent, AgentError, AgentUi, PRODUCER, Purpose, message_text, tools};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::AtomicBool;
@@ -381,11 +381,13 @@ pub(super) fn estimate(items: &[Value]) -> u64 {
                     item["name"].as_str().unwrap_or(""),
                     item["arguments"].as_str().unwrap_or("")
                 ),
-                Some("function_call_output") => item["output"].as_str().unwrap_or("").to_owned(),
+                Some("function_call_output") => tools::result_text(&item["output"]),
                 Some("reasoning") => thinking(item),
                 _ => text(item),
             };
-            (content.chars().count() as u64).div_ceil(4)
+            // Scramjet counts an image as 4800 characters.
+            let images = tools::result_images(&item["output"]) as u64 * 4800;
+            (content.chars().count() as u64 + images).div_ceil(4)
         })
         .sum()
 }
@@ -450,7 +452,7 @@ pub(super) fn serialize(items: &[Value]) -> String {
                 )
             }
             Some("function_call_output") => {
-                let output = item["output"].as_str().unwrap_or("");
+                let output = &tools::result_text(&item["output"]);
                 let length = output.chars().count();
                 let content = if length > 2000 {
                     format!(
@@ -766,6 +768,16 @@ mod tests {
             )
         );
         assert!(estimate(&items) > 500);
+        // An image's text is serialized; the image counts as Scramjet counts one.
+        let image = json!({"type":"function_call_output", "output":[
+            {"type":"input_text","text":"Read image file [image/png]"},
+            {"type":"input_image","image_url":format!("data:image/png;base64,{}", "A".repeat(100_000))},
+        ]});
+        assert_eq!(
+            serialize(std::slice::from_ref(&image)),
+            "[Tool result]: Read image file [image/png]"
+        );
+        assert_eq!(estimate(&[image]), (27 + 4800_u64).div_ceil(4));
     }
 
     #[test]
