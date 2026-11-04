@@ -123,6 +123,13 @@ impl Agent {
                         ui.notice(&notice);
                     }
                     self.save_command()?;
+                    // After the command's state, which `/tree` takes as the state there.
+                    let stopped = match &error {
+                        AgentError::Cancelled => json!({"type":"turn_stopped"}),
+                        error => json!({"type":"turn_stopped","error":error.to_string()}),
+                    };
+                    // Not saving it leaves the error to report as it is.
+                    let _ = self.add(stopped);
                     return Err(error);
                 }
                 Ok(()) => {}
@@ -349,18 +356,23 @@ to a larger-context model)"
     }
 
     /// Shows how `shell`, run apart from the agent, ended, and adds it to the conversation as
-    /// `shell` says.
+    /// `shell` says: for the model (`!`), or only to be shown again on a resume (`!!`).
     pub fn add_shell(&mut self, shell: Shell, ui: &mut dyn AgentUi) -> Result<(), AgentError> {
         let (text, failed) = shell.shown();
         ui.command_result(&text, failed);
-        if let (true, Ok(ran)) = (shell.include, &shell.ran) {
-            let prompt = format!("!{}", shell.command);
-            let message = ran.message(&shell.command);
-            let mut message = json!({"role":"user","content":message,TYPED:prompt});
-            if failed {
-                message[FAILED] = json!(true);
-            }
-            self.add(message)?;
+        let Ok(ran) = &shell.ran else {
+            return Ok(());
+        };
+        let prompt = format!("!{}", shell.command);
+        let mut item = match shell.include {
+            true => json!({"role":"user","content":ran.message(&shell.command),TYPED:prompt}),
+            false => json!({"type":"bang_excluded","command":shell.command,"output":text}),
+        };
+        if failed {
+            item[FAILED] = json!(true);
+        }
+        self.add(item)?;
+        if shell.include {
             self.prompts.push(prompt);
         }
         Ok(())
@@ -1332,21 +1344,38 @@ for trusted repositories.",
             agent.conversation(),
             [
                 json!({"role":"user","content":message,"_scramjet_typed":typed,
-                "_scramjet_failed":true})
+                "_scramjet_failed":true}),
+                json!({"type":"bang_excluded","command":"echo secret","output":"secret\n"}),
             ]
         );
         assert_eq!(agent.prompts(), [typed.as_str()]);
         agent.turn("next", &mut ui, &cancel).unwrap();
         let bodies = server.join().unwrap();
+        // As Scramjet's `!!`, saved and shown again on a resume, but never sent.
         assert_eq!(
             bodies[0]["input"],
             json!([{"role":"user","content":message},{"role":"user","content":"next"}])
         );
         assert!(!bodies[0].to_string().contains("\"_scramjet_"));
+        assert!(!bodies[0].to_string().contains("secret"));
         let path = agent.session_path().to_owned();
-        let (_, _, prompts) = Session::open(&path).unwrap();
+        let (_, conversation, prompts) = Session::open(&path).unwrap();
         assert_eq!(prompts, [typed.as_str(), "next"]);
-        assert!(!std::fs::read_to_string(&path).unwrap().contains("secret"));
+        let mut shown = Recorder::default();
+        show_items(&conversation, &mut shown);
+        assert_eq!(
+            shown.shown[..4],
+            [
+                format!("call bash {command}"),
+                "command hi\n100%\n\nCommand exited with code 3 failed".into(),
+                "call bash echo secret".into(),
+                "command secret\n".into(),
+            ]
+        );
+        let tree = agent.tree().unwrap();
+        let items: Vec<_> = tree.entries.iter().map(|entry| &entry.item).collect();
+        assert_eq!(items[1], &TreeItem::Command("echo secret".into()));
+        assert_eq!((agent.stats().user, agent.stats().total), (1, 3));
         // As Scramjet's session list names it by its first message, not a `!` command.
         let listed = agent.sessions().unwrap();
         assert_eq!(listed[0].first_prompt.as_deref(), Some("next"));
@@ -1517,6 +1546,55 @@ forms.</description>\n    <location>{}</location>\n  </skill>\n</available_skill
             agent.conversation()[0]["content"],
             "Ran `sleep 30`\n(no output)\n\n(command cancelled)"
         );
+    }
+
+    #[test]
+    fn a_failed_or_cancelled_turn_is_saved_to_be_shown_and_listed_but_never_sent() {
+        let failed = b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        let (endpoint, server) = serve(vec![
+            failed.to_vec(),
+            stream(&fixture::text_events("ok", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "stopped");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let error = agent.turn("one", &mut ui, &cancel).unwrap_err().to_string();
+        cancel.store(true, Ordering::Relaxed);
+        let cancelled = agent.turn("two", &mut ui, &cancel);
+        assert!(matches!(cancelled, Err(AgentError::Cancelled)));
+        cancel.store(false, Ordering::Relaxed);
+        agent.turn("three", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        let prompts = ["one", "two", "three"].map(|text| json!({"role":"user","content":text}));
+        assert_eq!(bodies[1]["input"], json!(prompts));
+        let (_, conversation, _) = Session::open(agent.session_path()).unwrap();
+        let mut shown = Recorder::default();
+        show_items(&conversation, &mut shown);
+        let stopped = format!("stopped {error}");
+        assert_eq!(
+            shown.shown,
+            [
+                "prompt one",
+                &stopped,
+                "prompt two",
+                "stopped (cancelled)",
+                "prompt three",
+                "reply ok"
+            ]
+        );
+        let tree = agent.tree().unwrap();
+        let items: Vec<_> = tree.entries.into_iter().map(|entry| entry.item).collect();
+        assert_eq!(
+            items[..4],
+            [
+                TreeItem::Prompt("one".into()),
+                TreeItem::Stopped(Some(error)),
+                TreeItem::Prompt("two".into()),
+                TreeItem::Stopped(None),
+            ]
+        );
+        // Not counted among the context's messages either.
+        assert_eq!((agent.stats().user, agent.stats().total), (3, 4));
     }
 
     #[test]

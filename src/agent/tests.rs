@@ -71,6 +71,10 @@ impl AgentUi for Recorder {
         let failed = if failed { " failed" } else { "" };
         self.shown.push(format!("command {output}{failed}"));
     }
+    fn stopped(&mut self, error: Option<&str>) {
+        self.shown
+            .push(format!("stopped {}", error.unwrap_or("(cancelled)")));
+    }
     fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>) {
         self.compactions
             .push((compaction.tokens_before, compaction.kept_items, automatic));

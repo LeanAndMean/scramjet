@@ -1321,7 +1321,12 @@ mod tests {
         assert_eq!(server.join().unwrap().len(), 2);
         assert_eq!(ui.replies, ["done"]);
         assert!(ui.compactions.is_empty());
-        assert_eq!(agent.conversation().len(), 4);
+        // The reply, then the error, which a resume shows.
+        assert_eq!(agent.conversation().len(), 5);
+        assert_eq!(
+            agent.conversation()[4],
+            json!({"type":"turn_stopped","error":error.to_string()})
+        );
     }
 
     #[test]

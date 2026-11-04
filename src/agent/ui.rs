@@ -42,6 +42,8 @@ pub trait AgentUi {
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
     /// The result of a command the user ran with `!` or `!!`.
     fn command_result(&mut self, output: &str, failed: bool);
+    /// A turn stopped before its end: cancelled (`None`), or failed with `error`.
+    fn stopped(&mut self, error: Option<&str>);
     /// Shows a finished compaction; `automatic` says why the agent ran it without `/compact`.
     fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>);
     /// An automatic compaction before a prompt failed; the prompt is sent anyway.
@@ -215,7 +217,8 @@ impl ChildRun {
 }
 
 /// Shows stored items as their turns showed them, as Scramjet redraws a resumed session: each
-/// prompt, reply, reasoning summary, tool call with its result, `!` command and compaction summary.
+/// prompt, reply, reasoning summary, tool call with its result, `!` and `!!` command, compaction
+/// summary and how a turn stopped.
 pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
     // A reply's calls are stored before their results, but each ran, and showed, in turn.
     let mut calls: Vec<(&str, &str, Option<Call>)> = Vec::new();
@@ -293,6 +296,11 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                     (None, None, None) => None,
                 };
                 ui.tool_result(name, output, detail.as_ref(), failed);
+            }
+            Some("turn_stopped") => ui.stopped(item["error"].as_str()),
+            Some("bang_excluded") => {
+                ui.tool_call("bash", item["command"].as_str().unwrap_or_default());
+                ui.command_result(item["output"].as_str().unwrap_or_default(), failed);
             }
             // Scramjet's status check is not shown, as the user never typed it.
             _ if item.get(PROBE).is_some() => {}

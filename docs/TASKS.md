@@ -16,8 +16,8 @@ Order agreed with the user on 2026-11-03 (`/rs:steer`; [design](DESIGN.md#curren
 5. **One `/settings`** for everything. The settings there are (thinking level, thinking blocks, steering and follow-up messages, Escape twice, leaving a branch, tools, credential stores, autopilot) are in, each changed with Enter and saved at once, and so are the next steps (command autonomy, with the settings a set's `autonomy-defaults.yaml` suggests, applied for this project or all) and publishing (publication approval per command and tool). So is Installed: what the session loaded with each one's source, and its problems, which launch sums up in one line. Next, perhaps: Enter on an Installed row opens its file in `$VISUAL`/`$EDITOR` and reloads after.
 6. **Small changes agreed on 2026-11-03** (Scramjet's behavior unless stated):
    - An unknown `--effort` level is refused at startup, listing the valid ones; the effort is shown on the usage line.
-   - `/tree` rows styled as Scramjet's; errors and cancellations saved and shown on resume; a restored command whose file is gone is dropped with a warning when its turn ends.
-   - `!!` commands saved, excluded from the context; `!` commands shown as Scramjet's `$ command` block.
+   - `/tree` rows styled as Scramjet's; a restored command whose file is gone is dropped with a warning when its turn ends.
+   - `!` commands shown as Scramjet's `$ command` block.
    - Equal fuzzy scores put the shorter name or id first; completion quotes names with spaces and completes inside an open `"`.
    - Argument completion after a built-in command, as Scramjet's: `/autopilot on|off|status` (none of the built-ins completes arguments yet).
    - The next-step list's own keys: Left/Right to pick the model the step runs with, Shift+Tab for its effort, as Scramjet's selector.

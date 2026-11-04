@@ -399,6 +399,9 @@ impl AgentUi for Link {
     fn command_result(&mut self, output: &str, failed: bool) {
         self.event(Event::CommandResult(output.to_owned(), failed));
     }
+    fn stopped(&mut self, error: Option<&str>) {
+        self.event(Event::Stopped(error.map(str::to_owned)));
+    }
     fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>) {
         self.event(Event::Compacted(compaction.clone(), automatic));
     }

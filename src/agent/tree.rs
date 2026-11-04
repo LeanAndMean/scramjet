@@ -23,9 +23,11 @@ pub struct TreeEntry {
 #[derive(Debug, PartialEq)]
 pub enum TreeItem {
     Prompt(String),
-    /// A `!` command's text.
+    /// A `!` or `!!` command's text.
     Command(String),
     Reply(String),
+    /// Where a turn stopped: cancelled (`None`), or failed with the error.
+    Stopped(Option<String>),
     /// A tool call's result, or the call itself, by the call's name and its call line's summary.
     Tool(String, String),
     Compaction(Option<u64>),
@@ -63,8 +65,8 @@ pub enum Navigated {
 
 impl Agent {
     /// The current session's entries, as Scramjet's `/tree` lists them by default: prompts,
-    /// replies with text, tool results, `!` commands, compactions and branch summaries, and the
-    /// current entry whatever it is.
+    /// replies with text, where turns stopped, tool results, `!` and `!!` commands, compactions
+    /// and branch summaries, and the current entry whatever it is.
     pub fn tree(&self) -> Result<SessionTree, AgentError> {
         let entries = self.session.entries()?;
         let leaf = self.session.leaf();
@@ -108,6 +110,12 @@ impl Agent {
             let item = match value["type"].as_str() {
                 Some("message") => Some(TreeItem::Reply(message_text(value))),
                 Some("function_call_output") => Some(tool(value)),
+                Some("turn_stopped") => Some(TreeItem::Stopped(
+                    value["error"].as_str().map(str::to_owned),
+                )),
+                Some("bang_excluded") => Some(TreeItem::Command(
+                    value["command"].as_str().unwrap_or_default().to_owned(),
+                )),
                 Some("compaction") => Some(TreeItem::Compaction(value["tokens_before"].as_u64())),
                 Some("branch_summary") => Some(TreeItem::BranchSummary(
                     value["summary"].as_str().unwrap_or_default().to_owned(),

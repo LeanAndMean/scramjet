@@ -236,10 +236,16 @@ impl Interactive {
             true => self.turn_on_screen(prompt),
             false => self.during_turn(|agent, ui, cancel| agent.turn(prompt, ui, cancel)),
         };
-        match result {
-            Ok(()) => {}
-            Err(AgentError::Cancelled) => self.say(&self.ui.dim("(cancelled)")),
-            Err(error) => self.say(&format!("error: {error}")),
+        if let Err(error) = result {
+            // As the session saved it, for a resume to show it so.
+            let error = match error {
+                AgentError::Cancelled => None,
+                error => Some(error.to_string()),
+            };
+            match &self.screen {
+                Some(screen) => screen.event(Event::Stopped(error)),
+                None => self.ui.stopped(error.as_deref()),
+            }
         }
         self.say_styled(style::MUTED, &usage_line(&self.agent));
         let completed = self.agent.take_completed()?;

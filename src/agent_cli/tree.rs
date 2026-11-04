@@ -148,6 +148,11 @@ fn label(item: &TreeItem) -> String {
         TreeItem::Prompt(text) => format!("user: {text}"),
         TreeItem::Reply(text) => format!("assistant: {text}"),
         TreeItem::Reasoning => "assistant: (no content)".into(),
+        TreeItem::Stopped(None) => "assistant: (aborted)".into(),
+        TreeItem::Stopped(Some(error)) => {
+            let error: String = text::one_line(error).chars().take(80).collect();
+            format!("assistant: {error}")
+        }
         TreeItem::Command(command) => format!("[bash]: {command}"),
         TreeItem::Tool(name, summary) if name == "bash" => {
             let command = text::one_line(summary);
@@ -268,6 +273,14 @@ mod tests {
             "[branch summary]: Went there"
         );
         assert_eq!(label(TreeItem::Command("ls".into())), "[bash]: ls");
+        assert_eq!(label(TreeItem::Stopped(None)), "assistant: (aborted)");
+        assert_eq!(
+            label(TreeItem::Stopped(Some(format!(
+                "provider:\n{}",
+                "x".repeat(90)
+            )))),
+            format!("assistant: provider: {}", "x".repeat(70))
+        );
         assert_eq!(
             label(TreeItem::Prompt("a\u{202e}b".into())),
             "user: a\\u{202e}b"

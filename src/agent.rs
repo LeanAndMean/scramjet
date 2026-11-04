@@ -77,6 +77,15 @@ const SUBAGENTS: &str = "_scramjet_subagents";
 /// Stored, as `true`, with Scramjet's status check, a user message the user never typed, so it
 /// is neither shown nor recalled.
 pub(super) const PROBE: &str = "_scramjet_probe";
+/// Items of the conversation that are only shown, never sent to a model, as Scramjet keeps its
+/// failed replies and `!!` output out of the context: how a turn stopped (`turn_stopped`, with
+/// the `error` unless it was cancelled) and a `!!` command (`bang_excluded`, with its `command`
+/// and the `output` shown).
+const SHOWN_ONLY: [&str; 2] = ["turn_stopped", "bang_excluded"];
+
+fn shown_only(item: &Value) -> bool {
+    (item["type"].as_str()).is_some_and(|kind| SHOWN_ONLY.contains(&kind))
+}
 
 pub struct AgentConfig {
     pub endpoint: SocketAddr,

@@ -20,6 +20,8 @@ pub(super) enum Event {
     Subagents(Children),
     ToolResult(String, String, Option<ToolDetail>, bool),
     CommandResult(String, bool),
+    /// A turn stopped before its end: cancelled (`None`), or failed with the error.
+    Stopped(Option<String>),
     Compacted(Compaction, Option<AutoCompaction>),
     CompactionFailed(String),
     UserPrompt(String),
@@ -51,6 +53,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
             ui.tool_result(name, output, detail.as_ref(), *failed)
         }
         Event::CommandResult(output, failed) => ui.command_result(output, *failed),
+        Event::Stopped(error) => ui.stopped(error.as_deref()),
         Event::Compacted(compaction, automatic) => ui.compacted(compaction, *automatic),
         Event::CompactionFailed(error) => ui.compaction_error(error),
         Event::UserPrompt(prompt) => ui.user_prompt(prompt),

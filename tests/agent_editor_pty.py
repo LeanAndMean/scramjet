@@ -974,6 +974,21 @@ def bang_commands(read, until, send, output):
     send(b'\x03\x04')
 
 
+def failed_after_bang(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('  secret')
+    send(b'hello\r')
+    on_screen('error: provider: cannot connect')
+    send(b'\x03\x04')
+
+
+def resumed_bang_and_error(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    rows = '\n'.join(on_screen('error: provider: cannot connect'))
+    assert '\u25cf bash echo secret\n  secret\n' in rows and '> hello\n\nerror: provider: cannot connect' in rows, rows
+    send(b'\x03\x04')
+
+
 def edited_in_editor(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -1168,7 +1183,14 @@ run([], bang_commands)
 items = [item for item in map(json.loads, open(ran)) if item.get('role') == 'user']
 assert [item['_scramjet_typed'] for item in items] == ['!echo hi; exit 3', '!sleep 30'], items
 assert items[1]['content'] == 'Ran `sleep 30`\n(no output)\n\n(command cancelled)', items
-assert 'secret' not in open(ran).read()
+# As Scramjet's `!!`, saved to be shown on a resume, outside the conversation the model gets.
+excluded = [item for item in map(json.loads, open(ran)) if item.get('type') == 'bang_excluded']
+assert excluded == [{'type': 'bang_excluded', 'command': 'echo secret', 'output': 'secret\n'}], excluded
+# A turn's error is saved too, and both are shown again on a resume.
+run(['--retries', '0', '--session', ran], failed_after_bang)
+stopped = [item for item in map(json.loads, open(ran)) if item.get('type') == 'turn_stopped']
+assert len(stopped) == 1 and stopped[0]['error'].startswith('provider: cannot connect'), stopped
+run(['--session', ran], resumed_bang_and_error)
 known = set(session_files())
 run(['--retries', '0'], edited_in_editor,
     variables={'VISUAL': edit_script + ' --wait', 'EDITOR': failing_script, 'TMPDIR': scratch})

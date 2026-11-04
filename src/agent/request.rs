@@ -1,7 +1,9 @@
 //! What a model request sends, and sending it again after transient failures as Scramjet
 //! does.
 use super::client::{self, ClientError, ModelInfo, Protocol};
-use super::{Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, tools};
+use super::{
+    Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, shown_only, tools,
+};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::atomic::AtomicBool, time::Duration};
 
@@ -40,6 +42,7 @@ impl Agent {
     fn replay_conversation(&self) -> Vec<Value> {
         self.conversation
             .iter()
+            .filter(|item| !shown_only(item))
             .map(|item| {
                 let mut item = item.clone();
                 let producer = item.as_object_mut().and_then(|object| {

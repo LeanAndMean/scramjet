@@ -766,6 +766,13 @@ impl AgentUi for Terminal {
     fn command_result(&mut self, output: &str, failed: bool) {
         self.result("bash", output, None, failed, COMMAND_LINES);
     }
+    fn stopped(&mut self, error: Option<&str>) {
+        let text = match error {
+            Some(error) => format!("error: {}", visible(error)),
+            None => self.dim("(cancelled)"),
+        };
+        self.said(&text);
+    }
     /// As Scramjet shows a compaction: the estimated context size before it, then the summary;
     /// an automatic one also says why it ran.
     fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>) {
