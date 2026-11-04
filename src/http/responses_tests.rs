@@ -548,6 +548,27 @@ fn items_are_found_by_id_and_a_text_may_arrive_only_in_its_done_event() {
     assert!(parse(&fixture::wire(&repeated, false)).is_err());
 }
 #[test]
+fn a_response_may_make_several_function_calls() {
+    let first = fixture::call_events("{}", Value::Null);
+    let text = serde_json::to_string(&first).unwrap();
+    let second: Vec<Value> =
+        serde_json::from_str(&text.replace("fc_1", "fc_2").replace("call_1", "call_2")).unwrap();
+    let mut events = vec![first[0].clone()];
+    events.extend(first[1..5].iter().cloned());
+    events.extend(second[1..5].iter().cloned());
+    let mut completed = first[5].clone();
+    completed["response"]["output"] = json!([first[4]["item"], second[4]["item"]]);
+    events.push(completed);
+    let items = parse(&fixture::wire(&events, false))
+        .unwrap()
+        .envelope
+        .unwrap()
+        .items;
+    let ids: Vec<_> = items.iter().map(|item| &item.raw()["call_id"]).collect();
+    assert_eq!(ids, ["call_1", "call_2"]);
+}
+
+#[test]
 fn compatibility_resource_and_malformed_failures_are_distinct() {
     let mut events = fixture::call_events("{}", Value::Null);
     events[1]["item"]["namespace"] = json!("foreign");

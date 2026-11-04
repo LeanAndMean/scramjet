@@ -288,7 +288,8 @@ to a larger-context model)"
             }
             // As in Pi, the turn ends without another request when every call ends it.
             let mut ends = true;
-            for item in calls {
+            let mut calls = calls.into_iter();
+            while let Some(item) = calls.next() {
                 let (output, ends_turn) = self.call(&item, ui, cancel);
                 ends &= ends_turn;
                 let mut result = json!({"type":"function_call_output","call_id":item["call_id"],"output":output.sent()});
@@ -312,6 +313,10 @@ to a larger-context model)"
                     );
                 }
                 if cancel.load(Ordering::Relaxed) {
+                    // Every call gets a result, as in Pi, or the next request is refused.
+                    for item in calls {
+                        self.not_run(&item, ui)?;
+                    }
                     return Err(AgentError::Cancelled);
                 }
             }
@@ -405,6 +410,19 @@ to a larger-context model)"
 
     /// Runs a tool call, after any approval; also says whether the turn ends after it, as a
     /// question the user cancelled or is to answer at the prompt ends it.
+    /// Answers a call of a reply whose turn stopped before it ran.
+    fn not_run(&mut self, item: &Value, ui: &mut dyn AgentUi) -> Result<(), AgentError> {
+        let name = item["name"].as_str().unwrap_or_default();
+        let summary = Call::parse(item).map(|call| call.summary());
+        ui.tool_call(name, summary.as_deref().unwrap_or_default());
+        let output = "Error: the turn was stopped before this tool call ran; it did not run.";
+        ui.tool_result(name, output, None, true);
+        self.add(
+            json!({"type":"function_call_output","call_id":item["call_id"],
+            "output":output,FAILED:true}),
+        )
+    }
+
     fn call(&mut self, item: &Value, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> (Output, bool) {
         let failure = |text: String| Output {
             text,
@@ -1687,6 +1705,70 @@ scramjet-rs\n",
             agent.conversation()[0]["content"],
             "Ran `sleep 30`\n(no output)\n\n(command cancelled)"
         );
+    }
+
+    #[test]
+    fn calls_after_the_one_a_stop_interrupted_are_answered_as_not_run() {
+        // One reply with two calls, as GPT makes them with `parallel_tool_calls`.
+        let first = fixture::call_events(&json!({"command":"sleep 30"}).to_string(), json!(null));
+        let arguments = json!({"path":"x.txt","content":"x"}).to_string();
+        let second = fixture::call_events(&arguments, json!(null));
+        let mut events = vec![first[0].clone()];
+        let mut output = Vec::new();
+        for (index, (call, name)) in [(&first, "bash"), (&second, "write")].iter().enumerate() {
+            let text = serde_json::to_string(&call[1..5]).unwrap();
+            let text = (text.replace("\"inert\"", &format!("\"{name}\"")))
+                .replace("fc_1", &format!("fc_{index}"))
+                .replace("call_1", &format!("call_{index}"));
+            for mut event in serde_json::from_str::<Vec<Value>>(&text).unwrap() {
+                event["output_index"] = json!(index);
+                if event["type"] == "response.output_item.done" {
+                    output.push(event["item"].clone());
+                }
+                events.push(event);
+            }
+        }
+        let mut completed = first[5].clone();
+        completed["response"]["output"] = json!(output);
+        completed["response"]["usage"] = fixture::known_usage();
+        events.push(completed);
+        let (endpoint, server) = serve(vec![
+            stream(&events),
+            stream(&fixture::text_events("ok", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "stopped-calls");
+        let mut ui = Recorder::default();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let setter = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            setter.store(true, Ordering::Relaxed);
+        });
+        let stopped = agent.turn("go", &mut ui, &cancel);
+        assert!(matches!(stopped, Err(AgentError::Cancelled)), "{stopped:?}");
+        assert!(!agent.root().join("x.txt").exists());
+        let not_run = "Error: the turn was stopped before this tool call ran; it did not run.";
+        assert_eq!(ui.calls, ["bash", "write"]);
+        assert_eq!(
+            ui.shown.last().unwrap(),
+            &format!("result write {not_run} failed")
+        );
+        cancel.store(false, Ordering::Relaxed);
+        agent.turn("again", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies[0]["parallel_tool_calls"], true);
+        let outputs: Vec<_> = (bodies[1]["input"].as_array().unwrap().iter())
+            .filter(|item| item["type"] == "function_call_output")
+            .map(|item| {
+                (
+                    item["call_id"].as_str().unwrap(),
+                    item["output"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].0, "call_0");
+        assert_eq!(outputs[1], ("call_1", not_run));
     }
 
     #[test]

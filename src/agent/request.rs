@@ -25,7 +25,7 @@ impl Agent {
             "input": self.replay_conversation(),
             "tools": tools::definitions(&self.config.tools),
             "tool_choice": "auto",
-            "parallel_tool_calls": false,
+            "parallel_tool_calls": true,
             "stream": true,
             "store": false,
             "include": ["reasoning.encrypted_content"],

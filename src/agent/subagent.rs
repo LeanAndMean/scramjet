@@ -1202,7 +1202,7 @@ fn run_child(
             "input": input,
             "tools": tools::child_definitions(tools),
             "tool_choice": "auto",
-            "parallel_tool_calls": false,
+            "parallel_tool_calls": true,
             "stream": true,
             "store": false,
             "include": ["reasoning.encrypted_content"],

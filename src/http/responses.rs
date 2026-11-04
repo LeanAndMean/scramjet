@@ -586,14 +586,6 @@ impl ResponsesParser {
                 if self.items.iter().any(|i| i.added["id"] == item["id"]) {
                     return Err(Outcome::Framing);
                 }
-                if item["type"] == "function_call"
-                    && self
-                        .items
-                        .iter()
-                        .any(|i| i.added["type"] == "function_call")
-                {
-                    return Err(Outcome::Unsupported);
-                }
                 let arguments = if item["type"] == "function_call" {
                     if let Some(progress) = &mut self.progress {
                         progress.push(StreamProgress::Call(string(&item, "name")?.to_owned()));
