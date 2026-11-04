@@ -606,13 +606,15 @@ pub(super) struct Suggestion {
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Slash,
+    /// A built-in command's argument.
+    Argument,
     Path,
     /// An `@` file reference.
     File,
 }
 
-/// The list under the prompt that completes a slash command, a path or an `@` file reference,
-/// as Scramjet's editor does. It replaces the text from `start` to the cursor.
+/// The list under the prompt that completes a slash command or its argument, a path or an `@`
+/// file reference, as Scramjet's editor does. It replaces the text from `start` to the cursor.
 struct Completion {
     start: usize,
     kind: Kind,
@@ -678,17 +680,58 @@ impl Completion {
         Self::new(0, Kind::Slash, items)
     }
 
-    /// The entries an `@` search found for the text from `start` to the cursor, selecting the
-    /// one that is that text or starts with it, as Scramjet selects its best match.
-    fn found(start: usize, items: Vec<Suggestion>, buffer: &Buffer) -> Option<Self> {
-        let typed = &buffer.text[start..buffer.cursor];
-        let best = items
-            .iter()
-            .position(|item| item.value == typed)
-            .or_else(|| items.iter().position(|item| item.value.starts_with(typed)));
-        let mut list = Self::new(start, Kind::File, items)?;
-        list.selected = best.unwrap_or(0);
+    /// The argument of a built-in command that Scramjet completes: after `/model `, the
+    /// endpoint's `models` that match it fuzzily; after `/autopilot `, the words starting with it.
+    fn argument(before: &str, models: &[String]) -> Option<Self> {
+        let (name, typed) = before.strip_prefix('/')?.split_once(' ')?;
+        if typed.contains('\n') {
+            return None;
+        }
+        let words: Vec<&str> = match name {
+            "autopilot" => ["on", "off", "status"]
+                .into_iter()
+                .filter(|word| word.starts_with(typed))
+                .collect(),
+            "model" => {
+                let ids: Vec<_> = models
+                    .iter()
+                    .map(|id| super::fuzzy::Haystack::new(id))
+                    .collect();
+                super::fuzzy::filter(&super::fuzzy::parse(typed), &ids)
+                    .into_iter()
+                    .map(|index| &*models[index])
+                    .collect()
+            }
+            _ => return None,
+        };
+        let items = (words.into_iter())
+            .map(|word| Suggestion {
+                value: word.to_owned(),
+                label: word.to_owned(),
+                description: String::new(),
+            })
+            .collect();
+        let mut list = Self::new(before.len() - typed.len(), Kind::Argument, items)?;
+        list.select_best(typed);
         Some(list)
+    }
+
+    /// The entries an `@` search found for the text from `start` to the cursor.
+    fn found(start: usize, items: Vec<Suggestion>, buffer: &Buffer) -> Option<Self> {
+        let mut list = Self::new(start, Kind::File, items)?;
+        list.select_best(&buffer.text[start..buffer.cursor]);
+        Some(list)
+    }
+
+    /// Selects the entry that is `typed` or else the first that starts with it, as Scramjet
+    /// selects its best match.
+    fn select_best(&mut self, typed: &str) {
+        let best = (self.items.iter().position(|item| item.value == typed)).or_else(|| {
+            self.items
+                .iter()
+                .position(|item| item.value.starts_with(typed))
+        });
+        self.selected = best.unwrap_or(0);
     }
 
     /// The entries of the directory named by the word before the cursor whose names start with
@@ -846,6 +889,8 @@ pub struct Editor {
     root: PathBuf,
     /// The commands listed after the built-in ones: names and descriptions.
     commands: Vec<(String, String)>,
+    /// The endpoint's models, which complete `/model`'s argument.
+    models: Vec<String>,
     /// Whether Escape twice on an empty prompt returns `Action::DoubleEscape`.
     double_escape: bool,
     /// Edits one text for a question, as Scramjet's dialog editor: Escape or Ctrl-C cancels.
@@ -859,6 +904,7 @@ impl Editor {
         hide_thinking: Arc<AtomicBool>,
         root: PathBuf,
         commands: Vec<(String, String)>,
+        models: Vec<String>,
         double_escape: bool,
     ) -> Self {
         Self {
@@ -866,6 +912,7 @@ impl Editor {
             hide_thinking,
             root,
             commands,
+            models,
             double_escape,
             dialog: false,
         }
@@ -875,8 +922,19 @@ impl Editor {
     pub fn dialog(hide_thinking: Arc<AtomicBool>) -> Self {
         Self {
             dialog: true,
-            ..Self::new(Vec::new(), hide_thinking, PathBuf::new(), Vec::new(), false)
+            ..Self::new(
+                Vec::new(),
+                hide_thinking,
+                PathBuf::new(),
+                Vec::new(),
+                Vec::new(),
+                false,
+            )
         }
+    }
+
+    pub fn set_models(&mut self, models: Vec<String>) {
+        self.models = models;
     }
 
     /// Lists `commands` after the built-in ones, and makes Escape twice on an empty prompt
@@ -946,10 +1004,17 @@ impl Editor {
                 }
                 true
             }
-            // As in Scramjet, Enter on a command also submits it.
+            // As in Scramjet, Enter on a command also submits it, and on an argument does not,
+            // but on one already typed in full, which Scramjet puts in again for a second Enter.
             Key::Text(_) | Key::Enter if (tab || key == Key::Enter) && completion.is_some() => {
                 let list = completion.take().expect("checked above");
-                let submit = list.kind == Kind::Slash && key == Key::Enter;
+                let typed = &buffer.text[list.start..buffer.cursor];
+                let submit = key == Key::Enter
+                    && match list.kind {
+                        Kind::Slash => true,
+                        Kind::Argument => list.items[list.selected].value == typed,
+                        Kind::Path | Kind::File => false,
+                    };
                 list.apply(buffer);
                 if submit {
                     buffer.set(buffer.text.trim().to_owned());
@@ -1015,11 +1080,13 @@ impl Editor {
                 true
             }
             Key::EndOfInput if buffer.text.is_empty() => return Action::Exit,
-            // Scramjet completes only commands after a `/` that starts the prompt; a path
-            // there is completed when no command matches. An `@` word is looked for.
+            // Scramjet completes only commands and their arguments after a `/` that starts the
+            // prompt; a path there is completed when nothing else matches. An `@` word is
+            // looked for.
             Key::Text(_) if tab && !self.dialog => {
                 let before = &buffer.text[..buffer.cursor];
-                *completion = Completion::slash(before, &self.commands);
+                *completion = Completion::slash(before, &self.commands)
+                    .or_else(|| Completion::argument(before, &self.models));
                 match file_search::Mention::find(before) {
                     Some(mention) if completion.is_none() => {
                         *lookup = Lookup::start(&self.root, mention, buffer, true);
@@ -1055,7 +1122,8 @@ impl Editor {
                     (None, Some(list)) if list.kind == Kind::Path => {
                         Completion::path(before, &self.root).filter(|next| next.start == list.start)
                     }
-                    (None, _) => Completion::slash(before, &self.commands),
+                    (None, _) => Completion::slash(before, &self.commands)
+                        .or_else(|| Completion::argument(before, &self.models)),
                 };
                 true
             }
@@ -1618,6 +1686,84 @@ mod tests {
         assert_eq!(labels(&list)[0], "/model");
         assert!(labels(&list).contains(&"/compact"));
         assert!(Completion::slash("/zzz", &[]).is_none());
+    }
+
+    #[test]
+    fn built_in_arguments_complete_as_scramjets() {
+        let models = ["gpt-6-luna", "claude-haiku-5-5", "gpt-6.1-sol"].map(String::from);
+        // The models in the endpoint's order, then those matching what is typed, best first.
+        let list = Completion::argument("/model ", &models).unwrap();
+        assert_eq!(labels(&list), models);
+        assert_eq!(
+            plain(list.rows(40))[..2],
+            ["→ gpt-6-luna", "  claude-haiku-5-5"]
+        );
+        let list = Completion::argument("/model 6 sol", &models).unwrap();
+        assert_eq!(labels(&list), ["gpt-6.1-sol"]);
+        let mut buffer = Buffer {
+            text: "/model hai".into(),
+            cursor: 10,
+        };
+        Completion::argument(&buffer.text, &models)
+            .unwrap()
+            .apply(&mut buffer);
+        assert_eq!(
+            (buffer.text.as_str(), buffer.cursor),
+            ("/model claude-haiku-5-5", 23)
+        );
+        // `/autopilot`'s words are those that start with what is typed, as typed.
+        let words = |before| Completion::argument(before, &[]).map(|list| labels(&list).join(" "));
+        assert_eq!(words("/autopilot ").unwrap(), "on off status");
+        assert_eq!(words("/autopilot o").unwrap(), "on off");
+        assert_eq!(words("/autopilot st").unwrap(), "status");
+        assert!(words("/autopilot O").is_none());
+        assert!(words("/autopilot on x").is_none());
+        // Nothing else completes: other commands, a later line, no models.
+        assert!(Completion::argument("/name ", &models).is_none());
+        assert!(Completion::argument("/model x\nhai", &models).is_none());
+        assert!(Completion::argument("say /model ", &models).is_none());
+        assert!(Completion::argument("/model ", &[]).is_none());
+        assert!(Completion::argument("/model zzz", &models).is_none());
+    }
+
+    #[test]
+    fn enter_puts_in_an_argument_without_sending_it() {
+        let models = vec!["claude-haiku-5-5".to_owned(), "gpt-6-luna".to_owned()];
+        let editor = Editor::new(
+            Vec::new(),
+            Arc::default(),
+            PathBuf::new(),
+            Vec::new(),
+            models,
+            false,
+        );
+        let mut draft = editor.draft("/model".into());
+        for text in [" ", "luna"] {
+            let key = Key::Text(text.into());
+            assert_eq!(editor.key(&mut draft, key, false), Action::Edited(true));
+        }
+        assert_eq!(plain(draft.completion_rows(40)), ["→ gpt-6-luna"]);
+        assert_eq!(
+            editor.key(&mut draft, Key::Enter, false),
+            Action::Edited(true)
+        );
+        assert_eq!(draft.text(), "/model gpt-6-luna");
+        assert!(!draft.completing());
+        assert_eq!(
+            editor.key(&mut draft, Key::Enter, false),
+            Action::Submit("/model gpt-6-luna".into())
+        );
+        // One typed in full is sent at once.
+        let mut draft = editor.draft("/autopilot o".into());
+        assert_eq!(
+            editor.key(&mut draft, Key::Text("n".into()), false),
+            Action::Edited(true)
+        );
+        assert_eq!(plain(draft.completion_rows(40)), ["→ on"]);
+        assert_eq!(
+            editor.key(&mut draft, Key::Enter, false),
+            Action::Submit("/autopilot on".into())
+        );
     }
 
     #[test]

@@ -164,11 +164,10 @@ def serve_thoughts(gates):
     def answer():
         for gate in gates:
             connection, _ = listener.accept()
-            if receive(connection).startswith(b'GET'):
+            while receive(connection).startswith(b'GET'):
                 connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
                 connection.close()
                 connection, _ = listener.accept()
-                receive(connection)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n'
                                b'transfer-encoding: chunked\r\n\r\n%x\r\n%s\r\n' % (len(chunks[0]), chunks[0]))
             gate.wait(10)
@@ -908,6 +907,13 @@ def completes_paths_and_commands(read, until, send, output):
     ending(read, output, ['> see completion/alpine-file and completion/unique-file'])
     send(b'\r')
     on_screen('error: provider: cannot connect')
+    # `/autopilot`'s argument is completed too, and Enter puts it in without sending it.
+    send(b'/autopilot s')
+    ending(read, output, ['> /autopilot s', '\u2192 status'])
+    send(b'\r')
+    ending(read, output, ['> /autopilot status'])
+    send(b'\r')
+    on_screen('Autopilot is off')
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     send(b'/')
     on_screen('(1/12)')
@@ -1436,6 +1442,13 @@ def search_selectors(read, until, send, output):
     on_screen('\u203a claude-haiku-5-5')
     send(b'\r')
     on_screen('\u2713 Model set to claude-haiku-5-5')
+    # After `/model `, the endpoint's models are completed.
+    send(b'/model 6.1')
+    ending(read, output, ['> /model 6.1', '\u2192 gpt-6.1-sol'])
+    send(b'\t')
+    ending(read, output, ['> /model gpt-6.1-sol'])
+    send(b'\r')
+    on_screen('\u2713 Model set to gpt-6.1-sol')
     send(b'\x04')
 
 

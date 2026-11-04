@@ -80,6 +80,8 @@ enum ToScreen {
     /// `/reload` read the commands and skills (the `/` list's rows after the built-in ones)
     /// and whether Escape twice on an empty prompt does something.
     Reloaded(Vec<(String, String)>, bool),
+    /// The endpoint's models, which complete `/model`'s argument.
+    Models(Vec<String>),
     Dialog(Dialog, mpsc::Sender<Answer>),
     /// The dialog's question is no longer asked.
     Dismiss,
@@ -248,6 +250,9 @@ impl Link {
         self.modes = (settings.steering_mode, settings.follow_up_mode);
         let double_escape = settings.double_escape != DoubleEscape::Nothing;
         self.send(ToScreen::Reloaded(commands, double_escape));
+    }
+    pub(super) fn models(&self, models: Vec<String>) {
+        self.send(ToScreen::Models(models));
     }
     /// Shows `dialog` and waits for its answer; `None` once the screen is gone or `cancel` set.
     pub(super) fn ask(&self, dialog: Dialog, cancel: Option<&AtomicBool>) -> Option<Answer> {
@@ -1020,6 +1025,7 @@ impl App {
             ToScreen::Reloaded(commands, double_escape) => {
                 self.editor.reloaded(commands, double_escape)
             }
+            ToScreen::Models(models) => self.editor.set_models(models),
             ToScreen::Dialog(dialog, reply) => {
                 let shown = match dialog {
                     Dialog::Pick(picker) if picker.is_empty() => {

@@ -783,6 +783,7 @@ impl Interactive {
         );
         if let Some(screen) = &mut self.screen {
             (screen.link).reloaded(completions(&self.agent), &self.settings);
+            (screen.link).models(self.agent.models().unwrap_or_default());
         }
         for notice in self.problem_notices() {
             self.ui().notice(&notice);

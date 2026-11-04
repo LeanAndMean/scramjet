@@ -82,6 +82,7 @@ impl Interactive {
                     hide_thinking.clone(),
                     agent.root().to_path_buf(),
                     completions(&agent),
+                    agent.models().unwrap_or_default(),
                     settings.double_escape != DoubleEscape::Nothing,
                 );
                 let started = Handle::start(
