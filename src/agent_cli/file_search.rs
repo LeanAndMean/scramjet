@@ -11,7 +11,7 @@ use std::{
 };
 
 /// Characters that end a word, as Scramjet's autocomplete counts them.
-const DELIMITERS: [char; 5] = [' ', '\t', '"', '\'', '='];
+pub(super) const DELIMITERS: [char; 5] = [' ', '\t', '"', '\'', '='];
 /// How many entries `fd` may list, and how many of the best are offered, as in Scramjet.
 const FOUND: usize = 100;
 const OFFERED: usize = 20;
@@ -32,8 +32,7 @@ impl Mention {
     pub(super) fn find(before: &str) -> Option<Self> {
         let line_start = before.rfind('\n').map_or(0, |at| at + 1);
         let line = &before[line_start..];
-        if line.matches('"').count() % 2 == 1 {
-            let quote = line.rfind('"').expect("counted");
+        if let Some(quote) = open_quote(line) {
             let opened = line[..quote]
                 .strip_suffix('@')
                 .filter(|word| word.is_empty() || word.ends_with(DELIMITERS));
@@ -64,6 +63,11 @@ impl Mention {
             )
         })
     }
+}
+
+/// Where the quote that `line` leaves open is, as Scramjet's `findUnclosedQuoteStart` finds it.
+pub(super) fn open_quote(line: &str) -> Option<usize> {
+    (line.matches('"').count() % 2 == 1).then(|| line.rfind('"').expect("counted"))
 }
 
 /// `fd` looking for a mention's entries, until it ends or this is dropped.

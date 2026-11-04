@@ -1,5 +1,6 @@
 //! The built-in commands: `/settings`, `/new`, `/name`, `/session`, `/resume`, `/fork`, `/tree`,
 //! `/model`, `/compact`, `/autopilot`, `/reload`, and `!` commands.
+use super::fuzzy::Haystack;
 use super::interactive::{Interactive, completions, model_line};
 use super::screen;
 use super::settings::{ROWS, Row, scramjet_level};
@@ -885,16 +886,13 @@ impl Interactive {
                 (sessions.iter()).position(|(session, _)| self.agent.is_session(&session.path));
             // Newest first, so the first other than the current one is the likely choice.
             let initial = usize::from(current == Some(0));
-            let texts: Vec<_> = sessions
-                .iter()
-                .map(|(session, _)| search_text(session))
-                .collect();
+            let texts = searched(&sessions);
             let row = |index: usize, width| session_line(&sessions[index].0, width);
             let tree = sessions.iter().map(|(_, tree)| tree.clone()).collect();
             let picker = select::Picker::search(
                 "Resume session",
                 select::VISIBLE,
-                &texts,
+                texts,
                 initial,
                 current,
                 "No matching sessions",
@@ -1123,7 +1121,7 @@ impl Interactive {
                 .search(
                     "Select model",
                     select::VISIBLE,
-                    &models,
+                    models.iter().map(|model| Haystack::new(model)).collect(),
                     current.unwrap_or(0),
                     current,
                     "No matching models",
@@ -1593,6 +1591,20 @@ fn threaded(sessions: Vec<SessionInfo>) -> Vec<(SessionInfo, String)> {
         .collect()
 }
 
+/// What `/resume` searches in each session, those matching equally the newest first, as in
+/// Scramjet.
+fn searched(sessions: &[(SessionInfo, String)]) -> Vec<Haystack> {
+    let mut newest: Vec<usize> = (0..sessions.len()).collect();
+    newest.sort_by_key(|&at| std::cmp::Reverse(sessions[at].0.modified));
+    let mut rank = vec![0; sessions.len()];
+    for (order, at) in newest.into_iter().enumerate() {
+        rank[at] = order;
+    }
+    (sessions.iter().zip(rank))
+        .map(|((session, _), rank)| Haystack::ranked(&search_text(session), rank))
+        .collect()
+}
+
 /// What `/resume` searches in a session, as Scramjet does: its id, name, prompts and replies.
 fn search_text(session: &SessionInfo) -> String {
     let id = session
@@ -1774,6 +1786,44 @@ mod tests {
             .map(|(session, tree)| format!("{tree}{}", session.name.unwrap()))
             .collect();
         assert_eq!(rows, ["R", "   ├─ P", "   │  └─ K", "   └─ Q"]);
+    }
+
+    #[test]
+    fn sessions_matching_equally_are_found_newest_first() {
+        let now = std::time::SystemTime::now();
+        let session = |name: &str, parent: Option<&str>, age: u64| SessionInfo {
+            path: PathBuf::from(format!("/nonexistent/{name}.jsonl")),
+            first_prompt: None,
+            text: "fix the parser".into(),
+            name: None,
+            item_count: 1,
+            modified: now - Duration::from_secs(age),
+            parent: parent.map(|parent| PathBuf::from(format!("/nonexistent/{parent}.jsonl"))),
+        };
+        // The fork, the newest, is threaded under its parent but found before it.
+        let sessions = threaded(vec![
+            session("aaaa", None, 10),
+            session("bbbb", None, 20),
+            session("cccc", Some("bbbb"), 5),
+        ]);
+        let ids = |rows: Vec<usize>| -> Vec<String> {
+            (rows.into_iter())
+                .map(|at| {
+                    sessions[at]
+                        .0
+                        .path
+                        .file_stem()
+                        .unwrap()
+                        .display()
+                        .to_string()
+                })
+                .collect()
+        };
+        let texts = searched(&sessions);
+        assert_eq!(ids((0..3).collect()), ["aaaa", "bbbb", "cccc"]);
+        use crate::agent_cli::fuzzy::{filter, parse};
+        let found = filter(&parse("parser"), &texts);
+        assert_eq!(ids(found), ["cccc", "aaaa", "bbbb"]);
     }
 
     #[test]

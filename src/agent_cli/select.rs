@@ -197,7 +197,7 @@ impl Picker {
     pub(super) fn search(
         title: &str,
         visible: usize,
-        texts: &[String],
+        texts: Vec<Haystack>,
         initial: usize,
         current: Option<usize>,
         none: &str,
@@ -577,11 +577,11 @@ impl List {
         }
     }
 
-    fn searching(texts: &[String], initial: usize, visible: usize, none: &str) -> Self {
+    fn searching(texts: Vec<Haystack>, initial: usize, visible: usize, none: &str) -> Self {
         let mut list = Self::new(texts.len(), initial, visible);
         list.search = Some(Box::new(Search {
             query: String::new(),
-            texts: texts.iter().map(|text| Haystack::new(text)).collect(),
+            texts,
             none: none.into(),
             initial: list.selected,
         }));
@@ -852,6 +852,10 @@ mod tests {
             .into_iter()
             .map(|line| text::printable(&line))
             .collect()
+    }
+
+    fn haystacks(texts: &[String]) -> Vec<Haystack> {
+        texts.iter().map(|text| Haystack::new(text)).collect()
     }
 
     #[test]
@@ -1188,7 +1192,7 @@ mod tests {
         let texts = ["root parser", "fork parser", "other"].map(String::from);
         let row = |index: usize, width: usize| text::clip(&texts[index], width);
         let picker = || {
-            Picker::search("Resume", 10, &texts, 0, Some(2), "None", row)
+            Picker::search("Resume", 10, haystacks(&texts), 0, Some(2), "None", row)
                 .threaded(vec![String::new(), "   └─ ".into(), String::new()], row)
                 .acting()
         };
@@ -1252,7 +1256,7 @@ mod tests {
         assert_eq!(shown(&unmatched)[2], "  None");
         assert_eq!(lines[..2], ["Resume  Session deleted", "> pars "]);
         assert_eq!(lines[2..], ["  root parser", "› fork parser"]);
-        let mut plain_list = Picker::search("Resume", 10, &texts, 0, None, "None", row);
+        let mut plain_list = Picker::search("Resume", 10, haystacks(&texts), 0, None, "None", row);
         assert_eq!(plain_list.key(&Key::Rename), None);
         assert_eq!(plain_list.key(&Key::EndOfInput), None);
         assert_eq!(plain_list.key(&Key::Enter), Some(Picked::Row(Some(0))));
@@ -1268,7 +1272,7 @@ mod tests {
         ]
         .map(String::from);
         let row = |index: usize, width: usize| text::clip(&texts[index], width);
-        let mut list = List::searching(&texts, 1, 10, "No matching rows");
+        let mut list = List::searching(haystacks(&texts), 1, 10, "No matching rows");
         let shown = |list: &List| {
             plain(lines(
                 ("Pick", HINT, style::MUTED),

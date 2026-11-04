@@ -547,7 +547,7 @@ impl Interactive {
         &self,
         title: &str,
         visible: usize,
-        texts: &[String],
+        texts: Vec<super::fuzzy::Haystack>,
         initial: usize,
         current: Option<usize>,
         none: &str,

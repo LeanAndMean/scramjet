@@ -6,14 +6,23 @@ pub(super) struct Haystack {
     chars: Vec<char>,
     /// Lowercased with whitespace runs as one space, for phrases.
     collapsed: String,
+    /// Among rows of equal scores, the lower comes first.
+    tie: usize,
 }
 
 impl Haystack {
+    /// Equal scores put the shorter text first, as Scramjet's `fuzzyFilter` does.
     pub(super) fn new(text: &str) -> Self {
+        Self::ranked(text, text.chars().count())
+    }
+
+    /// Equal scores put the lower `rank` first, as Scramjet's session search puts the newest.
+    pub(super) fn ranked(text: &str, rank: usize) -> Self {
         let lower = text.to_lowercase();
         Self {
             collapsed: collapse(&lower),
             chars: lower.chars().collect(),
+            tie: rank,
         }
     }
 }
@@ -62,8 +71,12 @@ pub(super) fn parse(query: &str) -> Vec<Token> {
     tokens
 }
 
-/// The indices of the rows every token matches, best first; equal scores keep the rows' order.
+/// The indices of the rows every token matches, best first; equal scores go by the rows' ranks,
+/// then keep the rows' order. Without tokens, every row in order.
 pub(super) fn filter(tokens: &[Token], rows: &[Haystack]) -> Vec<usize> {
+    if tokens.is_empty() {
+        return (0..rows.len()).collect();
+    }
     let mut matches: Vec<(i64, usize)> = rows
         .iter()
         .enumerate()
@@ -75,7 +88,7 @@ pub(super) fn filter(tokens: &[Token], rows: &[Haystack]) -> Vec<usize> {
             Some((total, index))
         })
         .collect();
-    matches.sort_by_key(|&(score, _)| score);
+    matches.sort_by_key(|&(score, index)| (score, rows[index].tie));
     matches.into_iter().map(|(_, index)| index).collect()
 }
 
@@ -210,16 +223,30 @@ mod tests {
         .iter()
         .map(|text| Haystack::new(text))
         .collect();
-        assert_eq!(filter(&parse("parser"), &rows), [0, 3, 2]);
+        assert_eq!(filter(&parse("parser"), &rows), [3, 0, 2]);
+        assert_eq!(filter(&parse(" "), &rows), [0, 1, 2, 3]);
         assert_eq!(filter(&parse("parser again"), &rows), [3]);
-        assert_eq!(filter(&parse(r#""the   PARSER""#), &rows), [0, 3]);
+        assert_eq!(filter(&parse(r#""the   PARSER""#), &rows), [3, 0]);
         assert_eq!(filter(&parse(r#""parser and""#), &rows), [0]);
         assert!(filter(&parse("zzz"), &rows).is_empty());
-        // Equal scores keep the rows' order.
+        // Equal scores put the shorter text first, as Scramjet's `fuzzyFilter`, or the lower
+        // rank, then keep the rows' order.
         let same: Vec<_> = ["same", "same"]
             .iter()
             .map(|text| Haystack::new(text))
             .collect();
         assert_eq!(filter(&parse("same"), &same), [0, 1]);
+        let names: Vec<_> = ["rs:review-all", "rs:review", "rs:loop"]
+            .iter()
+            .map(|text| Haystack::new(text))
+            .collect();
+        assert_eq!(filter(&parse("rs:"), &names), [2, 1, 0]);
+        assert_eq!(filter(&parse("review"), &names), [1, 0]);
+        let ranked: Vec<_> = [("fix it", 2), ("fix the parser", 0), ("fix", 1)]
+            .iter()
+            .map(|&(text, rank)| Haystack::ranked(text, rank))
+            .collect();
+        assert_eq!(filter(&parse("fix"), &ranked), [2, 1, 0]);
+        assert_eq!(filter(&parse(r#""fix""#), &ranked), [1, 2, 0]);
     }
 }

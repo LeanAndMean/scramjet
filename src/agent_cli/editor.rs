@@ -736,12 +736,16 @@ impl Completion {
 
     /// The entries of the directory named by the word before the cursor whose names start with
     /// the rest of it, as Scramjet's `getFileSuggestions` lists them: relative to `root`, `~/` in
-    /// the home directory, ignoring case, directories first.
+    /// the home directory, ignoring case, directories first. The word is all that follows a
+    /// quote left open where a word starts, and an entry with a space or after it is quoted.
     fn path(before: &str, root: &Path) -> Option<Self> {
-        let start = before
-            .rfind([' ', '\t', '\n', '"', '\'', '='])
-            .map_or(0, |at| at + 1);
-        let word = &before[start..];
+        let line_start = before.rfind('\n').map_or(0, |at| at + 1);
+        let line = &before[line_start..];
+        let quote = file_search::open_quote(line)
+            .filter(|&at| at == 0 || line[..at].ends_with(file_search::DELIMITERS));
+        let start = line_start
+            + quote.unwrap_or_else(|| line.rfind(file_search::DELIMITERS).map_or(0, |at| at + 1));
+        let word = &before[start + usize::from(quote.is_some())..];
         let (shown, name) = match word.rfind('/') {
             Some(slash) => word.split_at(slash + 1),
             None if word == "~" => ("~/", ""),
@@ -764,10 +768,15 @@ impl Completion {
                 let kind = entry.file_type().ok()?;
                 let directory = kind.is_dir() || kind.is_symlink() && entry.path().is_dir();
                 let label = if directory { format!("{file}/") } else { file };
+                let value = format!("{shown}{label}");
+                let value = match quote.is_some() || value.contains(' ') {
+                    true => format!("\"{value}\""),
+                    false => value,
+                };
                 Some((
                     directory,
                     Suggestion {
-                        value: format!("{shown}{label}"),
+                        value,
                         label,
                         description: String::new(),
                     },
@@ -799,24 +808,29 @@ impl Completion {
     fn apply(self, buffer: &mut Buffer) {
         let item = &self.items[self.selected];
         let value = &item.value;
-        if self.kind != Kind::File {
+        if matches!(self.kind, Kind::Slash | Kind::Argument) {
             buffer.text.replace_range(self.start..buffer.cursor, value);
             buffer.cursor = self.start + value.len();
             return;
         }
-        // As Scramjet: a file is followed by a space, a directory not, so that its entries can
-        // be looked for next, inside its quotes when quoted, and the quote after the cursor is
-        // the one a quoted entry closes.
+        // As Scramjet: an `@` file is followed by a space, a directory not, so that its
+        // entries can be completed next, inside its quotes when quoted, and the quote after the
+        // cursor is the one a quoted entry closes.
         let directory = item.label.ends_with('/');
         let closed = value.ends_with('"');
+        let typed = &buffer.text[self.start..buffer.cursor];
         let mut end = buffer.cursor;
         if closed
-            && buffer.text[self.start..buffer.cursor].starts_with("@\"")
+            && (typed.starts_with('"') || typed.starts_with("@\""))
             && buffer.text[end..].starts_with('"')
         {
             end += 1;
         }
-        let suffix = if directory { "" } else { " " };
+        let suffix = if self.kind == Kind::File && !directory {
+            " "
+        } else {
+            ""
+        };
         buffer
             .text
             .replace_range(self.start..end, &format!("{value}{suffix}"));
@@ -1700,6 +1714,12 @@ mod tests {
         );
         let list = Completion::argument("/model 6 sol", &models).unwrap();
         assert_eq!(labels(&list), ["gpt-6.1-sol"]);
+        // Equal matches put the shorter id first, as Scramjet's `fuzzyFilter` does.
+        let gpt = ["gpt-6.1-sol", "gpt-6-luna"].map(String::from);
+        let list = Completion::argument("/model gpt", &gpt).unwrap();
+        assert_eq!(labels(&list), ["gpt-6-luna", "gpt-6.1-sol"]);
+        let list = Completion::slash("/se", &[]).unwrap();
+        assert_eq!(labels(&list)[..2], ["/session", "/settings"]);
         let mut buffer = Buffer {
             text: "/model hai".into(),
             cursor: 10,
@@ -1857,6 +1877,43 @@ mod tests {
         assert_eq!(list("").unwrap().len(), 5);
         assert!(list("nothing").is_none());
         assert!(list("missing/a").is_none());
+
+        // As Scramjet's, a path with a space is quoted, and one is completed inside an open
+        // quote where a word starts, the quote after the cursor closing it.
+        fs::create_dir(root.join("my dir")).unwrap();
+        fs::write(root.join("my dir/a file.txt"), "").unwrap();
+        fs::write(root.join("my dir/b.txt"), "").unwrap();
+        assert_eq!(list("see m").unwrap(), ["\"my dir/\""]);
+        assert_eq!(list("\"my d").unwrap(), ["\"my dir/\""]);
+        assert_eq!(list("x \"Alpha").unwrap(), ["\"Alpha-dir/\""]);
+        assert_eq!(
+            list("x=\"my dir/").unwrap(),
+            ["\"my dir/a file.txt\"", "\"my dir/b.txt\""]
+        );
+        // A quote inside a word opens none; a closed one ends the word.
+        assert_eq!(list("a\"Alpha").unwrap(), ["Alpha-dir/"]);
+        assert_eq!(list("\"x\" Alpha").unwrap(), ["Alpha-dir/"]);
+        // A quote on an earlier line is closed by its end.
+        assert_eq!(list("\"a\nAlpha").unwrap(), ["Alpha-dir/"]);
+        let tab = |text: &str, cursor: usize| {
+            let mut buffer = Buffer {
+                text: text.into(),
+                cursor,
+            };
+            Completion::path(&text[..cursor], &root)
+                .unwrap()
+                .apply(&mut buffer);
+            (buffer.text, buffer.cursor)
+        };
+        assert_eq!(tab("see my", 6), ("see \"my dir/\"".into(), 12));
+        assert_eq!(
+            tab("see \"my dir/b\" x", 13),
+            ("see \"my dir/b.txt\" x".into(), 18)
+        );
+        assert_eq!(
+            tab("\"Alpha-dir/", 11),
+            ("\"Alpha-dir/inner.rs\"".into(), 20)
+        );
 
         let home = std::env::home_dir().unwrap();
         let name = fs::read_dir(&home)
