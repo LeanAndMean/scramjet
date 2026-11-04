@@ -57,7 +57,7 @@ impl AgentUi for Recorder {
         self.shown.push(format!("call {name} {summary}"));
         self.calls.push(name.to_owned());
     }
-    fn tool_running(&mut self) {}
+    fn tool_running(&mut self, _: std::time::Instant) {}
     fn subagents(&mut self, children: &Children) {
         self.children.push(children.clone());
     }
@@ -313,6 +313,45 @@ pub(super) fn tool_call(id: &str, name: &str, arguments: Value) -> Vec<u8> {
         .replace("\"inert\"", &format!("\"{name}\""))
         .replace("call_1", id);
     stream(&serde_json::from_str::<Vec<Value>>(&text).unwrap())
+}
+
+/// The events of a reply that makes each of `calls` (a tool's name and arguments), as GPT makes
+/// them with `parallel_tool_calls`; their ids are `call_0`, `call_1` and so on.
+pub(super) fn tool_calls(calls: &[(&str, Value)]) -> Vec<u8> {
+    let first = fixture::call_events("{}", Value::Null);
+    let (mut events, mut output) = (vec![first[0].clone()], Vec::new());
+    for (index, (name, arguments)) in calls.iter().enumerate() {
+        let call = fixture::call_events(&arguments.to_string(), Value::Null);
+        let text = serde_json::to_string(&call[1..5]).unwrap();
+        let text = (text.replace("\"inert\"", &format!("\"{name}\"")))
+            .replace("fc_1", &format!("fc_{index}"))
+            .replace("call_1", &format!("call_{index}"));
+        for mut event in serde_json::from_str::<Vec<Value>>(&text).unwrap() {
+            event["output_index"] = json!(index);
+            if event["type"] == "response.output_item.done" {
+                output.push(event["item"].clone());
+            }
+            events.push(event);
+        }
+    }
+    let mut completed = first[5].clone();
+    completed["response"]["output"] = json!(output);
+    completed["response"]["usage"] = fixture::known_usage();
+    events.push(completed);
+    stream(&events)
+}
+
+/// The results a request sends, by call id.
+pub(super) fn outputs(body: &Value) -> Vec<(String, String)> {
+    let items = body["input"].as_array().unwrap().iter();
+    let results = items.filter(|item| item["type"] == "function_call_output");
+    let result = |item: &Value| {
+        (
+            item["call_id"].as_str().unwrap().to_owned(),
+            tools::result_text(&item["output"]),
+        )
+    };
+    results.map(result).collect()
 }
 
 pub(super) fn last_output(body: &Value) -> String {

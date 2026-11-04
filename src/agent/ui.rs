@@ -7,7 +7,10 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{sync::atomic::AtomicBool, time::Duration};
+use std::{
+    sync::atomic::AtomicBool,
+    time::{Duration, Instant},
+};
 
 /// What a model request asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,8 +34,9 @@ pub trait AgentUi {
     /// The complete text of an assistant message, after any streamed progress for it.
     fn assistant(&mut self, text: &str);
     fn tool_call(&mut self, name: &str, summary: &str);
-    /// The tool call announced last starts running, after any approval.
-    fn tool_running(&mut self);
+    /// The tool call announced last started running at `since`, after any approval: before it
+    /// was announced when it ran beside the calls before it.
+    fn tool_running(&mut self, since: Instant);
     /// The end of the running tool's output so far.
     fn tool_output(&mut self, _output: &str) {}
     /// The children of the running `subagent` call, each time one starts, does something or
@@ -308,7 +312,7 @@ impl ChildRun {
 /// prompt, reply, reasoning summary, tool call with its result, `!` and `!!` command, compaction
 /// summary and how a turn stopped.
 pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
-    // A reply's calls are stored before their results, but each ran, and showed, in turn.
+    // A reply's calls are stored before their results, but each showed in turn as it ran.
     let mut calls: Vec<(&str, &str, Option<Call>)> = Vec::new();
     let unanswered = |calls: &mut Vec<(&str, &str, Option<Call>)>, ui: &mut dyn AgentUi| {
         for (_, _, call) in calls.drain(..) {
@@ -449,7 +453,7 @@ mod tests {
             json!({"type":"function_call_output","call_id":"c4","output":"Error: invalid","_scramjet_failed":true}),
             call("c5", "write", json!({"path":"/","content":"c"})),
             json!({"type":"function_call_output","call_id":"c5","output":"Error: dir","_scramjet_failed":true}),
-            // Claude calls two tools in one reply; they ran one after the other.
+            // Claude calls two tools in one reply; they showed one after the other.
             call("c6", "bash", json!({"command":"one"})),
             call("c7", "bash", json!({"command":"two"})),
             output("c6", "1"),

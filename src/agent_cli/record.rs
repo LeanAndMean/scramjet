@@ -6,7 +6,7 @@ use scramjet_rs::agent::{
     AgentUi, Answer, AutoCompaction, Children, Compaction, Purpose, StreamProgress, ToolDetail,
     UserCommand,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// A display call, and what the session says between turns (`Text`).
 pub(super) enum Event {
@@ -15,7 +15,8 @@ pub(super) enum Event {
     Retrying(String, u32, u32, Duration),
     Assistant(String),
     ToolCall(String, String),
-    ToolRunning,
+    /// Since when.
+    ToolRunning(Instant),
     ToolOutput(String),
     /// The children of a running `subagent` call, as they are now.
     Subagents(Children),
@@ -50,7 +51,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         }
         Event::Assistant(text) => ui.assistant(text),
         Event::ToolCall(name, summary) => ui.tool_call(name, summary),
-        Event::ToolRunning => ui.tool_running(),
+        Event::ToolRunning(since) => ui.tool_running(*since),
         Event::ToolOutput(_) | Event::Subagents(_) => {}
         Event::ToolResult(name, output, detail, failed) => {
             ui.tool_result(name, output, detail.as_ref(), *failed)

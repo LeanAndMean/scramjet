@@ -421,8 +421,8 @@ impl AgentUi for Link {
     fn tool_call(&mut self, name: &str, summary: &str) {
         self.event(Event::ToolCall(name.to_owned(), summary.to_owned()));
     }
-    fn tool_running(&mut self) {
-        self.event(Event::ToolRunning);
+    fn tool_running(&mut self, since: Instant) {
+        self.event(Event::ToolRunning(since));
     }
     fn tool_output(&mut self, output: &str) {
         self.event(Event::ToolOutput(output.to_owned()));
@@ -547,7 +547,11 @@ impl Activity {
             Event::Waiting(Purpose::Reply) => Self::new("thinking"),
             Event::Waiting(purpose) => Self::cancellable(waiting_for(*purpose)),
             Event::Progress(StreamProgress::Call(name)) => Self::new(format!("preparing {name}")),
-            Event::ToolRunning | Event::CommandStarted(..) => Self::new("running"),
+            Event::ToolRunning(since) => Self {
+                since: *since,
+                ..Self::new("running")
+            },
+            Event::CommandStarted(..) => Self::new("running"),
             Event::ToolResult(..) | Event::CommandResult(..) => Self::new("working"),
             Event::Retrying(_, _, _, delay) => Self {
                 countdown: Some(*delay),
@@ -2294,7 +2298,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            said(Event::ToolRunning, true),
+            said(Event::ToolRunning(Instant::now()), true),
             "… running (Esc to interrupt)"
         );
         let retry = Event::Retrying("busy".into(), 1, 3, Duration::from_secs(2));
@@ -2355,7 +2359,7 @@ mod tests {
         let mut transcript = Transcript::default();
         transcript.push(Event::Progress(StreamProgress::Text("Hel".into())));
         transcript.push(Event::Progress(StreamProgress::Text("lo".into())));
-        transcript.push(Event::ToolRunning);
+        transcript.push(Event::ToolRunning(Instant::now()));
         transcript.push(Event::ToolOutput("1".into()));
         transcript.push(Event::ToolOutput("1\n2".into()));
         assert_eq!(text(&transcript.parts[0]), ["Hello", "1\n2"]);

@@ -497,13 +497,17 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     }
     /// Shows `activity` on the status line now, or only once it lasts a second.
     fn show(&mut self, activity: String, now: bool) {
+        self.show_since(activity, Instant::now());
+        if now && self.live() {
+            self.status.lock().unwrap().draw();
+        }
+    }
+    /// As `show`, counting from `since`, drawn by the ticker.
+    fn show_since(&mut self, activity: String, since: Instant) {
         if self.live() {
             let mut status = self.status.lock().unwrap();
-            status.activity = Some((activity, Instant::now()));
+            status.activity = Some((activity, since));
             status.countdown = None;
-            if now {
-                status.draw();
-            }
         }
     }
     fn show_countdown(&mut self, activity: String, delay: Duration) {
@@ -775,9 +779,9 @@ impl AgentUi for Terminal {
         let line = self.dim(&call_line(name, summary, width, self.marked));
         self.err(&format!("{line}\n"));
     }
-    fn tool_running(&mut self) {
-        self.tool_started = Some(Instant::now());
-        self.show("running".into(), false);
+    fn tool_running(&mut self, since: Instant) {
+        self.tool_started = Some(since);
+        self.show_since("running".into(), since);
     }
     fn tool_output(&mut self, output: &str) {
         if !self.live() {

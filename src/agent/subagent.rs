@@ -902,7 +902,7 @@ is added or changed.",
     };
     let sandbox = sandbox::available();
     let job = |task, text| Job::new(task, text, &discovery.agents, parent, &sandbox);
-    ui.tool_running();
+    ui.tool_running(std::time::Instant::now());
     let mut shown = Children {
         mode: match mode {
             Mode::Single(_) => Delegation::Single,

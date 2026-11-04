@@ -215,7 +215,7 @@ impl AgentUi for Html {
         );
         self.tool = true;
     }
-    fn tool_running(&mut self) {}
+    fn tool_running(&mut self, _: std::time::Instant) {}
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
         self.end_thinking();
         // A call whose arguments did not parse has no call line.

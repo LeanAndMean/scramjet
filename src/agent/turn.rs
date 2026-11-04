@@ -3,9 +3,9 @@
 use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, CONTEXT, Completed, DIFF, Ending, FAILED,
-    MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, Step, TYPED, ToolDetail, USAGE,
-    UserCommand, autonomy, delegate, forge, message_text, publish, question, sandbox, status,
-    subagent,
+    MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, Step, TYPED, ToolDetail, USAGE, Usage,
+    UserCommand, autonomy, batch, delegate, forge, message_text, publish, question, sandbox,
+    status, subagent,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -287,39 +287,41 @@ to a larger-context model)"
                 return Ok(());
             }
             // As in Pi, the turn ends without another request when every call ends it.
-            let mut ends = true;
-            let mut calls = calls.into_iter();
-            while let Some(item) = calls.next() {
-                let (output, ends_turn) = self.call(&item, ui, cancel);
-                ends &= ends_turn;
-                let mut result = json!({"type":"function_call_output","call_id":item["call_id"],"output":output.sent()});
-                if output.failed {
-                    result[FAILED] = json!(true);
-                }
-                match &output.detail {
-                    Some(ToolDetail::Diff(diff)) => result[DIFF] = json!(diff),
-                    Some(ToolDetail::Subagents(children)) => {
-                        result[SUBAGENTS] = serde_json::to_value(children).unwrap_or_default()
+            let ends = match self.together(&calls) {
+                Some(together) => {
+                    let tools = self.tools();
+                    let run = |call: &Call, ui: &mut dyn AgentUi| {
+                        ui.tool_call(call.name, &call.summary());
+                        tools.run(call, ui, cancel)
+                    };
+                    let ran = batch::run(&together, &self.config.root, &run, ui, cancel);
+                    for (item, (output, usage)) in calls.iter().zip(ran) {
+                        self.usage.add(&usage);
+                        self.add_result(item, &output, ui)?;
                     }
-                    _ => {}
-                }
-                let spent = result.get(SUBAGENTS).is_some();
-                self.add(result)?;
-                if spent {
-                    ui.usage(
-                        self.session_tokens(),
-                        self.context_tokens(),
-                        self.output_rate(),
-                    );
-                }
-                if cancel.load(Ordering::Relaxed) {
-                    // Every call gets a result, as in Pi, or the next request is refused.
-                    for item in calls {
-                        self.not_run(&item, ui)?;
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(AgentError::Cancelled);
                     }
-                    return Err(AgentError::Cancelled);
+                    false
                 }
-            }
+                None => {
+                    let mut ends = true;
+                    let mut calls = calls.iter();
+                    while let Some(item) = calls.next() {
+                        let (output, ends_turn) = self.call(item, ui, cancel);
+                        ends &= ends_turn;
+                        self.add_result(item, &output, ui)?;
+                        if cancel.load(Ordering::Relaxed) {
+                            // Every call gets a result, as in Pi, or the next request is refused.
+                            for item in calls {
+                                self.not_run(item, ui)?;
+                            }
+                            return Err(AgentError::Cancelled);
+                        }
+                    }
+                    ends
+                }
+            };
             // After the results, so one reply's results stay a chain (see `destination`).
             self.save_command()?;
             if ends {
@@ -408,8 +410,80 @@ to a larger-context model)"
         Ok(())
     }
 
-    /// Runs a tool call, after any approval; also says whether the turn ends after it, as a
-    /// question the user cancelled or is to answer at the prompt ends it.
+    /// The calls of a reply that run at the same time, as Pi runs them: when there are several
+    /// and each is a coding tool or `subagent` that asks no approval question. Otherwise they
+    /// run one after another, as the user's questions, the command's reports and delegations and
+    /// the publications (sequential in Scramjet too) need.
+    fn together<'a>(&self, calls: &'a [Value]) -> Option<Vec<Call<'a>>> {
+        let parsed: Vec<Call> = calls
+            .iter()
+            .map(Call::parse)
+            .collect::<Result<_, _>>()
+            .ok()?;
+        let runs = |call: &Call| {
+            let tool = call.name == subagent::NAME
+                || self.config.tools.iter().any(|tool| tool == call.name);
+            let asks = matches!(call.approval(&self.config.root), Approval::Ask(_));
+            tool && !(asks && self.config.ask)
+        };
+        (parsed.len() > 1 && parsed.iter().all(runs)).then_some(parsed)
+    }
+
+    /// The `Tools` that run the agent's calls now.
+    fn tools(&self) -> Tools<'_> {
+        Tools {
+            parent: subagent::Parent {
+                endpoint: self.config.endpoint,
+                retries: self.config.retries,
+                model: &self.config.model,
+                info: &self.info,
+                effort: self.effort().or(self.info.default_level.as_deref()),
+                max_output_tokens: self.config.max_output_tokens,
+                root: &self.config.root,
+                cache_key: self.session.id(),
+                sources: subagent::Sources {
+                    user: self.agents_directory.as_deref(),
+                    sets: &self.sets,
+                },
+                skills: &self.skills,
+                approvals: self.approvals.as_deref(),
+                rates: self.rates.as_deref(),
+            },
+            hide_credentials: self.hide_credentials,
+        }
+    }
+
+    /// Adds `output` as the result of the call `item`, with what is shown of it on a resume.
+    fn add_result(
+        &mut self,
+        item: &Value,
+        output: &Output,
+        ui: &mut dyn AgentUi,
+    ) -> Result<(), AgentError> {
+        let mut result =
+            json!({"type":"function_call_output","call_id":item["call_id"],"output":output.sent()});
+        if output.failed {
+            result[FAILED] = json!(true);
+        }
+        match &output.detail {
+            Some(ToolDetail::Diff(diff)) => result[DIFF] = json!(diff),
+            Some(ToolDetail::Subagents(children)) => {
+                result[SUBAGENTS] = serde_json::to_value(children).unwrap_or_default()
+            }
+            _ => {}
+        }
+        let spent = result.get(SUBAGENTS).is_some();
+        self.add(result)?;
+        if spent {
+            ui.usage(
+                self.session_tokens(),
+                self.context_tokens(),
+                self.output_rate(),
+            );
+        }
+        Ok(())
+    }
+
     /// Answers a call of a reply whose turn stopped before it ran.
     fn not_run(&mut self, item: &Value, ui: &mut dyn AgentUi) -> Result<(), AgentError> {
         let name = item["name"].as_str().unwrap_or_default();
@@ -423,6 +497,8 @@ to a larger-context model)"
         )
     }
 
+    /// Runs a tool call, after any approval; also says whether the turn ends after it, as a
+    /// question the user cancelled or is to answer at the prompt ends it.
     fn call(&mut self, item: &Value, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> (Output, bool) {
         let failure = |text: String| Output {
             text,
@@ -441,36 +517,6 @@ to a larger-context model)"
         ui.tool_call(call.name, &call.summary());
         if call.name == question::NAME {
             return ask(&call.arguments, &mut self.lifecycle, ui);
-        }
-        if call.name == subagent::NAME {
-            let (output, usage) = {
-                let parent = subagent::Parent {
-                    endpoint: self.config.endpoint,
-                    retries: self.config.retries,
-                    model: &self.config.model,
-                    info: &self.info,
-                    effort: self.effort().or(self.info.default_level.as_deref()),
-                    max_output_tokens: self.config.max_output_tokens,
-                    root: &self.config.root,
-                    cache_key: self.session.id(),
-                    sources: subagent::Sources {
-                        user: self.agents_directory.as_deref(),
-                        sets: &self.sets,
-                    },
-                    skills: &self.skills,
-                    approvals: self.approvals.as_deref(),
-                    rates: self.rates.as_deref(),
-                };
-                subagent::run(&call.arguments, &parent, ui, cancel)
-            };
-            self.usage.add(&usage);
-            ui.tool_result(
-                call.name,
-                &output.text,
-                output.detail.as_ref(),
-                output.failed,
-            );
-            return (output, false);
         }
         if call.name == delegate::NAME {
             let active = self.lifecycle.active();
@@ -513,7 +559,7 @@ to a larger-context model)"
             };
             return (output, ends);
         }
-        if !self.config.tools.iter().any(|tool| tool == call.name) {
+        if call.name != subagent::NAME && !self.config.tools.iter().any(|tool| tool == call.name) {
             let output = format!("Tool {} not found", call.name);
             ui.tool_result(call.name, &output, None, true);
             return (failure(output), false);
@@ -534,20 +580,48 @@ to a larger-context model)"
             ui.tool_result(call.name, output, None, true);
             return (failure(output.to_owned()), false);
         }
-        ui.tool_running();
-        let hidden = self.hide_credentials.then(sandbox::Hidden::current);
-        let output = call
-            .run(&self.config.root, hidden.as_ref(), cancel, &mut |output| {
-                ui.tool_output(output)
-            })
-            .unwrap_or_else(|error| failure(format!("Error: {error}")));
+        let (output, usage) = self.tools().run(&call, ui, cancel);
+        self.usage.add(&usage);
+        (output, false)
+    }
+}
+
+/// What running coding tools and `subagent` calls takes from the agent, shared by the calls
+/// that run at the same time.
+struct Tools<'a> {
+    parent: subagent::Parent<'a>,
+    hide_credentials: bool,
+}
+
+impl Tools<'_> {
+    /// Runs `call` and shows its result; with the usage of its children, if any.
+    fn run(&self, call: &Call, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> (Output, Usage) {
+        let (output, usage) = match call.name {
+            subagent::NAME => subagent::run(&call.arguments, &self.parent, ui, cancel),
+            _ => {
+                ui.tool_running(std::time::Instant::now());
+                let hidden = self.hide_credentials.then(sandbox::Hidden::current);
+                let root = self.parent.root;
+                let output = call
+                    .run(root, hidden.as_ref(), cancel, &mut |output| {
+                        ui.tool_output(output)
+                    })
+                    .unwrap_or_else(|error| Output {
+                        text: format!("Error: {error}"),
+                        detail: None,
+                        failed: true,
+                        image: None,
+                    });
+                (output, Usage::default())
+            }
+        };
         ui.tool_result(
             call.name,
             &output.text,
             output.detail.as_ref(),
             output.failed,
         );
-        (output, false)
+        (output, usage)
     }
 }
 
@@ -1709,66 +1783,164 @@ scramjet-rs\n",
 
     #[test]
     fn calls_after_the_one_a_stop_interrupted_are_answered_as_not_run() {
-        // One reply with two calls, as GPT makes them with `parallel_tool_calls`.
-        let first = fixture::call_events(&json!({"command":"sleep 30"}).to_string(), json!(null));
-        let arguments = json!({"path":"x.txt","content":"x"}).to_string();
-        let second = fixture::call_events(&arguments, json!(null));
-        let mut events = vec![first[0].clone()];
-        let mut output = Vec::new();
-        for (index, (call, name)) in [(&first, "bash"), (&second, "write")].iter().enumerate() {
-            let text = serde_json::to_string(&call[1..5]).unwrap();
-            let text = (text.replace("\"inert\"", &format!("\"{name}\"")))
-                .replace("fc_1", &format!("fc_{index}"))
-                .replace("call_1", &format!("call_{index}"));
-            for mut event in serde_json::from_str::<Vec<Value>>(&text).unwrap() {
-                event["output_index"] = json!(index);
-                if event["type"] == "response.output_item.done" {
-                    output.push(event["item"].clone());
-                }
-                events.push(event);
-            }
-        }
-        let mut completed = first[5].clone();
-        completed["response"]["output"] = json!(output);
-        completed["response"]["usage"] = fixture::known_usage();
-        events.push(completed);
+        // With a question among them, a reply's calls run one after another.
+        let question = json!({"type":"confirm","message":"Go on?"});
         let (endpoint, server) = serve(vec![
-            stream(&events),
+            tool_calls(&[
+                ("bash", json!({"command":"sleep 30"})),
+                (question::NAME, question),
+            ]),
             stream(&fixture::text_events("ok", fixture::known_usage())),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "stopped-calls");
         let mut ui = Recorder::default();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let setter = cancel.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(300));
-            setter.store(true, Ordering::Relaxed);
-        });
+        let cancel = stop_after(Duration::from_millis(300));
         let stopped = agent.turn("go", &mut ui, &cancel);
         assert!(matches!(stopped, Err(AgentError::Cancelled)), "{stopped:?}");
-        assert!(!agent.root().join("x.txt").exists());
         let not_run = "Error: the turn was stopped before this tool call ran; it did not run.";
-        assert_eq!(ui.calls, ["bash", "write"]);
+        assert_eq!(ui.calls, ["bash", question::NAME]);
+        assert!(!ui.shown.iter().any(|shown| shown.starts_with("question")));
         assert_eq!(
             ui.shown.last().unwrap(),
-            &format!("result write {not_run} failed")
+            &format!("result {} {not_run} failed", question::NAME)
         );
         cancel.store(false, Ordering::Relaxed);
         agent.turn("again", &mut ui, &cancel).unwrap();
         let bodies = server.join().unwrap();
         assert_eq!(bodies[0]["parallel_tool_calls"], true);
-        let outputs: Vec<_> = (bodies[1]["input"].as_array().unwrap().iter())
-            .filter(|item| item["type"] == "function_call_output")
-            .map(|item| {
-                (
-                    item["call_id"].as_str().unwrap(),
-                    item["output"].as_str().unwrap(),
-                )
-            })
-            .collect();
+        let outputs = outputs(&bodies[1]);
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].0, "call_0");
-        assert_eq!(outputs[1], ("call_1", not_run));
+        assert_eq!(outputs[1], ("call_1".into(), not_run.into()));
+    }
+
+    /// A flag set after `delay`, as when the user stops the turn then.
+    fn stop_after(delay: Duration) -> Arc<AtomicBool> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let setter = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            setter.store(true, Ordering::Relaxed);
+        });
+        cancel
+    }
+
+    #[test]
+    fn a_replys_calls_run_together_and_show_one_after_another_in_their_order() {
+        // Each command waits up to 5 s for the other's file, which one after the other the first
+        // would not see.
+        let meet = |mine: &str, theirs: &str| {
+            json!({"command":format!("touch {mine}; for _ in $(seq 100); do [ -e {theirs} ] && \
+break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
+        };
+        let edit = |path: &str, old: &str, new: &str| json!({"path":path,"edits":[{"oldText":old,"newText":new}]});
+        let (endpoint, server) = serve(vec![
+            tool_calls(&[
+                ("bash", meet("a", "b")),
+                ("write", json!({"path":"f.txt","content":"one\n"})),
+                ("edit", edit("f.txt", "one", "two")),
+                ("edit", edit("./f.txt", "two", "three")),
+                ("bash", meet("b", "a")),
+            ]),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "calls-together");
+        let mut ui = Recorder::default();
+        let started = std::time::Instant::now();
+        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(4));
+        // The edits of one file ran in their order.
+        let file = agent.root().join("f.txt");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
+        let shown: Vec<String> = (ui.shown.iter())
+            .map(|shown| shown.splitn(3, ' ').take(2).collect::<Vec<_>>().join(" "))
+            .collect();
+        let each = ["bash", "write", "edit", "edit", "bash"]
+            .map(|name| [format!("call {name}"), format!("result {name}")]);
+        let mut expected: Vec<String> = each.concat();
+        expected.push("reply done".into());
+        assert_eq!(shown, expected);
+        assert!(!ui.shown.iter().any(|shown| shown.ends_with(" failed")));
+        let bodies = server.join().unwrap();
+        let outputs = outputs(&bodies[1]);
+        let ids: Vec<&str> = outputs.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, ["call_0", "call_1", "call_2", "call_3", "call_4"]);
+        assert_eq!(
+            (outputs[0].1.as_str(), outputs[4].1.as_str()),
+            ("met\n", "met\n")
+        );
+    }
+
+    #[test]
+    fn a_question_of_calls_running_together_waits_for_the_calls_before_it() {
+        let (endpoint, server) = serve(vec![
+            tool_calls(&[
+                ("bash", json!({"command":"sleep 0.3; echo slept"})),
+                (
+                    subagent::NAME,
+                    json!({"agent":"p","task":"go","agentScope":"both"}),
+                ),
+            ]),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "calls-together-question");
+        let project = agent.root().join(".scramjet/agents");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("p.md"), "---\nname: p\ndescription: P\n---\n").unwrap();
+        let mut ui = Recorder {
+            choices: vec![Some(1)],
+            ..Recorder::default()
+        };
+        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+        let shown: Vec<&str> = (ui.shown.iter())
+            .map(|shown| {
+                shown
+                    .split_once(['\n', ':'])
+                    .map_or(shown.as_str(), |(head, _)| head)
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "call bash sleep 0.3; echo slept",
+                "result bash slept",
+                "call subagent p [both]",
+                "question Agents",
+                "choose Run project-local agents? [\"Yes\", \"No\"] None",
+                "result subagent Canceled",
+                "reply done",
+            ]
+        );
+        let bodies = server.join().unwrap();
+        assert_eq!(
+            last_output(&bodies[1]),
+            "Canceled: project-local agents not approved."
+        );
+    }
+
+    #[test]
+    fn a_stop_during_calls_running_together_stops_each_with_its_own_result() {
+        let (endpoint, server) = serve(vec![
+            tool_calls(&[
+                ("bash", json!({"command":"sleep 30"})),
+                ("write", json!({"path":"x.txt","content":"x"})),
+            ]),
+            stream(&fixture::text_events("ok", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "calls-together-stopped");
+        let mut ui = Recorder::default();
+        let cancel = stop_after(Duration::from_millis(300));
+        let stopped = agent.turn("go", &mut ui, &cancel);
+        assert!(matches!(stopped, Err(AgentError::Cancelled)), "{stopped:?}");
+        // As in Pi, the write ran beside the command.
+        assert!(agent.root().join("x.txt").exists());
+        cancel.store(false, Ordering::Relaxed);
+        agent.turn("again", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        let outputs = outputs(&bodies[1]);
+        assert_eq!(outputs.len(), 2);
+        assert!(outputs[0].1.starts_with("Command cancelled"), "{outputs:?}");
+        assert!(outputs[1].1.starts_with("Wrote 1 bytes"), "{outputs:?}");
     }
 
     #[test]

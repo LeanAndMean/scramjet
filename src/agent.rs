@@ -4,6 +4,7 @@
 mod approvals;
 mod attached;
 mod autonomy;
+mod batch;
 mod client;
 mod commands;
 mod compaction;

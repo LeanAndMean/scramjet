@@ -377,7 +377,7 @@ fn publish(
         return not_begun("publication titles must contain exactly one line");
     }
     let approves = policy.approves(proposal.tool);
-    ui.tool_running();
+    ui.tool_running(std::time::Instant::now());
     let (origin, repository) = match &proposal.repository {
         Some(url) => match forge::parse_target(url) {
             Ok(repository) => (forge::origin(forge).ok(), repository),
@@ -413,7 +413,7 @@ fn publish(
         if !ui.approve_publication(&title) {
             return Outcome::Cancelled;
         }
-        ui.tool_running();
+        ui.tool_running(std::time::Instant::now());
         // As Scramjet, what was approved is checked again: time has passed.
         if let Some(origin) = &origin {
             match forge::origin(forge) {
