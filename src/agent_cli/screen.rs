@@ -130,6 +130,9 @@ pub(super) enum Answer {
     Acted(Act, usize, Spot),
     /// Tab in a picker that takes it (`Picker::tabbing`).
     Tabbed(Spot),
+    /// Shift+L in `/tree`'s list on an entry, with the list as it was, to show again once the
+    /// label is given; the screen puts the list in.
+    Label(usize, Option<Box<Picker>>),
     /// The row a picker's countdown chose.
     Expired(usize),
     Text(Option<String>),
@@ -334,6 +337,19 @@ impl Link {
             Some(Answer::Tabbed(place)) => Picked::Tab(place),
             Some(Answer::Picked(row)) => Picked::Row(row),
             _ => Picked::Row(None),
+        }
+    }
+
+    /// As `pick`, or, when Shift+L asks to label an entry of `/tree`'s list, that entry with the
+    /// list as it was, to show again.
+    pub(super) fn pick_or_label(
+        &self,
+        picker: Picker,
+    ) -> Result<Option<usize>, (usize, Box<Picker>)> {
+        match self.ask(Dialog::Pick(Box::new(picker)), None) {
+            Some(Answer::Picked(row)) => Ok(row),
+            Some(Answer::Label(entry, Some(picker))) => Err((entry, picker)),
+            _ => Ok(None),
         }
     }
 
@@ -1254,6 +1270,23 @@ impl App {
         if open.answered {
             return;
         }
+        let (answer, open) = match (answer, open) {
+            (
+                Some(Answer::Label(entry, None)),
+                Open {
+                    shown: Shown::Pick(picker),
+                    reply,
+                    ..
+                },
+            ) => {
+                let _ = reply.send(Answer::Label(entry, Some(picker)));
+                if let Some(activity) = &mut self.activity {
+                    *activity = Activity::new("working");
+                }
+                return;
+            }
+            pair => pair,
+        };
         let answer = answer.unwrap_or(match open.shown {
             Shown::Pick(_) => Answer::Picked(None),
             Shown::Text(_) => Answer::Text(None),
@@ -2002,6 +2035,7 @@ impl App {
                 Picked::Row(row) => Answer::Picked(row),
                 Picked::Act(act, row, place) => Answer::Acted(act, row, place),
                 Picked::Tab(place) => Answer::Tabbed(place),
+                Picked::Label(entry) => Answer::Label(entry, None),
             }),
             Shown::Approve(_) => match key {
                 Key::Text(text) if text.eq_ignore_ascii_case("y") => {

@@ -1,7 +1,7 @@
 //! A list to choose from with the arrow keys, drawn in the prompt's place on the full screen, as
 //! Scramjet's selectors for `/resume`, `/fork`, `/model` and `/tree` are; those for `/resume`,
 //! `/model` and `/tree` search as you type, `/resume`'s renames and deletes sessions, and
-//! `/tree`'s filters its entries and folds their branches.
+//! `/tree`'s filters its entries, folds their branches and labels them.
 
 use super::editor::{Key, terminal_size};
 use super::fuzzy::{self, Haystack};
@@ -9,15 +9,15 @@ use super::settings::scramjet_level;
 use super::style;
 use super::text;
 use super::tree::{Filter, View};
-use scramjet_rs::agent::{Choice, ModelOption};
+use scramjet_rs::agent::{Choice, Label, ModelOption};
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Rows shown at once, as in Scramjet's selectors other than its tree.
 pub(super) const VISIBLE: usize = 10;
 pub(super) const HINT: &str = "↑↓ move · Enter select · Esc cancel";
-const TREE_HINT: &str =
-    "↑↓ move · ←→ page · Ctrl+←→ fold/branch · Ctrl+D/T/U/A filters (Ctrl+O cycle) · Esc cancel";
+const TREE_HINT: &str = "↑↓ move · ←→ page · Ctrl+←→ fold/branch · Shift+L label · \
+     Ctrl+D/T/U/L/A filters (Ctrl+O cycle) · Shift+T label time · Esc cancel";
 const CONFIRM_DELETE: &str = "Delete session? Enter confirm · Esc cancel";
 /// Options shown at once in a question's list, as in Scramjet.
 const QUESTION_VISIBLE: usize = 8;
@@ -157,6 +157,8 @@ pub(super) enum Picked {
     Act(Act, usize, Spot),
     /// Tab, in a list that shows one of two sets of rows (`Picker::tabbing`).
     Tab(Spot),
+    /// Shift+L in `/tree`, to label the entry, an index into the tree's entries.
+    Label(usize),
 }
 
 /// A list for a screen that draws it and passes it the keys; it returns the row chosen with
@@ -198,8 +200,9 @@ enum Shape {
         /// A next step's model and effort (`routing`).
         route: Option<Route>,
     },
-    /// `/tree`'s entries, which its keys filter, search and fold.
-    Tree(Box<View>),
+    /// `/tree`'s entries, which its keys filter, search and fold, and the entry selected last,
+    /// which the selection goes back to after a filter or a query that showed none.
+    Tree(Box<View>, Option<usize>),
 }
 
 impl Picker {
@@ -265,7 +268,7 @@ impl Picker {
         let list = List::new(view.rows().len(), view.row_of(initial), visible);
         Self {
             list,
-            shape: Shape::Tree(Box::new(view)),
+            shape: Shape::Tree(Box::new(view), None),
             deadline: None,
             held: false,
             acts: false,
@@ -278,8 +281,35 @@ impl Picker {
     /// Whether the list takes `key`, which the screen takes for itself otherwise: the tree's
     /// Ctrl+T and Ctrl+O choose its filters.
     pub(super) fn takes(&self, key: &Key) -> bool {
-        matches!(self.shape, Shape::Tree(_))
+        matches!(self.shape, Shape::Tree(..))
             && matches!(key, Key::ToggleThinking | Key::Expand | Key::ExpandBack)
+    }
+
+    /// The label of the tree's `entry` (`Picker::tree`).
+    pub(super) fn tree_label(&self, entry: usize) -> Option<&str> {
+        match &self.shape {
+            Shape::Tree(view, _) => view.label(entry),
+            _ => None,
+        }
+    }
+
+    /// Shows `label` on the tree's `entry` (`Some(None)`: none; `None` leaves it as it was), and
+    /// says `status` in place of the keys' hint until the next key, when given (`true`: a
+    /// warning).
+    pub(super) fn relabel(
+        &mut self,
+        entry: usize,
+        label: Option<Option<Label>>,
+        status: Option<(String, bool)>,
+    ) {
+        if let Shape::Tree(view, last) = &mut self.shape {
+            if let Some(label) = label {
+                let selected = view.rows().get(self.list.selected).map(|&(entry, _)| entry);
+                view.set_label(entry, label);
+                reselect(view, &mut self.list, last, selected.or(*last));
+            }
+            self.status = status;
+        }
     }
 
     /// Says `hint` on the keys after the title, and under the rows the selected one's note.
@@ -478,8 +508,8 @@ impl Picker {
     /// key ended the list with.
     pub(super) fn key(&mut self, key: &Key) -> Option<Picked> {
         self.status = None;
-        if let Shape::Tree(view) = &mut self.shape {
-            return tree_key(view, &mut self.list, key).map(Picked::Row);
+        if let Shape::Tree(view, last) = &mut self.shape {
+            return tree_key(view, &mut self.list, last, key);
         }
         let row = self.list.rows.get(self.list.selected).copied();
         if self.list.warned {
@@ -523,7 +553,7 @@ impl Picker {
             Key::EndOfInput if self.acts => {
                 let current = match &self.shape {
                     Shape::Rows { current, .. } => *current,
-                    Shape::Question { .. } | Shape::Tree(_) => None,
+                    Shape::Question { .. } | Shape::Tree(..) => None,
                 };
                 if row.is_some() && row == current {
                     let why = "Cannot delete the currently active session";
@@ -599,14 +629,22 @@ impl Picker {
                 shown.extend(under);
                 shown
             }
-            Shape::Tree(view) => {
-                let header = ("Session Tree", TREE_HINT, style::MUTED);
+            Shape::Tree(view, _) => {
+                let header = match &self.status {
+                    Some((status, true)) => {
+                        ("Session Tree", status.as_str(), style::SELECTOR_WARNING)
+                    }
+                    Some((status, false)) => {
+                        ("Session Tree", status.as_str(), style::SELECTOR_DONE)
+                    }
+                    None => ("Session Tree", TREE_HINT, style::MUTED),
+                };
                 let search = Some((view.query(), "No entries found"));
                 let rows = view.rows();
                 let row = |index: usize, width| text::clip(&rows[index].1, width);
                 // As in Scramjet, the position shows with the filter, every row shown or not.
-                let filter = Some(view.filter_label());
-                lines(header, &self.list, search, filter, None, size, &row)
+                let status = view.status();
+                lines(header, &self.list, search, Some(&status), None, size, &row)
             }
             Shape::Question {
                 title,
@@ -633,14 +671,23 @@ impl Picker {
     }
 }
 
-/// What a key does in Scramjet's tree selector: typing searches, Ctrl+D, Ctrl+T, Ctrl+U and
-/// Ctrl+A choose a filter and Ctrl+O cycles through them, Ctrl+Left and Ctrl+Right (or Alt) fold
-/// or jump between branches, Left and Right page, and Escape clears the query before it cancels.
-/// Returns the entry chosen, or `Some(None)` when cancelled.
-fn tree_key(view: &mut View, list: &mut List, key: &Key) -> Option<Option<usize>> {
-    let selected = view.rows().get(list.selected).map(|&(entry, _)| entry);
+/// What a key does in Scramjet's tree selector: typing searches, Ctrl+D, Ctrl+T, Ctrl+U, Ctrl+L
+/// and Ctrl+A choose a filter and Ctrl+O cycles through them, Ctrl+Left and Ctrl+Right (or Alt)
+/// fold or jump between branches, Left and Right page, Shift+L asks to label the entry, Shift+T
+/// shows when labels were given, and Escape clears the query before it cancels.
+fn tree_key(
+    view: &mut View,
+    list: &mut List,
+    last: &mut Option<usize>,
+    key: &Key,
+) -> Option<Picked> {
+    let shown = view.rows().get(list.selected).map(|&(entry, _)| entry);
+    let selected = shown.or(*last);
     let mut query = view.query().to_owned();
     match key {
+        // As in Scramjet, where Shift+L and Shift+T are these keys, not text.
+        Key::Text(text) if text == "L" => return shown.map(Picked::Label),
+        Key::Text(text) if text == "T" => view.toggle_times(),
         Key::Text(text) | Key::Paste(text) => {
             let text = text
                 .chars()
@@ -656,6 +703,7 @@ fn tree_key(view: &mut View, list: &mut List, key: &Key) -> Option<Option<usize>
         Key::EndOfInput => view.toggle(Filter::Default),
         Key::ToggleThinking => view.toggle(Filter::NoTools),
         Key::KillStart => view.toggle(Filter::UserOnly),
+        Key::SelectModel => view.toggle(Filter::Labeled),
         Key::CtrlA => view.toggle(Filter::All),
         Key::Expand => view.cycle(true),
         Key::ExpandBack => view.cycle(false),
@@ -667,17 +715,24 @@ fn tree_key(view: &mut View, list: &mut List, key: &Key) -> Option<Option<usize>
             *list = List::new(view.rows().len(), row, list.visible);
             return None;
         }
-        Key::Left => return list.key(&Key::PageUp).map(|_| None),
-        Key::Right => return list.key(&Key::PageDown).map(|_| None),
-        Key::Enter => return selected.map(Some),
+        Key::Left => return list.key(&Key::PageUp).map(|_| Picked::Row(None)),
+        Key::Right => return list.key(&Key::PageDown).map(|_| Picked::Row(None)),
+        Key::Enter => return shown.map(|entry| Picked::Row(Some(entry))),
         Key::Up | Key::Down | Key::PageUp | Key::PageDown | Key::LineStart | Key::LineEnd => {
-            return list.key(key).map(|_| None);
+            return list.key(key).map(|_| Picked::Row(None));
         }
-        Key::Escape | Key::Interrupt => return Some(None),
+        Key::Escape | Key::Interrupt => return Some(Picked::Row(None)),
         _ => return None,
     }
-    *list = List::new(view.rows().len(), view.row_of(selected), list.visible);
+    reselect(view, list, last, selected);
     None
+}
+
+/// Selects `selected` among the rows `view` shows now, or its nearest shown ancestor, keeping it
+/// as the entry selected last while none is shown, as Scramjet's tree does.
+fn reselect(view: &View, list: &mut List, last: &mut Option<usize>, selected: Option<usize>) {
+    *list = List::new(view.rows().len(), view.row_of(selected), list.visible);
+    *last = (view.rows().get(list.selected).map(|&(entry, _)| entry)).or(selected);
 }
 
 struct List {
@@ -1549,7 +1604,7 @@ mod tests {
 
     #[test]
     fn the_tree_searches_filters_and_folds_and_returns_the_entry_chosen() {
-        let view = View::new(super::super::tree::sample(), false);
+        let view = View::new(super::super::tree::sample(), false, Filter::Default);
         let mut picker = Picker::tree(view, 4, Some(6));
         let text = |picker: &Picker| plain(picker.lines((80, 24)));
         let hint = format!("Session Tree  {}", text::clip(TREE_HINT, 79 - 14));
@@ -1576,6 +1631,13 @@ mod tests {
                 "  (2/3) [user]"
             ]
         );
+        // Through the labeled entries, none here, the selection stays on its entry.
+        assert_eq!(picker.key(&Key::Expand), None);
+        assert_eq!(
+            text(&picker)[1..],
+            [">  ", "  No entries found", "  (0/0) [labeled]"]
+        );
+        assert_eq!(picker.key(&Key::Enter), None);
         assert_eq!(picker.key(&Key::Expand), None);
         assert_eq!(text(&picker).last().unwrap(), "  (5/9) [all]");
         assert_eq!(picker.key(&Key::EndOfInput), None);
@@ -1595,7 +1657,11 @@ mod tests {
         assert_eq!(picker.key(&Key::Left), None);
         assert_eq!(picker.key(&Key::Enter), Some(Picked::Row(Some(3))));
         assert_eq!(picker.key(&Key::Escape), Some(Picked::Row(None)));
-        let mut empty = Picker::tree(View::new(super::super::tree::sample(), false), 4, None);
+        let mut empty = Picker::tree(
+            View::new(super::super::tree::sample(), false, Filter::Default),
+            4,
+            None,
+        );
         for key in ["z", "z"] {
             empty.key(&Key::Text(key.into()));
         }
@@ -1604,6 +1670,59 @@ mod tests {
             ["> zz ", "  No entries found", "  (0/0)"]
         );
         assert_eq!(empty.key(&Key::Enter), None);
+    }
+
+    #[test]
+    fn shift_l_asks_to_label_the_entry_and_the_list_shows_it_once_given() {
+        let view = View::new(super::super::tree::sample(), false, Filter::Default);
+        let mut picker = Picker::tree(view, 4, Some(6));
+        let text = |picker: &Picker| plain(picker.lines((80, 24)));
+        assert_eq!(picker.key(&Key::Text("L".into())), Some(Picked::Label(6)));
+        assert_eq!(picker.tree_label(6), None);
+        let label = Label {
+            text: "green".into(),
+            time: 0,
+        };
+        picker.relabel(6, Some(Some(label)), None);
+        assert_eq!(picker.tree_label(6), Some("green"));
+        assert_eq!(text(&picker)[4], "› │     • [green] assistant: tests pass");
+        // Ctrl+L shows the labeled entries, and again the others.
+        assert_eq!(picker.key(&Key::SelectModel), None);
+        assert_eq!(
+            text(&picker)[1..],
+            [
+                ">  ",
+                "› • [green] assistant: tests pass",
+                "  (1/1) [labeled]"
+            ]
+        );
+        assert_eq!(picker.key(&Key::Text("T".into())), None);
+        assert_eq!(text(&picker)[3], "  (1/1) [labeled] [+label time]");
+        assert_eq!(picker.key(&Key::SelectModel), None);
+        assert_eq!(text(&picker)[6], "  (6/8) [+label time]");
+        // Taken away while the labeled entries show, the selection goes back to its entry after.
+        picker.key(&Key::SelectModel);
+        picker.relabel(6, Some(None), None);
+        assert_eq!(text(&picker)[3], "  (0/0) [labeled] [+label time]");
+        assert_eq!(picker.key(&Key::Text("L".into())), None);
+        picker.key(&Key::SelectModel);
+        assert_eq!(text(&picker)[6], "  (6/8) [+label time]");
+        // A label that could not be saved is not shown; why shows until the next key.
+        picker.relabel(
+            6,
+            None,
+            Some(("Failed to save the label: full".into(), true)),
+        );
+        assert_eq!(
+            text(&picker)[0],
+            "Session Tree  Failed to save the label: full"
+        );
+        assert_eq!(picker.tree_label(6), None);
+        picker.key(&Key::Up);
+        assert!(text(&picker)[0].starts_with("Session Tree  ↑↓ move"));
+        // Lowercase is text, as in Scramjet.
+        assert_eq!(picker.key(&Key::Text("l".into())), None);
+        assert_eq!(text(&picker)[1], "> l ");
     }
 
     #[test]

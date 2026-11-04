@@ -1,6 +1,7 @@
 //! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet-rs/settings.json` (by default
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
+use super::tree::Filter;
 use scramjet_rs::agent::{
     CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, shortened, write_replacing,
 };
@@ -72,6 +73,7 @@ pub(super) enum Row {
     FollowUp,
     DoubleEscape,
     BranchSummary,
+    TreeFilter,
     Tools,
     Credentials,
     Autopilot,
@@ -80,13 +82,14 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 12] = [
+pub(super) const ROWS: [Row; 13] = [
     Row::ThinkingLevel,
     Row::ThinkingBlocks,
     Row::Steering,
     Row::FollowUp,
     Row::DoubleEscape,
     Row::BranchSummary,
+    Row::TreeFilter,
     Row::Tools,
     Row::Credentials,
     Row::Autopilot,
@@ -104,6 +107,7 @@ impl Row {
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
             Self::BranchSummary => "Leaving a branch",
+            Self::TreeFilter => "Tree entries",
             Self::Tools => "Tools",
             Self::Credentials => "Credential stores",
             Self::Autopilot => "Autopilot",
@@ -129,6 +133,9 @@ impl Row {
             Self::DoubleEscape => "Escape pressed twice on an empty prompt.",
             Self::BranchSummary => {
                 "When /tree moves to another branch: ask whether to summarize the one left behind."
+            }
+            Self::TreeFilter => {
+                "The entries /tree shows when it opens; there Ctrl+O cycles through the choices."
             }
             Self::Tools => "The coding tools the agent has. Subagents have their own.",
             Self::Credentials => {
@@ -165,6 +172,8 @@ pub(super) struct Settings {
     pub(super) double_escape: DoubleEscape,
     /// `branchSummary.skipPrompt`: leaving a branch in `/tree` summarizes nothing, unasked.
     pub(super) skip_branch_summary_prompt: bool,
+    /// `treeFilterMode`: the entries `/tree` shows when it opens.
+    pub(super) tree_filter: Filter,
     /// `defaultThinkingLevel`, named as the model cards name levels.
     pub(super) default_thinking_level: Option<String>,
     /// `tools`: the agent's coding tools, Scramjet's by default.
@@ -229,6 +238,7 @@ impl Settings {
             hide_thinking_block: false,
             double_escape: DoubleEscape::Tree,
             skip_branch_summary_prompt: false,
+            tree_filter: Filter::Default,
             default_thinking_level: None,
             tools: DEFAULT_TOOLS.map(str::to_owned).to_vec(),
             hide_credentials: HideCredentials::Unattended,
@@ -266,6 +276,20 @@ impl Settings {
             None | Some(None) => {}
             Some(Some(Value::Bool(skip))) => self.skip_branch_summary_prompt = *skip,
             Some(Some(_)) => wrong("branchSummary.skipPrompt", "true or false"),
+        }
+        match object.get("treeFilterMode").map(|value| value.as_str()) {
+            None => {}
+            Some(Some(name))
+                if let Some(&filter) = Filter::CYCLE.iter().find(|f| f.setting() == name) =>
+            {
+                self.tree_filter = filter
+            }
+            Some(_) => wrong(
+                "treeFilterMode",
+                &Filter::CYCLE
+                    .map(|f| format!("\"{}\"", f.setting()))
+                    .join(", "),
+            ),
         }
         match object
             .get("defaultThinkingLevel")
@@ -505,6 +529,14 @@ impl Settings {
             .into(),
             Row::BranchSummary if self.skip_branch_summary_prompt => "no summary".into(),
             Row::BranchSummary => "asks for a summary".into(),
+            Row::TreeFilter => match self.tree_filter {
+                Filter::Default => "all but model changes",
+                Filter::NoTools => "no tool results",
+                Filter::UserOnly => "prompts only",
+                Filter::Labeled => "labeled only",
+                Filter::All => "everything",
+            }
+            .into(),
             Row::Tools if self.tools.is_empty() => "none".into(),
             Row::Tools => (CODING_TOOLS.iter())
                 .filter(|tool| self.tools.iter().any(|known| known == *tool))
@@ -560,6 +592,12 @@ impl Settings {
                 self.skip_branch_summary_prompt = !self.skip_branch_summary_prompt;
                 let skip = self.skip_branch_summary_prompt;
                 self.save_in("branchSummary", "skipPrompt", json!(skip))
+            }
+            Row::TreeFilter => {
+                let at = Filter::CYCLE.iter().position(|&f| f == self.tree_filter);
+                let next = (at.unwrap_or(0) + 1) % Filter::CYCLE.len();
+                self.tree_filter = Filter::CYCLE[next];
+                self.save("treeFilterMode", json!(self.tree_filter.setting()))
             }
             Row::Credentials => {
                 let (hide, name) = match self.hide_credentials {
@@ -700,6 +738,7 @@ mod tests {
         assert!(!settings.hide_thinking_block);
         assert_eq!(settings.double_escape, DoubleEscape::Tree);
         assert!(!settings.skip_branch_summary_prompt);
+        assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.default_thinking_level, None);
         assert_eq!(settings.tools, ["read", "bash", "edit", "write"]);
         assert_eq!(settings.hide_credentials, HideCredentials::Unattended);
@@ -769,9 +808,10 @@ mod tests {
             &scratch,
             r#"{"hideThinkingBlock": true, "doubleEscapeAction": "fork",
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
-                "defaultThinkingLevel": "off", "theme": "dark",
+                "defaultThinkingLevel": "off", "theme": "dark", "treeFilterMode": "labeled-only",
                 "steeringMode": "one-at-a-time", "followUpMode": "all"}"#,
         );
+        assert_eq!(settings.tree_filter, Filter::Labeled);
         assert!(settings.hide_thinking_block);
         assert_eq!(settings.steering_mode, Delivery::OneAtATime);
         assert_eq!(settings.follow_up_mode, Delivery::All);
@@ -818,8 +858,9 @@ mod tests {
         let settings = settings_with(
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
-                "branchSummary": {"skipPrompt": 1}, "followUpMode": "each"}"#,
+                "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user"}"#,
         );
+        assert_eq!(settings.tree_filter, Filter::Default);
         assert!(!settings.hide_thinking_block);
         assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
         assert_eq!(settings.default_thinking_level, None);
@@ -829,6 +870,9 @@ mod tests {
             [
                 format!("{path}: hideThinkingBlock must be true or false; ignored"),
                 format!("{path}: branchSummary.skipPrompt must be true or false; ignored"),
+                format!(
+                    r#"{path}: treeFilterMode must be "default", "no-tools", "user-only", "labeled-only", "all"; ignored"#
+                ),
                 format!(
                     r#"{path}: defaultThinkingLevel must be "off", "minimal", "low", "medium", "high", "xhigh", "max"; ignored"#
                 ),
@@ -1007,6 +1051,17 @@ mod tests {
             seen(Row::ThinkingBlocks, &mut settings),
             ["shown", "hidden", "shown", "hidden"]
         );
+        assert_eq!(
+            seen(Row::TreeFilter, &mut settings),
+            [
+                "all but model changes",
+                "no tool results",
+                "prompts only",
+                "labeled only"
+            ]
+        );
+        settings.cycle(Row::TreeFilter).unwrap();
+        assert_eq!(settings.shown(Row::TreeFilter), "everything");
         settings.cycle(Row::FollowUp).unwrap();
         settings
             .set_tools(vec!["ls".into(), "read".into()])
@@ -1020,6 +1075,7 @@ mod tests {
                 "hideCredentials": "unattended",
                 "steeringMode": "one-at-a-time",
                 "hideThinkingBlock": true,
+                "treeFilterMode": "all",
                 "followUpMode": "all",
                 "tools": ["read", "ls"],
             })

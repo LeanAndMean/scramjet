@@ -1,13 +1,13 @@
 //! `/tree`'s list, as Scramjet's tree selector shows a session: a chain of entries stays in one
 //! column, each branch point indents its children under `├─`/`└─` connectors with `│` gutters,
-//! the branch with the current entry comes first, and `• ` marks that entry's path. Its filters,
-//! its query and the branches folded choose the entries shown; an entry whose parent is hidden
-//! hangs from its nearest shown ancestor.
+//! the branch with the current entry comes first, `• ` marks that entry's path, and an entry's
+//! label shows before it. Its filters, its query and the branches folded choose the entries
+//! shown; an entry whose parent is hidden hangs from its nearest shown ancestor.
 
 use super::style::{RESET, SELECTOR_TREE, TREE_ASSISTANT, TREE_COMPACTION, TREE_ERROR};
-use super::style::{TREE_OTHER, TREE_PATH, TREE_SUMMARY, TREE_USER};
+use super::style::{TREE_LABEL, TREE_LABEL_TIME, TREE_OTHER, TREE_PATH, TREE_SUMMARY, TREE_USER};
 use super::text;
-use scramjet_rs::agent::{SessionTree, TreeEntry, TreeItem};
+use scramjet_rs::agent::{Label, SessionTree, TreeEntry, TreeItem};
 use std::collections::{HashMap, HashSet};
 
 /// Which entries the tree shows, as Scramjet's filters choose them.
@@ -19,12 +19,20 @@ pub(super) enum Filter {
     NoTools,
     /// Prompts only.
     UserOnly,
+    /// Entries with a label.
+    Labeled,
     All,
 }
 
 impl Filter {
-    /// Ctrl+O's order, as Scramjet's, which has its labeled entries before `All`.
-    const CYCLE: [Self; 4] = [Self::Default, Self::NoTools, Self::UserOnly, Self::All];
+    /// Ctrl+O's order, as Scramjet's.
+    pub(super) const CYCLE: [Self; 5] = [
+        Self::Default,
+        Self::NoTools,
+        Self::UserOnly,
+        Self::Labeled,
+        Self::All,
+    ];
 
     /// What the list's position line says after it, as Scramjet's.
     fn label(self) -> &'static str {
@@ -32,16 +40,30 @@ impl Filter {
             Self::Default => "",
             Self::NoTools => " [no-tools]",
             Self::UserOnly => " [user]",
+            Self::Labeled => " [labeled]",
             Self::All => " [all]",
         }
     }
 
-    fn shows(self, item: &TreeItem, current: bool) -> bool {
+    /// Its name in the settings' `treeFilterMode`, as Scramjet's.
+    pub(super) fn setting(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::NoTools => "no-tools",
+            Self::UserOnly => "user-only",
+            Self::Labeled => "labeled-only",
+            Self::All => "all",
+        }
+    }
+
+    fn shows(self, entry: &TreeEntry, current: bool) -> bool {
+        let item = &entry.item;
         let change = matches!(item, TreeItem::Model(_) | TreeItem::Effort(_));
         match self {
             Self::Default => !change || current,
             Self::NoTools => (!change || current) && !matches!(item, TreeItem::Tool(..)),
             Self::UserOnly => matches!(item, TreeItem::Prompt(_)),
+            Self::Labeled => entry.label.is_some(),
             Self::All => true,
         }
     }
@@ -71,6 +93,8 @@ pub(super) struct View {
     color: bool,
     filter: Filter,
     query: String,
+    /// Whether labels show when they were given (Shift+T).
+    times: bool,
     /// The entries whose descendants are hidden, as indices into `tree.entries`.
     folded: HashSet<usize>,
     /// Each entry's parent, as an index into `tree.entries`.
@@ -85,8 +109,8 @@ pub(super) struct View {
 }
 
 impl View {
-    /// `tree` with Scramjet's default filter, styled when `color`.
-    pub(super) fn new(tree: SessionTree, color: bool) -> Self {
+    /// `tree` with `filter`, styled when `color`.
+    pub(super) fn new(tree: SessionTree, color: bool, filter: Filter) -> Self {
         let lines: HashMap<usize, usize> = (tree.entries.iter().enumerate())
             .map(|(index, entry)| (entry.line, index))
             .collect();
@@ -96,8 +120,9 @@ impl View {
         let mut view = Self {
             tree,
             color,
-            filter: Filter::Default,
+            filter,
             query: String::new(),
+            times: false,
             folded: HashSet::new(),
             parents,
             order: Vec::new(),
@@ -146,9 +171,30 @@ impl View {
         &self.query
     }
 
-    /// The position line's end: which filter shows the rows.
-    pub(super) fn filter_label(&self) -> &'static str {
-        self.filter.label()
+    /// The position line's end: which filter shows the rows, and whether labels show their times.
+    pub(super) fn status(&self) -> String {
+        let times = if self.times { " [+label time]" } else { "" };
+        format!("{}{times}", self.filter.label())
+    }
+
+    /// The label of `entry`, an index into the tree's entries.
+    pub(super) fn label(&self, entry: usize) -> Option<&str> {
+        let label = self.tree.entries.get(entry)?.label.as_ref();
+        label.map(|label| label.text.as_str())
+    }
+
+    /// Shows `label` on `entry`, or none, as Scramjet's tree does once it is saved.
+    pub(super) fn set_label(&mut self, entry: usize, label: Option<Label>) {
+        if let Some(entry) = self.tree.entries.get_mut(entry) {
+            entry.label = label;
+            self.refresh();
+        }
+    }
+
+    /// Shows when labels were given, or no longer (Shift+T).
+    pub(super) fn toggle_times(&mut self) {
+        self.times = !self.times;
+        self.refresh();
     }
 
     /// Shows the entries `filter` chooses, all branches unfolded; as Scramjet's keys for the
@@ -265,10 +311,10 @@ impl View {
                 hidden[index] = hidden[parent] || self.folded.contains(&parent);
             }
             let current = self.tree.current == Some(entry.line);
-            if hidden[index] || !self.filter.shows(&entry.item, current) {
+            if hidden[index] || !self.filter.shows(entry, current) {
                 continue;
             }
-            let text = searched(&entry.item).to_lowercase();
+            let text = searched(entry).to_lowercase();
             if tokens.iter().all(|token| text.contains(token)) {
                 shown.push(index);
             }
@@ -293,9 +339,21 @@ impl View {
         let connector = row.connector && !row.virtual_root_child;
         let root_fold = if folded && !connector { "⊞ " } else { "" };
         let marker = if entry.active { "• " } else { "" };
+        let (given, time) = match &entry.label {
+            Some(label) => (
+                format!("[{}] ", text::one_line(&text::visible(&label.text))),
+                match self.times {
+                    true => format!("{} ", clock(label.time)),
+                    false => String::new(),
+                },
+            ),
+            None => Default::default(),
+        };
         paint(SELECTOR_TREE, &prefix(row, multiple_roots, fold))
             + &paint(TREE_PATH, root_fold)
             + &paint(TREE_PATH, marker)
+            + &paint(TREE_LABEL, &given)
+            + &paint(TREE_LABEL_TIME, &time)
             + &label(&entry.item, &paint)
     }
 }
@@ -385,9 +443,57 @@ fn layout(entries: &[TreeEntry], parents: &[Option<usize>], shown: &[usize]) -> 
     }
 }
 
-/// What a query looks for in an entry, as in Scramjet: its kind and its text.
-fn searched(item: &TreeItem) -> String {
-    match item {
+/// When a label was given, as Scramjet's tree says it: the time today, else the day too, and
+/// the year when it was another.
+fn clock(time: u64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    match (
+        local(time),
+        local(now.unwrap_or_default().as_millis() as u64),
+    ) {
+        (Some(at), Some(now)) => clock_at(at, now),
+        _ => String::new(),
+    }
+}
+
+/// A time's local year, month, day, hour and minute.
+type Local = (i32, i32, i32, i32, i32);
+
+fn clock_at(at: Local, now: Local) -> String {
+    let (year, month, day, hour, minute) = at;
+    let time = format!("{hour:02}:{minute:02}");
+    if (year, month, day) == (now.0, now.1, now.2) {
+        time
+    } else if year == now.0 {
+        format!("{month}/{day} {time}")
+    } else {
+        format!("{:02}/{month}/{day} {time}", year.rem_euclid(100))
+    }
+}
+
+fn local(milliseconds: u64) -> Option<Local> {
+    let seconds = libc::time_t::try_from(milliseconds / 1000).ok()?;
+    // SAFETY: `tm` is plain data, which `localtime_r` fills in from `seconds` without keeping
+    // either pointer.
+    let tm = unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&seconds, &mut tm).is_null() {
+            return None;
+        }
+        tm
+    };
+    Some((
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+    ))
+}
+
+/// What a query looks for in an entry, as in Scramjet: its label, its kind and its text.
+fn searched(entry: &TreeEntry) -> String {
+    let item = match &entry.item {
         TreeItem::Prompt(text) => format!("user {text}"),
         TreeItem::Reply(text) => format!("assistant {text}"),
         TreeItem::Reasoning => "assistant".to_owned(),
@@ -400,6 +506,10 @@ fn searched(item: &TreeItem) -> String {
         TreeItem::BranchSummary(summary) => format!("branch summary {summary}"),
         TreeItem::Model(model) => format!("model {model}"),
         TreeItem::Effort(level) => format!("thinking {level}"),
+    };
+    match &entry.label {
+        Some(label) => format!("{} {item}", label.text),
+        None => item,
     }
 }
 
@@ -488,6 +598,7 @@ pub(super) fn sample() -> SessionTree {
         parent,
         item,
         active,
+        label: None,
     };
     let tool = |name: &str, summary: &str| TreeItem::Tool(name.into(), summary.into());
     SessionTree {
@@ -516,6 +627,7 @@ mod tests {
             parent,
             item: TreeItem::Prompt(text.into()),
             active,
+            label: None,
         }
     }
 
@@ -524,7 +636,7 @@ mod tests {
     }
 
     fn shown(tree: SessionTree) -> Vec<String> {
-        texts(&View::new(tree, false))
+        texts(&View::new(tree, false, Filter::Default))
     }
 
     #[test]
@@ -543,7 +655,7 @@ mod tests {
             ],
             current: Some(8),
         };
-        let view = View::new(tree, false);
+        let view = View::new(tree, false, Filter::Default);
         assert_eq!(
             texts(&view),
             [
@@ -563,7 +675,7 @@ mod tests {
 
     #[test]
     fn filters_and_a_query_choose_the_entries_hanging_each_from_its_nearest_shown_ancestor() {
-        let mut view = View::new(sample(), false);
+        let mut view = View::new(sample(), false, Filter::Default);
         let default = [
             "• user: fix the bug",
             "• [read: src/a.rs]",
@@ -575,7 +687,7 @@ mod tests {
             "      assistant: ok",
         ];
         assert_eq!(texts(&view), default);
-        assert_eq!((view.row_of(view.current()), view.filter_label()), (5, ""));
+        assert_eq!((view.row_of(view.current()), view.status()), (5, "".into()));
         view.toggle(Filter::UserOnly);
         assert_eq!(
             texts(&view),
@@ -587,8 +699,8 @@ mod tests {
         );
         // The current entry is hidden: its nearest shown ancestor stands for it.
         assert_eq!(
-            (view.row_of(view.current()), view.filter_label()),
-            (1, " [user]")
+            (view.row_of(view.current()), view.status()),
+            (1, " [user]".into())
         );
         view.toggle(Filter::UserOnly);
         assert_eq!(texts(&view), default);
@@ -605,14 +717,17 @@ mod tests {
             ]
         );
         view.cycle(true);
-        assert_eq!(view.filter_label(), " [user]");
+        assert_eq!(view.status(), " [user]");
         view.cycle(true);
-        assert_eq!(view.filter_label(), " [all]");
+        assert_eq!(view.status(), " [labeled]");
+        assert!(texts(&view).is_empty());
+        view.cycle(true);
+        assert_eq!(view.status(), " [all]");
         assert_eq!(texts(&view)[..2], ["• [model: a]", "• user: fix the bug"]);
         view.cycle(true);
         assert_eq!(texts(&view), default);
         view.cycle(false);
-        assert_eq!(view.filter_label(), " [all]");
+        assert_eq!(view.status(), " [all]");
         view.toggle(Filter::Default);
         // Every word, in any case, in what each entry says or is.
         view.set_query("TEST".into());
@@ -632,8 +747,65 @@ mod tests {
     }
 
     #[test]
+    fn labels_show_before_their_entries_which_their_filter_and_a_query_choose() {
+        let label = |text: &str, time| {
+            Some(Label {
+                text: text.into(),
+                time,
+            })
+        };
+        let mut tree = sample();
+        tree.entries[4].label = label("checkpoint", 0);
+        let mut view = View::new(tree, false, Filter::Labeled);
+        assert_eq!(texts(&view), ["• [checkpoint] user: add tests"]);
+        assert_eq!(
+            (view.status(), view.label(4)),
+            (" [labeled]".into(), Some("checkpoint"))
+        );
+        view.set_label(7, label("other\nway", 0));
+        assert_eq!(
+            texts(&view),
+            [
+                "• [checkpoint] user: add tests",
+                "[other way] user: other way"
+            ]
+        );
+        view.set_label(4, None);
+        assert_eq!(texts(&view), ["[other way] user: other way"]);
+        assert_eq!(view.label(4), None);
+        // A query looks in labels too.
+        view.toggle(Filter::Labeled);
+        view.set_query("OTHER WAY".into());
+        assert_eq!(texts(&view), ["[other way] user: other way"]);
+        view.set_query("other assistant".into());
+        assert!(texts(&view).is_empty());
+        // Shift+T shows when each was given.
+        view.set_query(String::new());
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        view.set_label(7, label("now", now.unwrap().as_millis() as u64));
+        view.toggle_times();
+        assert_eq!(view.status(), " [+label time]");
+        let row = &texts(&view)[6];
+        let time = row.strip_prefix("└⊟ [now] ").unwrap();
+        let (clock, rest) = time.split_at(6);
+        assert_eq!(rest, "user: other way");
+        assert!(clock.as_bytes()[2] == b':' && clock.ends_with(' '), "{row}");
+        view.toggle_times();
+        assert_eq!(texts(&view)[6], "└⊟ [now] user: other way");
+    }
+
+    #[test]
+    fn a_label_s_time_is_the_time_today_else_with_the_day_and_another_year() {
+        let now = (2026, 11, 4, 18, 30);
+        assert_eq!(clock_at((2026, 11, 4, 9, 5), now), "09:05");
+        assert_eq!(clock_at((2026, 3, 14, 23, 59), now), "3/14 23:59");
+        assert_eq!(clock_at((2005, 12, 31, 0, 0), now), "05/12/31 00:00");
+        assert!(local(0).is_some());
+    }
+
+    #[test]
     fn a_branch_folds_and_the_keys_jump_between_branch_starts() {
-        let mut view = View::new(sample(), false);
+        let mut view = View::new(sample(), false, Filter::Default);
         // From a branch's last entry up to where it starts, then down to the next branch.
         assert_eq!(view.fold_or_up(5), 3);
         assert_eq!(view.unfold_or_down(0), 3);
@@ -686,11 +858,17 @@ mod tests {
             parent,
             item,
             active,
+            label: None,
         };
+        let mut labeled = item(2, Some(1), TreeItem::Reply("b".into()), true);
+        labeled.label = Some(Label {
+            text: "x".into(),
+            time: 0,
+        });
         let tree = SessionTree {
             entries: vec![
                 item(1, None, TreeItem::Prompt("a".into()), true),
-                item(2, Some(1), TreeItem::Reply("b".into()), true),
+                labeled,
                 item(3, Some(1), TreeItem::Stopped(Some("boom".into())), false),
                 item(4, Some(2), TreeItem::BranchSummary("went".into()), true),
                 item(5, Some(4), TreeItem::Compaction(Some(2000)), true),
@@ -698,14 +876,14 @@ mod tests {
             ],
             current: Some(6),
         };
-        let shown = texts(&View::new(tree, true));
+        let shown = texts(&View::new(tree, true, Filter::Default));
         let (lines, path, error) = ("\x1b[2m", "\x1b[36m• \x1b[0m", "\x1b[31mboom\x1b[0m");
         let (assistant, end) = ("\x1b[32massistant: \x1b[0m", "\x1b[0m");
         assert_eq!(
             shown,
             [
                 format!("{path}\x1b[36muser: {end}a"),
-                format!("{lines}├⊟ {end}{path}{assistant}b"),
+                format!("{lines}├⊟ {end}{path}\x1b[33m[x] {end}{assistant}b"),
                 format!("{lines}│     {end}{path}\x1b[33m[branch summary]: {end}went"),
                 format!("{lines}│     {end}{path}\x1b[36m[compaction: 2k tokens]{end}"),
                 format!("{lines}│     {end}{path}{lines}[model: m]{end}"),

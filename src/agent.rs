@@ -42,7 +42,7 @@ pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use problem::{Problem, ProblemFile};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
-pub use session::{Branch, Removal, Session, SessionInfo, read_branch};
+pub use session::{Branch, Label, Removal, Session, SessionInfo, read_branch};
 pub use skills::{Skill, Skills};
 pub use status::{Completed, Next, Routing, Source, Step};
 pub use suggest::Suggested;

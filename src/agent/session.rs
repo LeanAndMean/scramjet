@@ -2,6 +2,7 @@ use super::Tokens;
 use super::compaction::FileLists;
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -52,6 +53,14 @@ impl Branch {
     }
 }
 
+/// A label the user gave an entry in `/tree`, as Scramjet's tree labels mark entries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Label {
+    pub text: String,
+    /// When it was given, in milliseconds since the Unix epoch.
+    pub time: u64,
+}
+
 /// How `delete` removed a session file.
 #[derive(Debug, PartialEq)]
 pub enum Removal {
@@ -66,7 +75,7 @@ pub enum Removal {
 /// conversation came back from, with the files read and modified there, and each change of the
 /// active command (`status::Lifecycle::saved`), and each `/autopilot` toggle. Entries form a tree (see `Entries`); the
 /// conversation is the path from the start to the current entry, the leaf, which each appended
-/// entry continues.
+/// entry continues. Names and labels are lines of their own, not entries.
 pub struct Session {
     path: PathBuf,
     file: File,
@@ -129,6 +138,9 @@ struct Entries {
     entries: Vec<Entry>,
     /// The latest `session_info` name in the file; an empty one clears it.
     name: Option<String>,
+    /// Each labeled entry's latest label (`{"type":"label","target":N,"label":…,"time":…}`),
+    /// by its line; one without `label` clears it.
+    labels: HashMap<usize, Label>,
     /// The entry a line appended without a branch line continues, where a resume continues.
     tail: Option<usize>,
     /// Lines in the file, the header and blank ones included.
@@ -158,6 +170,7 @@ fn read(path: &Path) -> io::Result<Entries> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut tail = None;
     let mut name = None;
+    let mut labels = HashMap::new();
     let mut parent = None;
     let mut header = Value::Null;
     let mut tokens = Tokens::default();
@@ -191,6 +204,21 @@ fn read(path: &Path) -> io::Result<Entries> {
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .map(str::to_owned);
+        } else if value["type"] == "label" {
+            // As Scramjet's, a label of no entry is not an error; it shows nowhere.
+            let target = (value["target"].as_u64()).and_then(|line| usize::try_from(line).ok());
+            if let Some(target) = target.filter(|&line| find(&entries, line).is_some()) {
+                match value["label"].as_str().filter(|text| !text.is_empty()) {
+                    Some(text) => labels.insert(
+                        target,
+                        Label {
+                            text: text.to_owned(),
+                            time: value["time"].as_u64().unwrap_or_default(),
+                        },
+                    ),
+                    None => labels.remove(&target),
+                };
+            }
         } else if value["type"] == "branch" {
             tail = match &value["parent"] {
                 Value::Null => None,
@@ -219,6 +247,7 @@ fn read(path: &Path) -> io::Result<Entries> {
     Ok(Entries {
         entries,
         name,
+        labels,
         tail,
         lines,
         size: end as u64,
@@ -385,8 +414,9 @@ impl Entries {
         }
     }
 
-    /// The lines of `file` (this session's bytes) on the path to `leaf`, then a `session_info`
-    /// line naming it `name` when given.
+    /// The lines of `file` (this session's bytes) on the path to `leaf`, for a file of their own
+    /// after its header, then their labels, as Scramjet's branched sessions keep them, and a
+    /// `session_info` line naming it `name` when given.
     fn history(
         &self,
         file: &Path,
@@ -395,7 +425,8 @@ impl Entries {
         name: Option<&str>,
     ) -> io::Result<Vec<u8>> {
         let mut history = Vec::new();
-        for entry in self.path(leaf) {
+        let mut labels = Vec::new();
+        for (index, entry) in self.path(leaf).into_iter().enumerate() {
             let line = source
                 .get(entry.bytes.clone())
                 .ok_or_else(|| invalid(file, "changed while it was read"))?;
@@ -403,6 +434,13 @@ impl Entries {
             if !line.ends_with(b"\n") {
                 history.push(b'\n');
             }
+            if let Some(label) = self.labels.get(&entry.line) {
+                labels.push(label_line(index + 1, Some(&label.text), label.time));
+            }
+        }
+        for label in labels {
+            history.extend(serde_json::to_vec(&label)?);
+            history.push(b'\n');
         }
         if let Some(name) = name {
             history.extend(serde_json::to_vec(
@@ -412,6 +450,19 @@ impl Entries {
         }
         Ok(history)
     }
+}
+
+fn label_line(target: usize, text: Option<&str>, time: u64) -> Value {
+    let mut line = json!({"type":"label","target":target,"time":time});
+    if let Some(text) = text {
+        line["label"] = json!(text);
+    }
+    line
+}
+
+fn now_ms() -> u64 {
+    let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    since.unwrap_or_default().as_millis() as u64
 }
 
 /// Creates a session file in `directory`, named for the millisecond it is created in and this
@@ -683,6 +734,35 @@ impl Session {
     /// Every entry of the session, in file order.
     pub fn entries(&self) -> io::Result<Vec<Entry>> {
         Ok(read(&self.path)?.entries)
+    }
+
+    /// Every entry of the session, in file order, and the labels of those labeled, by line.
+    pub fn labeled_entries(&self) -> io::Result<(Vec<Entry>, HashMap<usize, Label>)> {
+        let entries = read(&self.path)?;
+        Ok((entries.entries, entries.labels))
+    }
+
+    /// Gives the entry on `line` the label `text`, or takes its label away (`None`), as
+    /// Scramjet's tree does; a line of its own, as a name is. Returns the label given.
+    pub fn set_label(&mut self, line: usize, text: Option<&str>) -> io::Result<Option<Label>> {
+        let text = text.filter(|text| !text.is_empty());
+        let _writing = self.writing()?;
+        self.catch_up()?;
+        if find(&read(&self.path)?.entries, line).is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "no such entry in the session",
+            ));
+        }
+        let time = now_ms();
+        let mut written = serde_json::to_vec(&label_line(line, text, time))?;
+        written.push(b'\n');
+        self.write(&written)?;
+        self.lines += 1;
+        Ok(text.map(|text| Label {
+            text: text.to_owned(),
+            time,
+        }))
     }
 
     /// The entry the conversation ends at; `None` before its first one.

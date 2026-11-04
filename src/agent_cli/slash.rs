@@ -1111,8 +1111,8 @@ impl Interactive {
                     return chosen.map(|index| sessions[index].0.path.clone());
                 }
                 select::Picked::Act(act, index, at) => (act, index, at),
-                // Not a key of this list (`Picker::tabbing`).
-                select::Picked::Tab(_) => {
+                // Not keys of this list (`Picker::tabbing`, `Picker::tree`).
+                select::Picked::Tab(_) | select::Picked::Label(_) => {
                     screen.dismiss();
                     return None;
                 }
@@ -1238,7 +1238,8 @@ impl Interactive {
                 }
             };
             let lines: Vec<usize> = session_tree.entries.iter().map(|e| e.line).collect();
-            let view = tree::View::new(session_tree, self.interactive());
+            let filter = self.settings.tree_filter;
+            let view = tree::View::new(session_tree, self.interactive(), filter);
             let rows = view.rows();
             let chosen = match wanted {
                 "" if rows.is_empty() => {
@@ -1250,7 +1251,7 @@ impl Interactive {
                     let visible = (editor::terminal_size().1 / 2).max(5);
                     let initial = reopen.or(view.current());
                     let picker = select::Picker::tree(view, visible, initial);
-                    self.screen.as_ref().and_then(|screen| screen.pick(picker))
+                    self.pick_entry(picker, &lines)
                 }
                 "" => {
                     let digits = rows.len().to_string().len();
@@ -1321,6 +1322,36 @@ impl Interactive {
                 Err(error) => self.say(&format!("error: {error}")),
             }
             return;
+        }
+    }
+
+    /// Shows `/tree`'s list until an entry is chosen or it is cancelled, giving the entries
+    /// Shift+L asks to label their label (`lines`: each one's line), as Scramjet's tree does.
+    fn pick_entry(&mut self, mut picker: select::Picker, lines: &[usize]) -> Option<usize> {
+        loop {
+            let screen = self.screen.as_ref()?;
+            let (entry, back) = match screen.pick_or_label(picker) {
+                Ok(chosen) => return chosen,
+                Err(labeling) => labeling,
+            };
+            picker = *back;
+            let label = picker.tree_label(entry).unwrap_or_default().to_owned();
+            let dialog = screen::Dialog::Text(
+                "Label (empty to remove)".into(),
+                label,
+                screen::Optional::Yes,
+            );
+            let Some(screen::Answer::Text(Some(text))) = screen.ask(dialog, None) else {
+                continue;
+            };
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            match self.agent.set_label(lines[entry], Some(&text)) {
+                Ok(label) => picker.relabel(entry, Some(label), None),
+                Err(error) => {
+                    let status = (format!("Failed to save the label: {error}"), true);
+                    picker.relabel(entry, None, Some(status))
+                }
+            }
         }
     }
 

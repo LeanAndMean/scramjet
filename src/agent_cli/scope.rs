@@ -546,7 +546,7 @@ impl Interactive {
             }
             let (act, index, spot) = match screen.pick_or_act(picker) {
                 Picked::Act(act, index, spot) => (act, index, spot),
-                Picked::Row(_) | Picked::Tab(_) => return screen.dismiss(),
+                Picked::Row(_) | Picked::Tab(_) | Picked::Label(_) => return screen.dismiss(),
             };
             let id = order[index].clone();
             let shown: Vec<String> = spot.shown.iter().map(|&at| order[at].clone()).collect();

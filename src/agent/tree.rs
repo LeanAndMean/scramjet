@@ -1,7 +1,7 @@
 //! The session as a tree: the entries `/tree` lists, and continuing the conversation from
 //! one of them.
 use super::tools::Call;
-use super::{Agent, AgentError, AgentUi, Purpose, TYPED, compaction, message_text, session};
+use super::{Agent, AgentError, AgentUi, Label, Purpose, TYPED, compaction, message_text, session};
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
@@ -18,6 +18,7 @@ pub struct TreeEntry {
     pub item: TreeItem,
     /// Whether it is on the path to the current entry.
     pub active: bool,
+    pub label: Option<Label>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -71,7 +72,7 @@ impl Agent {
     /// `!` and `!!` commands, compactions, branch summaries, model and effort changes, and the
     /// current entry whatever it is.
     pub fn tree(&self) -> Result<SessionTree, AgentError> {
-        let entries = self.session.entries()?;
+        let (entries, mut labels) = self.session.labeled_entries()?;
         let leaf = self.session.leaf();
         let mut calls = std::collections::HashMap::new();
         for entry in &entries {
@@ -158,6 +159,7 @@ impl Agent {
                 parent,
                 item,
                 active: active.contains(&entry.line),
+                label: labels.remove(&entry.line),
             });
         }
         let mut current = leaf;
@@ -168,6 +170,16 @@ impl Agent {
             entries: tree,
             current,
         })
+    }
+
+    /// Gives the session's entry on `line` the label `text`, or takes its label away (`None` or
+    /// empty), as Scramjet's tree labels entries. Returns the label given.
+    pub fn set_label(
+        &mut self,
+        line: usize,
+        text: Option<&str>,
+    ) -> Result<Option<Label>, AgentError> {
+        Ok(self.session.set_label(line, text)?)
     }
 
     /// Whether continuing from the session's entry on `line` leaves a branch with anything for
@@ -455,6 +467,115 @@ mod tests {
             .collect();
         assert_eq!(forked[1..], source[1..5]);
         assert_eq!(agent.conversation().len(), 4);
+    }
+
+    #[test]
+    fn labels_are_lines_of_their_own_that_forks_clones_and_exports_carry_to_their_entries() {
+        let (endpoint, _server) = serve(vec![stream(&fixture::text_events(
+            "C",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, scratch) = agent(endpoint, "tree-labels");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let path = scratch.0.join("labels.jsonl");
+        let reply = |text: &str| {
+            json!({"type":"message","role":"assistant",
+                "content":[{"type":"output_text","text":text}],"_scramjet_model":"m"})
+        };
+        write_session(
+            &path,
+            &[
+                json!({"type":"session","version":1}),
+                json!({"type":"model_change","model":"m"}),
+                json!({"role":"user","content":"one"}),
+                reply("A"),
+                json!({"role":"user","content":"two"}),
+                reply("B"),
+            ],
+            std::time::SystemTime::now(),
+        );
+        agent.resume_session(&path).unwrap();
+        let labels = |agent: &Agent| -> Vec<(usize, String)> {
+            let tree = agent.tree().unwrap();
+            (tree.entries.into_iter())
+                .filter_map(|entry| Some((entry.line, entry.label?.text)))
+                .collect()
+        };
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let given = agent.set_label(3, Some("first answer")).unwrap().unwrap();
+        assert_eq!(given.text, "first answer");
+        assert!(given.time >= before && given.time < before + 60_000);
+        assert!(agent.set_label(5, Some("second")).unwrap().is_some());
+        // Taken away, also with an empty label.
+        assert_eq!(agent.set_label(5, None).unwrap(), None);
+        assert!(agent.set_label(4, Some("x")).unwrap().is_some());
+        assert_eq!(agent.set_label(4, Some("")).unwrap(), None);
+        assert!(agent.set_label(99, Some("x")).is_err());
+        assert_eq!(labels(&agent), [(3, "first answer".to_owned())]);
+        let lines: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            lines[6],
+            json!({"type":"label","target":3,"label":"first answer","time":given.time})
+        );
+        assert_eq!(lines[8]["label"], Value::Null);
+        assert_eq!((lines.len(), lines[8]["target"].as_u64()), (11, Some(5)));
+        // The conversation is where it was; a label of no entry shows nowhere.
+        assert_eq!(agent.tree().unwrap().current, Some(5));
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(
+            &mut file,
+            b"{\"type\":\"label\",\"target\":9,\"label\":\"y\"}\n",
+        )
+        .unwrap();
+        assert_eq!(labels(&agent).len(), 1);
+
+        // On another branch, after the label lines, a prompt's label is on its own line.
+        agent.navigate(4, None, &mut ui, &cancel).unwrap();
+        agent.turn("two again", &mut ui, &cancel).unwrap();
+        let again = (agent.tree().unwrap().entries.iter())
+            .find(|entry| entry.item == TreeItem::Prompt("two again".into()))
+            .map(|entry| entry.line)
+            .unwrap();
+        assert_eq!(again, 13);
+        agent.set_label(again, Some("retry")).unwrap();
+
+        // An export and a clone keep the labels of the entries on the path, at their lines there.
+        let carried = |path: &std::path::Path| -> Vec<(u64, String)> {
+            (std::fs::read_to_string(path).unwrap().lines())
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|line| line["type"] == "label")
+                .map(|line| {
+                    let text = line["label"].as_str().unwrap().to_owned();
+                    (line["target"].as_u64().unwrap(), text)
+                })
+                .collect()
+        };
+        let exported = scratch.0.join("exported.jsonl");
+        assert!(agent.export_session(&exported).unwrap());
+        let both = vec![(3, "first answer".to_owned()), (4, "retry".to_owned())];
+        assert_eq!(carried(&exported), both);
+        let original = agent.session_path().to_owned();
+        assert!(agent.clone_session().unwrap());
+        assert_eq!(carried(agent.session_path()), both);
+        assert_eq!(
+            labels(&agent),
+            [(3, "first answer".to_owned()), (4, "retry".to_owned())]
+        );
+        // A fork before a prompt keeps those before it.
+        agent.resume_session(&original).unwrap();
+        assert_eq!(agent.fork(2).unwrap().as_deref(), Some("two again"));
+        assert_eq!(labels(&agent), [(3, "first answer".to_owned())]);
     }
 
     #[test]

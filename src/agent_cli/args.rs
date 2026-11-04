@@ -68,7 +68,7 @@ session's branches and continues from the entry chosen, in the same
 session: from before a prompt, which is put in the prompt for editing, or from after a reply
 or tool result. When that leaves part of the conversation, it asks whether the model should
 summarize that branch, also with your own instructions, for the conversation to continue
-with. Escape twice on an empty prompt opens /tree too. /model, or Ctrl+L, chooses a model.
+with; Shift+L there labels the selected entry. Escape twice on an empty prompt opens /tree too. /model, or Ctrl+L, chooses a model.
 In the prompt, Ctrl+Y puts back the text deleted last, Alt+Y then replaces it with what was
 deleted before; Ctrl+- undoes; Ctrl+] then a character jumps to it, Ctrl+Alt+] backward.
 Ctrl+Home and Ctrl+End scroll to the conversation's start and end.
@@ -94,7 +94,8 @@ loaded in the current directory, what each brings and what was skipped.
 this also happens by itself when the context nears the model's window.
 Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scramjet-rs/),
 with Scramjet's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
-Escape), branchSummary.skipPrompt (true: /tree never asks for a summary) and
+Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
+(the entries /tree opens with: default, no-tools, user-only, labeled-only or all) and
 defaultThinkingLevel; tools, the agent's coding tools among read, bash, edit, write (the
 default) and grep, find, ls; and enabledModels, the patterns of the models Ctrl+P cycles through.";
 

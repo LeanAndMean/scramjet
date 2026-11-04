@@ -1291,6 +1291,8 @@ def tree_session(read, until, send, output):
         assert row in text, (row, text)
     assert 'Reply' not in text, text
     send(b'\x0f')
+    on_screen('(0/0) [labeled]')
+    send(b'\x0f')
     on_screen('[all]')
     send(b'\x14')
     on_screen('[no-tools]')
@@ -1310,6 +1312,26 @@ def tree_session(read, until, send, output):
     assert '\u203a \u251c\u229e \u2022 [branch summary]: The user explored a different' in '\n'.join(rows), rows
     send(b'\x1b[1;5C')
     on_screen('(3/7)')
+    # As in Scramjet, Shift+L labels the entry, the list showing again after the label is given,
+    # Ctrl+L shows the labeled entries only, and Shift+T when they were labeled.
+    send(b'L')
+    on_screen('Label (empty to remove)')
+    send(b'checkpoint\r')
+    rows = on_screen('(3/7)')
+    assert '\u203a \u251c\u229f \u2022 [checkpoint] [branch summary]: The user explored' in '\n'.join(rows), rows
+    send(b'\x0c')
+    rows = on_screen('(1/1) [labeled]')
+    send(b'T')
+    rows = on_screen('(1/1) [labeled] [+label time]')
+    assert re.search(r'\u203a \u2022 \[checkpoint\] \d\d:\d\d \[branch summary\]', '\n'.join(rows)), rows
+    send(b'\x0c')
+    on_screen('(3/7) [+label time]')
+    # Escape in the label's dialog leaves it as it was.
+    send(b'L')
+    on_screen('Label (empty to remove)')
+    send(b'\x1b')
+    rows = on_screen('(3/7) [+label time]')
+    assert '[checkpoint]' in '\n'.join(rows), rows
     send(b'\x1b')
     ending(read, output, EMPTY)
     # As in Scramjet, Escape twice within half a second on an empty prompt opens the tree in the
@@ -1397,6 +1419,8 @@ assert summary.startswith('The user explored a different conversation branch bef
 assert summary.endswith('\n\nThe branch said two.'), summary
 prompts = [item['content'] for item in lines if item.get('role') == 'user']
 assert prompts == ['first', 'second', 'second again'], prompts
+(label,) = [line for line in lines if line.get('type') == 'label']
+assert label['label'] == 'checkpoint' and lines[label['target']]['type'] == 'branch_summary', label
 
 
 def shift_tab_cycles_effort(read, until, send, output):
@@ -1596,7 +1620,7 @@ def settings_menu(read, until, send, output):
     assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
                          '  before its next request.'], rows
-    send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
+    send(b'\x1b[B' * 5 + b'\r')
     rows = on_screen('Tools  \u2191\u2193 move \u00b7 Enter switch on or off \u00b7 Esc back')
     assert '\u203a [x] read' in rows and '  [ ] grep' in rows and rows[-1] == '  Read file contents', rows
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
@@ -1611,7 +1635,7 @@ def settings_menu(read, until, send, output):
     send(b'/settings\r')
     on_screen('Command: /settings')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[B' * 6 + b'\r')
+    send(b'\x1b[B' * 7 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))
