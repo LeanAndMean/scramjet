@@ -321,6 +321,11 @@ pub(super) fn result_images(output: &Value) -> usize {
         .count()
 }
 
+/// How many images a conversation item has: a tool result's, or a user message's.
+pub(super) fn item_images(item: &Value) -> usize {
+    result_images(&item["output"]) + result_images(&item["content"])
+}
+
 /// Writes `text` to a file beside `path`'s target and renames it over the target, so a reader
 /// never sees part of it. A symbolic link stays one.
 pub fn write_replacing(path: &Path, text: &str) -> io::Result<()> {

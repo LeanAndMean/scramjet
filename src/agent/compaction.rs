@@ -386,7 +386,7 @@ pub(super) fn estimate(items: &[Value]) -> u64 {
                 _ => text(item),
             };
             // Scramjet counts an image as 4800 characters.
-            let images = tools::result_images(&item["output"]) as u64 * 4800;
+            let images = tools::item_images(item) as u64 * 4800;
             (content.chars().count() as u64 + images).div_ceil(4)
         })
         .sum()
@@ -778,6 +778,15 @@ mod tests {
             "[Tool result]: Read image file [image/png]"
         );
         assert_eq!(estimate(&[image]), (27 + 4800_u64).div_ceil(4));
+        let attached = json!({"role":"user","content":[
+            {"type":"input_text","text":"<file name=\"/p/a.png\"></file>\n"},
+            {"type":"input_image","image_url":format!("data:image/png;base64,{}", "A".repeat(100_000))},
+        ]});
+        assert_eq!(
+            serialize(std::slice::from_ref(&attached)),
+            "[User]: <file name=\"/p/a.png\"></file>\n"
+        );
+        assert_eq!(estimate(&[attached]), (30 + 4800_u64).div_ceil(4));
     }
 
     #[test]

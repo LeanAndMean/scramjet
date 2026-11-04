@@ -197,7 +197,7 @@ fn find(entries: &[Entry], line: usize) -> Option<&Entry> {
 pub(super) fn is_prompt(entry: &Value) -> bool {
     entry["role"] == "user"
         && !is_bang(entry)
-        && entry["content"].is_string()
+        && (entry["content"].is_string() || entry["content"].is_array())
         && entry.get(super::PROBE).is_none()
 }
 

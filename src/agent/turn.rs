@@ -73,10 +73,17 @@ impl Agent {
         self.compact_before_prompt(ui, cancel)?;
         self.completed = None;
         self.delegated.clear();
-        let message = self.user_message(prompt, ui);
+        // With files the text starts with them, so it is a reply even after a `/`, as in Scramjet.
+        let (message, typed) = match self.attached.take() {
+            Some(files) => {
+                self.lifecycle.prompted(status::Prompt::Reply);
+                (files.message(prompt), files.typed(prompt))
+            }
+            None => (self.user_message(prompt, ui), prompt.to_owned()),
+        };
         self.add(message)?;
         self.save_command()?;
-        self.prompts.push(prompt.to_owned());
+        self.prompts.push(typed);
         self.resume_turn(ui, cancel)
     }
 

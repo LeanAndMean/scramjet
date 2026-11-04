@@ -2,6 +2,7 @@
 //! a project.
 
 mod approvals;
+mod attached;
 mod autonomy;
 mod client;
 mod commands;
@@ -24,6 +25,7 @@ mod tree;
 mod turn;
 mod ui;
 
+pub use attached::Attached;
 pub use autonomy::{
     Approval, Approvals, Edge, NextStep, NextSteps, Publication, Scope, Setting, Suggestion,
 };
@@ -66,8 +68,9 @@ const CONTEXT: &str = "_scramjet_context_tokens";
 /// (`input` not read from the cache, `output`, `cache_read`), which `/session` sums over the
 /// conversation as Scramjet sums its assistant messages' usage. Never sent.
 const USAGE: &str = "_scramjet_usage";
-/// Stored with a user message whose text is not its prompt: the `!command` it ran, which is recalled
-/// as typed. Never sent to the endpoint.
+/// Stored with a user message whose text is not its prompt as typed (a command's or skill's
+/// expansion, a `!command`'s output, `@` files' contents): the prompt as typed, which is shown and
+/// recalled. Never sent to the endpoint.
 pub(super) const TYPED: &str = "_scramjet_typed";
 /// Stored, as `true`, with a tool result or `!` command that failed, so a resumed conversation
 /// shows it as it ran. Never sent, as no `_scramjet_` field is.
@@ -267,6 +270,8 @@ pub struct Agent {
     completed: Option<Completed>,
     /// The commands delegated in this turn, with their arguments.
     delegated: Vec<(String, String)>,
+    /// Files the next prompt sends.
+    attached: Option<Attached>,
     /// Scramjet's global `autonomy.yaml`, and what was last said about the files.
     autonomy: Option<PathBuf>,
     autonomy_diagnostics: Vec<String>,
@@ -389,6 +394,7 @@ impl Agent {
             lifecycle,
             completed: None,
             delegated: Vec::new(),
+            attached: None,
             autonomy: autonomy::global_path(),
             autonomy_diagnostics: Vec::new(),
             info: ModelInfo::guess(&config.model),
@@ -695,6 +701,18 @@ impl Agent {
     /// The text `prompt` sends when it runs a command or a skill, `None` when it is sent as typed.
     pub fn expand(&self, prompt: &str) -> Option<String> {
         (self.commands.expand(prompt)).or_else(|| self.skills.expand(prompt)?.ok())
+    }
+
+    /// Sends `files` with the next prompt `turn` runs, as Scramjet sends the command line's `@`
+    /// files with its first message.
+    pub fn attach(&mut self, files: Attached) {
+        self.attached = Some(files);
+    }
+
+    /// The next prompt as shown and as sent, when files go with it.
+    pub fn attached(&self, prompt: &str) -> Option<(String, String)> {
+        let files = self.attached.as_ref()?;
+        Some((files.typed(prompt), files.sent(prompt)))
     }
 
     /// The user's prompts in this session, oldest first, including those compacted away.

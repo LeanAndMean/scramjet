@@ -5,7 +5,7 @@ use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model ID] \
 [--effort LEVEL] [--max-output-tokens N] [--retries N] [--continue | -r | --session FILE]
-[--ask] [-p PROMPT]
+[--ask] [-p] [@FILE...] [MESSAGE...]
        scramjet-rs install DIR | remove NAME|DIR | list
 
 Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
@@ -23,7 +23,11 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   --ask                  ask before each bash command and each write or edit outside the
                          project (answer `a` to stop asking until exit); by default tool
                          calls run without asking, as in Scramjet. Bash is not sandboxed.
-  -p PROMPT              run one prompt and exit (`-p -` reads it from stdin)
+  -p, --print            run the messages and exit; a message `-` is read from stdin
+  @FILE                  send FILE with the first message (or alone), as Scramjet does: a
+                         text file's contents, or a PNG, JPEG, GIF or WebP image, scaled down
+                         as read scales it; a relative path is from the current directory
+  MESSAGE                prompts sent one after another when the session starts
 The session fills the terminal's alternate screen: the conversation above a status line and the
 prompt. Page Up/Down and the mouse wheel scroll the conversation; Escape goes back to its end.
 In the prompt, Enter or Alt+Enter sends; Shift+Enter, Ctrl-J or a trailing \\ starts a new
@@ -84,8 +88,12 @@ pub(super) struct Options {
     pub(super) resume: bool,
     pub(super) ask: bool,
     pub(super) retries: u32,
-    /// `-p`: the one prompt to run, `-` to read it from stdin.
-    pub(super) prompt: Option<String>,
+    /// `-p`: run the messages and exit.
+    pub(super) print: bool,
+    /// `@FILE` arguments, without the `@`: sent with the first message.
+    pub(super) files: Vec<String>,
+    /// The other words: prompts to send in order; with `-p`, `-` is read from stdin.
+    pub(super) messages: Vec<String>,
 }
 
 impl Options {
@@ -103,7 +111,9 @@ impl Options {
             resume: false,
             ask: false,
             retries: 3,
-            prompt: None,
+            print: false,
+            files: Vec::new(),
+            messages: Vec::new(),
         };
         while let Some(argument) = arguments.next() {
             let mut value = || {
@@ -152,13 +162,25 @@ impl Options {
                     (options.choice, options.resume) = (SessionChoice::Open(path), false)
                 }
                 Some("--ask") => options.ask = true,
-                Some("-p" | "--print") => options.prompt = Some(value()?),
+                Some("-p" | "--print") => options.print = true,
                 Some("-h" | "--help") => return Ok(None),
+                Some(file) if file.starts_with('@') => options.files.push(file[1..].to_owned()),
+                Some(message) if message == "-" || !message.starts_with('-') => {
+                    options.messages.push(message.to_owned())
+                }
                 _ => return Err(format!("unknown argument {argument:?}\n\n{USAGE}")),
             }
         }
-        if options.resume && options.prompt.is_some() {
+        if options.resume && options.print {
             return Err(format!("--resume cannot be used with -p\n\n{USAGE}"));
+        }
+        if options.print && options.messages.is_empty() && options.files.is_empty() {
+            return Err(format!("-p needs a message or an @FILE\n\n{USAGE}"));
+        }
+        if !options.print && options.messages.iter().any(|message| message == "-") {
+            return Err(format!(
+                "the message - (read from stdin) needs -p\n\n{USAGE}"
+            ));
         }
         Ok(Some(options))
     }

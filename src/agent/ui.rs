@@ -385,7 +385,9 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
             // Scramjet's status check is not shown, as the user never typed it.
             _ if item.get(PROBE).is_some() => {}
             _ if item["role"] == "user" => {
-                let content = item["content"].as_str().unwrap_or_default();
+                let content =
+                    (item["content"].as_str()).map_or_else(|| message_text(item), str::to_owned);
+                let content = content.as_str();
                 let command = item[TYPED]
                     .as_str()
                     .and_then(|typed| typed.strip_prefix('!'));

@@ -12,7 +12,7 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
             "{text}"
         );
     }
-    for word in ["agent", "smoke", "--bogus"] {
+    for word in ["--bogus", "-x"] {
         let output = Command::new(binary)
             .args([word, "--endpoint", "127.0.0.1:9"])
             .output()
@@ -25,6 +25,19 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         );
         assert!(text.contains("Usage: scramjet-rs"), "{text}");
     }
+    let refused = |arguments: &[&str]| {
+        let output = Command::new(binary).args(arguments).output().unwrap();
+        assert!(!output.status.success());
+        String::from_utf8(output.stderr).unwrap()
+    };
+    assert!(refused(&["-p"]).starts_with("scramjet-rs: -p needs a message or an @FILE\n"));
+    assert!(refused(&["-"]).starts_with("scramjet-rs: the message - (read from stdin) needs -p\n"));
+    // Before a session is started.
+    let missing = refused(&["-p", "@/nonexistent/notes.md", "--endpoint", "127.0.0.1:9"]);
+    assert_eq!(
+        missing,
+        "scramjet-rs: file not found: /nonexistent/notes.md\n"
+    );
     let output = Command::new(binary)
         .args(["--effort", "hgih", "--endpoint", "127.0.0.1:9"])
         .output()

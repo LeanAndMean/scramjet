@@ -131,10 +131,10 @@ pub(super) fn request(request: &Value, max_tokens: u64, thinking: bool) -> Resul
 /// Scramjet, a tool call without a result (a turn cancelled between calls) gets an error result.
 fn messages(items: &[Value]) -> Vec<Value> {
     let mut messages: Vec<(&str, Vec<Value>)> = Vec::new();
-    for (role, block) in items.iter().filter_map(block) {
+    for (role, added) in items.iter().filter_map(blocks) {
         match messages.last_mut() {
-            Some((last, blocks)) if *last == role => blocks.push(block),
-            _ => messages.push((role, vec![block])),
+            Some((last, blocks)) if *last == role => blocks.extend(added),
+            _ => messages.push((role, added)),
         }
     }
     let mut i = 0;
@@ -175,6 +175,19 @@ fn messages(items: &[Value]) -> Vec<Value> {
         .into_iter()
         .map(|(role, content)| json!({"role":role,"content":content}))
         .collect()
+}
+
+/// A conversation item as Messages content blocks, with the role of the message they belong to:
+/// one, or a user message's text and images.
+fn blocks(item: &Value) -> Option<(&'static str, Vec<Value>)> {
+    if item["role"] == "user"
+        && let Some(parts) = item["content"].as_array()
+    {
+        let blocks: Vec<Value> = parts.iter().filter_map(content_block).collect();
+        return (!blocks.is_empty()).then_some(("user", blocks));
+    }
+    let (role, block) = block(item)?;
+    Some((role, vec![block]))
 }
 
 /// A conversation item as a Messages content block, with the role of the message it belongs to.
@@ -243,8 +256,8 @@ fn block(item: &Value) -> Option<(&'static str, Value)> {
     Some((role, block))
 }
 
-/// A Responses content part of a tool result as a Messages content block: text, or an image
-/// given as a data URL.
+/// A Responses content part of a tool result or user message as a Messages content block: text,
+/// or an image given as a data URL.
 fn content_block(part: &Value) -> Option<Value> {
     match part["type"].as_str()? {
         "input_text" => {
@@ -614,6 +627,25 @@ mod tests {
                 {"type":"text","text":"Read image file [image/png]"},
                 {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0K"}},
             ],"cache_control":{"type":"ephemeral","ttl":"1h"}}]})
+        );
+    }
+
+    #[test]
+    fn a_user_messages_images_follow_its_text() {
+        let request = json!({"model":"claude-opus-5-5","input":[
+            {"role":"user","content":[
+                {"type":"input_text","text":"<file name=\"/p/a.png\"></file>\nWhat is it?"},
+                {"type":"input_image","detail":"auto","image_url":"data:image/png;base64,iVBORw0K"},
+            ],"_scramjet_typed":"@a.png What is it?"},
+        ]});
+        let body = super::request(&request, 9, false).unwrap();
+        assert_eq!(
+            body["messages"],
+            json!([{"role":"user","content":[
+                {"type":"text","text":"<file name=\"/p/a.png\"></file>\nWhat is it?"},
+                {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0K"},
+                 "cache_control":{"type":"ephemeral","ttl":"1h"}},
+            ]}])
         );
     }
 

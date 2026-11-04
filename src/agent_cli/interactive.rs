@@ -8,7 +8,7 @@ use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
 use super::{editor, installed, select, settings, style};
 use scramjet_rs::agent::{
-    Agent, AgentError, AgentUi, Choice, Command, Completed, Installed, Next, Step,
+    Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Step,
 };
 use std::{
     io::{BufRead, IsTerminal},
@@ -109,9 +109,15 @@ impl Interactive {
 
     /// Reads and runs prompts until the user quits or the input ends; with `resume`, after
     /// choosing a session to resume (`--resume`), unless none is chosen on the full screen, which
-    /// ends the session without saving it, as in Scramjet.
-    pub(super) fn run(mut self, resume: bool) -> Result<(), String> {
-        let result = self.read_and_run(resume);
+    /// ends the session without saving it, as in Scramjet. The command line's `messages` run
+    /// first, as if typed, the first with its `files`.
+    pub(super) fn run(
+        mut self,
+        resume: bool,
+        messages: Vec<String>,
+        files: Option<Attached>,
+    ) -> Result<(), String> {
+        let result = self.read_and_run(resume, messages, files);
         // The terminal is given back first, so that an error saving the settings shows.
         self.screen = None;
         self.save_hide_thinking();
@@ -127,7 +133,12 @@ impl Interactive {
         }
     }
 
-    fn read_and_run(&mut self, resume: bool) -> Result<Ended, String> {
+    fn read_and_run(
+        &mut self,
+        resume: bool,
+        messages: Vec<String>,
+        files: Option<Attached>,
+    ) -> Result<Ended, String> {
         // As Scramjet's `--resume` shows the sessions before the session itself.
         let resumed = match resume && self.interactive() {
             true if self.resume("") => true,
@@ -157,12 +168,17 @@ impl Interactive {
         if resume && !resumed {
             self.resume("");
         }
+        let mut messages = messages.into_iter();
+        if let Some(files) = files {
+            self.agent.attach(files);
+        }
         // A completed command's next step, run as if typed.
         let mut queued: Option<(String, Start)> = None;
         loop {
             self.save_hide_thinking();
             self.typed_during_turn(false);
-            let (dispatched, start) = queued.take().unzip();
+            let message = || messages.next().map(|message| (message, Start::Typed));
+            let (dispatched, start) = queued.take().or_else(message).unzip();
             let prompt = match self.read(dispatched)? {
                 Read::Prompt(prompt) => prompt,
                 Read::DoubleEscape => match self.settings.double_escape {
@@ -172,6 +188,11 @@ impl Interactive {
                 Read::Again => continue,
                 Read::End => return Ok(Ended::Quit),
             };
+            // Sent as it is, and never a command, as the files' text comes first.
+            if self.agent.attached(&prompt).is_some() {
+                queued = self.send(&prompt, Start::Typed);
+                continue;
+            }
             let prompt = prompt.trim();
             if prompt.is_empty() {
                 continue;
@@ -212,7 +233,10 @@ impl Interactive {
                 if !std::mem::take(&mut self.spaced) {
                     eprintln!();
                 }
-                self.ui.user_prompt(&prompt);
+                match self.agent.attached(&prompt) {
+                    Some((typed, sent)) => self.ui.command_prompt(&typed, &sent),
+                    None => self.ui.user_prompt(&prompt),
+                }
                 prompt
             }
             None => match read_lines()? {
@@ -227,10 +251,13 @@ impl Interactive {
     /// completed with one.
     fn send(&mut self, prompt: &str, start: Start) -> Option<(String, Start)> {
         if let Some(screen) = &self.screen {
-            screen.event(match self.agent.expand(prompt) {
-                Some(sent) => Event::CommandPrompt(prompt.to_owned(), sent),
-                None => Event::UserPrompt(prompt.to_owned()),
-            });
+            screen.event(
+                match (self.agent.attached(prompt), self.agent.expand(prompt)) {
+                    (Some((typed, sent)), _) => Event::CommandPrompt(typed, sent),
+                    (None, Some(sent)) => Event::CommandPrompt(prompt.to_owned(), sent),
+                    (None, None) => Event::UserPrompt(prompt.to_owned()),
+                },
+            );
         }
         let hide = (self.settings.hide_credentials).hides(start == Start::Unattended);
         self.agent.set_hide_credentials(hide);

@@ -184,9 +184,10 @@ pub(super) fn send(
 }
 
 /// `request` for a model that takes no images, when it has any: each tool result's images become
-/// a note after its text. `None` when it has none.
+/// a note after its text, and a user message's a note in its place. `None` when it has none.
 fn without_images(request: &Value) -> Option<Value> {
-    let has_images = |item: &Value| tools::result_images(&item["output"]) > 0;
+    const NOTE: &str = "[Image omitted: the current model does not support images.]";
+    let has_images = |item: &Value| tools::item_images(item) > 0;
     if !request["input"].as_array()?.iter().any(has_images) {
         return None;
     }
@@ -196,9 +197,16 @@ fn without_images(request: &Value) -> Option<Value> {
         if images > 0 {
             let mut text = tools::result_text(&item["output"]);
             for _ in 0..images {
-                text.push_str("\n[Image omitted: the current model does not support images.]");
+                text.push('\n');
+                text.push_str(NOTE);
             }
             item["output"] = json!(text);
+        }
+        let parts = item.get_mut("content").and_then(Value::as_array_mut);
+        for part in parts.into_iter().flatten() {
+            if part["type"] == "input_image" {
+                *part = json!({"type":"input_text","text":format!("\n{NOTE}")});
+            }
         }
     }
     Some(request)
@@ -474,6 +482,68 @@ response is incomplete; retry the request."});
             replay.shown.iter().any(|line| line == shown),
             "{:?}",
             replay.shown
+        );
+    }
+
+    #[test]
+    fn attached_files_go_with_the_next_prompt_only_and_show_as_typed() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("A dot.", fixture::known_usage())),
+            stream(&fixture::text_events(
+                "Still a dot.",
+                fixture::known_usage(),
+            )),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "attached-turn");
+        let png = crate::agent::image::tests::png(3, 2);
+        std::fs::write(scratch.0.join("dot.png"), &png).unwrap();
+        let files = crate::agent::Attached::read(&["dot.png".to_owned()], &scratch.0).unwrap();
+        agent.attach(files);
+        let element = format!(
+            "<file name=\"{}\"></file>\n",
+            scratch.0.join("dot.png").display()
+        );
+        let sent = format!("{element}What is it?");
+        assert_eq!(
+            agent.attached("What is it?"),
+            Some(("@dot.png What is it?".to_owned(), sent.clone()))
+        );
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("What is it?", &mut ui, &cancel).unwrap();
+        assert_eq!(agent.attached("And now?"), None);
+        agent.info.images = false;
+        agent.turn("And now?", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        let image = json!({"type":"input_image","detail":"auto",
+            "image_url":format!("data:image/png;base64,{}", crate::agent::image::base64(&png))});
+        let text = json!({"type":"input_text","text":sent});
+        assert_eq!(
+            bodies[0]["input"],
+            json!([{"role":"user","content":[text, image]}])
+        );
+        // A model whose card lists no image input gets a note in the image's place.
+        let note = "\n[Image omitted: the current model does not support images.]";
+        assert_eq!(
+            bodies[1]["input"][0],
+            json!({"role":"user","content":[text, {"type":"input_text","text":note}]})
+        );
+        assert_eq!(
+            bodies[1]["input"][2],
+            json!({"role":"user","content":"And now?"})
+        );
+        // Recalled, listed by /tree and shown on a resume as typed.
+        assert_eq!(agent.prompts(), ["@dot.png What is it?", "And now?"]);
+        let tree = agent.tree().unwrap();
+        assert_eq!(
+            tree.entries[0].item,
+            crate::agent::TreeItem::Prompt("@dot.png What is it?".into())
+        );
+        let mut replay = Recorder::default();
+        crate::agent::show_items(agent.conversation(), &mut replay);
+        assert_eq!(
+            replay.shown[0],
+            format!("command @dot.png What is it? sent {sent}")
         );
     }
 

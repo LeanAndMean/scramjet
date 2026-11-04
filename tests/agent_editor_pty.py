@@ -18,6 +18,7 @@ import tempfile
 import termios
 import threading
 import time
+import zlib
 
 BINARY = sys.argv[1]
 work = tempfile.mkdtemp(prefix='agent-editor-')
@@ -2883,4 +2884,73 @@ run(['--model', 'gpt-6-luna'], fullscreen_subagent, serve_items([
     [message('Scouted.')],
 ], gate=subagent_gate, gated=2))
 run(['--continue'], fullscreen_subagent_resumed)
+
+
+def tiny_png(width, height):
+    rows = b''.join(b'\x00' + b'\xff\x00\x00' * width for _ in range(height))
+
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
+
+
+ATTACHED = '> @notes.md @shots/dot.png What are these?\n\u2026 (sent as 5 lines, Ctrl+O to expand)'
+
+
+def attached_files(read, until, send, output):
+    # The command line's files go with its first message, which runs at once and shows as typed.
+    shown, on_screen = full_screen()(read, output)
+    rows = on_screen('A note and a dot.')
+    assert ATTACHED in '\n'.join(rows), rows
+    send(b'\x04')
+
+
+def attached_files_resumed(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    rows = on_screen('A note and a dot.')
+    assert ATTACHED in '\n'.join(rows), rows
+    send(b'\x04')
+
+
+def attached_alone(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    rows = on_screen('A note.')
+    assert '> @notes.md\n\u2026 (sent as 3 lines, Ctrl+O to expand)' in '\n'.join(rows), rows
+    send(b'\x04')
+
+
+def printed_attached(read, until, send, output):
+    until(b'Second.', until(b'First.'))
+
+
+os.makedirs(os.path.join(project, 'shots'))
+dot = tiny_png(2, 1)
+with open(os.path.join(project, 'shots', 'dot.png'), 'wb') as file:
+    file.write(dot)
+with open(os.path.join(project, 'notes.md'), 'w') as file:
+    file.write('first note')
+real = os.path.realpath(project)
+notes_element = '<file name="%s/notes.md">\nfirst note\n</file>\n' % real
+sent_bodies = []
+run(['@notes.md', '@shots/dot.png', 'What are these?'], attached_files,
+    serve_items([[message('A note and a dot.')]], bodies=sent_bodies))
+assert sent_bodies[0]['input'] == [{'role': 'user', 'content': [
+    {'type': 'input_text', 'text': notes_element + '<file name="%s/shots/dot.png"></file>\nWhat are these?' % real},
+    {'type': 'input_image', 'detail': 'auto', 'image_url': 'data:image/png;base64,' + base64.b64encode(dot).decode()},
+]}], sent_bodies
+run(['--continue'], attached_files_resumed)
+# Files alone are the first message.
+sent_bodies = []
+run(['@notes.md'], attached_alone, serve_items([[message('A note.')]], bodies=sent_bodies))
+assert sent_bodies[0]['input'] == [{'role': 'user', 'content': notes_element}], sent_bodies
+# With -p, the messages run one after another, the first with the files.
+sent_bodies = []
+run(['-p', '@notes.md', 'one', 'two'], printed_attached,
+    serve_items([[message('First.')], [message('Second.')]], bodies=sent_bodies))
+assert [body['input'][-1] for body in sent_bodies] == [
+    {'role': 'user', 'content': notes_element + 'one'}, {'role': 'user', 'content': 'two'}], sent_bodies
+assert sent_bodies[1]['input'][0] == sent_bodies[0]['input'][0], sent_bodies
+shutil.rmtree(os.path.join(project, 'shots'))
+os.remove(os.path.join(project, 'notes.md'))
 print('agent editor journeys passed')

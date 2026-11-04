@@ -23,7 +23,7 @@ mod tree;
 
 use args::{Options, USAGE};
 use rustix::termios::{self, OptionalActions, QueueSelector};
-use scramjet_rs::agent::{Agent, AgentConfig, AgentUi, Next};
+use scramjet_rs::agent::{Agent, AgentConfig, AgentUi, Attached, Next};
 use settings::Settings;
 use std::{
     ffi::OsString,
@@ -49,24 +49,39 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         println!("{USAGE}");
         return Ok(());
     };
-    let prompt = options.prompt.take();
-    let resume = options.resume;
+    let mut messages = std::mem::take(&mut options.messages);
+    let files = match options.files.is_empty() {
+        true => None,
+        false => {
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            Some(Attached::read(&options.files, &cwd)?)
+        }
+    };
+    // Files alone are a prompt, as in Scramjet.
+    if files.is_some() && messages.is_empty() {
+        messages.push(String::new());
+    }
+    let (print_only, resume) = (options.print, options.resume);
     let mut settings = Settings::load();
     let mut agent = start(options, &settings)?;
     let cancel = Arc::new(AtomicBool::new(false));
     let hide_thinking = Arc::new(AtomicBool::new(settings.hide_thinking_block));
     handle_signals(&cancel, &hide_thinking)?;
     let mut ui = Terminal::new(hide_thinking.clone(), true);
-    let Some(prompt) = prompt else {
+    if !print_only {
         let interactive =
             interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings)?;
-        return interactive.run(resume);
-    };
+        return interactive.run(resume, messages, files);
+    }
     for warning in std::mem::take(&mut settings.warnings) {
         ui.notice(&format!("settings: {warning}"));
     }
     agent.set_hide_credentials(settings.hide_credentials.hides(true));
-    let result = print(&mut agent, &mut ui, prompt, &cancel);
+    if let Some(files) = files {
+        agent.attach(files);
+    }
+    let result =
+        (messages.into_iter()).try_for_each(|prompt| print(&mut agent, &mut ui, prompt, &cancel));
     if let Err(error) = settings.set_hide_thinking_block(hide_thinking.load(Ordering::Relaxed)) {
         eprintln!("error: settings not saved: {error}");
     }
@@ -153,8 +168,8 @@ fn handle_signals(cancel: &Arc<AtomicBool>, hide_thinking: &Arc<AtomicBool>) -> 
     Ok(())
 }
 
-/// `-p`: runs one prompt (`-` reads it from stdin) and names the next step that would run after
-/// it, with `/autopilot on` too, instead of running it.
+/// `-p`: runs a prompt (`-` reads it from stdin) and names the next step that would run after it,
+/// with `/autopilot on` too, instead of running it.
 fn print(
     agent: &mut Agent,
     ui: &mut Terminal,
