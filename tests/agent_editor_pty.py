@@ -2143,6 +2143,38 @@ def next_steps_resumed(read, until, send, output):
     send(b'\x04')
 
 
+def suggested_steps(read, until, send, output):
+    shown, on_screen = full_screen(rows=50)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'what next?\r')
+    # Once the turn ends, the steps the agent suggested, with the effort they run with.
+    rows = on_screen('Agent suggests a next step')
+    text = '\n'.join(rows)
+    for expected in ['Pick one.', '\u2192 0: /flow:step two', '[recommended] Go on.',
+                     'effort: medium \u00b7 Shift+Tab cycle']:
+        assert expected in text, (expected, text)
+    assert text.index('Pick one.') < text.index('Agent suggests a next step'), text
+    send(b'\r')
+    # Run as if typed, after the record of the choice.
+    rows = on_screen('> /flow:step two')
+    text = '\n'.join(rows)
+    assert text.index('Agent-suggested next step:\n\u2192 /flow:step two \u2014 Go on.') < text.index('> /flow:step two'), text
+    on_screen('\u25cf report_scramjet_command_status completed')
+    send(b'again\r')
+    on_screen('Agent suggests a next step')
+    # A text step goes into the editor, to send or change.
+    send(b'\x1b[B\r')
+    rows = on_screen('> Explain more')
+    assert '  /flow:done \u2014 Finish.' in rows and '\u2192 Explain more \u2014 Ask.' in rows, rows
+    send(b'\r')
+    on_screen('Last one.')
+    on_screen('Agent suggests a next step')
+    send(b'\x1b')
+    rows = on_screen('Cancelled')
+    assert '- /flow:done \u2014 Finish.' in rows, rows
+    send(b'\x04')
+
+
 def dispatched_prompt_shows_escapes(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -2482,6 +2514,25 @@ assert records(second) == [('selected', 0), ('dismissed', None)], records(second
 kinds = [item.get('name') or item.get('type') or item.get('role') for item in bodies[3]['input']]
 assert kinds[-3:] == ['scramjet_next_step_selection', 'function_call_output', 'user'], kinds
 run(['--continue'], next_steps_resumed, rows=50)
+suggest = lambda call_id, steps, recommended: tool_call(call_id, 'suggest_scramjet_next_steps', {
+    'next_steps': [{'message': text, 'fresh_session': False, 'reason': reason} for text, reason in steps],
+    'recommended_next_step': recommended})
+known = set(session_files())
+run([], suggested_steps, serve_items([
+    [suggest('call_1', [('/flow:step two', 'Go on.')], 0)],
+    [message('Pick one.')],
+    [report('call_2')],
+    [suggest('call_3', [('/flow:done', 'Finish.'), ('Explain more', 'Ask.')], 0)],
+    [message('Or this.')],
+    [suggest('call_4', [('/flow:done', 'Finish.')], 0)],
+    [message('Last one.')],
+], models=['gpt-6-luna'], cards=route_cards[:1]), rows=50)
+(suggested,) = set(session_files()) - known
+records = [json.loads(line['arguments']) for line in map(json.loads, open(suggested))
+           if line.get('name') == 'scramjet_next_step_selection']
+assert [(r['outcome'], r['selectedIndex'], r['source'], r['sourceCommand']) for r in records] == [
+    ('selected', 0, 'suggestion', None), ('selected', 1, 'suggestion', None),
+    ('dismissed', None, 'suggestion', None)], records
 run([], dispatched_prompt_shows_escapes, serve_items([
     [report('call_1', [('/flow:done \x1b]0;pwned\x07', False, 'Finish.')], 0)],
     [message('Finished hostile.'), report('call_2')],

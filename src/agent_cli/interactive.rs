@@ -8,7 +8,8 @@ use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
 use super::{editor, footer, installed, scope, select, settings, style};
 use scramjet_rs::agent::{
-    Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Step,
+    Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Source,
+    Step, Suggested,
 };
 use std::{
     io::{BufRead, IsTerminal},
@@ -262,7 +263,7 @@ impl Interactive {
     }
 
     /// Runs `prompt` as a model turn. Returns the next step to run, when the turn's command
-    /// completed with one.
+    /// completed with one, or the user chose one the agent suggested.
     fn send(&mut self, prompt: &str, start: Start) -> Option<(String, Start)> {
         if let Some(screen) = &self.screen {
             screen.event(
@@ -294,8 +295,11 @@ impl Interactive {
         if self.screen.is_none() {
             self.say_styled(style::MUTED, &usage_line(&self.agent));
         }
-        let completed = self.agent.take_completed()?;
-        self.next_step(&completed)
+        match (self.agent.take_completed(), self.agent.take_suggestion()) {
+            (Some(completed), _) => self.next_step(&completed),
+            (None, Some(suggested)) => self.suggested(suggested),
+            (None, None) => None,
+        }
     }
 
     /// Runs `prompt` as a model turn on the full screen, as `on_screen` does. Where the turn
@@ -410,52 +414,81 @@ impl Interactive {
         for notice in &routing.notices {
             self.ui().notice(notice);
         }
+        let source = Source::Completion(&routing.source);
         let (step, start, routed) = match routing.next {
             Next::Nothing => {
                 self.spaced = true;
                 return None;
             }
             Next::Run { steps, chosen } => {
-                self.record(&routing.source, &steps, Some(chosen));
+                self.record(source, &steps, Some(chosen));
                 (steps[chosen].clone(), Start::Unattended, Routed::default())
             }
             Next::Offer {
                 steps,
                 recommended,
                 autoselect,
-            } => {
-                let choices: Vec<_> = steps
-                    .iter()
-                    .map(|step| Choice {
-                        label: step.label(),
-                        description: Some(step.description()).filter(|text| !text.is_empty()),
-                        value: String::new(),
-                    })
-                    .collect();
-                let mut picker =
-                    select::Picker::question("Select next step", &choices, recommended);
-                if self.screen.is_some() {
-                    let models = self.agent.model_options();
-                    let current = models.iter().position(|m| m.id == self.agent.model());
-                    let effort = self.agent.effort().map(str::to_owned);
-                    let route = select::Route::new(models, current.unwrap_or(0), effort);
-                    picker = picker.routing(route);
-                }
-                // After the models were read, which the countdown does not wait for.
-                if autoselect {
-                    picker = picker.counting_down(AUTOSELECT);
-                }
-                let chosen = (self.screen.as_ref()).and_then(|screen| screen.pick_timed(picker));
-                self.record(&routing.source, &steps, chosen.as_ref().map(|(at, ..)| *at));
-                let (at, timed, routed) = chosen?;
-                let start = if timed {
-                    Start::Unattended
-                } else {
-                    Start::Chosen
-                };
-                (steps[at].clone(), start, routed)
-            }
+            } => self.offer("Select next step", source, &steps, recommended, autoselect)?,
         };
+        self.take_step(step, start, routed)
+    }
+
+    /// The step the agent suggested that the user chooses, under Scramjet's title for them, from
+    /// a list that `/autopilot on` never chooses from by itself, as in Scramjet.
+    fn suggested(&mut self, suggested: Suggested) -> Option<(String, Start)> {
+        let (steps, recommended) = (&suggested.steps, suggested.recommended);
+        let title = "Agent suggests a next step";
+        let (step, start, routed) =
+            self.offer(title, Source::Suggestion, steps, recommended, false)?;
+        self.take_step(step, start, routed)
+    }
+
+    /// Lets the user choose one of `steps` from `source` under `title`, `recommended` selected
+    /// at first, and the model and effort it runs with; with `autoselect`, the recommended one
+    /// is chosen unless the user acts within `AUTOSELECT`. Records the choice, or that the list
+    /// was dismissed.
+    fn offer(
+        &mut self,
+        title: &str,
+        source: Source,
+        steps: &[Step],
+        recommended: Option<usize>,
+        autoselect: bool,
+    ) -> Option<(Step, Start, Routed)> {
+        let choices: Vec<_> = steps
+            .iter()
+            .map(|step| Choice {
+                label: step.label(),
+                description: Some(step.description()).filter(|text| !text.is_empty()),
+                value: String::new(),
+            })
+            .collect();
+        let mut picker = select::Picker::question(title, &choices, recommended);
+        if self.screen.is_some() {
+            let models = self.agent.model_options();
+            let current = models.iter().position(|m| m.id == self.agent.model());
+            let effort = self.agent.effort().map(str::to_owned);
+            let route = select::Route::new(models, current.unwrap_or(0), effort);
+            picker = picker.routing(route);
+        }
+        // After the models were read, which the countdown does not wait for.
+        if autoselect {
+            picker = picker.counting_down(AUTOSELECT);
+        }
+        let chosen = (self.screen.as_ref()).and_then(|screen| screen.pick_timed(picker));
+        self.record(source, steps, chosen.as_ref().map(|(at, ..)| *at));
+        let (at, timed, routed) = chosen?;
+        let start = if timed {
+            Start::Unattended
+        } else {
+            Start::Chosen
+        };
+        Some((steps[at].clone(), start, routed))
+    }
+
+    /// Takes a next step with the model and effort `routed` chose: returns its command to run,
+    /// after starting a new session when it asks for one; a text step goes into the editor.
+    fn take_step(&mut self, step: Step, start: Start, routed: Routed) -> Option<(String, Start)> {
         let Some(command) = step.command else {
             self.take_route(routed);
             self.set_text(step.message);
@@ -521,7 +554,7 @@ impl Interactive {
     }
 
     /// Records and shows the next step chosen, or that the list was dismissed.
-    fn record(&mut self, source: &str, steps: &[Step], chosen: Option<usize>) {
+    fn record(&mut self, source: Source, steps: &[Step], chosen: Option<usize>) {
         match self.agent.record_next_step(source, steps, chosen) {
             Ok(record) => {
                 self.ui().next_step(&record);

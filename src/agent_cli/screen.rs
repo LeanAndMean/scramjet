@@ -525,6 +525,9 @@ impl AgentUi for Link {
     fn effort(&mut self) -> Option<String> {
         self.take_effort()
     }
+    fn offers_suggestions(&mut self) -> bool {
+        true
+    }
     fn pause(&mut self) -> bool {
         let queue = self.queue();
         queue.model_steps != 0

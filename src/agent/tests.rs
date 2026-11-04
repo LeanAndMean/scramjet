@@ -39,6 +39,8 @@ pub(super) struct Recorder {
     /// Shows a reply's calls running at the same time each as it runs, `shown` saying whose
     /// call what follows is (`of N`, `of none`).
     pub(super) together: bool,
+    /// Offers the steps the agent suggests (`offers_suggestions`).
+    pub(super) suggests: bool,
 }
 impl AgentUi for Recorder {
     fn waiting(&mut self, purpose: Purpose) {
@@ -153,6 +155,9 @@ impl AgentUi for Recorder {
             true => None,
             false => self.efforts.remove(0),
         }
+    }
+    fn offers_suggestions(&mut self) -> bool {
+        self.suggests
     }
     fn pause(&mut self) -> bool {
         !self.pauses.is_empty() && self.pauses.remove(0)

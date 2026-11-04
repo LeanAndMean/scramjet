@@ -3,9 +3,9 @@
 use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, CONTEXT, Completed, DIFF, Ending, FAILED,
-    MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, Step, TYPED, ToolDetail, USAGE, Usage,
-    UserCommand, autonomy, batch, delegate, forge, message_text, publish, question, sandbox,
-    status, subagent,
+    MAX_STEPS, PROBE, PRODUCER, Purpose, Routing, SUBAGENTS, Source, Step, Suggested, TYPED,
+    ToolDetail, USAGE, Usage, UserCommand, autonomy, batch, delegate, forge, message_text, publish,
+    question, sandbox, status, subagent, suggest,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -72,6 +72,7 @@ impl Agent {
     ) -> Result<(), AgentError> {
         self.compact_before_prompt(ui, cancel)?;
         self.completed = None;
+        self.suggestion = suggest::Pending::Nothing;
         self.delegated.clear();
         // With files the text starts with them, so it is a reply even after a `/`, as in Scramjet.
         let (message, typed) = match self.attached.take() {
@@ -132,6 +133,7 @@ impl Agent {
             match ran {
                 Err(AgentError::Paused) => return Err(AgentError::Paused),
                 Err(error) => {
+                    self.suggestion = suggest::Pending::Nothing;
                     if let Some(notice) = self.lifecycle.interrupted() {
                         ui.notice(&notice);
                     }
@@ -172,6 +174,15 @@ impl Agent {
         self.completed.take()
     }
 
+    /// The steps the agent suggested in the last turn, which ended as a turn ends without a
+    /// command, for the user to choose from.
+    pub fn take_suggestion(&mut self) -> Option<Suggested> {
+        match std::mem::take(&mut self.suggestion) {
+            suggest::Pending::Steps(suggested) => Some(suggested),
+            _ => None,
+        }
+    }
+
     /// The next step of a completed command, from its `next:` policy and the `autonomy.yaml`
     /// edges; `interactive` when the user can choose from a list, `autopilot` when the
     /// recommended command runs unless the user chooses otherwise (usually `self.autopilot()`).
@@ -194,7 +205,7 @@ impl Agent {
     /// record as the result has it.
     pub fn record_next_step(
         &mut self,
-        source: &str,
+        source: Source,
         steps: &[Step],
         chosen: Option<usize>,
     ) -> Result<String, AgentError> {
@@ -357,6 +368,8 @@ to a larger-context model)"
         if messages.is_empty() {
             return Ok(());
         }
+        // The user went on, as Scramjet drops a suggestion at the user's input.
+        self.suggestion = suggest::Pending::Nothing;
         for prompt in messages {
             let message = self.user_message(&prompt, ui);
             match message.get(TYPED) {
@@ -516,7 +529,33 @@ to a larger-context model)"
         };
         ui.tool_call(call.name, &call.summary());
         if call.name == question::NAME {
-            return ask(&call.arguments, &mut self.lifecycle, ui);
+            let (output, ends) = ask(&call.arguments, &mut self.lifecycle, ui);
+            let freetext = question::Question::parse(&call.arguments)
+                .is_ok_and(|question| question.kind == question::Kind::Freetext);
+            if freetext {
+                self.suggestion = suggest::Pending::Reply;
+            }
+            return (output, ends);
+        }
+        if call.name == suggest::NAME {
+            let (active, shows) = (self.lifecycle.active(), ui.offers_suggestions());
+            let (commands, pending) = (&self.commands, &self.suggestion);
+            let (text, failed) =
+                match suggest::run(&call.arguments, commands, active, shows, pending) {
+                    Ok((suggested, text)) => {
+                        self.suggestion = suggest::Pending::Steps(suggested);
+                        (text, false)
+                    }
+                    Err(refused) => refused,
+                };
+            ui.tool_result(call.name, &text, None, failed);
+            let output = Output {
+                text,
+                detail: None,
+                failed,
+                image: None,
+            };
+            return (output, false);
         }
         if call.name == delegate::NAME {
             let active = self.lifecycle.active();
@@ -1470,14 +1509,16 @@ files is added or changed.",
                 "add_pr_comment",
                 question::NAME,
                 delegate::NAME,
-                subagent::NAME
+                subagent::NAME,
+                suggest::NAME
             ]
         );
         let instructions = bodies[0]["instructions"].as_str().unwrap();
         for line in [
             "- read: Read file contents\n- grep: Search file contents for patterns (respects \
 .gitignore)\n- ls: List directory contents\n- report_scramjet_command_status:",
-            "Guidelines:\n- Use read to examine files instead of cat or sed.\n- Be concise",
+            "Guidelines:\n- Use read to examine files instead of cat or sed.\n- When idle in an \
+interactive session, prefer `suggest_scramjet_next_steps`",
         ] {
             assert!(instructions.contains(line), "{instructions}");
         }
@@ -2403,12 +2444,16 @@ auto-dispatches it only when its message is a slash command."
             command: Some(message.into()),
         };
         let steps = [step(0, "/rs:review", "risky"), step(2, "/rs:loop", "")];
-        let shown = agent.record_next_step("rs:loop", &steps, Some(1)).unwrap();
+        let shown = agent
+            .record_next_step(Source::Completion("rs:loop"), &steps, Some(1))
+            .unwrap();
         assert_eq!(
             shown,
             "Next step (from rs:loop):\n  /rs:review — risky\n→ /rs:loop"
         );
-        let dismissed = agent.record_next_step("rs:loop", &steps, None).unwrap();
+        let dismissed = agent
+            .record_next_step(Source::Completion("rs:loop"), &steps, None)
+            .unwrap();
         let mut ui = Recorder::default();
         agent
             .turn("go on", &mut ui, &AtomicBool::new(false))
@@ -2484,6 +2529,105 @@ auto-dispatches it only when its message is a slash command."
                 &TreeItem::Tool(status::RECORD.into(), "dismissed".into())
             ]
         );
+    }
+
+    #[test]
+    fn a_suggestion_waits_for_the_turns_end_unless_the_user_goes_on_or_it_stops() {
+        let suggest = |id: &str| {
+            let step = json!({"message":"/rs:work 5","fresh_session":false,"reason":"Go on."});
+            tool_call(
+                id,
+                suggest::NAME,
+                json!({"next_steps":[step],"recommended_next_step":0}),
+            )
+        };
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let failed = b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        let step = json!({"message":"/rs:work 5","fresh_session":false,"reason":"Go on."});
+        let (endpoint, server) = serve(vec![
+            suggest("call_1"),
+            reply("Try it."),
+            suggest("call_2"),
+            reply("Waiting."),
+            tool_calls(&[
+                (suggest::NAME, json!({"next_steps":[step]})),
+                (
+                    question::NAME,
+                    json!({"type":"freetext","message":"Which?"}),
+                ),
+            ]),
+            suggest("call_3"),
+            reply("Asked."),
+            suggest("call_4"),
+            failed.to_vec(),
+            suggest("call_5"),
+            reply("Unseen."),
+            reply("Plain."),
+            suggest("call_6"),
+            tool_call(
+                "call_7",
+                status::NAME,
+                json!({"summary":"Done.","status":"completed"}),
+            ),
+        ]);
+        let (mut agent, _scratch) = command_agent(endpoint, "suggest", CLOSED);
+        let mut ui = Recorder {
+            suggests: true,
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+
+        // Kept for the end of the turn, which goes on after it.
+        agent.turn("what next?", &mut ui, &cancel).unwrap();
+        let suggested = agent.take_suggestion().unwrap();
+        assert_eq!(suggested.recommended, Some(0));
+        let commands: Vec<_> = (suggested.steps.iter())
+            .map(|step| step.command.as_deref())
+            .collect();
+        assert_eq!(commands, [Some("/rs:work 5")]);
+        assert_eq!(agent.take_suggestion(), None);
+
+        // Dropped when the user sends a message meanwhile, a question waits for their reply (and
+        // none is taken until then), the turn fails or the next one starts.
+        ui.steering = vec![Vec::new(), vec!["no, wait".into()]];
+        agent.turn("again", &mut ui, &cancel).unwrap();
+        assert_eq!(agent.take_suggestion(), None);
+        agent.turn("and?", &mut ui, &cancel).unwrap();
+        assert!(
+            ui.shown.contains(&"question Which?".to_owned()),
+            "{:?}",
+            ui.shown
+        );
+        assert_eq!(agent.take_suggestion(), None);
+        assert!(agent.turn("fails", &mut ui, &cancel).is_err());
+        assert_eq!(agent.take_suggestion(), None);
+        agent.turn("unseen", &mut ui, &cancel).unwrap();
+        agent.turn("plain", &mut ui, &cancel).unwrap();
+        assert_eq!(agent.take_suggestion(), None);
+
+        // A running command offers its steps with its report instead.
+        agent.turn("/rs:work 1", &mut ui, &cancel).unwrap();
+        assert_eq!(agent.take_suggestion(), None);
+        assert!(agent.take_completed().is_some());
+
+        let bodies = server.join().unwrap();
+        let accepted = "Suggestion accepted — the user will see a selector popup with: /rs:work 5";
+        assert_eq!(outputs(&bodies[1]), [("call_1".into(), accepted.into())]);
+        let result = |body: &Value, id: &str| {
+            let found = outputs(body).into_iter().find(|(call, _)| call == id);
+            found.unwrap().1
+        };
+        assert!(result(&bodies[6], "call_3").starts_with("A freetext reply is pending"));
+        let refused = result(&bodies[13], "call_6");
+        assert!(
+            refused.contains("only when no command is active (/rs:work is)"),
+            "{refused}"
+        );
+        // The model sees the tool and its guideline.
+        let tools = bodies[0]["tools"].as_array().unwrap();
+        assert!(tools.iter().any(|tool| tool["name"] == suggest::NAME));
+        let instructions = bodies[0]["instructions"].as_str().unwrap();
+        assert!(instructions.contains(suggest::GUIDELINE));
     }
 
     /// An agent in a scratch project whose `rs:work` command has `next`, and `rs:other`.

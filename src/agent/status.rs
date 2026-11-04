@@ -58,21 +58,25 @@ with get_scramjet_user_input."},
                 "description":"Ordered next-step candidates for completed commands. Omit \
 entirely to stop the chain. Each entry is a suggested next message; entries may reuse the same \
 slash command with different arguments to offer meaningful variants.",
-                "items":{"type":"object","properties":{
-                    "message":{"type":"string","description":"The suggested next message, shown \
-to the user verbatim and dispatched on selection. For a slash command, start with '/' and include \
-any arguments, e.g. '/mach12:issue-plan 55'. For a non-command follow-up, write the message text \
-directly."},
-                    "fresh_session":{"type":"boolean","description":"Whether to start a fresh \
-session first (true if instructions say '/clear then ...' or 'in a fresh session'). Only \
-meaningful for slash commands; defaults to false."},
-                    "reason":{"type":"string","description":"Brief explanation of why this next \
-step fits."}},
-                  "required":["message","fresh_session"]}},
+                "items":next_step_schema()},
             "recommended_next_step":{"type":"integer","minimum":0,
                 "description":"Zero-based index into next_steps for the recommended selector \
 option."}},
           "required":["summary","status"]}})
+}
+
+/// Scramjet's schema of a next step the model offers.
+pub(super) fn next_step_schema() -> Value {
+    json!({"type":"object","properties":{
+        "message":{"type":"string","description":"The suggested next message, shown to the user \
+verbatim and dispatched on selection. For a slash command, start with '/' and include any \
+arguments, e.g. '/mach12:issue-plan 55'. For a non-command follow-up, write the message text \
+directly."},
+        "fresh_session":{"type":"boolean","description":"Whether to start a fresh session first \
+(true if instructions say '/clear then ...' or 'in a fresh session'). Only meaningful for slash \
+commands; defaults to false."},
+        "reason":{"type":"string","description":"Brief explanation of why this next step fits."}},
+      "required":["message","fresh_session"]})
 }
 
 /// A next step the model offers: a message to send, a slash command or text.
@@ -272,19 +276,10 @@ impl Lifecycle {
                 summary: summary.to_owned(),
             });
         }
-        let next_steps: Vec<Offered> = arguments["next_steps"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|step| Offered {
-                message: step["message"].as_str().unwrap_or_default().to_owned(),
-                fresh_session: step["fresh_session"].as_bool().unwrap_or(false),
-                reason: step["reason"].as_str().map(str::to_owned),
-            })
-            .collect();
-        let recommended = arguments["recommended_next_step"]
-            .as_u64()
-            .map(|index| index as usize);
+        let Report {
+            next_steps,
+            recommended,
+        } = Report::of(arguments);
         let next = match recommended {
             Some(index) => next_steps.get(index),
             None => next_steps.first(),
@@ -366,6 +361,93 @@ and did not finish or ask you anything. Reply to continue."
     }
 }
 
+impl Report {
+    /// The `next_steps` and `recommended_next_step` of a call's arguments, once valid.
+    fn of(arguments: &Value) -> Self {
+        let next_steps = (arguments["next_steps"].as_array().into_iter().flatten())
+            .map(|step| Offered {
+                message: step["message"].as_str().unwrap_or_default().to_owned(),
+                fresh_session: step["fresh_session"].as_bool().unwrap_or(false),
+                reason: step["reason"].as_str().map(str::to_owned),
+            })
+            .collect();
+        let recommended = arguments["recommended_next_step"]
+            .as_u64()
+            .map(|index| index as usize);
+        Self {
+            next_steps,
+            recommended,
+        }
+    }
+}
+
+/// Why `next_steps` and `recommended_next_step` do not fit their schema, as Pi words it.
+pub(super) fn next_steps_errors(arguments: &Value, errors: &mut Vec<&'static str>) {
+    match &arguments["next_steps"] {
+        Value::Null => {}
+        Value::Array(steps) => {
+            let valid = |step: &Value| {
+                step["message"].is_string()
+                    && step["fresh_session"].is_boolean()
+                    && (step["reason"].is_null() || step["reason"].is_string())
+            };
+            if !steps.iter().all(valid) {
+                errors.push(
+                    "  - next_steps: each entry must have a string message, a boolean \
+fresh_session and an optional string reason",
+                );
+            }
+        }
+        _ => errors.push("  - next_steps: must be an array"),
+    }
+    let recommended = &arguments["recommended_next_step"];
+    if !recommended.is_null() && !recommended.is_u64() {
+        errors.push("  - recommended_next_step: must be an integer of at least 0");
+    }
+}
+
+/// What the model receives for a call of `tool` whose arguments have schema `errors`.
+pub(super) fn validation_failed(tool: &str, errors: &[&str], arguments: &Value) -> String {
+    let received = serde_json::to_string_pretty(arguments).unwrap_or_default();
+    format!(
+        "Validation failed for tool \"{tool}\":\n{}\n\nReceived arguments:\n{received}",
+        errors.join("\n")
+    )
+}
+
+/// The steps of a `suggest_scramjet_next_steps` call (valid arguments) that can be offered, as
+/// Scramjet's tool checks them: any command not `delegate-only`, or text, each with a reason;
+/// with the recommended one's position among them. Otherwise why none can.
+pub(super) fn suggested(
+    arguments: &Value,
+    commands: &Commands,
+) -> Result<(Vec<Step>, Option<usize>), String> {
+    let open = Policy::Open {
+        candidates: Vec::new(),
+        blacklist: Vec::new(),
+    };
+    let unknown = |name: &str| {
+        let available: Vec<_> = (commands.list().iter())
+            .filter(|command| !command.delegate_only)
+            .map(|command| format!("/{}", command.name))
+            .collect();
+        match available.is_empty() {
+            true => format!("unknown command \"{name}\""),
+            false => format!(
+                "unknown command \"{name}\" — available: {}",
+                available.join(", ")
+            ),
+        }
+    };
+    let checked = check_with(&Report::of(arguments), &open, commands, &unknown);
+    match checked.valid.is_empty() {
+        true => Err(checked
+            .reason
+            .unwrap_or_else(|| "no valid next steps".into())),
+        false => Ok((checked.valid, checked.recommended)),
+    }
+}
+
 /// The summary and whether the call abandons the command, or what the model receives: the
 /// schema errors, as Pi lists them, or why a status of Scramjet's is not one here.
 fn validate(arguments: &Value) -> Result<(&str, bool), String> {
@@ -392,36 +474,10 @@ more you can do, keep working; if you need something from the user, ask with \
             None
         }
     };
-    match &arguments["next_steps"] {
-        Value::Null => {}
-        Value::Array(steps) => {
-            let valid = |step: &Value| {
-                step["message"].is_string()
-                    && step["fresh_session"].is_boolean()
-                    && (step["reason"].is_null() || step["reason"].is_string())
-            };
-            if !steps.iter().all(valid) {
-                errors.push(
-                    "  - next_steps: each entry must have a string message, a boolean \
-fresh_session and an optional string reason",
-                );
-            }
-        }
-        _ => errors.push("  - next_steps: must be an array"),
-    }
-    let recommended = &arguments["recommended_next_step"];
-    if !recommended.is_null() && !recommended.is_u64() {
-        errors.push("  - recommended_next_step: must be an integer of at least 0");
-    }
+    next_steps_errors(arguments, &mut errors);
     match (errors.is_empty(), abandon) {
         (true, Some(abandon)) => Ok((summary, abandon)),
-        _ => {
-            let received = serde_json::to_string_pretty(arguments).unwrap_or_default();
-            Err(format!(
-                "Validation failed for tool \"{NAME}\":\n{}\n\nReceived arguments:\n{received}",
-                errors.join("\n")
-            ))
-        }
+        _ => Err(validation_failed(NAME, &errors, arguments)),
     }
 }
 
@@ -741,10 +797,22 @@ struct Checked {
 }
 
 fn check(report: &Report, policy: &Policy, commands: &Commands) -> Checked {
+    check_with(report, policy, commands, &|name| {
+        format!("{name} is not registered")
+    })
+}
+
+/// As `check`, `unknown` saying why a command that is not installed cannot follow.
+fn check_with(
+    report: &Report,
+    policy: &Policy,
+    commands: &Commands,
+    unknown: &dyn Fn(&str) -> String,
+) -> Checked {
     let mut valid = Vec::new();
     let mut skipped = Vec::new();
     for (index, offered) in report.next_steps.iter().enumerate() {
-        match allowed(offered, policy, commands) {
+        match allowed(offered, policy, commands, unknown) {
             Ok(command) => valid.push(Step {
                 index,
                 message: offered.message.clone(),
@@ -794,6 +862,7 @@ fn allowed(
     offered: &Offered,
     policy: &Policy,
     commands: &Commands,
+    unknown: &dyn Fn(&str) -> String,
 ) -> Result<Option<String>, String> {
     let parsed = parse_slash(&offered.message);
     let open = matches!(policy, Policy::Open { .. });
@@ -815,7 +884,7 @@ fn allowed(
             _ => {}
         }
         match commands.get(name) {
-            None => return Err(format!("{name} is not registered")),
+            None => return Err(unknown(name)),
             Some(command) if command.delegate_only => {
                 return Err(format!(
                     "{name} is delegate-only (invoke via delegate, not top-level dispatch)"
@@ -936,10 +1005,22 @@ steps"
     Next::Nothing
 }
 
+/// Where next steps offered to the user come from, as Scramjet's record says.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Source<'a> {
+    /// The report of this command, completed.
+    Completion(&'a str),
+    /// The agent's suggestion outside a command (`suggest_scramjet_next_steps`).
+    Suggestion,
+}
+
 /// Scramjet's record of a next-step choice: the options offered and the one chosen (`None`:
 /// the list was dismissed).
-pub fn record(source: &str, steps: &[Step], chosen: Option<usize>) -> String {
-    let mut lines = vec![format!("Next step (from {}):", clean_display(source))];
+pub fn record(source: Source, steps: &[Step], chosen: Option<usize>) -> String {
+    let mut lines = vec![match source {
+        Source::Completion(command) => format!("Next step (from {}):", clean_display(command)),
+        Source::Suggestion => "Agent-suggested next step:".to_owned(),
+    }];
     for (position, step) in steps.iter().enumerate() {
         let mark = match chosen {
             None => "- ",
@@ -961,7 +1042,7 @@ pub fn record(source: &str, steps: &[Step], chosen: Option<usize>) -> String {
 
 /// The arguments of the `RECORD` call for `record`'s choice, as Scramjet's
 /// `NextStepRecordParams`.
-pub(super) fn record_arguments(source: &str, steps: &[Step], chosen: Option<usize>) -> Value {
+pub(super) fn record_arguments(source: Source, steps: &[Step], chosen: Option<usize>) -> Value {
     let options: Vec<_> = (steps.iter())
         .map(|step| match step.reason.is_empty() {
             true => json!({"message":step.message}),
@@ -972,8 +1053,12 @@ pub(super) fn record_arguments(source: &str, steps: &[Step], chosen: Option<usiz
         Some(_) => "selected",
         None => "dismissed",
     };
-    json!({"outcome":outcome,"options":options,"selectedIndex":chosen,"sourceCommand":source,
-        "source":"completion"})
+    let (command, source) = match source {
+        Source::Completion(command) => (Some(command), "completion"),
+        Source::Suggestion => (None, "suggestion"),
+    };
+    json!({"outcome":outcome,"options":options,"selectedIndex":chosen,"sourceCommand":command,
+        "source":source})
 }
 
 /// A `RECORD` call's line: the step chosen, or that the list was dismissed.
@@ -1618,11 +1703,11 @@ auto-dispatches it only when its message is a slash command."
             },
         ];
         assert_eq!(
-            record("rs:loop", &steps, Some(1)),
+            record(Source::Completion("rs:loop"), &steps, Some(1)),
             "Next step (from rs:loop):\n  /rs:loop — Continue now.\n→ /rs:steer"
         );
         assert_eq!(
-            record("rs:loop", &steps, None),
+            record(Source::Completion("rs:loop"), &steps, None),
             "Next step (from rs:loop):\n- /rs:loop — Continue now.\n- /rs:steer\nCancelled"
         );
         assert_eq!(steps[1].label(), "2: /rs:steer");

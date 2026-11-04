@@ -23,6 +23,7 @@ mod session;
 mod skills;
 mod status;
 mod subagent;
+mod suggest;
 mod tools;
 mod tree;
 mod turn;
@@ -40,7 +41,8 @@ pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
 pub use session::{Branch, Removal, Session, SessionInfo, read_branch};
 pub use skills::{Skill, Skills};
-pub use status::{Completed, Next, Routing, Step};
+pub use status::{Completed, Next, Routing, Source, Step};
+pub use suggest::Suggested;
 pub use tools::{
     CODING_TOOLS, DEFAULT_TOOLS, search_program, sequence_diff, shortened, terminal_line,
     write_replacing,
@@ -376,6 +378,9 @@ pub struct Agent {
     lifecycle: status::Lifecycle,
     /// The command the last turn reported completed, until its next step is routed.
     completed: Option<Completed>,
+    /// The steps the agent suggested in the last turn, outside a command, for the user to choose
+    /// from once it ends.
+    suggestion: suggest::Pending,
     /// The commands delegated in this turn, with their arguments.
     delegated: Vec<(String, String)>,
     /// Files the next prompt sends.
@@ -509,6 +514,7 @@ impl Agent {
             skills: Skills::default(),
             lifecycle,
             completed: None,
+            suggestion: suggest::Pending::Nothing,
             delegated: Vec::new(),
             attached: None,
             autonomy: autonomy::global_path(),

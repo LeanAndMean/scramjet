@@ -103,6 +103,11 @@ pub trait AgentUi {
     fn effort(&mut self) -> Option<String> {
         None
     }
+    /// Whether the user can choose from the steps the agent suggests once the turn ends
+    /// (`suggest_scramjet_next_steps`), as from a list on the full screen.
+    fn offers_suggestions(&mut self) -> bool {
+        false
+    }
     /// Whether the user gave the session something to do with the agent while the turn runs,
     /// such as a command: the turn then returns `AgentError::Paused` before its next request,
     /// and `Agent::resume_turn` goes on with it.
