@@ -3,29 +3,32 @@ use super::settings::{LEVELS, card_level};
 use scramjet_rs::agent::SessionChoice;
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
-pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model ID] \
-[--models PATTERNS] [--effort LEVEL] [--max-output-tokens N] [--retries N]
-[--continue | -r | --session FILE] [--ask] [-p] [@FILE...] [MESSAGE...]
-       scramjet-rs --export FILE [OUTPUT]
+pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model PATTERN] \
+[--models PATTERNS] [--thinking LEVEL] [--max-output-tokens N] [--retries N]
+[-c | -r | --session FILE] [--ask] [-p] [@FILE...] [MESSAGE...]
+       scramjet-rs --list-models [SEARCH] | --export FILE [OUTPUT] | --version
        scramjet-rs install DIR | remove NAME|DIR | list
 
 Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
 the Messages API for Claude models (those whose Proxy model card lists only Messages).
   --project DIR          project directory (default: current directory)
-  --model ID             model (default: the one a resumed session last used; for a new
-                         session, the one last chosen in this project, else anywhere, as in
-                         Scramjet, else gpt-6-luna)
+  --model PATTERN        model, as Scramjet finds it: the one whose id or provider/id PATTERN
+                         is, else the newest whose id or name contains it (after provider/,
+                         among that provider's), with an optional :LEVEL that sets the
+                         thinking level (default: the one a resumed session last used; for a
+                         new session, the one last chosen in this project, else anywhere, as
+                         in Scramjet, else gpt-6-luna)
   --models PATTERNS      the models Ctrl+P cycles through, comma-separated, in place of the
                          settings' enabledModels: each a model's id, part of its id or name,
                          or a glob (claude-*), with an optional :LEVEL; a new session without
                          --model starts with the one last chosen when it is one of them, else
                          with the first, at its level
-  --effort LEVEL         reasoning effort: off, minimal, low, medium, high, xhigh or max, the
-                         nearest the model's Proxy card lists (default: the one a resumed
-                         session last used, else the settings' defaultThinkingLevel, else
-                         medium)
+  --thinking LEVEL       reasoning effort (also --effort): off, minimal, low, medium, high,
+                         xhigh or max, the nearest the model's Proxy card lists (default: the
+                         one --model's :LEVEL sets, else the one a resumed session last used,
+                         else the settings' defaultThinkingLevel, else medium)
   --retries N            resend a request that failed transiently up to N times (default 3)
-  --continue             resume the session for this project written to last
+  -c, --continue         resume the session for this project written to last
   -r, --resume           choose one of this project's sessions to resume, as /resume does
   --session FILE         resume a specific session file
   --ask                  ask before each bash command and each write or edit outside the
@@ -38,6 +41,10 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   MESSAGE                prompts sent one after another when the session starts
   --export FILE [OUTPUT] write the session file FILE as a web page to OUTPUT (default:
                          scramjet-rs-session-<its name>.html here), as /export does, and exit
+  --list-models [SEARCH] list the endpoint's models (those SEARCH matches) by provider, with
+                         their context window, output limit, and whether they reason and
+                         take images, as Scramjet lists them, and exit
+  -v, --version          print the version and exit
 The session fills the terminal's alternate screen: the conversation above a status line and the
 prompt, and under it the project's directory and Git branch, the session's tokens, how full the
 context is and the model, as Scramjet's footer. Page Up/Down and the mouse wheel scroll the
@@ -128,13 +135,14 @@ pub(super) struct Options {
     pub(super) messages: Vec<String>,
     /// `--export FILE`: the session file to write as a page, to the first message if any.
     pub(super) export: Option<PathBuf>,
+    /// `--list-models [SEARCH]`.
+    pub(super) list_models: Option<Option<String>>,
+    pub(super) version: bool,
 }
 
 impl Options {
     /// The options `arguments` give; `None` when they ask for `--help`.
-    pub(super) fn parse(
-        mut arguments: impl Iterator<Item = OsString>,
-    ) -> Result<Option<Self>, String> {
+    pub(super) fn parse(arguments: impl Iterator<Item = OsString>) -> Result<Option<Self>, String> {
         let mut options = Self {
             project: None,
             endpoint: ([127, 0, 0, 1], 18080).into(),
@@ -150,7 +158,10 @@ impl Options {
             files: Vec::new(),
             messages: Vec::new(),
             export: None,
+            list_models: None,
+            version: false,
         };
+        let mut arguments = arguments.peekable();
         while let Some(argument) = arguments.next() {
             let mut value = || {
                 arguments
@@ -171,11 +182,11 @@ impl Options {
                     let patterns = value()?.split(',').map(|p| p.trim().to_owned()).collect();
                     options.models = Some(patterns)
                 }
-                Some("--effort") => {
+                Some(name @ ("--thinking" | "--effort")) => {
                     let level = value()?;
                     let Some(level) = card_level(&level) else {
                         return Err(format!(
-                            "invalid --effort {level:?}: valid levels are {}",
+                            "invalid {name} {level:?}: valid levels are {}",
                             LEVELS.join(", ")
                         ));
                     };
@@ -191,7 +202,7 @@ impl Options {
                 Some("--retries") => {
                     options.retries = value()?.parse().map_err(|_| "invalid --retries")?
                 }
-                Some("--continue") => {
+                Some("-c" | "--continue") => {
                     (options.choice, options.resume) = (SessionChoice::Continue, false)
                 }
                 Some("-r" | "--resume") => {
@@ -202,6 +213,14 @@ impl Options {
                     (options.choice, options.resume) = (SessionChoice::Open(path), false)
                 }
                 Some("--export") => options.export = Some(PathBuf::from(value()?)),
+                // As Scramjet's, a search is the next word unless it is an option or a file.
+                Some("--list-models") => {
+                    let search = arguments.next_if(|next| {
+                        (next.to_str()).is_some_and(|next| !next.starts_with(['-', '@']))
+                    });
+                    options.list_models = Some(search.and_then(|search| search.into_string().ok()))
+                }
+                Some("-v" | "--version") => options.version = true,
                 Some("--ask") => options.ask = true,
                 Some("-p" | "--print") => options.print = true,
                 Some("-h" | "--help") => return Ok(None),

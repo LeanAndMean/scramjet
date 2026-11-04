@@ -143,6 +143,9 @@ mod tests {
             reasoning: true,
             levels: Vec::new(),
             default_level: None,
+            window: None,
+            output: None,
+            images: true,
             rate: None,
         };
         let models = [

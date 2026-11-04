@@ -1240,7 +1240,8 @@ fn a_next_step_offers_the_endpoints_models_with_their_cards_and_the_current_one(
     let list = json!({"data": [{"id": "gpt"}, {"id": "claude"}]}).to_string();
     let cards = json!({"models": [
         {"requestId": "claude", "displayName": "Claude", "provider": "anthropic",
-            "reasoning": {"levels": ["low", "high"]}},
+            "reasoning": {"levels": ["low", "high"]}, "input": ["text"],
+            "limits": {"context": 200_000, "output": 64_000}},
         {"requestId": "m", "displayName": "Current", "reasoning": null},
     ]})
     .to_string();
@@ -1258,6 +1259,9 @@ fn a_next_step_offers_the_endpoints_models_with_their_cards_and_the_current_one(
         reasoning,
         levels: levels.iter().map(|level| level.to_string()).collect(),
         default_level: None,
+        window: None,
+        output: None,
+        images: true,
         rate: None,
     };
     // The current model, which the endpoint does not list, goes first, as its card says.
@@ -1267,7 +1271,12 @@ fn a_next_step_offers_the_endpoints_models_with_their_cards_and_the_current_one(
         [
             option("m", Some("Current"), false, &[]),
             option("gpt", None, true, &[]),
-            option("claude", Some("Claude"), true, &["low", "high"]),
+            ModelOption {
+                window: Some(200_000),
+                output: Some(64_000),
+                images: false,
+                ..option("claude", Some("Claude"), true, &["low", "high"])
+            },
         ]
     );
     let claude = &options[2];

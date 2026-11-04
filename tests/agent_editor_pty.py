@@ -1957,7 +1957,7 @@ prompts = [item['content'] for item in map(json.loads, open(effort)) if item.get
 assert prompts == ['aXb'], prompts
 run(['--continue'], shift_tab_resumed, serve_replies([], cards=effort_cards), variables=in_levels)
 assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max'], saved_levels(effort)
-run(['--continue', '--effort', 'low'], started_at('low'), serve_replies([], cards=effort_cards),
+run(['-c', '--effort', 'low'], started_at('low'), serve_replies([], cards=effort_cards),
     variables=in_levels)
 assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max', 'low'], saved_levels(effort)
 # --effort is not saved; a new session starts at the level Shift+Tab saved.
@@ -2016,6 +2016,25 @@ os.remove(remembered_models)
 run(['--models', 'terra, x'], ctrl_p_in_a_scope_of_one,
     serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
     variables={'XDG_CONFIG_HOME': config_home('scope-of-one')}, columns=80)
+# As Scramjet's --model, a pattern names a model, a provider's prefix among its own, and :level sets
+# the effort, unless --thinking does.
+named = config_home('named-model')
+for arguments, started in [(['--model', 'terra:low'], 'gpt-6-terra \u00b7 thinking low'),
+                           (['--model', 'OpenAI/Terra:low', '--thinking', 'high'], 'gpt-6-terra \u00b7 thinking high')]:
+    run(arguments, starts_with(started), serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
+        variables={'XDG_CONFIG_HOME': named})
+# One naming none is refused before a session is written.
+known = set(session_files())
+ran = subprocess.run([BINARY, '--endpoint', serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
+                      '--model', 'sol', '-p', 'go'], cwd=project, env=dict(env, XDG_CONFIG_HOME=named),
+                     capture_output=True, timeout=30)
+assert (ran.returncode, ran.stdout, ran.stderr) == (
+    1, b'', b'scramjet-rs: --model "sol" names none of the endpoint\'s models (--list-models lists them)\n'), ran
+assert set(session_files()) == known, set(session_files()) - known
+ran = subprocess.run([BINARY, '--endpoint', serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
+                      '--list-models', 'terra'], cwd=project, capture_output=True, timeout=30)
+assert (ran.returncode, ran.stdout.decode()) == (0, 'provider  model        context  max-out  thinking  images\n'
+                                                   'openai    gpt-6-terra  -        -        yes       yes\n'), ran
 listed = config_home('listed')
 haiku_card = {'requestId': 'claude-haiku-5-5', 'displayName': 'Claude Haiku 5.5', 'provider': 'anthropic',
               'supportedProtocols': ['anthropic-messages'], 'reasoning': None}

@@ -1,7 +1,7 @@
 //! Choosing models: `/model`, and the scope Ctrl+P cycles through, as Scramjet's: the models the
 //! patterns of `--models` or the settings' `enabledModels` choose, else all the endpoint's;
 //! `/scoped-models` chooses them.
-use super::fuzzy::Haystack;
+use super::fuzzy::{self, Haystack};
 use super::interactive::{Interactive, model_line};
 use super::select::{self, Act, Picked, Picker, Spot};
 use super::settings::{Settings, card_level, scramjet_level};
@@ -9,6 +9,7 @@ use super::style::{MODEL_OFF, MODEL_ON, MUTED, RESET};
 use super::terminal;
 use super::text::{clip, visible};
 use scramjet_rs::agent::{Agent, ModelOption};
+use unicode_width::UnicodeWidthStr;
 
 const IN_SCOPE_KEYS: &str = "↑↓ move · Enter select · Tab all models · Esc cancel";
 const ALL_KEYS: &str = "↑↓ move · Enter select · Tab models for Ctrl+P · Esc cancel";
@@ -172,6 +173,121 @@ pub(super) fn exact<'a>(reference: &str, models: &'a [ModelOption]) -> Option<&'
             .filter(|model| model.id.to_lowercase() == reference)
             .collect(),
     )
+}
+
+/// The model `pattern` names among `models`, as Scramjet resolves `--model`: the one whose id or
+/// `provider/id` it is (`exact`), else after a provider's `provider/` one of its models, else any,
+/// as `named_partly` finds it. `None` when it names none.
+pub(super) fn named(pattern: &str, models: &[ModelOption]) -> Option<Scoped> {
+    let pattern = pattern.trim();
+    if let Some(model) = exact(pattern, models) {
+        let id = model.id.clone();
+        return Some(Scoped { id, level: None });
+    }
+    let provider = pattern.split_once('/').and_then(|(provider, rest)| {
+        let theirs: Vec<ModelOption> = (models.iter())
+            .filter(|model| {
+                (model.provider.as_deref()).is_some_and(|p| p.eq_ignore_ascii_case(provider))
+            })
+            .cloned()
+            .collect();
+        (!theirs.is_empty()).then_some((theirs, rest))
+    });
+    (provider.and_then(|(theirs, rest)| named_partly(rest, &theirs)))
+        .or_else(|| named_partly(pattern, models))
+}
+
+/// The model `pattern` names as Scramjet's strict `parseModelPattern` finds it: the newest whose
+/// id or name contains it, preferring an alias (`matching`; a glob names none), else, before a
+/// last `:level`, the model the rest names, at that level.
+fn named_partly(pattern: &str, models: &[ModelOption]) -> Option<Scoped> {
+    if !pattern.contains(['*', '?', '['])
+        && let Some(model) = matching(pattern, models).first()
+    {
+        let id = model.id.clone();
+        return Some(Scoped { id, level: None });
+    }
+    let (body, suffix) = pattern.rsplit_once(':')?;
+    let level = Some(card_level(suffix)?.to_owned());
+    Some(Scoped {
+        level,
+        ..named_partly(body, models)?
+    })
+}
+
+/// The endpoint's `models` as `--list-models` prints them, as Scramjet's: those `search` matches
+/// (all without one) by provider and id, each with its context window, its output limit, and
+/// whether it reasons and takes images.
+pub(super) fn listing(models: &[ModelOption], search: Option<&str>) -> String {
+    let provider = |model: &ModelOption| model.provider.clone().unwrap_or_default();
+    let mut shown: Vec<&ModelOption> = match search {
+        Some(search) => {
+            let rows: Vec<Haystack> = (models.iter())
+                .map(|model| Haystack::new(&format!("{} {}", provider(model), model.id)))
+                .collect();
+            let found = fuzzy::filter(&fuzzy::parse(search), &rows);
+            found.into_iter().map(|index| &models[index]).collect()
+        }
+        None => models.iter().collect(),
+    };
+    if shown.is_empty() {
+        return match search {
+            Some(search) => format!("No models matching \"{search}\"\n"),
+            None => "The endpoint lists no models\n".to_owned(),
+        };
+    }
+    shown.sort_by(|a, b| (provider(a), &a.id).cmp(&(provider(b), &b.id)));
+    let yes = |yes: bool| if yes { "yes" } else { "no" }.to_owned();
+    let header = [
+        "provider", "model", "context", "max-out", "thinking", "images",
+    ];
+    let rows: Vec<[String; 6]> = (Some(header.map(str::to_owned)).into_iter())
+        .chain(shown.iter().map(|model| {
+            [
+                provider(model),
+                model.id.clone(),
+                token_count(model.window),
+                token_count(model.output),
+                yes(model.reasoning),
+                yes(model.images),
+            ]
+        }))
+        .collect();
+    let widths: Vec<usize> = (0..header.len())
+        .map(|column| {
+            rows.iter()
+                .map(|row| row[column].width())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let mut text = String::new();
+    for row in &rows {
+        let cells = row.iter().zip(&widths);
+        let line = cells
+            .map(|(cell, &width)| format!("{cell}{}", " ".repeat(width - cell.width())))
+            .collect::<Vec<_>>()
+            .join("  ");
+        text += line.trim_end();
+        text.push('\n');
+    }
+    text
+}
+
+/// A number of tokens as Scramjet's model list writes it: `200K`, `1M`, `1.1M`; `-` when unknown.
+fn token_count(count: Option<u64>) -> String {
+    let Some(count) = count else {
+        return "-".to_owned();
+    };
+    let (value, unit) = match count {
+        1_000_000.. => (count as f64 / 1e6, "M"),
+        1_000.. => (count as f64 / 1e3, "K"),
+        _ => return count.to_string(),
+    };
+    match value.fract() == 0.0 {
+        true => format!("{value}{unit}"),
+        false => format!("{value:.1}{unit}"),
+    }
 }
 
 /// The model `steps` Ctrl+P presses move to from `current` in `scope` (negative: Shift+Ctrl+P),
@@ -619,6 +735,9 @@ mod tests {
             reasoning: true,
             levels: Vec::new(),
             default_level: None,
+            window: None,
+            output: None,
+            images: true,
             rate: None,
         }
     }
@@ -676,6 +795,88 @@ mod tests {
         // Several of the same id name none, as in Scramjet.
         let twice = [models[4].clone(), models[4].clone()];
         assert_eq!(exact("claude-haiku-5-5", &twice), None);
+    }
+
+    #[test]
+    fn the_model_option_names_one_model_as_scramjets_does() {
+        let models = proxy();
+        let named = |pattern| named(pattern, &models).map(|scoped| (scoped.id, scoped.level));
+        let at = |id: &str, level: Option<&str>| Some((id.to_owned(), level.map(str::to_owned)));
+        assert_eq!(named("Claude-Opus-5-5"), at("claude-opus-5-5", None));
+        assert_eq!(named("haiku"), at("claude-haiku-5-5", None));
+        assert_eq!(named("Sonnet 5.5"), at("claude-sonnet-5-5", None));
+        // A level after the last colon, Scramjet's `off` as the cards' `none`; an id's own colon.
+        assert_eq!(named("opus:high"), at("claude-opus-5-5", Some("high")));
+        assert_eq!(named("luna:off"), at("gpt-6-luna", Some("none")));
+        assert_eq!(named("local:7b"), at("local:7b", None));
+        assert_eq!(named("local:7b:low"), at("local:7b", Some("low")));
+        // A provider's prefix limits the models to its own, else it is part of the pattern.
+        assert_eq!(named("openai/luna"), at("gpt-6-luna", None));
+        assert_eq!(
+            named("anthropic/5-5:max"),
+            at("claude-sonnet-5-5", Some("max"))
+        );
+        assert_eq!(named("openai/opus"), None);
+        // As Scramjet's strict --model, an unknown level, a glob or no match names none.
+        assert_eq!(named("opus:hgih"), None);
+        assert_eq!(named("claude-*"), None);
+        assert_eq!(named("mistral"), None);
+    }
+
+    #[test]
+    fn the_model_list_is_sorted_by_provider_with_scramjets_columns() {
+        let card = |id: &str, provider, window, output, reasoning, images| ModelOption {
+            window,
+            output,
+            reasoning,
+            images,
+            ..model(id, None, provider)
+        };
+        let models = [
+            card(
+                "gpt-6-luna",
+                Some("openai"),
+                Some(1_050_000),
+                Some(128_000),
+                true,
+                true,
+            ),
+            card(
+                "claude-haiku-4-5",
+                Some("anthropic"),
+                Some(200_000),
+                Some(64_000),
+                false,
+                true,
+            ),
+            card(
+                "deepseek-v4.1-flash",
+                Some("deepseek"),
+                Some(500_000),
+                Some(32_768),
+                true,
+                false,
+            ),
+            card("bare", None, None, Some(999), true, true),
+        ];
+        assert_eq!(
+            listing(&models, None),
+            "provider   model                context  max-out  thinking  images\n\
+             \x20          bare                 -        999      yes       yes\n\
+             anthropic  claude-haiku-4-5     200K     64K      no        yes\n\
+             deepseek   deepseek-v4.1-flash  500K     32.8K    yes       no\n\
+             openai     gpt-6-luna           1.1M     128K     yes       yes\n"
+        );
+        let found = listing(&models, Some("openai luna"));
+        assert_eq!(
+            found.lines().skip(1).collect::<Vec<_>>(),
+            ["openai    gpt-6-luna  1.1M     128K     yes       yes"]
+        );
+        assert_eq!(
+            listing(&models, Some("zzz")),
+            "No models matching \"zzz\"\n"
+        );
+        assert_eq!(listing(&[], None), "The endpoint lists no models\n");
     }
 
     #[test]

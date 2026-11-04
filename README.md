@@ -14,7 +14,9 @@ cd /path/to/your/project
 /path/to/scramjet-rs/target/release/scramjet-rs            # interactive
 scramjet-rs -p 'Explain what src/main.rs does'             # one prompt, then exit (-p - reads stdin)
 scramjet-rs @shot.png 'What is wrong here?'                # a session that starts with a file and a prompt
-scramjet-rs --continue                                     # resume this project's latest session
+scramjet-rs -c                                             # continue this project's latest session
+scramjet-rs --model opus:high                              # start with the newest Opus, at high effort
+scramjet-rs --list-models luna                             # the endpoint's models (those matching luna)
 scramjet-rs -r                                             # choose one of its sessions to resume
 scramjet-rs --export SESSION.jsonl [OUT.html]              # a saved session as a web page, as /export
 scramjet-rs install ~/repos/scramjet/packages/scramjet/mach12   # a command set, by reference
@@ -24,7 +26,7 @@ scramjet-rs --help                                         # options and keys
 
 As in Scramjet, the words after the options are prompts, sent one after another when the session starts (with `-p`, before it exits), and `@FILE` sends a file with the first one (alone when there is none): a text file's contents in a `<file name="…">` element before the prompt's text, or a PNG, JPEG, GIF or WebP image, scaled down as `read` scales it (below); a relative path is from the current directory. That prompt shows as typed, with the text sent behind Ctrl+O. A file that is neither text nor such an image is refused before the session starts.
 
-Options: `--model ID` (default: a resumed session's last model, else the model chosen last, below, else `gpt-6-luna`), `--models PATTERNS` (below), `--effort LEVEL` (default: a resumed session's, else `defaultThinkingLevel`, else `medium`), `--max-output-tokens N`, `--retries N` (default 3), `-r`/`--resume`, `--session FILE`, `--project DIR`, `--endpoint ADDR`, `--ask`.
+Options, Scramjet's where they match: `--model PATTERN` (as Scramjet's: the model whose id or `provider/id` it is, else the newest whose id or name contains it, among a provider's after `provider/`, with an optional `:LEVEL` for its effort; refused when it names none of the endpoint's; default: a resumed session's last model, else the model chosen last, below, else `gpt-6-luna`), `--models PATTERNS` (below), `--thinking LEVEL` or `--effort LEVEL` (default: `--model`'s `:LEVEL`, else a resumed session's, else `defaultThinkingLevel`, else `medium`), `--max-output-tokens N`, `--retries N` (default 3), `-c`/`--continue`, `-r`/`--resume`, `--session FILE`, `--project DIR`, `--endpoint ADDR`, `--ask`, `--list-models [SEARCH]` (as Scramjet's table: provider, model, context window, output limit, whether it reasons and takes images), `-v`/`--version`.
 
 Most behavior follows Scramjet; what to know:
 

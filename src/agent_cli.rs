@@ -27,7 +27,7 @@ mod tree;
 
 use args::{Options, USAGE};
 use rustix::termios::{self, OptionalActions, QueueSelector};
-use scramjet_rs::agent::{Agent, AgentConfig, AgentUi, Attached, Next};
+use scramjet_rs::agent::{self, Agent, AgentConfig, AgentUi, Attached, ModelOption, Next};
 use settings::Settings;
 use std::{
     ffi::OsString,
@@ -53,6 +53,15 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         println!("{USAGE}");
         return Ok(());
     };
+    if options.version {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if let Some(search) = options.list_models.take() {
+        let models = endpoint_models(options.endpoint)?;
+        print!("{}", scope::listing(&models, search.as_deref()));
+        return Ok(());
+    }
     if let Some(file) = options.export.take() {
         let output = options.messages.first().map(std::path::PathBuf::from);
         let written = export::file(&file, output)?;
@@ -120,8 +129,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     result
 }
 
-/// Starts the agent in the project the options name. A model or effort they give wins over the
-/// one a resumed session last used. As in Scramjet, a new session without one starts with the
+/// Starts the agent in the project the options name. A model or effort they give (`--model`'s
+/// `:level` too, unless `--thinking` gives one) wins over the one a resumed session last used,
+/// and a model pattern naming none of the endpoint's is refused. As in Scramjet, a new session without one starts with the
 /// model chosen before (`remembered`) when the scope `patterns` choose it or there is no scope,
 /// else with the scope's first model, at the effort its pattern sets; without either, with
 /// `gpt-6-luna`. Without an effort either, the effort is the settings' default thinking level,
@@ -142,13 +152,18 @@ fn start(
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
     }
-    let chosen = options.model.is_some();
-    let chosen_effort = options.effort.clone();
+    // Before the session starts, so that a pattern naming no model leaves none behind.
+    let named = match &options.model {
+        Some(pattern) => Some(named_model(pattern, options.endpoint)?),
+        None => None,
+    };
+    let chosen = named.is_some();
+    let chosen_effort = (options.effort.clone()).or_else(|| named.as_ref()?.level.clone());
     let config = AgentConfig {
         endpoint: options.endpoint,
-        model: options.model.unwrap_or_else(|| "gpt-6-luna".to_owned()),
+        model: named.map_or_else(|| "gpt-6-luna".to_owned(), |named| named.id),
         root,
-        effort: options.effort,
+        effort: chosen_effort.clone(),
         max_output_tokens: options.max_output_tokens,
         ask: options.ask,
         retries: options.retries,
@@ -188,6 +203,31 @@ fn start(
     agent.set_effort(effort).map_err(|e| e.to_string())?;
     agent.load_model_card();
     Ok((agent, warnings))
+}
+
+/// The endpoint's models, or why they cannot be listed.
+fn endpoint_models(endpoint: std::net::SocketAddr) -> Result<Vec<ModelOption>, String> {
+    match agent::endpoint_models(endpoint) {
+        Ok(Some(models)) => Ok(models),
+        Ok(None) => Err(format!(
+            "could not list the models of the endpoint {endpoint}"
+        )),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// The model `--model` names, with the level its `:level` sets. When the endpoint cannot list
+/// its models, `pattern` is taken as an id, as before it could be checked.
+fn named_model(pattern: &str, endpoint: std::net::SocketAddr) -> Result<scope::Scoped, String> {
+    let Ok(models) = endpoint_models(endpoint) else {
+        let id = pattern.trim().to_owned();
+        return Ok(scope::Scoped { id, level: None });
+    };
+    scope::named(pattern, &models).ok_or_else(|| {
+        format!(
+            "--model {pattern:?} names none of the endpoint's models (--list-models lists them)"
+        )
+    })
 }
 
 /// The model chosen before that a new session in the agent's project starts with

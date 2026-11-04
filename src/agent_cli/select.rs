@@ -1415,6 +1415,9 @@ mod tests {
             reasoning: !levels.is_empty(),
             levels: levels.iter().map(|level| level.to_string()).collect(),
             default_level: None,
+            window: None,
+            output: None,
+            images: true,
             rate: None,
         };
         let models = vec![

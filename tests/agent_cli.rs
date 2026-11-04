@@ -38,15 +38,35 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         missing,
         "scramjet-rs: file not found: /nonexistent/notes.md\n"
     );
+    for option in ["--thinking", "--effort"] {
+        let output = Command::new(binary)
+            .args([option, "hgih", "--endpoint", "127.0.0.1:9"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            format!(
+                "scramjet-rs: invalid {option} \"hgih\": valid levels are off, minimal, low, \
+medium, high, xhigh, max\n"
+            )
+        );
+    }
+    for version in ["--version", "-v"] {
+        let output = Command::new(binary).arg(version).output().unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(text, format!("{}\n", env!("CARGO_PKG_VERSION")));
+    }
+    // Before a session is started.
     let output = Command::new(binary)
-        .args(["--effort", "hgih", "--endpoint", "127.0.0.1:9"])
+        .args(["--list-models", "--endpoint", "127.0.0.1:9"])
         .output()
         .unwrap();
     assert!(!output.status.success());
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
-        "scramjet-rs: invalid --effort \"hgih\": valid levels are off, minimal, low, medium, \
-high, xhigh, max\n"
+        "scramjet-rs: could not list the models of the endpoint 127.0.0.1:9\n"
     );
 }
 

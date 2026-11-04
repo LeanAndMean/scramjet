@@ -154,6 +154,11 @@ pub struct ModelOption {
     /// The effort levels the card lists, in order.
     pub levels: Vec<String>,
     pub default_level: Option<String>,
+    /// The context window, input and output tokens, as the card says.
+    pub window: Option<u64>,
+    /// The most output tokens a response may have, as the card says.
+    pub output: Option<u64>,
+    pub images: bool,
     /// The median rate its last replies were written at, in tokens a second (`rates`).
     pub rate: Option<f64>,
 }
@@ -173,6 +178,9 @@ impl ModelOption {
             reasoning: info.reasoning,
             levels: info.levels.clone(),
             default_level: info.default_level.clone(),
+            window: info.window,
+            output: info.output,
+            images: info.images,
             rate,
         }
     }
@@ -197,6 +205,26 @@ impl ModelOption {
         }
         .advance()
     }
+}
+
+/// The models `endpoint` lists, in its order, each with what its card says (one without a card
+/// as its id suggests); `None` when it cannot list them.
+pub fn endpoint_models(endpoint: SocketAddr) -> Result<Option<Vec<ModelOption>>, AgentError> {
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let Some(ids) = executor.block_on(client::models(endpoint)) else {
+        return Ok(None);
+    };
+    let cards = executor.block_on(client::model_cards(endpoint));
+    let options = ids.into_iter().map(|id| {
+        let card = cards.iter().find(|card| card.id == id);
+        let info = card.map_or_else(|| ModelInfo::guess(&id), |card| card.info.clone());
+        let name = card.and_then(|card| card.name.clone());
+        let provider = card.and_then(|card| card.provider.clone());
+        ModelOption::new(id, name, provider, &info, None)
+    });
+    Ok(Some(options.collect()))
 }
 
 pub enum SessionChoice {
