@@ -72,6 +72,9 @@ pub struct Session {
     file: File,
     /// The latest model change or response item producer on the path, as Scramjet restores it.
     model: Option<String>,
+    /// The models that produced response items on the path, compacted ones included, in the
+    /// order they first did.
+    contributors: Vec<String>,
     /// The latest `session_info` name in the file, which applies to the whole session.
     name: Option<String>,
     /// The latest thinking level change on the path, which a resume restores.
@@ -142,6 +145,7 @@ struct Entries {
 struct Context {
     items: Vec<Value>,
     model: Option<String>,
+    contributors: Vec<String>,
     effort: Option<String>,
     files: FileLists,
     context_tokens: Option<u64>,
@@ -224,6 +228,12 @@ fn read(path: &Path) -> io::Result<Entries> {
     })
 }
 
+fn contribute(contributors: &mut Vec<String>, model: &str) {
+    if !contributors.iter().any(|known| known == model) {
+        contributors.push(model.to_owned());
+    }
+}
+
 fn find(entries: &[Entry], line: usize) -> Option<&Entry> {
     entries
         .binary_search_by_key(&line, |entry| entry.line)
@@ -275,6 +285,7 @@ impl Entries {
         let mut context = Context {
             items: Vec::new(),
             model: None,
+            contributors: Vec::new(),
             effort: None,
             files: FileLists::default(),
             context_tokens: None,
@@ -320,6 +331,7 @@ impl Entries {
                 if let Some(producer) = value[super::PRODUCER].as_str() {
                     context.model = Some(producer.to_owned());
                     context.context_tokens = value[super::CONTEXT].as_u64();
+                    contribute(&mut context.contributors, producer);
                 }
                 items.push(value.clone());
             }
@@ -500,6 +512,7 @@ impl Session {
             path,
             file,
             model: None,
+            contributors: Vec::new(),
             name: None,
             effort: None,
             files: FileLists::default(),
@@ -556,6 +569,7 @@ impl Session {
                 path: path.to_owned(),
                 file,
                 model: context.model,
+                contributors: context.contributors,
                 name: entries.name.clone(),
                 effort: context.effort,
                 files: context.files,
@@ -690,6 +704,7 @@ impl Session {
         let context = entries.context(&self.path, leaf)?;
         self.leaf = leaf;
         self.model = context.model;
+        self.contributors = context.contributors;
         self.effort = context.effort;
         self.files = context.files;
         self.context_tokens = context.context_tokens;
@@ -850,6 +865,11 @@ impl Session {
         self.model.as_deref()
     }
 
+    /// The models that replied on the current branch, compactions aside, first ones first.
+    pub fn contributors(&self) -> &[String] {
+        &self.contributors
+    }
+
     /// The thinking level the latest change on the path set, if any.
     pub fn effort(&self) -> Option<&str> {
         self.effort.as_deref()
@@ -951,6 +971,7 @@ impl Session {
         } else if let Some(producer) = item[super::PRODUCER].as_str() {
             self.model = Some(producer.to_owned());
             self.context_tokens = item[super::CONTEXT].as_u64();
+            contribute(&mut self.contributors, producer);
         }
         self.tokens.add(item);
         Ok(())

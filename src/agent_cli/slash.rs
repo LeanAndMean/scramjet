@@ -234,7 +234,7 @@ impl Interactive {
         let path = std::path::absolute(path)?;
         let tools = self.agent.tool_definitions();
         let setup = export::Setup {
-            instructions: self.agent.instructions(),
+            instructions: &self.agent.instructions(),
             tools: &tools,
         };
         let page = export::page(&self.agent.branch()?, &id, Some(setup));

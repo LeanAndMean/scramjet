@@ -1567,3 +1567,103 @@ fn replies_keep_their_models_output_rate_for_the_footer_and_the_model_list() {
     // The endpoint is gone: the list has the current model, with its rate.
     assert_eq!(agent.model_options()[0].rate, Some(rate));
 }
+
+#[test]
+fn requests_end_with_the_models_identity_and_the_sessions_file() {
+    let cards = json!({"models": [
+        {"requestId": "m", "displayName": "Model M", "provider": "openai"},
+        {"requestId": "c", "displayName": "Claude C", "provider": "anthropic"},
+    ]})
+    .to_string();
+    let (gets, cards_server) = serve_gets(vec![("200 OK", cards), ("404 Not Found", "no".into())]);
+    let (mut agent, _scratch) = agent(gets, "identity");
+    agent.load_model_card();
+    // Cards that cannot be read again keep the names known.
+    agent.load_model_card();
+    cards_server.join().unwrap();
+    let (endpoint, server) = serve(vec![
+        stream(&fixture::text_events("one", fixture::known_usage())),
+        stream(&fixture::text_events("two", fixture::known_usage())),
+        stream(&fixture::text_events("three", fixture::known_usage())),
+    ]);
+    agent.config.endpoint = endpoint;
+    let mut ui = Recorder::default();
+    let cancel = AtomicBool::new(false);
+    agent.turn("first", &mut ui, &cancel).unwrap();
+    agent.set_model("c").unwrap();
+    agent.turn("second", &mut ui, &cancel).unwrap();
+    agent.set_model("m").unwrap();
+    agent.turn("third", &mut ui, &cancel).unwrap();
+    let bodies = server.join().unwrap();
+    let m = "Model M (ID: m, provider: openai)";
+    let c = "Claude C (ID: c, provider: anthropic)";
+    let environment = format!(
+        "\nCurrent working directory: {}\nCurrent session journal: {}",
+        agent.root().display(),
+        agent.session_path().display()
+    );
+    // The current model is listed from the first request, so the text stays after its reply.
+    let expected = [(m, vec![m]), (c, vec![m, c]), (m, vec![m, c])];
+    for (body, (current, listed)) in bodies.iter().zip(expected) {
+        let instructions = body["instructions"].as_str().unwrap();
+        let listed: Vec<String> = listed.iter().map(|model| format!("- {model}")).collect();
+        let identity = format!(
+            "\n\n# Model Identity\nYour model for the imminent response is: {current}.\nModels \
+with material responses in this session branch, the imminent one included:\n{}\nWhen posting",
+            listed.join("\n")
+        );
+        assert!(instructions.contains(&identity), "{instructions}");
+        assert!(instructions.ends_with(&environment), "{instructions}");
+        assert!(instructions.starts_with(&agent.instructions));
+    }
+    assert!(
+        bodies[0]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("\"Reviewed by Model M\"")
+    );
+    assert!(
+        bodies[1]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("\"Reviewed by Claude C\"")
+    );
+
+    // A resume knows them from the file; a move to before `c` replied knows only `m`.
+    let path = agent.session_path().to_owned();
+    let (mut session, _, _) = Session::open(&path).unwrap();
+    assert_eq!(session.contributors(), ["m", "c"]);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let first_reply = (text.lines())
+        .position(|line| line.contains("\"_scramjet_model\":\"m\""))
+        .unwrap();
+    session.move_to(Some(first_reply)).unwrap();
+    assert_eq!(session.contributors(), ["m"]);
+}
+
+#[test]
+fn models_that_replied_before_a_compaction_are_still_on_the_branch() {
+    let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
+        "scramjet-agent-contributors-{}",
+        std::process::id()
+    )));
+    let path = scratch.0.join("compacted.jsonl");
+    let lines = [
+        json!({"type":"session","version":1}),
+        json!({"role":"user","content":"one"}),
+        json!({"type":"message","role":"assistant","content":[],"_scramjet_model":"a"}),
+        json!({"role":"user","content":"two"}),
+        json!({"type":"compaction","summary":"s","first_kept":2}),
+        json!({"type":"message","role":"assistant","content":[],"_scramjet_model":"b"}),
+        json!({"type":"message","role":"assistant","content":[],"_scramjet_model":"a"}),
+    ];
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    std::fs::write(&path, text).unwrap();
+    let (mut session, items, _) = Session::open(&path).unwrap();
+    assert_eq!(items.len(), 4);
+    assert_eq!(session.contributors(), ["a", "b"]);
+    session
+        .append(&json!({"type":"message","role":"assistant","content":[],"_scramjet_model":"c"}))
+        .unwrap();
+    assert_eq!(session.contributors(), ["a", "b", "c"]);
+}

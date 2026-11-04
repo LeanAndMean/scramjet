@@ -21,7 +21,7 @@ impl Agent {
     pub(super) fn request(&self) -> Value {
         let mut request = json!({
             "model": self.config.model,
-            "instructions": self.instructions,
+            "instructions": self.instructions(),
             "input": self.replay_conversation(),
             "tools": tools::definitions(&self.config.tools),
             "tool_choice": "auto",
@@ -632,7 +632,7 @@ response is incomplete; retry the request."});
             first["thinking"],
             json!({"type":"adaptive","display":"summarized"})
         );
-        assert_eq!(first["system"][0]["text"], agent.instructions);
+        assert_eq!(first["system"][0]["text"], agent.instructions());
         assert_eq!(first["tools"][0]["name"], "read");
         assert_eq!(
             first["tools"][0]["input_schema"]["required"],

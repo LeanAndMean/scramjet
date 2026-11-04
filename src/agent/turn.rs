@@ -1644,9 +1644,10 @@ files is added or changed.",
         let listed = "\n\nThe following skills provide specialized instructions for specific \
 tasks.\nUse the read tool to load a skill's file when the task matches its description.\n";
         assert!(instructions.contains(listed), "{instructions}");
-        assert!(instructions.ends_with(&format!(
+        assert!(instructions.contains(&format!(
             "<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>Fills PDF \
-forms.</description>\n    <location>{}</location>\n  </skill>\n</available_skills>\n",
+forms.</description>\n    <location>{}</location>\n  </skill>\n</available_skills>\n\n# \
+scramjet-rs\n",
             file.display()
         )));
         // Gone since, it is said so and sent as typed; neither is a command, so no status check.
@@ -1945,8 +1946,8 @@ be a non-empty array for select type. failed",
         assert_eq!(last_input(&bodies[4]), "hello");
         assert_eq!(last_input(&bodies[6]), "hi");
         assert!(bodies.iter().all(|body| {
-            let body = body.to_string();
-            !body.contains("command_state") && !body.contains("Dormant")
+            let input = body["input"].to_string();
+            !input.contains("command_state") && !input.contains("Dormant")
         }));
         let saved: Vec<_> = std::fs::read_to_string(agent.session_path())
             .unwrap()

@@ -54,6 +54,7 @@ pub use ui::{
 use client::ModelInfo;
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     path::{Path, PathBuf},
 };
@@ -396,6 +397,9 @@ pub struct Agent {
     info: ModelInfo,
     /// Its card's provider, when the endpoint's cards name several (`provider`).
     provider: Option<String>,
+    /// The names and providers of the endpoint's models, from their cards, for the Model
+    /// Identity; kept when the cards cannot be read again.
+    identities: HashMap<String, instructions::Identity>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
     /// Whether a completed command's recommended next step runs without the user choosing it.
@@ -510,6 +514,7 @@ impl Agent {
             autonomy_diagnostics: Vec::new(),
             info: ModelInfo::guess(&config.model),
             provider: None,
+            identities: HashMap::new(),
             hide_credentials: false,
             autopilot,
             config,
@@ -744,9 +749,14 @@ impl Agent {
         }
     }
 
-    /// The instructions the model's requests start with.
-    pub fn instructions(&self) -> &str {
-        &self.instructions
+    /// The instructions the model's next request starts with: those of the session, then the
+    /// current model's identity and the environment's facts.
+    pub fn instructions(&self) -> String {
+        let contributors = self.session.contributors();
+        let model = &self.config.model;
+        self.instructions.clone()
+            + &instructions::identity(model, contributors, &self.identities)
+            + &instructions::environment(&self.config.root, self.session.path())
     }
 
     /// The definitions of the tools the model's requests offer.
@@ -1104,6 +1114,17 @@ impl Agent {
         providers.sort_unstable();
         providers.dedup();
         let several = providers.len() > 1;
+        if !cards.is_empty() {
+            self.identities = (cards.iter())
+                .map(|card| {
+                    let identity = instructions::Identity {
+                        name: card.name.clone(),
+                        provider: card.provider.clone(),
+                    };
+                    (card.id.clone(), identity)
+                })
+                .collect();
+        }
         if let Some(card) = cards.into_iter().find(|card| card.id == self.config.model) {
             self.provider = card.provider.filter(|_| several);
             self.info = card.info;
