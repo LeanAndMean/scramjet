@@ -4,7 +4,7 @@ The goal is a dependable Rust coding harness the user can use day to day, built 
 
 ## Scramjet is the reference
 
-`~/repos/scramjet` (and the Proxy proxy at `~/repos/proxy`) work today; this harness talks to the same Proxy endpoint. When unsure what a protocol, tool or limit needs, read how Scramjet does it and match that behavior. Treat those repositories as read-only references, not dependencies, and don't copy their code wholesale. Do not modify sibling repositories. Where Scramjet's behavior comes from its history rather than its design (command files registered as Pi prompt templates, `/scramjet settings` apart from `/settings`), do better (user decision, 2026-11-03; `docs/DESIGN.md`).
+`~/repos/scramjet` (and the Proxy proxy at `~/repos/proxy`) work today; this harness talks to the same Proxy endpoint. When unsure what a protocol, tool or limit needs, read how Scramjet does it and match that behavior. Treat those repositories as read-only references, not dependencies, and don't copy their code wholesale. Do not modify sibling repositories. Where Scramjet's behavior comes from its history rather than its design (command files registered as Pi prompt templates, `/scramjet settings` apart from `/settings`), do better (user decision, 2026-11-03; `docs/DESIGN.md`). For the names and keys users type, Claude Code and Codex come first: where they name an action differently from Scramjet, list theirs and keep the others accepted (user decision, 2026-11-04; `docs/DESIGN.md`). Their installed CLIs (`claude`, `codex`) show what they call things.
 
 ## Rules made by agents are not law
 

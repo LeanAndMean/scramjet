@@ -23,6 +23,8 @@ Approvals (user decision, 2026-10-30, replacing the same day's read-only command
 
 Scramjet (`~/repos/scramjet`) and Proxy (`~/repos/proxy`) are the working reference for protocol and tool behavior. A limit or check needs a concrete basis: a documented contract, a user decision, a real safety risk, or an observed failure. "No document guarantees X" is not a reason to reject X. When a self-imposed rule blocks the real system, compare with Scramjet and loosen or remove it. Where Scramjet's behavior comes from its history rather than its design (command files registered as Pi prompt templates, `/scramjet settings` apart from `/settings`), do better (user decision, 2026-11-03).
 
+Familiar names (user decision, 2026-11-04). The UI should be no less familiar than Claude Code's or Codex's. Where they and Pi/Scramjet name or bind the same action differently, the name their users know is the one listed and documented, and the other names a user would type stay accepted without being listed, so that typing one never sends it to the model as a prompt. `/clear` is listed, with `/new` and `/reset` accepted (both Claude Code and Codex understand `/new`). By the user's choice, `/settings` stays listed over Claude Code's `/config`, which is accepted.
+
 Proxy keeps authentication; Rust never reads OAuth credentials or changes Proxy state. Missing usage is recorded as unknown, not zero, and local cancellation is not proof that remote generation or billing stopped.
 
 ### Agreed product shape (2026-11-03)
