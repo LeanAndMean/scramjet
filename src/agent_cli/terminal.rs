@@ -325,9 +325,34 @@ impl Terminal {
                 (code(content, path, content, limited))
                     .unwrap_or_else(|| styled(preview(content, shown(limited), width)))
             }
+            // As Scramjet's, a Markdown file's first lines rendered as a document, and the note
+            // after a cut read in the tool's style.
+            (_, Some(ToolDetail::Read(path))) if self.color && highlight::is_markdown(path) => {
+                let more = output.rfind(&format!("\n{READ_MORE}"));
+                let source = more.map_or(output, |at| &output[..at]);
+                let mut lines: Vec<String> = source.lines().map(printable).collect();
+                while lines.last().is_some_and(String::is_empty) {
+                    lines.pop();
+                }
+                let total = lines.len();
+                if !full {
+                    lines.truncate(READ_LINES);
+                }
+                let mut rows = self.markdown_rows(&lines.join("\n"), width);
+                if lines.len() < total {
+                    let more = total - lines.len();
+                    let note = format!("… ({more} more source lines, {total} total{hint})");
+                    rows.extend(styled(vec![note]));
+                }
+                if let Some(at) = more {
+                    rows.push(String::new());
+                    rows.extend(styled(preview(&output[at + 1..], Shown::All, width)));
+                }
+                rows
+            }
             // The note after a cut read is not code.
             (_, Some(ToolDetail::Read(path))) => {
-                let limited = Shown::First(RESULT_LINES);
+                let limited = Shown::First(READ_LINES);
                 let more = output.rfind(&format!("\n{READ_MORE}"));
                 let source = more.map_or(output, |at| &output[..at]);
                 (code(output, path, source, limited))
@@ -404,7 +429,14 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                 shown(Shown::Last(BASH_LINES)),
                 width,
             )),
-            _ => styled(preview(output, shown(Shown::First(RESULT_LINES)), width)),
+            _ => {
+                let lines = match name {
+                    "grep" => GREP_LINES,
+                    "find" | "ls" => LISTING_LINES,
+                    _ => RESULT_LINES,
+                };
+                styled(preview(output, shown(Shown::First(lines)), width))
+            }
         };
         let gutter = self.gutter();
         for row in rows {
@@ -1318,7 +1350,12 @@ fn answer(typed: &str) -> Answer {
 const BASH_LINES: usize = 5;
 /// As Scramjet shows the output of a command the user ran with `!`.
 pub(super) const COMMAND_LINES: usize = 20;
+/// The first lines of results shown until expanded, as Scramjet's write, read, grep, find and
+/// ls show them; other tools' show `RESULT_LINES`.
 const WRITE_LINES: usize = 10;
+const READ_LINES: usize = 10;
+const GREP_LINES: usize = 15;
+const LISTING_LINES: usize = 20;
 const RESULT_LINES: usize = 6;
 const SUMMARY_LINES: usize = 10;
 /// Ends the note about the lines a preview leaves out, as Scramjet's does.
@@ -1619,6 +1656,47 @@ to expand\n(exit 2)"
             false,
         );
         assert_eq!(ui.captured(), "  fn a() {}\n\n");
+    }
+
+    #[test]
+    fn markdown_files_read_show_as_documents() {
+        use style::{RESET, STRONG, TITLE};
+        let mut source = "# Title\n\nSome **bold** text.\n".to_owned();
+        source += &(4..=12)
+            .map(|n| format!("- item {n}\n"))
+            .collect::<String>();
+        let read = format!("{source}\n{READ_MORE}1-12 of 30. Use offset=13 to continue.]");
+        let detail = ToolDetail::Read("docs/notes.md".into());
+        let shown = |full| {
+            let mut ui = Terminal::capture_shown(80, Arc::new(AtomicBool::new(false)), full);
+            ui.tool_result("read", &read, Some(&detail), false);
+            ui.captured().replace(FROM, "")
+        };
+        let dim = |text: &str| format!("  {}{text}{RESET}", style::TOOL_OUTPUT);
+        let bullet = |n| format!("  {}-{RESET} item {n}", style::LIST_BULLET);
+        let note = dim("[Showing lines 1-12 of 30. Use offset=13 to continue.]");
+        let mut cut = vec![
+            format!("  {TITLE}Title{RESET}"),
+            String::new(),
+            format!("  Some {STRONG}bold{RESET} text."),
+        ];
+        cut.extend((4..=10).map(bullet));
+        let mut whole = cut.clone();
+        cut.extend([
+            dim("… (2 more source lines, 12 total, Ctrl+O to expand)"),
+            String::new(),
+            note.clone(),
+            String::new(),
+        ]);
+        assert_eq!(shown(false).lines().collect::<Vec<_>>(), cut);
+        whole.extend((11..=12).map(bullet));
+        whole.extend([String::new(), note, String::new()]);
+        assert_eq!(shown(true).lines().collect::<Vec<_>>(), whole);
+        // Without colors, its source.
+        let mut ui = Terminal::new(Arc::new(AtomicBool::new(false)), false);
+        ui.capture = Some((String::new(), 80));
+        ui.tool_result("read", "# Title", Some(&detail), false);
+        assert_eq!(ui.captured(), "  # Title\n\n");
     }
 
     #[test]

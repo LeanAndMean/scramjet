@@ -139,6 +139,11 @@ pub(super) fn of_path(path: &str) -> Option<Language> {
     (syntax.name != "Plain Text").then_some(Language(syntax))
 }
 
+/// Whether a file's name shows it is Markdown, as `.md` or `.markdown`.
+pub(super) fn is_markdown(path: &str) -> bool {
+    of_path(path).is_some_and(|Language(syntax)| syntax.name == "Markdown")
+}
+
 /// Highlights the lines of one piece of code in order, styled over `base`.
 pub(super) struct Highlighter {
     base: &'static str,
@@ -289,5 +294,7 @@ mod tests {
         assert_eq!(name(of_path("a/b.TOML")), Some("TOML"));
         assert_eq!(name(of_path("notes.txt")), None);
         assert_eq!(name(of_path("README")), None);
+        assert!(is_markdown("docs/TASKS.md") && is_markdown("a.markdown"));
+        assert!(!is_markdown("a.rs") && !is_markdown("README"));
     }
 }
