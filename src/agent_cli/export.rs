@@ -10,9 +10,9 @@ use super::text::visible;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use scramjet_rs::agent::{
     AgentError, AgentUi, Answer, AutoCompaction, Branch, ChildItem, ChildRun, ChildState, Children,
-    Choice, Compaction, DELEGATE, DELEGATE_SCOPE_WARNING, Delegation, Ending, PUBLICATION_TOOLS,
-    Purpose, Stats, StreamProgress, ToolDetail, UserCommand, read_branch, show_items,
-    terminal_line,
+    Choice, CompactRead, Compaction, DELEGATE, DELEGATE_SCOPE_WARNING, Delegation, Ending,
+    PUBLICATION_TOOLS, Purpose, Stats, StreamProgress, ToolDetail, UserCommand, read_branch,
+    show_items, terminal_line,
 };
 use serde_json::Value;
 use std::{
@@ -56,13 +56,14 @@ pub(super) fn page(branch: &Branch, id: &str, setup: Option<Setup>) -> String {
         .unwrap_or_else(|| format!("Session {id}"));
     let mut html = Html::default();
     // `show_items` shows conversation items; the entries only a session file has are shown here.
+    // The page shows every call whole, so no read is compact.
     let mut start = 0;
     for (index, entry) in branch.entries.iter().enumerate() {
         let kind = entry["type"].as_str();
         if !matches!(kind, Some("compaction" | "branch_summary" | "model_change")) {
             continue;
         }
-        show_items(&branch.entries[start..index], &mut html);
+        show_items(&branch.entries[start..index], None, &mut html);
         start = index + 1;
         let summary = entry["summary"].as_str().unwrap_or_default();
         match kind {
@@ -71,7 +72,7 @@ pub(super) fn page(branch: &Branch, id: &str, setup: Option<Setup>) -> String {
             _ => html.model(entry["model"].as_str().unwrap_or_default()),
         }
     }
-    show_items(&branch.entries[start..], &mut html);
+    show_items(&branch.entries[start..], None, &mut html);
     html.block();
     let mut info = vec![("Session", escape(id))];
     if let Some(created) = branch.header["created"].as_u64() {
@@ -206,7 +207,7 @@ impl AgentUi for Html {
             self.out += &format!("<div class=\"reply markdown\">{text}</div>\n");
         }
     }
-    fn tool_call(&mut self, name: &str, summary: &str) {
+    fn tool_call(&mut self, name: &str, summary: &str, _: Option<&CompactRead>) {
         self.block();
         self.out += &format!(
             "<div class=\"tool\"><div class=\"call\"><b>{}</b> {}</div>\n",

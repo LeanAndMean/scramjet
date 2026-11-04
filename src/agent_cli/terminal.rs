@@ -11,9 +11,9 @@ use rustix::{
     termios::{self, LocalModes, OptionalActions, SpecialCodeIndex, Termios},
 };
 use scramjet_rs::agent::{
-    Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, Compaction, DELEGATE,
-    DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE, StreamProgress,
-    ToolDetail, UserCommand, publication_choices,
+    Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, CompactRead, Compaction,
+    DELEGATE, DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE,
+    StreamProgress, ToolDetail, UserCommand, publication_choices,
 };
 use std::{
     io::{BufRead, IsTerminal, Write},
@@ -246,6 +246,8 @@ pub(super) struct Terminal {
     markdown: markdown::Markdown,
     wrap: Wrap,
     tool_started: Option<Instant>,
+    /// The call shown last is a compact read, whose result shows only if it failed.
+    compact: bool,
     /// The command the user runs with `!` (true) or `!!`, while it runs.
     command: Option<(String, bool)>,
     /// How many of the last lines of a command the user ran its block shows.
@@ -277,6 +279,7 @@ impl Terminal {
         self.clear();
         let width = self.width().saturating_sub(2).max(20);
         let full = self.full;
+        let compact = std::mem::take(&mut self.compact);
         let took = (self.tool_started.take()).map(|started| at.saturating_duration_since(started));
         let style = match () {
             _ if !self.color => "",
@@ -314,6 +317,7 @@ impl Terminal {
             Some(rows)
         };
         let rows = match (name, detail) {
+            _ if compact && !failed => Vec::new(),
             (_, Some(ToolDetail::Diff(diff))) => {
                 let limit = if full { usize::MAX } else { diff::ROWS };
                 diff::rows(diff, width, self.color, marked, limit, hint)
@@ -554,6 +558,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             markdown: markdown::Markdown::new(false, "", 0),
             wrap: Wrap::new(0),
             tool_started: None,
+            compact: false,
             command: None,
             command_lines: COMMAND_LINES,
             hide_thinking,
@@ -843,11 +848,30 @@ impl AgentUi for Terminal {
             self.out(&format!("{text}\n\n"));
         }
     }
-    fn tool_call(&mut self, name: &str, summary: &str) {
+    fn tool_call(&mut self, name: &str, summary: &str, compact: Option<&CompactRead>) {
         self.clear();
         self.command = None;
         let width = if self.color { self.width() } else { 0 };
-        let line = self.dim(&call_line(name, summary, width, self.marked));
+        let compact = compact.filter(|_| !self.full);
+        self.compact = compact.is_some();
+        let line = match compact {
+            // As Scramjet's compact reads: what was read, without its result until expanded.
+            Some(compact) => {
+                let (name, read) = match compact {
+                    CompactRead::Skill(skill) => ("[skill]", skill),
+                    CompactRead::Resource(path) => ("read resource", path),
+                    CompactRead::Docs(path) => ("read docs", path),
+                };
+                let hint = if self.expandable {
+                    " (Ctrl+O to expand)"
+                } else {
+                    ""
+                };
+                call_line(name, &format!("{read}{hint}"), width, self.marked)
+            }
+            None => call_line(name, summary, width, self.marked),
+        };
+        let line = self.dim(&line);
         self.err(&format!("{line}\n"));
     }
     fn tool_running(&mut self, since: Instant) {
@@ -1572,10 +1596,10 @@ to expand\n(exit 2)"
         let mut ui = Terminal::capture(30, Arc::new(AtomicBool::new(false)));
         ui.user_prompt("count");
         ui.progress(&StreamProgress::Reasoning("Counting **now**.\n\n".into()));
-        ui.tool_call("bash", "seq 1 12");
+        ui.tool_call("bash", "seq 1 12", None);
         let output: String = (1..=12).map(|n| format!("{n}\n")).collect();
         ui.tool_result("bash", &output, None, false);
-        ui.tool_call("read", "a.txt");
+        ui.tool_call("read", "a.txt", None);
         ui.tool_result("read", &"word ".repeat(10), None, false);
         let diff: String = (1..=50).map(|n| format!("+{n:>2} line {n}\n")).collect();
         ui.tool_result("edit", "ok", Some(&ToolDetail::Diff(diff)), false);
@@ -1700,6 +1724,67 @@ to expand\n(exit 2)"
     }
 
     #[test]
+    fn compact_reads_show_what_was_read_until_expanded() {
+        let call = |ui: &mut Terminal, compact: &CompactRead, failed| {
+            ui.tool_call(
+                "read",
+                "~/skills/release-notes/SKILL.md:1-40",
+                Some(compact),
+            );
+            let detail = ToolDetail::Read("~/skills/release-notes/SKILL.md".into());
+            match failed {
+                false => ui.tool_result("read", "# Release notes", Some(&detail), false),
+                true => ui.tool_result("read", "Error: no such file", None, true),
+            }
+        };
+        let lines = |ui: Terminal| {
+            let text = crate::agent_cli::text::plain(&ui.captured().replace(FROM, ""));
+            text.lines().map(str::to_owned).collect::<Vec<_>>()
+        };
+        let shown = |full, compact: &CompactRead, failed| {
+            let mut ui = Terminal::capture_shown(80, Arc::new(AtomicBool::new(false)), full);
+            call(&mut ui, compact, failed);
+            lines(ui)
+        };
+        let skill = CompactRead::Skill("release-notes:1-40".into());
+        let expand = " (Ctrl+O to expand)";
+        assert_eq!(
+            shown(false, &skill, false),
+            [
+                format!("● [skill] release-notes:1-40{expand}"),
+                String::new()
+            ]
+        );
+        assert_eq!(
+            shown(true, &skill, false),
+            [
+                "● read ~/skills/release-notes/SKILL.md:1-40",
+                "  Release notes",
+                ""
+            ]
+        );
+        let resource = CompactRead::Resource("CLAUDE.md".into());
+        assert_eq!(
+            shown(false, &resource, true),
+            [
+                format!("● read resource CLAUDE.md{expand}"),
+                "  Error: no such file".into(),
+                String::new()
+            ]
+        );
+        // Printed, where nothing expands; the next call's result shows.
+        let mut printed = Terminal::new(Arc::new(AtomicBool::new(false)), false);
+        printed.capture = Some((String::new(), 80));
+        call(&mut printed, &CompactRead::Docs("README.md".into()), false);
+        printed.tool_call("read", "a.txt", None);
+        printed.tool_result("read", "text", None, false);
+        assert_eq!(
+            lines(printed),
+            ["● read docs README.md", "", "● read a.txt", "  text", ""]
+        );
+    }
+
+    #[test]
     fn summaries_and_command_texts_are_cut_until_expanded() {
         let summary: String = (1..=12).map(|n| format!("Point {n}\n")).collect();
         let sent = "<scramjet-command name=\"rs:loop\">\n# Build\n\nGo.\n</scramjet-command>";
@@ -1737,11 +1822,11 @@ to expand\n(exit 2)"
         );
         let shown = |full| {
             let mut ui = Terminal::capture_shown(40, Arc::new(AtomicBool::new(false)), full);
-            ui.tool_call(DELEGATE, "/rs:read 42");
+            ui.tool_call(DELEGATE, "/rs:read 42", None);
             ui.tool_result(DELEGATE, body, None, false);
-            ui.tool_call(DELEGATE, "/rs:edit");
+            ui.tool_call(DELEGATE, "/rs:edit", None);
             ui.tool_result(DELEGATE, &disjoint, None, false);
-            ui.tool_call(DELEGATE, "/rs:nope");
+            ui.tool_call(DELEGATE, "/rs:nope", None);
             ui.tool_result(DELEGATE, "ERROR: unknown command 'rs:nope'.", None, true);
             let text = ui.captured();
             let mut plain = String::new();
@@ -1773,7 +1858,7 @@ blocked. Widen the caller scope or\n  abort delegation.\n  … (3 lines, Ctrl+O 
         let payload = "## Title\n\nFix it\n\n## Body\n\nIt **breaks**\x1b[2J.";
         let shown = |full, detail: Option<&ToolDetail>| {
             let mut ui = Terminal::capture_shown(40, Arc::new(AtomicBool::new(false)), full);
-            ui.tool_call("create_issue", "Fix it");
+            ui.tool_call("create_issue", "Fix it", None);
             ui.tool_result("create_issue", verified, detail, false);
             let text = ui.captured();
             let mut plain = String::new();

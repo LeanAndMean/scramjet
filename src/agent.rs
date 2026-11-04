@@ -53,8 +53,8 @@ pub use tools::{
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use turn::Shell;
 pub use ui::{
-    AgentUi, Answer, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation, Ending,
-    Purpose, ToolDetail, UserCommand, publication_choices, show_items,
+    AgentUi, Answer, ChildItem, ChildRun, ChildState, ChildUsage, Children, CompactRead,
+    Delegation, Ending, Purpose, ToolDetail, UserCommand, publication_choices, show_items,
 };
 
 use client::ModelInfo;
@@ -1117,7 +1117,7 @@ impl Agent {
 
     /// Shows the conversation as a resumed session has it, as its turns showed when they ran.
     pub fn show_conversation(&self, ui: &mut dyn AgentUi) {
-        show_items(&self.conversation, ui);
+        show_items(&self.conversation, Some(&self.config.root), ui);
     }
 
     /// Reads the current model's Proxy model card: which protocol its requests use, its output

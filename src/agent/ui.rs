@@ -8,6 +8,7 @@ use super::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    path::Path,
     sync::atomic::AtomicBool,
     time::{Duration, Instant},
 };
@@ -33,7 +34,8 @@ pub trait AgentUi {
     fn retrying(&mut self, error: &str, attempt: u32, retries: u32, delay: Duration);
     /// The complete text of an assistant message, after any streamed progress for it.
     fn assistant(&mut self, text: &str);
-    fn tool_call(&mut self, name: &str, summary: &str);
+    /// `compact`: the call is a read Scramjet shows in one line until expanded.
+    fn tool_call(&mut self, name: &str, summary: &str, compact: Option<&CompactRead>);
     /// The tool call announced last started running at `since`, after any approval: before it
     /// was announced when it ran beside the calls before it.
     fn tool_running(&mut self, since: Instant);
@@ -164,6 +166,18 @@ pub enum ToolDetail {
     Subagents(Children),
     /// What a publication call proposed, each field under a markdown heading.
     Publication(String),
+}
+
+/// A read that Scramjet shows in one line, with its result only if it failed, until expanded;
+/// each says what was read, then the call's line range (`:3-10`) if it has one.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CompactRead {
+    /// A skill's `SKILL.md`: the skill's directory name.
+    Skill(String),
+    /// A context file (`AGENTS.md`, `CLAUDE.md`): its path, relative to the project if in it.
+    Resource(String),
+    /// This build's README, which the instructions point to.
+    Docs(String),
 }
 
 /// A command the user ran with `!` or `!!`, as its block shows it.
@@ -328,14 +342,16 @@ impl ChildRun {
 
 /// Shows stored items as their turns showed them, as Scramjet redraws a resumed session: each
 /// prompt, reply, reasoning summary, tool call with its result, `!` and `!!` command, compaction
-/// summary and how a turn stopped.
-pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
+/// summary and how a turn stopped. Reads are compact by their paths in `root`, the project's;
+/// with `None`, none is.
+pub fn show_items(items: &[Value], root: Option<&Path>, ui: &mut dyn AgentUi) {
+    let compact = |call: &Call| root.and_then(|root| call.compact(root));
     // A reply's calls are stored before their results, but each showed in turn as it ran.
     let mut calls: Vec<(&str, &str, Option<Call>)> = Vec::new();
     let unanswered = |calls: &mut Vec<(&str, &str, Option<Call>)>, ui: &mut dyn AgentUi| {
         for (_, _, call) in calls.drain(..) {
             if let Some(call) = call {
-                ui.tool_call(call.name, &call.summary());
+                ui.tool_call(call.name, &call.summary(), compact(&call).as_ref());
             }
         }
     };
@@ -380,7 +396,7 @@ pub fn show_items(items: &[Value], ui: &mut dyn AgentUi) {
                 }
                 // A call whose arguments do not parse had no call line, only its error.
                 if let Some(call) = &call {
-                    ui.tool_call(call.name, &call.summary());
+                    ui.tool_call(call.name, &call.summary(), compact(call).as_ref());
                 }
                 let asked = call
                     .as_ref()
@@ -496,7 +512,7 @@ mod tests {
             json!({"role":"user","content":"next"}),
         ];
         let mut recorder = Recorder::default();
-        show_items(&items, &mut recorder);
+        show_items(&items, None, &mut recorder);
         assert_eq!(
             recorder.shown,
             [
@@ -530,6 +546,42 @@ Comment\\n\\nMe too.\")",
                 "prompt next",
             ]
         );
+    }
+
+    #[test]
+    fn reads_of_skills_and_context_files_are_compact_live_and_resumed() {
+        let skill = "skills/notes/SKILL.md";
+        let (endpoint, server) = serve(vec![
+            tool_calls(&[
+                ("read", json!({"path":"CLAUDE.md"})),
+                ("read", json!({"path":skill,"limit":5})),
+            ]),
+            tool_call("call_2", "read", json!({"path":"AGENTS.md"})),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "compact-reads");
+        std::fs::create_dir_all(agent.root().join("skills/notes")).unwrap();
+        for file in ["CLAUDE.md", skill] {
+            std::fs::write(agent.root().join(file), "Be brief.\n").unwrap();
+        }
+        let mut ui = Recorder::default();
+        agent
+            .turn("read them", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        server.join().unwrap();
+        let calls = |shown: &[String]| -> Vec<String> {
+            let calls = shown.iter().filter(|shown| shown.starts_with("call "));
+            calls.cloned().collect()
+        };
+        let compact = [
+            "call read CLAUDE.md Resource(\"CLAUDE.md\")",
+            "call read skills/notes/SKILL.md:1-5 Skill(\"notes:1-5\")",
+            "call read AGENTS.md Resource(\"AGENTS.md\")",
+        ];
+        assert_eq!(calls(&ui.shown), compact);
+        let mut replay = Recorder::default();
+        agent.show_conversation(&mut replay);
+        assert_eq!(calls(&replay.shown), compact);
     }
 
     #[test]

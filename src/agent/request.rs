@@ -493,7 +493,7 @@ response is incomplete; retry the request."});
             .find(|line| line["type"] == "function_call_output");
         assert_eq!(saved.unwrap()["output"], sent);
         let mut replay = Recorder::default();
-        crate::agent::show_items(agent.conversation(), &mut replay);
+        crate::agent::show_items(agent.conversation(), None, &mut replay);
         assert!(
             replay.shown.iter().any(|line| line == shown),
             "{:?}",
@@ -556,7 +556,7 @@ response is incomplete; retry the request."});
             crate::agent::TreeItem::Prompt("@dot.png What is it?".into())
         );
         let mut replay = Recorder::default();
-        crate::agent::show_items(agent.conversation(), &mut replay);
+        crate::agent::show_items(agent.conversation(), None, &mut replay);
         assert_eq!(
             replay.shown[0],
             format!("command @dot.png What is it? sent {sent}")

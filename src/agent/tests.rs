@@ -58,8 +58,13 @@ impl AgentUi for Recorder {
         self.shown.push(format!("reply {text}"));
         self.replies.push(text.to_owned());
     }
-    fn tool_call(&mut self, name: &str, summary: &str) {
-        self.shown.push(format!("call {name} {summary}"));
+    fn tool_call(&mut self, name: &str, summary: &str, compact: Option<&CompactRead>) {
+        match compact {
+            Some(compact) => self
+                .shown
+                .push(format!("call {name} {summary} {compact:?}")),
+            None => self.shown.push(format!("call {name} {summary}")),
+        }
         self.calls.push(name.to_owned());
     }
     fn tool_running(&mut self, _: std::time::Instant) {}

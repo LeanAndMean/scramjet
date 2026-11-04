@@ -6,7 +6,7 @@ const CONTEXT_FILE_BYTES: u64 = 256 << 10;
 /// Scramjet's base directives, from its command framing to its release timing.
 const DIRECTIVES: &str = include_str!("directives.md");
 /// This build's README, which the instructions point to when it is there.
-const README: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/README.md");
+pub(super) const README: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/README.md");
 
 /// The agent's instructions, in Scramjet's order: Pi's list of its coding `tools` and the
 /// guidelines for them, the project's context files, the `skills`, Scramjet's directives, then

@@ -2,7 +2,7 @@
 //! place as it runs where the interface can (`AgentUi::running_calls`), else as if they ran one
 //! after another, what a call shows waiting until the calls before it have ended.
 use super::tools::{self, Call, Output};
-use super::{AgentUi, Answer, Children, Choice, ToolDetail, Usage};
+use super::{AgentUi, Answer, Children, Choice, CompactRead, ToolDetail, Usage};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{
@@ -153,9 +153,9 @@ impl<'a> Relay<'a> {
 
 /// What a tool shows; the rest of the interface is a turn's, which no tool shows.
 impl AgentUi for Relay<'_> {
-    fn tool_call(&mut self, name: &str, summary: &str) {
-        let (name, summary) = (name.to_owned(), summary.to_owned());
-        self.show(move |ui| ui.tool_call(&name, &summary));
+    fn tool_call(&mut self, name: &str, summary: &str, compact: Option<&CompactRead>) {
+        let (name, summary, compact) = (name.to_owned(), summary.to_owned(), compact.cloned());
+        self.show(move |ui| ui.tool_call(&name, &summary, compact.as_ref()));
     }
     fn tool_running(&mut self, since: Instant) {
         self.show(move |ui| ui.tool_running(since));

@@ -25,8 +25,8 @@ use rustix::{
     io::Errno,
 };
 use scramjet_rs::agent::{
-    self, AgentError, AgentUi, AutoCompaction, Children, Choice, Compaction, EffortCycle, Purpose,
-    Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
+    self, AgentError, AgentUi, AutoCompaction, Children, Choice, CompactRead, Compaction,
+    EffortCycle, Purpose, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
 };
 use std::{
     fmt::Write as _,
@@ -456,8 +456,9 @@ impl AgentUi for Link {
     fn assistant(&mut self, text: &str) {
         self.event(Event::Assistant(text.to_owned()));
     }
-    fn tool_call(&mut self, name: &str, summary: &str) {
-        self.event(Event::ToolCall(name.to_owned(), summary.to_owned()));
+    fn tool_call(&mut self, name: &str, summary: &str, compact: Option<&CompactRead>) {
+        let (name, summary) = (name.to_owned(), summary.to_owned());
+        self.event(Event::ToolCall(name, summary, compact.cloned()));
     }
     fn tool_running(&mut self, since: Instant) {
         self.event(Event::ToolRunning(since));
@@ -2518,7 +2519,7 @@ mod tests {
                 .unwrap()
         };
         for (index, command) in ["seq 1 2", "seq 3 4"].into_iter().enumerate() {
-            transcript.push_call(index, Event::ToolCall("bash".into(), command.into()));
+            transcript.push_call(index, Event::ToolCall("bash".into(), command.into(), None));
             transcript.push_call(index, Event::ToolRunning(ago(5)));
         }
         transcript.push_call(0, Event::ToolOutput("1".into()));
@@ -2550,7 +2551,7 @@ mod tests {
         let hide = Arc::new(AtomicBool::new(false));
         let mut transcript = Transcript::default();
         transcript.push(Event::UserPrompt("count".into()));
-        transcript.push(Event::ToolCall("bash".into(), "seq 1 9".into()));
+        transcript.push(Event::ToolCall("bash".into(), "seq 1 9".into(), None));
         let output: Vec<_> = (1..=9).map(|n| n.to_string()).collect();
         transcript.push(Event::ToolResult(
             "bash".into(),
@@ -2600,7 +2601,7 @@ mod tests {
         transcript.push(Event::Progress(StreamProgress::Text(reply.into())));
         transcript.push(Event::Assistant(reply.into()));
         let command = "cargo test --offline --no-fail-fast";
-        transcript.push(Event::ToolCall("bash".into(), command.into()));
+        transcript.push(Event::ToolCall("bash".into(), command.into(), None));
         let output = "test a ... ok\ntest agent::tests::compaction ... FAILED";
         transcript.push(Event::ToolResult(
             "bash".into(),

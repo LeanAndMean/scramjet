@@ -1,6 +1,7 @@
 use super::{
-    ToolDetail,
+    CompactRead, ToolDetail,
     image::{self, Image},
+    instructions,
     sandbox::{self, Hidden},
 };
 use serde_json::{Value, json};
@@ -178,20 +179,48 @@ impl<'a> Call<'a> {
             super::status::NAME => self.arguments["status"].as_str().unwrap_or("").to_owned(),
             super::status::RECORD => super::status::record_summary(&self.arguments),
             "read" => {
-                let path = &shortened(self.arguments["path"].as_str().unwrap_or(""));
-                let (offset, limit) = (
-                    self.arguments["offset"].as_u64(),
-                    self.arguments["limit"].as_u64(),
-                );
-                let start = offset.unwrap_or(1).max(1);
-                match limit {
-                    _ if offset.is_none() && limit.is_none() => path.to_owned(),
-                    Some(limit) => format!("{path}:{start}-{}", (start + limit).saturating_sub(1)),
-                    None => format!("{path}:{start}"),
-                }
+                let path = shortened(self.arguments["path"].as_str().unwrap_or(""));
+                path + &self.lines()
             }
             _ => shortened(self.arguments["path"].as_str().unwrap_or("")),
         }
+    }
+    /// A read's line range as its call line shows it (`:3-10`, `:3`), if it asks for one.
+    fn lines(&self) -> String {
+        let (offset, limit) = (
+            self.arguments["offset"].as_u64(),
+            self.arguments["limit"].as_u64(),
+        );
+        let start = offset.unwrap_or(1).max(1);
+        match limit {
+            _ if offset.is_none() && limit.is_none() => String::new(),
+            Some(limit) => format!(":{start}-{}", (start + limit).saturating_sub(1)),
+            None => format!(":{start}"),
+        }
+    }
+    /// As Scramjet's compact reads, a read of a skill's `SKILL.md`, an `AGENTS.md` or
+    /// `CLAUDE.md`, or the README the instructions point to, by its path in `root`.
+    pub fn compact(&self, root: &Path) -> Option<CompactRead> {
+        let given = (self.arguments["path"].as_str()).filter(|_| self.name == "read")?;
+        let path = resolve(root, given);
+        let name = path.file_name()?.to_str()?;
+        let lines = self.lines();
+        if name == "SKILL.md" {
+            let skill = path.parent().and_then(Path::file_name);
+            let skill = skill.map_or(name.into(), |skill| skill.to_string_lossy());
+            return Some(CompactRead::Skill(format!("{skill}{lines}")));
+        }
+        if path == Path::new(instructions::README) {
+            return Some(CompactRead::Docs(format!("README.md{lines}")));
+        }
+        if !matches!(name, "AGENTS.md" | "AGENTS.MD" | "CLAUDE.md" | "CLAUDE.MD") {
+            return None;
+        }
+        let shown = match path.strip_prefix(root) {
+            Ok(relative) => relative.display().to_string(),
+            Err(_) => shortened(&path.to_string_lossy()),
+        };
+        Some(CompactRead::Resource(format!("{shown}{lines}")))
     }
     pub fn approval(&self, root: &Path) -> Approval {
         match self.name {
@@ -1509,6 +1538,53 @@ inline image size limit.]",
                 json!(bad.text),
             )
         );
+    }
+
+    #[test]
+    fn reads_of_skills_context_files_and_the_readme_are_compact() {
+        let root = Path::new("/work/project");
+        let compact = |arguments| call("read", arguments).compact(root);
+        let home = std::env::home_dir().unwrap();
+        let skill = home.join(".agents/skills/release-notes/SKILL.md");
+        assert_eq!(
+            compact(json!({"path":skill,"offset":5,"limit":10})),
+            Some(CompactRead::Skill("release-notes:5-14".into()))
+        );
+        assert_eq!(
+            compact(json!({"path":"SKILL.md"})),
+            Some(CompactRead::Skill("project".into()))
+        );
+        assert_eq!(
+            compact(json!({"path":"./CLAUDE.md"})),
+            Some(CompactRead::Resource("CLAUDE.md".into()))
+        );
+        assert_eq!(
+            compact(json!({"path":"/work/project/sub/AGENTS.MD"})),
+            Some(CompactRead::Resource("sub/AGENTS.MD".into()))
+        );
+        assert_eq!(
+            compact(json!({"path":home.join("AGENTS.md"),"offset":2})),
+            Some(CompactRead::Resource("~/AGENTS.md:2".into()))
+        );
+        assert_eq!(
+            compact(json!({"path":"../CLAUDE.md"})),
+            Some(CompactRead::Resource("/work/CLAUDE.md".into()))
+        );
+        assert_eq!(
+            compact(json!({"path":instructions::README})),
+            Some(CompactRead::Docs("README.md".into()))
+        );
+        for other in [
+            "README.md",
+            "skill.md",
+            "CLAUDE.md.bak",
+            "docs/AGENT.md",
+            "",
+        ] {
+            assert_eq!(compact(json!({"path":other})), None, "{other}");
+        }
+        let write = call("write", json!({"path":"CLAUDE.md","content":""}));
+        assert_eq!(write.compact(root), None);
     }
 
     #[test]

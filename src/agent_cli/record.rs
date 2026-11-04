@@ -3,8 +3,8 @@
 
 use super::terminal::Terminal;
 use scramjet_rs::agent::{
-    AgentUi, Answer, AutoCompaction, Children, Compaction, Purpose, StreamProgress, ToolDetail,
-    UserCommand,
+    AgentUi, Answer, AutoCompaction, Children, CompactRead, Compaction, Purpose, StreamProgress,
+    ToolDetail, UserCommand,
 };
 use std::time::{Duration, Instant};
 
@@ -14,7 +14,7 @@ pub(super) enum Event {
     Progress(StreamProgress),
     Retrying(String, u32, u32, Duration),
     Assistant(String),
-    ToolCall(String, String),
+    ToolCall(String, String, Option<CompactRead>),
     /// Since when.
     ToolRunning(Instant),
     ToolOutput(String),
@@ -53,7 +53,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
             ui.retrying(error, *attempt, *retries, *delay)
         }
         Event::Assistant(text) => ui.assistant(text),
-        Event::ToolCall(name, summary) => ui.tool_call(name, summary),
+        Event::ToolCall(name, summary, compact) => ui.tool_call(name, summary, compact.as_ref()),
         Event::ToolRunning(since) => ui.tool_running(*since),
         Event::ToolOutput(_) | Event::Subagents(_) => {}
         Event::ToolResult(name, output, detail, failed, at) => {

@@ -753,7 +753,7 @@ Summary of that exploration:\n\n## Goal\nlook\n\n<read-files>\nold.rs\nx.rs\n</r
         let (_, resumed, _) = Session::open(&path).unwrap();
         assert_eq!(resumed[2], message);
         let mut shown = Recorder::default();
-        show_items(&resumed, &mut shown);
+        show_items(&resumed, None, &mut shown);
         assert_eq!(
             shown.shown,
             [

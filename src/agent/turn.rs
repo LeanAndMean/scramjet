@@ -301,8 +301,9 @@ to a larger-context model)"
             let ends = match self.together(&calls) {
                 Some(together) => {
                     let tools = self.tools();
+                    let root = &self.config.root;
                     let run = |call: &Call, ui: &mut dyn AgentUi| {
-                        ui.tool_call(call.name, &call.summary());
+                        ui.tool_call(call.name, &call.summary(), call.compact(root).as_ref());
                         tools.run(call, ui, cancel)
                     };
                     let ran = batch::run(&together, &self.config.root, &run, ui, cancel);
@@ -500,8 +501,10 @@ to a larger-context model)"
     /// Answers a call of a reply whose turn stopped before it ran.
     fn not_run(&mut self, item: &Value, ui: &mut dyn AgentUi) -> Result<(), AgentError> {
         let name = item["name"].as_str().unwrap_or_default();
-        let summary = Call::parse(item).map(|call| call.summary());
-        ui.tool_call(name, summary.as_deref().unwrap_or_default());
+        let call = Call::parse(item).ok();
+        let summary = call.as_ref().map(Call::summary).unwrap_or_default();
+        let compact = call.and_then(|call| call.compact(&self.config.root));
+        ui.tool_call(name, &summary, compact.as_ref());
         let output = "Error: the turn was stopped before this tool call ran; it did not run.";
         ui.tool_result(name, output, None, true);
         self.add(
@@ -527,7 +530,8 @@ to a larger-context model)"
                 return (failure(output), false);
             }
         };
-        ui.tool_call(call.name, &call.summary());
+        let compact = call.compact(&self.config.root);
+        ui.tool_call(call.name, &call.summary(), compact.as_ref());
         if call.name == question::NAME {
             let (output, ends) = ask(&call.arguments, &mut self.lifecycle, ui);
             let freetext = question::Question::parse(&call.arguments)
@@ -988,7 +992,7 @@ instructions are in that earlier result.";
         let (_, conversation, resumed) = Session::open(agent.session_path()).unwrap();
         assert_eq!(resumed, ["/rs:work go", "/rs:other now"]);
         let mut replay = Recorder::default();
-        show_items(&conversation, &mut replay);
+        show_items(&conversation, None, &mut replay);
         assert!(replay.shown.contains(&shown), "{:?}", replay.shown);
     }
 
@@ -1127,7 +1131,7 @@ here\n\nkept.txt says original";
         assert_eq!(ui.children.len(), 1 + 3 + 3 + 1);
         // Stored with the result, so that a resumed conversation shows them.
         let mut resumed = Recorder::default();
-        show_items(agent.conversation(), &mut resumed);
+        show_items(agent.conversation(), None, &mut resumed);
         assert_eq!(resumed.details, ui.details);
     }
 
@@ -1660,7 +1664,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
         let (_, conversation, prompts) = Session::open(&path).unwrap();
         assert_eq!(prompts, [typed.as_str(), "next"]);
         let mut shown = Recorder::default();
-        show_items(&conversation, &mut shown);
+        show_items(&conversation, None, &mut shown);
         // A resume shows them as they ended.
         assert_eq!(shown.shown[..2], blocks);
         let tree = agent.tree().unwrap();
@@ -1750,7 +1754,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
         let (_, conversation, resumed) = Session::open(&path).unwrap();
         assert_eq!(resumed, prompts);
         let mut shown = Recorder::default();
-        show_items(&conversation, &mut shown);
+        show_items(&conversation, None, &mut shown);
         assert_eq!(shown.shown[0], format!("command {typed} sent {expansion}"));
         assert!(shown.shown.contains(&"prompt /sjrstest:other x".to_owned()));
     }
@@ -2102,7 +2106,7 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
         assert_eq!(bodies[1]["input"], json!(prompts));
         let (_, conversation, _) = Session::open(agent.session_path()).unwrap();
         let mut shown = Recorder::default();
-        show_items(&conversation, &mut shown);
+        show_items(&conversation, None, &mut shown);
         let stopped = format!("stopped {error}");
         assert_eq!(
             shown.shown,
@@ -2524,7 +2528,7 @@ auto-dispatches it only when its message is a slash command."
         let (_, resumed, _) = Session::open(agent.session_path()).unwrap();
         assert_eq!(resumed, agent.conversation());
         let mut replay = Recorder::default();
-        show_items(&resumed, &mut replay);
+        show_items(&resumed, None, &mut replay);
         assert_eq!(
             replay.shown[..3],
             [
