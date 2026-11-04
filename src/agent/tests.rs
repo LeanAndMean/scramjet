@@ -312,10 +312,12 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
         tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
         command_sets: Vec::new(),
         skills: Vec::new(),
+        prompt: Default::default(),
     };
     let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
     // The user's own agents and command sets stay out of the tests.
     agent.agents_directory = None;
+    agent.agent_directory = None;
     agent.approvals = Some(root.join("approved-agents.json"));
     agent.skills = Skills::default();
     project_sets(&mut agent);
@@ -325,6 +327,7 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
         &agent.commands,
         &[],
         &agent.skills,
+        &Default::default(),
     );
     (agent, scratch)
 }
@@ -568,6 +571,7 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
         tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
         command_sets: Vec::new(),
         skills: Vec::new(),
+        prompt: Default::default(),
     };
     let resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
     assert_eq!(resumed.session_name(), Some("Parser work"));

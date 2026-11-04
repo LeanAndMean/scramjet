@@ -1,11 +1,12 @@
 //! The command line: its options and the usage text.
 use super::settings::{LEVELS, card_level};
-use scramjet_rs::agent::SessionChoice;
+use scramjet_rs::agent::{SessionChoice, SystemPrompt};
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
 pub(super) const USAGE: &str = "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model PATTERN] \
 [--models PATTERNS] [--thinking LEVEL] [--max-output-tokens N] [--retries N]
-[-c | -r | --session FILE] [--ask] [-p] [@FILE...] [MESSAGE...]
+[-c | -r | --session FILE] [--system-prompt TEXT] [--append-system-prompt TEXT]...
+[--no-context-files] [--ask] [-p] [@FILE...] [MESSAGE...]
        scramjet-rs --list-models [SEARCH] | --export FILE [OUTPUT] | --version
        scramjet-rs install DIR | remove NAME|DIR | list
 
@@ -31,6 +32,16 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   -c, --continue         resume the session for this project written to last
   -r, --resume           choose one of this project's sessions to resume, as /resume does
   --session FILE         resume a specific session file
+  --system-prompt TEXT   the instructions' opening, in place of the tools and guidelines: TEXT,
+                         or the contents of the file it names (default: the project's
+                         .scramjet/SYSTEM.md, else ~/.scramjet/agent/SYSTEM.md, else
+                         scramjet-rs's), as in Scramjet
+  --append-system-prompt TEXT
+                         text, or a file's contents, after the opening; several are joined
+                         (default: an APPEND_SYSTEM.md found as SYSTEM.md is)
+  -nc, --no-context-files
+                         leave out the AGENTS.md and CLAUDE.md files of ~/.scramjet/agent, the
+                         project and the directories above it
   --ask                  ask before each bash command and each write or edit outside the
                          project (answer `a` to stop asking until exit); by default tool
                          calls run without asking, as in Scramjet. Bash is not sandboxed.
@@ -123,6 +134,7 @@ pub(super) struct Options {
     pub(super) effort: Option<String>,
     pub(super) max_output_tokens: Option<u64>,
     pub(super) choice: SessionChoice,
+    pub(super) prompt: SystemPrompt,
     /// `--resume`: the session starts by choosing one to resume.
     pub(super) resume: bool,
     pub(super) ask: bool,
@@ -151,6 +163,7 @@ impl Options {
             effort: None,
             max_output_tokens: None,
             choice: SessionChoice::New,
+            prompt: SystemPrompt::default(),
             resume: false,
             ask: false,
             retries: 3,
@@ -212,6 +225,9 @@ impl Options {
                     let path = PathBuf::from(value()?);
                     (options.choice, options.resume) = (SessionChoice::Open(path), false)
                 }
+                Some("--system-prompt") => options.prompt.system = Some(value()?),
+                Some("--append-system-prompt") => options.prompt.append.push(value()?),
+                Some("-nc" | "--no-context-files") => options.prompt.no_context_files = true,
                 Some("--export") => options.export = Some(PathBuf::from(value()?)),
                 // As Scramjet's, a search is the next word unless it is an option or a file.
                 Some("--list-models") => {

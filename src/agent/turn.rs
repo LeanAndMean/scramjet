@@ -460,6 +460,7 @@ to a larger-context model)"
                     sets: &self.sets,
                 },
                 skills: &self.skills,
+                agent_directory: self.agent_directory.as_deref(),
                 approvals: self.approvals.as_deref(),
                 rates: self.rates.as_deref(),
             },
@@ -1506,6 +1507,7 @@ files is added or changed.",
             &agent.commands,
             &[],
             &agent.skills,
+            &Default::default(),
         );
         std::fs::create_dir(agent.root().join("src")).unwrap();
         std::fs::write(agent.root().join("src/a.txt"), "a needle\n").unwrap();
@@ -1711,6 +1713,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             command_sets: Vec::new(),
             skills: Vec::new(),
+            prompt: Default::default(),
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
         agent.instructions = instructions::agent(
@@ -1719,6 +1722,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
             &agent.commands,
             &[],
             &agent.skills,
+            &Default::default(),
         );
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
@@ -1780,6 +1784,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
             &agent.commands,
             &[],
             &agent.skills,
+            &Default::default(),
         );
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
@@ -1822,7 +1827,14 @@ scramjet-rs\n",
         agent.show_conversation(&mut shown);
         assert_eq!(shown.shown[0], format!("command {typed} sent {sent}"));
         // Without the read tool the model is not told to read them.
-        let text = instructions::agent(agent.root(), &[], &agent.commands, &[], &agent.skills);
+        let text = instructions::agent(
+            agent.root(),
+            &[],
+            &agent.commands,
+            &[],
+            &agent.skills,
+            &Default::default(),
+        );
         assert!(!text.contains("<available_skills>"));
     }
 
@@ -2277,6 +2289,7 @@ be a non-empty array for select type. failed",
                 tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
                 command_sets: Vec::new(),
                 skills: Vec::new(),
+                prompt: Default::default(),
             };
             let path = agent.session_path().to_owned();
             drop(agent);

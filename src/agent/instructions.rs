@@ -1,5 +1,7 @@
 //! The system instructions of the agent and of its subagents.
-use super::{Commands, Skills, publish, question, status, subagent, suggest, switch};
+use super::{
+    Commands, Problem, Skills, SystemPrompt, publish, question, status, subagent, suggest, switch,
+};
 use std::path::{Path, PathBuf};
 
 const CONTEXT_FILE_BYTES: u64 = 256 << 10;
@@ -9,14 +11,16 @@ const DIRECTIVES: &str = include_str!("directives.md");
 pub(super) const README: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/README.md");
 
 /// The agent's instructions, in Scramjet's order: Pi's list of its coding `tools` and the
-/// guidelines for them, the project's context files, the `skills`, Scramjet's directives, then
-/// the subagents and commands. Each request adds `identity` and `environment`.
+/// guidelines for them, or the opening `loaded` has in their place, the texts it appends, the
+/// context files, the `skills`, Scramjet's directives, then the subagents and commands. Each
+/// request adds `identity` and `environment`.
 pub(super) fn agent(
     root: &Path,
     tools: &[String],
     commands: &Commands,
     agents: &[subagent::Definition],
     skills: &Skills,
+    loaded: &Loaded,
 ) -> String {
     let catalog: String = [subagent::catalog(agents), commands.catalog()]
         .into_iter()
@@ -89,9 +93,11 @@ with relevant checks.",
         "- Be concise in your responses",
         "- Show file paths clearly when working with files",
     ]);
-    let text = format!(
-        "You are scramjet-rs, a coding agent. You help the user with software engineering tasks \
-in the project directory {root}, using the tools below.
+    let mut text = match &loaded.opening {
+        Some(opening) => opening.clone(),
+        None => format!(
+            "You are scramjet-rs, a coding agent. You help the user with software engineering \
+tasks in the project directory {root}, using the tools below.
 
 Available tools:
 {tools}
@@ -99,12 +105,19 @@ Available tools:
 Guidelines:
 {guidelines}
 ",
-        root = root.display(),
-        tools = listed.join("\n"),
-        guidelines = guidelines.join("\n"),
-    );
+            root = root.display(),
+            tools = listed.join("\n"),
+            guidelines = guidelines.join("\n"),
+        ),
+    };
+    if !loaded.appended.is_empty() {
+        text = format!("{}\n\n{}", text.trim_end(), loaded.appended.join("\n\n"));
+    }
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
     let text = text
-        + &project_context(root)
+        + &project_context(&loaded.context)
         + &skills_section(has("read"), skills)
         + &format!("\n{}\n{DIRECTIVES}\n{catalog}", orientation());
     text.trim_end().to_owned()
@@ -204,8 +217,15 @@ fn skills_section(read: bool, skills: &Skills) -> String {
 }
 
 /// A subagent's instructions, as Pi builds a child's: its tools and guidelines, the agent's own
-/// text, the project's context files from `cwd` and the `skills`, then the date and directory.
-pub(super) fn child(cwd: &Path, tools: &[&str], prompt: &str, skills: &Skills) -> String {
+/// text, the context files from `cwd` (and the `agent_directory`) and the `skills`, then the date
+/// and directory.
+pub(super) fn child(
+    cwd: &Path,
+    tools: &[&str],
+    prompt: &str,
+    skills: &Skills,
+    agent_directory: Option<&Path>,
+) -> String {
     let listed: Vec<&str> = tools
         .iter()
         .map(|tool| match *tool {
@@ -254,7 +274,7 @@ Guidelines:
     if !prompt.trim().is_empty() {
         text += &format!("\n\n{prompt}");
     }
-    text += &project_context(cwd);
+    text += &project_context(&context_files(cwd, agent_directory));
     let listed = skills_section(tools.contains(&"read"), skills);
     if !listed.is_empty() && !text.ends_with('\n') {
         text.push('\n');
@@ -267,31 +287,126 @@ Guidelines:
     )
 }
 
-/// The `AGENTS.md` and `CLAUDE.md` files of `root` and the directories above it, outermost
-/// first, with their contents.
-pub(super) fn context_files(root: &Path) -> Vec<(PathBuf, String)> {
-    let mut files = Vec::new();
-    for directory in root.ancestors() {
-        for name in ["AGENTS.md", "CLAUDE.md"] {
-            let path = directory.join(name);
-            if std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= CONTEXT_FILE_BYTES)
-                && let Ok(contents) = std::fs::read_to_string(&path)
-            {
-                files.push((path, contents));
+/// What the agent's instructions take from files and the command line, as Scramjet's resource
+/// loader reads it.
+#[derive(Debug, Default)]
+pub(super) struct Loaded {
+    /// In place of the opening (the tools and guidelines): `--system-prompt`, else `SYSTEM.md`.
+    pub opening: Option<String>,
+    /// After it: the `--append-system-prompt` texts, else `APPEND_SYSTEM.md`.
+    pub appended: Vec<String>,
+    pub context: Vec<(PathBuf, String)>,
+    /// The files `opening` and `appended` were read from, each with whether it is the opening.
+    pub files: Vec<(PathBuf, bool)>,
+    /// The files among them that could not be read.
+    pub problems: Vec<Problem>,
+}
+
+impl Loaded {
+    /// The text `source` gives: the contents of the file it names, else itself.
+    fn read(&mut self, source: &str, opening: bool) -> Option<String> {
+        let path = Path::new(source);
+        if !path.exists() {
+            return Some(source.to_owned());
+        }
+        match std::fs::read_to_string(path) {
+            Ok(text) => {
+                let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+                self.files.push((path, opening));
+                Some(text)
+            }
+            Err(error) => {
+                let text = format!("could not read {}: {error}", path.display());
+                self.problems.push(Problem::in_file(text, path));
+                None
             }
         }
     }
-    files.reverse();
+}
+
+/// Reads what `prompt` names for the instructions of an agent in `root`, as Scramjet does: its
+/// opening's text or file, else the project's `.scramjet/SYSTEM.md`, else the agent directory's;
+/// the texts or files it appends, else an `APPEND_SYSTEM.md` found the same way; and, unless it
+/// leaves them out, the context files.
+pub(super) fn load(prompt: &SystemPrompt, root: &Path, agent_directory: Option<&Path>) -> Loaded {
+    let mut loaded = Loaded::default();
+    if !prompt.no_context_files {
+        loaded.context = context_files(root, agent_directory);
+    }
+    let found = |name: &str| {
+        let directories = [
+            Some(root.join(".scramjet")),
+            agent_directory.map(Path::to_path_buf),
+        ];
+        (directories.into_iter().flatten())
+            .map(|directory| directory.join(name))
+            .find(|path| path.exists())
+            .map(|path| path.to_string_lossy().into_owned())
+    };
+    let opening = (prompt.system.clone()).or_else(|| found("SYSTEM.md"));
+    if let Some(source) = opening {
+        loaded.opening = (loaded.read(&source, true)).filter(|text| !text.trim().is_empty());
+    }
+    let appended = match prompt.append.is_empty() {
+        true => found("APPEND_SYSTEM.md").into_iter().collect(),
+        false => prompt.append.clone(),
+    };
+    for source in appended {
+        if let Some(text) = loaded.read(&source, false) {
+            let text = text.trim_end();
+            if !text.is_empty() {
+                loaded.appended.push(text.to_owned());
+            }
+        }
+    }
+    loaded
+}
+
+/// The context files, as Scramjet's: those of the `agent_directory`, then those of `root` and
+/// the directories above it, outermost first, with their contents. A directory's `CLAUDE.md` comes
+/// before its `AGENTS.md`, which is left out when it says the same.
+pub(super) fn context_files(root: &Path, agent_directory: Option<&Path>) -> Vec<(PathBuf, String)> {
+    let mut files = agent_directory.map(directory_context).unwrap_or_default();
+    let mut above = Vec::new();
+    for directory in root.ancestors() {
+        let found = directory_context(directory).into_iter();
+        let found: Vec<_> = found
+            .filter(|(path, _)| !files.iter().any(|(seen, _)| seen == path))
+            .collect();
+        above.splice(0..0, found);
+    }
+    files.extend(above);
     files
 }
 
-/// The context files of `root`, as Pi's `# Project Context`; empty without any.
-fn project_context(root: &Path) -> String {
+/// The `CLAUDE.md` and `AGENTS.md` (or `.MD`) of `directory`, as Scramjet reads them.
+fn directory_context(directory: &Path) -> Vec<(PathBuf, String)> {
+    let first = |names: [&str; 2]| {
+        names.into_iter().find_map(|name| {
+            let path = directory.join(name);
+            let fits = std::fs::metadata(&path)
+                .is_ok_and(|m| m.is_file() && m.len() <= CONTEXT_FILE_BYTES);
+            let contents = fits
+                .then(|| std::fs::read_to_string(&path).ok())
+                .flatten()?;
+            Some((path, contents))
+        })
+    };
+    let claude = first(["CLAUDE.md", "CLAUDE.MD"]);
+    let agents = first(["AGENTS.md", "AGENTS.MD"]);
+    match (claude, agents) {
+        (Some(claude), Some(agents)) if claude.1 != agents.1 => vec![claude, agents],
+        (Some(claude), _) => vec![claude],
+        (None, agents) => agents.into_iter().collect(),
+    }
+}
+
+/// The context `files`, as Pi's `# Project Context`; empty without any.
+fn project_context(files: &[(PathBuf, String)]) -> String {
     let mut text = String::new();
-    let files = context_files(root);
     if !files.is_empty() {
         text.push_str("\n# Project Context\n\nProject-specific instructions and guidelines:\n");
-        for (path, contents) in &files {
+        for (path, contents) in files {
             text.push_str(&format!(
                 "\n## {}\n\n{}\n",
                 path.display(),
@@ -323,6 +438,7 @@ fn today() -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ProblemFile;
     use super::*;
 
     #[test]
@@ -330,7 +446,14 @@ mod tests {
         let root = Path::new("/nonexistent/scramjet-rs-instructions");
         let commands = Commands::default();
         let tools = super::super::tools::DEFAULT_TOOLS.map(String::from);
-        let text = agent(root, &tools, &commands, &[], &Skills::default());
+        let text = agent(
+            root,
+            &tools,
+            &commands,
+            &[],
+            &Skills::default(),
+            &Loaded::default(),
+        );
         let listed = "Available tools:\n- read: Read file contents\n- bash: Execute bash commands \
 (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including \
 multiple disjoint edits in one call\n- write: Create or overwrite files\n- report_scramjet_command_status:";
@@ -342,7 +465,14 @@ git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use
             text.contains("- Use write only for new files or complete rewrites.\n- Prefer editing")
         );
 
-        let text = agent(root, &[], &commands, &[], &Skills::default());
+        let text = agent(
+            root,
+            &[],
+            &commands,
+            &[],
+            &Skills::default(),
+            &Loaded::default(),
+        );
         assert!(text.contains("Available tools:\n- report_scramjet_command_status:"));
         let guidelines = format!("Guidelines:\n{}\n- Be concise", suggest::GUIDELINE);
         assert!(text.contains(&guidelines), "{text}");
@@ -355,7 +485,14 @@ git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use
         );
         assert!(text.contains(&listed), "{text}");
         let all = super::super::tools::CODING_TOOLS.map(String::from);
-        let text = agent(root, &all, &commands, &[], &Skills::default());
+        let text = agent(
+            root,
+            &all,
+            &commands,
+            &[],
+            &Skills::default(),
+            &Loaded::default(),
+        );
         assert!(text.contains(
             "Guidelines:\n- Prefer grep/find/ls tools over bash for file exploration (faster, \
 respects .gitignore)\n- Use read"
@@ -386,7 +523,14 @@ model: \"Reviewed by x\"\n- Multiple credited models: describe each model's cont
     #[test]
     fn the_directives_follow_the_context_and_skills_and_the_catalogs_follow_them() {
         let root = Path::new("/nonexistent/scramjet-rs-directives");
-        let text = agent(root, &[], &Commands::default(), &[], &Skills::default());
+        let text = agent(
+            root,
+            &[],
+            &Commands::default(),
+            &[],
+            &Skills::default(),
+            &Loaded::default(),
+        );
         let at = |heading: &str| text.find(&format!("\n# {heading}\n")).unwrap();
         assert!(at("scramjet-rs") < at("Prior-session fallback"));
         assert!(at("Command framing") < at("Executing actions with care"));
@@ -405,6 +549,151 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {README}\
     }
 
     #[test]
+    fn system_md_and_append_system_md_are_found_and_the_options_replace_them() {
+        let scratch = std::env::temp_dir().join(format!("sjrs-system-md-{}", std::process::id()));
+        let _scratch = super::super::tests::ScratchDir::new(scratch.clone());
+        let (root, home) = (scratch.join("project"), scratch.join("agent"));
+        let write = |path: &Path, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        let prompt = SystemPrompt::default();
+        let loaded = load(&prompt, &root, Some(&home));
+        assert_eq!(
+            (loaded.opening, loaded.appended),
+            (None, Vec::<String>::new())
+        );
+        write(&home.join("SYSTEM.md"), "Global.");
+        write(&home.join("APPEND_SYSTEM.md"), "Global after.");
+        let loaded = load(&prompt, &root, Some(&home));
+        assert_eq!(loaded.opening.as_deref(), Some("Global."));
+        assert_eq!(loaded.appended, ["Global after."]);
+        write(&root.join(".scramjet/SYSTEM.md"), "Project.");
+        let loaded = load(&prompt, &root, Some(&home));
+        assert_eq!(loaded.opening.as_deref(), Some("Project."));
+        assert_eq!(
+            loaded.files,
+            [
+                (root.join(".scramjet/SYSTEM.md"), true),
+                (home.join("APPEND_SYSTEM.md"), false)
+            ]
+        );
+        // The options' texts and files win; an empty one leaves the default opening.
+        let given = scratch.join("given.md");
+        write(&given, "From a file.");
+        let prompt = SystemPrompt {
+            system: Some("Be terse.".into()),
+            append: vec![given.display().to_string(), "Inline.".into()],
+            no_context_files: false,
+        };
+        let loaded = load(&prompt, &root, Some(&home));
+        assert_eq!(loaded.opening.as_deref(), Some("Be terse."));
+        assert_eq!(loaded.appended, ["From a file.", "Inline."]);
+        assert_eq!(loaded.files, [(given, false)]);
+        let prompt = SystemPrompt {
+            system: Some(String::new()),
+            ..SystemPrompt::default()
+        };
+        assert_eq!(load(&prompt, &root, Some(&home)).opening, None);
+        // A file that cannot be read is a problem, and left out.
+        std::fs::create_dir(root.join(".scramjet/APPEND_SYSTEM.md")).unwrap();
+        let loaded = load(&SystemPrompt::default(), &root, Some(&home));
+        assert!(loaded.appended.is_empty());
+        let unread = root.join(".scramjet/APPEND_SYSTEM.md");
+        assert_eq!(loaded.problems.len(), 1);
+        assert_eq!(
+            loaded.problems[0].file,
+            Some(ProblemFile::Path(unread.clone()))
+        );
+        assert!(
+            (loaded.problems[0].text)
+                .starts_with(&format!("could not read {}: ", unread.display())),
+            "{:?}",
+            loaded.problems
+        );
+    }
+
+    #[test]
+    fn the_opening_given_replaces_the_tools_and_guidelines_and_the_appended_texts_follow_it() {
+        let scratch = std::env::temp_dir().join(format!("sjrs-opening-{}", std::process::id()));
+        let _scratch = super::super::tests::ScratchDir::new(scratch.clone());
+        std::fs::write(scratch.join("AGENTS.md"), "Be careful.\n").unwrap();
+        let prompt = SystemPrompt {
+            system: Some("You review code.".into()),
+            append: vec!["First.".into(), "Second.\n".into()],
+            no_context_files: false,
+        };
+        let loaded = load(&prompt, &scratch, None);
+        let tools = super::super::tools::DEFAULT_TOOLS.map(String::from);
+        let text = agent(
+            &scratch,
+            &tools,
+            &Commands::default(),
+            &[],
+            &Skills::default(),
+            &loaded,
+        );
+        let context = format!(
+            "You review code.\n\nFirst.\n\nSecond.\n\n# Project Context\n\nProject-specific \
+instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
+            scratch.join("AGENTS.md").display()
+        );
+        assert!(text.starts_with(&context), "{text}");
+        assert!(!text.contains("Available tools:"));
+        let prompt = SystemPrompt {
+            append: vec!["After.".into()],
+            no_context_files: true,
+            ..SystemPrompt::default()
+        };
+        let loaded = load(&prompt, &scratch, None);
+        assert!(loaded.context.is_empty());
+        let text = agent(
+            &scratch,
+            &tools,
+            &Commands::default(),
+            &[],
+            &Skills::default(),
+            &loaded,
+        );
+        assert!(text.contains(
+            "- Show file paths clearly when working with files\n\nAfter.\n\n# scramjet-rs\n"
+        ));
+        assert!(!text.contains("# Project Context"));
+    }
+
+    #[test]
+    fn context_files_are_the_agent_directory_s_then_outermost_first_claude_md_before_agents_md() {
+        let scratch = std::env::temp_dir().join(format!("sjrs-context-{}", std::process::id()));
+        let _scratch = super::super::tests::ScratchDir::new(scratch.clone());
+        let (outer, root, home) = (
+            scratch.join("a"),
+            scratch.join("a/b"),
+            scratch.join("agent"),
+        );
+        for directory in [&root, &home] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let write = |path: PathBuf, text: &str| std::fs::write(path, text).unwrap();
+        write(home.join("AGENTS.md"), "Home.");
+        write(outer.join("AGENTS.md"), "Outer agents.");
+        write(outer.join("CLAUDE.MD"), "Outer claude.");
+        write(root.join("CLAUDE.md"), "Same.");
+        write(root.join("AGENTS.md"), "Same.");
+        let found: Vec<(PathBuf, String)> = context_files(&root, Some(&home))
+            .into_iter()
+            .filter(|(path, _)| path.starts_with(&scratch))
+            .collect();
+        let expected = [
+            (home.join("AGENTS.md"), "Home."),
+            (outer.join("CLAUDE.MD"), "Outer claude."),
+            (outer.join("AGENTS.md"), "Outer agents."),
+            (root.join("CLAUDE.md"), "Same."),
+        ]
+        .map(|(path, text)| (path, text.to_owned()));
+        assert_eq!(found, expected);
+    }
+
+    #[test]
     fn children_that_can_read_are_told_of_the_skills() {
         let scratch =
             std::env::temp_dir().join(format!("sjrs-child-skills-{}", std::process::id()));
@@ -414,7 +703,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {README}\
         std::fs::write(&file, "---\ndescription: PDFs.\n---\nBody").unwrap();
         let skills = Skills::in_directory(&scratch);
         let cwd = Path::new("/nonexistent/scramjet-rs-child");
-        let text = child(cwd, &["read", "bash"], "Be brief.", &skills);
+        let text = child(cwd, &["read", "bash"], "Be brief.", &skills, None);
         let listed = "Be brief.\n\nThe following skills provide specialized instructions for \
 specific tasks.\n";
         assert!(text.contains(listed), "{text}");
@@ -423,6 +712,6 @@ specific tasks.\n";
             file.display()
         );
         assert!(text.contains(&end), "{text}");
-        assert!(!child(cwd, &["bash"], "", &skills).contains("<available_skills>"));
+        assert!(!child(cwd, &["bash"], "", &skills, None).contains("<available_skills>"));
     }
 }

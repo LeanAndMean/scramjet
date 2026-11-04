@@ -73,7 +73,8 @@ impl Listing {
     }
 }
 
-/// The problems, the command sets, commands, agents, skills, context files and settings files.
+/// The problems, the command sets, commands, agents, skills, system prompt, context and settings
+/// files.
 pub(super) fn listing(loaded: &Loaded) -> Listing {
     let installed = loaded.installed;
     let mut listing = Listing::default();
@@ -172,6 +173,29 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
         })
         .collect();
     listing.section("Skills", skills);
+    let prompt = (installed.prompt_files.iter())
+        .map(|(path, opening)| {
+            let (what, note) = match opening {
+                true => (
+                    "replaces the opening",
+                    "In the instructions in place of their opening (the tools and guidelines), as \
+                     Scramjet's SYSTEM.md or --system-prompt; /reload reads it again.",
+                ),
+                false => (
+                    "after the opening",
+                    "In the instructions after their opening, as Scramjet's APPEND_SYSTEM.md or \
+                     --append-system-prompt; /reload reads it again.",
+                ),
+            };
+            let columns = vec![shown(path), what.to_owned()];
+            (
+                columns,
+                format!("{}\n{note}", shown(path)),
+                Some(path.clone()),
+            )
+        })
+        .collect();
+    listing.section("System prompt", prompt);
     let context = (installed.context_files.iter())
         .map(|path| {
             let note = "In the instructions as the project's context, outermost first; /reload \
@@ -364,6 +388,10 @@ mod tests {
                 ),
             ],
             context_files: vec![root.join("AGENTS.md")],
+            prompt_files: vec![
+                (root.join(".scramjet/SYSTEM.md"), true),
+                (base.join("more.md"), false),
+            ],
             autonomy: (
                 root.join(".scramjet/autonomy.yaml"),
                 Some(base.join("config/autonomy.yaml")),
@@ -404,6 +432,16 @@ mod tests {
                     "  pdf  {}",
                     shown(&root.join(".scramjet/skills/pdf/SKILL.md"))
                 ),
+                "System prompt".into(),
+                format!(
+                    "  {}  replaces the opening",
+                    shown(&root.join(".scramjet/SYSTEM.md"))
+                ),
+                format!(
+                    "  {:w$}  after the opening",
+                    shown(&base.join("more.md")),
+                    w = shown(&root.join(".scramjet/SYSTEM.md")).len()
+                ),
                 "Context files".into(),
                 format!("  {}", shown(&root.join("AGENTS.md"))),
                 "Settings files".into(),
@@ -418,11 +456,11 @@ mod tests {
         let headings: Vec<usize> = (0..list.rows.len())
             .filter(|&at| list.headings[at])
             .collect();
-        assert_eq!(headings, [0, 3, 5, 8, 11, 13, 15]);
+        assert_eq!(headings, [0, 3, 5, 8, 11, 13, 16, 18]);
         assert_eq!(list.notes.len(), list.rows.len());
         assert_eq!(list.files.len(), list.rows.len());
-        // Enter opens the files of problems, commands, agents, skills, context and settings
-        // files that exist; not those of headings, problems without one, sets or files not
+        // Enter opens the files of problems, commands, agents, skills, system prompt, context
+        // and settings files that exist; not those of headings, problems without one, sets or files not
         // written yet.
         let files: Vec<(usize, &Path)> = (list.files.iter().enumerate())
             .filter_map(|(at, file)| Some((at, file.as_deref()?)))
@@ -436,14 +474,20 @@ mod tests {
                 (9, &base.join("user/mine.md")),
                 (10, &set.join("agents/demo:helper.md")),
                 (12, &root.join(".scramjet/skills/pdf/SKILL.md")),
-                (14, &root.join("AGENTS.md")),
-                (16, &settings),
+                (14, &root.join(".scramjet/SYSTEM.md")),
+                (15, &base.join("more.md")),
+                (17, &root.join("AGENTS.md")),
+                (19, &settings),
             ]
         );
+        assert!(list.notes[15].ends_with(
+            "\nIn the instructions after their opening, as \
+            Scramjet's APPEND_SYSTEM.md or --append-system-prompt; /reload reads it again."
+        ));
         // After an edit, the list comes back on the row Enter was pressed on, not the
         // problem's row of the same file.
-        let rows = [16, 1, 10, 3].map(|near| list.row_of(&settings, near));
-        assert_eq!(rows, [Some(16), Some(1), Some(16), Some(1)]);
+        let rows = [19, 1, 11, 3].map(|near| list.row_of(&settings, near));
+        assert_eq!(rows, [Some(19), Some(1), Some(19), Some(1)]);
         assert_eq!(list.row_of(&base.join("gone.md"), 4), None);
         let opens = format!("settings: x: wrong\nEnter opens {}.", shown(&settings));
         assert_eq!((&list.notes[1], &list.notes[2][..]), (&opens, "skills: y"));
@@ -470,12 +514,12 @@ mod tests {
                 .ends_with("\nOffered to the model; /skill:pdf runs it. Fills PDF forms.")
         );
         // The settings file is there; the autonomy.yaml files are not yet.
-        assert!(list.notes[16].ends_with("saved as you change them."));
-        assert!(list.notes[17].ends_with(
+        assert!(list.notes[19].ends_with("saved as you change them."));
+        assert!(list.notes[20].ends_with(
             " Not there yet: changing a next step or publishing for all projects writes it."
         ));
         assert!(
-            list.notes[18]
+            list.notes[21]
                 .ends_with(" Not there yet: changing a next step for this project writes it.")
         );
         assert_eq!(
@@ -486,6 +530,7 @@ mod tests {
             sets: Vec::new(),
             agents: Vec::new(),
             context_files: Vec::new(),
+            prompt_files: Vec::new(),
             autonomy: (root.join(".scramjet/autonomy.yaml"), None),
             problems: Vec::new(),
         };
@@ -524,6 +569,7 @@ mod tests {
             sets: Vec::new(),
             agents: Vec::new(),
             context_files: Vec::new(),
+            prompt_files: Vec::new(),
             autonomy: (base.join(".scramjet/autonomy.yaml"), None),
             problems: Vec::new(),
         };

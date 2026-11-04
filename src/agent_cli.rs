@@ -170,6 +170,7 @@ fn start(
         tools: settings.tools.clone(),
         command_sets: settings.command_sets.clone(),
         skills: settings.skills.clone(),
+        prompt: options.prompt,
     };
     let mut agent = Agent::start(config, options.choice).map_err(|e| e.to_string())?;
     let (scoped, warnings) = match patterns.is_empty() {

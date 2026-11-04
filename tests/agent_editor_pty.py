@@ -3792,4 +3792,29 @@ assert [body['input'][-1] for body in sent_bodies] == [
 assert sent_bodies[1]['input'][0] == sent_bodies[0]['input'][0], sent_bodies
 shutil.rmtree(os.path.join(project, 'shots'))
 os.remove(os.path.join(project, 'notes.md'))
+# As Scramjet's, the project's .scramjet/SYSTEM.md replaces the instructions' opening, and
+# --system-prompt (a text, or a file's contents) replaces both; --append-system-prompt follows it;
+# -nc leaves out the context files.
+context_file = os.path.join(project, 'AGENTS.md')
+with open(context_file, 'w') as file:
+    file.write('Context here.\n')
+system_md = os.path.join(project, '.scramjet', 'SYSTEM.md')
+os.makedirs(os.path.dirname(system_md), exist_ok=True)
+with open(system_md, 'w') as file:
+    file.write('From SYSTEM.md.\n')
+appended = os.path.join(work, 'appended.md')
+with open(appended, 'w') as file:
+    file.write('From a file.\n')
+sent_bodies = []
+for arguments in [[], ['--system-prompt', 'Given.', '--append-system-prompt', appended,
+                       '--append-system-prompt', 'Inline.', '-nc']]:
+    ran = subprocess.run([BINARY, '--endpoint', serve_items([[message('Done.')]], bodies=sent_bodies), *arguments,
+                          '-p', 'go'], cwd=project, env=env, capture_output=True, timeout=30)
+    assert ran.returncode == 0, ran
+found, given = (body['instructions'] for body in sent_bodies)
+assert found.startswith('From SYSTEM.md.\n\n# Project Context\n'), found
+assert '\n## %s\n\nContext here.\n' % os.path.realpath(context_file) in found, found
+assert given.startswith('Given.\n\nFrom a file.\n\nInline.\n\n# scramjet-rs\n'), given
+os.remove(context_file)
+os.remove(system_md)
 print('agent editor journeys passed')

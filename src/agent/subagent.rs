@@ -624,6 +624,8 @@ pub(super) struct Parent<'a> {
     /// The agent's skills, which children with `read` are told of, as Scramjet's children load
     /// them.
     pub skills: &'a Skills,
+    /// Scramjet's agent directory, whose context files children have, as Scramjet's do.
+    pub agent_directory: Option<&'a Path>,
     /// Where the user's approvals of project agents are remembered (`approvals::path`).
     pub approvals: Option<&'a Path>,
     /// Where replies' output rates are kept (`rates::path`).
@@ -1197,7 +1199,13 @@ fn run_child(
             .unwrap_or_else(|| ModelInfo::guess(&job.model)),
     };
     let effort = &job.effort;
-    let instructions = instructions::child(&job.cwd, tools, &agent.prompt, parent.skills);
+    let instructions = instructions::child(
+        &job.cwd,
+        tools,
+        &agent.prompt,
+        parent.skills,
+        parent.agent_directory,
+    );
     let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];
     for _ in 0..MAX_STEPS {
         if cancel.load(Ordering::Relaxed) {

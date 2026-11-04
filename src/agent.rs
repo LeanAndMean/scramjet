@@ -118,6 +118,20 @@ pub struct AgentConfig {
     pub command_sets: Vec<PathBuf>,
     /// The skill files and directories the settings list, besides those found by default.
     pub skills: Vec<PathBuf>,
+    pub prompt: SystemPrompt,
+}
+
+/// What the command line changes in the agent's instructions, as Scramjet's options do. A text
+/// that is a file's path stands for the file's contents, read again by `/reload`.
+#[derive(Clone, Debug, Default)]
+pub struct SystemPrompt {
+    /// `--system-prompt`: in place of the opening (the tools and guidelines), and of the
+    /// `SYSTEM.md` files that would replace it.
+    pub system: Option<String>,
+    /// `--append-system-prompt`: after it, in place of the `APPEND_SYSTEM.md` files.
+    pub append: Vec<String>,
+    /// `--no-context-files`: without the `AGENTS.md` and `CLAUDE.md` files.
+    pub no_context_files: bool,
 }
 
 /// The reasoning effort levels a model's card lists, and the current one, as Shift+Tab cycles
@@ -426,8 +440,14 @@ pub struct Agent {
     /// Where replies' output rates are kept (`rates::path`).
     rates: Option<PathBuf>,
     sets: Sets,
+    /// Scramjet's agent directory, whose context files, `SYSTEM.md` and `APPEND_SYSTEM.md` the
+    /// instructions take.
+    agent_directory: Option<PathBuf>,
     /// The context files the instructions have, outermost first.
     context_files: Vec<PathBuf>,
+    /// The files read in place of their opening (`true`) or after it, and those that could not
+    /// be read.
+    prompt_files: (Vec<(PathBuf, bool)>, Vec<Problem>),
     session: Session,
     executor: tokio::runtime::Runtime,
     /// The current model's protocol and limits, from its name until `load_model_card`.
@@ -479,10 +499,13 @@ pub struct Installed {
     pub agents: Vec<AgentFile>,
     /// The context files the instructions have, outermost first.
     pub context_files: Vec<PathBuf>,
+    /// The files read for the instructions in place of their opening (`true`) or after it.
+    pub prompt_files: Vec<(PathBuf, bool)>,
     /// Scramjet's `autonomy.yaml` of the project, and the one for all projects.
     pub autonomy: (PathBuf, Option<PathBuf>),
-    /// What is wrong in the sets, commands, agents, skills and `autonomy.yaml` files, each
-    /// saying which: `scramjet: `, `agents: ` or `skills: ` first.
+    /// What is wrong in the sets, commands, agents, skills, instructions files and
+    /// `autonomy.yaml` files, each saying which: `scramjet: `, `agents: `, `skills: ` or
+    /// `instructions: ` first.
     pub problems: Vec<Problem>,
 }
 
@@ -542,7 +565,9 @@ impl Agent {
             approvals: approvals::path(),
             rates: rates::path(),
             sets: Sets::default(),
+            agent_directory: None,
             context_files: Vec::new(),
+            prompt_files: Default::default(),
             commands: Commands::default(),
             skills: Skills::default(),
             lifecycle,
@@ -591,20 +616,25 @@ impl Agent {
         self.commands = Commands::discover(&self.sets);
         self.skills = Skills::discover(&config.skills, &config.root);
         self.agents_directory = subagent::user_directory();
+        self.agent_directory = subagent::agent_directory();
         self.instruct();
     }
 
     fn instruct(&mut self) {
-        let context = instructions::context_files(&self.config.root);
-        self.context_files = context.into_iter().map(|(path, _)| path).collect();
+        let config = &self.config;
+        let directory = self.agent_directory.as_deref();
+        let loaded = instructions::load(&config.prompt, &config.root, directory);
         let agents = subagent::registered(&self.sets, &mut Vec::new());
         self.instructions = instructions::agent(
-            &self.config.root,
-            &self.config.tools,
+            &config.root,
+            &config.tools,
             &self.commands,
             &agents,
             &self.skills,
+            &loaded,
         );
+        self.context_files = (loaded.context.into_iter()).map(|(path, _)| path).collect();
+        self.prompt_files = (loaded.files, loaded.problems);
     }
 
     /// The coding tools of the requests that follow, as the settings' `tools`; the instructions
@@ -893,11 +923,13 @@ impl Agent {
         let mut problems = prefixed(self.commands.warnings(), "scramjet: ");
         problems.extend(prefixed(&discovery.diagnostics, "agents: "));
         problems.extend(prefixed(self.skills.warnings(), "skills: "));
+        problems.extend(prefixed(&self.prompt_files.1, "instructions: "));
         problems.extend(edges.diagnostics);
         Installed {
             sets: self.sets.list().to_vec(),
             agents,
             context_files: self.context_files.clone(),
+            prompt_files: self.prompt_files.0.clone(),
             autonomy: (autonomy::project_path(root), self.autonomy.clone()),
             problems,
         }

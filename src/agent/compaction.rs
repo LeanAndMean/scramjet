@@ -1250,6 +1250,7 @@ mod tests {
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             command_sets: Vec::new(),
             skills: Vec::new(),
+            prompt: Default::default(),
         };
         let mut resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
         assert_eq!(resumed.usage.context_tokens, Some(29_000));

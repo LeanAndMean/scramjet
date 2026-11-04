@@ -189,8 +189,8 @@ impl Row {
                  Kept in Scramjet's autonomy.yaml for all projects, which Scramjet reads too."
             }
             Self::Installed => {
-                "What this session loaded: command sets, commands, agents, skills, context and \
-                 settings files, where each comes from, and what is wrong there."
+                "What this session loaded: command sets, commands, agents, skills, system prompt, \
+                 context and settings files, where each comes from, and what is wrong there."
             }
         }
     }
