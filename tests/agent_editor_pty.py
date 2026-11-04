@@ -1864,6 +1864,47 @@ def themed_start(expected):
     return script
 
 
+def user_theme(ocean):
+    def script(read, until, send, output):
+        shown, on_screen = full_screen(columns=120)(read, output)
+        on_screen('\u2500' * 20)
+        # The file that is no theme, said at start.
+        on_screen('skipping theme ' + os.path.join(os.path.dirname(ocean), 'broken.json') + ': EOF while parsing')
+        send(b'hello\r')
+        on_screen('Run ls now.')
+        send(b'/settings\r')
+        on_screen('Settings  \u2191\u2193 move')
+        select_row(read, shown, send, 'Theme', b'\x1b[B')
+        send(b'\r')
+        on_screen('Theme  \u2191\u2193 move \u00b7 Enter use \u00b7 Esc back')
+        rows = select_row(read, shown, send, 'Ocean', b'\x1b[B')
+        assert rows[-1] == '  From ' + ocean + '.', rows
+        since = len(output)
+        send(b'\r')
+        until(b'\x1b[38;2;10;20;30mls\x1b[0m', since)
+        on_screen('\u203a Ocean \u2713')
+        send(b'\x1b')
+        on_screen('\u203a ' + setting('Theme', 'Ocean'))
+        send(b'\x1b')
+        on_screen('Settings  \u2191\u2193 move', gone=True)
+        # The file changed, read again by /reload.
+        theme = json.load(open(ocean))
+        theme['colors']['mdCode'] = '#1e140a'
+        with open(ocean, 'w') as file:
+            json.dump(theme, file)
+        since = len(output)
+        send(b'/reload\r')
+        until(b'\x1b[38;2;30;20;10mls\x1b[0m', since)
+        send(b'\x04')
+    return script
+
+
+def missing_theme(read, until, send, output):
+    shown, on_screen = full_screen(columns=120)(read, output)
+    on_screen('settings: theme gone is not one of the themes found; using terminal-colors')
+    send(b'\x04')
+
+
 def double_escape_forks(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -2279,6 +2320,24 @@ run([], themed_start(b'\x1b[38;2;129;139;157m'), variables=exact)
 # Where the terminal may not show 24-bit colors, the nearest of its 256.
 indexed = dict(exact, COLORTERM='', WT_SESSION='', TERM='screen-256color')
 run([], themed_start(b'\x1b[38;5;103m'), variables=indexed)
+# A theme of the user's own, in Scramjet's agent directory.
+themes_agent = os.path.join(work, 'agent-themes')
+os.makedirs(os.path.join(themes_agent, 'themes'))
+ocean = os.path.join(themes_agent, 'themes', 'ocean.json')
+theme = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src', 'agent_cli', 'themes',
+                                    'scramjet-dark.json')))
+theme['name'] = 'Ocean'
+theme['colors']['mdCode'] = '#0a141e'
+with open(ocean, 'w') as file:
+    json.dump(theme, file)
+with open(os.path.join(themes_agent, 'themes', 'broken.json'), 'w') as file:
+    file.write('{')
+user_theme_home = config_home('user-theme')
+run([], user_theme(ocean), serve_replies([(['Run `ls` now.'], 'Run `ls` now.')]),
+    variables={'XDG_CONFIG_HOME': user_theme_home, 'COLORTERM': 'truecolor', 'SCRAMJET_CODING_AGENT_DIR': themes_agent},
+    columns=120)
+assert json.load(open(settings_path(user_theme_home))) == {'theme': 'Ocean'}
+run([], missing_theme, variables={'XDG_CONFIG_HOME': config_home('missing-theme', '{"theme": "gone"}')}, columns=120)
 forking_home = config_home('forking', '{"doubleEscapeAction": "fork", "branchSummary": {"skipPrompt": true}}')
 run([], double_escape_forks, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]),
     variables={'XDG_CONFIG_HOME': forking_home})
@@ -2382,7 +2441,7 @@ def reloads(read, until, send, output):
     with open(settings_path(reloading), 'w') as file:
         file.write('{"tools": ["read", "bash"], "followUpMode": "each"}')
     send(b'/reload\r')
-    rows = on_screen('Reloaded settings, command sets, agents, skills and context files')
+    rows = on_screen('Reloaded settings, themes, command sets, agents, skills and context files')
     assert ('settings: %s: followUpMode must be "all" or "one-at-a-time"; ignored'
             % settings_path(reloading)) in rows, rows
     send(b'/fresh:h')
@@ -2444,7 +2503,7 @@ def installed_view(read, until, send, output):
     select_row(read, shown, send, '/demo:greet', b'\x1b[A')
     send(b'\r')
     rows = on_screen('\u203a   /demo:greet  Greet someone kindly')
-    assert 'Reloaded settings, command sets, agents, skills and context files' in rows, rows
+    assert 'Reloaded settings, themes, command sets, agents, skills and context files' in rows, rows
     assert rows.count(attention) == 2, rows
     # On a link that leads nowhere, it asks before removing the link; Escape keeps it.
     rows = select_row(read, shown, send, 'agents: ', b'\x1b[A')
@@ -2548,7 +2607,7 @@ def installed_edited_during_turn(read, until, send, output):
     on_screen('Done.')
     ended(read, output, 120, 40)
     send(b'/reload\r')
-    on_screen('Reloaded settings, command sets, agents, skills and context files')
+    on_screen('Reloaded settings, themes, command sets, agents, skills and context files')
     send(b'/demo:g')
     on_screen('\u2192 /demo:greet  <name> \u2014 Greet someone kindly')
     send(b'\x03')

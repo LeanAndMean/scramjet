@@ -121,7 +121,7 @@ pub(super) struct Sources<'a> {
 
 /// Scramjet's agent directory, as its `getAgentDir()`: `$SCRAMJET_CODING_AGENT_DIR`, else
 /// `~/.scramjet/agent`.
-pub(super) fn agent_directory() -> Option<PathBuf> {
+pub fn agent_directory() -> Option<PathBuf> {
     match std::env::var_os("SCRAMJET_CODING_AGENT_DIR").filter(|dir| !dir.is_empty()) {
         Some(dir) => Some(super::tools::resolve(
             Path::new("/"),

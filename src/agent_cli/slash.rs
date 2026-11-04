@@ -5,6 +5,7 @@
 use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal::{self, Terminal};
 use super::text::clip;
+use super::theme::Themes;
 use super::{clipboard, completion, export, style};
 use scramjet_rs::agent::{Agent, AgentError};
 use std::{
@@ -263,15 +264,14 @@ impl Interactive {
         self.say_styled(style::MUTED, &format!("Autopilot is {state}"));
     }
 
-    /// `/reload`, as Scramjet's: the settings, the command sets with their commands and agents,
-    /// the skills and the context files read again, and what is wrong in them said as at start.
+    /// `/reload`, as Scramjet's: the settings, the themes, the command sets with their commands and
+    /// agents, the skills and the context files read again, and what is wrong in them said as at
+    /// start.
     pub(super) fn reload(&mut self) {
         self.save_hide_thinking();
-        let theme = self.settings.theme.clone();
         self.settings.reload();
-        if self.settings.theme != theme {
-            style::set(&self.settings.theme());
-        }
+        self.themes = Themes::discover(self.agent.root());
+        style::set(&self.themes.theme(&self.settings.theme));
         let settings = &self.settings;
         (self.hide_thinking).store(settings.hide_thinking_block, Ordering::Relaxed);
         self.ui.markdown_reads = settings.markdown_reads;
@@ -287,7 +287,7 @@ impl Interactive {
         for notice in self.problem_notices() {
             self.ui().notice(&notice);
         }
-        let done = "Reloaded settings, command sets, agents, skills and context files";
+        let done = "Reloaded settings, themes, command sets, agents, skills and context files";
         self.say_styled(style::MUTED, done);
     }
 

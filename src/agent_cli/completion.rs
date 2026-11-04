@@ -33,7 +33,7 @@ const SLASH_COMMANDS: [(&str, &str); 18] = [
     ("resume", "Resume a different session"),
     (
         "reload",
-        "Reload settings, command sets, agents, skills and context files",
+        "Reload settings, themes, command sets, agents, skills and context files",
     ),
     (
         "autopilot",

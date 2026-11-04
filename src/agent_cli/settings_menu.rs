@@ -3,7 +3,7 @@
 use super::interactive::{Interactive, completions};
 use super::settings::{ROWS, Row, scramjet_level};
 use super::text::clip;
-use super::theme::{BUILT_IN, Mode, TERMINAL_COLORS, Theme};
+use super::theme::{Listed, Mode, TERMINAL_COLORS};
 use super::{editor, installed, select, style};
 use scramjet_rs::agent::{
     Approval, Approvals, CODING_TOOLS, Choice, Edge, Installed, NextStep, NextSteps, Problem,
@@ -45,17 +45,20 @@ const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
 const AUTOPILOT_DECIDES: &str = "With autopilot on, the recommended step runs after a 3-second \
     countdown; off, the next steps wait for you to choose.";
 
-/// What a built-in theme is, as `/settings` says under its row.
-fn theme_note(name: &str) -> String {
-    let note = match name {
-        TERMINAL_COLORS => {
+/// What a theme is, as `/settings` says under its row.
+fn theme_note(listed: &Listed) -> String {
+    let note = match (listed.name.as_str(), &listed.file) {
+        (_, Some(file)) => format!("From {}.", shortened(&file.display().to_string())),
+        (TERMINAL_COLORS, None) => {
             return "The terminal's own 16 colors, which follow its color scheme.".into();
         }
-        "scramjet-dark" => "Scramjet's theme, in exact colors, for a dark background.",
-        _ => "Pi's light theme, in exact colors, for a light background.",
+        ("scramjet-dark", None) => {
+            "Scramjet's theme, in exact colors, for a dark background.".into()
+        }
+        _ => "Pi's light theme, in exact colors, for a light background.".into(),
     };
     match Mode::detect() {
-        Mode::TrueColor => note.into(),
+        Mode::TrueColor => note,
         Mode::Indexed => format!("{note} This terminal gets the nearest of its 256 colors."),
     }
 }
@@ -218,30 +221,29 @@ impl Interactive {
     /// The themes; Enter shows everything in one at once and keeps the list open to try the
     /// next, and the one chosen last stays.
     fn choose_theme(&mut self) {
-        let position = |name: &str| BUILT_IN.iter().position(|known| *known == name);
-        let mut at = position(&self.settings.theme).unwrap_or(0);
+        let mut at = None;
         loop {
             let Some(screen) = &self.screen else {
                 return;
             };
-            let notes = BUILT_IN.map(theme_note).to_vec();
+            let listed = &self.themes.listed;
+            let current = (listed.iter()).position(|known| known.name == self.settings.theme);
+            let notes = listed.iter().map(theme_note).collect();
             let picker = select::Picker::select(
                 "Theme",
                 select::VISIBLE,
-                BUILT_IN.len(),
-                at,
-                position(&self.settings.theme),
-                |index, width| clip(BUILT_IN[index], width),
+                listed.len(),
+                at.or(current).unwrap_or(0),
+                current,
+                |index, width| clip(&listed[index].name, width),
             );
             let Some(index) = screen.pick(picker.noting(THEME_KEYS, notes).held()) else {
                 return;
             };
-            at = index;
-            let name = BUILT_IN[index];
-            if name != self.settings.theme {
-                style::set(&Theme::built_in(name).expect("built in"));
-            }
-            if let Err(error) = self.settings.set_theme(name) {
+            at = Some(index);
+            style::set(&listed[index].theme);
+            let name = listed[index].name.clone();
+            if let Err(error) = self.settings.set_theme(&name) {
                 self.say(&format!("Error: settings not saved: {error}"));
             }
         }

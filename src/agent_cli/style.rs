@@ -223,11 +223,15 @@ static GENERATION: AtomicUsize = AtomicUsize::new(0);
 
 /// Shows everything from now on in `theme`'s colors.
 pub(super) fn set(theme: &Theme) {
-    // A few hundred bytes for each theme chosen, which strings already shown may still borrow.
-    let table = table(theme, Mode::detect()).leak();
-    *TABLE
+    let table = table(theme, Mode::detect());
+    let mut current = TABLE
         .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = table;
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if **current == table[..] {
+        return;
+    }
+    // A few hundred bytes for each theme chosen, which strings already shown may still borrow.
+    *current = table.leak();
     GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 

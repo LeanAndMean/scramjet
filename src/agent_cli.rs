@@ -100,7 +100,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     };
     let mut settings = Settings::load();
-    style::set(&settings.theme());
+    let themes = theme::Themes::discover(&root);
+    style::set(&themes.theme(&settings.theme));
     let (patterns, source) = match options.models.take() {
         Some(patterns) => (patterns, "--models"),
         None => (settings.enabled_models.clone(), "settings: enabledModels"),
@@ -113,7 +114,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     ui.markdown_reads = settings.markdown_reads;
     if !print_only {
         let mut interactive =
-            interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings)?;
+            interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings, themes)?;
         interactive.scope = patterns;
         return interactive.run(resume, messages, files, scope_warnings);
     }
@@ -123,6 +124,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         .map(|warning| format!("settings: {warning}"))
     {
         ui.notice(&warning);
+    }
+    for problem in themes.problems(&settings.theme) {
+        ui.notice(&problem.text);
     }
     for warning in &scope_warnings {
         ui.notice(warning);

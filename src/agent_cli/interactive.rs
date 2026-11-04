@@ -7,6 +7,7 @@ use super::select::Routed;
 use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
+use super::theme::Themes;
 use super::{editor, footer, installed, scope, select, settings, style};
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Problem,
@@ -37,6 +38,8 @@ pub(super) struct Interactive {
     pub(super) cancel: Arc<AtomicBool>,
     pub(super) hide_thinking: Arc<AtomicBool>,
     pub(super) settings: Settings,
+    /// The themes `/settings` offers, found at start and by `/reload`.
+    pub(super) themes: Themes,
     /// The patterns of the models Ctrl+P cycles through (`scope::resolve`); empty: all.
     pub(super) scope: Vec<String>,
     /// A turn waits for the built-in commands typed during it (`typed_during_turn`).
@@ -79,6 +82,7 @@ impl Interactive {
         cancel: Arc<AtomicBool>,
         hide_thinking: Arc<AtomicBool>,
         settings: Settings,
+        themes: Themes,
     ) -> Result<Self, String> {
         let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
         let screen = match terminal {
@@ -111,6 +115,7 @@ impl Interactive {
             cancel,
             hide_thinking,
             settings,
+            themes,
             scope: Vec::new(),
             in_turn: false,
         })
@@ -550,6 +555,7 @@ impl Interactive {
     pub(super) fn problems(&self, found: &Installed) -> Vec<Problem> {
         (self.settings.warnings.iter())
             .map(|warning| Problem::in_settings(format!("settings: {warning}")))
+            .chain(self.themes.problems(&self.settings.theme))
             .chain(found.problems.iter().cloned())
             .collect()
     }

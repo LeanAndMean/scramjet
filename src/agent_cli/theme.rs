@@ -3,7 +3,9 @@
 //! `""` for the terminal's own. Exact colors are sent as 24-bit colors where the terminal shows
 //! them, else as the nearest of its 256, as Scramjet sends them.
 
+use scramjet_rs::agent::{Problem, agent_directory};
 use serde_json::{Map, Value};
+use std::path::{Path, PathBuf};
 
 macro_rules! tokens {
     ($($token:ident = $key:literal),* $(,)?) => {
@@ -71,7 +73,7 @@ tokens! {
     SpellcheckError = "spellcheckError",
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Color {
     /// The terminal's own (`""`).
     Default,
@@ -162,9 +164,130 @@ fn nearest_index(r: u8, g: u8, b: u8) -> u8 {
     16 + 36 * ri as u8 + 6 * gi as u8 + bi as u8
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Theme {
     colors: Vec<Color>,
+}
+
+/// A theme to choose from: a built-in one, or one read from `file`.
+#[derive(Debug)]
+pub(super) struct Listed {
+    pub(super) name: String,
+    pub(super) file: Option<PathBuf>,
+    pub(super) theme: Theme,
+}
+
+/// The themes to choose from, and what was wrong with the files skipped.
+#[derive(Debug)]
+pub(super) struct Themes {
+    pub(super) listed: Vec<Listed>,
+    problems: Vec<Problem>,
+}
+
+impl Themes {
+    /// The built-in themes, then, as Scramjet finds its own, the files in the `themes`
+    /// directory of Scramjet's agent directory and in the project's `.scramjet/themes`.
+    pub(super) fn discover(root: &Path) -> Self {
+        let mut directories: Vec<PathBuf> = agent_directory()
+            .map(|directory| directory.join("themes"))
+            .into_iter()
+            .collect();
+        directories.push(root.join(".scramjet/themes"));
+        Self::load(&directories)
+    }
+
+    /// The built-in themes, then those in the `.json` files of `directories`; of two with one
+    /// name, the first is kept.
+    fn load(directories: &[PathBuf]) -> Self {
+        let built_in = BUILT_IN.map(|name| Listed {
+            name: name.to_owned(),
+            file: None,
+            theme: Theme::built_in(name).expect("built in"),
+        });
+        let mut themes = Self {
+            listed: built_in.into(),
+            problems: Vec::new(),
+        };
+        let mut loaded = std::collections::HashSet::new();
+        for directory in directories {
+            let entries = match std::fs::read_dir(directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    themes.problems.push(Problem::new(format!(
+                        "{}: failed to read theme directory ({error})",
+                        directory.display()
+                    )));
+                    continue;
+                }
+            };
+            let mut files: Vec<PathBuf> = (entries.filter_map(Result::ok))
+                .map(|entry| entry.path())
+                .filter(|path| path.extension() == Some("json".as_ref()) && path.is_file())
+                .collect();
+            files.sort();
+            for file in files {
+                // The same file reached again, through a link or another directory, is no collision.
+                if loaded.insert(file.canonicalize().unwrap_or_else(|_| file.clone())) {
+                    themes.add(&file);
+                }
+            }
+        }
+        themes
+    }
+
+    fn add(&mut self, file: &Path) {
+        let skipping = |error: String| {
+            Problem::in_file(format!("skipping theme {}: {error}", file.display()), file)
+        };
+        let read = std::fs::read_to_string(file).map_err(|error| error.to_string());
+        let (name, theme) = match read.and_then(|text| Theme::parse_named(&text)) {
+            Ok(parsed) => parsed,
+            Err(error) => return self.problems.push(skipping(error)),
+        };
+        let stem = || {
+            file.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let name = name.unwrap_or_else(stem);
+        match self.listed.iter().find(|known| known.name == name) {
+            Some(known) => {
+                let from = match &known.file {
+                    Some(path) => format!("loaded from {}", path.display()),
+                    None => "a built-in theme's".to_owned(),
+                };
+                self.problems
+                    .push(skipping(format!("name {name} is already {from}")));
+            }
+            None => self.listed.push(Listed {
+                name,
+                file: Some(file.to_path_buf()),
+                theme,
+            }),
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<&Listed> {
+        self.listed.iter().find(|listed| listed.name == name)
+    }
+
+    /// The theme `name`, else the terminal colors.
+    pub(super) fn theme(&self, name: &str) -> Theme {
+        self.get(name)
+            .map_or_else(terminal_colors, |listed| listed.theme.clone())
+    }
+
+    /// What is wrong with the themes when the setting names `chosen`.
+    pub(super) fn problems(&self, chosen: &str) -> Vec<Problem> {
+        let missing = self.get(chosen).is_none().then(|| {
+            Problem::in_settings(format!(
+                "settings: theme {chosen} is not one of the themes found; using {TERMINAL_COLORS}"
+            ))
+        });
+        missing.into_iter().chain(self.problems.clone()).collect()
+    }
 }
 
 pub(super) const TERMINAL_COLORS: &str = "terminal-colors";
@@ -190,7 +313,17 @@ impl Theme {
 
     /// A theme in Scramjet's format, which names all its tokens' colors.
     pub(super) fn parse(text: &str) -> Result<Self, String> {
+        Self::parse_named(text).map(|(_, theme)| theme)
+    }
+
+    /// A theme in Scramjet's format, and its `name` when it has one.
+    fn parse_named(text: &str) -> Result<(Option<String>, Self), String> {
         let json: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let name = match json.get("name") {
+            None => None,
+            Some(Value::String(name)) if !name.trim().is_empty() => Some(name.clone()),
+            Some(_) => return Err("name must be a theme's name".into()),
+        };
         let empty = Map::new();
         let vars = match json.get("vars") {
             None => &empty,
@@ -212,7 +345,7 @@ impl Theme {
                 resolve(&colors[*key], vars, &mut Vec::new()).map_err(|e| format!("{key}: {e}"))
             })
             .collect::<Result<_, _>>()?;
-        Ok(Self { colors })
+        Ok((name, Self { colors }))
     }
 }
 
@@ -342,6 +475,110 @@ mod tests {
             error.starts_with("colors lacks borderAccent, borderMuted, "),
             "{error}"
         );
+    }
+
+    #[test]
+    fn themes_are_found_in_their_directories_the_first_of_a_name_kept() {
+        struct Scratch(PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = std::env::temp_dir().join(format!("scramjet-rs-themes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let scratch = Scratch(root.clone());
+        let (user, project) = (root.join("user"), root.join("project"));
+        for directory in [&user, &project, &user.join("folder.json")] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let theme = |name: Option<&str>, accent: &str| {
+            let colors: Vec<String> = (KEYS.iter())
+                .map(|key| {
+                    format!(
+                        r#""{key}": "{}""#,
+                        if *key == "accent" { accent } else { "" }
+                    )
+                })
+                .collect();
+            let name = name.map_or(String::new(), |name| format!(r#""name": "{name}", "#));
+            format!(r#"{{{name}"colors": {{{}}}}}"#, colors.join(", "))
+        };
+        let write = |path: &Path, text: &str| std::fs::write(path, text).unwrap();
+        write(&user.join("ocean.json"), &theme(Some("Ocean"), "#0000ff"));
+        write(&user.join("plain.json"), &theme(None, "#00ff00"));
+        write(&user.join("broken.json"), "{");
+        write(&user.join("light.json"), &theme(Some("pi-light"), ""));
+        write(&user.join("notes.txt"), &theme(Some("notes"), ""));
+        write(&project.join("sea.json"), &theme(Some("Ocean"), "#ff0000"));
+        write(
+            &project.join("forest.json"),
+            &theme(Some("Forest"), "#00ff00"),
+        );
+        std::os::unix::fs::symlink(project.join("forest.json"), project.join("link.json")).unwrap();
+        std::fs::create_dir(root.join("elsewhere")).unwrap();
+        write(&root.join("elsewhere/r.json"), &theme(Some("River"), ""));
+        std::os::unix::fs::symlink(root.join("elsewhere/r.json"), project.join("river.json"))
+            .unwrap();
+
+        let themes = Themes::load(&[user.clone(), root.join("missing"), project.clone()]);
+        let names: Vec<&str> = themes.listed.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "terminal-colors",
+                "scramjet-dark",
+                "pi-light",
+                "Ocean",
+                "plain",
+                "Forest",
+                "River"
+            ]
+        );
+        let ocean = themes.get("Ocean").unwrap();
+        assert_eq!(
+            ocean.file.as_deref(),
+            Some(user.join("ocean.json").as_path())
+        );
+        assert_eq!(
+            themes.theme("Ocean").color(Token::Accent),
+            Color::Rgb(0, 0, 255)
+        );
+        assert_eq!(themes.theme("gone"), terminal_colors());
+        let problems: Vec<String> = (themes.problems("gone").into_iter())
+            .map(|problem| problem.text)
+            .collect();
+        let shown = |path: PathBuf| path.display().to_string();
+        assert_eq!(problems.len(), 4, "{problems:#?}");
+        assert_eq!(
+            problems[0],
+            "settings: theme gone is not one of the themes found; using terminal-colors"
+        );
+        assert!(
+            problems[1].starts_with(&format!(
+                "skipping theme {}: EOF",
+                shown(user.join("broken.json"))
+            )),
+            "{}",
+            problems[1]
+        );
+        assert_eq!(
+            problems[2],
+            format!(
+                "skipping theme {}: name pi-light is already a built-in theme's",
+                shown(user.join("light.json"))
+            )
+        );
+        assert_eq!(
+            problems[3],
+            format!(
+                "skipping theme {}: name Ocean is already loaded from {}",
+                shown(project.join("sea.json")),
+                shown(user.join("ocean.json"))
+            )
+        );
+        assert_eq!(themes.problems("River").len(), 3);
+        drop(scratch);
     }
 
     #[test]

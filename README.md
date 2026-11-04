@@ -54,7 +54,7 @@ A command set is a directory of commands (`commands/<set>:<name>.md`) and agents
 - Subagents run inside this process, read-only: their shell runs under Bubblewrap with every file read-only, a private `/tmp`, no network and credential stores hidden.
 - In turns nobody started (a next step that runs by itself, autopilot, `-p`), the agent's tools cannot see common credential stores (`~/.ssh`, `~/.netrc`, Proxy's…) or credential variables. The `hideCredentials` setting makes that `always` or `never`. tmux servers the agent starts then get their own socket directory: attach with `TMUX_TMPDIR=~/.local/state/scramjet-rs/tmux tmux attach`.
 - `edit` changes only the text it matched, also when it matched with trailing whitespace or typographic quotes aside (Scramjet then rewrites the whole file normalized).
-- Themes: `terminal-colors` (the terminal's own 16 colors, the default), Scramjet's `scramjet-dark` and Pi's `pi-light`, chosen in `/settings` (`theme`). Theme files of your own are not read yet.
+- Themes: `terminal-colors` (the terminal's own 16 colors, the default), Scramjet's `scramjet-dark` and Pi's `pi-light`, and theme files in Scramjet's format from `~/.scramjet/agent/themes/` and the project's `.scramjet/themes/`, chosen in `/settings` (`theme`). `/reload` reads them again.
 - Not yet: images shown in the terminal, GitLab publications.
 
 ## Coming from Claude Code or Codex

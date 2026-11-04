@@ -51,6 +51,7 @@ pub use session::{
 pub use shell::Shell;
 pub use skills::{Skill, SkillOptions, Skills};
 pub use status::{Completed, Next, Routing, Source, Step};
+pub use subagent::agent_directory;
 pub use suggest::Suggested;
 pub use tools::{
     CODING_TOOLS, DEFAULT_TOOLS, HARNESS_TOOLS, READ_MORE, search_program, sequence_diff,

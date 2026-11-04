@@ -1,7 +1,7 @@
 //! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet-rs/settings.json` (by default
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
-use super::theme::{BUILT_IN, TERMINAL_COLORS, Theme};
+use super::theme::TERMINAL_COLORS;
 use super::tree::Filter;
 use scramjet_rs::agent::{
     CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, shortened, state_directory,
@@ -358,13 +358,8 @@ impl Settings {
         }
         match object.get("theme") {
             None => {}
-            Some(Value::String(name)) if BUILT_IN.contains(&name.as_str()) => {
-                self.theme = name.clone()
-            }
-            Some(_) => wrong(
-                "theme",
-                &BUILT_IN.map(|name| format!("\"{name}\"")).join(", "),
-            ),
+            Some(Value::String(name)) if !name.trim().is_empty() => self.theme = name.clone(),
+            Some(_) => wrong("theme", "a theme's name"),
         }
         match object
             .get("defaultThinkingLevel")
@@ -580,11 +575,6 @@ impl Settings {
         }
         self.theme = name.to_owned();
         self.save("theme", json!(name))
-    }
-
-    /// The theme `theme` names.
-    pub(super) fn theme(&self) -> Theme {
-        Theme::built_in(&self.theme).expect("only a built-in theme is read")
     }
 
     /// A reasoning effort chosen with Shift+Tab, saved when it changed.
@@ -1046,7 +1036,7 @@ mod tests {
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
-                "markdown": {"toolDisplay": "raw"}, "theme": "dark"}"#,
+                "markdown": {"toolDisplay": "raw"}, "theme": 1}"#,
         );
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.theme, "terminal-colors");
@@ -1064,9 +1054,7 @@ mod tests {
                     r#"{path}: treeFilterMode must be "default", "no-tools", "user-only", "labeled-only", "all"; ignored"#
                 ),
                 format!(r#"{path}: markdown.toolDisplay must be "rendered" or "source"; ignored"#),
-                format!(
-                    r#"{path}: theme must be "terminal-colors", "scramjet-dark", "pi-light"; ignored"#
-                ),
+                format!("{path}: theme must be a theme's name; ignored"),
                 format!(
                     r#"{path}: defaultThinkingLevel must be "off", "minimal", "low", "medium", "high", "xhigh", "max"; ignored"#
                 ),
