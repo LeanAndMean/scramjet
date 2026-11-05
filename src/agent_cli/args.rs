@@ -16,8 +16,8 @@ pub(super) const USAGE: &str =
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
 settings file (by default ~/.config/scramjet-rs/models.json) and in installed command sets, in
-Scramjet's format: each provider has a baseUrl (http:// for now), an api (openai-responses or
-anthropic-messages), an apiKey (the value of the environment variable of that name, else the
+Scramjet's format: each provider has a baseUrl (http:// or https://), an api (openai-responses,
+anthropic-messages or openai-completions, with its compat), an apiKey (the value of the environment variable of that name, else the
 text) and its models, with their contextWindow, maxTokens, reasoning, input and cost; a file's
 providersCommand names a program printing more, as {\"version\": 1, \"providers\": ...}, and
 its credentialFiles the files holding their keys, hidden as --list-credential-stores says.

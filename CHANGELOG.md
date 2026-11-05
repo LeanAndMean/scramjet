@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.15.0 — Chat Completions providers
+
+### Added
+
+- A provider's `api` may be `openai-completions`, Chat Completions, which vLLM, Ollama, llama.cpp and many hosted services serve. Tool calls, images, reasoning (`reasoning_content` and the like), usage with cached tokens, and replies cut at the output limit work as with the other APIs.
+- What such a server accepts is told from the provider's name and URL as Scramjet tells it (DeepSeek, Together, z.ai, OpenRouter and others), and a provider's or model's `compat` says otherwise with Scramjet's fields.
+
 ## 0.14.0 — HTTPS providers
 
 ### Added

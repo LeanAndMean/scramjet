@@ -171,6 +171,25 @@ impl Failure {
     }
 }
 
+/// Keeps of a reply stopped at the output token limit its text, with the reasoning before it, but
+/// not its tool calls, whose input may be cut off; says so, naming `limit`, the request's field.
+pub(super) fn cut_at_limit(items: &mut Vec<Value>, limit: &str) -> String {
+    let calls = (items.iter())
+        .filter(|item| item["type"] == "function_call")
+        .count();
+    items.retain(|item| item["type"] != "function_call");
+    if !items.iter().any(|item| item["type"] == "message") {
+        items.clear();
+    }
+    let mut message = format!("response incomplete: it reached the output token limit ({limit})");
+    match calls {
+        0 => {}
+        1 => message.push_str("; the tool call it was making did not run"),
+        n => message.push_str(&format!("; the {n} tool calls in it did not run")),
+    }
+    message
+}
+
 fn mentions(message: &str, words: &[&str]) -> bool {
     let message = message.to_lowercase();
     words.iter().any(|word| message.contains(word))
@@ -224,15 +243,20 @@ pub(super) async fn cancelled(flag: &AtomicBool) {
 pub(super) enum Protocol {
     Responses,
     Messages,
+    /// Chat Completions, with what the server accepts.
+    Completions,
 }
 
-/// What a request sends besides its body: `betas` is a Messages request's `anthropic-beta`
-/// header, and `priced_by` names the response header `Reply::priced_by` keeps.
+/// What a request sends besides its body: `headers` are those of this request (a Messages
+/// request's `anthropic-beta`), after the route's, and `priced_by` names the response header
+/// `Reply::priced_by` keeps.
 pub(super) struct Sent<'a> {
     pub route: &'a Route,
     pub protocol: Protocol,
-    pub betas: Option<&'a str>,
+    pub headers: &'a [(&'static str, String)],
     pub priced_by: Option<&'a str>,
+    /// What a Chat Completions server accepts.
+    pub compat: &'a super::completions::Compat,
 }
 
 pub(super) async fn respond(
@@ -252,8 +276,9 @@ async fn exchange(
     Sent {
         route,
         protocol,
-        betas,
+        headers,
         priced_by,
+        compat,
     }: Sent<'_>,
     body: Vec<u8>,
     progress: &mut dyn FnMut(StreamProgress),
@@ -262,18 +287,16 @@ async fn exchange(
     let (mut sender, driver) = connect(route).await?;
     let mut request = match protocol {
         Protocol::Responses => Request::builder().uri(format!("{}/responses", route.path)),
-        Protocol::Messages => {
-            let request = Request::builder()
-                .uri(format!("{}/v1/messages", route.path))
-                .header("anthropic-version", "2023-06-01");
-            match betas {
-                Some(betas) => request.header("anthropic-beta", betas),
-                None => request,
-            }
-        }
+        Protocol::Completions => Request::builder().uri(format!("{}/chat/completions", route.path)),
+        Protocol::Messages => Request::builder()
+            .uri(format!("{}/v1/messages", route.path))
+            .header("anthropic-version", "2023-06-01"),
     };
     for (name, value) in &route.headers {
         request = request.header(name, value);
+    }
+    for (name, value) in headers {
+        request = request.header(*name, value);
     }
     let request = request
         .method("POST")
@@ -333,6 +356,13 @@ async fn exchange(
             Protocol::Responses => responses_reply(&mut body, progress).await,
             Protocol::Messages => {
                 let mut stream = super::messages::Stream::default();
+                match read_body(&mut body, |data| stream.feed(data, progress)).await {
+                    Ok(()) => stream.finish(),
+                    Err(failure) => Err(failure),
+                }
+            }
+            Protocol::Completions => {
+                let mut stream = super::completions::Stream::new(compat);
                 match read_body(&mut body, |data| stream.feed(data, progress)).await {
                     Ok(()) => stream.finish(),
                     Err(failure) => Err(failure),

@@ -1,6 +1,7 @@
 //! What a model request sends, and sending it again after transient failures as Scramjet
 //! does.
 use super::client::{self, ClientError, Protocol};
+use super::completions;
 use super::providers::ModelInfo;
 use super::{
     Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, rates, sent, tools,
@@ -154,7 +155,8 @@ pub(super) fn send(
     };
     let without_images = (!info.images).then(|| without_images(request)).flatten();
     let request = without_images.as_ref().unwrap_or(request);
-    let (body, betas) = match info.protocol {
+    let mut headers = Vec::new();
+    let body = match info.protocol {
         // As Scramjet's, a model that does not reason is asked nothing of reasoning.
         Protocol::Responses if !info.reasoning => {
             let mut request = request.clone();
@@ -162,9 +164,9 @@ pub(super) fn send(
                 object.remove("reasoning");
                 object.remove("include");
             }
-            (serde_json::to_vec(&request), None)
+            serde_json::to_vec(&request)
         }
-        Protocol::Responses => (serde_json::to_vec(request), None),
+        Protocol::Responses => serde_json::to_vec(request),
         Protocol::Messages => {
             let body = messages::request(
                 request,
@@ -172,8 +174,17 @@ pub(super) fn send(
                 info.reasoning,
             )
             .map_err(AgentError::Provider)?;
-            let betas = messages::betas(&body);
-            (serde_json::to_vec(&body), betas)
+            headers.extend(messages::betas(&body).map(|betas| ("anthropic-beta", betas)));
+            serde_json::to_vec(&body)
+        }
+        Protocol::Completions => {
+            let session = request["prompt_cache_key"].as_str();
+            if let Some(session) = session.filter(|_| info.compat.session_affinity) {
+                for name in ["session_id", "x-client-request-id", "x-session-affinity"] {
+                    headers.push((name, session.to_owned()));
+                }
+            }
+            serde_json::to_vec(&completions::request(request, info))
         }
     };
     let body = body.map_err(std::io::Error::from)?;
@@ -184,8 +195,9 @@ pub(super) fn send(
         let sent = client::Sent {
             route,
             protocol: info.protocol,
-            betas: betas.as_deref(),
+            headers: &headers,
             priced_by: info.prices.header(),
+            compat: &info.compat,
         };
         let failure =
             match executor.block_on(client::respond(sent, body.clone(), cancel, &mut |update| {
@@ -763,6 +775,101 @@ response is incomplete; retry the request."});
                 .all(|item| item["_scramjet_model"] == "claude-opus-5-5"
                     || item["type"] == "function_call_output")
         );
+    }
+
+    /// A streamed Chat Completions reply with these chunks.
+    fn completions_stream(chunks: &[Value]) -> Vec<u8> {
+        let mut body: String = (chunks.iter())
+            .map(|chunk| format!("data: {chunk}\n\n"))
+            .collect();
+        body.push_str("data: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn chat_completions_models_run_tools_and_replay_their_results() {
+        let choice = |delta: Value, finish: Value| json!({"id":"chatcmpl-1","choices":[{"index":0,"delta":delta,"finish_reason":finish}]});
+        let usage = |prompt: u64| {
+            json!({"id":"chatcmpl-1","choices":[],
+                "usage":{"prompt_tokens":prompt,"completion_tokens":5}})
+        };
+        let (endpoint, server) = serve_requests(vec![
+            completions_stream(&[
+                choice(
+                    json!({"role":"assistant","reasoning_content":"Need the file."}),
+                    json!(null),
+                ),
+                choice(
+                    json!({"tool_calls":[{"index":0,"id":"call_9","type":"function",
+                    "function":{"name":"read","arguments":"{\"path\":\"notes.txt\"}"}}]}),
+                    json!(null),
+                ),
+                choice(json!({}), json!("tool_calls")),
+                usage(20),
+            ]),
+            completions_stream(&[
+                choice(json!({"content":"It says hello."}), json!(null)),
+                choice(json!({}), json!("stop")),
+                usage(40),
+            ]),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "completions");
+        std::fs::write(scratch.0.join("notes.txt"), "hello\n").unwrap();
+        agent.config.providers = crate::agent::Providers::given(json!({"providers": {"local": {
+            "baseUrl": format!("http://{endpoint}/v1"), "api": "openai-completions",
+            "apiKey": "local-key",
+            "models": [{"id": "qwen3", "reasoning": true, "maxTokens": 8192}],
+        }}}));
+        agent.set_model("qwen3").unwrap();
+        agent.config.effort = Some("low".into());
+        let mut ui = Recorder::default();
+        agent
+            .turn("What is in notes.txt?", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(ui.replies, ["It says hello."]);
+        assert_eq!(ui.calls, ["read"]);
+        let requests = server.join().unwrap();
+        for (head, body) in &requests {
+            assert!(
+                head.starts_with("post /v1/chat/completions http/1.1\r\n"),
+                "{head}"
+            );
+            assert!(
+                head.contains("authorization: bearer local-key\r\n"),
+                "{head}"
+            );
+            assert_eq!(body["model"], "qwen3");
+            assert_eq!(body["reasoning_effort"], "low");
+            assert_eq!(body["max_completion_tokens"], 8192);
+            assert_eq!(body["prompt_cache_key"], agent.session.id());
+        }
+        let messages = requests[1].1["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "developer");
+        assert_eq!(messages[0]["content"], agent.instructions());
+        assert_eq!(
+            messages[2],
+            json!({"role":"assistant","content":null,"reasoning_content":"Need the file.",
+                "tool_calls":[{"id":"call_9","type":"function",
+                "function":{"name":"read","arguments":"{\"path\":\"notes.txt\"}"}}]})
+        );
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call_9");
+        assert!(messages[3]["content"].as_str().unwrap().contains("hello"));
+        assert_eq!(messages.len(), 4);
+        assert_eq!(agent.usage.input_tokens, 60);
+        assert_eq!(agent.usage.output_tokens, 10);
+        assert_eq!(agent.usage.context_tokens, Some(45));
+        // Saved as Responses items, which another model is sent without this one's reasoning.
+        assert_eq!(agent.conversation()[1]["type"], "reasoning");
+        assert_eq!(agent.conversation()[1]["_scramjet_model"], "qwen3");
+        agent.set_model("m").unwrap();
+        let replay = agent.replay_conversation();
+        assert_eq!(replay[1]["type"], "function_call");
+        assert_eq!(replay[1]["call_id"], "call_9");
     }
 
     #[test]

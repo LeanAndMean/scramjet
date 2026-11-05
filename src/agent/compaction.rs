@@ -656,7 +656,7 @@ impl Agent {
         });
         let effort = match (purpose, self.info.protocol) {
             // A Messages request without effort would think; `none` sends no thinking.
-            (Purpose::BranchSummary, Protocol::Messages) => Some("none"),
+            (Purpose::BranchSummary, Protocol::Messages | Protocol::Completions) => Some("none"),
             (Purpose::BranchSummary, Protocol::Responses) => Some(self.info.fit("none")),
             _ => self.effort(),
         };

@@ -30,7 +30,7 @@ Other main options: `--thinking LEVEL` (or `--effort`), `--models PATTERNS` (the
 
 ## Providers
 
-Models come from the providers in `~/.config/scramjet-rs/models.json` and in the `models.json` of each installed command set or package, in Scramjet's format. Each provider has a `baseUrl` (`http://`, or `https://`, trusting the system's certificates or those `SSL_CERT_FILE` and `SSL_CERT_DIR` name, as OpenSSL does), an `api` (`openai-responses`, or `anthropic-messages`, under which requests go to `/v1/messages`), an `apiKey` (the variable of that name in the environment, else the text itself) and the `models` it offers:
+Models come from the providers in `~/.config/scramjet-rs/models.json` and in the `models.json` of each installed command set or package, in Scramjet's format. Each provider has a `baseUrl` (`http://`, or `https://`, trusting the system's certificates or those `SSL_CERT_FILE` and `SSL_CERT_DIR` name, as OpenSSL does), an `api` (`openai-responses`; `anthropic-messages`, under which requests go to `/v1/messages`; or `openai-completions`, Chat Completions at `/chat/completions`, which vLLM, Ollama and llama.cpp serve), an `apiKey` (the variable of that name in the environment, else the text itself) and the `models` it offers:
 
 ```json
 {
@@ -49,7 +49,7 @@ Models come from the providers in `~/.config/scramjet-rs/models.json` and in the
 }
 ```
 
-A model may also give its own `api`, `baseUrl` and `headers`, and a `thinkingLevelMap` as in Scramjet. A file may name a program in `providersCommand` (`["bin/models", "arg"]`, a path from the file's directory) whose output, `{"version": 1, "providers": {...}}`, adds the providers it learns at run time; a package installed with `scramjet-rs install DIR` can bring one, as the private package for the author's local proxy does. A file's `credentialFiles` (`["~/.config/acme", "token.json"]`) names the files and directories holding its providers' credentials, which the agent's tools do not see, as the common stores below. What is wrong in these files is said at start and by `--list-models`.
+A model may also give its own `api`, `baseUrl` and `headers`, and a `thinkingLevelMap` as in Scramjet. What a Chat Completions server accepts is told from its provider's name and URL as Scramjet tells it, and a provider's or model's `compat` (Scramjet's fields, such as `maxTokensField`, `thinkingFormat` or `requiresToolResultName`) says otherwise. A file may name a program in `providersCommand` (`["bin/models", "arg"]`, a path from the file's directory) whose output, `{"version": 1, "providers": {...}}`, adds the providers it learns at run time; a package installed with `scramjet-rs install DIR` can bring one, as the private package for the author's local proxy does. A file's `credentialFiles` (`["~/.config/acme", "token.json"]`) names the files and directories holding its providers' credentials, which the agent's tools do not see, as the common stores below. What is wrong in these files is said at start and by `--list-models`.
 
 ## Where the rest is
 
@@ -71,7 +71,7 @@ A command set is a directory of commands (`commands/<set>:<name>.md`) and agents
 
 ## Coming from Scramjet
 
-- Its providers are those of its own `models.json` files, which have no built-in models to fall back on: each provider lists its models. They speak HTTP or HTTPS, with the Responses or Messages API, not through a proxy (`HTTPS_PROXY`). There is no login yet, no Chat Completions and no Pi extension API.
+- Its providers are those of its own `models.json` files, which have no built-in models to fall back on: each provider lists its models. They speak HTTP or HTTPS, with the Responses, Messages or Chat Completions API, not through a proxy (`HTTPS_PROXY`). There is no login yet and no Pi extension API.
 - Its settings (`~/.config/scramjet-rs/settings.json`) and sessions (`~/.local/state/scramjet-rs/sessions/`) are its own, with Scramjet's setting names. It shares Scramjet's `autonomy.yaml` files, agents (`~/.scramjet/agent/agents`), skills, `SYSTEM.md`, and `CLAUDE.md`/`AGENTS.md` context files. Scramjet's session files cannot be imported.
 - Built-in commands carry Claude Code's and Codex's names (`/clear`, `/exit`, `/rename`, `/status`); Scramjet's (`/new`, `/quit`, `/name`, `/session`) still work. One `/settings` holds everything; there is no `/scramjet settings`.
 - A command's status is `completed` or `abandoned` (only after you confirm); there is no `blocked`, `incomplete` or `continuing`. A reply that ends without a report gets a short status check, at most 3 in a row.

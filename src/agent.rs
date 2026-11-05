@@ -9,6 +9,7 @@ mod calls;
 mod client;
 mod commands;
 mod compaction;
+mod completions;
 mod delegate;
 mod forge;
 mod image;

@@ -7,6 +7,7 @@
 
 use super::ModelOption;
 use super::client::Protocol;
+use super::completions::Compat;
 use super::pricing::Prices;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -48,7 +49,7 @@ pub(super) struct Route {
     /// The base URL's host and port as written, for the `Host` header.
     pub authority: String,
     /// The base URL's path without a trailing `/`: requests go to `{path}/responses` or
-    /// `{path}/v1/messages`, where Scramjet's clients send them.
+    /// `{path}/v1/messages` or `{path}/chat/completions`, where Scramjet's clients send them.
     pub path: String,
     /// Authentication and the entries' `headers`.
     pub headers: Vec<(String, String)>,
@@ -81,6 +82,8 @@ pub(super) struct ModelInfo {
     pub levels: Vec<String>,
     pub images: bool,
     pub prices: Prices,
+    /// What its server accepts, for Chat Completions.
+    pub compat: Compat,
     /// `None` when no provider offers it.
     pub route: Option<Route>,
 }
@@ -99,6 +102,7 @@ impl ModelInfo {
             levels: Vec::new(),
             images: true,
             prices: Prices::default(),
+            compat: Compat::default(),
             route: None,
         }
     }
@@ -393,6 +397,7 @@ impl Reading {
         let protocol = match text("api")? {
             Some("openai-responses") => Protocol::Responses,
             Some("anthropic-messages") => Protocol::Messages,
+            Some("openai-completions") => Protocol::Completions,
             Some(api) => return Err(format!("model {id}: api {api} is not supported yet")),
             None => return Err(format!("model {id}: no api")),
         };
@@ -410,7 +415,7 @@ impl Reading {
             if protocol == Protocol::Messages {
                 headers.push(("x-api-key".to_owned(), key.clone()));
             }
-            if protocol == Protocol::Responses || field("authHeader") == Some(&Value::Bool(true)) {
+            if protocol != Protocol::Messages || field("authHeader") == Some(&Value::Bool(true)) {
                 headers.push(("authorization".to_owned(), format!("Bearer {key}")));
             }
         }
@@ -440,6 +445,14 @@ impl Reading {
                 ));
             }
         }
+        let compat = match protocol {
+            Protocol::Completions => {
+                let given = [provider.get("compat"), entry.get("compat")];
+                Compat::read(name, url, entry, given)
+                    .map_err(|problem| format!("model {id}: {problem}"))?
+            }
+            _ => Compat::default(),
+        };
         let reasoning = entry["reasoning"].as_bool().unwrap_or(false);
         let levels = match reasoning {
             true => levels(&entry["thinkingLevelMap"]),
@@ -457,6 +470,7 @@ impl Reading {
             levels,
             images: input.is_some_and(|input| input.iter().any(|kind| kind == "image")),
             prices: Prices::of(&entry["cost"]),
+            compat,
             route: Some(Route {
                 provider: name.to_owned(),
                 tls,
@@ -695,6 +709,8 @@ mod tests {
                     {"id": "claude", "api": "anthropic-messages", "baseUrl": "http://[::1]:9",
                         "authHeader": true, "headers": {"x-team": "messages"}},
                     {"id": "plain"},
+                    {"id": "chat", "api": "openai-completions", "baseUrl": "http://localhost:11434/v1",
+                        "compat": {"maxTokensField": "max_tokens"}},
                 ],
             },
         }}));
@@ -747,6 +763,11 @@ mod tests {
         );
         // Keys are not shown.
         assert!(!format!("{:?}", providers.models()).contains("literal-key"));
+        // Chat Completions takes the key as Responses does.
+        let chat = providers.find("chat").unwrap();
+        assert_eq!(chat.info.protocol, Protocol::Completions);
+        assert_eq!(route(&providers, "chat").headers[0], headers[0]);
+        assert_ne!(chat.info.compat, Compat::default());
         assert_eq!(providers.options()[0].provider.as_deref(), Some("local"));
         assert_eq!(providers.info("unknown"), ModelInfo::guess("unknown"));
     }
@@ -770,7 +791,8 @@ mod tests {
         let providers = Providers::given(json!({
             "providers": {
                 "a": {"baseUrl": "http://a/v1", "api": "openai-responses", "models": [
-                    {"id": "m"}, {"name": "no id"}, {"id": "chat", "api": "openai-completions"},
+                    {"id": "m"}, {"name": "no id"}, {"id": "chat", "api": "google-generative-ai"},
+                    {"id": "odd", "api": "openai-completions", "compat": {"supportsStore": 1}},
                     {"id": "shell", "apiKey": "!pass show key"},
                     {"id": "bad", "headers": {"x-bad": "line\nbreak"}},
                 ]},
@@ -787,7 +809,8 @@ mod tests {
             providers.problems(),
             [
                 "models: provider a: a model has no id",
-                "models: provider a: model chat: api openai-completions is not supported yet",
+                "models: provider a: model chat: api google-generative-ai is not supported yet",
+                "models: provider a: model odd: compat.supportsStore must be true or false",
                 "models: provider a: model shell: apiKey is a shell command (`!…`), which is not \
                  run yet",
                 "models: provider a: model bad: the header x-bad is not valid in HTTP",

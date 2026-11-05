@@ -548,24 +548,7 @@ impl Stream {
                 _ => None,
             })
             .collect();
-        let incomplete = limited.then(|| {
-            let calls = items
-                .iter()
-                .filter(|item| item["type"] == "function_call")
-                .count();
-            items.retain(|item| item["type"] != "function_call");
-            if !items.iter().any(|item| item["type"] == "message") {
-                items.clear();
-            }
-            let mut message =
-                "response incomplete: it reached the output token limit (max_tokens)".to_owned();
-            match calls {
-                0 => {}
-                1 => message.push_str("; the tool call it was making did not run"),
-                n => message.push_str(&format!("; the {n} tool calls in it did not run")),
-            }
-            message
-        });
+        let incomplete = limited.then(|| super::client::cut_at_limit(&mut items, "max_tokens"));
         let usage = self.usage.map(|[input, read, write, output]| {
             let input = input + read + write;
             crate::http::responses::ProviderUsage {
