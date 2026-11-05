@@ -876,7 +876,7 @@ response is incomplete; retry the request."});
         agent.config.providers = crate::agent::Providers::given_logged_in(
             json!({"providers": {"github-copilot": {
                 "baseUrl": format!("http://{endpoint}/v1"), "api": "openai-responses",
-                "headers": {"Copilot-Integration-Id": "vscode-chat"},
+                "headers": {"Editor-Version": "vscode/1.107.0"},
                 "models": [{"id": "gpt-6-luna", "reasoning": true}],
             }}}),
             logins.clone(),
@@ -901,7 +901,7 @@ response is incomplete; retry the request."});
                 "{head}"
             );
             assert!(
-                head.contains("copilot-integration-id: vscode-chat\r\n"),
+                head.contains("editor-version: vscode/1.107.0\r\n"),
                 "{head}"
             );
             assert!(!head.contains("copilot-vision-request"), "{head}");

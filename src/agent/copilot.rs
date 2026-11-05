@@ -16,13 +16,15 @@ use std::{
 pub const PROVIDER: &str = "github-copilot";
 /// VS Code's Copilot client, as Scramjet and other open clients log in.
 const CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
-/// What Copilot's own client says of itself, as Scramjet sends it.
-pub(super) const HEADERS: [(&str, &str); 4] = [
-    ("User-Agent", "GitHubCopilotChat/0.35.0"),
-    ("Editor-Version", "vscode/1.107.0"),
-    ("Editor-Plugin-Version", "copilot-chat/0.35.0"),
-    ("Copilot-Integration-Id", "vscode-chat"),
-];
+/// What scramjet-rs says of itself to GitHub and to Copilot.
+const USER_AGENT: (&str, &str) = (
+    "User-Agent",
+    concat!("scramjet-rs/", env!("CARGO_PKG_VERSION")),
+);
+/// The editor Copilot's API is told it serves, since it refuses one it does not know (`unknown
+/// Editor-Version header for IDE auth`) and a request without (live, 2026-11-05). GitHub sells
+/// its tokens without it.
+const EDITOR: (&str, &str) = ("Editor-Version", "vscode/1.107.0");
 /// The version of Copilot's API asked for, as Scramjet's models ask.
 const API_VERSION: (&str, &str) = ("X-GitHub-Api-Version", "2026-06-01");
 /// Copilot's API for a GitHub.com account, unless its token names another host.
@@ -238,8 +240,7 @@ pub(super) fn refresh(credential: &Value) -> Result<Value, Failure> {
 /// The credential of a Copilot token bought with `github`, the GitHub token.
 fn buy(url: &str, github: &str, enterprise: Option<&str>) -> Result<Value, Failure> {
     let authorization = format!("Bearer {github}");
-    let mut headers = vec![("Accept", "application/json")];
-    headers.extend(HEADERS);
+    let mut headers = vec![("Accept", "application/json"), USER_AGENT];
     headers.push(("Authorization", &authorization));
     let fetched = login::blocking(client::fetch(PROVIDER, "GET", url, &headers, None));
     let answer = login::renewal(fetched, "GitHub's Copilot token")?;
@@ -273,8 +274,12 @@ fn models(credential: &Value, api: Option<&str>) -> Result<Vec<Value>, String> {
         ),
     };
     let authorization = format!("Bearer {token}");
-    let mut headers = vec![("Accept", "application/json"), API_VERSION];
-    headers.extend(HEADERS);
+    let mut headers = vec![
+        ("Accept", "application/json"),
+        USER_AGENT,
+        EDITOR,
+        API_VERSION,
+    ];
     headers.push(("Authorization", &authorization));
     let url = format!("{base}/models");
     let listed = login::blocking(client::fetch(PROVIDER, "GET", &url, &headers, None))?;
@@ -312,7 +317,7 @@ fn models(credential: &Value, api: Option<&str>) -> Result<Vec<Value>, String> {
 /// Completions), its limits, images and effort levels.
 pub(super) fn entry(credential: &Value, listed: &Value) -> Value {
     let token = credential["access"].as_str().unwrap_or_default();
-    let headers: serde_json::Map<String, Value> = (HEADERS.iter().chain([&API_VERSION]))
+    let headers: serde_json::Map<String, Value> = ([USER_AGENT, EDITOR, API_VERSION].iter())
         .map(|(name, value)| (name.to_string(), json!(value)))
         .collect();
     let models: Vec<Value> = (listed["data"].as_array().into_iter().flatten())
@@ -490,7 +495,7 @@ pub(super) fn host(token: &str, enterprise: Option<&str>) -> String {
 }
 
 async fn post_form(url: &str, form: String) -> Result<Value, String> {
-    let headers = [("Accept", "application/json"), ("User-Agent", HEADERS[0].1)];
+    let headers = [("Accept", "application/json"), USER_AGENT];
     let body = Some(("application/x-www-form-urlencoded", form.into_bytes()));
     login::answer(
         client::fetch(PROVIDER, "POST", url, &headers, body).await?,
@@ -614,11 +619,14 @@ mod tests {
                 .0
                 .contains("authorization: Bearer tid=1;exp=2;proxy-ep=")
         );
-        assert!(
-            requests[5]
-                .0
-                .contains("copilot-integration-id: vscode-chat\r\n")
-        );
+        // Each names scramjet-rs; only Copilot's API is told of an editor, which it requires.
+        let ours = format!("user-agent: scramjet-rs/{}\r\n", env!("CARGO_PKG_VERSION"));
+        for (i, (head, _)) in requests.iter().enumerate() {
+            assert!(head.contains(&ours), "{head}");
+            let editor = head.contains("editor-version: vscode/1.107.0\r\n");
+            assert_eq!(editor, i >= 5, "{head}");
+            assert!(!head.contains("copilot-integration-id"), "{head}");
+        }
         assert_eq!(requests[6].1, r#"{"state":"enabled"}"#);
         let saved = login::saved(&logins.auth).unwrap();
         let credential = &saved[PROVIDER];
@@ -785,10 +793,14 @@ mod tests {
         let model = providers.find("claude-opus-5.5").unwrap();
         let route = model.info.route.as_ref().unwrap();
         assert_eq!(route.authority, DEFAULT_HOST);
-        assert!(
-            route
-                .headers
-                .contains(&("copilot-integration-id".into(), "vscode-chat".into()))
+        let names: Vec<&str> = route
+            .headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["editor-version", "user-agent", "x-github-api-version"]
         );
         assert_eq!(model.info.levels, ["low", "medium", "high", "max"]);
         assert!(model.info.images);

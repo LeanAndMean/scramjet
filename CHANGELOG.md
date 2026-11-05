@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.24.0 — GitHub Copilot is told it is scramjet-rs
+
+### Changed
+
+- Requests to GitHub and GitHub Copilot (the login, token renewals, the model list and model requests) say they come from scramjet-rs (`User-Agent: scramjet-rs/0.24.0`), where they claimed to be VS Code's Copilot Chat. Only Copilot's API is still told the editor is VS Code (`Editor-Version: vscode/1.107.0`), as it refuses requests naming no editor or one it does not know.
+
 ## 0.23.0 — Start banners to try
 
 ### Added
