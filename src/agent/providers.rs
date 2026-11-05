@@ -41,6 +41,8 @@ const LEVELS: [(&str, &str, bool); 7] = [
 pub(super) struct Route {
     /// The provider's name.
     pub provider: String,
+    /// `https://`: the connection is TLS, verified against the system's trusted certificates.
+    pub tls: bool,
     pub host: String,
     pub port: u16,
     /// The base URL's host and port as written, for the `Host` header.
@@ -58,6 +60,7 @@ impl std::fmt::Debug for Route {
         let names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
         f.debug_struct("Route")
             .field("provider", &self.provider)
+            .field("tls", &self.tls)
             .field("authority", &self.authority)
             .field("path", &self.path)
             .field("headers", &names)
@@ -394,8 +397,13 @@ impl Reading {
             None => return Err(format!("model {id}: no api")),
         };
         let url = text("baseUrl")?.ok_or_else(|| format!("model {id}: no baseUrl"))?;
-        let (host, port, authority, path) =
-            base_url(url).map_err(|problem| format!("model {id}: baseUrl {problem}"))?;
+        let BaseUrl {
+            tls,
+            host,
+            port,
+            authority,
+            path,
+        } = base_url(url).map_err(|problem| format!("model {id}: baseUrl {problem}"))?;
         let mut headers = Vec::new();
         if let Some(key) = text("apiKey")? {
             let key = resolve(key).map_err(|problem| format!("model {id}: apiKey {problem}"))?;
@@ -451,6 +459,7 @@ impl Reading {
             prices: Prices::of(&entry["cost"]),
             route: Some(Route {
                 provider: name.to_owned(),
+                tls,
                 host,
                 port,
                 authority,
@@ -499,19 +508,28 @@ fn resolve(value: &str) -> Result<String, String> {
     }
 }
 
-/// An `http://` URL's host, port (80 by default), authority and path without a trailing `/`.
-fn base_url(url: &str) -> Result<(String, u16, String, String), String> {
+#[derive(Debug, PartialEq)]
+struct BaseUrl {
+    tls: bool,
+    host: String,
+    /// 80 for `http://` and 443 for `https://` unless the URL names one.
+    port: u16,
+    authority: String,
+    /// Without a trailing `/`.
+    path: String,
+}
+
+/// An `http://` or `https://` URL's parts.
+fn base_url(url: &str) -> Result<BaseUrl, String> {
     let scheme = |prefix: &str| {
         url.get(..prefix.len())
             .is_some_and(|s| s.eq_ignore_ascii_case(prefix))
     };
-    if scheme("https://") {
-        return Err(format!("{url}: HTTPS is not supported yet"));
-    }
-    if !scheme("http://") {
-        return Err(format!("{url}: not an http:// URL"));
-    }
-    let rest = &url["http://".len()..];
+    let (tls, rest) = match (scheme("https://"), scheme("http://")) {
+        (true, _) => (true, &url["https://".len()..]),
+        (_, true) => (false, &url["http://".len()..]),
+        _ => return Err(format!("{url}: not an http:// or https:// URL")),
+    };
     if rest
         .chars()
         .any(|c| matches!(c, '?' | '#' | '@' | '\\') || c.is_whitespace() || c.is_control())
@@ -532,6 +550,7 @@ fn base_url(url: &str) -> Result<(String, u16, String, String), String> {
         },
     };
     let port = match port {
+        None if tls => 443,
         None => 80,
         Some(port) => port
             .parse()
@@ -540,8 +559,13 @@ fn base_url(url: &str) -> Result<(String, u16, String, String), String> {
     if host.is_empty() {
         return Err(format!("{url}: no host"));
     }
-    let path = path.trim_end_matches('/').to_owned();
-    Ok((host.to_owned(), port, authority.to_owned(), path))
+    Ok(BaseUrl {
+        tls,
+        host: host.to_owned(),
+        port,
+        authority: authority.to_owned(),
+        path: path.trim_end_matches('/').to_owned(),
+    })
 }
 
 /// The providers a program's `output` lists, in the version read here; `what` names it.
@@ -747,7 +771,6 @@ mod tests {
             "providers": {
                 "a": {"baseUrl": "http://a/v1", "api": "openai-responses", "models": [
                     {"id": "m"}, {"name": "no id"}, {"id": "chat", "api": "openai-completions"},
-                    {"id": "secure", "baseUrl": "https://a/v1"},
                     {"id": "shell", "apiKey": "!pass show key"},
                     {"id": "bad", "headers": {"x-bad": "line\nbreak"}},
                 ]},
@@ -765,7 +788,6 @@ mod tests {
             [
                 "models: provider a: a model has no id",
                 "models: provider a: model chat: api openai-completions is not supported yet",
-                "models: provider a: model secure: baseUrl https://a/v1: HTTPS is not supported yet",
                 "models: provider a: model shell: apiKey is a shell command (`!…`), which is not \
                  run yet",
                 "models: provider a: model bad: the header x-bad is not valid in HTTP",
@@ -950,11 +972,27 @@ mod tests {
     }
 
     #[test]
-    fn only_plain_http_urls_with_a_host_are_taken() {
-        let parsed = |url: &str| base_url(url).map(|(host, port, _, path)| (host, port, path));
+    fn only_http_and_https_urls_with_a_host_are_taken() {
+        let parsed = |url: &str| {
+            base_url(url).map(|url| (url.tls, url.host, url.port, url.authority, url.path))
+        };
         assert_eq!(
             parsed("HTTP://h:8/a/b/"),
-            Ok(("h".into(), 8, "/a/b".into()))
+            Ok((false, "h".into(), 8, "h:8".into(), "/a/b".into()))
+        );
+        assert_eq!(
+            parsed("https://api.example.com/v1"),
+            Ok((
+                true,
+                "api.example.com".into(),
+                443,
+                "api.example.com".into(),
+                "/v1".into()
+            ))
+        );
+        assert_eq!(
+            parsed("HTTPS://[::1]:8443"),
+            Ok((true, "::1".into(), 8443, "[::1]:8443".into(), "".into()))
         );
         for url in [
             "http://",
@@ -962,7 +1000,10 @@ mod tests {
             "http://u:p@h",
             "http://h?q",
             "http://h:x",
+            "https://",
+            "https://u@h/v1",
             "ftp://h",
+            "h:80",
         ] {
             assert!(parsed(url).is_err(), "{url}");
         }

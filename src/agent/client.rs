@@ -7,10 +7,17 @@ use hyper::{Request, body::Incoming, client::conn::http1};
 use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
 use std::{
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime},
 };
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpStream,
+    task::JoinHandle,
+};
 
 /// Large enough for real coding turns; the model's own context limit applies first.
 pub(super) const LIMITS: ParserLimits = ParserLimits {
@@ -252,17 +259,7 @@ async fn exchange(
     progress: &mut dyn FnMut(StreamProgress),
 ) -> Result<Reply, Failure> {
     let authority = &route.authority;
-    let provider = &route.provider;
-    let socket = (TcpStream::connect((route.host.as_str(), route.port)).await).map_err(|e| {
-        Failure::new(
-            format!("cannot connect to {authority} (provider {provider}): {e}"),
-            true,
-        )
-    })?;
-    let (mut sender, driver) = http1::handshake(TokioIo::new(socket))
-        .await
-        .map_err(|e| Failure::new(format!("HTTP handshake failed: {e}"), true))?;
-    let driver = tokio::spawn(driver);
+    let (mut sender, driver) = connect(route).await?;
     let mut request = match protocol {
         Protocol::Responses => Request::builder().uri(format!("{}/responses", route.path)),
         Protocol::Messages => {
@@ -345,6 +342,95 @@ async fn exchange(
     };
     driver.abort();
     result.map(|reply| Reply { priced_by, ..reply })
+}
+
+type Connection = (
+    http1::SendRequest<Full<Bytes>>,
+    JoinHandle<hyper::Result<()>>,
+);
+
+/// An HTTP/1.1 connection to `route`'s host, in TLS for an `https://` base URL, with the task
+/// that drives it.
+async fn connect(route: &Route) -> Result<Connection, Failure> {
+    let (authority, provider) = (&route.authority, &route.provider);
+    let socket = (TcpStream::connect((route.host.as_str(), route.port)).await).map_err(|e| {
+        Failure::new(
+            format!("cannot connect to {authority} (provider {provider}): {e}"),
+            true,
+        )
+    })?;
+    if !route.tls {
+        return handshake(socket).await;
+    }
+    let config = tls_config().map_err(|problem| Failure::new(problem, false))?;
+    let name = rustls::pki_types::ServerName::try_from(route.host.clone()).map_err(|_| {
+        Failure::new(
+            format!("{} is not a name TLS can verify", route.host),
+            false,
+        )
+    })?;
+    let stream = (tokio_rustls::TlsConnector::from(config)
+        .connect(name, socket)
+        .await)
+        .map_err(|e| tls_failure(route, &e))?;
+    handshake(stream).await
+}
+
+async fn handshake(
+    io: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
+) -> Result<Connection, Failure> {
+    let (sender, driver) = http1::handshake(TokioIo::new(io))
+        .await
+        .map_err(|e| Failure::new(format!("HTTP handshake failed: {e}"), true))?;
+    Ok((sender, tokio::spawn(driver)))
+}
+
+/// TLS's settings, with the system's trusted certificates (or `SSL_CERT_FILE`'s and
+/// `SSL_CERT_DIR`'s), read at the first `https://` request and kept once read.
+fn tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    if let Some(config) = CONFIG.get() {
+        return Ok(config.clone());
+    }
+    let found = rustls_native_certs::load_native_certs();
+    let mut roots = rustls::RootCertStore::empty();
+    let (added, _) = roots.add_parsable_certificates(found.certs);
+    if added == 0 {
+        let why = (found.errors.first()).map_or(String::new(), |error| format!(": {error}"));
+        return Err(format!(
+            "no trusted certificates found for HTTPS in the system's store (or SSL_CERT_FILE, \
+             SSL_CERT_DIR){why}"
+        ));
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("TLS: {e}"))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(CONFIG.get_or_init(|| Arc::new(config)).clone())
+}
+
+/// A failed TLS handshake: TLS's own errors (an untrusted or invalid certificate, an alert)
+/// would fail again, unlike a connection that broke.
+fn tls_failure(route: &Route, error: &std::io::Error) -> Failure {
+    let (authority, provider) = (&route.authority, &route.provider);
+    let untrusted = (error.get_ref())
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        .is_some_and(|error| {
+            *error == rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer)
+        });
+    let hint = match untrusted {
+        true => {
+            "; HTTPS trusts the system's certificates, or those SSL_CERT_FILE and SSL_CERT_DIR name"
+        }
+        false => "",
+    };
+    Failure::new(
+        format!("TLS handshake with {authority} (provider {provider}) failed: {error}{hint}"),
+        error.kind() != std::io::ErrorKind::InvalidData,
+    )
 }
 
 /// Passes each received chunk to `feed` until the body ends, `feed` fails or the stream stalls.

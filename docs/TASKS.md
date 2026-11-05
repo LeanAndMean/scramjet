@@ -21,7 +21,7 @@ Order agreed with the user at the second `/rs:steer` of 2026-11-04: 19, 20, 15, 
     - Proxy in comments, test names and docs (7 files under `src/`), before publishing (Open questions).
     - Scramjet's `!command` values of `apiKey` and `headers`, refused with a warning for now.
     - Later: the direct login and routing that Scramjet's private `~/repos/scramjet-provider-proxy` reimplements (a read-only reference, as Scramjet is).
-22. **Providers and `/login`** ([design](DESIGN.md#packages-providers-and-mcp-2026-11-04)). HTTPS: none today, since `src/agent/client.rs` speaks plain HTTP to one address. Also:
+22. **Providers and `/login`** ([design](DESIGN.md#packages-providers-and-mcp-2026-11-04)). HTTPS is in (0.14.0: rustls with ring, the system's certificates through `rustls-native-certs`; this network re-signs most hosts with the company's inspection CA, in `SSL_CERT_DIR`). `HTTP(S)_PROXY` and `NO_PROXY`, which Scramjet honors (undici's `EnvHttpProxyAgent`, `packages/coding-agent/src/cli.ts`), wait for a need: none is set here. Next:
     - Chat Completions for open servers;
     - scramjet-rs's own credentials file, hidden from the agent's tools like the other stores;
     - GitHub Copilot's device login and ChatGPT's (Codex) browser login, as in Scramjet's `packages/ai/src/utils/oauth/{github-copilot,openai-codex}.ts`;

@@ -1,6 +1,10 @@
 use std::{
     io::{BufRead, BufReader, Write},
     process::{Child, Command, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -83,16 +87,17 @@ fn list_models_lists_the_providers_models_and_what_is_wrong_in_their_files() {
         serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     models["providers"]["remote"] = serde_json::json!({"baseUrl": "https://example.com/v1",
         "api": "openai-responses", "models": [{"id": "far"}]});
+    models["providers"]["odd"] = serde_json::json!({"baseUrl": "ftp://example.com/v1",
+        "api": "openai-responses", "models": [{"id": "elsewhere"}]});
     std::fs::write(&file, models.to_string()).unwrap();
     let (listed, warnings) = list();
-    assert!(
-        listed.contains("test") && listed.contains("gpt-6-luna"),
-        "{listed}"
-    );
-    assert!(!listed.contains("far"), "{listed}");
+    for offered in ["test", "gpt-6-luna", "remote", "far"] {
+        assert!(listed.contains(offered), "{listed}");
+    }
+    assert!(!listed.contains("elsewhere"), "{listed}");
     let problem = format!(
-        "Warning: {}: provider remote: model far: baseUrl https://example.com/v1: HTTPS is not \
-supported yet\n",
+        "Warning: {}: provider odd: model elsewhere: baseUrl ftp://example.com/v1: not an http:// \
+or https:// URL\n",
         file.display()
     );
     assert_eq!(warnings, problem);
@@ -171,6 +176,141 @@ fn provide(config: &std::path::Path, endpoint: &str) {
         "models": [{"id": "gpt-6-luna", "reasoning": true, "input": ["text", "image"]}],
     }}});
     std::fs::write(config.join("scramjet-rs/models.json"), models.to_string()).unwrap();
+}
+
+#[test]
+fn https_providers_are_reached_over_tls_and_untrusted_certificates_refused_once() {
+    let binary = env!("CARGO_BIN_EXE_scramjet-rs");
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-https-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let tls = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/tls");
+    let (port, connections, heads) = serve_tls(&tls);
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet-rs")).unwrap();
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("https://localhost:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet-rs/models.json"), models.to_string()).unwrap();
+    // As if the system trusted only the certificates in `trusted`.
+    let run = |trusted: &str| {
+        Command::new(binary)
+            .args(["--retries", "2", "--no-session", "-p", "hi"])
+            .current_dir(&project)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_CONFIG_HOME", &config)
+            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .env("SSL_CERT_FILE", tls.join(trusted))
+            .env_remove("SSL_CERT_DIR")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let output = run("ca.pem");
+    let text = |bytes: Vec<u8>| String::from_utf8(bytes).unwrap();
+    let (stdout, stderr) = (text(output.stdout), text(output.stderr));
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(stdout.trim_end(), "Reached over TLS.", "{stderr}");
+    let head = heads.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(head.starts_with("post /v1/messages http/1.1\r\n"), "{head}");
+    assert!(
+        head.contains(&format!("\r\nhost: localhost:{port}\r\n")),
+        "{head}"
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+
+    // Trusting only the server's own certificate, which is no CA's: no retry would help.
+    let output = run("localhost.pem");
+    assert!(!output.status.success());
+    let stderr = text(output.stderr);
+    assert_eq!(
+        stderr.lines().last().unwrap_or_default(),
+        format!(
+            "scramjet-rs: provider: TLS handshake with localhost:{port} (provider test) failed: \
+invalid peer certificate: UnknownIssuer; HTTPS trusts the system's certificates, or those \
+SSL_CERT_FILE and SSL_CERT_DIR name"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+}
+
+/// A provider on a port of 127.0.0.1 speaking TLS with `tls`' certificate for localhost,
+/// answering each request with the same short Messages reply: its port, the connections it
+/// took, and the head (request line and headers, lowercased) of each request it answered.
+fn serve_tls(tls: &std::path::Path) -> (u16, Arc<AtomicUsize>, std::sync::mpsc::Receiver<String>) {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+    let chain = CertificateDer::pem_file_iter(tls.join("localhost.pem"))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let key = PrivateKeyDer::from_pem_file(tls.join("localhost.key")).unwrap();
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(chain, key)
+        .unwrap();
+    let config = Arc::new(config);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let (heads, received) = std::sync::mpsc::channel();
+    let counted = connections.clone();
+    let events = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Reached over TLS."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ];
+    let body: String = (events.iter())
+        .map(|event| {
+            let kind: serde_json::Value = serde_json::from_str(event).unwrap();
+            format!(
+                "event: {}\ndata: {event}\n\n",
+                kind["type"].as_str().unwrap()
+            )
+        })
+        .collect();
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    std::thread::spawn(move || {
+        for socket in listener.incoming() {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let connection = rustls::ServerConnection::new(config.clone()).unwrap();
+            let mut stream = rustls::StreamOwned::new(connection, socket.unwrap());
+            let mut reader = BufReader::new(&mut stream);
+            let (mut head, mut length) = (String::new(), 0);
+            // A client that does not trust the certificate ends the handshake here.
+            while let Ok(read) = reader.read_line(&mut head) {
+                let line = &head[head.len() - read..];
+                if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+                if read == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            if !head.ends_with("\r\n\r\n") {
+                continue;
+            }
+            let mut body = vec![0; length];
+            std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+            stream.write_all(reply.as_bytes()).unwrap();
+            stream.conn.send_close_notify();
+            let _ = stream.flush();
+            let _ = heads.send(head.to_lowercase());
+        }
+    });
+    (port, connections, received)
 }
 
 #[test]

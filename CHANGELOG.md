@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.14.0 — HTTPS providers
+
+### Added
+
+- A provider's `baseUrl` may be `https://`. Its certificate is checked against the system's trusted certificates, or against those `SSL_CERT_FILE` and `SSL_CERT_DIR` name, so a company's inspection CA in the system's store works. An untrusted certificate fails at once, without retries, and says where trust comes from.
+
 ## 0.13.1 — Stores stay hidden across /reload
 
 ### Fixed
