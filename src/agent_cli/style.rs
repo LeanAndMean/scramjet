@@ -1,6 +1,7 @@
 //! How the agent's terminal output looks, decided in one place: each kind of text the renderers
 //! show has its style here, named for what it shows, as text attributes plus the color of one of
-//! the theme's tokens. The theme in use decides the escape sequences.
+//! the theme's tokens. The theme in use decides the escape sequences, and the base under them on
+//! the full screen: its main background, if it has one, with its text color.
 
 use super::theme::{Color, Mode, TERMINAL_COLORS, Theme, Token};
 use std::fmt;
@@ -187,13 +188,30 @@ impl Style {
     }
 }
 
+/// The escape sequence that starts the full screen's base in the theme in use: its background
+/// and text colors when it colors the background, else empty, the terminal's own.
+pub(super) fn base() -> &'static str {
+    let table = *TABLE
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    &table[SPECS.len()]
+}
+
+/// `row` on `base`, which each reset in it starts again.
+pub(super) fn painted(row: &str, base: &str) -> String {
+    match base.is_empty() {
+        true => row.to_owned(),
+        false => base.to_owned() + &row.replace(RESET, &(RESET.to_owned() + base)),
+    }
+}
+
 impl fmt::Display for Style {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.get())
     }
 }
 
-/// The styles' escape sequences in a theme.
+/// The styles' escape sequences in a theme, then its base's.
 fn table(theme: &Theme, mode: Mode) -> Vec<String> {
     let sequence = |spec: &Spec| {
         let mut attributes = spec.attributes.to_vec();
@@ -212,7 +230,16 @@ fn table(theme: &Theme, mode: Mode) -> Vec<String> {
             false => format!("\x1b[{}m", parameters.join(";")),
         }
     };
-    SPECS.iter().map(sequence).collect()
+    let base = theme.background().background(mode).map(|background| {
+        let text = theme.color(Token::Text).foreground(mode);
+        let parameters: Vec<String> = text.into_iter().chain([background]).collect();
+        format!("\x1b[{}m", parameters.join(";"))
+    });
+    SPECS
+        .iter()
+        .map(sequence)
+        .chain([base.unwrap_or_default()])
+        .collect()
 }
 
 static TABLE: LazyLock<RwLock<&'static [String]>> = LazyLock::new(|| {
@@ -243,6 +270,7 @@ pub(super) fn generation() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_cli::theme::BUILT_IN;
 
     #[test]
     fn the_terminal_colors_are_the_16_colors_shown_before_themes() {
@@ -275,5 +303,34 @@ mod tests {
         assert_eq!(shown(&exact, TITLE), "\x1b[1;4;38;2;255;158;90m");
         assert_eq!(shown(&exact, SUBAGENT_NAME), "\x1b[1m");
         assert_eq!(shown(&exact, CODE_BLOCK), "");
+    }
+
+    #[test]
+    fn a_theme_with_a_background_paints_it_under_its_text_color() {
+        let base = |text: &str, mode| {
+            let theme = include_str!("themes/scramjet-dark.json").replace(
+                r#""text": "","#,
+                &format!(r##""text": {text}, "background": "#10141c","##),
+            );
+            let theme = Theme::parse(&theme).unwrap();
+            table(&theme, mode).pop().unwrap()
+        };
+        assert_eq!(
+            base(r##""#e0e4ec""##, Mode::TrueColor),
+            "\x1b[38;2;224;228;236;48;2;16;20;28m"
+        );
+        assert_eq!(base(r#""""#, Mode::TrueColor), "\x1b[48;2;16;20;28m");
+        assert_eq!(base("15", Mode::Indexed), "\x1b[97;48;5;16m");
+        for name in BUILT_IN {
+            let theme = Theme::built_in(name).unwrap();
+            assert_eq!(table(&theme, Mode::TrueColor).last().unwrap(), "");
+        }
+
+        let row = "plain \x1b[1mbold\x1b[0m end\x1b[0m";
+        assert_eq!(painted(row, ""), row);
+        assert_eq!(
+            painted(row, "\x1b[44m"),
+            "\x1b[44mplain \x1b[1mbold\x1b[0m\x1b[44m end\x1b[0m\x1b[44m"
+        );
     }
 }

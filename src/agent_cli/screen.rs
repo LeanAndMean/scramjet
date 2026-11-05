@@ -290,8 +290,9 @@ struct App {
     click: Option<Click>,
     /// The user asked to exit; keys are no longer taken.
     exiting: bool,
-    /// The terminal's size, the rows and the cursor drawn last.
+    /// The terminal's size, the theme's base, the rows and the cursor drawn last.
     size: (usize, usize),
+    base: &'static str,
     drawn: Vec<String>,
     /// The dock's rows drawn last.
     docked: Vec<Line>,
@@ -340,6 +341,7 @@ impl App {
             click: None,
             exiting: false,
             size: (0, 0),
+            base: "",
             drawn: Vec::new(),
             docked: Vec::new(),
             cursor: None,

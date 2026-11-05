@@ -2061,6 +2061,24 @@ def user_theme(ocean):
             json.dump(theme, file)
         until(b'\x1b[38;2;50;60;70mls\x1b[0m', since)
         on_screen('Theme Ocean read again')
+        # With a main background, each row is erased on it, its text in the theme's text color,
+        # and each reset in a row starts them again; without it, the terminal's own again.
+        theme['colors']['background'] = '#010203'
+        theme['colors']['text'] = '#fafbfc'
+        since = len(output)
+        with open(ocean, 'w') as file:
+            json.dump(theme, file)
+        base = b'\x1b[38;2;250;251;252;48;2;1;2;3m'
+        until(base + b'\x1b[2K', since)
+        until(b'\x1b[38;2;50;60;70mls\x1b[0m' + base, since)
+        del theme['colors']['background']
+        since = len(output)
+        with open(ocean, 'w') as file:
+            json.dump(theme, file)
+        # Rows erased without a base, all of them, since the base changed.
+        at = until(b';1H\x1b[2K', since)
+        read(.3)
+        assert b'48;2;1;2;3m' not in output[at:], bytes(output[at:])
         # The list offers it as it is now.
         send(b'/settings\r')
         on_screen('Settings  \u2191\u2193 move')

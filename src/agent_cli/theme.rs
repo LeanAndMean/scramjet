@@ -1,7 +1,8 @@
 //! Themes, in Scramjet's format: a palette of named colors (`vars`) and the color of each of
 //! its 52 tokens (`colors`), a palette color's name, an exact `#rrggbb`, a 256-color index or
 //! `""` for the terminal's own. Exact colors are sent as 24-bit colors where the terminal shows
-//! them, else as the nearest of its 256, as Scramjet sends them.
+//! them, else as the nearest of its 256, as Scramjet sends them. Beyond Scramjet's format, a
+//! theme may color the main `background` among its `colors`.
 
 use scramjet_rs::agent::{Problem, agent_directory};
 use serde_json::{Map, Value};
@@ -130,6 +131,18 @@ impl Color {
             Self::Rgb(r, g, b) => Some(format!("38;5;{}", nearest_index(r, g, b))),
         }
     }
+
+    /// The SGR parameter that sets it as the background; none for the terminal's own.
+    pub(super) fn background(self, mode: Mode) -> Option<String> {
+        match self {
+            Self::Default | Self::Faint => None,
+            Self::Index(index @ 0..8) => Some(format!("{}", 40 + index)),
+            Self::Index(index @ 8..16) => Some(format!("{}", 100 + index - 8)),
+            Self::Index(index) => Some(format!("48;5;{index}")),
+            Self::Rgb(r, g, b) if mode == Mode::TrueColor => Some(format!("48;2;{r};{g};{b}")),
+            Self::Rgb(r, g, b) => Some(format!("48;5;{}", nearest_index(r, g, b))),
+        }
+    }
 }
 
 /// The 256-color index nearest `r`, `g`, `b`, as Scramjet picks it: in the 6×6×6 cube, or on the
@@ -169,6 +182,7 @@ fn nearest_index(r: u8, g: u8, b: u8) -> u8 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Theme {
     colors: Vec<Color>,
+    background: Color,
 }
 
 /// A theme to choose from: a built-in one, or one read from `file`.
@@ -345,6 +359,8 @@ fn is_json(path: &Path) -> bool {
 }
 
 pub(super) const TERMINAL_COLORS: &str = "terminal-colors";
+/// The key of the main background among a theme's colors, which Scramjet's format lacks.
+const BACKGROUND: &str = "background";
 
 /// The built-in themes' names, in the order `/settings` lists them.
 pub(super) const BUILT_IN: [&str; 3] = [TERMINAL_COLORS, "scramjet-dark", "pi-light"];
@@ -352,6 +368,11 @@ pub(super) const BUILT_IN: [&str; 3] = [TERMINAL_COLORS, "scramjet-dark", "pi-li
 impl Theme {
     pub(super) fn color(&self, token: Token) -> Color {
         self.colors[token as usize]
+    }
+
+    /// The main background, under everything; the terminal's own unless the theme colors it.
+    pub(super) fn background(&self) -> Color {
+        self.background
     }
 
     /// The built-in theme `name`.
@@ -394,12 +415,18 @@ impl Theme {
         if !missing.is_empty() {
             return Err(format!("colors lacks {}", missing.join(", ")));
         }
-        let colors = (KEYS.iter())
-            .map(|key| {
-                resolve(&colors[*key], vars, &mut Vec::new()).map_err(|e| format!("{key}: {e}"))
-            })
+        let color = |key: &str| {
+            resolve(&colors[key], vars, &mut Vec::new()).map_err(|e| format!("{key}: {e}"))
+        };
+        let background = match colors.contains_key(BACKGROUND) {
+            true => color(BACKGROUND)?,
+            false => Color::Default,
+        };
+        let colors = KEYS
+            .iter()
+            .map(|key| color(key))
             .collect::<Result<_, _>>()?;
-        Ok((name, Self { colors }))
+        Ok((name, Self { colors, background }))
     }
 }
 
@@ -548,6 +575,7 @@ fn terminal_colors() -> Theme {
     };
     Theme {
         colors: TOKENS.iter().map(|&token| color(token)).collect(),
+        background: Default,
     }
 }
 
@@ -611,6 +639,47 @@ mod tests {
         assert!(
             error.starts_with("colors lacks borderAccent, borderMuted, "),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn a_theme_may_color_the_main_background() {
+        let with = |background: &str| {
+            let colors: Vec<String> = (KEYS.iter()).map(|key| format!(r#""{key}": """#)).collect();
+            format!(
+                r##"{{"vars": {{"night": "#10141c"}}, "colors": {{{}{background}}}}}"##,
+                colors.join(", ")
+            )
+        };
+        let background = |text: &str| Theme::parse(text).map(|theme| theme.background());
+        assert_eq!(background(&with("")), Ok(Color::Default));
+        assert_eq!(
+            background(&with(r#", "background": """#)),
+            Ok(Color::Default)
+        );
+        assert_eq!(
+            background(&with(r#", "background": "night""#)),
+            Ok(Color::Rgb(0x10, 0x14, 0x1c))
+        );
+        assert_eq!(
+            background(&with(r#", "background": "day""#)),
+            Err("background: day is not in vars".into())
+        );
+        for name in BUILT_IN {
+            assert_eq!(Theme::built_in(name).unwrap().background(), Color::Default);
+        }
+        assert_eq!(Color::Index(4).background(Mode::Indexed), Some("44".into()));
+        assert_eq!(
+            Color::Index(12).background(Mode::Indexed),
+            Some("104".into())
+        );
+        assert_eq!(
+            Color::Rgb(16, 20, 28).background(Mode::TrueColor),
+            Some("48;2;16;20;28".into())
+        );
+        assert_eq!(
+            Color::Rgb(16, 20, 28).background(Mode::Indexed),
+            Some("48;5;16".into())
         );
     }
 

@@ -388,6 +388,11 @@ impl App {
             self.thumb = None;
             out.push_str("\x1b[2J");
         }
+        let base = style::base();
+        if base != self.base {
+            self.base = base;
+            self.drawn.clear();
+        }
         let (dock, cursor) = self.dock((width, height));
         let rows = height.saturating_sub(dock.len()).max(1);
         // As Scramjet's, the last column is the scrollbar's, whether it shows or not, so that
@@ -436,9 +441,10 @@ impl App {
         for (index, row) in frame.iter().enumerate() {
             if self.drawn.get(index) != Some(row) {
                 // Erased first: without autowrap, a row as wide as the screen leaves the
-                // cursor on its last cell, which erasing after it would take.
-                let reset = style::RESET;
-                write!(out, "\x1b[{};1H\x1b[2K{row}{reset}", index + 1).unwrap();
+                // cursor on its last cell, which erasing after it would take. Erasing fills
+                // the row with the base's background.
+                let (row, reset) = (style::painted(row, base), style::RESET);
+                write!(out, "\x1b[{};1H{base}\x1b[2K{row}{reset}", index + 1).unwrap();
             }
         }
         if let Some((row, column)) = cursor.filter(|(row, _)| *row < height) {

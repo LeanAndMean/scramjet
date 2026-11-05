@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.10.0 — A theme's own background
+
+### Added
+
+- A theme may color the main background, with `background` among its `colors` (a color or a name from its `vars`, beyond Scramjet's format). The full screen then shows everything on it, dialogs and the footer included, with the theme's `text` color as the color of plain text; a theme without one keeps the terminal's own background, as before.
+
 ## 0.9.0 — Themes show as you edit them
 
 ### Added
