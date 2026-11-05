@@ -4058,8 +4058,11 @@ def fullscreen_copy_on_select(read, until, send, output):
     send(b'\x1b[<0;15;%dM\x1b[<0;15;%dm' % (row, row) * 3)
     copied('Row 30 of the reply.')
     assert open(copies).read() == 'Row 30\nreply\nRow 30 of the reply.\n', open(copies).read()
-    # The selection went once copied: a right click pastes, here from no clipboard. The first
-    # failure names the terminal's own paste key, later ones only the cause.
+    # The selection goes once the screen sees the copy end, after the stand-in has written it;
+    # a right click before then does nothing.
+    read(.3)
+    # Then a right click pastes, here from no clipboard. The first failure names the terminal's
+    # own paste key, later ones only the cause.
     send(b'\x1b[<2;5;5M\x1b[<2;5;5m')
     rows = on_screen('Ctrl+Shift+V')
     assert rows[-4:-2] == ['Paste failed: Cannot read clipboard text; Windows Terminal',
