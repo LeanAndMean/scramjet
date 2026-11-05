@@ -3971,21 +3971,25 @@ for variables, said in [({'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAY
     else:
         assert not os.path.exists(clipboard)
 pastes = os.path.join(work, 'pastes')
-# Stands in for the PowerShell kept for pastes: checks it reads the clipboard's text through Windows
-# Forms, answers each `text` line with the text's length and bytes, and counts its starts and reads;
-# the second read takes a second.
+# Stands in for the PowerShell kept for pastes and copies: checks it reads and writes the clipboard's
+# text through Windows Forms, answers each `text` line with the text's length and bytes, and counts
+# its starts and reads; the second read takes a second. A `copy` line's text goes to the stand-in
+# clipboard file.
 with open(os.path.join(clipboard_bin, 'powershell.exe'), 'w') as script_file:
     script_file.write('#!/bin/sh\n[ "$4" = -STA ] && [ "$5" = -Command ] || exit 1\n'
-                      'case "$6" in *"[System.Windows.Forms.Clipboard]::GetText()"*) ;; *) exit 1;; esac\n'
+                      'case "$6" in *"Forms.Clipboard]::GetText()"*"Forms.Clipboard]::SetText("*) ;; *) exit 1;; esac\n'
                       'echo started >> "$PASTES.starts"\nprintf \'0\\n\'\n'
-                      'while read -r request; do [ "$request" = text ] || exit 1\n'
+                      'while read -r request; do case $request in\n'
+                      '"copy "*) printf %s "${request#copy }" | base64 -d > "$CLIPBOARD" || exit 1\n'
+                      'printf \'0\\n\'; continue;;\ntext) ;; *) exit 1;; esac\n'
                       'count=$(cat "$PASTES" 2>/dev/null || echo 0)\necho $((count + 1)) > "$PASTES"\n'
                       '[ "$count" -ge 1 ] && sleep 1\nprintf \'18\\npasted\\r\\nsecond \\342\\200\\224\'\ndone\n')
 os.chmod(os.path.join(clipboard_bin, 'powershell.exe'), 0o755)
 known = set(session_files())
+# Without WAYLAND_DISPLAY, wl-copy is not tried: the copies come through the stand-in PowerShell.
 run([], fullscreen_paste_and_clicks, serve_items([[message(rows_reply)]]), variables={
-    'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WSL_DISTRO_NAME': 'Test', 'WAYLAND_DISPLAY': 'wayland-test',
-    'CLIPBOARD': clipboard, 'PASTES': pastes})
+    'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WSL_DISTRO_NAME': 'Test', 'CLIPBOARD': clipboard,
+    'PASTES': pastes})
 (pasted,) = set(session_files()) - known
 prompts = [line['content'] for line in map(json.loads, open(pasted)) if line.get('role') == 'user']
 assert prompts == ['x pasted\nsecond \u2014'], prompts

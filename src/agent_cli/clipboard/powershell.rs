@@ -1,5 +1,7 @@
-//! Windows' clipboard under WSL, read by one PowerShell process kept for the next paste, as
-//! Scramjet's reader is: starting PowerShell takes about 0.6 s, a read in it about 80 ms. Its
+//! Windows' clipboard under WSL, read and written by one PowerShell process kept for the next
+//! paste or copy, as Scramjet's reader is: starting PowerShell takes about 0.6 s, a read in it
+//! about 80 ms, a copy 30-200 ms. Copying here rather than with OSC 52 also works inside tmux,
+//! whose default `set-clipboard external` drops a program's OSC 52, and for any length. Its
 //! script, a plain `-Command`, only calls `System.Windows.Forms.Clipboard`: no code compiled with
 //! `Add-Type` (whose DLLs in Windows' `%TEMP%` alarmed endpoint security; Scramjet's #642) and no
 //! `-EncodedCommand`. WSLg's own X11 clipboard answers in 2 ms but can stop following Windows'
@@ -14,9 +16,10 @@ use std::{
 };
 
 /// Answers each `text` or `image` line with the clipboard's text as UTF-8 or its image as PNG
-/// (none: nothing), sent as a line with the number of bytes and then the bytes; `-1` when the
-/// clipboard cannot be read, as when another program holds it. Its first answer, empty, says
-/// that it is ready.
+/// (none: nothing), sent as a line with the number of bytes and then the bytes, and each
+/// `copy BASE64` line, once the UTF-8 text it carries is on the clipboard, with nothing; `-1` when
+/// the clipboard cannot be used, as when another program holds it. Its first answer, empty, says
+/// that it is ready. `SetText` leaves the text there after PowerShell ends.
 const SCRIPT: &str = "Add-Type -AssemblyName System.Windows.Forms; \
 Add-Type -AssemblyName System.Drawing; \
 $out = [Console]::OpenStandardOutput(); \
@@ -30,6 +33,9 @@ elseif ($request -eq 'image') { $image = [System.Windows.Forms.Clipboard]::GetIm
 if ($image) { $png = New-Object IO.MemoryStream; \
 $image.Save($png, [System.Drawing.Imaging.ImageFormat]::Png); $image.Dispose(); Send ($png.ToArray()) } \
 else { Send @() } } \
+elseif ($request.StartsWith('copy ')) { \
+[System.Windows.Forms.Clipboard]::SetText([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($request.Substring(5)))); \
+Send @() } \
 else { break } \
 } catch { $failed = [Text.Encoding]::ASCII.GetBytes('-1' + [char]10); \
 $out.Write($failed, 0, $failed.Length); $out.Flush() } }";
@@ -53,6 +59,13 @@ pub(super) fn read(request: &str, max: usize) -> Result<Vec<u8>, String> {
         true => Ok(bytes),
         false => Err("the clipboard holds too much".to_owned()),
     }
+}
+
+/// Puts `text` on the clipboard.
+pub(super) fn write(text: &str) -> Result<(), String> {
+    let request = format!("copy {}", super::base64(text.as_bytes()));
+    let mut reader = READER.lock().unwrap_or_else(PoisonError::into_inner);
+    read_with(&mut reader, start, &request, super::TIMEOUT).map(drop)
 }
 
 fn start() -> io::Result<Reader> {

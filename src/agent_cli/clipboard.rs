@@ -1,8 +1,9 @@
-//! The desktop's clipboard as Scramjet uses it. Copying: with `pbcopy` on macOS, else `wl-copy`
+//! The desktop's clipboard as Scramjet uses it. Copying: with `pbcopy` on macOS, else with a
+//! PowerShell kept running under WSL (`powershell.rs`) outside a remote session, then `wl-copy`
 //! under Wayland, then the X server itself (`x11.rs`), `xclip` or `xsel`; else, and also in a
-//! remote session, through the terminal with OSC 52. Pasting: with a PowerShell kept running
-//! under WSL (`powershell.rs`), `pbpaste` on macOS, else from the X server itself, then with
-//! `wl-paste`, `xclip` or `xsel`; never in a remote session, whose clipboard is the terminal's.
+//! remote session, through the terminal with OSC 52. Pasting: with the PowerShell under WSL,
+//! `pbpaste` on macOS, else from the X server itself, then with `wl-paste`, `xclip` or `xsel`;
+//! never in a remote session, whose clipboard is the terminal's.
 //! An image is pasted as Scramjet pastes it, as the path of a file it is saved to.
 
 use std::{
@@ -58,7 +59,8 @@ pub(super) fn copy(text: &str, terminal: bool) -> Result<Option<String>, String>
     }
 }
 
-/// Under WSL, starts what reads Windows' clipboard, for the first paste not to wait for it.
+/// Under WSL, starts what reads and writes Windows' clipboard, for the first paste or copy not to
+/// wait for it.
 pub(super) fn warm() {
     if wsl(set) && !remote() {
         powershell::warm();
@@ -263,7 +265,8 @@ fn directly(text: &str) -> bool {
     if cfg!(target_os = "macos") {
         return give("pbcopy", &[], text);
     }
-    (set("WAYLAND_DISPLAY") && give("wl-copy", &[], text))
+    (wsl(set) && !remote() && powershell::write(text).is_ok())
+        || (set("WAYLAND_DISPLAY") && give("wl-copy", &[], text))
         || x11(set) && x11::copy(text).is_ok()
         || set("DISPLAY")
             && (give("xclip", &["-selection", "clipboard"], text)
