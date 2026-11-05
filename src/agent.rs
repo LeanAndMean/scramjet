@@ -1281,8 +1281,9 @@ impl Agent {
     }
 
     /// Reads the providers again for what the current model takes, its limits and where its
-    /// requests go; returns its context window. A model no provider offers keeps what was known
-    /// of it.
+    /// requests go; returns its context window. A model no provider offers any longer keeps what
+    /// was known of it, and where its requests went while a file or program has problems: one
+    /// that failed may offer it again.
     pub fn load_model_info(&mut self) -> Option<u64> {
         self.config.providers.reload();
         self.take_model_info()
@@ -1316,6 +1317,9 @@ impl Agent {
         if let Some(model) = self.config.providers.find(&self.config.model) {
             self.provider = several.then(|| model.provider.clone());
             self.info = model.info.clone();
+        } else if self.config.providers.problems().is_empty() {
+            self.provider = None;
+            self.info.route = None;
         }
         self.info.window
     }

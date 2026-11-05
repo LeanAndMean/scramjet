@@ -470,14 +470,44 @@ fn what_the_model_takes_comes_from_its_provider_read_again_each_time() {
     write(json!({"providers": {"openai": openai(json!({"id": "m"}))}}));
     assert_eq!(agent.load_model_info(), None);
     assert_eq!(agent.provider(), None);
-    // A model no provider offers any longer keeps what was known of it and where it went, and
-    // the names stay known for the Model Identity.
+    // A model no provider offers any longer keeps what was known of it, and where it went while
+    // a program fails, and the names stay known for the Model Identity.
     write(json!({"providers": {"openai": openai(json!({"id": "m", "contextWindow": 5}))}}));
     assert_eq!(agent.load_model_info(), Some(5));
-    std::fs::remove_file(&file).unwrap();
+    write(json!({"providersCommand": ["./absent"]}));
     assert_eq!(agent.load_model_info(), Some(5));
     assert!(agent.info.route.is_some());
     assert!(agent.identities.contains_key("m"));
+    // Removed from files read without problems, its requests go nowhere.
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(agent.load_model_info(), Some(5));
+    assert_eq!(agent.info.route, None);
+    let error = agent.turn("Hi", &mut Recorder::default(), &AtomicBool::new(false));
+    assert!(
+        matches!(&error, Err(AgentError::Provider(message)) if message.starts_with("no provider offers the model m")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_model_that_does_not_reason_is_asked_nothing_of_reasoning() {
+    let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+        "plain",
+        fixture::known_usage(),
+    ))]);
+    let (mut agent, _scratch) = agent(endpoint, "no-reasoning");
+    agent.set_providers(Providers::given(json!({"providers": {"p": {
+        "baseUrl": format!("http://{endpoint}/v1"), "api": "openai-responses",
+        "models": [{"id": "plain"}],
+    }}})));
+    agent.config.effort = Some("high".into());
+    agent.set_model("plain").unwrap();
+    agent
+        .turn("Hi", &mut Recorder::default(), &AtomicBool::new(false))
+        .unwrap();
+    let body = &server.join().unwrap()[0];
+    assert_eq!((body.get("reasoning"), body.get("include")), (None, None));
+    assert_eq!(body["input"][0]["content"], "Hi");
 }
 
 pub(super) fn write_session(path: &Path, lines: &[Value], modified: std::time::SystemTime) {

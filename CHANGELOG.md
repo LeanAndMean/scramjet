@@ -4,6 +4,15 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.12.1 — Provider programs and models fixed
+
+### Fixed
+
+- A `providersCommand` program is held to its 2 seconds even when it leaves a process running on its output, and the processes it started end with it when it runs out of time. One that writes much to its error output is no longer cut off.
+- A model whose `thinkingLevelMap` sends two levels as one (as Scramjet's maps for GPT-5 do) no longer stops Shift+Tab at that level.
+- A Responses model without `reasoning: true` is no longer sent reasoning settings, as in Scramjet.
+- After `/reload` or a change of model, a model removed from files read without problems is no longer sent requests at its old address; one whose program failed still is.
+
 ## 0.12.0 — Providers from models.json
 
 ### Changed

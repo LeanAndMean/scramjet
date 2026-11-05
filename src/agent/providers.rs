@@ -11,8 +11,10 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::{
     io::Read,
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -431,13 +433,20 @@ impl Reading {
 /// map gives a text is sent as that text, one it gives `null` is not taken, and those it leaves
 /// out are taken but `xhigh` and `max`.
 fn levels(map: &Value) -> Vec<String> {
-    (LEVELS.iter())
-        .filter_map(|(level, sent, ordinary)| match map.get(level) {
-            Some(Value::String(text)) => Some(text.clone()),
-            Some(_) => None,
-            None => ordinary.then(|| (*sent).to_owned()),
-        })
-        .collect()
+    let mut levels: Vec<String> = Vec::new();
+    for (level, sent, ordinary) in LEVELS {
+        let sent = match map.get(level) {
+            Some(Value::String(text)) => text.as_str(),
+            Some(_) => continue,
+            None if ordinary => sent,
+            None => continue,
+        };
+        // Scramjet's own maps send two levels as one (`minimal` as `low`); Shift+Tab steps once.
+        if !levels.iter().any(|listed| listed == sent) {
+            levels.push(sent.to_owned());
+        }
+    }
+    levels
 }
 
 /// A configured value, as Scramjet resolves it: the environment variable of that name when one
@@ -519,49 +528,66 @@ fn run(words: &[&str], directory: &Path) -> Result<Vec<u8>, String> {
         None if program.contains('/') => directory.join(program),
         None => PathBuf::from(program),
     };
+    // In a group of its own, so that the processes it starts end with it.
     let mut child = Command::new(&path)
         .args(&words[1..])
         .current_dir(directory)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(|error| format!("cannot run {program}: {error}"))?;
+    let group = rustix::process::Pid::from_raw(child.id() as i32);
     let (mut stdout, mut stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
-    let output = std::thread::spawn(move || {
+    // What is past the limits is read and dropped: a closed pipe would end the program.
+    let (sender, output) = mpsc::channel();
+    std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        (&mut stdout)
+        let read = (&mut stdout)
             .take(COMMAND_OUTPUT_BYTES + 1)
             .read_to_end(&mut bytes)
-            .map(|_| bytes)
+            .and_then(|_| std::io::copy(&mut stdout, &mut std::io::sink()));
+        let _ = sender.send(read.map(|_| bytes));
     });
-    let errors = std::thread::spawn(move || {
+    let (sender, errors) = mpsc::channel();
+    std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = (&mut stderr).take(64 << 10).read_to_end(&mut bytes);
-        bytes
+        let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+        let _ = sender.send(bytes);
     });
     let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let timed_out = |child: &mut std::process::Child| {
+        if let Some(group) = group {
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        let seconds = COMMAND_TIMEOUT.as_secs();
+        format!("{program} gave no answer within {seconds}s")
+    };
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let seconds = COMMAND_TIMEOUT.as_secs();
-                return Err(format!("{program} gave no answer within {seconds}s"));
-            }
+            Ok(None) => return Err(timed_out(&mut child)),
             Err(error) => return Err(format!("{program}: {error}")),
         }
     };
-    let errors = errors.join().unwrap_or_default();
+    // A process it left running may hold the pipes open: the limit stands until they close.
+    let left = || deadline.saturating_duration_since(Instant::now());
+    let (Ok(errors), Ok(output)) = (errors.recv_timeout(left()), output.recv_timeout(left()))
+    else {
+        return Err(timed_out(&mut child));
+    };
     let said = String::from_utf8_lossy(&errors);
     let said = said.lines().map(str::trim).find(|line| !line.is_empty());
     let said = said.map(|line| format!(": {line}")).unwrap_or_default();
     if !status.success() {
         return Err(format!("{program} failed ({status}){said}"));
     }
-    let output = output.join().ok().and_then(Result::ok).unwrap_or_default();
+    let output = output.map_err(|error| format!("{program}: {error}"))?;
     if output.len() as u64 > COMMAND_OUTPUT_BYTES {
         return Err(format!(
             "{program}: its output is over {} MB",
@@ -610,6 +636,9 @@ mod tests {
         assert_eq!((info.window, info.output), (Some(1_050_000), Some(128_000)));
         assert!(info.reasoning && info.images);
         assert_eq!(info.levels, ["none", "low", "medium", "high", "xhigh"]);
+        // A level sent as another's is taken once, as in Scramjet's maps for GPT-5.
+        let shared = levels(&json!({"xhigh": "xhigh", "minimal": "low"}));
+        assert_eq!(shared, ["none", "low", "medium", "high", "xhigh"]);
         let local = route(&providers, "luna");
         assert_eq!((local.host.as_str(), local.port), ("127.0.0.1", 18080));
         assert_eq!(
@@ -722,7 +751,17 @@ mod tests {
         );
         script("fail", "echo 'cannot reach the server' >&2; exit 3");
         script("old", "echo '{\"version\": 2}'");
-        script("slow", "exec sleep 10");
+        script("slow", "sleep 10 & echo $! > slow.pid; wait");
+        script(
+            "background",
+            &format!("sleep 10 & echo $! > background.pid; echo '{listed}'"),
+        );
+        script(
+            "noisy",
+            &format!(
+                "i=0; while [ $i -lt 3000 ]; do echo \"progress line $i of many\" >&2; i=$((i+1)); done; echo '{listed}'"
+            ),
+        );
         let file = scratch.0.join("models.json");
         let write = |document: Value| std::fs::write(&file, document.to_string()).unwrap();
         write(json!({
@@ -754,14 +793,32 @@ mod tests {
             assert_eq!(providers.problems(), [format!("{shown}: {problem}")]);
             assert!(providers.models().is_empty());
         }
-        write(json!({"providersCommand": ["./slow"]}));
-        let started = Instant::now();
+        // More than the 64 KiB of errors kept.
+        write(json!({"providersCommand": ["./noisy"]}));
         providers.reload();
-        assert!(started.elapsed() < COMMAND_TIMEOUT + Duration::from_secs(1));
-        assert_eq!(
-            providers.problems(),
-            [format!("{shown}: ./slow gave no answer within 2s")]
-        );
+        assert_eq!(providers.problems(), [] as [String; 0]);
+        assert_eq!(providers.models().len(), 1);
+        // The limit holds for a program and what it leaves running on its output, which ends.
+        let gone = |name: &str| {
+            let pid = std::fs::read_to_string(scratch.0.join(name)).unwrap();
+            let process = PathBuf::from(format!("/proc/{}", pid.trim()));
+            let until = Instant::now() + Duration::from_secs(2);
+            while process.exists() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            !process.exists()
+        };
+        for program in ["slow", "background"] {
+            write(json!({"providersCommand": [format!("./{program}")]}));
+            let started = Instant::now();
+            providers.reload();
+            assert!(started.elapsed() < COMMAND_TIMEOUT + Duration::from_secs(1));
+            assert_eq!(
+                providers.problems(),
+                [format!("{shown}: ./{program} gave no answer within 2s")]
+            );
+            assert!(gone(&format!("{program}.pid")), "{program}");
+        }
         std::fs::write(&file, "{").unwrap();
         providers.reload();
         assert!(providers.problems()[0].starts_with(&format!("{shown}: EOF while parsing")));

@@ -155,6 +155,15 @@ pub(super) fn send(
     let without_images = (!info.images).then(|| without_images(request)).flatten();
     let request = without_images.as_ref().unwrap_or(request);
     let (body, betas) = match info.protocol {
+        // As Scramjet's, a model that does not reason is asked nothing of reasoning.
+        Protocol::Responses if !info.reasoning => {
+            let mut request = request.clone();
+            if let Some(object) = request.as_object_mut() {
+                object.remove("reasoning");
+                object.remove("include");
+            }
+            (serde_json::to_vec(&request), None)
+        }
         Protocol::Responses => (serde_json::to_vec(request), None),
         Protocol::Messages => {
             let body = messages::request(
