@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.22.1 — /logout of an API key removes only the key
+
+### Fixed
+
+- `/logout` of an API key whose provider is named with `../` in a `models.json` file no longer deletes the `.json` file that name leads to.
+
 ## 0.22.0 — API keys in /login
 
 ### Added

@@ -117,7 +117,10 @@ pub fn save_key(path: &Path, provider: &str, key: &str) -> Result<(), String> {
 /// Removes `provider`'s credentials, and what its login listed; returns whether there were any.
 pub fn logout(logins: &Logins, provider: &str) -> Result<bool, String> {
     let removed = update(&logins.auth, |saved| Ok(saved.remove(provider).is_some()))?;
-    let _ = std::fs::remove_file(logins.listed(provider));
+    // Only logins list models; a key's provider is named by a models.json file, not a file name.
+    if LOGINS.iter().any(|(login, _)| *login == provider) {
+        let _ = std::fs::remove_file(logins.listed(provider));
+    }
     Ok(removed)
 }
 
@@ -512,17 +515,19 @@ mod tests {
             key(&super::saved(&path).unwrap(), "openrouter"),
             Some("sk-or-v1-abc")
         );
-        assert!(
-            logout(
-                &Logins {
-                    auth: path.clone(),
-                    lists: scratch.0.clone()
-                },
-                "openrouter"
-            )
-            .unwrap()
-        );
+        let logins = Logins {
+            auth: path.clone(),
+            lists: scratch.0.join("logins"),
+        };
+        assert!(logout(&logins, "openrouter").unwrap());
         assert!(saved_keys(&path).unwrap().is_empty());
+        // A name from a models.json file is not a file's: removing its key removes nothing else.
+        std::fs::create_dir_all(&logins.lists).unwrap();
+        let outside = scratch.0.join("models.json");
+        std::fs::write(&outside, "{}").unwrap();
+        save_key(&path, "../models", "sk").unwrap();
+        assert!(logout(&logins, "../models").unwrap());
+        assert!(outside.exists());
     }
 
     #[test]
