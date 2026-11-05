@@ -270,14 +270,13 @@ impl Tools<'_> {
                     .mcp
                     .ok_or_else(|| "no MCP server is configured".to_owned());
                 let output = match call.name {
-                    mcp::SEARCH => {
-                        (servers.and_then(|mcp| mcp.search(&call.arguments))).map(|text| Output {
+                    mcp::SEARCH => (servers.and_then(|mcp| mcp.search(&call.arguments, cancel)))
+                        .map(|text| Output {
                             text,
                             detail: None,
                             failed: false,
                             image: None,
-                        })
-                    }
+                        }),
                     _ => servers.and_then(|mcp| mcp.call(&call.arguments, cancel)),
                 };
                 (output.unwrap_or_else(failure), Usage::default())

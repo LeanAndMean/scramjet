@@ -4,6 +4,14 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.26.1 — MCP servers that keep running
+
+### Fixed
+
+- An MCP server that wrote a byte that is not UTF-8 to its standard error lost the pipe and usually ended at its next line there; what it writes is now read whatever its bytes.
+- `/reload` starts again a server that ended, and only the servers whose entries changed, where it kept or restarted all of them. A server started and stopped at once, as by a quick `/reload`, is no longer left running.
+- Escape stops a search waiting for a server to list its tools, which could take 10 seconds per server; a search's result is cut as other tools' are (2000 lines, 50 KB). `/mcp` shows control characters in what a server wrote as escapes.
+
 ## 0.26.0 — MCP servers' tools
 
 ### Added

@@ -1,6 +1,6 @@
 use super::*;
-use crate::agent::instructions;
 use crate::agent::tests::{Recorder, ScratchDir, agent, outputs, serve, stream, tool_call};
+use crate::agent::{Agent, instructions};
 use crate::provider_fixture as fixture;
 use std::sync::atomic::AtomicBool;
 
@@ -55,7 +55,9 @@ scramjet-rs's tests (7 tools)"
         &["echo", "add", "forecast", "fail", "slow", "picture", "grow"]
     );
 
-    let found = servers.search(&json!({"query": "weather"})).unwrap();
+    let found = servers
+        .search(&json!({"query": "weather"}), &AtomicBool::new(false))
+        .unwrap();
     assert_eq!(
         found,
         "1 tool matches \"weather\":\n\nServer: test\nTool: forecast\nTell the weather forecast \
@@ -63,20 +65,29 @@ for a city.\nArguments (JSON Schema): {\"properties\":{\"city\":{\"type\":\"stri
 \"object\"}"
     );
     let found = servers
-        .search(&json!({"query": "add numbers", "limit": 1}))
+        .search(
+            &json!({"query": "add numbers", "limit": 1}),
+            &AtomicBool::new(false),
+        )
         .unwrap();
     // `grow`'s description has "Adds".
     assert!(found.starts_with("2 tools match \"add numbers\"; the best 1:\n\nServer: test\nTool: add (Add numbers)\nAdd two numbers.\nArguments"), "{found}");
-    let found = servers.search(&json!({"query": "test/echo"})).unwrap();
+    let found = servers
+        .search(&json!({"query": "test/echo"}), &AtomicBool::new(false))
+        .unwrap();
     assert!(found.contains("\nTool: echo\n"), "{found}");
-    let listed = servers.search(&json!({"query": ""})).unwrap();
+    let listed = servers
+        .search(&json!({"query": ""}), &AtomicBool::new(false))
+        .unwrap();
     assert!(
         listed.starts_with(
             "Server test:\n- echo: Repeat the text it is given.\n- add: Add two numbers.\n"
         ),
         "{listed}"
     );
-    let none = servers.search(&json!({"query": "zebra"})).unwrap();
+    let none = servers
+        .search(&json!({"query": "zebra"}), &AtomicBool::new(false))
+        .unwrap();
     assert!(
         none.starts_with(
             "No tool matches \"zebra\". The tools (server/tool): test/echo, test/add,"
@@ -84,7 +95,10 @@ for a city.\nArguments (JSON Schema): {\"properties\":{\"city\":{\"type\":\"stri
         "{none}"
     );
     let unknown = servers
-        .search(&json!({"query": "x", "server": "other"}))
+        .search(
+            &json!({"query": "x", "server": "other"}),
+            &AtomicBool::new(false),
+        )
         .unwrap_err();
     assert_eq!(unknown, "no MCP server is named other; the servers: test");
 
@@ -113,12 +127,14 @@ fn a_tool_a_server_adds_is_found_once_it_says_its_tools_changed() {
     let servers = started(&[test_server("test", &[])], &scratch.0);
     assert!(
         servers
-            .search(&json!({"query": "extra"}))
+            .search(&json!({"query": "extra"}), &AtomicBool::new(false))
             .unwrap()
             .starts_with("1 tool matches \"extra\":\n\nServer: test\nTool: grow\n")
     );
     assert_eq!(call(&servers, "grow", json!({})).unwrap().text, "grown");
-    let found = servers.search(&json!({"query": "extra"})).unwrap();
+    let found = servers
+        .search(&json!({"query": "extra"}), &AtomicBool::new(false))
+        .unwrap();
     assert!(
         found.starts_with("2 tools match \"extra\":\n\nServer: test\nTool: extra\nAdded later."),
         "{found}"
@@ -224,7 +240,9 @@ fn servers_that_cannot_start_say_why_once_and_the_others_run() {
     assert!(servers.unreported_failures().is_empty());
     let section = servers.section();
     assert!(section.ends_with("\n- exits: not available\n- missing: not available\n- test: Tools for scramjet-rs's tests (7 tools)"), "{section}");
-    let found = servers.search(&json!({"query": "echo"})).unwrap();
+    let found = servers
+        .search(&json!({"query": "echo"}), &AtomicBool::new(false))
+        .unwrap();
     assert!(found.starts_with("1 tool matches \"echo\":"), "{found}");
     assert!(found.ends_with("\n\nNot available:\n- exits: exits is not available: it ended before it answered\n- missing: missing is not available: could not run /nonexistent/mcp-server: No such file or directory (os error 2)"), "{found}");
     let arguments = json!({"server": "missing", "tool": "echo"});
@@ -385,4 +403,167 @@ fn without_servers_the_model_has_no_mcp_tools_and_none_start() {
     agent.start_mcp();
     assert!(agent.mcp.is_none());
     assert!(agent.mcp_servers().is_empty());
+}
+
+/// The process ids `log` holds, in the order the servers started.
+fn pids(log: &Path) -> Vec<u32> {
+    (std::fs::read_to_string(log).unwrap_or_default().lines())
+        .filter_map(|line| line.strip_prefix("pid ")?.parse().ok())
+        .collect()
+}
+
+fn alive(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .is_ok_and(|stat| !(stat.rsplit(')').next().unwrap_or("").trim_start()).starts_with('Z'))
+}
+
+fn until(done: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !done() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn a_server_writing_bytes_that_are_not_utf8_keeps_its_standard_error() {
+    let scratch = scratch("latin1");
+    let servers = started(
+        &[test_server(
+            "test",
+            &[("MCP_TEST_MODE", "latin1".to_owned())],
+        )],
+        &scratch.0,
+    );
+    for text in ["one", "two"] {
+        let echoed = call(&servers, "echo", json!({"text": text})).unwrap();
+        assert_eq!(echoed.text, format!("echo: {text}"));
+    }
+    assert!(matches!(servers.states()[0].1, State::Ready { .. }));
+    let kept = servers.servers[0].failure("why");
+    assert!(kept.contains("\ncaf\u{fffd}\n"), "{kept}");
+    assert!(kept.ends_with("\ngot tools/call"), "{kept}");
+}
+
+#[test]
+fn reload_starts_again_the_servers_that_ended_or_changed_and_keeps_the_others() {
+    let (endpoint, _server) = serve(Vec::new());
+    let (mut agent, scratch) = agent(endpoint, "mcp-reload");
+    let (log_a, log_b) = (scratch.0.join("a.log"), scratch.0.join("b.log"));
+    let a = test_server("a", &[("MCP_TEST_LOG", log_a.display().to_string())]);
+    let b = test_server("b", &[("MCP_TEST_LOG", log_b.display().to_string())]);
+    agent.config.mcp_servers = vec![a.clone(), b.clone()];
+    agent.start_mcp();
+    let settle = |agent: &Agent| agent.mcp.as_ref().unwrap().settle(&AtomicBool::new(false));
+    settle(&agent);
+    let (first_a, first_b) = (pids(&log_a), pids(&log_b));
+    assert_eq!((first_a.len(), first_b.len()), (1, 1));
+    // `a` ends.
+    std::process::Command::new("kill")
+        .args(["-9", &first_a[0].to_string()])
+        .status()
+        .unwrap();
+    until(|| matches!(agent.mcp_servers()[0].1, State::Failed(_)));
+    assert!(matches!(agent.mcp_servers()[0].1, State::Failed(_)));
+    let reload = |agent: &mut Agent, servers: Vec<Server>| {
+        let config = &agent.config;
+        let (tools, sets, skills) = (
+            config.tools.clone(),
+            config.command_sets.clone(),
+            config.skills.clone(),
+        );
+        agent.reload(tools, sets, skills, servers);
+    };
+    reload(&mut agent, vec![a.clone(), b.clone()]);
+    settle(&agent);
+    assert!(matches!(agent.mcp_servers()[0].1, State::Ready { .. }));
+    assert_eq!(pids(&log_a).len(), 2);
+    assert_eq!(pids(&log_b), first_b);
+    // Only `b` changed.
+    let mut changed = b.clone();
+    changed.env.push(("EXTRA".to_owned(), "1".to_owned()));
+    reload(&mut agent, vec![a.clone(), changed]);
+    settle(&agent);
+    assert_eq!(pids(&log_a).len(), 2);
+    let second_b = pids(&log_b);
+    assert_eq!(second_b.len(), 2);
+    until(|| !alive(first_b[0]));
+    assert!(!alive(first_b[0]));
+    assert!(alive(second_b[1]));
+    // `b` removed.
+    reload(&mut agent, vec![a]);
+    until(|| !alive(second_b[1]));
+    assert!(!alive(second_b[1]));
+    let section = agent.mcp.as_ref().unwrap().section();
+    assert!(
+        section.ends_with("mcp_call.\n- a: Tools for scramjet-rs's tests (7 tools)"),
+        "{section}"
+    );
+}
+
+#[test]
+fn a_search_returning_more_than_a_tool_output_holds_is_cut() {
+    let scratch = scratch("many");
+    let servers = started(
+        &[test_server(
+            "test",
+            &[("MCP_TEST_TOOLS", "1000".to_owned())],
+        )],
+        &scratch.0,
+    );
+    let listed = servers
+        .search(&json!({"query": ""}), &AtomicBool::new(false))
+        .unwrap();
+    assert!(listed.len() <= MAX_BYTES + 100, "{}", listed.len());
+    assert!(listed.contains("\n[Output cut: showing "), "{listed}");
+}
+
+#[test]
+fn escape_stops_a_search_waiting_for_a_server_to_list_its_tools() {
+    let scratch = scratch("stuck");
+    let servers = started(
+        &[test_server(
+            "test",
+            &[("MCP_TEST_MODE", "stuck".to_owned())],
+        )],
+        &scratch.0,
+    );
+    let began = std::time::Instant::now();
+    let cancel = AtomicBool::new(true);
+    let found = servers.search(&json!({"query": "weather"}), &cancel);
+    assert!(
+        began.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        began.elapsed()
+    );
+    assert!(found.unwrap().contains("\nTool: forecast\n"));
+}
+
+#[test]
+fn servers_ended_as_they_start_leave_no_process() {
+    let scratch = scratch("ended-early");
+    let log = scratch.0.join("log");
+    // A server that never reads its input, so that only killing it ends it.
+    let server = Server {
+        name: "sleeper".to_owned(),
+        command: "sh".to_owned(),
+        args: vec![
+            "-c".to_owned(),
+            format!("echo pid $$ >> '{}'; exec sleep 30", log.display()),
+        ],
+        env: Vec::new(),
+    };
+    for round in 0..40 {
+        let servers = Servers::start(std::slice::from_ref(&server), &scratch.0);
+        std::thread::sleep(Duration::from_micros(round * 50));
+        drop(servers);
+    }
+    let started = pids(&log);
+    until(|| started.iter().all(|pid| !alive(*pid)));
+    let left: Vec<&u32> = started.iter().filter(|pid| alive(**pid)).collect();
+    for pid in &left {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+    }
+    assert!(left.is_empty(), "{} of {} left", left.len(), started.len());
 }

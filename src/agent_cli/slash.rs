@@ -5,7 +5,7 @@
 //! in `login.rs`.
 use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal::{self, Terminal};
-use super::text::clip;
+use super::text::{clip, visible};
 use super::{clipboard, completion, export, keymap, style};
 use scramjet_rs::agent::{Agent, AgentError, McpState, Providers};
 use std::{
@@ -301,7 +301,8 @@ impl Interactive {
             };
         }
         let ui = &self.ui;
-        let row = |label: &str, value: &str| format!("  {} {value}\n", ui.dim(label));
+        // What a server wrote or says of itself is shown as text, its control characters escaped.
+        let row = |label: &str, value: &str| format!("  {} {}\n", ui.dim(label), visible(value));
         let mut info = format!("{}\n", ui.styled(style::INFO_HEADING, "MCP Servers"));
         for (server, state) in servers {
             info += "\n";
@@ -311,7 +312,8 @@ impl Interactive {
                 McpState::Ready { tools, .. } => format!("{} tools", tools.len()),
                 McpState::Failed(_) => "not available".to_owned(),
             };
-            info += &format!("{} {}\n", server.name, ui.dim(&format!("· {said}")));
+            let name = visible(&server.name);
+            info += &format!("{name} {}\n", ui.dim(&format!("· {said}")));
             info += &row("Command:", &server.command_line());
             match &state {
                 McpState::Ready { tools, about } => {

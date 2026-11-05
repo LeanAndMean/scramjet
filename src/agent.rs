@@ -675,7 +675,7 @@ impl Agent {
 
     /// `/reload`: finds the command sets, their commands and agents, the skills and the context
     /// files again, as at start, with the settings' `tools`, `command_sets` and `skills`, as
-    /// Scramjet's reload does, and starts the MCP servers whose entries changed. The
+    /// Scramjet's reload does, and starts the MCP servers whose entries changed or that ended. The
     /// conversation and the command running stay; what is wrong in `autonomy.yaml` is said again
     /// at the next routing.
     pub fn reload(
@@ -695,20 +695,18 @@ impl Agent {
     }
 
     /// Starts the MCP servers when the model is offered their tools; servers already running as
-    /// configured keep running, the others stop.
+    /// configured keep running, the others, also those that ended, start again.
     fn start_mcp(&mut self) {
         let offered = self.offered();
-        let wanted = &self.config.mcp_servers;
+        let (wanted, root) = (&self.config.mcp_servers, &self.config.root);
         if wanted.is_empty() || !mcp::TOOLS.iter().any(|tool| offered.contains(tool)) {
             self.mcp = None;
             return;
         }
-        let running = self.mcp.as_ref().map(mcp::Servers::configs);
-        if running.is_some_and(|running| running.into_iter().eq(wanted.iter())) {
-            return;
+        match &mut self.mcp {
+            Some(running) => running.update(wanted, root),
+            None => self.mcp = Some(mcp::Servers::start(wanted, root)),
         }
-        self.mcp = None;
-        self.mcp = Some(mcp::Servers::start(wanted, &self.config.root));
     }
 
     /// The MCP servers and how each is, in the settings' order.

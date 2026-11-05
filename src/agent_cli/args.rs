@@ -152,7 +152,7 @@ gives actions others; /hotkeys lists those in use and changes them, and /keybind
 file in your editor. /settings lists the settings, each with what it does, and
 changes them; it also shows each command's next steps, publication approval, and what the
 session loaded from where, with any problems. /reload reads the settings, command sets, agents,
-skills and context files again, and starts the MCP servers whose entries changed.
+skills and context files again, and starts the MCP servers whose entries changed or that ended.
 /skill:NAME ARGS sends a skill's instructions with ARGS.
 /autopilot on|off|status: when on, a finished command's recommended next step runs after 3s.
 /mcp shows the settings' MCP servers (mcpServers), each with its tools or why it is not

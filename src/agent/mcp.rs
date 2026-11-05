@@ -23,7 +23,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
 
 pub const SEARCH: &str = "mcp_search";
 pub const CALL: &str = "mcp_call";
@@ -41,6 +41,8 @@ const LIST: Duration = Duration::from_secs(10);
 /// The last lines of a server's standard error kept to say why it failed.
 const STDERR_LINES: usize = 20;
 const STDERR_LINE_CHARS: usize = 300;
+/// What is read of a line of standard error before the rest of it is dropped.
+const STDERR_LINE_BYTES: usize = 4 * STDERR_LINE_CHARS;
 const DEFAULT_MATCHES: usize = 5;
 const MAX_MATCHES: usize = 20;
 /// The tools' names a search that matches none lists, at most.
@@ -91,6 +93,8 @@ pub enum State {
 pub(super) struct Servers {
     runtime: Option<tokio::runtime::Runtime>,
     servers: Vec<Arc<Running>>,
+    /// How long each has to start.
+    within: Duration,
     /// The instructions' list of the servers, made once none is starting.
     section: Mutex<Option<String>>,
 }
@@ -102,6 +106,8 @@ struct Running {
     stderr: Mutex<VecDeque<String>>,
     /// The process group it runs in, until its process ended.
     group: Mutex<Option<Group>>,
+    /// Whether it was killed, so that a process it starts after is killed too.
+    killed: AtomicBool,
     /// What waits for its process to end.
     watcher: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Whether the user was told it failed.
@@ -140,55 +146,96 @@ impl Servers {
             .thread_name("mcp")
             .enable_all()
             .build();
-        let servers: Vec<Arc<Running>> = (configs.iter())
+        let mut servers = Self {
+            runtime: None,
+            servers: Vec::new(),
+            within,
+            section: Mutex::new(None),
+        };
+        match runtime {
+            Ok(runtime) => servers.runtime = Some(runtime),
+            Err(error) => {
+                for config in configs {
+                    let server = Running::new(config);
+                    server.set(Status::Failed(format!("could not start: {error}")));
+                    servers.servers.push(server);
+                }
+                return servers;
+            }
+        }
+        servers.servers = (configs.iter())
+            .map(|config| servers.launch(config, root))
+            .collect();
+        servers
+    }
+
+    /// `/reload`: keeps the servers running as `configs` lists them, starts the others, also those
+    /// that ended, and kills those it no longer lists.
+    pub fn update(&mut self, configs: &[Server], root: &Path) {
+        if self.runtime.is_none() {
+            *self = Self::start_within(configs, root, self.within);
+            return;
+        }
+        let mut old = std::mem::take(&mut self.servers);
+        let mut same = old.len() == configs.len();
+        let kept: Vec<Option<Arc<Running>>> = (configs.iter())
             .map(|config| {
-                Arc::new(Running {
-                    config: config.clone(),
-                    state: Mutex::new(Status::Starting),
-                    changed: Condvar::new(),
-                    stderr: Mutex::new(VecDeque::new()),
-                    group: Mutex::new(None),
-                    watcher: Mutex::new(None),
-                    reported: AtomicBool::new(false),
-                })
+                let index = (old.iter()).position(|server| {
+                    server.config == *config && !matches!(*lock(&server.state), Status::Failed(_))
+                });
+                same &= index == Some(0);
+                Some(old.remove(index?))
             })
             .collect();
-        let runtime = match runtime {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                for server in &servers {
-                    server.set(Status::Failed(format!("could not start: {error}")));
-                }
-                return Self {
-                    runtime: None,
-                    servers,
-                    section: Mutex::new(None),
-                };
-            }
-        };
-        for server in &servers {
-            let (server, root) = (server.clone(), root.to_owned());
-            runtime.spawn(async move {
-                let status = match tokio::time::timeout(within, start(&server, root)).await {
-                    Ok(Ok(ready)) => Status::Ready(Arc::new(ready)),
-                    Ok(Err(error)) => Status::Failed(error),
-                    Err(_) => {
-                        server.kill();
-                        Status::Failed(format!("it did not start within {} s", within.as_secs()))
-                    }
-                };
-                server.set(status);
-            });
-        }
-        Self {
-            runtime: Some(runtime),
-            servers,
-            section: Mutex::new(None),
+        // Before the new ones start, which may need what an old one holds (a port, a lock).
+        self.end(&old);
+        let servers = (configs.iter().zip(kept))
+            .map(|(config, kept)| kept.unwrap_or_else(|| self.launch(config, root)))
+            .collect();
+        self.servers = servers;
+        if !same {
+            *lock(&self.section) = None;
         }
     }
 
-    pub fn configs(&self) -> Vec<&Server> {
-        self.servers.iter().map(|server| &server.config).collect()
+    /// Starts `config`'s server in the background.
+    fn launch(&self, config: &Server, root: &Path) -> Arc<Running> {
+        let server = Running::new(config);
+        let runtime = self.runtime.as_ref().expect("launched on a runtime");
+        let (started, root, within) = (server.clone(), root.to_owned(), self.within);
+        runtime.spawn(async move {
+            let status = match tokio::time::timeout(within, start(&started, root)).await {
+                Ok(Ok(ready)) => Status::Ready(Arc::new(ready)),
+                Ok(Err(error)) => Status::Failed(error),
+                Err(_) => {
+                    started.kill();
+                    Status::Failed(format!("it did not start within {} s", within.as_secs()))
+                }
+            };
+            started.set(status);
+        });
+        server
+    }
+
+    /// Kills `servers`, and waits a moment for their processes so that none is left unreaped.
+    fn end(&self, servers: &[Arc<Running>]) {
+        for server in servers {
+            server.kill();
+        }
+        let Some(runtime) = &self.runtime else {
+            return;
+        };
+        let watchers: Vec<_> = (servers.iter())
+            .filter_map(|server| lock(&server.watcher).take())
+            .collect();
+        runtime.block_on(async {
+            let ended = async {
+                for watcher in watchers {
+                    let _ = watcher.await;
+                }
+            };
+            let _ = tokio::time::timeout(Duration::from_secs(1), ended).await;
+        });
     }
 
     /// The names of the servers still starting.
@@ -277,8 +324,9 @@ with {SEARCH}, which shows how to call each, then run one with {CALL}.\n{}",
     }
 
     /// `mcp_search`: the tools whose names and descriptions best match the query's words, each
-    /// with its input schema; with an empty query, every tool's name.
-    pub fn search(&self, arguments: &Value) -> Result<String, String> {
+    /// with its input schema; with an empty query, every tool's name. Servers that do not list
+    /// their tools again before `cancel` is set are searched as last listed.
+    pub fn search(&self, arguments: &Value, cancel: &AtomicBool) -> Result<String, String> {
         let query = arguments["query"].as_str().unwrap_or("").trim();
         let only = arguments["server"].as_str().filter(|name| !name.is_empty());
         if let Some(name) = only {
@@ -293,7 +341,7 @@ with {SEARCH}, which shows how to call each, then run one with {CALL}.\n{}",
         let mut tools = Vec::new();
         let mut unavailable = Vec::new();
         for server in &searched {
-            match self.listed(server) {
+            match self.listed(server, cancel) {
                 Ok(listed) => tools.extend(listed.into_iter().map(|tool| (*server, tool))),
                 Err(why) => unavailable.push(format!("{}: {why}", server.config.name)),
             }
@@ -305,7 +353,7 @@ with {SEARCH}, which shows how to call each, then run one with {CALL}.\n{}",
         if !unavailable.is_empty() {
             text += &format!("\n\nNot available:\n- {}", unavailable.join("\n- "));
         }
-        Ok(text)
+        Ok(head(&text))
     }
 
     /// `mcp_call`: runs the tool on its server until it answers or `cancel` is set, which cancels
@@ -331,7 +379,7 @@ with {SEARCH}, which shows how to call each, then run one with {CALL}.\n{}",
         let ready = server.ready()?;
         let known = |tools: &[Value]| tools.iter().any(|listed| listed["name"] == tool);
         if !known(&lock(&ready.tools)) {
-            let listed = self.listed(server)?;
+            let listed = self.listed(server, cancel)?;
             if !known(&listed) {
                 let names: Vec<&str> = (listed.iter())
                     .filter_map(|tool| tool["name"].as_str())
@@ -347,21 +395,7 @@ with {SEARCH}, which shows how to call each, then run one with {CALL}.\n{}",
             .as_ref()
             .ok_or("the MCP servers are not running")?;
         let params = CallToolRequestParams::new(tool.to_owned()).with_arguments(given);
-        let result = runtime.block_on(async {
-            let call = ready.service.call_tool(params);
-            tokio::pin!(call);
-            loop {
-                tokio::select! {
-                    result = &mut call => return Some(result),
-                    _ = tokio::time::sleep(Duration::from_millis(50)) => {
-                        if cancel.load(Ordering::Relaxed) {
-                            return None;
-                        }
-                    }
-                }
-            }
-        });
-        match result {
+        match until_cancelled(runtime, ready.service.call_tool(params), cancel) {
             None => Err(format!("cancelled; {name}'s {tool} may have run in part")),
             Some(Err(error)) => Err(format!("{name}: {error}")),
             Some(Ok(result)) => Ok(output(serde_json::to_value(result).unwrap_or_default())),
@@ -383,17 +417,21 @@ with {SEARCH}, which shows how to call each, then run one with {CALL}.\n{}",
     }
 
     /// The server's tools, listed again (the client keeps a list until the server says it
-    /// changed), or as last listed when it does not answer in time.
-    fn listed(&self, server: &Running) -> Result<Vec<Value>, String> {
+    /// changed), or as last listed when it does not answer in time or `cancel` is set.
+    fn listed(&self, server: &Running, cancel: &AtomicBool) -> Result<Vec<Value>, String> {
         let ready = server.ready()?;
         let runtime = self
             .runtime
             .as_ref()
             .ok_or("the MCP servers are not running")?;
         let list = ready.service.list_all_tools();
-        let listed = runtime.block_on(async { tokio::time::timeout(LIST, list).await });
+        let listed = until_cancelled(
+            runtime,
+            async { tokio::time::timeout(LIST, list).await },
+            cancel,
+        );
         let mut tools = lock(&ready.tools);
-        if let Ok(Ok(listed)) = listed {
+        if let Some(Ok(Ok(listed))) = listed {
             *tools = (listed.iter())
                 .map(|tool| serde_json::to_value(tool).unwrap_or_default())
                 .collect();
@@ -403,30 +441,49 @@ with {SEARCH}, which shows how to call each, then run one with {CALL}.\n{}",
 }
 
 impl Drop for Servers {
-    /// Kills the servers, and waits a moment for their processes so that none is left unreaped.
     fn drop(&mut self) {
-        for server in &self.servers {
-            server.kill();
+        self.end(&self.servers);
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
         }
-        let Some(runtime) = self.runtime.take() else {
-            return;
-        };
-        let watchers: Vec<_> = (self.servers.iter())
-            .filter_map(|server| lock(&server.watcher).take())
-            .collect();
-        runtime.block_on(async {
-            let ended = async {
-                for watcher in watchers {
-                    let _ = watcher.await;
-                }
-            };
-            let _ = tokio::time::timeout(Duration::from_secs(1), ended).await;
-        });
-        runtime.shutdown_background();
     }
 }
 
+/// `future`'s output, or `None` once `cancel` is set, which drops it.
+fn until_cancelled<F: Future>(
+    runtime: &tokio::runtime::Runtime,
+    future: F,
+    cancel: &AtomicBool,
+) -> Option<F::Output> {
+    runtime.block_on(async {
+        tokio::pin!(future);
+        loop {
+            tokio::select! {
+                output = &mut future => return Some(output),
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                    if cancel.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                }
+            }
+        }
+    })
+}
+
 impl Running {
+    fn new(config: &Server) -> Arc<Self> {
+        Arc::new(Self {
+            config: config.clone(),
+            state: Mutex::new(Status::Starting),
+            changed: Condvar::new(),
+            stderr: Mutex::new(VecDeque::new()),
+            group: Mutex::new(None),
+            killed: AtomicBool::new(false),
+            watcher: Mutex::new(None),
+            reported: AtomicBool::new(false),
+        })
+    }
+
     fn set(&self, status: Status) {
         *lock(&self.state) = status;
         self.changed.notify_all();
@@ -441,9 +498,22 @@ impl Running {
     }
 
     fn kill(&self) {
-        if let Some(group) = lock(&self.group).take() {
+        let mut group = lock(&self.group);
+        self.killed.store(true, Ordering::Relaxed);
+        if let Some(group) = group.take() {
             group.kill();
         }
+    }
+
+    /// Keeps a line of its standard error, cut short.
+    fn keep(&self, line: &[u8]) {
+        let line = String::from_utf8_lossy(line);
+        let mut kept = lock(&self.stderr);
+        if kept.len() == STDERR_LINES {
+            kept.pop_front();
+        }
+        let line = line.trim_end_matches('\r').chars().take(STDERR_LINE_CHARS);
+        kept.push_back(line.collect());
     }
 
     /// `why`, with the end of what the server wrote to its standard error.
@@ -478,7 +548,14 @@ async fn start(server: &Arc<Running>, root: PathBuf) -> Result<Ready, String> {
         Ok((child, id))
     })
     .map_err(|error| format!("could not run {}: {error}", config.command))?;
-    *lock(&server.group) = Some(group);
+    {
+        let mut held = lock(&server.group);
+        if server.killed.load(Ordering::Relaxed) {
+            group.kill();
+            return Err("it was stopped as it started".to_owned());
+        }
+        *held = Some(group);
+    }
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
@@ -486,14 +563,20 @@ async fn start(server: &Arc<Running>, root: PathBuf) -> Result<Ready, String> {
         return Err("its standard input and output could not be read".to_owned());
     };
     let reader = server.clone();
+    // Read to its end, whatever its bytes: a server whose standard error is closed fails writing.
     tokio::spawn(async move {
-        let mut lines = tokio::io::BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let mut kept = lock(&reader.stderr);
-            if kept.len() == STDERR_LINES {
-                kept.pop_front();
+        let (mut stderr, mut chunk, mut line) = (stderr, [0; 4096], Vec::new());
+        while let Ok(read @ 1..) = stderr.read(&mut chunk).await {
+            for &byte in &chunk[..read] {
+                match byte {
+                    b'\n' => reader.keep(&std::mem::take(&mut line)),
+                    _ if line.len() < STDERR_LINE_BYTES => line.push(byte),
+                    _ => {}
+                }
             }
-            kept.push_back(line.chars().take(STDERR_LINE_CHARS).collect());
+        }
+        if !line.is_empty() {
+            reader.keep(&line);
         }
     });
     let ended = Arc::new(AtomicBool::new(false));

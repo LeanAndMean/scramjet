@@ -3,8 +3,10 @@
 
 It speaks the `initialize` handshake (2025-11-25 and before) and answers `server/discover` as an
 unknown method, as servers written before 2026-07-28 do. `MCP_TEST_LOG` names a file its process
-id and each message's method are appended to; `MCP_TEST_MODE` is `exit` (it fails at once) or `silent` (it
-never answers)."""
+id and each message's method are appended to; `MCP_TEST_MODE` is `exit` (it fails at once),
+`silent` (it never answers), `latin1` (its standard error has a byte that is not UTF-8, and each
+message is logged there) or `stuck` (it lists its tools once, then never again); `MCP_TEST_TOOLS`
+adds that many tools with long descriptions."""
 import json
 import os
 import sys
@@ -98,6 +100,17 @@ def main():
     log("pid %d" % os.getpid())
     sys.stderr.write("test server starting\n")
     sys.stderr.flush()
+    global PAGE
+    extra = int(os.environ.get("MCP_TEST_TOOLS") or 0)
+    if extra:
+        PAGE = extra + len(TOOLS)
+    for n in range(extra):
+        TOOLS.append({"name": "tool%d" % n, "description": "A tool that does thing %d. " % n * 4,
+                      "inputSchema": {"type": "object"}})
+    if mode == "latin1":
+        sys.stderr.buffer.write(b"caf\xe9\n")
+        sys.stderr.flush()
+    listed = False
     if mode == "exit":
         sys.stderr.write("no configuration found\n")
         sys.exit(3)
@@ -109,6 +122,9 @@ def main():
         log(method)
         if mode == "silent":
             continue
+        if mode == "latin1":
+            sys.stderr.write("got " + method + "\n")
+            sys.stderr.flush()
         id = message.get("id")
         params = message.get("params") or {}
         if method == "initialize":
@@ -118,10 +134,14 @@ def main():
                                        "description": "Tools for scramjet-rs's tests"},
                         "instructions": "Use echo to repeat text."})
         elif method == "tools/list":
+            if mode == "stuck" and listed:
+                continue
             start = int(params.get("cursor") or 0)
             page = {"tools": TOOLS[start:start + PAGE]}
             if start + PAGE < len(TOOLS):
                 page["nextCursor"] = str(start + PAGE)
+            else:
+                listed = True
             answer(id, page)
         elif method == "tools/call":
             call(id, params.get("name"), params.get("arguments") or {})
