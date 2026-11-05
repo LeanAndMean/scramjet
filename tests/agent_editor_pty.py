@@ -3971,12 +3971,16 @@ for variables, said in [({'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAY
     else:
         assert not os.path.exists(clipboard)
 pastes = os.path.join(work, 'pastes')
-# Checks it is asked for the clipboard's text as Scramjet asks; the second time it takes a second.
+# Stands in for the PowerShell kept for pastes: checks it reads the clipboard's text through Windows
+# Forms, answers each `text` line with the text's length and bytes, and counts its starts and reads;
+# the second read takes a second.
 with open(os.path.join(clipboard_bin, 'powershell.exe'), 'w') as script_file:
-    script_file.write('#!/bin/sh\n[ "$3" = -STA ] && [ "$4" = -Command ] || exit 1\n'
-                      'case "$5" in *"[System.Windows.Forms.Clipboard]::GetText()"*) ;; *) exit 1;; esac\n'
+    script_file.write('#!/bin/sh\n[ "$4" = -STA ] && [ "$5" = -Command ] || exit 1\n'
+                      'case "$6" in *"[System.Windows.Forms.Clipboard]::GetText()"*) ;; *) exit 1;; esac\n'
+                      'echo started >> "$PASTES.starts"\nprintf \'0\\n\'\n'
+                      'while read -r request; do [ "$request" = text ] || exit 1\n'
                       'count=$(cat "$PASTES" 2>/dev/null || echo 0)\necho $((count + 1)) > "$PASTES"\n'
-                      '[ "$count" -ge 1 ] && sleep 1\nprintf \'pasted\\r\\nsecond \\342\\200\\224\'\n')
+                      '[ "$count" -ge 1 ] && sleep 1\nprintf \'18\\npasted\\r\\nsecond \\342\\200\\224\'\ndone\n')
 os.chmod(os.path.join(clipboard_bin, 'powershell.exe'), 0o755)
 known = set(session_files())
 run([], fullscreen_paste_and_clicks, serve_items([[message(rows_reply)]]), variables={
@@ -3986,19 +3990,23 @@ run([], fullscreen_paste_and_clicks, serve_items([[message(rows_reply)]]), varia
 prompts = [line['content'] for line in map(json.loads, open(pasted)) if line.get('role') == 'user']
 assert prompts == ['x pasted\nsecond \u2014'], prompts
 assert open(pastes).read() == '2\n', open(pastes).read()
+assert open(pastes + '.starts').read() == 'started\n', open(pastes + '.starts').read()
 image_bin = os.path.join(work, 'image-bin')
 os.mkdir(image_bin)
 images = os.path.join(work, 'images')
 os.mkdir(images)
 image_reads = os.path.join(work, 'image-reads')
 png = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR'
-# Checks it is asked for the clipboard's image as PNG on standard output; holds one twice, then none.
+# Checks the PowerShell kept for pastes is asked for the clipboard's image as PNG on standard output;
+# it holds one twice, then none.
 with open(os.path.join(image_bin, 'powershell.exe'), 'w') as script_file:
-    script_file.write('#!/bin/sh\n[ "$3" = -STA ] && [ "$4" = -Command ] || exit 1\n'
-                      'case "$5" in *"Clipboard]::GetImage()"*"ImageFormat]::Png"*"OpenStandardOutput()"*) ;;'
-                      ' *) exit 1;; esac\ncount=$(cat "$READS" 2>/dev/null || echo 0)\n'
-                      'echo $((count + 1)) > "$READS"\n'
-                      '[ "$count" -ge 2 ] || printf \'\\211PNG\\r\\n\\032\\n\\000\\000\\000\\rIHDR\'\n')
+    script_file.write('#!/bin/sh\n[ "$4" = -STA ] && [ "$5" = -Command ] || exit 1\n'
+                      'case "$6" in *"OpenStandardOutput()"*"Clipboard]::GetImage()"*"ImageFormat]::Png"*) ;;'
+                      ' *) exit 1;; esac\nprintf \'0\\n\'\n'
+                      'while read -r request; do [ "$request" = image ] || exit 1\n'
+                      'count=$(cat "$READS" 2>/dev/null || echo 0)\necho $((count + 1)) > "$READS"\n'
+                      'if [ "$count" -ge 2 ]; then printf \'0\\n\'; else '
+                      'printf \'16\\n\\211PNG\\r\\n\\032\\n\\000\\000\\000\\rIHDR\'; fi; done\n')
 os.chmod(os.path.join(image_bin, 'powershell.exe'), 0o755)
 known = set(session_files())
 run([], fullscreen_paste_image, serve_items([[message('Seen.')]]), columns=160, variables={

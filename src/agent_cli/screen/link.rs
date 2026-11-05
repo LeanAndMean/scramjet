@@ -2,6 +2,7 @@
 //! interface during a turn, and the `Handle` that starts the thread and reads the user's input.
 
 use super::{Answer, App, Dialog, Input, Queue, Sides, ToScreen, stops_turn};
+use crate::agent_cli::clipboard;
 use crate::agent_cli::editor::{Editor, Note};
 use crate::agent_cli::footer;
 use crate::agent_cli::keys::RawMode;
@@ -236,6 +237,7 @@ impl Handle {
         rustix::fs::fcntl_setfl(&wake, rustix::fs::OFlags::NONBLOCK)?;
         rustix::fs::fcntl_setfl(&woken, rustix::fs::OFlags::NONBLOCK)?;
         let raw = RawMode::enter()?;
+        clipboard::warm();
         let queue = Arc::new(Mutex::new(Queue::default()));
         let woke = wake.try_clone()?;
         let thread = std::thread::Builder::new().name("screen".into()).spawn({

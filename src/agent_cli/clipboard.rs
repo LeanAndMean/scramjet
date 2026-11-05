@@ -1,8 +1,9 @@
 //! The desktop's clipboard as Scramjet uses it. Copying: with the platform's tool (`pbcopy`;
 //! `wl-copy` under Wayland, `xclip` or `xsel` under X11), else, and also in a remote session,
-//! through the terminal with OSC 52. Pasting: with PowerShell under WSL, `pbpaste`, `wl-paste`,
-//! `xclip` or `xsel`; never in a remote session, whose clipboard is the terminal's. An image is
-//! pasted as Scramjet pastes it, as the path of a file it is saved to.
+//! through the terminal with OSC 52. Pasting: with a PowerShell kept running under WSL
+//! (`powershell.rs`), `pbpaste`, `wl-paste`, `xclip` or `xsel`; never in a remote session, whose
+//! clipboard is the terminal's. An image is pasted as Scramjet pastes it, as the path of a file
+//! it is saved to.
 
 use std::{
     env,
@@ -13,6 +14,8 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant, SystemTime},
 };
+
+mod powershell;
 
 /// How long a clipboard tool may take, as Scramjet's.
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -30,18 +33,6 @@ const IMAGE_TYPES: [(&str, &str); 4] = [
     ("image/webp", "webp"),
     ("image/gif", "gif"),
 ];
-/// Writes the Windows clipboard's image as PNG, as Scramjet's PowerShell command saves it, and
-/// nothing when it holds none.
-const POWERSHELL_IMAGE: &str = "Add-Type -AssemblyName System.Windows.Forms; \
-Add-Type -AssemblyName System.Drawing; \
-$image = [System.Windows.Forms.Clipboard]::GetImage(); \
-if ($image) { $png = New-Object System.IO.MemoryStream; \
-$image.Save($png, [System.Drawing.Imaging.ImageFormat]::Png); \
-$out = [Console]::OpenStandardOutput(); $out.Write($png.ToArray(), 0, $png.Length); $out.Flush() }";
-/// Scramjet's PowerShell command that writes the Windows clipboard's text as UTF-8.
-const POWERSHELL_READ: &str = "Add-Type -AssemblyName System.Windows.Forms; \
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); \
-[Console]::Write([System.Windows.Forms.Clipboard]::GetText())";
 
 /// Copies `text`. `Ok(Some(sequence))`: write `sequence` to the terminal, which copies it; never
 /// without a `terminal` to write it to.
@@ -57,10 +48,26 @@ pub(super) fn copy(text: &str, terminal: bool) -> Result<Option<String>, String>
     }
 }
 
-/// The text on the clipboard, read with the first of the platform's tools that succeeds.
+/// Under WSL, starts what reads Windows' clipboard, for the first paste not to wait for it.
+pub(super) fn warm() {
+    if wsl(set) && !remote() {
+        powershell::warm();
+    }
+}
+
+/// The text on the clipboard: under WSL Windows', else read with the first of the platform's
+/// tools that succeeds.
 pub(super) fn paste() -> Result<String, String> {
     if remote() {
         return Err("Use your terminal's Paste command in remote sessions".to_owned());
+    }
+    if wsl(set) {
+        return match powershell::read("text", PASTE_MAX) {
+            Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+            Err(error) => Err(format!(
+                "Cannot read clipboard text ({error}); use your terminal's Paste command"
+            )),
+        };
     }
     (readers(set).into_iter())
         .find_map(|(program, arguments)| read(program, arguments))
@@ -75,25 +82,20 @@ pub(super) fn paste_image() -> Result<String, String> {
     if cfg!(target_os = "macos") {
         return Err("Pasting images is not supported on macOS yet".to_owned());
     }
-    let (bytes, extension) = image(set).ok_or("No image on the clipboard")?;
+    let (bytes, extension) = image(set)?.ok_or("No image on the clipboard")?;
     save(&bytes, extension, &env::temp_dir().to_string_lossy())
 }
 
-/// The clipboard's image and its extension, given which variables are `set`: under WSL Windows'
-/// clipboard, as for text; else with `wl-paste` under Wayland, then `xclip` under X11, in a type
-/// the tool lists among `IMAGE_TYPES`.
-fn image(set: impl Fn(&str) -> bool) -> Option<(Vec<u8>, &'static str)> {
+/// The clipboard's image, if any, and its extension, given which variables are `set`: under WSL
+/// Windows' as PNG, as for text; else with `wl-paste` under Wayland, then `xclip` under X11, in a
+/// type the tool lists among `IMAGE_TYPES`.
+fn image(set: impl Fn(&str) -> bool) -> Result<Option<(Vec<u8>, &'static str)>, String> {
     let nonempty = |read: Option<(Vec<u8>, _)>| read.filter(|(bytes, _)| !bytes.is_empty());
-    if set("WSL_DISTRO_NAME") || set("WSL_INTEROP") {
-        let arguments = [
-            "-NoProfile",
-            "-NonInteractive",
-            "-STA",
-            "-Command",
-            POWERSHELL_IMAGE,
-        ];
-        let png = output("powershell.exe", &arguments, IMAGE_MAX);
-        return nonempty(png.map(|bytes| (bytes, "png")));
+    if wsl(&set) {
+        return match powershell::read("image", IMAGE_MAX) {
+            Ok(png) => Ok(nonempty(Some((png, "png")))),
+            Err(error) => Err(format!("Cannot read the clipboard's image ({error})")),
+        };
     }
     let listed = |program: &str, arguments: &[&str]| {
         preferred(&String::from_utf8_lossy(&output(
@@ -115,8 +117,8 @@ fn image(set: impl Fn(&str) -> bool) -> Option<(Vec<u8>, &'static str)> {
         )?;
         Some((bytes, extension))
     };
-    nonempty(set("WAYLAND_DISPLAY").then(wayland).flatten())
-        .or_else(|| nonempty(set("DISPLAY").then(x11).flatten()))
+    Ok(nonempty(set("WAYLAND_DISPLAY").then(wayland).flatten())
+        .or_else(|| nonempty(set("DISPLAY").then(x11).flatten())))
 }
 
 /// The first of `IMAGE_TYPES` among the types a tool lists, one a line, ignoring parameters such
@@ -164,19 +166,13 @@ fn set(name: &str) -> bool {
     env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
-/// The tools that read the clipboard, in Scramjet's order, given which variables are `set`.
-/// Under WSL only Windows' clipboard is read, which WSLg's Wayland one need not follow.
+fn wsl(set: impl Fn(&str) -> bool) -> bool {
+    set("WSL_DISTRO_NAME") || set("WSL_INTEROP")
+}
+
+/// The tools that read the clipboard outside WSL, in Scramjet's order, given which variables are
+/// `set`.
 fn readers(set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static [&'static str])> {
-    if set("WSL_DISTRO_NAME") || set("WSL_INTEROP") {
-        let arguments = &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-STA",
-            "-Command",
-            POWERSHELL_READ,
-        ];
-        return vec![("powershell.exe", arguments)];
-    }
     if cfg!(target_os = "macos") {
         return vec![("pbpaste", &[])];
     }
@@ -308,11 +304,9 @@ mod tests {
                 .map(|(program, _)| program)
                 .collect()
         };
-        assert_eq!(
-            names(&["WSL_INTEROP", "WAYLAND_DISPLAY", "DISPLAY"]),
-            ["powershell.exe"]
-        );
-        assert_eq!(names(&["WSL_DISTRO_NAME"]), ["powershell.exe"]);
+        let wsl = |variables: &[&str]| wsl(|name: &str| variables.contains(&name));
+        assert!(wsl(&["WSL_INTEROP", "WAYLAND_DISPLAY", "DISPLAY"]) && wsl(&["WSL_DISTRO_NAME"]));
+        assert!(!wsl(&["WAYLAND_DISPLAY", "DISPLAY"]));
         if cfg!(target_os = "macos") {
             return;
         }
