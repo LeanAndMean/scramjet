@@ -366,7 +366,7 @@ pub(super) fn attention(problems: &[Problem]) -> Option<String> {
     }
 }
 
-fn count(n: usize, what: &str) -> String {
+pub(super) fn count(n: usize, what: &str) -> String {
     match n {
         1 => format!("1 {what}"),
         n => format!("{n} {what}s"),

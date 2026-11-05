@@ -24,7 +24,7 @@ A scenario (scripts/screens/*.json) holds:
     "steps":    {"until": TEXT} waits for TEXT on screen, however it wraps, {"type": KEYS} types them,
                 {"sleep": SECONDS}, {"shot": NAME} writes NAME.ansi and NAME.png.
 
-Nothing reaches a provider or the user's settings, sessions or clipboard."""
+Nothing reaches a provider or the user's settings, sessions, packages or clipboard."""
 import argparse
 import fcntl
 import json
@@ -218,6 +218,8 @@ FONTS = {(False, False): font(''), (True, False): font('-Bold'), (False, True): 
 BRAILLE = font('', 'DejaVuSans')
 # Drawn as cells, as terminals draw them, rather than from the font.
 BLOCKS = {'█': (0, 1), '▌': (0, .5), '▐': (.5, 1), '▎': (0, .25), '▏': (0, .125), '▕': (.875, 1)}
+# The quadrants each of these fills: top left, top right, bottom left, bottom right.
+QUADRANTS = {char: bits for bits, char in enumerate(' ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█') if bits not in (0, 5, 10, 15)}
 
 
 def png(screen, path):
@@ -234,7 +236,13 @@ def png(screen, path):
             left, top = 8 + x * width, 8 + y * height
             cells = 2 if x + 1 < screen.columns and screen.buffer[y][x + 1].data == '' else 1
             draw.rectangle([left, top, left + width * cells - 1, top + height - 1], fill=bg)
-            if cell.data in BLOCKS:
+            if cell.data in QUADRANTS:
+                for bit, (across, down) in enumerate([(0, 0), (1, 0), (0, 1), (1, 1)]):
+                    if QUADRANTS[cell.data] >> bit & 1:
+                        draw.rectangle([left + across * width // 2, top + down * height // 2,
+                                        left + (across + 1) * width // 2 - 1,
+                                        top + (down + 1) * height // 2 - 1], fill=fg)
+            elif cell.data in BLOCKS:
                 start, end = BLOCKS[cell.data]
                 draw.rectangle([left + int(width * start), top, left + max(1, int(width * end)) - 1,
                                 top + height - 1], fill=fg)
@@ -295,10 +303,11 @@ def main():
         with open(os.path.join(work, 'config/scramjet-rs/settings.json'), 'w') as file:
             json.dump(settings, file)
         env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'),
-                   XDG_CONFIG_HOME=os.path.join(work, 'config'),
+                   XDG_CONFIG_HOME=os.path.join(work, 'config'), XDG_DATA_HOME=os.path.join(work, 'data'),
                    SCRAMJET_CODING_AGENT_DIR=os.path.join(work, 'agent'), TERM='xterm-256color',
                    COLORTERM='truecolor')
-        for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'TMUX', 'VISUAL', 'EDITOR']:
+        for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'TMUX', 'VISUAL', 'EDITOR',
+                     'SCRAMJET_CACHE']:
             env.pop(name, None)
 
         # The scripted server is the first provider, offering the scenario's model.

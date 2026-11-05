@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.23.0 — Start banners to try
+
+### Added
+
+- `/settings` has a Banner row (the `banner` setting) offering three banners to try in place of the plain start lines: `header`, as Scramjet's (the name and version, the main keys, then the context files, command sets and skills loaded); `card`, a box of the model, project, context files and what was loaded; and `logo`, Scramjet's logo in block characters with the version, model and project beside it, or under it on a narrower terminal. Ctrl+O expands any of them to every key and where each loaded thing is. The plain lines stay the default until one is chosen.
+
 ## 0.22.2 — Token renewals retried, and Escape stops them
 
 ### Fixed

@@ -1,6 +1,7 @@
 //! The agent's display calls, kept as events: the full screen keeps the conversation so, and
 //! renders it again from them at its width.
 
+use super::banner::Opening;
 use super::design::Outcome;
 use super::style::Style;
 use super::terminal::Terminal;
@@ -46,6 +47,8 @@ pub(super) enum Event {
     Text(String),
     /// One in a style, which takes the theme it is shown in.
     Styled(Style, String),
+    /// The banner a session starts with.
+    Banner(Box<Opening>),
 }
 
 /// Shows `event` on `ui` as it showed when it happened.
@@ -97,6 +100,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
             let text = ui.styled(*style, text);
             ui.said(&text)
         }
+        Event::Banner(opening) => ui.banner(opening),
     }
 }
 

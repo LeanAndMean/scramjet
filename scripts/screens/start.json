@@ -1,0 +1,21 @@
+{
+  "size": "100x34",
+  "settings": {
+    "theme": "scramjet-dark",
+    "banner": "logo"
+  },
+  "files": {
+    "AGENTS.md": "# Words\n\nRun `cargo test` before committing.\n",
+    "Cargo.toml": "[package]\nname = \"words\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    "src/lib.rs": "pub fn words(text: &str) -> Vec<&str> {\n    text.split_whitespace().collect()\n}\n",
+    ".scramjet/words/commands/words:check.md": "---\ndescription: Check the crate\n---\nRun the tests and Clippy.\n",
+    ".scramjet/words/commands/words:release.md": "---\ndescription: Release the crate\n---\nBump the version and tag it.\n"
+  },
+  "steps": [
+    {"until": "Ctrl+O more"},
+    {"shot": "start"},
+    {"type": "\u000f"},
+    {"until": "/hotkeys for every key"},
+    {"shot": "expanded"}
+  ]
+}

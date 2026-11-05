@@ -1,6 +1,7 @@
 //! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet-rs/settings.json` (by default
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
+use super::banner::Banner;
 use super::design::Design;
 use super::keymap::{self, Binding};
 use super::packages::{self, Source};
@@ -95,6 +96,7 @@ pub(super) enum Row {
     MarkdownReads,
     Theme,
     Look,
+    Banner,
     Steering,
     FollowUp,
     DoubleEscape,
@@ -109,13 +111,14 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 18] = [
+pub(super) const ROWS: [Row; 19] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
     Row::MarkdownReads,
     Row::Theme,
     Row::Look,
+    Row::Banner,
     Row::Steering,
     Row::FollowUp,
     Row::DoubleEscape,
@@ -139,6 +142,7 @@ impl Row {
             Self::MarkdownReads => "Markdown reads",
             Self::Theme => "Theme",
             Self::Look => "Look",
+            Self::Banner => "Banner",
             Self::Steering => "Steering messages",
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
@@ -189,6 +193,13 @@ impl Row {
                 "How the conversation shows prompts, reasoning, tool calls and replies: classic, \
                  or a variant to try (rails, panels, margin; panels needs a theme with \
                  backgrounds, such as scramjet-dark)."
+            }
+            Self::Banner => {
+                let then = then(Binding::ToolsExpand, "shows every key and what was loaded.");
+                return format!(
+                    "What a session shows as it starts: plain, or a variant to try (header, as \
+                     Scramjet's; card; logo, Scramjet's logo).{then}"
+                );
             }
             Self::Steering => {
                 let with = with(Binding::Submit, " with ");
@@ -273,6 +284,8 @@ pub(super) struct Settings {
     pub(super) theme: String,
     /// `look`: how the full screen shows prompts, reasoning, calls and replies.
     pub(super) look: Design,
+    /// `banner`: what the full screen shows as a session starts.
+    pub(super) banner: Banner,
     /// `defaultThinkingLevel`, named as requests send levels.
     pub(super) default_thinking_level: Option<String>,
     /// `defaultProvider` and `defaultModel`: the model last chosen in any project, as Scramjet
@@ -367,6 +380,7 @@ impl Settings {
             markdown_reads: MarkdownReads::Rendered,
             theme: TERMINAL_COLORS.to_owned(),
             look: Design::Classic,
+            banner: Banner::Plain,
             default_thinking_level: None,
             default_provider: None,
             default_model: None,
@@ -452,6 +466,14 @@ impl Settings {
             Some(_) => wrong(
                 "look",
                 &Design::ALL.map(|d| format!("\"{}\"", d.name())).join(", "),
+            ),
+        }
+        match object.get("banner").map(|value| value.as_str()) {
+            None => {}
+            Some(Some(name)) if let Some(banner) = Banner::named(name) => self.banner = banner,
+            Some(_) => wrong(
+                "banner",
+                &Banner::ALL.map(|b| format!("\"{}\"", b.name())).join(", "),
             ),
         }
         match object
@@ -909,6 +931,7 @@ impl Settings {
             | Row::Installed => String::new(),
             Row::Theme => self.theme.clone(),
             Row::Look => self.look.name().into(),
+            Row::Banner => self.banner.name().into(),
             Row::StartupModel => match self.startup_model {
                 StartupModel::PerDirectory => "last chosen here",
                 StartupModel::Global => "last chosen anywhere",
@@ -987,6 +1010,10 @@ impl Settings {
             Row::Look => {
                 self.look = self.look.next();
                 self.save("look", json!(self.look.name()))
+            }
+            Row::Banner => {
+                self.banner = self.banner.next();
+                self.save("banner", json!(self.banner.name()))
             }
             Row::MarkdownReads => {
                 let (reads, name) = match self.markdown_reads {
@@ -1304,8 +1331,9 @@ mod tests {
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
-                "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on"}"#,
+                "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big"}"#,
         );
+        assert_eq!(settings.banner, Banner::Plain);
         assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.theme, "terminal-colors");
@@ -1325,6 +1353,7 @@ mod tests {
                 ),
                 format!(r#"{path}: markdown.toolDisplay must be "rendered" or "source"; ignored"#),
                 format!("{path}: theme must be a theme's name; ignored"),
+                format!(r#"{path}: banner must be "plain", "header", "card", "logo"; ignored"#),
                 format!(
                     r#"{path}: defaultThinkingLevel must be "off", "minimal", "low", "medium", "high", "xhigh", "max"; ignored"#
                 ),
@@ -1591,6 +1620,12 @@ mod tests {
         // Then round to the first again, and on.
         settings.cycle(Row::Look).unwrap();
         settings.cycle(Row::Look).unwrap();
+        assert_eq!(
+            seen(Row::Banner, &mut settings),
+            ["plain", "header", "card", "logo"]
+        );
+        settings.cycle(Row::Banner).unwrap();
+        settings.cycle(Row::Banner).unwrap();
         let (default, other) = match cfg!(target_os = "macos") {
             true => ("on", "off"),
             false => ("off", "on"),
@@ -1637,6 +1672,7 @@ mod tests {
                 "tools": ["read", "ls"],
                 "theme": "scramjet-dark",
                 "look": "rails",
+                "banner": "header",
             })
         );
         let reread = Settings::read(Some(path.clone()));

@@ -154,6 +154,7 @@ impl Link {
             markdown_reads: settings.markdown_reads,
             copy_on_select: settings.copy_on_select,
             design: settings.look,
+            banner: settings.banner,
         });
     }
     /// The file of the theme in use, to read again when it changes; none for a built-in one.
@@ -282,7 +283,7 @@ impl Handle {
     ) -> io::Result<Self> {
         let modes = (settings.steering_mode, settings.follow_up_mode);
         let (markdown_reads, copy_on_select) = (settings.markdown_reads, settings.copy_on_select);
-        let design = settings.look;
+        let (design, banner) = (settings.look, settings.banner);
         let (to, messages) = mpsc::channel();
         let (inputs, from) = mpsc::channel();
         let (woken, wake) = io::pipe()?;
@@ -305,6 +306,7 @@ impl Handle {
                     markdown_reads,
                     copy_on_select,
                     design,
+                    banner,
                     ..app
                 };
                 app.run(raw, &messages, woken)

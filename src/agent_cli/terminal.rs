@@ -1,6 +1,7 @@
 //! The agent's output as text: printed as it streams for `-p` and piped input, with a status
 //! line under it on a terminal, or captured for the full screen to show; and the terminal modes
 //! of a `-p` turn.
+use super::banner::{self, Banner, Opening};
 use super::design::{Design, Gutter, Outcome};
 use super::editor::NOTE_TIME;
 use super::highlight::{self, Highlighter};
@@ -302,6 +303,8 @@ pub(super) struct Terminal {
     marked: bool,
     /// How prompts, reasoning, calls and replies look; the classic look but on the full screen.
     pub(super) design: Design,
+    /// The banner a session starts with (`banner`).
+    pub(super) banner: Banner,
     /// How each call still to be shown went, in turn, and how long it ran (`record::outcomes`),
     /// for a look whose headings say it.
     pub(super) outcomes: VecDeque<(Outcome, Option<Duration>)>,
@@ -675,6 +678,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             full: false,
             marked: false,
             design: Design::Classic,
+            banner: Banner::Plain,
             outcomes: VecDeque::new(),
             outcome: Outcome::Running,
             lead: None,
@@ -1252,6 +1256,16 @@ impl Terminal {
         self.clear();
         let text = self.wrapped(text);
         self.err(&format!("{text}\n\n"));
+    }
+    /// The banner a session starts with, every key and what was loaded when results are shown
+    /// whole (Ctrl+O).
+    pub(super) fn banner(&mut self, opening: &Opening) {
+        if self.banner == Banner::Plain || !self.color {
+            return self.said(&banner::plain(opening));
+        }
+        self.clear();
+        let rows = banner::rows(self.banner, opening, self.width(), self.full, self.marked);
+        self.err(&format!("{}\n\n", rows.join("\n")));
     }
     pub(super) fn compaction_error(&mut self, error: &str) {
         self.clear();

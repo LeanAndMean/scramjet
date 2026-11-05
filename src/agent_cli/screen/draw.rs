@@ -412,6 +412,7 @@ impl App {
             markdown_reads: self.markdown_reads,
             theme: style::generation(),
             design: self.design,
+            banner: self.banner,
         };
         self.transcript.render(look, &self.hide_thinking);
         let last = self.transcript.len().saturating_sub(rows);

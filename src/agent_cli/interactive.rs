@@ -1,5 +1,6 @@
 //! The interactive session: prompts read from the editor, the full screen or piped lines, the
 //! built-in commands (`slash.rs`), model turns and a completed command's next step.
+use super::banner::{self, Opening};
 use super::editor::Note;
 use super::record::Event;
 use super::screen::{self, Handle};
@@ -15,6 +16,7 @@ use scramjet_rs::agent::{
 };
 use std::{
     io::{BufRead, IsTerminal},
+    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -188,12 +190,11 @@ impl Interactive {
             false => false,
         };
         if !resumed {
-            self.say(&format!(
-                "scramjet-rs · {} · {}\n{}",
-                model_line(&self.agent),
-                self.agent.root().display(),
-                saved_line(&self.agent),
-            ));
+            let opening = self.opening();
+            match &self.screen {
+                Some(screen) => screen.event(Event::Banner(Box::new(opening))),
+                None => self.say(&banner::plain(&opening)),
+            }
             // A tool block ends with a blank line; other output gets one before the prompt.
             self.show_resumed();
         }
@@ -626,6 +627,26 @@ impl Interactive {
                 self.spaced = true;
             }
             Err(error) => self.say(&format!("Error: next step not recorded: {error}")),
+        }
+    }
+
+    /// What the banner tells of the session starting.
+    fn opening(&self) -> Opening {
+        let installed = self.agent.installed();
+        let named = |name: &str, path: &Path| (name.to_owned(), path.to_path_buf());
+        Opening {
+            model: model_line(&self.agent),
+            root: self.agent.root().to_path_buf(),
+            session: (self.agent.session_saved()).then(|| self.agent.session_path().to_path_buf()),
+            context: installed.context_files,
+            sets: (installed.sets.iter())
+                .map(|set| named(&set.name, &set.directory))
+                .collect(),
+            skills: (self.agent.skills().list().iter())
+                .map(|skill| named(&skill.name, &skill.path))
+                .collect(),
+            commands: self.agent.commands().list().len(),
+            agents: installed.agents.len(),
         }
     }
 

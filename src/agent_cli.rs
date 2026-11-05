@@ -1,4 +1,5 @@
 mod args;
+mod banner;
 mod children;
 mod clipboard;
 mod completion;

@@ -2206,7 +2206,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B\r')
     on_screen(setting('Thinking level', 'high'))
     # Keys typed at once each reach the list the one before them leaves, none lost between.
-    send(b'\x1b[B\x1b[B\r\x1b[B\x1b[B\x1b[B\x1b[B\r')
+    send(b'\x1b[B\x1b[B\r' + b'\x1b[B' * 5 + b'\r')
     rows = on_screen(setting('Steering messages', 'one at a time'))
     assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
@@ -2226,12 +2226,38 @@ def settings_menu(read, until, send, output):
     send(b'/settings\r')
     on_screen('Command: /settings')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[B' * 12 + b'\r')
+    send(b'\x1b[B' * 13 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))
     send(b'\x1b')
     on_screen('Replied.')
+    send(b'\x04')
+
+
+def banner_choice(read, until, send, output):
+    shown, on_screen = full_screen(80)(read, output)
+    rows = on_screen('\u2500' * 20)
+    assert rows[0].startswith('\u256d\u2500 scramjet-rs v'), rows
+    assert rows[1].startswith('\u2502 model    gpt-6-luna \u00b7 thinking medium '), rows
+    assert 'Esc interrupt \u00b7 Ctrl+C/D clear/exit \u00b7 / commands \u00b7 ! bash \u00b7 Ctrl+O more' in rows, rows
+    # Ctrl+O shows every key, and again only the main ones.
+    send(b'\x0f')
+    on_screen('/hotkeys for every key')
+    send(b'\x0f')
+    on_screen('/hotkeys for every key', gone=True)
+    # Changed in /settings, the banner shown is the next one at once.
+    send(b'/settings\r')
+    on_screen('Settings  \u2191\u2193 move')
+    rows = select_row(read, shown, send, 'Banner', b'\x1b[B')
+    assert '\u203a ' + setting('Banner', 'card') in rows, rows
+    assert '  What a session shows as it starts: plain, or a variant to try (header, as' in rows, rows
+    send(b'\r')
+    on_screen('\u203a ' + setting('Banner', 'logo'))
+    send(b'\x1b')
+    rows = on_screen('Settings  \u2191\u2193 move', gone=True)
+    # Too narrow for its text beside it, the logo goes over it.
+    assert '\u2584\u2584\u2584\u2584\u2584\u2584' in rows[1] and rows[5].startswith('rs v'), rows
     send(b'\x04')
 
 
@@ -2816,6 +2842,9 @@ assert json.load(open(settings_path(menu_home))) == {
 guide = os.path.join(work, 'guide.md')
 with open(guide, 'w') as file:
     file.write('# Guide\n\nSome **bold** text.\n')
+banner_home = config_home('banner', '{"banner": "card"}')
+run([], banner_choice, variables={'XDG_CONFIG_HOME': banner_home}, columns=80)
+assert json.load(open(settings_path(banner_home))) == {'banner': 'logo'}
 reads_home = config_home('reads', '{"markdown": {"toolDisplay": "source"}}')
 run([], markdown_reads, serve_items([[tool_call('call_1', 'read', {'path': guide})], [message('Read it.')]]),
     variables={'XDG_CONFIG_HOME': reads_home})

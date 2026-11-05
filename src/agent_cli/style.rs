@@ -89,6 +89,18 @@ styles! {
     LABEL_RUNNING: [BOLD] Warning;
     LABEL_DONE: [BOLD] Success;
     LABEL_FAILED: [BOLD] Error;
+    /// The banner a session starts with (`banner`): the name, its version, Scramjet's logo, a
+    /// key and what it does, a heading over a list of what was loaded and the list, and the
+    /// card's border and labels.
+    BANNER_NAME: [BOLD] Accent;
+    BANNER_VERSION: [] Dim;
+    BANNER_LOGO: [] Accent;
+    BANNER_KEY: [] Dim;
+    BANNER_ACTION: [] Muted;
+    BANNER_HEADING: [] MdHeading;
+    BANNER_LIST: [] Dim;
+    BANNER_BORDER: [] BorderMuted;
+    BANNER_LABEL: [] Dim;
     /// A compaction summary.
     SUMMARY: [] CustomMessageText;
     /// A section heading in an information block such as `/session`'s.

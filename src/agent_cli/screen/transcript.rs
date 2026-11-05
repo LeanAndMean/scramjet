@@ -1,5 +1,6 @@
 //! The conversation the screen shows, in parts that each render on their own.
 
+use crate::agent_cli::banner::Banner;
 use crate::agent_cli::design::Design;
 use crate::agent_cli::record::{self, Event};
 use crate::agent_cli::selection::{self, Line};
@@ -19,6 +20,7 @@ pub(super) struct Look {
     /// `style::generation()`: the theme's.
     pub(super) theme: usize,
     pub(super) design: Design,
+    pub(super) banner: Banner,
 }
 
 /// A line of the conversation by its part, so that it stays in view as parts before it or it
@@ -160,6 +162,7 @@ fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> Vec<L
     let mut ui = Terminal::capture_shown(look.width, hide_thinking, look.whole);
     ui.markdown_reads = look.markdown_reads;
     ui.design = look.design;
+    ui.banner = look.banner;
     ui.outcomes = record::outcomes(events).into();
     for event in events {
         record::replay(event, &mut ui);
@@ -190,6 +193,7 @@ mod tests {
             markdown_reads: MarkdownReads::Rendered,
             theme: 0,
             design: Design::Classic,
+            banner: Banner::Plain,
         }
     }
 
