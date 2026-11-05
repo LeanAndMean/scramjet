@@ -62,7 +62,25 @@ fn install_package(source: Source) -> Result<(), String> {
         });
     }
     let directory = source.clone_directory(&root);
+    let nested = (settings.packages.iter()).find(|known| {
+        let other = known.clone_directory(&root);
+        other.starts_with(&directory) || directory.starts_with(&other)
+    });
+    if let Some(other) = nested {
+        return Err(format!(
+            "{} would be cloned into {}, which nests with the clone of {}; remove that first",
+            source.written,
+            shown(&directory),
+            other.written
+        ));
+    }
     let fresh = !directory.exists();
+    if !fresh && !packages::is_clone(&directory) {
+        return Err(format!(
+            "{} exists and is not a clone; left as it is",
+            shown(&directory)
+        ));
+    }
     match (fresh, &source.reference) {
         (true, _) => {
             println!("Cloning {} into {}", source.written, shown(&directory));
@@ -171,6 +189,19 @@ fn remove(reference: &str) -> Result<(), String> {
             ));
         };
         let root = settings.clones()?.to_path_buf();
+        let directory = known.clone_directory(&root);
+        let held = (settings.packages.iter()).find(|other| {
+            other.identity() != known.identity()
+                && other.clone_directory(&root).starts_with(&directory)
+        });
+        if let Some(held) = held {
+            return Err(format!(
+                "{}'s clone in {} holds the clone of {}; remove that first",
+                known.written,
+                shown(&directory),
+                held.written
+            ));
+        }
         let directory = settings.remove_package(&known)?;
         packages::delete(&directory, &root).map_err(|problem| {
             format!(

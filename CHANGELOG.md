@@ -4,6 +4,14 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.20.1 — Package fixes
+
+### Fixed
+
+- `scramjet-rs install git://HOST/USER/REPO` works: the `git:` shorthand no longer takes in `git://` URLs and refuses them.
+- A package whose clone would lie inside another's, or hold it (`…/tools.git` and `…/tools/extra.git` on one server), is refused, and `remove` keeps a clone that holds another package's clone, which it used to delete with that clone's changes.
+- A directory in a clone's place that is not a clone is neither used by `install` nor pulled by `update`, so git is not run on a repository around it.
+
 ## 0.20.0 — Packages from git
 
 ### Added

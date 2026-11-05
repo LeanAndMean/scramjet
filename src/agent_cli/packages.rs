@@ -29,8 +29,8 @@ impl Source {
     pub fn parse(text: &str) -> Option<Result<Self, String>> {
         let written = text.trim();
         let (prefixed, url) = match written.strip_prefix("git:") {
-            Some(rest) => (true, rest.trim()),
-            None => (false, written),
+            Some(rest) if !rest.starts_with("//") => (true, rest.trim()),
+            _ => (false, written),
         };
         if !prefixed && !url.contains("://") {
             return None;
@@ -154,9 +154,21 @@ pub(super) fn checkout(directory: &Path, reference: &str) -> Result<(), String> 
     run(command.args([reference, "--"]), "checkout").map(drop)
 }
 
+/// Whether `directory` is a clone of its own, not only inside one, so git is not run on the
+/// repository around it.
+pub(super) fn is_clone(directory: &Path) -> bool {
+    directory.join(".git").exists()
+}
+
 /// Pulls the clone in `directory` when it can be fast-forwarded, keeping changes made in it.
 /// Its commit before and after.
 pub(super) fn pull(directory: &Path) -> Result<(String, String), String> {
+    if !is_clone(directory) {
+        return Err(format!(
+            "{} is not a clone; left as it is",
+            directory.display()
+        ));
+    }
     let head = || {
         run(
             git(Some(directory)).args(["rev-parse", "--short", "HEAD"]),
@@ -180,7 +192,7 @@ pub(super) fn delete(directory: &Path, root: &Path) -> Result<(), String> {
         (Ok(root), Ok(clone)) => clone.starts_with(&root) && clone != root,
         _ => false,
     };
-    if !inside || !directory.join(".git").exists() {
+    if !inside || !is_clone(directory) {
         return Err(format!(
             "{shown} is not a clone in {}; left as it is",
             root.display()
@@ -284,6 +296,15 @@ mod tests {
                 "host.example",
                 "group/sub/repo",
                 Some("abc123")
+            )
+        );
+        assert_eq!(
+            parsed("git://host.example/user/repo"),
+            owned(
+                "git://host.example/user/repo",
+                "host.example",
+                "user/repo",
+                None
             )
         );
         assert_eq!(

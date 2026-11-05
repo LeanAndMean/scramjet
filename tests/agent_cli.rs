@@ -740,6 +740,64 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     assert_eq!(out, format!("{pinned}: pinned to {first}; left as it is\n"));
     assert!(run(&["uninstall", &source]).0);
 
+    // Clones do not nest, so that removing one does not delete another.
+    git(
+        &scratch.0,
+        &["clone", "--quiet", "--bare", "work", "upstream/inner.git"],
+    );
+    let inner = format!("file://{}", scratch.0.join("upstream/inner.git").display());
+    assert!(run(&["install", &source]).0);
+    let (ok, _, err) = run(&["install", &inner]);
+    assert!(!ok);
+    assert_eq!(
+        err,
+        format!(
+            "scramjet-rs: {inner} would be cloned into {shown_clone}/inner, which nests with the \
+             clone of {source}; remove that first\n"
+        )
+    );
+    assert!(!clone.join("inner").exists());
+    std::fs::write(
+        &settings,
+        serde_json::json!({ "packages": [&source, &inner] }).to_string(),
+    )
+    .unwrap();
+    assert!(run(&["update", &inner]).0);
+    let (ok, _, err) = run(&["remove", &source]);
+    assert!(!ok);
+    assert_eq!(
+        err,
+        format!(
+            "scramjet-rs: {source}'s clone in {shown_clone} holds the clone of {inner}; remove \
+             that first\n"
+        )
+    );
+    assert!(clone.join("inner/.git").exists());
+    assert!(run(&["remove", &inner]).0);
+    assert!(run(&["remove", &source]).0);
+
+    // A directory in a clone's place that is not one is neither used nor pulled.
+    std::fs::create_dir_all(clone.join("notes")).unwrap();
+    let (ok, _, err) = run(&["install", &source]);
+    assert!(!ok);
+    assert_eq!(
+        err,
+        format!("scramjet-rs: {shown_clone} exists and is not a clone; left as it is\n")
+    );
+    std::fs::write(
+        &settings,
+        serde_json::json!({ "packages": [&source] }).to_string(),
+    )
+    .unwrap();
+    let (ok, _, err) = run(&["update"]);
+    assert!(!ok);
+    assert!(
+        err.contains(&format!("{source}: {} is not a clone", clone.display())),
+        "{err}"
+    );
+    std::fs::write(&settings, r#"{"packages": []}"#).unwrap();
+    std::fs::remove_dir_all(clones.join("localhost")).unwrap();
+
     // A repository without a set, or one that cannot be cloned, leaves nothing.
     let plain = scratch.0.join("plain");
     std::fs::create_dir_all(&plain).unwrap();
