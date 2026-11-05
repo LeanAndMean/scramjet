@@ -17,10 +17,7 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         );
     }
     for word in ["--bogus", "-x"] {
-        let output = Command::new(binary)
-            .args([word, "--endpoint", "127.0.0.1:9"])
-            .output()
-            .unwrap();
+        let output = Command::new(binary).arg(word).output().unwrap();
         assert!(!output.status.success());
         let text = String::from_utf8(output.stderr).unwrap();
         assert!(
@@ -37,14 +34,14 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
     assert!(refused(&["-p"]).starts_with("scramjet-rs: -p needs a message or an @FILE\n"));
     assert!(refused(&["-"]).starts_with("scramjet-rs: the message - (read from stdin) needs -p\n"));
     // Before a session is started.
-    let missing = refused(&["-p", "@/nonexistent/notes.md", "--endpoint", "127.0.0.1:9"]);
+    let missing = refused(&["-p", "@/nonexistent/notes.md"]);
     assert_eq!(
         missing,
         "scramjet-rs: file not found: /nonexistent/notes.md\n"
     );
     for option in ["--thinking", "--effort"] {
         let output = Command::new(binary)
-            .args([option, "hgih", "--endpoint", "127.0.0.1:9"])
+            .args([option, "hgih"])
             .output()
             .unwrap();
         assert!(!output.status.success());
@@ -62,16 +59,43 @@ medium, high, xhigh, max\n"
         let text = String::from_utf8(output.stdout).unwrap();
         assert_eq!(text, format!("{}\n", env!("CARGO_PKG_VERSION")));
     }
-    // Before a session is started.
-    let output = Command::new(binary)
-        .args(["--list-models", "--endpoint", "127.0.0.1:9"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        "scramjet-rs: could not list the models of the endpoint 127.0.0.1:9\n"
+}
+
+#[test]
+fn list_models_lists_the_providers_models_and_what_is_wrong_in_their_files() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-models-{}", std::process::id())));
+    let list = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
+            .arg("--list-models")
+            .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = |bytes| String::from_utf8(bytes).unwrap();
+        (text(output.stdout), text(output.stderr))
+    };
+    let none = ("No provider offers any model\n".to_owned(), String::new());
+    assert_eq!(list(), none);
+    provide(&scratch.0.join("config"), "127.0.0.1:9");
+    let file = scratch.0.join("config/scramjet-rs/models.json");
+    let mut models: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    models["providers"]["remote"] = serde_json::json!({"baseUrl": "https://example.com/v1",
+        "api": "openai-responses", "models": [{"id": "far"}]});
+    std::fs::write(&file, models.to_string()).unwrap();
+    let (listed, warnings) = list();
+    assert!(
+        listed.contains("test") && listed.contains("gpt-6-luna"),
+        "{listed}"
     );
+    assert!(!listed.contains("far"), "{listed}");
+    let problem = format!(
+        "Warning: {}: provider remote: model far: baseUrl https://example.com/v1: HTTPS is not \
+supported yet\n",
+        file.display()
+    );
+    assert_eq!(warnings, problem);
 }
 
 struct Scratch(std::path::PathBuf);
@@ -80,6 +104,17 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// Writes the `models.json` of the configuration directory `config`: a provider at `endpoint`
+/// offering gpt-6-luna.
+fn provide(config: &std::path::Path, endpoint: &str) {
+    std::fs::create_dir_all(config.join("scramjet-rs")).unwrap();
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://{endpoint}/v1"), "api": "openai-responses",
+        "models": [{"id": "gpt-6-luna", "reasoning": true, "input": ["text", "image"]}],
+    }}});
+    std::fs::write(config.join("scramjet-rs/models.json"), models.to_string()).unwrap();
 }
 
 #[test]
@@ -112,9 +147,10 @@ fn session_and_fork_find_a_session_by_the_start_of_its_id() {
         let header = format!("{{\"type\":\"session\",\"version\":1,\"root\":{root:?}}}\n");
         std::fs::write(path, header + lines).unwrap();
     }
+    provide(&scratch.0.join("config"), "127.0.0.1:9");
     let run = |arguments: &[&str]| {
         let output = Command::new(binary)
-            .args(["--endpoint", "127.0.0.1:9", "--retries", "0"])
+            .args(["--retries", "0"])
             .args(arguments)
             .current_dir(&project)
             .env("XDG_STATE_HOME", scratch.0.join("state"))
@@ -156,7 +192,7 @@ continues it in a new session of this one"
     let listed = || std::fs::read_dir(&here).unwrap().count();
     assert_eq!(listed(), 1);
 
-    // The requests fail (no endpoint), after the prompt is saved in the session.
+    // The requests fail (nothing listens), after the prompt is saved in the session.
     let refused = "scramjet-rs: provider: cannot connect to 127.0.0.1:9";
     assert!(run(&["--session", "16", "-p", "again"]).starts_with(refused));
     let saved = std::fs::read_to_string(&ours).unwrap();
@@ -189,9 +225,10 @@ fn no_session_saves_none_and_its_directory_goes_at_exit() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::create_dir_all(&temporary).unwrap();
     let command = |endpoint: &str| {
+        provide(&scratch.0.join("config"), endpoint);
         let mut command = Command::new(binary);
         command
-            .args(["--endpoint", endpoint, "--retries", "0"])
+            .args(["--retries", "0"])
             .args(["--no-session", "-p", "hi"])
             .current_dir(&project)
             .env("XDG_STATE_HOME", scratch.0.join("state"))

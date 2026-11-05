@@ -97,7 +97,7 @@ enum ToScreen {
     },
     /// The file of the theme in use, read again as it changes.
     Theme(Option<Watched>),
-    /// The endpoint's models, which complete `/model`'s argument.
+    /// The providers' models, which complete `/model`'s argument.
     Models(Vec<String>),
     /// What the footer shows of the session now.
     Footer(footer::Shown),

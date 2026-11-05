@@ -8,16 +8,16 @@ use super::{
     AgentError, AgentUi, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation,
     MAX_STEPS, Problem, Skills, ToolDetail, Usage,
     approvals::{self, Approvals},
-    client::{self, ModelInfo},
     commands::{self, Sets},
-    instructions, rates,
+    instructions,
+    providers::{ModelInfo, Providers},
+    rates,
     request::{self, Sending},
     sandbox,
     tools::{self, Call, Output},
 };
 use serde_json::{Value, json};
 use std::{
-    net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -611,11 +611,11 @@ pub(super) fn summary(arguments: &Value) -> String {
 
 /// What children share with the agent that starts them.
 pub(super) struct Parent<'a> {
-    pub endpoint: SocketAddr,
+    pub providers: &'a Providers,
     pub retries: u32,
     pub model: &'a str,
     pub info: &'a ModelInfo,
-    /// The level the agent's own requests ask for, or its model's default.
+    /// The level the agent's own requests ask for.
     pub effort: Option<&'a str>,
     pub max_output_tokens: Option<u64>,
     pub root: &'a Path,
@@ -1195,9 +1195,7 @@ fn run_child(
     };
     let info = match job.model == parent.model {
         true => parent.info.clone(),
-        false => executor
-            .block_on(client::model_info(parent.endpoint, &job.model))
-            .unwrap_or_else(|| ModelInfo::guess(&job.model)),
+        false => parent.providers.info(&job.model),
     };
     let effort = &job.effort;
     let instructions = instructions::child(
@@ -1235,7 +1233,6 @@ fn run_child(
         let requests = &mut run.usage.requests;
         let sent = request::send(
             &executor,
-            parent.endpoint,
             &info,
             parent.retries,
             &request,

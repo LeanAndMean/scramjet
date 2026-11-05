@@ -38,7 +38,7 @@ pub(super) enum Switched {
 }
 
 impl Agent {
-    /// Runs a call as Scramjet's tool does: the model the endpoint lists with that id and
+    /// Runs a call as Scramjet's tool does: the model a provider offers with that id and
     /// provider becomes the current one, recorded in the session; an unknown one changes
     /// nothing, and the model is told which there are.
     pub(super) fn switch_model(&mut self, arguments: &Value) -> Switched {
@@ -52,8 +52,8 @@ impl Agent {
         let Some(models) = self.listed_models() else {
             return Switched::Not(
                 format!(
-                    "Cannot switch to \"{provider}/{model}\": the endpoint's models could not be \
-listed. The model was not switched."
+                    "Cannot switch to \"{provider}/{model}\": no provider offers any model. The \
+model was not switched."
                 ),
                 false,
             );
@@ -79,7 +79,7 @@ listed. The model was not switched."
             let text = format!("Failed to switch to {name}: {error}. The model was not changed.");
             return Switched::Not(text, false);
         }
-        self.load_model_card();
+        self.load_model_info();
         Switched::To(match &found.provider {
             Some(provider) => format!(
                 "Switched to {name} (ID: {}, provider: {provider}).",
@@ -114,7 +114,7 @@ fn full(model: &ModelOption) -> String {
 }
 
 /// The models a switch can go to, as Scramjet lists them after an unknown one: those of the
-/// user's scope when there is one, else all the endpoint's, sorted.
+/// user's scope when there is one, else all the providers', sorted.
 fn catalog(models: &[ModelOption], scope: &[String]) -> String {
     let mut lines: Vec<String> = (models.iter())
         .filter(|model| scope.is_empty() || scope.contains(&model.id))
@@ -142,7 +142,6 @@ mod tests {
             provider: provider.map(str::to_owned),
             reasoning: true,
             levels: Vec::new(),
-            default_level: None,
             window: None,
             output: None,
             images: true,

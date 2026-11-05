@@ -1,4 +1,4 @@
-use super::pricing::Prices;
+use super::providers::Route;
 pub use crate::http::responses::StreamProgress;
 use crate::http::responses::{ParserLimits, ResponsesParser};
 use bytes::Bytes;
@@ -7,7 +7,6 @@ use hyper::{Request, body::Incoming, client::conn::http1};
 use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
 use std::{
-    net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, SystemTime},
 };
@@ -21,10 +20,6 @@ pub(super) const LIMITS: ParserLimits = ParserLimits {
 };
 const WIRE_BYTES: usize = 256 << 20;
 const ERROR_BODY_BYTES: usize = 64 << 10;
-/// Proxy's model card document is about 73KB.
-const CARDS_BYTES: usize = 4 << 20;
-/// The lookup runs before the first prompt; Proxy answers in milliseconds.
-const CARDS_TIMEOUT: Duration = Duration::from_millis(500);
 /// Like Scramjet's provider timeout: reset by every received chunk, so long generations continue.
 const INACTIVITY: Duration = Duration::from_secs(600);
 /// Failure wording that another attempt cannot fix, checked before `TRANSIENT_WORDS`.
@@ -98,9 +93,9 @@ pub(super) struct Reply {
     /// Why the reply stopped before it was complete, when it reached the output token limit:
     /// `items` then keep its text, but not its tool calls.
     pub incomplete: Option<String>,
-    /// The agentic backend that served it, as Proxy's upstream names it in `x-llm-backend`.
-    pub backend: Option<String>,
-    /// What it cost in dollars, when its model's price cards say (`request::send`).
+    /// The value of the response header its model's prices are chosen by, in lower case.
+    pub priced_by: Option<String>,
+    /// What it cost in dollars, when its model's prices say (`request::send`).
     pub cost: Option<f64>,
     /// From its request to its end, retries aside (`request::send`).
     pub elapsed: Duration,
@@ -217,224 +212,50 @@ pub(super) async fn cancelled(flag: &AtomicBool) {
     }
 }
 
-/// The endpoint's models (`/v1/models`); `None` when the list is not served in time.
-pub(super) async fn models(endpoint: SocketAddr) -> Option<Vec<String>> {
-    let list = tokio::time::timeout(CARDS_TIMEOUT, get(endpoint, "/v1/models"))
-        .await
-        .ok()??;
-    let list: Value = serde_json::from_slice(&list).ok()?;
-    Some(
-        list["data"]
-            .as_array()?
-            .iter()
-            .filter_map(|model| model["id"].as_str())
-            .map(str::to_owned)
-            .collect(),
-    )
-}
-
-/// The protocol a model's requests use: Proxy serves Claude on Messages only.
+/// The protocol a model's requests use.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Protocol {
     Responses,
     Messages,
 }
 
-/// What the agent needs to know about a model to send it requests.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct ModelInfo {
+/// What a request sends besides its body: `betas` is a Messages request's `anthropic-beta`
+/// header, and `priced_by` names the response header `Reply::priced_by` keeps.
+pub(super) struct Sent<'a> {
+    pub route: &'a Route,
     pub protocol: Protocol,
-    /// The context window (input and output tokens).
-    pub window: Option<u64>,
-    /// The most output tokens a response may have.
-    pub output: Option<u64>,
-    /// Whether the model reasons; Proxy's cards give `reasoning: null` for those that do not.
-    pub reasoning: bool,
-    /// The reasoning effort levels the card lists, in order; empty when it lists none.
-    pub levels: Vec<String>,
-    /// The card's default reasoning effort.
-    pub default_level: Option<String>,
-    /// Whether the model takes images; a card without `input` says nothing against it.
-    pub images: bool,
-    /// The price cards of the card's pricing key.
-    pub prices: Prices,
+    pub betas: Option<&'a str>,
+    pub priced_by: Option<&'a str>,
 }
 
-impl ModelInfo {
-    /// What the model's name says, for a model without a card.
-    pub(super) fn guess(model: &str) -> Self {
-        Self {
-            protocol: match model.starts_with("claude-") {
-                true => Protocol::Messages,
-                false => Protocol::Responses,
-            },
-            window: None,
-            output: None,
-            reasoning: true,
-            levels: Vec::new(),
-            default_level: None,
-            images: true,
-            prices: Prices::default(),
-        }
-    }
-
-    /// `effort` fitted to the card's levels (`fit`).
-    pub(super) fn fit<'a>(&'a self, effort: &'a str) -> &'a str {
-        fit(&self.levels, effort)
-    }
-
-    /// From a Proxy model card and the document's price cards: Responses when the card lists it,
-    /// else Messages when it lists that.
-    fn from_card(card: &Value, prices: &[Value]) -> Self {
-        let lists = |protocol: &str| {
-            card["supportedProtocols"]
-                .as_array()
-                .is_some_and(|protocols| protocols.iter().any(|p| p == protocol))
-        };
-        Self {
-            protocol: match !lists("openai-responses") && lists("anthropic-messages") {
-                true => Protocol::Messages,
-                false => Protocol::Responses,
-            },
-            window: card["limits"]["context"].as_u64(),
-            output: card["limits"]["output"].as_u64(),
-            reasoning: !card["reasoning"].is_null(),
-            levels: card["reasoning"]["levels"]
-                .as_array()
-                .map(|levels| {
-                    levels
-                        .iter()
-                        .filter_map(|l| l.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            default_level: card["reasoning"]["default"].as_str().map(str::to_owned),
-            images: card["input"]
-                .as_array()
-                .is_none_or(|input| input.iter().any(|kind| kind == "image")),
-            prices: Prices::of(prices, card["pricingKey"].as_str()),
-        }
-    }
-}
-
-/// `effort`, or when `levels` has others but not it, the nearest higher level among them, else
-/// the nearest lower one, as Scramjet clamps a thinking level. An effort not in Scramjet's order
-/// is left for the endpoint to judge.
-pub(super) fn fit<'a>(levels: &[String], effort: &'a str) -> &'a str {
-    const ORDER: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
-    let listed = |level: &str| levels.iter().any(|listed| listed == level);
-    match ORDER.iter().position(|level| *level == effort) {
-        Some(wanted) if !levels.is_empty() && !listed(effort) => ORDER[wanted..]
-            .iter()
-            .chain(ORDER[..wanted].iter().rev())
-            .copied()
-            .find(|level| listed(level))
-            .unwrap_or(effort),
-        _ => effort,
-    }
-}
-
-/// Each Proxy model card's model, display name and what the agent needs to know of it; none when
-/// the endpoint does not serve the cards in time.
-pub(super) async fn model_cards(endpoint: SocketAddr) -> Vec<Card> {
-    let Some((cards, prices)) = cards(endpoint).await else {
-        return Vec::new();
-    };
-    (cards.iter())
-        .filter_map(|card| {
-            let text = |key: &str| card[key].as_str().map(str::to_owned);
-            Some(Card {
-                id: text("requestId")?,
-                name: text("displayName"),
-                provider: text("provider"),
-                info: ModelInfo::from_card(card, &prices),
-            })
-        })
-        .collect()
-}
-
-/// What a Proxy model card says of a model.
-pub(super) struct Card {
-    pub id: String,
-    pub name: Option<String>,
-    pub provider: Option<String>,
-    pub info: ModelInfo,
-}
-
-/// The model's Proxy model card; `None` when the endpoint does not serve the cards in time or does
-/// not list the model.
-pub(super) async fn model_info(endpoint: SocketAddr, model: &str) -> Option<ModelInfo> {
-    let (cards, prices) = cards(endpoint).await?;
-    (cards.iter())
-        .find(|card| card["requestId"] == model)
-        .map(|card| ModelInfo::from_card(card, &prices))
-}
-
-/// The document's model cards and price cards; a document without price cards has none.
-async fn cards(endpoint: SocketAddr) -> Option<(Vec<Value>, Vec<Value>)> {
-    let cards = tokio::time::timeout(CARDS_TIMEOUT, get(endpoint, "/api/model-cards"))
-        .await
-        .ok()??;
-    let mut cards: Value = serde_json::from_slice(&cards).ok()?;
-    let Value::Array(models) = cards["models"].take() else {
-        return None;
-    };
-    let prices = match cards["priceCards"].take() {
-        Value::Array(prices) => prices,
-        _ => Vec::new(),
-    };
-    Some((models, prices))
-}
-
-async fn get(endpoint: SocketAddr, path: &str) -> Option<Bytes> {
-    let socket = TcpStream::connect(endpoint).await.ok()?;
-    let (mut sender, connection) = http1::handshake(TokioIo::new(socket)).await.ok()?;
-    let request = Request::builder()
-        .uri(path)
-        .header("Host", endpoint.to_string())
-        .body(Full::new(Bytes::new()))
-        .ok()?;
-    let mut exchange = std::pin::pin!(async {
-        let response = sender.send_request(request).await.ok()?;
-        if response.status() != 200 {
-            return None;
-        }
-        let body = http_body_util::Limited::new(response.into_body(), CARDS_BYTES);
-        Some(body.collect().await.ok()?.to_bytes())
-    });
-    // A connection closed after the response may end first; the response is still complete.
-    tokio::select! {
-        body = &mut exchange => body,
-        _ = connection => exchange.await,
-    }
-}
-
-/// `betas` is a Messages request's `anthropic-beta` header.
 pub(super) async fn respond(
-    endpoint: SocketAddr,
-    protocol: Protocol,
+    sent: Sent<'_>,
     body: Vec<u8>,
-    betas: Option<&str>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(StreamProgress),
 ) -> Result<Reply, ClientError> {
     tokio::select! {
         biased;
         () = cancelled(cancel) => Err(ClientError::Cancelled),
-        result = exchange(endpoint, protocol, body, betas, progress) => result.map_err(ClientError::Failed),
+        result = exchange(sent, body, progress) => result.map_err(ClientError::Failed),
     }
 }
 
 async fn exchange(
-    endpoint: SocketAddr,
-    protocol: Protocol,
+    Sent {
+        route,
+        protocol,
+        betas,
+        priced_by,
+    }: Sent<'_>,
     body: Vec<u8>,
-    betas: Option<&str>,
     progress: &mut dyn FnMut(StreamProgress),
 ) -> Result<Reply, Failure> {
-    let socket = TcpStream::connect(endpoint).await.map_err(|e| {
+    let authority = &route.authority;
+    let provider = &route.provider;
+    let socket = (TcpStream::connect((route.host.as_str(), route.port)).await).map_err(|e| {
         Failure::new(
-            format!("cannot connect to {endpoint}: {e} (is Proxy running?)"),
+            format!("cannot connect to {authority} (provider {provider}): {e}"),
             true,
         )
     })?;
@@ -442,15 +263,11 @@ async fn exchange(
         .await
         .map_err(|e| Failure::new(format!("HTTP handshake failed: {e}"), true))?;
     let driver = tokio::spawn(driver);
-    // Proxy replaces client credentials with its own.
-    let request = match protocol {
-        Protocol::Responses => Request::builder()
-            .uri("/v1/responses")
-            .header("Authorization", "Bearer managed-by-proxy"),
+    let mut request = match protocol {
+        Protocol::Responses => Request::builder().uri(format!("{}/responses", route.path)),
         Protocol::Messages => {
             let request = Request::builder()
-                .uri("/v1/messages")
-                .header("x-api-key", "managed-by-proxy")
+                .uri(format!("{}/v1/messages", route.path))
                 .header("anthropic-version", "2023-06-01");
             match betas {
                 Some(betas) => request.header("anthropic-beta", betas),
@@ -458,9 +275,12 @@ async fn exchange(
             }
         }
     };
+    for (name, value) in &route.headers {
+        request = request.header(name, value);
+    }
     let request = request
         .method("POST")
-        .header("Host", endpoint.to_string())
+        .header("Host", authority)
         .header("Content-Type", "application/json")
         .header("Accept", "text/event-stream")
         .header("Content-Length", body.len())
@@ -483,7 +303,7 @@ async fn exchange(
         Some(crate::http::retry_after::RetryWait::Unrepresentable) => Some(Duration::MAX),
         None => None,
     };
-    let backend = (response.headers().get("x-llm-backend"))
+    let priced_by = (priced_by.and_then(|header| response.headers().get(header)))
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
@@ -524,7 +344,7 @@ async fn exchange(
         }
     };
     driver.abort();
-    result.map(|reply| Reply { backend, ..reply })
+    result.map(|reply| Reply { priced_by, ..reply })
 }
 
 /// Passes each received chunk to `feed` until the body ends, `feed` fails or the stream stalls.

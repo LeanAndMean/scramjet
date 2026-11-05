@@ -4,6 +4,21 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.12.0 — Providers from models.json
+
+### Changed
+
+- Models come from the providers listed in `models.json`, in Scramjet's format: the one beside the settings (`~/.config/scramjet-rs/models.json`), then one in each installed command set. Each provider has a `baseUrl` (plain `http://` for now), an `api` (`openai-responses` or `anthropic-messages`), an `apiKey` (an environment variable's name, or the key itself) and its `models`, each with its limits, thinking levels, whether it takes images and its prices. `--help` and the README say how. `--endpoint` is gone.
+- The local Proxy route comes from a private package, installed with `scramjet-rs install`, instead of being built in.
+- `/model` and `/scoped-models` name every model's provider, as Scramjet's do, and list the models by provider.
+
+### Added
+
+- A `models.json` may name a program in `providersCommand` whose output adds providers, as a package that learns its models at run time does.
+- `scramjet-rs install` takes a directory that has only a `models.json`.
+- A model's `cost` may give `longContext` rates for responses whose input is over a number of tokens, and rates by the value of a response header (`header`, `byHeader`), such as the backend that served it.
+- What is wrong in the `models.json` files is said at start, by `/reload` and by `--list-models`.
+
 ## 0.11.0 — Three new looks to try
 
 ### Added

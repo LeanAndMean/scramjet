@@ -160,7 +160,7 @@ flag): {}\n",
     text
 }
 
-/// A model as the Model Identity names it, from its Proxy card.
+/// A model as the Model Identity names it, as its provider describes it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Identity {
     pub name: Option<String>,

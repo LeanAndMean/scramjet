@@ -76,7 +76,7 @@ impl Interactive {
         };
         match self.agent.resume_session(&path) {
             Ok(()) => {
-                self.agent.load_model_card();
+                self.agent.load_model_info();
                 self.remember_prompts();
                 self.replaced(&format!(
                     "✓ Resumed session · {}\n{}",
@@ -274,7 +274,7 @@ impl Interactive {
         };
         match self.agent.fork(index) {
             Ok(Some(prompt)) => {
-                self.agent.load_model_card();
+                self.agent.load_model_info();
                 self.replaced(&format!(
                     "✓ Forked to new session · {}\n{}",
                     model_line(&self.agent),
@@ -294,7 +294,7 @@ impl Interactive {
     pub(super) fn clone_session(&mut self, name: &str) {
         match self.agent.clone_session() {
             Ok(true) => {
-                self.agent.load_model_card();
+                self.agent.load_model_info();
                 self.replaced(&format!(
                     "✓ Cloned to new session · {}\n{}",
                     model_line(&self.agent),

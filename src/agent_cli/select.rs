@@ -1506,7 +1506,6 @@ mod tests {
             provider: None,
             reasoning: !levels.is_empty(),
             levels: levels.iter().map(|level| level.to_string()).collect(),
-            default_level: None,
             window: None,
             output: None,
             images: true,
@@ -1577,10 +1576,9 @@ mod tests {
             effort,
         };
         assert_eq!(picker.routed(), Some(only_effort));
-        // With one model there is no model line; without an effort set, the card's default.
-        let mut alone = model("gpt-6-luna", None, &["low", "high"]);
-        alone.default_level = Some("high".into());
-        let route = Route::new(vec![alone], 0, None);
+        // With one model there is no model line.
+        let alone = model("gpt-6-luna", None, &["low", "high"]);
+        let route = Route::new(vec![alone], 0, Some("high".into()));
         let mut single = Picker::question("Select next step", &options, None).routing(route);
         assert_eq!(tail(&single), ["effort: high · Shift+Tab cycle"]);
         assert_eq!(single.key(&key("right")), None);

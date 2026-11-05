@@ -178,7 +178,7 @@ impl Completion {
     }
 
     /// The argument of a built-in command that Scramjet completes: after `/model `, the
-    /// endpoint's `models` that match it fuzzily; after `/autopilot `, the words starting with it.
+    /// providers' `models` that match it fuzzily; after `/autopilot `, the words starting with it.
     pub(super) fn argument(before: &str, models: &[String]) -> Option<Self> {
         let (name, typed) = before.strip_prefix('/')?.split_once(' ')?;
         if typed.contains('\n') {
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn built_in_arguments_complete_as_scramjets() {
         let models = ["gpt-6-luna", "claude-haiku-5-5", "gpt-6.1-sol"].map(String::from);
-        // The models in the endpoint's order, then those matching what is typed, best first.
+        // The models in the providers' order, then those matching what is typed, best first.
         let list = Completion::argument("/model ", &models).unwrap();
         assert_eq!(labels(&list), models);
         assert_eq!(

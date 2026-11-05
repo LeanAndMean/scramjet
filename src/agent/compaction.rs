@@ -1240,7 +1240,7 @@ mod tests {
         drop(first);
 
         let config = AgentConfig {
-            endpoint,
+            providers: crate::agent::tests::serving(endpoint),
             model: "m".into(),
             root: scratch.0.clone(),
             effort: None,

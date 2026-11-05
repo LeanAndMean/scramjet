@@ -4,7 +4,7 @@ use crate::provider_fixture as fixture;
 use client::Protocol;
 use session::Session;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::{sync::atomic::AtomicBool, time::Duration};
+use std::{net::SocketAddr, sync::atomic::AtomicBool, time::Duration};
 
 #[derive(Default)]
 pub(super) struct Recorder {
@@ -296,10 +296,56 @@ pub(super) fn serve_answering(
     (address, server)
 }
 
+/// The models the tests use.
+const SERVED: [&str; 16] = [
+    "m",
+    "a",
+    "b",
+    "c",
+    "other",
+    "plain",
+    "old",
+    "new",
+    "flash",
+    "both",
+    "gpt-6-luna",
+    "gpt-6-terra",
+    "claude-opus-5-5",
+    "claude-sonnet-4-5",
+    "claude-haiku-5-5",
+    "claude-haiku-4-5-20251001",
+];
+
+/// A provider at `endpoint` offering the models the tests use, each as its name suggests
+/// (`ModelInfo::guess`): Claude on Messages, the others on Responses, all reasoning at any level
+/// and taking images, with nothing known of their limits or prices.
+pub(super) fn serving(endpoint: SocketAddr) -> Providers {
+    let any: serde_json::Map<String, Value> =
+        ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+            .iter()
+            .map(|level| (level.to_string(), json!(settings_level(level))))
+            .collect();
+    let models: Vec<Value> = (SERVED.iter())
+        .map(|id| {
+            let (api, base) = match id.starts_with("claude-") {
+                true => ("anthropic-messages", format!("http://{endpoint}")),
+                false => ("openai-responses", format!("http://{endpoint}/v1")),
+            };
+            json!({"id": id, "api": api, "baseUrl": base, "reasoning": true,
+                "input": ["text", "image"], "thinkingLevelMap": any})
+        })
+        .collect();
+    Providers::given(json!({"providers": {"test": {"models": models}}}))
+}
+
+fn settings_level(level: &str) -> &str {
+    if level == "off" { "none" } else { level }
+}
+
 /// The configuration of an agent of the project `root`, with the model `m`.
 pub(super) fn config(endpoint: SocketAddr, root: &Path) -> AgentConfig {
     AgentConfig {
-        endpoint,
+        providers: serving(endpoint),
         model: "m".into(),
         root: root.to_owned(),
         effort: None,
@@ -399,64 +445,39 @@ pub(super) fn last_output(body: &Value) -> String {
     input.last().unwrap()["output"].as_str().unwrap().to_owned()
 }
 
-/// Answers one GET request per response in turn; returns the request lines.
-pub(super) fn serve_gets(
-    responses: Vec<(&'static str, String)>,
-) -> (SocketAddr, std::thread::JoinHandle<Vec<String>>) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let mut requests = Vec::new();
-        for (status, body) in responses {
-            let (connection, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(connection);
-            let mut head = String::new();
-            while !head.ends_with("\r\n\r\n") {
-                reader.read_line(&mut head).unwrap();
-            }
-            requests.push(head.lines().next().unwrap().to_owned());
-            let response = format!(
-                "HTTP/1.1 {status}\r\ncontent-length: {}\r\n\r\n{body}",
-                body.len()
-            );
-            reader.get_mut().write_all(response.as_bytes()).unwrap();
-        }
-        requests
-    });
-    (endpoint, server)
-}
-
 #[test]
-fn the_context_window_comes_from_proxy_model_cards() {
-    let cards = json!({"models": [
-        {"requestId": "other", "provider": "anthropic", "limits": {"context": 1}},
-        {"requestId": "m", "provider": "openai",
-            "limits": {"context": 1_050_000, "output": 128_000}},
-    ]})
-    .to_string();
-    let alone = json!({"models": [{"requestId": "m", "provider": "openai"}]}).to_string();
-    let (endpoint, server) = serve_gets(vec![
-        ("200 OK", cards),
-        ("200 OK", alone),
-        ("404 Not Found", "no".into()),
-    ]);
-    let (mut cards, _scratch) = agent(endpoint, "cards");
-    assert_eq!(cards.load_model_card(), Some(1_050_000));
-    assert_eq!(cards.info.output, Some(128_000));
-    assert_eq!(cards.provider(), Some("openai"));
-    cards.set_model("m").unwrap();
-    assert_eq!((cards.info.output, cards.provider()), (None, None));
-    // The provider is named only when the endpoint's models have several.
-    assert_eq!(cards.load_model_card(), None);
-    assert_eq!(cards.provider(), None);
-    assert_eq!(cards.load_model_card(), None);
-    assert_eq!(server.join().unwrap(), ["GET /api/model-cards HTTP/1.1"; 3]);
-    assert_eq!(cards.load_model_card(), None);
-    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let (mut hung, _scratch) = agent(silent.local_addr().unwrap(), "cards-silent");
-    let started = std::time::Instant::now();
-    assert_eq!(hung.load_model_card(), None);
-    assert!(started.elapsed() < Duration::from_secs(2));
+fn what_the_model_takes_comes_from_its_provider_read_again_each_time() {
+    let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "provider-info");
+    let file = scratch.0.join("models.json");
+    let write = |document: Value| std::fs::write(&file, document.to_string()).unwrap();
+    let openai = |m: Value| {
+        json!({"baseUrl": "http://127.0.0.1:9/v1", "api": "openai-responses",
+        "models": [m]})
+    };
+    write(json!({"providers": {
+        "anthropic": {"baseUrl": "http://127.0.0.1:9", "api": "anthropic-messages",
+            "models": [{"id": "other", "contextWindow": 1}]},
+        "openai": openai(json!({"id": "m", "name": "Model M", "contextWindow": 1_050_000,
+            "maxTokens": 128_000})),
+    }}));
+    agent.set_providers(Providers::read(vec![file.clone()]));
+    assert_eq!(agent.context_window(), Some(1_050_000));
+    assert_eq!(agent.info.output, Some(128_000));
+    assert_eq!(agent.provider(), Some("openai"));
+    agent.set_model("m").unwrap();
+    assert_eq!((agent.info.output, agent.provider()), (Some(128_000), None));
+    // The provider is named only when the models are those of several.
+    write(json!({"providers": {"openai": openai(json!({"id": "m"}))}}));
+    assert_eq!(agent.load_model_info(), None);
+    assert_eq!(agent.provider(), None);
+    // A model no provider offers any longer keeps what was known of it and where it went, and
+    // the names stay known for the Model Identity.
+    write(json!({"providers": {"openai": openai(json!({"id": "m", "contextWindow": 5}))}}));
+    assert_eq!(agent.load_model_info(), Some(5));
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(agent.load_model_info(), Some(5));
+    assert!(agent.info.route.is_some());
+    assert!(agent.identities.contains_key("m"));
 }
 
 pub(super) fn write_session(path: &Path, lines: &[Value], modified: std::time::SystemTime) {
@@ -714,7 +735,7 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
     assert_eq!(agent.session_id(), "session");
     let path = agent.session_path().to_owned();
     let config = AgentConfig {
-        endpoint,
+        providers: serving(endpoint),
         model: "m".into(),
         root: scratch.0.clone(),
         effort: None,
@@ -1435,120 +1456,118 @@ fn model_switches_are_saved_at_once_and_resumed() {
 }
 
 #[test]
-fn the_model_list_is_the_endpoints() {
-    let list = json!({"data": [{"id": "claude"}, {"id": "gpt"}]}).to_string();
-    let (endpoint, server) = serve_gets(vec![("200 OK", list), ("404 Not Found", "no".into())]);
-    let (agent, _scratch) = agent(endpoint, "model-list");
-    let ids = Some(vec!["claude".to_owned(), "gpt".to_owned()]);
-    assert_eq!(agent.models(), ids);
+fn the_model_list_is_the_providers() {
+    let (mut agent, _scratch) = agent("127.0.0.1:9".parse().unwrap(), "model-list");
+    let ids: Vec<String> = SERVED.iter().map(|id| id.to_string()).collect();
+    assert_eq!(agent.models(), Some(ids));
+    agent.set_providers(Providers::given(json!({})));
     assert_eq!(agent.models(), None);
-    assert_eq!(server.join().unwrap(), ["GET /v1/models HTTP/1.1"; 2]);
 }
 
 #[test]
-fn a_next_step_offers_the_endpoints_models_with_their_cards_and_the_current_one() {
-    let list = json!({"data": [{"id": "gpt"}, {"id": "claude"}]}).to_string();
-    let cards = json!({"models": [
-        {"requestId": "claude", "displayName": "Claude", "provider": "anthropic",
-            "reasoning": {"levels": ["low", "high"]}, "input": ["text"],
-            "limits": {"context": 200_000, "output": 64_000}},
-        {"requestId": "m", "displayName": "Current", "reasoning": null},
-    ]})
-    .to_string();
-    let (endpoint, server) = serve_gets(vec![
-        ("200 OK", list),
-        ("200 OK", cards),
-        ("404 Not Found", "no".into()),
-        ("404 Not Found", "no".into()),
-    ]);
-    let (agent, _scratch) = agent(endpoint, "model-options");
-    let option = |id: &str, name: Option<&str>, reasoning, levels: &[&str]| ModelOption {
+fn a_next_step_offers_the_providers_models_and_the_current_one() {
+    let (mut agent, _scratch) = agent("127.0.0.1:9".parse().unwrap(), "model-options");
+    let current = agent.info.clone();
+    agent.set_providers(Providers::given(json!({"providers": {
+        "openai": {"baseUrl": "http://127.0.0.1:9/v1", "api": "openai-responses",
+            "models": [{"id": "gpt", "reasoning": true, "input": ["text", "image"]}]},
+        "anthropic": {"baseUrl": "http://127.0.0.1:9", "api": "anthropic-messages",
+            "models": [{"id": "claude", "name": "Claude", "reasoning": true, "input": ["text"],
+                "contextWindow": 200_000, "maxTokens": 64_000,
+                "thinkingLevelMap": {"off": null, "minimal": null, "medium": null}}]},
+    }})));
+    let option = |id: &str, provider: Option<&str>, levels: &[&str]| ModelOption {
         id: id.into(),
-        name: name.map(str::to_owned),
-        provider: (id == "claude").then(|| "anthropic".to_owned()),
-        reasoning,
+        name: None,
+        provider: provider.map(str::to_owned),
+        reasoning: true,
         levels: levels.iter().map(|level| level.to_string()).collect(),
-        default_level: None,
         window: None,
         output: None,
         images: true,
         rate: None,
     };
-    // The current model, which the endpoint does not list, goes first, as its card says.
+    // The current model, which no provider offers, goes first, as the agent knows it.
     let options = agent.model_options();
     assert_eq!(
         options,
         [
-            option("m", Some("Current"), false, &[]),
-            option("gpt", None, true, &[]),
             ModelOption {
+                levels: current.levels.clone(),
+                ..option("m", None, &[])
+            },
+            ModelOption {
+                name: Some("Claude".into()),
                 window: Some(200_000),
                 output: Some(64_000),
                 images: false,
-                ..option("claude", Some("Claude"), true, &["low", "high"])
+                ..option("claude", Some("anthropic"), &["low", "high"])
             },
+            option(
+                "gpt",
+                Some("openai"),
+                &["none", "minimal", "low", "medium", "high"]
+            ),
         ]
     );
-    let claude = &options[2];
+    let claude = &options[1];
     assert_eq!(claude.effort(Some("medium")).as_deref(), Some("high"));
     assert_eq!(claude.next_effort(Some("medium")).as_deref(), Some("low"));
-    assert_eq!(
-        (claude.effort(None), options[1].next_effort(None)),
-        (None, None)
-    );
-    // Without a list, only the current model, as the agent knows it.
-    assert_eq!(agent.model_options(), [option("m", None, true, &[])]);
-    let requests = ["GET /v1/models HTTP/1.1", "GET /api/model-cards HTTP/1.1"];
-    assert_eq!(server.join().unwrap(), [requests, requests].concat());
+    assert_eq!(claude.effort(None), None);
+    // Without an explicit level, Scramjet's xhigh and max are taken as high.
+    assert_eq!(options[2].effort(Some("max")).as_deref(), Some("high"));
+    // Without models, only the current one.
+    agent.set_providers(Providers::given(json!({})));
+    assert_eq!(agent.model_options().len(), 1);
 }
 
 #[test]
-fn model_cards_choose_the_protocol_and_names_do_without_one() {
-    let cards = json!({"models": [
-        {"requestId": "claude-opus-5-5", "supportedProtocols": ["anthropic-messages"],
-         "limits": {"context": 1_000_000, "output": 128_000}, "reasoning": {"levels": ["high"]},
-         "input": ["text", "image", "pdf"]},
-        {"requestId": "both", "supportedProtocols": ["openai-responses", "anthropic-messages"],
-         "reasoning": null, "input": ["text"]},
-    ]})
-    .to_string();
-    let (endpoint, server) = serve_gets(vec![("200 OK", cards.clone()), ("200 OK", cards)]);
-    let (mut agent, _scratch) = agent(endpoint, "protocols");
+fn entries_choose_the_protocol_and_names_do_without_one() {
+    let (mut agent, _scratch) = agent("127.0.0.1:9".parse().unwrap(), "protocols");
+    let only_high: serde_json::Map<String, Value> =
+        ["off", "minimal", "low", "medium", "xhigh", "max"]
+            .iter()
+            .map(|level| (level.to_string(), Value::Null))
+            .collect();
+    agent.set_providers(Providers::given(json!({"providers": {"p": {
+        "baseUrl": "http://127.0.0.1:9/v1", "api": "openai-responses",
+        "models": [
+            {"id": "claude-opus-5-5", "api": "anthropic-messages", "contextWindow": 1_000_000,
+                "maxTokens": 128_000, "reasoning": true, "thinkingLevelMap": only_high,
+                "input": ["text", "image"]},
+            {"id": "both", "input": ["text"]},
+        ],
+    }}})));
     agent.set_model("claude-opus-5-5").unwrap();
-    assert_eq!(agent.load_model_card(), Some(1_000_000));
-    let expected = ModelInfo {
-        protocol: Protocol::Messages,
-        window: Some(1_000_000),
-        output: Some(128_000),
-        reasoning: true,
-        levels: vec!["high".into()],
-        default_level: None,
-        images: true,
-        prices: Default::default(),
-    };
-    assert_eq!(agent.info, expected);
+    assert_eq!(agent.load_model_info(), Some(1_000_000));
+    let info = &agent.info;
+    assert_eq!(
+        (info.protocol, info.output),
+        (Protocol::Messages, Some(128_000))
+    );
+    assert!(info.reasoning && info.images);
+    assert_eq!(info.levels, ["high"]);
     agent.set_model("both").unwrap();
-    agent.load_model_card();
     assert_eq!(agent.info.protocol, Protocol::Responses);
     assert!(!agent.info.reasoning);
     assert!(!agent.info.images);
-    server.join().unwrap();
     assert_eq!(ModelInfo::guess("claude-new").protocol, Protocol::Messages);
     assert_eq!(ModelInfo::guess("gpt-new").protocol, Protocol::Responses);
 }
 
 #[test]
-fn shift_tab_cycles_the_card_levels_and_the_effort_is_sent_fitted_saved_and_restored() {
-    let card = json!({"models": [
-        {"requestId": "gpt-6-luna", "supportedProtocols": ["openai-responses"],
-         "reasoning": {"levels": ["none","low","medium","high","xhigh","max"], "default": "medium"}},
-        {"requestId": "flash", "supportedProtocols": ["openai-responses"],
-         "reasoning": {"levels": ["none","low","high","xhigh","max"]}},
-        {"requestId": "plain", "supportedProtocols": ["openai-responses"], "reasoning": {}},
-    ]})
-    .to_string();
-    let (endpoint, server) = serve_gets(vec![("200 OK", card); 4]);
-    let (mut agent, scratch) = agent(endpoint, "effort-cycle");
+fn shift_tab_cycles_the_models_levels_and_the_effort_is_sent_fitted_saved_and_restored() {
+    let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "effort-cycle");
+    let entry =
+        |id: &str, map: Value| json!({"id": id, "reasoning": true, "thinkingLevelMap": map});
+    agent.set_providers(Providers::given(json!({"providers": {"p": {
+        "baseUrl": "http://127.0.0.1:9/v1", "api": "openai-responses",
+        "models": [
+            entry("gpt-6-luna", json!({"minimal": null, "xhigh": "xhigh", "max": "max"})),
+            entry("flash", json!({"minimal": null, "medium": null, "xhigh": "xhigh", "max": "max"})),
+            {"id": "plain"},
+        ],
+    }}})));
     let saved = |path: &Path| -> Vec<String> {
         std::fs::read_to_string(path)
             .unwrap()
@@ -1559,20 +1578,22 @@ fn shift_tab_cycles_the_card_levels_and_the_effort_is_sent_fitted_saved_and_rest
             .collect()
     };
     agent.set_model("gpt-6-luna").unwrap();
-    agent.load_model_card();
-    // No effort is set: the cycle starts after the card's default, medium.
+    agent.set_effort("medium").unwrap();
     let cycled: Vec<_> = (0..5)
         .map(|_| agent.cycle_effort().unwrap().unwrap())
         .collect();
     assert_eq!(cycled, ["high", "xhigh", "max", "none", "low"]);
     assert_eq!(agent.request()["reasoning"]["effort"], "low");
-    assert_eq!(saved(agent.session_path()), cycled);
+    assert_eq!(
+        saved(agent.session_path()),
+        [&["medium".to_owned()], &cycled[..]].concat()
+    );
 
-    // A level the next model's card lacks is sent as the nearest higher one it lists, and
-    // the cycle goes on from that one.
+    // A level the next model lacks is sent as the nearest higher one it takes, and the cycle
+    // goes on from that one.
     agent.set_effort("medium").unwrap();
     agent.set_model("flash").unwrap();
-    agent.load_model_card();
+    agent.load_model_info();
     assert_eq!(agent.effort(), Some("high"));
     assert_eq!(agent.request()["reasoning"]["effort"], "high");
     assert_eq!(agent.cycle_effort().unwrap().as_deref(), Some("xhigh"));
@@ -1589,7 +1610,7 @@ fn shift_tab_cycles_the_card_levels_and_the_effort_is_sent_fitted_saved_and_rest
         std::time::SystemTime::now(),
     );
     agent.resume_session(&path).unwrap();
-    agent.load_model_card();
+    agent.load_model_info();
     assert_eq!(agent.effort(), Some("max"));
     assert_eq!(agent.cycle_effort().unwrap().as_deref(), Some("none"));
     assert_eq!(saved(&path), ["max", "none"]);
@@ -1601,10 +1622,10 @@ fn shift_tab_cycles_the_card_levels_and_the_effort_is_sent_fitted_saved_and_rest
         .find(|entry| Some(entry.line) == tree.current);
     assert_eq!(current.unwrap().item, TreeItem::Effort("none".into()));
 
-    // A model whose card lists no levels keeps its effort and writes nothing.
+    // A model without levels keeps its effort and writes nothing.
     agent.set_model("plain").unwrap();
     let before = std::fs::read_to_string(&path).unwrap();
-    agent.load_model_card();
+    agent.load_model_info();
     assert_eq!(agent.cycle_effort().unwrap(), None);
     assert_eq!(agent.effort(), Some("none"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
@@ -1612,11 +1633,10 @@ fn shift_tab_cycles_the_card_levels_and_the_effort_is_sent_fitted_saved_and_rest
     // A new session starts with the effort recorded, as with the model.
     agent.new_session().unwrap();
     assert_eq!(saved(agent.session_path()), ["none"]);
-    server.join().unwrap();
 }
 
 #[test]
-fn an_effort_the_card_lacks_becomes_the_nearest_level_it_lists() {
+fn an_effort_the_model_lacks_becomes_the_nearest_level_it_takes() {
     let info = |levels: &[&str]| ModelInfo {
         levels: levels.iter().map(|level| level.to_string()).collect(),
         ..ModelInfo::guess("m")
@@ -1626,7 +1646,7 @@ fn an_effort_the_card_lacks_becomes_the_nearest_level_it_lists() {
     assert_eq!(opus.fit("high"), "high");
     assert_eq!(info(&["none", "low", "high"]).fit("medium"), "high");
     assert_eq!(info(&["none", "low", "medium", "high"]).fit("max"), "high");
-    // A level not in Scramjet's order is left for the endpoint to judge.
+    // A level not in Scramjet's order is left for the provider to judge.
     assert_eq!(opus.fit("hgih"), "hgih");
     assert_eq!(info(&[]).fit("minimal"), "minimal");
 }
@@ -1715,12 +1735,10 @@ fn installed_says_where_each_comes_from_and_what_is_wrong() {
     );
 }
 
-/// Prices of a model's provider card, in effect since 1970, in dollars per million tokens.
+/// A model's prices in dollars per million tokens, cache writes at 1.25 times its input.
 pub(super) fn prices(input: f64, cache_read: f64, output: f64) -> pricing::Prices {
-    let card = json!({"api":"foundry","pricingKey":"m","effectiveFrom":"1970-01-01T00:00:00.000Z",
-        "inputPerMTok":input,"cacheWritePerMTok":input * 1.25,"cacheReadPerMTok":cache_read,
-        "outputPerMTok":output});
-    pricing::Prices::of(&[card], Some("m"))
+    pricing::Prices::of(&json!({"input": input, "cacheWrite": input * 1.25,
+        "cacheRead": cache_read, "output": output}))
 }
 
 pub(super) fn close(cost: f64, expected: f64) {
@@ -1728,12 +1746,12 @@ pub(super) fn close(cost: f64, expected: f64) {
 }
 
 #[test]
-fn each_response_is_priced_by_the_card_of_its_backend_and_resumes_keep_what_it_cost() {
+fn each_response_is_priced_by_its_backends_rates_and_resumes_keep_what_it_cost() {
     let served_by = |backend: Option<&str>| {
         let usage = json!({"input_tokens":1_000_000,"output_tokens":10_000,"total_tokens":1_010_000,
             "input_tokens_details":{"cached_tokens":300_000,"cache_write_tokens":100_000}});
         let response = String::from_utf8(stream(&fixture::text_events("priced", usage))).unwrap();
-        let header = backend.map(|backend| format!("\r\nx-llm-backend: {backend}"));
+        let header = backend.map(|backend| format!("\r\nx-served-by: {backend}"));
         response
             .replacen("\r\n", &(header.unwrap_or_default() + "\r\n"), 1)
             .into_bytes()
@@ -1744,15 +1762,12 @@ fn each_response_is_priced_by_the_card_of_its_backend_and_resumes_keep_what_it_c
         served_by(Some("onehpc")),
     ]);
     let (mut agent, _scratch) = agent(endpoint, "priced");
-    let rate = |input: f64, write: f64, read: f64, output: f64| {
-        json!({"inputPerMTok":input,"cacheWritePerMTok":write,"cacheReadPerMTok":read,
-            "outputPerMTok":output,"effectiveFrom":"2026-01-01T00:00:00.000Z","pricingKey":"opus"})
-    };
-    let mut foundry = rate(5.0, 6.25, 0.5, 25.0);
-    foundry["api"] = json!("foundry");
-    let mut bedrock = rate(5.5, 6.875, 0.55, 27.5);
-    (bedrock["api"], bedrock["upstreamProvider"]) = (json!("agentic"), json!("bedrock"));
-    agent.info.prices = pricing::Prices::of(&[foundry, bedrock], Some("opus"));
+    agent.info.prices = pricing::Prices::of(&json!({
+        "input": 5, "cacheWrite": 6.25, "cacheRead": 0.5, "output": 25,
+        "header": "x-served-by",
+        "byHeader": {"bedrock": {"input": 5.5, "cacheWrite": 6.875, "cacheRead": 0.55,
+            "output": 27.5}},
+    }));
     let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
     agent.turn("one", &mut ui, &cancel).unwrap();
     // 600k input tokens neither read from the cache nor written to it, 300k read, 100k written.
@@ -1768,7 +1783,7 @@ fn each_response_is_priced_by_the_card_of_its_backend_and_resumes_keep_what_it_c
     close(tokens.cost, both);
     assert!(!tokens.unpriced);
     assert_eq!((tokens.input, tokens.cache_write), (1_200_000, 200_000));
-    // Proxy has no card for this backend: the cost is not known.
+    // No rates for this backend: the cost is not known.
     agent.turn("three", &mut ui, &cancel).unwrap();
     server.join().unwrap();
     assert!(
@@ -1883,29 +1898,26 @@ fn replies_keep_their_models_output_rate_for_the_footer_and_the_model_list() {
     assert_eq!(ui.rates.len(), 2);
     assert!(ui.rates.iter().all(Option::is_some));
     assert_eq!(ui.rates.last(), Some(&Some(rate)));
-    // The endpoint is gone: the list has the current model, with its rate.
+    // The list has the model with its rate.
     assert_eq!(agent.model_options()[0].rate, Some(rate));
 }
 
 #[test]
 fn requests_end_with_the_models_identity_and_the_sessions_file() {
-    let cards = json!({"models": [
-        {"requestId": "m", "displayName": "Model M", "provider": "openai"},
-        {"requestId": "c", "displayName": "Claude C", "provider": "anthropic"},
-    ]})
-    .to_string();
-    let (gets, cards_server) = serve_gets(vec![("200 OK", cards), ("404 Not Found", "no".into())]);
-    let (mut agent, _scratch) = agent(gets, "identity");
-    agent.load_model_card();
-    // Cards that cannot be read again keep the names known.
-    agent.load_model_card();
-    cards_server.join().unwrap();
     let (endpoint, server) = serve(vec![
         stream(&fixture::text_events("one", fixture::known_usage())),
         stream(&fixture::text_events("two", fixture::known_usage())),
         stream(&fixture::text_events("three", fixture::known_usage())),
     ]);
-    agent.config.endpoint = endpoint;
+    let (mut agent, _scratch) = agent(endpoint, "identity");
+    let provider = |id: &str, name: &str| {
+        json!({"baseUrl": format!("http://{endpoint}/v1"),
+        "api": "openai-responses", "models": [{"id": id, "name": name}]})
+    };
+    agent.set_providers(Providers::given(json!({"providers": {
+        "openai": provider("m", "Model M"),
+        "anthropic": provider("c", "Claude C"),
+    }})));
     let mut ui = Recorder::default();
     let cancel = AtomicBool::new(false);
     agent.turn("first", &mut ui, &cancel).unwrap();

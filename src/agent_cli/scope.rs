@@ -1,5 +1,5 @@
 //! Choosing models: `/model`, and the scope Ctrl+P cycles through, as Scramjet's: the models the
-//! patterns of `--models` or the settings' `enabledModels` choose, else all the endpoint's;
+//! patterns of `--models` or the settings' `enabledModels` choose, else all the providers';
 //! `/scoped-models` chooses them.
 use super::editor::Note;
 use super::fuzzy::{self, Haystack};
@@ -43,8 +43,8 @@ fn scoped_acts() -> String {
     format!("{switches}\n{acts}")
 }
 
-/// A model in the scope, with the effort its pattern sets (`sonnet:high`), named as the model
-/// cards name levels.
+/// A model in the scope, with the effort its pattern sets (`sonnet:high`), named as requests
+/// send levels.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Scoped {
     pub(super) id: String,
@@ -241,7 +241,7 @@ fn named_partly(pattern: &str, models: &[ModelOption]) -> Option<Scoped> {
     })
 }
 
-/// The endpoint's `models` as `--list-models` prints them, as Scramjet's: those `search` matches
+/// The providers' `models` as `--list-models` prints them, as Scramjet's: those `search` matches
 /// (all without one) by provider and id, each with its context window, its output limit, and
 /// whether it reasons and takes images.
 pub(super) fn listing(models: &[ModelOption], search: Option<&str>) -> String {
@@ -259,7 +259,7 @@ pub(super) fn listing(models: &[ModelOption], search: Option<&str>) -> String {
     if shown.is_empty() {
         return match search {
             Some(search) => format!("No models matching \"{search}\"\n"),
-            None => "The endpoint lists no models\n".to_owned(),
+            None => "No provider offers any model\n".to_owned(),
         };
     }
     shown.sort_by(|a, b| (provider(a), &a.id).cmp(&(provider(b), &b.id)));
@@ -331,7 +331,7 @@ pub(super) fn step<'a>(scope: &'a [Scoped], current: &str, steps: isize) -> Opti
 }
 
 /// Ctrl+P or Shift+Ctrl+P, `steps` times (negative: back): switches to the next model in the
-/// scope `patterns` choose, or among all the endpoint's models when they choose none, with the
+/// scope `patterns` choose, or among all the providers' models when they choose none, with the
 /// effort a pattern sets. As in Scramjet, the model is remembered for sessions started later
 /// and the effort saved as the settings' default. Returns what to say, as Scramjet's status says
 /// it but for a switch, which the footer shows.
@@ -365,7 +365,7 @@ pub(super) fn cycle(
     if let Err(error) = agent.set_model(&next.id) {
         return Some(Note::Error(format!("Error: {error}")));
     }
-    agent.load_model_card();
+    agent.load_model_info();
     let mut unsaved = settings.remember_model(agent.root(), &next.id).err();
     if let Some(level) = &next.level {
         if let Err(error) = agent.set_effort(level.clone()) {
@@ -376,7 +376,7 @@ pub(super) fn cycle(
     unsaved.map(|error| Note::Error(format!("Error: settings not saved: {error}")))
 }
 
-/// The models `/scoped-models` has on, among `all` (the endpoint's, in its order), as
+/// The models `/scoped-models` has on, among `all` (the providers', in their order), as
 /// Scramjet's list keeps them: `on: None` for all of them, else those on, in the order Ctrl+P
 /// takes them.
 #[derive(Debug, PartialEq)]
@@ -477,18 +477,14 @@ impl Chosen {
 impl Interactive {
     /// `/model`, as Scramjet's: sets the model `wanted` names (`exact`); otherwise, on the full
     /// screen, lists the models with `wanted` as the query (see `pick_model`). With piped input
-    /// and nothing wanted, it lists the endpoint's models. The model set is remembered for
+    /// and nothing wanted, it lists the providers' models. The model set is remembered for
     /// sessions started later.
     pub(super) fn model(&mut self, wanted: &str) {
         let Some(models) = self.agent.listed_models() else {
-            return self.say("Error: could not list the endpoint's models");
+            return self.say("No provider offers any model");
         };
         let chosen = match exact(wanted, &models) {
             Some(model) => Some(model.id.clone()),
-            None if models.is_empty() => {
-                self.say("The endpoint lists no models");
-                None
-            }
             None if self.interactive() => self.pick_model(&models, wanted),
             None if wanted.is_empty() => {
                 for model in &models {
@@ -509,7 +505,7 @@ impl Interactive {
         if let Some(model) = chosen {
             match self.agent.set_model(&model) {
                 Ok(()) => {
-                    self.agent.load_model_card();
+                    self.agent.load_model_info();
                     self.say(&format!("✓ Model set to {}", model_line(&self.agent)));
                     self.remember_model();
                 }
@@ -520,7 +516,7 @@ impl Interactive {
 
     /// `/model`'s list, as Scramjet's selector: each model with its provider, and its name under
     /// the list, searched from `query`. With a scope it shows the scope's models in their order,
-    /// and Tab switches to all the endpoint's and back, keeping the query and the model selected.
+    /// and Tab switches to all the providers' and back, keeping the query and the model selected.
     fn pick_model(&self, models: &[ModelOption], query: &str) -> Option<String> {
         let screen = self.screen.as_ref()?;
         let (scoped, _) = resolve(&self.scope, models);
@@ -617,7 +613,7 @@ impl Interactive {
         }
     }
 
-    /// `/scoped-models`, as Scramjet's: the endpoint's models, those Ctrl+P cycles through first
+    /// `/scoped-models`, as Scramjet's: the providers' models, those Ctrl+P cycles through first
     /// in its order, each switched on or off with Enter (with all on, the first leaves only it
     /// on), all shown with Ctrl+A and Ctrl+X, a provider's with Ctrl+P, moved with Alt+Up and
     /// Alt+Down. Changes apply to the session at once; Ctrl+S saves them as `enabledModels`.
@@ -774,7 +770,6 @@ mod tests {
             provider: provider.map(str::to_owned),
             reasoning: true,
             levels: Vec::new(),
-            default_level: None,
             window: None,
             output: None,
             images: true,
@@ -845,7 +840,7 @@ mod tests {
         assert_eq!(named("Claude-Opus-5-5"), at("claude-opus-5-5", None));
         assert_eq!(named("haiku"), at("claude-haiku-5-5", None));
         assert_eq!(named("Sonnet 5.5"), at("claude-sonnet-5-5", None));
-        // A level after the last colon, Scramjet's `off` as the cards' `none`; an id's own colon.
+        // A level after the last colon, Scramjet's `off` as requests' `none`; an id's own colon.
         assert_eq!(named("opus:high"), at("claude-opus-5-5", Some("high")));
         assert_eq!(named("luna:off"), at("gpt-6-luna", Some("none")));
         assert_eq!(named("local:7b"), at("local:7b", None));
@@ -916,7 +911,7 @@ mod tests {
             listing(&models, Some("zzz")),
             "No models matching \"zzz\"\n"
         );
-        assert_eq!(listing(&[], None), "The endpoint lists no models\n");
+        assert_eq!(listing(&[], None), "No provider offers any model\n");
     }
 
     #[test]
@@ -934,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn a_glob_takes_every_model_it_matches_in_the_endpoints_order_each_once() {
+    fn a_glob_takes_every_model_it_matches_in_the_providers_order_each_once() {
         assert_eq!(
             ids(&["*luna", "anthropic/*sonnet*", "gpt-6-luna"]).0,
             just(&[

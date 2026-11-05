@@ -38,8 +38,8 @@ mod tree;
 use args::{Options, Start, USAGE};
 use rustix::termios::{self, QueueSelector};
 use scramjet_rs::agent::{
-    self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
-    Next, Session, SessionChoice, SkillOptions,
+    self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, Next,
+    Providers, Session, SessionChoice, SkillOptions,
 };
 use settings::Settings;
 use std::{
@@ -77,8 +77,14 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     }
     if let Some(search) = options.list_models.take() {
-        let models = endpoint_models(options.endpoint)?;
-        print!("{}", scope::listing(&models, search.as_deref()));
+        let providers = Providers::read(Settings::load().models_files());
+        for problem in providers.problems() {
+            eprintln!("Warning: {problem}");
+        }
+        print!(
+            "{}",
+            scope::listing(&providers.options(), search.as_deref())
+        );
         return Ok(());
     }
     if let Some(file) = options.export.take() {
@@ -231,12 +237,13 @@ a new session of this one",
 
 /// Starts the agent in the project `root`, in the session `choice`. A model or effort the options
 /// give (`--model`'s `:level` too, unless `--thinking` gives one) wins over the one a resumed
-/// session last used, and a model pattern naming none of the endpoint's is refused. As in
+/// session last used, and a model pattern naming none of the providers' is refused. As in
 /// Scramjet, a new session without one starts with the model chosen before (`remembered`) when the scope `patterns` choose it or there is no scope,
 /// else with the scope's first model, at the effort its pattern sets; without either, with
 /// `gpt-6-luna`. Without an effort either, the effort is the settings' default thinking level,
 /// else Scramjet's default, `medium`. Also returns what in `patterns` matched nothing, after the
-/// option or setting they come from, and the models remembered that the endpoint lacks.
+/// option or setting they come from, the models remembered that the providers lack, and what is
+/// wrong in the providers' files.
 fn start(
     options: Options,
     root: PathBuf,
@@ -244,9 +251,10 @@ fn start(
     settings: &Settings,
     (patterns, source): (&[String], &str),
 ) -> Result<(Agent, Vec<String>), String> {
+    let providers = Providers::read(settings.models_files());
     // Before the session starts, so that a pattern naming no model leaves none behind.
     let named = match &options.model {
-        Some(pattern) => Some(named_model(pattern, options.endpoint)?),
+        Some(pattern) => Some(named_model(pattern, &providers)?),
         None => None,
     };
     let chosen = named.is_some();
@@ -264,9 +272,20 @@ fn start(
             .collect(),
         no_skills: options.no_skills,
     };
+    let mut warnings: Vec<String> = providers.problems().to_vec();
+    if providers.options().is_empty() {
+        warnings.push(format!(
+            "No provider offers any model: add providers to {} (see --help)",
+            providers
+                .files()
+                .first()
+                .map_or("models.json".into(), |file| file.display().to_string())
+        ));
+    }
+    let model = named.map_or_else(|| default_model(&providers), |named| named.id);
     let config = AgentConfig {
-        endpoint: options.endpoint,
-        model: named.map_or_else(|| "gpt-6-luna".to_owned(), |named| named.id),
+        providers,
+        model,
         root,
         effort: chosen_effort.clone(),
         max_output_tokens: options.max_output_tokens,
@@ -280,14 +299,12 @@ fn start(
         prompt: options.prompt,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
-    let (scoped, warnings) = match patterns.is_empty() {
+    let (scoped, scope_warnings) = match patterns.is_empty() {
         true => Default::default(),
         false => scope::resolve(patterns, &agent.model_options()),
     };
-    let mut warnings: Vec<String> = (warnings.iter())
-        .map(|warning| format!("{source}: {warning}"))
-        .chain(unknown_tools)
-        .collect();
+    warnings.extend((scope_warnings.iter()).map(|warning| format!("{source}: {warning}")));
+    warnings.extend(unknown_tools);
     agent.set_model_scope(scoped.iter().map(|scoped| scoped.id.clone()).collect());
     let new = !chosen && agent.last_model().is_none();
     let remembered = new
@@ -310,7 +327,7 @@ fn start(
         .or_else(|| settings.default_thinking_level.clone())
         .unwrap_or_else(|| "medium".to_owned());
     agent.set_effort(effort).map_err(|e| e.to_string())?;
-    agent.load_model_card();
+    agent.load_model_info();
     Ok((agent, warnings))
 }
 
@@ -326,34 +343,35 @@ fn given_path(path: &str, cwd: &Path) -> PathBuf {
     }
 }
 
-/// The endpoint's models, or why they cannot be listed.
-fn endpoint_models(endpoint: std::net::SocketAddr) -> Result<Vec<ModelOption>, String> {
-    match agent::endpoint_models(endpoint) {
-        Ok(Some(models)) => Ok(models),
-        Ok(None) => Err(format!(
-            "could not list the models of the endpoint {endpoint}"
-        )),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-/// The model `--model` names, with the level its `:level` sets. When the endpoint cannot list
-/// its models, `pattern` is taken as an id, as before it could be checked.
-fn named_model(pattern: &str, endpoint: std::net::SocketAddr) -> Result<scope::Scoped, String> {
-    let Ok(models) = endpoint_models(endpoint) else {
+/// The model `--model` names, with the level its `:level` sets. When the providers list no
+/// models, `pattern` is taken as an id, as before it could be checked.
+fn named_model(pattern: &str, providers: &Providers) -> Result<scope::Scoped, String> {
+    let models = providers.options();
+    if models.is_empty() {
         let id = pattern.trim().to_owned();
         return Ok(scope::Scoped { id, level: None });
-    };
+    }
     scope::named(pattern, &models).ok_or_else(|| {
         format!(
-            "--model {pattern:?} names none of the endpoint's models (--list-models lists them)"
+            "--model {pattern:?} names none of the providers' models (--list-models lists them)"
         )
     })
 }
 
+/// The model a new session starts with when nothing chooses one: gpt-6-luna, unless the
+/// providers offer others but not it, then the first of theirs.
+fn default_model(providers: &Providers) -> String {
+    const DEFAULT: &str = "gpt-6-luna";
+    let models = providers.options();
+    match models.iter().any(|model| model.id == DEFAULT) {
+        false if let Some(first) = models.first() => first.id.clone(),
+        _ => DEFAULT.to_owned(),
+    }
+}
+
 /// The model chosen before that a new session in the agent's project starts with
-/// (`Settings::remembered_models`): the first the endpoint lists, or either when it cannot list
-/// its models. Says in `warnings` which of them it does not list.
+/// (`Settings::remembered_models`): the first the providers offer, or either when they list no
+/// models. Says in `warnings` which of them they do not offer.
 fn remembered(settings: &Settings, agent: &Agent, warnings: &mut Vec<String>) -> Option<String> {
     let (here, anywhere) = settings.remembered_models(agent.root());
     let anywhere = anywhere.filter(|model| here.as_ref() != Some(model));
@@ -375,7 +393,7 @@ fn remembered(settings: &Settings, agent: &Agent, warnings: &mut Vec<String>) ->
         if listed.as_ref().is_none_or(|ids| ids.contains(&model)) {
             return Some(model);
         }
-        warnings.push(format!("{what} is not one the endpoint lists; not used"));
+        warnings.push(format!("{what} is not one the providers offer; not used"));
     }
     None
 }

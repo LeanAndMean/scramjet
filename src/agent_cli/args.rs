@@ -1,11 +1,11 @@
 //! The command line: its options and the usage text.
 use super::settings::{LEVELS, card_level};
 use scramjet_rs::agent::{HARNESS_TOOLS, SystemPrompt};
-use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
+use std::{ffi::OsString, path::PathBuf};
 
 pub(super) const USAGE: &str =
-    "Usage: scramjet-rs [--project DIR] [--endpoint ADDR] [--model PATTERN]
-[--models PATTERNS] [--thinking LEVEL] [--max-output-tokens N] [--retries N]
+    "Usage: scramjet-rs [--project DIR] [--model PATTERN] [--models PATTERNS]
+[--thinking LEVEL] [--max-output-tokens N] [--retries N]
 [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--system-prompt TEXT]
 [--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
 [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask] [-p]
@@ -13,10 +13,13 @@ pub(super) const USAGE: &str =
        scramjet-rs --list-models [SEARCH] | --export FILE [OUTPUT] | --version
        scramjet-rs install DIR | remove NAME|DIR | list
 
-Interactive coding agent using Proxy (default 127.0.0.1:18080): the Responses API for GPT models,
-the Messages API for Claude models (those whose Proxy model card lists only Messages).
+Interactive coding agent. Its models are those of the providers in models.json beside the
+settings file (by default ~/.config/scramjet-rs/models.json) and in installed command sets, in
+Scramjet's format: each provider has a baseUrl (http:// for now), an api (openai-responses or
+anthropic-messages), an apiKey (the value of the environment variable of that name, else the
+text) and its models, with their contextWindow, maxTokens, reasoning, input and cost; a file's
+providersCommand names a program printing more, as {\"version\": 1, \"providers\": ...}.
   --project DIR          project directory (default: current directory)
-  --endpoint ADDR        Proxy's address (default: 127.0.0.1:18080)
   --model PATTERN        model, as Scramjet finds it: the one whose id or provider/id PATTERN
                          is, else the newest whose id or name contains it (after provider/,
                          among that provider's), with an optional :LEVEL that sets the
@@ -29,7 +32,7 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
                          --model starts with the one last chosen when it is one of them, else
                          with the first, at its level
   --thinking LEVEL       reasoning effort (also --effort): off, minimal, low, medium, high,
-                         xhigh or max, the nearest the model's Proxy card lists (default: the
+                         xhigh or max, the nearest the model takes (default: the
                          one --model's :LEVEL sets, else the one a resumed session last used,
                          else the settings' defaultThinkingLevel, else medium)
   --max-output-tokens N  the most tokens a reply may have (default: the model's limit)
@@ -83,7 +86,7 @@ the Messages API for Claude models (those whose Proxy model card lists only Mess
   MESSAGE                prompts sent one after another when the session starts
   --export FILE [OUTPUT] write the session file FILE as a web page to OUTPUT (default:
                          scramjet-rs-session-<its name>.html here), as /export does, and exit
-  --list-models [SEARCH] list the endpoint's models (those SEARCH matches) by provider, with
+  --list-models [SEARCH] list the providers' models (those SEARCH matches) by provider, with
                          their context window, output limit, and whether they reason and
                          take images, as Scramjet lists them, and exit
   -v, --version          print the version and exit
@@ -105,11 +108,11 @@ Ctrl+C or a right click copies it, and a right click without a selection pastes 
 into the prompt. Ctrl+V or Alt+V saves the clipboard's image to a file in the temporary directory
 and pastes its path, for the model to read. Ctrl+O shows tool results whole, or cut again. Ctrl+T
 hides reasoning summaries behind a `Thinking...` line, or shows them again. Shift+Tab sets the
-reasoning effort to the next level the model's Proxy card lists. Both are saved in the settings.
+reasoning effort to the next level the model takes. Both are saved in the settings.
 /model, or Ctrl+L, chooses a model. Ctrl+P switches to the next model of --models or
-enabledModels, else of all the endpoint's, Shift+Ctrl+P (in a terminal that reports it) to the
+enabledModels, else of all the providers', Shift+Ctrl+P (in a terminal that reports it) to the
 one before; during a turn, from its next request. /scoped-models lists
-the endpoint's models, those Ctrl+P takes first in its order: Enter switches one on or off,
+the providers' models, those Ctrl+P takes first in its order: Enter switches one on or off,
 Ctrl+A and Ctrl+X all those shown, Ctrl+P its provider's, Alt+Up/Down moves it, for the session;
 Ctrl+S saves them as enabledModels. /clear [NAME] starts a new session;
 /resume chooses one of this project's sessions to switch to, forks under the session they came
@@ -185,7 +188,6 @@ pub(super) enum Start {
 /// What the command line asks for.
 pub(super) struct Options {
     pub(super) project: Option<PathBuf>,
-    pub(super) endpoint: SocketAddr,
     pub(super) model: Option<String>,
     /// `--models`: the patterns of the models Ctrl+P cycles through, for the session.
     pub(super) models: Option<Vec<String>>,
@@ -223,7 +225,6 @@ impl Options {
     pub(super) fn parse(arguments: impl Iterator<Item = OsString>) -> Result<Option<Self>, String> {
         let mut options = Self {
             project: None,
-            endpoint: ([127, 0, 0, 1], 18080).into(),
             model: None,
             models: None,
             effort: None,
@@ -261,9 +262,6 @@ impl Options {
             };
             match argument.to_str() {
                 Some("--project") => options.project = Some(PathBuf::from(value()?)),
-                Some("--endpoint") => {
-                    options.endpoint = value()?.parse().map_err(|_| "invalid --endpoint address")?
-                }
                 Some("--model") => options.model = Some(value()?),
                 Some("--models") => {
                     let patterns = value()?.split(',').map(|p| p.trim().to_owned()).collect();

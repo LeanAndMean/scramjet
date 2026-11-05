@@ -116,7 +116,15 @@ fn contents(found: &Inventory, set: &Set) -> String {
         1 => format!("1 {what}"),
         n => format!("{n} {what}s"),
     };
-    format!("{}, {}", count(commands, "command"), count(agents, "agent"))
+    let providers = match set.directory.join("models.json").is_file() {
+        true => ", and providers (models.json)",
+        false => "",
+    };
+    format!(
+        "{}, {}{providers}",
+        count(commands, "command"),
+        count(agents, "agent")
+    )
 }
 
 fn print_warnings(warnings: &[&Problem]) {

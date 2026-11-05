@@ -548,7 +548,7 @@ impl Interactive {
         if let Some(model) = &routed.model {
             match self.agent.set_model(model) {
                 Ok(()) => {
-                    self.agent.load_model_card();
+                    self.agent.load_model_info();
                     self.remember_model();
                 }
                 Err(error) => self.say(&format!("Error: model not set to {model}: {error}")),

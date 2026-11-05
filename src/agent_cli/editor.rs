@@ -364,7 +364,7 @@ pub struct Editor {
     root: PathBuf,
     /// The commands listed after the built-in ones: names and descriptions.
     commands: Vec<(String, String)>,
-    /// The endpoint's models, which complete `/model`'s argument.
+    /// The providers' models, which complete `/model`'s argument.
     models: Vec<String>,
     /// Whether Escape twice on an empty prompt returns `Action::DoubleEscape`.
     double_escape: bool,

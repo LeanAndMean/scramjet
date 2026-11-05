@@ -29,7 +29,7 @@ pub(super) struct Shown {
     /// The model's median output rate, in tokens a second (`Agent::output_rate`).
     pub(super) rate: Option<f64>,
     pub(super) model: String,
-    /// The model's provider, when the endpoint has several (`Agent::provider`).
+    /// The model's provider, when the models are those of several (`Agent::provider`).
     pub(super) provider: Option<String>,
     /// The effort level, for a model that reasons.
     pub(super) effort: Option<String>,

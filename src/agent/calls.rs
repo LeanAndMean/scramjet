@@ -34,11 +34,11 @@ impl Agent {
     pub(super) fn tools(&self) -> Tools<'_> {
         Tools {
             parent: subagent::Parent {
-                endpoint: self.config.endpoint,
+                providers: &self.config.providers,
                 retries: self.config.retries,
                 model: &self.config.model,
                 info: &self.info,
-                effort: self.effort().or(self.info.default_level.as_deref()),
+                effort: self.effort(),
                 max_output_tokens: self.config.max_output_tokens,
                 root: &self.config.root,
                 cache_key: self.session.id(),
@@ -1426,18 +1426,6 @@ be a non-empty array for select type. failed",
         let switch = |provider: &str, model: &str| {
             (switch::NAME, json!({"provider":provider,"model":model}))
         };
-        let got = |body: Value| {
-            let body = body.to_string();
-            let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", body.len());
-            (head + &body).into_bytes()
-        };
-        let listed = got(json!({"data":[{"id":"m"},{"id":"gpt-x"},{"id":"claude-y"}]}));
-        let cards = got(json!({"models":[
-            {"requestId":"m","provider":"openai","displayName":"M"},
-            {"requestId":"gpt-x","provider":"openai","displayName":"GPT X",
-                "supportedProtocols":["openai-responses"],"limits":{"context":400_000}},
-            {"requestId":"claude-y","provider":"anthropic","displayName":"Claude Y"},
-        ]}));
         let (endpoint, server) = serve_requests(vec![
             tool_calls(&[
                 (switch::NAME, json!({"model":3})),
@@ -1445,29 +1433,23 @@ be a non-empty array for select type. failed",
                 switch("openai", "m"),
                 switch("openai", "gpt-x"),
             ]),
-            // Each call lists the models with their cards; a switch reads the cards again.
-            listed.clone(),
-            cards.clone(),
-            listed.clone(),
-            cards.clone(),
-            listed,
-            cards.clone(),
-            cards,
             stream(&fixture::text_events("Done.", fixture::known_usage())),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "switch-model");
+        let base = format!("http://{endpoint}/v1");
+        agent.set_providers(crate::agent::Providers::given(json!({"providers": {
+            "openai": {"baseUrl": base, "api": "openai-responses", "models": [
+                {"id": "m", "name": "M"},
+                {"id": "gpt-x", "name": "GPT X", "contextWindow": 400_000},
+            ]},
+            "anthropic": {"baseUrl": base, "api": "anthropic-messages",
+                "models": [{"id": "claude-y", "name": "Claude Y"}]},
+        }})));
         agent.set_model_scope(vec!["m".into(), "claude-y".into()]);
         let mut ui = Recorder::default();
         (agent.turn("switch", &mut ui, &AtomicBool::new(false))).unwrap();
         let requests = server.join().unwrap();
-        let lines: Vec<_> = (requests.iter())
-            .map(|(head, _)| head.lines().next().unwrap())
-            .collect();
-        let (models, cards) = ("get /v1/models http/1.1", "get /api/model-cards http/1.1");
-        let gets = [models, cards, models, cards, models, cards, cards];
-        assert_eq!(lines[1..8], gets);
-
-        let (first, last) = (&requests[0].1, &requests[8].1);
+        let (first, last) = (&requests[0].1, &requests[1].1);
         assert_eq!(
             (first["model"].as_str(), last["model"].as_str()),
             (Some("m"), Some("gpt-x"))
@@ -1501,7 +1483,7 @@ required property\n  - model: must be string\n\nReceived arguments:"
         assert_eq!(failed, [true, false, false, false]);
 
         // The interface heard of the one switch; the reply after it is the new model's, which
-        // the session keeps for a resume, with its card's window.
+        // the session keeps for a resume, with its window.
         let switched: Vec<_> = (ui.shown.iter())
             .filter(|shown| shown.starts_with("switched"))
             .collect();

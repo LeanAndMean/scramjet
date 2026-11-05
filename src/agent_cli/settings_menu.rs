@@ -15,7 +15,7 @@ use std::{
 };
 use unicode_width::UnicodeWidthStr;
 
-const NO_LEVELS: &str = "The model's card lists no thinking levels to choose from.";
+const NO_LEVELS: &str = "The model has no thinking levels to choose from.";
 /// What a next step can be set to, in the order `/settings` offers them.
 const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
     (
@@ -190,7 +190,7 @@ impl Interactive {
             .collect()
     }
 
-    /// The levels of the model's card to choose from; the one chosen is the session's and the
+    /// The model's levels to choose from; the one chosen is the session's and the
     /// settings' default, as Shift+Tab sets them.
     fn choose_thinking_level(&mut self) {
         let levels = self.agent.effort_levels().to_vec();

@@ -1,13 +1,12 @@
 //! What a model request sends, and sending it again after transient failures as Scramjet
 //! does.
-use super::client::{self, ClientError, ModelInfo, Protocol};
+use super::client::{self, ClientError, Protocol};
+use super::providers::ModelInfo;
 use super::{
-    Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, pricing, rates, sent,
-    tools,
+    Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, rates, sent, tools,
 };
 use serde_json::{Value, json};
 use std::{
-    net::SocketAddr,
     sync::atomic::AtomicBool,
     time::{Duration, Instant},
 };
@@ -87,11 +86,20 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<client::Reply, AgentError> {
+        if self.info.route.is_none() {
+            // A provider that could not list its models before may list them now.
+            self.config.providers.reload();
+            if let Some(model) = self.config.providers.find(&self.config.model) {
+                self.info = model.info.clone();
+            }
+        }
+        if self.info.route.is_none() {
+            return Err(AgentError::Provider(self.unoffered()));
+        }
         let retries = self.config.retries;
         let requests = &mut self.usage.requests;
         let reply = send(
             &self.executor,
-            self.config.endpoint,
             &self.info,
             retries,
             request,
@@ -132,13 +140,18 @@ pub(super) enum Sending<'a> {
 /// failed response's items are discarded, so a retry never runs a tool call from it.
 pub(super) fn send(
     executor: &tokio::runtime::Runtime,
-    endpoint: SocketAddr,
     info: &ModelInfo,
     retries: u32,
     request: &Value,
     cancel: &AtomicBool,
     on: &mut dyn FnMut(Sending),
 ) -> Result<client::Reply, AgentError> {
+    let Some(route) = &info.route else {
+        let model = request["model"].as_str().unwrap_or_default();
+        return Err(AgentError::Provider(format!(
+            "no provider offers the model {model}"
+        )));
+    };
     let without_images = (!info.images).then(|| without_images(request)).flatten();
     let request = without_images.as_ref().unwrap_or(request);
     let (body, betas) = match info.protocol {
@@ -159,24 +172,25 @@ pub(super) fn send(
     loop {
         on(Sending::Attempt);
         let started = Instant::now();
-        let failure = match executor.block_on(client::respond(
-            endpoint,
-            info.protocol,
-            body.clone(),
-            betas.as_deref(),
-            cancel,
-            &mut |update| on(Sending::Progress(&update)),
-        )) {
-            Ok(mut reply) => {
-                reply.elapsed = started.elapsed();
-                reply.cost = (reply.usage.as_ref()).and_then(|usage| {
-                    (info.prices).cost(usage, reply.backend.as_deref(), pricing::now())
-                });
-                return Ok(reply);
-            }
-            Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
-            Err(ClientError::Failed(failure)) => failure,
+        let sent = client::Sent {
+            route,
+            protocol: info.protocol,
+            betas: betas.as_deref(),
+            priced_by: info.prices.header(),
         };
+        let failure =
+            match executor.block_on(client::respond(sent, body.clone(), cancel, &mut |update| {
+                on(Sending::Progress(&update))
+            })) {
+                Ok(mut reply) => {
+                    reply.elapsed = started.elapsed();
+                    reply.cost = (reply.usage.as_ref())
+                        .and_then(|usage| info.prices.cost(usage, reply.priced_by.as_deref()));
+                    return Ok(reply);
+                }
+                Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
+                Err(ClientError::Failed(failure)) => failure,
+            };
         let backoff = RETRY_DELAY * 2u32.pow(attempt.min(5));
         let delay = backoff
             .min(MAX_RETRY_WAIT)
@@ -414,7 +428,7 @@ response is incomplete; retry the request."});
         )
         .unwrap();
         let config = AgentConfig {
-            endpoint: ([127, 0, 0, 1], 9).into(),
+            providers: crate::agent::tests::serving(([127, 0, 0, 1], 9).into()),
             model: "new".into(),
             root: root.clone(),
             effort: None,
@@ -851,7 +865,7 @@ reached the output token limit (max_output_tokens)"),
         )
         .unwrap();
         let config = AgentConfig {
-            endpoint: ([127, 0, 0, 1], 9).into(),
+            providers: crate::agent::tests::serving(([127, 0, 0, 1], 9).into()),
             model: "m".into(),
             root: root.clone(),
             effort: None,

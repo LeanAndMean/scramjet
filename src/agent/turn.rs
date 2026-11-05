@@ -570,7 +570,7 @@ mod tests {
         let path = root.join("session.jsonl");
         std::fs::write(&path, "{\"type\":\"session\",\"version\":1}\n").unwrap();
         let config = AgentConfig {
-            endpoint,
+            providers: crate::agent::tests::serving(endpoint),
             model: "m".into(),
             root: root.clone(),
             effort: None,
@@ -789,7 +789,7 @@ scramjet-rs\n",
         .unwrap();
         let resume = |agent: Agent| {
             let config = AgentConfig {
-                endpoint,
+                providers: crate::agent::tests::serving(endpoint),
                 model: "m".into(),
                 root: agent.root().to_owned(),
                 effort: None,

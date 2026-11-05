@@ -98,8 +98,12 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
             let agents = (installed.agents.iter())
                 .filter(|agent| agent.source == AgentSource::Set(set.name.clone()))
                 .count();
+            let providers = match set.directory.join("models.json").is_file() {
+                true => " Its models.json adds providers.",
+                false => "",
+            };
             let contents = format!(
-                "{}, {}.",
+                "{}, {}.{providers}",
                 count(commands, "command"),
                 count(agents, "agent")
             );

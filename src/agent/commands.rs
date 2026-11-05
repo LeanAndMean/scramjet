@@ -43,7 +43,7 @@ pub struct Set {
 
 impl Set {
     /// The set in `directory`, or why it is none: it must have a `commands` or an `agents`
-    /// directory.
+    /// directory, or, when installed, a `models.json` of providers (`Providers`).
     pub fn at(directory: &Path, origin: Origin) -> Result<Self, String> {
         let shown = directory.display();
         if !directory.is_dir() {
@@ -52,9 +52,16 @@ impl Set {
                 false => format!("{shown} does not exist"),
             });
         }
-        if !directory.join("commands").is_dir() && !directory.join("agents").is_dir() {
+        let providers = origin == Origin::Installed && directory.join("models.json").is_file();
+        if !directory.join("commands").is_dir() && !directory.join("agents").is_dir() && !providers
+        {
             return Err(format!(
-                "{shown} is not a command set: it has no commands or agents directory"
+                "{shown} is not a command set: it has no commands or agents directory{}",
+                if origin == Origin::Installed {
+                    ", nor a models.json"
+                } else {
+                    ""
+                }
             ));
         }
         let name = directory.file_name().and_then(|name| name.to_str());
@@ -892,7 +899,7 @@ mod tests {
                 )),
                 Problem::in_settings(format!(
                     "skipping installed command set: {} is not a command set: it has no commands \
-or agents directory",
+or agents directory, nor a models.json",
                     shown("installed/empty")
                 )),
                 Problem::new(format!(

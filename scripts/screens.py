@@ -125,12 +125,10 @@ def serve(replies):
         pending = iter(streams)
         while True:
             connection, _ = listener.accept()
-            if receive(connection).startswith(b'GET'):
-                connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
-            else:
-                body = next(pending, None) or stream(items([{'text': 'No more replies.'}], len(streams)))
-                connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
-                                   b'connection: close\r\n\r\n%s' % (len(body), body))
+            receive(connection)
+            body = next(pending, None) or stream(items([{'text': 'No more replies.'}], len(streams)))
+            connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
+                               b'connection: close\r\n\r\n%s' % (len(body), body))
             connection.close()
 
     threading.Thread(target=answer, daemon=True).start()
@@ -301,10 +299,16 @@ def main():
         for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'TMUX', 'VISUAL', 'EDITOR']:
             env.pop(name, None)
 
+        # The scripted server is the one provider, offering the scenario's model.
+        model = scenario.get('model', 'gpt-6-luna')
+        provider = {'baseUrl': 'http://%s/v1' % serve(scenario['replies']), 'api': 'openai-responses',
+                    'models': [{'id': model, 'reasoning': True, 'input': ['text', 'image']}]}
+        with open(os.path.join(work, 'config/scramjet-rs/models.json'), 'w') as file:
+            json.dump({'providers': {'screens': provider}}, file)
+
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
-        arguments = [options.binary, '--endpoint', serve(scenario['replies']), '--model',
-                     scenario.get('model', 'gpt-6-luna')]
+        arguments = [options.binary, '--model', model]
         if 'prompt' in scenario:
             arguments.append(scenario['prompt'])
         process = subprocess.Popen(arguments, cwd=project, env=env, stdin=slave, stdout=slave, stderr=slave,

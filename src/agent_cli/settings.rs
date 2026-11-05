@@ -16,15 +16,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Scramjet's thinking levels; its `off` is the `none` of Proxy's model cards.
+/// Scramjet's thinking levels; its `off` is the `none` requests send.
 pub(super) const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-/// Scramjet's name for a model card's effort level.
+/// Scramjet's name for an effort level as requests send it.
 pub(super) fn scramjet_level(level: &str) -> &str {
     if level == "none" { "off" } else { level }
 }
 
-/// The model cards' name for one of Scramjet's thinking levels, or for a card's own `none`;
+/// The name requests send for one of Scramjet's thinking levels, or for their own `none`;
 /// `None` for another word.
 pub(super) fn card_level(level: &str) -> Option<&str> {
     match level {
@@ -272,7 +272,7 @@ pub(super) struct Settings {
     pub(super) theme: String,
     /// `look`: how the full screen shows prompts, reasoning, calls and replies.
     pub(super) look: Design,
-    /// `defaultThinkingLevel`, named as the model cards name levels.
+    /// `defaultThinkingLevel`, named as requests send levels.
     pub(super) default_thinking_level: Option<String>,
     /// `defaultModel`: the model last chosen in any project, as Scramjet saves it.
     pub(super) default_model: Option<String>,
@@ -606,6 +606,15 @@ impl Settings {
 
     pub(super) fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    /// The `models.json` files providers come from: the one beside the settings file, then each
+    /// installed command set's.
+    pub(super) fn models_files(&self) -> Vec<PathBuf> {
+        let own = self.path.as_deref().and_then(Path::parent);
+        let own = own.map(|directory| directory.join("models.json"));
+        let sets = self.command_sets.iter().map(|set| set.join("models.json"));
+        own.into_iter().chain(sets).collect()
     }
 
     /// The settings file, shortened for display.
@@ -1515,10 +1524,20 @@ mod tests {
         assert_eq!(
             settings.install_set(&plain).unwrap_err(),
             format!(
-                "{} is not a command set: it has no commands or agents directory",
+                "{} is not a command set: it has no commands or agents directory, nor a models.json",
                 plain.display()
             )
         );
+        // A package of providers alone.
+        let package = scratch.0.join("package");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("models.json"), "{}").unwrap();
+        assert_eq!(settings.install_set(&package).unwrap().name, "package");
+        assert_eq!(
+            settings.models_files().last(),
+            Some(&package.join("models.json"))
+        );
+        settings.remove_set("package").unwrap();
 
         assert_eq!(
             settings.remove_set("rs").unwrap(),

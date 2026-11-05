@@ -1,4 +1,4 @@
-//! A coding agent that talks to Proxy (Responses for GPT models, Messages for Claude) and works in
+//! A coding agent that talks to its models' providers (Responses or Messages) and works in
 //! a project.
 
 mod approvals;
@@ -16,6 +16,7 @@ mod instructions;
 mod messages;
 mod pricing;
 mod problem;
+mod providers;
 mod publish;
 mod question;
 mod rates;
@@ -42,6 +43,7 @@ pub use commands::{Command, Commands, Origin, Set, Sets};
 pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use problem::{Problem, ProblemFile};
+pub use providers::Providers;
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
 pub use session::{
@@ -63,17 +65,16 @@ pub use ui::{
     Delegation, Ending, Purpose, ToolDetail, UserCommand, publication_choices, show_items,
 };
 
-use client::ModelInfo;
+use providers::ModelInfo;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    net::SocketAddr,
     path::{Path, PathBuf},
 };
 
 /// Guards against a model that never stops calling tools.
 const MAX_STEPS: usize = 200;
-/// Stored with each response item: the model that produced it. Never sent to the endpoint.
+/// Stored with each response item: the model that produced it. Never sent to the provider.
 const PRODUCER: &str = "_scramjet_model";
 /// Stored with a response's last item when the response reported it: the context size, so a
 /// resumed session knows how full the context is before its first reply, as Scramjet reads it
@@ -81,12 +82,12 @@ const PRODUCER: &str = "_scramjet_model";
 const CONTEXT: &str = "_scramjet_context_tokens";
 /// Stored with a response's last item when the response reported its usage: the tokens it counted
 /// (`input` neither read from the cache nor written to it, `output`, `cache_read`, `cache_write`)
-/// and, when its model's price cards say, its `cost` in dollars, which `/session` and the footer
+/// and, when its model's prices say, its `cost` in dollars, which `/session` and the footer
 /// sum as Scramjet sums its assistant messages' usage. Never sent.
 const USAGE: &str = "_scramjet_usage";
 /// Stored with a user message whose text is not its prompt as typed (a command's or skill's
 /// expansion, a `!command`'s output, `@` files' contents): the prompt as typed, which is shown and
-/// recalled. Never sent to the endpoint.
+/// recalled. Never sent to the provider.
 pub(super) const TYPED: &str = "_scramjet_typed";
 /// Stored, as `true`, with a tool result or `!` command that failed, so a resumed conversation
 /// shows it as it ran. Never sent, as no `_scramjet_` field is.
@@ -126,7 +127,8 @@ pub fn end() {
 }
 
 pub struct AgentConfig {
-    pub endpoint: SocketAddr,
+    /// The providers requests go to, by their models.
+    pub providers: Providers,
     pub model: String,
     pub root: PathBuf,
     pub effort: Option<String>,
@@ -162,7 +164,7 @@ pub struct SystemPrompt {
     pub no_context_files: bool,
 }
 
-/// The reasoning effort levels a model's card lists, and the current one, as Shift+Tab cycles
+/// The reasoning effort levels a model takes, and the current one, as Shift+Tab cycles
 /// through them.
 #[derive(Clone, Debug, Default)]
 pub struct EffortCycle {
@@ -172,7 +174,7 @@ pub struct EffortCycle {
 
 impl EffortCycle {
     /// Moves to the level after the current one, wrapping around as Scramjet's thinking level
-    /// cycle does, and returns it; `None` when the card lists no levels.
+    /// cycle does, and returns it; `None` when it takes no levels.
     pub fn advance(&mut self) -> Option<String> {
         let levels = &self.levels;
         let next = (self.current.as_ref())
@@ -184,21 +186,20 @@ impl EffortCycle {
     }
 }
 
-/// A model to run a next step with, as the endpoint lists it with its card.
+/// A model to run a next step with, as its provider describes it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelOption {
     pub id: String,
-    /// The card's display name.
+    /// Its display name.
     pub name: Option<String>,
-    /// The card's provider: `anthropic`, `openai`…
+    /// The provider offering it; `None` for a model none offers.
     pub provider: Option<String>,
     pub reasoning: bool,
-    /// The effort levels the card lists, in order.
+    /// The effort levels it takes, in order; empty: any.
     pub levels: Vec<String>,
-    pub default_level: Option<String>,
-    /// The context window, input and output tokens, as the card says.
+    /// The context window, input and output tokens.
     pub window: Option<u64>,
-    /// The most output tokens a response may have, as the card says.
+    /// The most output tokens a response may have.
     pub output: Option<u64>,
     pub images: bool,
     /// The median rate its last replies were written at, in tokens a second (`rates`).
@@ -219,7 +220,6 @@ impl ModelOption {
             provider,
             reasoning: info.reasoning,
             levels: info.levels.clone(),
-            default_level: info.default_level.clone(),
             window: info.window,
             output: info.output,
             images: info.images,
@@ -227,16 +227,15 @@ impl ModelOption {
         }
     }
 
-    /// The effort its requests have with `set` set, as `Agent::effort` fits it, else the card's
-    /// default; `None` when it does not reason or neither is there.
+    /// The effort its requests have with `set` set, as `Agent::effort` fits it; `None` when it
+    /// does not reason or none is set.
     pub fn effort(&self, set: Option<&str>) -> Option<String> {
-        let fitted = set.map(|effort| client::fit(&self.levels, effort));
-        let effort = fitted.or(self.default_level.as_deref())?;
+        let effort = providers::fit(&self.levels, set?);
         self.reasoning.then(|| effort.to_owned())
     }
 
-    /// Shift+Tab's: the level after `effort(set)` among the card's, wrapping around; `None` when
-    /// it lists fewer than two.
+    /// Shift+Tab's: the level after `effort(set)` among its levels, wrapping around; `None` when
+    /// it takes fewer than two.
     pub fn next_effort(&self, set: Option<&str>) -> Option<String> {
         if self.levels.len() < 2 {
             return None;
@@ -247,26 +246,6 @@ impl ModelOption {
         }
         .advance()
     }
-}
-
-/// The models `endpoint` lists, in its order, each with what its card says (one without a card
-/// as its id suggests); `None` when it cannot list them.
-pub fn endpoint_models(endpoint: SocketAddr) -> Result<Option<Vec<ModelOption>>, AgentError> {
-    let executor = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let Some(ids) = executor.block_on(client::models(endpoint)) else {
-        return Ok(None);
-    };
-    let cards = executor.block_on(client::model_cards(endpoint));
-    let options = ids.into_iter().map(|id| {
-        let card = cards.iter().find(|card| card.id == id);
-        let info = card.map_or_else(|| ModelInfo::guess(&id), |card| card.info.clone());
-        let name = card.and_then(|card| card.name.clone());
-        let provider = card.and_then(|card| card.provider.clone());
-        ModelOption::new(id, name, provider, &info, None)
-    });
-    Ok(Some(options.collect()))
 }
 
 pub enum SessionChoice {
@@ -321,7 +300,7 @@ pub struct Usage {
     pub output_tokens: u64,
     /// Dollars, of the responses whose cost is known.
     pub cost: f64,
-    /// Whether a response that reported its usage has no known cost: no price card applies.
+    /// Whether a response that reported its usage has no known cost: no prices apply.
     pub unpriced: bool,
     /// The input and output tokens of the last response, when it reported them: how full the
     /// context was, as Scramjet's footer shows it.
@@ -485,12 +464,13 @@ pub struct Agent {
     /// With `SessionChoice::Unsaved`, where every session of the run is, removed with the agent.
     unsaved: Option<session::Unsaved>,
     executor: tokio::runtime::Runtime,
-    /// The current model's protocol and limits, from its name until `load_model_card`.
+    /// What its provider says of the current model, and where its requests go; as its name
+    /// suggests when no provider offers it.
     info: ModelInfo,
-    /// Its card's provider, when the endpoint's cards name several (`provider`).
+    /// Its provider, when the models are those of several (`provider`).
     provider: Option<String>,
-    /// The names and providers of the endpoint's models, from their cards, for the Model
-    /// Identity; kept when the cards cannot be read again.
+    /// The names and providers of the providers' models, for the Model Identity; kept when they
+    /// cannot be listed again.
     identities: HashMap<String, instructions::Identity>,
     /// The models of the user's scope (`set_model_scope`); empty: all.
     model_scope: Vec<String>,
@@ -639,7 +619,7 @@ impl Agent {
             attached: None,
             autonomy: autonomy::global_path(),
             autonomy_diagnostics: Vec::new(),
-            info: ModelInfo::guess(&config.model),
+            info: config.providers.info(&config.model),
             provider: None,
             identities: HashMap::new(),
             model_scope: Vec::new(),
@@ -946,7 +926,7 @@ impl Agent {
         };
         self.restore_command();
         if let Some(model) = model {
-            self.info = ModelInfo::guess(&model);
+            self.info = self.config.providers.info(&model);
             self.config.model = model;
         }
         if let Some(level) = effort {
@@ -1073,14 +1053,14 @@ impl Agent {
     pub fn set_model(&mut self, model: impl Into<String>) -> Result<(), AgentError> {
         let model = model.into();
         self.session.record_model(&model)?;
-        self.info = ModelInfo::guess(&model);
+        self.info = self.config.providers.info(&model);
         self.provider = None;
         self.config.model = model;
         Ok(())
     }
 
-    /// The reasoning effort requests ask for: the one set, fitted to the levels the model's card
-    /// lists as Scramjet clamps a thinking level; `None` leaves it to the model.
+    /// The reasoning effort requests ask for: the one set, fitted to the levels the model takes
+    /// as Scramjet clamps a thinking level; `None` leaves it to the model.
     pub fn effort(&self) -> Option<&str> {
         let effort = self.config.effort.as_deref()?;
         Some(self.info.fit(effort))
@@ -1100,20 +1080,20 @@ impl Agent {
         Ok(())
     }
 
-    /// Whether the model reasons, so that an effort applies to it; Proxy's card says when not.
+    /// Whether the model reasons, so that an effort applies to it, as its provider says.
     pub fn reasons(&self) -> bool {
         self.info.reasoning
     }
 
-    /// The effort levels the model's card lists, in its order; none when it lists none.
+    /// The effort levels the model takes, in order; none when it takes any.
     pub fn effort_levels(&self) -> &[String] {
         &self.info.levels
     }
 
-    /// Shift+Tab: moves the reasoning effort to the next level the model's card lists, after the
-    /// current one (the card's default when none is set), wrapping around as Scramjet's thinking
-    /// level cycle does, and records the change in the session. Returns the new level; `None`
-    /// when the card lists no levels, which keeps the effort.
+    /// Shift+Tab: moves the reasoning effort to the next level the model takes, after the current
+    /// one, wrapping around as Scramjet's thinking level cycle does, and records the change in
+    /// the session. Returns the new level; `None` when it lists no levels, which keeps the
+    /// effort.
     pub fn cycle_effort(&mut self) -> Result<Option<String>, AgentError> {
         let Some(level) = self.effort_cycle().advance() else {
             return Ok(None);
@@ -1127,7 +1107,7 @@ impl Agent {
     pub fn effort_cycle(&self) -> EffortCycle {
         EffortCycle {
             levels: self.info.levels.clone(),
-            current: (self.effort().or(self.info.default_level.as_deref())).map(str::to_owned),
+            current: self.effort().map(str::to_owned),
         }
     }
 
@@ -1211,7 +1191,7 @@ impl Agent {
         self.info.window = window;
     }
 
-    /// The current model's context window, from its card, or `None` when unknown.
+    /// The current model's context window, as its provider says, or `None` when unknown.
     pub fn context_window(&self) -> Option<u64> {
         self.info.window
     }
@@ -1221,19 +1201,48 @@ impl Agent {
         self.session.model()
     }
 
-    /// The endpoint's models, or `None` if they cannot be listed.
+    /// The providers' models, or `None` when they list none.
     pub fn models(&self) -> Option<Vec<String>> {
-        self.executor.block_on(client::models(self.config.endpoint))
+        let models = self.config.providers.models();
+        let ids = models.iter().map(|model| model.id.clone());
+        (!models.is_empty()).then(|| ids.collect())
     }
 
-    /// The endpoint's models in its order, each with what its card says, the current model first
-    /// when the endpoint does not list it: only the current one when they cannot be listed.
-    pub fn model_options(&self) -> Vec<ModelOption> {
-        let mut ids = self.models().unwrap_or_default();
-        if !ids.contains(&self.config.model) {
-            ids.insert(0, self.config.model.clone());
+    /// The providers, as last read.
+    pub fn providers(&self) -> &Providers {
+        &self.config.providers
+    }
+
+    /// Why a request for the current model cannot be sent: no provider offers it.
+    fn unoffered(&self) -> String {
+        let providers = &self.config.providers;
+        let files: Vec<String> = (providers.files().iter())
+            .map(|file| file.display().to_string())
+            .collect();
+        let mut message = format!(
+            "no provider offers the model {}; providers come from {}",
+            self.config.model,
+            match files.is_empty() {
+                true => "models.json files".to_owned(),
+                false => files.join(", "),
+            }
+        );
+        for problem in providers.problems() {
+            message.push_str(&format!("\n{problem}"));
         }
-        self.options(ids)
+        message
+    }
+
+    /// The providers' models, read again, each with its output rate, the current model first
+    /// when none offers it.
+    pub fn model_options(&mut self) -> Vec<ModelOption> {
+        let mut options = self.listed_models().unwrap_or_default();
+        if !options.iter().any(|option| option.id == self.config.model) {
+            let rate = rates::Rates::read(self.rates.as_deref()).median(&self.config.model);
+            let id = self.config.model.clone();
+            options.insert(0, ModelOption::new(id, None, None, &self.info, rate));
+        }
+        options
     }
 
     /// The models the user chose for Ctrl+P (`--models`, `enabledModels`, `/scoped-models`),
@@ -1242,35 +1251,15 @@ impl Agent {
         self.model_scope = models;
     }
 
-    /// The endpoint's models in its order, each with what its card says, or `None` if they
-    /// cannot be listed.
-    pub fn listed_models(&self) -> Option<Vec<ModelOption>> {
-        self.models().map(|ids| self.options(ids))
-    }
-
-    fn options(&self, ids: Vec<String>) -> Vec<ModelOption> {
-        let cards = self
-            .executor
-            .block_on(client::model_cards(self.config.endpoint));
+    /// The providers' models, read again, each with its output rate; `None` when they list none.
+    pub fn listed_models(&mut self) -> Option<Vec<ModelOption>> {
+        self.config.providers.reload();
         let rates = rates::Rates::read(self.rates.as_deref());
-        (ids.into_iter())
-            .map(|id| {
-                let guessed;
-                let card = cards.iter().find(|card| card.id == id);
-                let info = match card {
-                    Some(card) => &card.info,
-                    None if id == self.config.model => &self.info,
-                    None => {
-                        guessed = ModelInfo::guess(&id);
-                        &guessed
-                    }
-                };
-                let name = card.and_then(|card| card.name.clone());
-                let provider = card.and_then(|card| card.provider.clone());
-                let rate = rates.median(&id);
-                ModelOption::new(id, name, provider, info, rate)
-            })
-            .collect()
+        let mut options = self.config.providers.options();
+        for option in &mut options {
+            option.rate = rates.median(&option.id);
+        }
+        (!options.is_empty()).then_some(options)
     }
 
     pub fn conversation(&self) -> &[Value] {
@@ -1291,37 +1280,48 @@ impl Agent {
         show_items(&self.conversation, Some(&self.config.root), ui);
     }
 
-    /// Reads the current model's Proxy model card: which protocol its requests use, its output
-    /// limit and its context window, which is returned. Without a card the model's name decides
-    /// the protocol, and the window is unknown (`None`).
-    pub fn load_model_card(&mut self) -> Option<u64> {
-        let cards = (self.executor).block_on(client::model_cards(self.config.endpoint));
-        let mut providers: Vec<&str> = (cards.iter())
-            .filter_map(|card| card.provider.as_deref())
+    /// Reads the providers again for what the current model takes, its limits and where its
+    /// requests go; returns its context window. A model no provider offers keeps what was known
+    /// of it.
+    pub fn load_model_info(&mut self) -> Option<u64> {
+        self.config.providers.reload();
+        self.take_model_info()
+    }
+
+    /// `/reload`'s: providers read from other files, as `load_model_info` takes them.
+    pub fn set_providers(&mut self, providers: Providers) {
+        self.config.providers = providers;
+        self.take_model_info();
+    }
+
+    fn take_model_info(&mut self) -> Option<u64> {
+        let models = self.config.providers.models();
+        let mut providers: Vec<&str> = (models.iter())
+            .map(|model| model.provider.as_str())
             .collect();
         providers.sort_unstable();
         providers.dedup();
         let several = providers.len() > 1;
-        if !cards.is_empty() {
-            self.identities = (cards.iter())
-                .map(|card| {
+        if !models.is_empty() {
+            self.identities = (models.iter())
+                .map(|model| {
                     let identity = instructions::Identity {
-                        name: card.name.clone(),
-                        provider: card.provider.clone(),
+                        name: model.name.clone(),
+                        provider: Some(model.provider.clone()),
                     };
-                    (card.id.clone(), identity)
+                    (model.id.clone(), identity)
                 })
                 .collect();
         }
-        if let Some(card) = cards.into_iter().find(|card| card.id == self.config.model) {
-            self.provider = card.provider.filter(|_| several);
-            self.info = card.info;
+        if let Some(model) = self.config.providers.find(&self.config.model) {
+            self.provider = several.then(|| model.provider.clone());
+            self.info = model.info.clone();
         }
         self.info.window
     }
 
-    /// The current model's provider, as its card names it, when the endpoint's models have
-    /// several, as Scramjet's footer names it.
+    /// The current model's provider, when the models are those of several, as Scramjet's footer
+    /// names it.
     pub fn provider(&self) -> Option<&str> {
         self.provider.as_deref()
     }

@@ -1,32 +1,28 @@
-//! What a response cost, as Proxy prices it (`src/cost/provider-pricing.ts` there): the price card
-//! of the model's pricing key for the backend that served the response, the latest in effect when
-//! it ran, at its long-context rates when the response's input was over their threshold.
+//! What a response cost, from its model's `cost` entry: Scramjet's dollars per million tokens
+//! (`input`, `output`, `cacheRead`, `cacheWrite`), with two of scramjet-rs's own. `longContext`
+//! gives the rates of a response whose input is over its `above` tokens. `header` names a
+//! response header, such as the backend that served it, and `byHeader` the rates for each of its
+//! values. A response with a value `byHeader` lacks has no known cost.
 
 use crate::http::responses::ProviderUsage;
 use serde_json::Value;
 
-/// Proxy's threshold for long-context rates when a card gives none.
-const LONG_CONTEXT_TOKENS: u64 = 272_000;
-/// The agentic backend whose usage Proxy prices with the provider's own cards.
-const PROVIDER_PRICED_BACKEND: &str = "palantir";
-
-/// The price cards of one model's pricing key, from Proxy's model card document.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct Prices(Vec<Card>);
+pub(super) struct Prices {
+    rates: Tiered,
+    header: Option<String>,
+    by_header: Vec<(String, Tiered)>,
+}
 
-#[derive(Clone, Debug, PartialEq)]
-struct Card {
-    /// The agentic backend (`x-llm-backend`) it prices; `None` for the provider's own card.
-    backend: Option<String>,
-    /// When it took effect, in seconds since the Unix epoch.
-    from: i64,
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Tiered {
     rates: Rates,
     /// The rates above a number of input tokens.
     long: Option<(u64, Rates)>,
 }
 
-/// Dollars per million tokens; `None` where the card has no price.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Dollars per million tokens; `None` where the entry gives no price.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Rates {
     input: Option<f64>,
     cache_write: Option<f64>,
@@ -35,67 +31,61 @@ struct Rates {
 }
 
 impl Rates {
-    fn of(card: &Value) -> Self {
+    fn of(entry: &Value) -> Self {
         Self {
-            input: card["inputPerMTok"].as_f64(),
-            cache_write: card["cacheWritePerMTok"].as_f64(),
-            cache_read: card["cacheReadPerMTok"].as_f64(),
-            output: card["outputPerMTok"].as_f64(),
+            input: entry["input"].as_f64(),
+            cache_write: entry["cacheWrite"].as_f64(),
+            cache_read: entry["cacheRead"].as_f64(),
+            output: entry["output"].as_f64(),
+        }
+    }
+}
+
+impl Tiered {
+    fn of(entry: &Value) -> Self {
+        let long = &entry["longContext"];
+        Self {
+            rates: Rates::of(entry),
+            long: long["above"].as_u64().map(|above| (above, Rates::of(long))),
         }
     }
 }
 
 impl Prices {
-    /// The cards in `cards` (the document's `priceCards`) for `key`; a card of another API or
-    /// without a date it took effect is left out.
-    pub(super) fn of(cards: &[Value], key: Option<&str>) -> Self {
-        let Some(key) = key else {
-            return Self::default();
-        };
-        let card = |card: &Value| {
-            let backend = match card["api"].as_str()? {
-                "foundry" => None,
-                "agentic" => Some(card["upstreamProvider"].as_str()?.to_owned()),
-                _ => return None,
-            };
-            let long = card.get("longContext").map(|rates| {
-                let above = card["longContextThresholdTokens"].as_u64();
-                (above.unwrap_or(LONG_CONTEXT_TOKENS), Rates::of(rates))
-            });
-            Some(Card {
-                backend,
-                from: seconds(card["effectiveFrom"].as_str()?)?,
-                rates: Rates::of(card),
-                long,
-            })
-        };
-        Self(
-            (cards.iter())
-                .filter(|card| card["pricingKey"] == key)
-                .filter_map(card)
-                .collect(),
-        )
+    /// From a model's `cost` entry; without one, every cost is unknown.
+    pub(super) fn of(cost: &Value) -> Self {
+        let by_header = (cost["byHeader"].as_object().into_iter().flatten())
+            .map(|(value, rates)| (value.to_ascii_lowercase(), Tiered::of(rates)))
+            .collect();
+        Self {
+            rates: Tiered::of(cost),
+            header: cost["header"].as_str().map(str::to_ascii_lowercase),
+            by_header,
+        }
     }
 
-    /// What a response with `usage` cost in dollars, served by `backend` at `now` (seconds since
-    /// the Unix epoch); `None` when no card applies or it has no price for tokens the response
-    /// used.
-    pub(super) fn cost(
-        &self,
-        usage: &ProviderUsage,
-        backend: Option<&str>,
-        now: i64,
-    ) -> Option<f64> {
-        let backend = backend.filter(|backend| *backend != PROVIDER_PRICED_BACKEND);
-        let card = (self.0.iter())
-            .filter(|card| card.backend.as_deref() == backend && card.from <= now)
-            .max_by_key(|card| card.from)?;
+    /// The response header whose value chooses the rates.
+    pub(super) fn header(&self) -> Option<&str> {
+        self.header.as_deref()
+    }
+
+    /// What a response with `usage` cost in dollars, `served_by` the value of its `header`, in
+    /// lower case; `None` when no rates apply or they have no price for tokens it used.
+    pub(super) fn cost(&self, usage: &ProviderUsage, served_by: Option<&str>) -> Option<f64> {
+        let tiered = match served_by {
+            Some(value) if self.header.is_some() => {
+                &(self.by_header.iter())
+                    .find(|(listed, _)| listed == value)?
+                    .1
+            }
+            _ => &self.rates,
+        };
         let input = usage.input_tokens?;
         let read = usage.cached_input_tokens.unwrap_or(0);
         let written = usage.cache_write_tokens.unwrap_or(0);
-        let rates = match card.long {
+        let rates = match tiered.long {
             Some((above, rates)) if input > above => rates,
-            _ => card.rates,
+            _ => tiered.rates,
         };
         let part = |tokens: u64, rate: Option<f64>| match tokens {
             0 => Some(0.0),
@@ -108,31 +98,6 @@ impl Prices {
                 + part(usage.output_tokens?, rates.output)?,
         )
     }
-}
-
-/// An ISO 8601 UTC time as Proxy writes it (`2026-10-07T00:00:00.000Z`), in seconds since the Unix
-/// epoch.
-fn seconds(time: &str) -> Option<i64> {
-    let number = |range: std::ops::Range<usize>| time.get(range)?.parse::<i64>().ok();
-    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
-    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
-    if !(1..=12).contains(&month) || time.as_bytes().get(10) != Some(&b'T') {
-        return None;
-    }
-    // Days from the civil date, as `instructions::today` turns them back.
-    let year = year - i64::from(month <= 2);
-    let era = year.div_euclid(400);
-    let of_era = year - era * 400;
-    let of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
-    let days = era * 146_097 + of_era * 365 + of_era / 4 - of_era / 100 + of_year - 719_468;
-    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
-}
-
-/// Now, in seconds since the Unix epoch.
-pub(super) fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs() as i64)
 }
 
 #[cfg(test)]
@@ -157,85 +122,63 @@ mod tests {
     }
 
     #[test]
-    fn times_are_read_as_proxy_writes_them() {
-        assert_eq!(seconds("1970-01-01T00:00:00.000Z"), Some(0));
-        assert_eq!(seconds("2026-10-07T00:00:00.000Z"), Some(1_791_331_200));
-        assert_eq!(seconds("2000-02-29T12:34:56Z"), Some(951_827_696));
-        assert_eq!(seconds("2026-13-01T00:00:00Z"), None);
-        assert_eq!(seconds("2026-10-07"), None);
-    }
-
-    #[test]
-    fn the_backend_chooses_the_card_and_the_latest_in_effect_applies() {
-        let cards = [
-            json!({"api":"foundry","pricingKey":"opus","effectiveFrom":"1970-01-01T00:00:00.000Z",
-                "inputPerMTok":5,"cacheWritePerMTok":5,"cacheReadPerMTok":0,"outputPerMTok":25}),
-            json!({"api":"foundry","pricingKey":"opus","effectiveFrom":"2026-06-06T00:00:00.000Z",
-                "inputPerMTok":5,"cacheWritePerMTok":6.25,"cacheReadPerMTok":0.5,"outputPerMTok":25}),
-            json!({"api":"agentic","pricingKey":"opus","upstreamProvider":"bedrock",
-                "effectiveFrom":"2026-09-25T00:00:00.000Z",
-                "inputPerMTok":5.5,"cacheWritePerMTok":6.875,"cacheReadPerMTok":0.55,"outputPerMTok":27.5}),
-            json!({"api":"foundry","pricingKey":"other","effectiveFrom":"1970-01-01T00:00:00.000Z",
-                "inputPerMTok":1,"cacheWritePerMTok":1,"cacheReadPerMTok":1,"outputPerMTok":1}),
-        ];
-        let prices = Prices::of(&cards, Some("opus"));
+    fn the_header_value_chooses_the_rates() {
+        let prices = Prices::of(&json!({
+            "input": 5, "cacheWrite": 6.25, "cacheRead": 0.5, "output": 25,
+            "header": "X-Served-By",
+            "byHeader": {
+                "direct": {"input": 5, "cacheWrite": 6.25, "cacheRead": 0.5, "output": 25},
+                "Bedrock": {"input": 5.5, "cacheWrite": 6.875, "cacheRead": 0.55, "output": 27.5},
+            },
+        }));
+        assert_eq!(prices.header(), Some("x-served-by"));
         // 1M input tokens: 600k not cached, 300k read from the cache and 100k written to it.
         let used = usage(1_000_000, 300_000, 100_000, 10_000);
-        let june = seconds("2026-07-01T00:00:00Z").unwrap();
-        close(prices.cost(&used, None, june), 3.0 + 0.625 + 0.15 + 0.25);
+        close(prices.cost(&used, None), 3.0 + 0.625 + 0.15 + 0.25);
         close(
-            prices.cost(&used, Some("palantir"), june),
+            prices.cost(&used, Some("direct")),
             3.0 + 0.625 + 0.15 + 0.25,
         );
-        close(prices.cost(&used, None, 0), 3.0 + 0.5 + 0.0 + 0.25);
-        let october = seconds("2026-10-01T00:00:00Z").unwrap();
         close(
-            prices.cost(&used, Some("bedrock"), october),
+            prices.cost(&used, Some("bedrock")),
             3.3 + 0.6875 + 0.165 + 0.275,
         );
-        // No card for the backend yet, or for a backend Proxy does not price.
-        assert_eq!(prices.cost(&used, Some("bedrock"), june), None);
-        assert_eq!(prices.cost(&used, Some("onehpc"), october), None);
-        assert_eq!(Prices::of(&cards, None).cost(&used, None, june), None);
-        assert_eq!(
-            Prices::of(&cards, Some("gone")).cost(&used, None, june),
-            None
-        );
+        // A value without rates of its own, or no entry at all: the cost is not known.
+        assert_eq!(prices.cost(&used, Some("elsewhere")), None);
+        assert_eq!(Prices::of(&Value::Null).cost(&used, None), None);
+        // Without a header to read, its value does not matter.
+        let flat = Prices::of(&json!({"input": 1, "cacheWrite": 1, "cacheRead": 1, "output": 1}));
+        close(flat.cost(&used, Some("bedrock")), 1.01);
     }
 
     #[test]
     fn long_context_rates_apply_above_their_threshold_and_a_missing_price_is_unknown() {
-        let cards = [
-            json!({"api":"foundry","pricingKey":"gpt","effectiveFrom":"2026-09-22T00:00:00.000Z",
-                "inputPerMTok":2,"cacheWritePerMTok":null,"cacheReadPerMTok":0.2,"outputPerMTok":10,
-                "longContext":{"inputPerMTok":4,"cacheWritePerMTok":null,"cacheReadPerMTok":0.4,
-                    "outputPerMTok":15}}),
-            json!({"api":"agentic","pricingKey":"gpt","upstreamProvider":"azure_openai",
-                "effectiveFrom":"2026-09-22T00:00:00.000Z",
-                "inputPerMTok":1,"cacheWritePerMTok":1,"cacheReadPerMTok":1,"outputPerMTok":1,
-                "longContext":{"inputPerMTok":2,"cacheWritePerMTok":2,"cacheReadPerMTok":2,
-                    "outputPerMTok":2},"longContextThresholdTokens":100_000}),
-        ];
-        let prices = Prices::of(&cards, Some("gpt"));
-        let now = seconds("2026-11-04T00:00:00Z").unwrap();
+        let prices = Prices::of(&json!({
+            "input": 2, "cacheRead": 0.2, "output": 10,
+            "longContext": {"above": 272_000, "input": 4, "cacheRead": 0.4, "output": 15},
+            "header": "x-served-by",
+            "byHeader": {"azure": {"input": 1, "cacheWrite": 1, "cacheRead": 1, "output": 1,
+                "longContext": {"above": 100_000, "input": 2, "cacheWrite": 2, "cacheRead": 2,
+                    "output": 2}}},
+        }));
         close(
-            prices.cost(&usage(272_000, 72_000, 0, 1_000), None, now),
+            prices.cost(&usage(272_000, 72_000, 0, 1_000), None),
             0.4 + 0.0144 + 0.01,
         );
         close(
-            prices.cost(&usage(272_001, 72_000, 0, 1_000), None, now),
+            prices.cost(&usage(272_001, 72_000, 0, 1_000), None),
             200_001.0 * 4e-6 + 0.0288 + 0.015,
         );
         close(
-            prices.cost(&usage(100_001, 0, 0, 0), Some("azure_openai"), now),
+            prices.cost(&usage(100_001, 0, 0, 0), Some("azure")),
             100_001.0 * 2e-6,
         );
         // Cache writes without a price make the cost unknown; none written cost nothing.
-        assert_eq!(prices.cost(&usage(1_000, 0, 10, 1), None, now), None);
+        assert_eq!(prices.cost(&usage(1_000, 0, 10, 1), None), None);
         let unknown_output = ProviderUsage {
             output_tokens: None,
             ..usage(1_000, 0, 0, 0)
         };
-        assert_eq!(prices.cost(&unknown_output, None, now), None);
+        assert_eq!(prices.cost(&unknown_output, None), None);
     }
 }

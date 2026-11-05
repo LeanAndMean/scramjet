@@ -36,6 +36,50 @@ silent = socket.socket()
 silent.bind(('127.0.0.1', 0))
 silent.listen(8)
 hanging = '127.0.0.1:%d' % silent.getsockname()[1]
+LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+# The models each scripted server offers, by its address (`provide`).
+catalogs = {}
+
+
+def model(id, levels=None, provider='test', **fields):
+    """A model entry of models.json taking images and, when `levels` are given (as requests name
+    them), reasoning at those; at any level when they are empty."""
+    entry = {'id': id, 'provider': provider, 'input': ['text', 'image'], **fields}
+    if levels is not None:
+        sent = lambda level: 'none' if level == 'off' else level
+        entry['reasoning'] = True
+        entry['thinkingLevelMap'] = {level: sent(level) if sent(level) in levels else None for level in LEVELS}
+    return entry
+
+
+def offering(address, models):
+    """Records that the server at `address` offers `models`: entries (`model`) or ids, each as a
+    model's name suggests: Claude on Messages, the others on Responses, reasoning at any level."""
+    catalogs[address] = [model(each, []) if isinstance(each, str) else each for each in models]
+    return address
+
+
+def provide(endpoint, config):
+    """Writes the models.json of the configuration directory `config`: the models the server at
+    `endpoint` offers, else gpt-6-luna, grouped by provider."""
+    providers = {}
+    for entry in catalogs.get(endpoint) or [model('gpt-6-luna', [])]:
+        entry = dict(entry)
+        claude = entry['id'].startswith('claude-')
+        entry.setdefault('api', 'anthropic-messages' if claude else 'openai-responses')
+        messages = entry['api'] == 'anthropic-messages'
+        entry.setdefault('baseUrl', 'http://%s%s' % (endpoint, '' if messages else '/v1'))
+        providers.setdefault(entry.pop('provider'), {'models': []})['models'].append(entry)
+    os.makedirs(os.path.join(config, 'scramjet-rs'), exist_ok=True)
+    with open(os.path.join(config, 'scramjet-rs', 'models.json'), 'w') as file:
+        json.dump({'providers': providers}, file)
+
+
+def agent(endpoint, config=None):
+    """The agent's command, its models those of the server at `endpoint` (`provide`) in the
+    configuration directory `config`, by default the journeys'."""
+    provide(endpoint, config or env['XDG_CONFIG_HOME'])
+    return [BINARY]
 
 
 def receive(connection):
@@ -181,10 +225,9 @@ def serve_thoughts(gates):
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
-def serve_replies(replies, models=(), cards=None, usage=None, prices=(), backend=None):
+def serve_replies(replies, models=(), usage=None, backend=None):
     """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`
-    (and `usage`, when given) from `backend` (`x-llm-backend`), lists `models` at `/v1/models` and
-    `cards` with the price cards `prices` at `/api/model-cards`."""
+    (and `usage`, when given) from `backend` (`x-served-by`), offering `models` (`offering`)."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -208,31 +251,20 @@ def serve_replies(replies, models=(), cards=None, usage=None, prices=(), backend
         ]
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
-    listing = json.dumps({'data': [{'id': model} for model in models]}).encode()
-    card_listing = json.dumps({'models': cards or [], 'priceCards': list(prices)}).encode()
-    served_by = b'x-llm-backend: %s\r\n' % backend.encode() if backend else b''
+    served_by = b'x-served-by: %s\r\n' % backend.encode() if backend else b''
 
     def answer():
         pending = iter(streams)
         while True:
             connection, _ = listener.accept()
-            request = receive(connection)
-            if request.startswith(b'GET /v1/models') and models:
-                connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n'
-                                   b'connection: close\r\n\r\n%s' % (len(listing), listing))
-            elif request.startswith(b'GET /api/model-cards') and cards:
-                connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n'
-                                   b'connection: close\r\n\r\n%s' % (len(card_listing), card_listing))
-            elif request.startswith(b'GET'):
-                connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
-            else:
-                stream = next(pending)
-                connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n%scontent-length: %d\r\n'
-                                   b'connection: close\r\n\r\n%s' % (served_by, len(stream), stream))
+            receive(connection)
+            stream = next(pending)
+            connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n%scontent-length: %d\r\n'
+                               b'connection: close\r\n\r\n%s' % (served_by, len(stream), stream))
             connection.close()
 
     threading.Thread(target=answer, daemon=True).start()
-    return '127.0.0.1:%d' % listener.getsockname()[1]
+    return offering('127.0.0.1:%d' % listener.getsockname()[1], models)
 
 
 def item_events(index, item):
@@ -259,11 +291,11 @@ def item_events(index, item):
     return events + [{'type': 'response.output_item.done', 'output_index': index, 'item': item}]
 
 
-def serve_items(responses, gate=None, models=(), cards=None, bodies=None, gated=0, usages=(), prices=()):
+def serve_items(responses, gate=None, models=(), bodies=None, gated=0, usages=()):
     """Answers the requests in turn with a response streaming the complete items in `responses`
     with the usage at the same index in `usages`, if any, the one at index `gated` once `gate`, if
-    given, is set, lists `models` at `/v1/models` and `cards` with the price cards `prices` at
-    `/api/model-cards`, and adds each request's body to `bodies`, if given."""
+    given, is set, offers `models` (`offering`), and adds each request's body to `bodies`, if
+    given."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -277,24 +309,10 @@ def serve_items(responses, gate=None, models=(), cards=None, bodies=None, gated=
                        'response': {'id': 'resp_1', 'status': 'completed', 'output': items, **usage}})
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
-    listing = json.dumps({'data': [{'id': model} for model in models]}).encode()
-    card_listing = json.dumps({'models': cards or [], 'priceCards': list(prices)}).encode()
-
     def answer():
         for number, stream in enumerate(streams):
             connection, _ = listener.accept()
-            while (request := receive(connection)).startswith(b'GET'):
-                if request.startswith(b'GET /v1/models') and models:
-                    connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n'
-                                       b'content-length: %d\r\nconnection: close\r\n\r\n%s' % (len(listing), listing))
-                elif request.startswith(b'GET /api/model-cards') and cards:
-                    connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n'
-                                       b'content-length: %d\r\nconnection: close\r\n\r\n%s'
-                                       % (len(card_listing), card_listing))
-                else:
-                    connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
-                connection.close()
-                connection, _ = listener.accept()
+            request = receive(connection)
             if bodies is not None:
                 bodies.append(json.loads(request.partition(b'\r\n\r\n')[2]))
             if gate and number == gated:
@@ -304,7 +322,7 @@ def serve_items(responses, gate=None, models=(), cards=None, bodies=None, gated=
             connection.close()
 
     threading.Thread(target=answer, daemon=True).start()
-    return '127.0.0.1:%d' % listener.getsockname()[1]
+    return offering('127.0.0.1:%d' % listener.getsockname()[1], models)
 
 
 def tool_call(call_id, name, arguments):
@@ -362,7 +380,8 @@ def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, 
         os.setsid()
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
-    child = subprocess.Popen([BINARY, '--endpoint', endpoint, *arguments], cwd=project, env=dict(env, **variables),
+    variables = dict(env, **variables)
+    child = subprocess.Popen([*agent(endpoint, variables['XDG_CONFIG_HOME']), *arguments], cwd=project, env=variables,
                              stdin=slave, stdout=slave, stderr=slave, close_fds=True, preexec_fn=own_terminal)
     output = bytearray()
 
@@ -439,7 +458,7 @@ def run_in_shell(script, endpoint):
     def send(data):
         os.write(master, data)
 
-    send(b'stty -g > ../mode; %s --endpoint %s\r' % (BINARY.encode(), endpoint.encode()))
+    send(b'stty -g > ../mode; %s\r' % agent(endpoint)[0].encode())
     script(read, until, send, output)
     send(b'exit\r')
     assert shell.wait(timeout=10) == 0, bytes(output[-2000:])
@@ -704,7 +723,7 @@ def cancel_retry(read, until, send, output):
     send(b'go\r')
     # Wrapped, as the full screen cuts what is wider than it.
     rows = on_screen('Retrying (1/3) in 2s (Ctrl-C to cancel)')
-    assert 'Connection refused (os error 111) (is Proxy running?)' in ' '.join(rows), rows
+    assert '(provider test): Connection refused (os error 111)' in ' '.join(rows), rows
     assert re.match(SPINNING + 'Retrying \\(1/3\\) in [12]s \\(Esc to cancel\\)', rows[-3]), rows
     send(b'\x03')
     on_screen('(cancelled)')
@@ -1443,7 +1462,7 @@ def fork_session(read, until, send, output):
     assert 'Reply two.' in rows, rows
     send(b'/model\r')
     rows = on_screen('Select model')
-    assert '\u203a gpt-6-luna \u2713' in rows, rows
+    assert '\u203a gpt-6-luna [test] \u2713' in rows, rows
     send(b'\x1b[B\r')
     on_screen('\u2713 Model set to claude-haiku-5-5')
     # A fork before the first prompt, quit before anything is said in it, is not kept.
@@ -1806,8 +1825,8 @@ def agent_switches_the_model(read, until, send, output):
     footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 medium', 80)], columns=80)
     send(b'go\r')
     on_screen('Switched to GPT-6 Terra (ID: gpt-6-terra, provider: openai).')
-    # While its next request runs, the footer names the new model at its card's level nearest
-    # the one set, and Shift+Tab cycles that card's levels.
+    # While its next request runs, the footer names the new model at its level nearest
+    # the one set, and Shift+Tab cycles its levels.
     footer_shows(read, output, [project, stats('?', 'gpt-6-terra \u2022 high', 80)], columns=80)
     send(b'\x1b[Z')
     footer_shows(read, output, [project, stats('?', 'gpt-6-terra \u2022 low', 80)], columns=80)
@@ -1913,7 +1932,7 @@ def settings_menu(read, until, send, output):
     assert '  ' + setting('Theme', 'terminal-colors') in rows, rows
     assert '  ' + setting('Look', 'classic') in rows, rows
     assert rows[-1] == '  start at. Shift+Tab cycles it.', rows
-    # The thinking level is chosen from the card's levels; Enter takes one and goes back.
+    # The thinking level is chosen from the model's levels; Enter takes one and goes back.
     send(b'\r')
     rows = on_screen('Thinking level  \u2191\u2193 move \u00b7 Enter select \u00b7 Esc back')
     assert '\u203a medium \u2713' in rows, rows
@@ -2192,7 +2211,7 @@ def name_and_session(read, until, send, output):
     send(b'hello\r')
     on_screen('Reply one.')
     # The tokens neither read from the cache nor written to it, the output, the cache reads and
-    # writes, what the agentic backend's card prices them at, then the context's.
+    # writes, what the backend's rates price them at, then the context's.
     footer_shows(read, output, [project, stats(SPENT, 'gpt-6-luna \u2022 medium', 200)], 200, 30)
     send(b'/name  Parser work \r')
     on_screen('Session name set: Parser work')
@@ -2257,7 +2276,7 @@ def search_selectors(read, until, send, output):
     on_screen('\u203a claude-haiku-5-5')
     send(b'\r')
     on_screen('\u2713 Model set to claude-haiku-5-5')
-    # After `/model `, the endpoint's models are completed.
+    # After `/model `, the providers' models are completed.
     send(b'/model 6.1')
     ending(read, output, ['> /model 6.1', '\u2192 gpt-6.1-sol'])
     send(b'\t')
@@ -2372,10 +2391,9 @@ assert set(session_files()) == known, set(session_files()) - known
 
 known = set(session_files())
 levels = config_home('levels')
-effort_cards = [{'requestId': 'gpt-6-luna', 'supportedProtocols': ['openai-responses'],
-                 'reasoning': {'levels': ['none', 'low', 'medium', 'high', 'xhigh', 'max'], 'default': 'medium'}}]
+effort_models = [model('gpt-6-luna', ['none', 'low', 'medium', 'high', 'xhigh', 'max'])]
 in_levels = {'XDG_CONFIG_HOME': levels}
-run([], shift_tab_cycles_effort, serve_replies([(['Reply.'], 'Reply.')], cards=effort_cards),
+run([], shift_tab_cycles_effort, serve_replies([(['Reply.'], 'Reply.')], models=effort_models),
     variables=in_levels)
 (effort,) = set(session_files()) - known
 # A new session starts at Scramjet's default level, medium.
@@ -2383,28 +2401,26 @@ assert saved_levels(effort) == ['medium', 'high', 'xhigh'], saved_levels(effort)
 assert json.load(open(settings_path(levels))) == {'defaultThinkingLevel': 'xhigh'}
 prompts = [item['content'] for item in map(json.loads, open(effort)) if item.get('role') == 'user']
 assert prompts == ['aXb'], prompts
-run(['--continue'], shift_tab_resumed, serve_replies([], cards=effort_cards), variables=in_levels)
+run(['--continue'], shift_tab_resumed, serve_replies([], models=effort_models), variables=in_levels)
 assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max'], saved_levels(effort)
-run(['-c', '--effort', 'low'], started_at('low'), serve_replies([], cards=effort_cards),
+run(['-c', '--effort', 'low'], started_at('low'), serve_replies([], models=effort_models),
     variables=in_levels)
 assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max', 'low'], saved_levels(effort)
 # --effort is not saved; a new session starts at the level Shift+Tab saved.
 assert json.load(open(settings_path(levels))) == {'defaultThinkingLevel': 'max'}
 known = set(session_files())
-run([], started_at('max'), serve_replies([], cards=effort_cards), variables=in_levels)
-# Scramjet's `off` is the cards' `none`, and is named `off`.
-run(['--effort', 'off'], started_at('off'), serve_replies([], cards=effort_cards), variables=in_levels)
+run([], started_at('max'), serve_replies([], models=effort_models), variables=in_levels)
+# Scramjet's `off` is requests' `none`, and is named `off`.
+run(['--effort', 'off'], started_at('off'), serve_replies([], models=effort_models), variables=in_levels)
 # Quit before a prompt, neither session was kept, as Scramjet writes none before the first reply.
 assert set(session_files()) == known, set(session_files()) - known
-scope_cards = [{'requestId': model, 'displayName': name, 'provider': 'openai',
-                'supportedProtocols': ['openai-responses'],
-                'reasoning': {'levels': ['none', 'low', 'medium', 'high'], 'default': 'medium'}}
-               for model, name in [('gpt-6-luna', 'GPT-6 Luna'), ('gpt-6-terra', 'GPT-6 Terra')]]
+scope_models = [model(id, ['none', 'low', 'medium', 'high'], 'openai', name=name)
+                for id, name in [('gpt-6-luna', 'GPT-6 Luna'), ('gpt-6-terra', 'GPT-6 Terra')]]
 scoped = config_home('scoped', '{"enabledModels": ["gpt-6-terra:high", "luna:low", "nothing"]}')
 bodies = []
 run([], ctrl_p_cycles_models, serve_items([
     [tool_call('call_1', 'bash', {'command': 'sleep 2'})], [message('Switched.')], [message('Unused.')],
-], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards, bodies=bodies),
+], models=scope_models, bodies=bodies),
     variables={'XDG_CONFIG_HOME': scoped}, columns=80, forget_models=False)
 assert [(body['model'], body['reasoning']['effort']) for body in bodies] == [
     ('gpt-6-terra', 'high'), ('gpt-6-luna', 'low')], bodies
@@ -2412,16 +2428,15 @@ assert json.load(open(settings_path(scoped))) == {
     'enabledModels': ['gpt-6-terra:high', 'luna:low', 'nothing'], 'defaultThinkingLevel': 'low',
     'defaultModel': 'gpt-6-luna'}
 # The model chosen last, when the scope has it, starts the next session, at its pattern's effort.
-run([], starts_with('gpt-6-luna \u00b7 thinking low'), serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'],
-                                                                      cards=scope_cards),
+run([], starts_with('gpt-6-luna \u00b7 thinking low'), serve_replies([], models=scope_models),
     variables={'XDG_CONFIG_HOME': scoped})
-switch_cards = [dict(scope_cards[0]), dict(scope_cards[1], reasoning={'levels': ['low', 'high'], 'default': 'high'})]
+switch_models = [scope_models[0], model('gpt-6-terra', ['low', 'high'], 'openai', name='GPT-6 Terra')]
 known, bodies = set(session_files()), []
 switching = config_home('switching')
 run([], agent_switches_the_model, serve_items([
     [tool_call('call_1', 'switch_scramjet_model', {'provider': 'openai', 'model': 'gpt-6-terra'})],
     [message('Terra replied.')],
-], gate=switch_gate, gated=1, models=['gpt-6-luna', 'gpt-6-terra'], cards=switch_cards, bodies=bodies),
+], gate=switch_gate, gated=1, models=switch_models, bodies=bodies),
     variables={'XDG_CONFIG_HOME': switching}, columns=80)
 # As /model, the agent's switch is remembered.
 assert json.load(open(settings_path(switching))) == {'defaultModel': 'gpt-6-terra', 'defaultThinkingLevel': 'low'}
@@ -2432,42 +2447,41 @@ changes = [line['model'] for line in map(json.loads, open(switched)) if line.get
 assert changes == ['gpt-6-luna', 'gpt-6-terra'], changes
 # In printed output too.
 printing = config_home('printed-switch')
-ran = subprocess.run([BINARY, '--endpoint', serve_items([
+ran = subprocess.run([*agent(serve_items([
     [tool_call('call_1', 'switch_scramjet_model', {'provider': 'openai', 'model': 'gpt-6-terra'})],
     [message('Terra replied.')],
-], models=['gpt-6-luna', 'gpt-6-terra'], cards=switch_cards), '-p', 'go'], cwd=project,
+], models=switch_models), printing), '-p', 'go'], cwd=project,
     env=dict(env, XDG_CONFIG_HOME=printing), capture_output=True, timeout=30)
 assert ran.returncode == 0 and b'Terra replied.' in ran.stdout + ran.stderr, ran
 assert json.load(open(settings_path(printing))) == {'defaultModel': 'gpt-6-terra'}
 assert json.load(open(remembered_models)) == {os.path.realpath(project): 'gpt-6-terra'}
 os.remove(remembered_models)
 run(['--models', 'terra, x'], ctrl_p_in_a_scope_of_one,
-    serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
+    serve_replies([], models=scope_models),
     variables={'XDG_CONFIG_HOME': config_home('scope-of-one')}, columns=80)
 # As Scramjet's --model, a pattern names a model, a provider's prefix among its own, and :level sets
 # the effort, unless --thinking does.
 named = config_home('named-model')
 for arguments, started in [(['--model', 'terra:low'], 'gpt-6-terra \u00b7 thinking low'),
                            (['--model', 'OpenAI/Terra:low', '--thinking', 'high'], 'gpt-6-terra \u00b7 thinking high')]:
-    run(arguments, starts_with(started), serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
+    run(arguments, starts_with(started), serve_replies([], models=scope_models),
         variables={'XDG_CONFIG_HOME': named})
 # One naming none is refused before a session is written.
 known = set(session_files())
-ran = subprocess.run([BINARY, '--endpoint', serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
+ran = subprocess.run([*agent(serve_replies([], models=scope_models), named),
                       '--model', 'sol', '-p', 'go'], cwd=project, env=dict(env, XDG_CONFIG_HOME=named),
                      capture_output=True, timeout=30)
 assert (ran.returncode, ran.stdout, ran.stderr) == (
-    1, b'', b'scramjet-rs: --model "sol" names none of the endpoint\'s models (--list-models lists them)\n'), ran
+    1, b'', b'scramjet-rs: --model "sol" names none of the providers\' models (--list-models lists them)\n'), ran
 assert set(session_files()) == known, set(session_files()) - known
-ran = subprocess.run([BINARY, '--endpoint', serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
-                      '--list-models', 'terra'], cwd=project, capture_output=True, timeout=30)
+ran = subprocess.run([*agent(serve_replies([], models=scope_models)), '--list-models', 'terra'], cwd=project,
+                     env=env, capture_output=True, timeout=30)
 assert (ran.returncode, ran.stdout.decode()) == (0, 'provider  model        context  max-out  thinking  images\n'
                                                    'openai    gpt-6-terra  -        -        yes       yes\n'), ran
 listed = config_home('listed')
-haiku_card = {'requestId': 'claude-haiku-5-5', 'displayName': 'Claude Haiku 5.5', 'provider': 'anthropic',
-              'supportedProtocols': ['anthropic-messages'], 'reasoning': None}
+haiku = model('claude-haiku-5-5', provider='anthropic', name='Claude Haiku 5.5')
 run([], scoped_models_list,
-    serve_replies([], models=['gpt-6-luna', 'gpt-6-terra', 'claude-haiku-5-5'], cards=scope_cards + [haiku_card]),
+    serve_replies([], models=scope_models + [haiku]),
     variables={'XDG_CONFIG_HOME': listed}, columns=80)
 assert json.load(open(settings_path(listed))) == {'enabledModels': ['gpt-6-luna', 'gpt-6-terra'],
                                                   'defaultModel': 'gpt-6-luna'}
@@ -2476,7 +2490,7 @@ in_remembering = {'XDG_CONFIG_HOME': remembering}
 other = os.path.join(work, 'other')
 os.mkdir(other)
 here, there = os.path.realpath(project), os.path.realpath(other)
-both = lambda: serve_replies([], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards)
+both = lambda: serve_replies([], models=scope_models)
 # As in Scramjet, a model chosen during a session is remembered for its project and anywhere...
 run([], starts_with('gpt-6-luna', [(b'/model gpt-6-terra\r', '\u2713 Model set to gpt-6-terra')]), both(),
     variables=in_remembering, forget_models=False)
@@ -2489,17 +2503,17 @@ assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-lu
 assert json.load(open(remembered_models)) == {here: 'gpt-6-terra', there: 'gpt-6-luna'}
 # --model and a resumed session's model win over the project's own and teach nothing.
 run(['--model', 'gpt-6-luna'], starts_with('gpt-6-luna', [(b'hi\r', 'Luna reply.')]),
-    serve_replies([(['Luna reply.'], 'Luna reply.')], models=['gpt-6-luna', 'gpt-6-terra'], cards=scope_cards),
+    serve_replies([(['Luna reply.'], 'Luna reply.')], models=scope_models),
     variables=in_remembering, forget_models=False)
 run([], starts_with('gpt-6-terra'), both(), variables=in_remembering, forget_models=False)
 # The session just quit without a prompt is not kept, so --continue takes the one before it.
 run(['--continue'], starts_with('gpt-6-luna'), both(), variables=in_remembering, forget_models=False)
 assert json.load(open(remembered_models)) == {here: 'gpt-6-terra', there: 'gpt-6-luna'}
 assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-luna'}
-# One the endpoint does not list is passed over, saying so.
-unlisted = 'gpt-6-terra, the model last chosen in this project, is not one the endpoint lists; not used'
+# One the providers do not offer is passed over, saying so.
+unlisted = 'gpt-6-terra, the model last chosen in this project, is not one the providers offer; not used'
 run([], starts_with('gpt-6-luna', notices=[unlisted], columns=120),
-    serve_replies([], models=['gpt-6-luna'], cards=scope_cards), variables=in_remembering, columns=120,
+    serve_replies([], models=scope_models[:1]), variables=in_remembering, columns=120,
     forget_models=False)
 # With startupModel global, every project starts with the model chosen last anywhere.
 run([], starts_with('gpt-6-terra', [(b'/settings\r', 'Settings  \u2191\u2193 move'),
@@ -2509,14 +2523,13 @@ run([], starts_with('gpt-6-terra', [(b'/settings\r', 'Settings  \u2191\u2193 mov
 assert json.load(open(settings_path(remembering))) == {'defaultModel': 'gpt-6-luna', 'startupModel': 'global'}
 run([], starts_with('gpt-6-luna'), both(), variables=in_remembering)
 run(['--models', 'luna,haiku'], model_list_in_a_scope,
-    serve_replies([], models=['gpt-6-luna', 'gpt-6-terra', 'claude-haiku-5-5'], cards=scope_cards + [haiku_card]),
+    serve_replies([], models=scope_models + [haiku]),
     variables={'XDG_CONFIG_HOME': config_home('model-scope')}, columns=80)
-plain_cards = [{'requestId': 'gpt-6-luna', 'supportedProtocols': ['openai-responses'], 'reasoning': None}]
-run([], started_without_thinking, serve_replies([], cards=plain_cards), variables=in_levels)
+run([], started_without_thinking, serve_replies([], models=[model('gpt-6-luna')]), variables=in_levels)
 menu_home = config_home('menu', '{"quietStartup": true, "branchSummary": {"reserveTokens": 16384}}')
 bodies = []
 run([], settings_menu, serve_items([[tool_call('call_1', 'bash', {'command': 'sleep 2'})], [message('Replied.')]],
-                                   cards=effort_cards, bodies=bodies), variables={'XDG_CONFIG_HOME': menu_home})
+                                   models=effort_models, bodies=bodies), variables={'XDG_CONFIG_HOME': menu_home})
 # Each change is used at once: the next request has the level and the tools chosen.
 assert bodies[0]['reasoning']['effort'] == 'high', bodies
 coding = ('read', 'bash', 'edit', 'write', 'grep', 'find', 'ls')
@@ -2581,15 +2594,13 @@ assert open(settings_path(broken)).read() == '{"hideThinkingBlock": tru'
 known = set(session_files())
 usage = {'input_tokens': 1200, 'output_tokens': 34, 'total_tokens': 1234,
          'input_tokens_details': {'cached_tokens': 1000, 'cache_write_tokens': 100}}
-luna = [{'requestId': 'gpt-6-luna', 'pricingKey': 'luna', 'reasoning': {'levels': ['low', 'medium', 'high']}}]
-rates = {'pricingKey': 'luna', 'effectiveFrom': '2026-01-01T00:00:00.000Z'}
-luna_prices = [dict(rates, api='foundry', inputPerMTok=1, cacheWritePerMTok=1.25, cacheReadPerMTok=0.1, outputPerMTok=5),
-               dict(rates, api='agentic', upstreamProvider='azure_openai', inputPerMTok=100, cacheWritePerMTok=200,
-                    cacheReadPerMTok=10, outputPerMTok=1000)]
+luna = [model('gpt-6-luna', ['low', 'medium', 'high'], cost={
+    'input': 1, 'cacheWrite': 1.25, 'cacheRead': 0.1, 'output': 5, 'header': 'x-served-by',
+    'byHeader': {'azure': {'input': 100, 'cacheWrite': 200, 'cacheRead': 10, 'output': 1000}}})]
 # 100 input tokens at $100 per million, 100 written at $200, 1,000 read at $10 and 34 output at $1,000.
 SPENT = '\u2191100 \u219334 (RATE) R1.0k W100 $0.074 1.2k'
-run([], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], cards=luna, usage=usage, prices=luna_prices,
-                                        backend='azure_openai'), columns=200, rows=30)
+run([], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], models=luna, usage=usage, backend='azure'),
+    columns=200, rows=30)
 rates = os.path.join(work, 'state/scramjet-rs/output-rates.json')
 samples = json.load(open(rates))['samples']
 assert [(sample['model'], sample['output_tokens']) for sample in samples] == [('gpt-6-luna', 34)], samples
@@ -2672,7 +2683,7 @@ def reloads(read, until, send, output):
     with open(settings_path(reloading), 'w') as file:
         file.write('{"tools": ["read", "bash"], "followUpMode": "each"}')
     send(b'/reload\r')
-    rows = on_screen('Reloaded settings, keybindings, themes, command sets, agents, skills and context files')
+    rows = on_screen('Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files')
     assert ('settings: %s: followUpMode must be "all" or "one-at-a-time"; ignored'
             % settings_path(reloading)) in rows, rows
     send(b'/fresh:h')
@@ -2734,7 +2745,7 @@ def installed_view(read, until, send, output):
     select_row(read, shown, send, '/demo:greet', b'\x1b[A')
     send(b'\r')
     rows = on_screen('\u203a   /demo:greet  Greet someone kindly')
-    assert 'Reloaded settings, keybindings, themes, command sets, agents, skills and context files' in rows, rows
+    assert 'Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files' in rows, rows
     assert rows.count(attention) == 2, rows
     # On a link that leads nowhere, it asks before removing the link; Escape keeps it.
     rows = select_row(read, shown, send, 'agents: ', b'\x1b[A')
@@ -2838,7 +2849,7 @@ def installed_edited_during_turn(read, until, send, output):
     on_screen('Done.')
     ended(read, output, 120, 40)
     send(b'/reload\r')
-    on_screen('Reloaded settings, keybindings, themes, command sets, agents, skills and context files')
+    on_screen('Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files')
     send(b'/demo:g')
     on_screen('\u2192 /demo:greet  <name> \u2014 Greet someone kindly')
     send(b'\x03')
@@ -3288,17 +3299,16 @@ with open(os.path.join(project, '.scramjet', 'autonomy.yaml'), 'w') as file:
 known = set(session_files())
 bodies = []
 routing = config_home('routing')
-route_cards = [{'requestId': model, 'displayName': name, 'supportedProtocols': ['openai-responses'],
-                'reasoning': {'levels': levels, 'default': 'medium'}}
-               for model, name, levels in [('gpt-6-luna', 'GPT-6 Luna', ['low', 'medium', 'high']),
-                                           ('gpt-6-sol', 'GPT-6 Sol', ['low', 'medium', 'high', 'xhigh'])]]
+route_models = [model(id, levels, name=name)
+                for id, name, levels in [('gpt-6-luna', 'GPT-6 Luna', ['low', 'medium', 'high']),
+                                         ('gpt-6-sol', 'GPT-6 Sol', ['low', 'medium', 'high', 'xhigh'])]]
 run([], next_steps, serve_items([
     [report('call_1', [('/flow:step two', True, 'Do the second.'), ('/flow:done', False, 'Stop here.')], 0)],
     [message('Second done.')],
     [report('call_2', [('/flow:done', False, 'Finish.')], 0)],
     [message('All done.'), report('call_3')],
     [report('call_4', [('/flow:step four', False, 'Again.')], 0)],
-], models=['gpt-6-luna', 'gpt-6-sol'], cards=route_cards, bodies=bodies), variables={'XDG_CONFIG_HOME': routing},
+], models=route_models, bodies=bodies), variables={'XDG_CONFIG_HOME': routing},
     rows=50)
 first, second = sorted(set(session_files()) - known)
 # The chosen model and effort take the step's requests and those after it, from the new session.
@@ -3333,7 +3343,7 @@ run([], suggested_steps, serve_items([
     [message('Or this.')],
     [suggest('call_4', [('/flow:done', 'Finish.')], 0)],
     [message('Last one.')],
-], models=['gpt-6-luna'], cards=route_cards[:1]), rows=50)
+], models=route_models[:1]), rows=50)
 (suggested,) = set(session_files()) - known
 records = [json.loads(line['arguments']) for line in map(json.loads, open(suggested))
            if line.get('name') == 'scramjet_next_step_selection']
@@ -3556,7 +3566,7 @@ assert open(os.path.join(publishing, 'scramjet', 'autonomy.yaml')).read() == \
 # In piped input the choice is a numbered line, and an empty one cancels: it may only separate prompts.
 for piped, outcome in [(b'file it\n\nthanks\n', 'cancelled'), (b'file it\n1\n', 'verified')]:
     logged = len(open(forge_log).readlines())
-    ran = subprocess.run([BINARY, '--endpoint', serve_items([[filed], [message('Filed.')], [message('Thanks.')]])],
+    ran = subprocess.run(agent(serve_items([[filed], [message('Filed.')], [message('Thanks.')]])),
                          cwd=project, env=dict(env, PATH=forge + os.pathsep + env['PATH']), input=piped,
                          capture_output=True, timeout=30)
     shown = ran.stderr.decode()
@@ -4187,7 +4197,7 @@ run([], fullscreen_shell_and_effort_during_turn, serve_items([
     [message('Replied.')],
     [tool_call('call_2', 'bash', {'command': 'sleep 2'})],
     [message('Second.')],
-], cards=effort_cards, bodies=bodies), variables={'XDG_CONFIG_HOME': during})
+], models=effort_models, bodies=bodies), variables={'XDG_CONFIG_HOME': during})
 assert [body['reasoning']['effort'] for body in bodies] == ['medium', 'high', 'high', 'high'], bodies
 assert json.load(open(settings_path(during))) == {'defaultThinkingLevel': 'high'}
 (during_session,) = set(session_files()) - known
@@ -4246,7 +4256,8 @@ for variables, said in [({'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAY
                         ({}, 'Error: Failed to copy to clipboard')]:
     if os.path.exists(clipboard):
         os.remove(clipboard)
-    ran = subprocess.run([BINARY, '--endpoint', serve_items([[message('Piped **reply**.')]])], cwd=project,
+    ran = subprocess.run(agent(serve_items([[message('Piped **reply**.')]]), variables.get('XDG_CONFIG_HOME')),
+                         cwd=project,
                          env=dict(env, **variables), input=b'go\n/copy\n', capture_output=True, timeout=30)
     assert said in ran.stderr.decode() and b'\x1b]52' not in ran.stderr, ran.stderr
     if variables:
@@ -4343,14 +4354,14 @@ def priced(input_tokens, output_tokens):
             'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}}
 
 
-# At the provider's card: $1 a million input tokens and $5 output: $0.015, the child's $0.03 and
+# At the model's prices: $1 a million input tokens and $5 output: $0.015, the child's $0.03 and
 # $0.04, then $0.015.
 run(['--model', 'gpt-6-luna'], fullscreen_subagent, serve_items([
     [tool_call('call_1', 'subagent', {'agent': 'scout', 'task': 'Look around the project.'})],
     [tool_call('call_2', 'ls', {'path': '.'})],
     [message('Found a.txt.\nLine 2\nLine 3\nLine 4\nLine 5')],
     [message('Scouted.')],
-], gate=subagent_gate, gated=2, cards=luna, prices=luna_prices,
+], gate=subagent_gate, gated=2, models=luna,
     usages=[priced(10_000, 1_000), priced(20_000, 2_000), priced(30_000, 2_000), priced(10_000, 1_000)]))
 run(['--continue'], fullscreen_subagent_resumed)
 
@@ -4438,7 +4449,7 @@ with open(appended, 'w') as file:
 sent_bodies = []
 for arguments in [[], ['--system-prompt', 'Given.', '--append-system-prompt', appended,
                        '--append-system-prompt', 'Inline.', '-nc']]:
-    ran = subprocess.run([BINARY, '--endpoint', serve_items([[message('Done.')]], bodies=sent_bodies), *arguments,
+    ran = subprocess.run([*agent(serve_items([[message('Done.')]], bodies=sent_bodies)), *arguments,
                           '-p', 'go'], cwd=project, env=env, capture_output=True, timeout=30)
     assert ran.returncode == 0, ran
 found, given = (body['instructions'] for body in sent_bodies)
