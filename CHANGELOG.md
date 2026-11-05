@@ -4,6 +4,16 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.6.0 — The terminal's paste key
+
+### Changed
+
+- When the clipboard cannot be read (in a remote session, or under WSL when PowerShell cannot start), the first failed right-click paste names the key that pastes through the terminal itself: Ctrl+Shift+V in Windows Terminal and most others, Command+V on a Mac, Shift+Insert in xterm, which pastes only selected text. Later failures give only the cause.
+
+### Added
+
+- [docs/TERMINALS.md](docs/TERMINALS.md): what each terminal does with copying, pasting and the keys scramjet-rs uses, such as Windows Terminal keeping Alt+Enter for full screen.
+
 ## 0.5.0 — Copy on select
 
 ### Added

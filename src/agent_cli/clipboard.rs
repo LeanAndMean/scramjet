@@ -3,7 +3,8 @@
 //! under Wayland, then the X server itself (`x11.rs`), `xclip` or `xsel`; else, and also in a
 //! remote session, through the terminal with OSC 52. Pasting: with the PowerShell under WSL,
 //! `pbpaste` on macOS, else from the X server itself, then with `wl-paste`, `xclip` or `xsel`;
-//! never in a remote session, whose clipboard is the terminal's.
+//! never in a remote session, whose clipboard is the terminal's. When no route reads it, the first
+//! failure names the key that pastes through the terminal itself.
 //! An image is pasted as Scramjet pastes it, as the path of a file it is saved to.
 
 use std::{
@@ -12,7 +13,10 @@ use std::{
     io::{Read, Write},
     os::unix::fs::OpenOptionsExt,
     process::{self, Child, Command, Stdio},
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant, SystemTime},
 };
 
@@ -35,6 +39,9 @@ const IMAGE_TYPES: [(&str, &str); 4] = [
     ("image/webp", "webp"),
     ("image/gif", "gif"),
 ];
+
+/// Whether a failed paste has named the terminal's own paste key in this run.
+static KEY_NAMED: AtomicBool = AtomicBool::new(false);
 
 /// Runs the command line's `command` if it is the clipboard's own: scramjet-rs started again to
 /// own a copy (`x11::copy`).
@@ -70,15 +77,16 @@ pub(super) fn warm() {
 /// The text on the clipboard: under WSL Windows', else read with the first of the platform's
 /// tools that succeeds.
 pub(super) fn paste() -> Result<String, String> {
+    let failed = |why: String| unreadable(why, &KEY_NAMED);
     if remote() {
-        return Err("Use your terminal's Paste command in remote sessions".to_owned());
+        return Err(failed(
+            "Remote sessions paste only through the terminal".to_owned(),
+        ));
     }
     if wsl(set) {
         return match powershell::read("text", PASTE_MAX) {
             Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
-            Err(error) => Err(format!(
-                "Cannot read clipboard text ({error}); use your terminal's Paste command"
-            )),
+            Err(error) => Err(failed(format!("Cannot read clipboard text ({error})"))),
         };
     }
     let built_in = x11(set).then(|| x11::text(PASTE_MAX));
@@ -91,11 +99,39 @@ pub(super) fn paste() -> Result<String, String> {
     }
     Err(match built_in {
         Some(Ok(_)) => "No text on the clipboard".to_owned(),
-        Some(Err(error)) => {
-            format!("Cannot read clipboard text ({error}); use your terminal's Paste command")
-        }
-        None => "Cannot read clipboard text; use your terminal's Paste command".to_owned(),
+        Some(Err(error)) => failed(format!("Cannot read clipboard text ({error})")),
+        None => failed("Cannot read clipboard text".to_owned()),
     })
+}
+
+/// `why` no route read the clipboard's text, followed the first time (`named`) by the key that
+/// pastes through the terminal itself.
+fn unreadable(why: String, named: &AtomicBool) -> String {
+    if named.swap(true, Ordering::Relaxed) {
+        return why;
+    }
+    let var = |name: &str| env::var(name).unwrap_or_default();
+    format!("{why}; {}", paste_key(var, remote()))
+}
+
+/// Which key pastes through the terminal itself, as the terminal the variables (`var`) name binds
+/// it by default, else as most do; a `remote` session's terminal may be a Mac's.
+fn paste_key(var: impl Fn(&str) -> String, remote: bool) -> &'static str {
+    if var("LC_TERMINAL") == "iTerm2" || var("TERM_PROGRAM") == "iTerm.app" {
+        "iTerm2 pastes with Command+V"
+    } else if var("TERM_PROGRAM") == "Apple_Terminal" {
+        "Apple's Terminal pastes with Command+V"
+    } else if !var("WT_SESSION").is_empty() {
+        "Windows Terminal pastes with Ctrl+Shift+V"
+    } else if !var("XTERM_VERSION").is_empty() {
+        "xterm pastes only selected text, with Shift+Insert"
+    } else if cfg!(target_os = "macos") && !remote {
+        "paste with Command+V"
+    } else if remote {
+        "most terminals paste with Ctrl+Shift+V, a Mac's with Command+V"
+    } else {
+        "most terminals paste with Ctrl+Shift+V"
+    }
 }
 
 /// Saves the clipboard's image to a new file only the user can read, for its path to be pasted.
@@ -359,6 +395,51 @@ mod tests {
         );
         assert_eq!(names(&["DISPLAY"]), ["xclip", "xsel"]);
         assert!(names(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_first_unreadable_paste_names_the_terminals_own_paste_key() {
+        let key = |variables: &[(&str, &str)], remote: bool| {
+            let var = |name: &str| {
+                let value = variables.iter().find(|(set, _)| *set == name);
+                value.map_or_else(String::new, |(_, value)| (*value).to_owned())
+            };
+            paste_key(var, remote)
+        };
+        let windows = [("WT_SESSION", "0b1c"), ("TERM_PROGRAM", "tmux")];
+        assert_eq!(
+            key(&windows, false),
+            "Windows Terminal pastes with Ctrl+Shift+V"
+        );
+        assert_eq!(
+            key(&[("LC_TERMINAL", "iTerm2")], true),
+            "iTerm2 pastes with Command+V"
+        );
+        assert_eq!(
+            key(&[("TERM_PROGRAM", "Apple_Terminal")], false),
+            "Apple's Terminal pastes with Command+V"
+        );
+        assert_eq!(
+            key(&[("XTERM_VERSION", "XTerm(390)")], false),
+            "xterm pastes only selected text, with Shift+Insert"
+        );
+        assert_eq!(
+            key(&[], true),
+            "most terminals paste with Ctrl+Shift+V, a Mac's with Command+V"
+        );
+        let local = match cfg!(target_os = "macos") {
+            true => "paste with Command+V",
+            false => "most terminals paste with Ctrl+Shift+V",
+        };
+        assert_eq!(key(&[("TERM", "xterm-256color")], false), local);
+
+        let named = AtomicBool::new(false);
+        let first = unreadable("Cannot read clipboard text".to_owned(), &named);
+        let (why, hint) = first.split_once("; ").unwrap();
+        assert_eq!(why, "Cannot read clipboard text");
+        assert!(hint.contains(" with "), "{hint}");
+        let later = unreadable("Cannot read clipboard text (ended)".to_owned(), &named);
+        assert_eq!(later, "Cannot read clipboard text (ended)");
     }
 
     #[test]

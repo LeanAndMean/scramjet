@@ -3778,9 +3778,15 @@ def fullscreen_copy_on_select(read, until, send, output):
     send(b'\x1b[<0;15;%dM\x1b[<0;15;%dm' % (row, row) * 3)
     copied('Row 30 of the reply.')
     assert open(copies).read() == 'Row 30\nreply\nRow 30 of the reply.\n', open(copies).read()
-    # The selection went once copied: a right click pastes, here from no clipboard.
+    # The selection went once copied: a right click pastes, here from no clipboard. The first
+    # failure names the terminal's own paste key, later ones only the cause.
     send(b'\x1b[<2;5;5M\x1b[<2;5;5m')
-    on_screen('Paste failed: Cannot read clipboard text')
+    rows = on_screen('Ctrl+Shift+V')
+    assert rows[-4:-2] == ['Paste failed: Cannot read clipboard text; Windows Terminal',
+                           'pastes with Ctrl+Shift+V'], rows
+    send(b'\x1b[<2;5;5M\x1b[<2;5;5m')
+    rows = on_screen('Ctrl+Shift+V', gone=True)
+    assert rows[-3] == 'Paste failed: Cannot read clipboard text', rows
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
     rows = select_row(read, shown, send, 'Copy on select', b'\x1b[B')
@@ -4029,7 +4035,7 @@ for stale in [clipboard, clipboard + '.log']:
 selecting = config_home('copy-on-select', '{"copyOnSelect": true}')
 run([], fullscreen_copy_on_select, serve_items([[message(rows_reply)]]), variables={
     'PATH': slow_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
-    'CLIPBOARD': clipboard, 'XDG_CONFIG_HOME': selecting})
+    'CLIPBOARD': clipboard, 'XDG_CONFIG_HOME': selecting, 'WT_SESSION': 'test'})
 assert json.load(open(settings_path(selecting))) == {'copyOnSelect': False}, open(settings_path(selecting)).read()
 pastes = os.path.join(work, 'pastes')
 # Stands in for the PowerShell kept for pastes and copies: checks it reads and writes the clipboard's

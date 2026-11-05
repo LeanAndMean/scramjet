@@ -33,6 +33,7 @@ Other main options: `--thinking LEVEL` (or `--effort`), `--models PATTERNS` (the
 - `scramjet-rs --help`: every option, the keys and the built-in commands.
 - `/hotkeys`: every key. `/` lists the commands and skills as you type.
 - `/settings`: every setting, each with a line saying what it does; also each command's next steps, publication approval, and what the session loaded from where, with any problems (Enter on a file opens it in `$EDITOR`).
+- [docs/TERMINALS.md](docs/TERMINALS.md): what your terminal does with copying, pasting and scramjet-rs's keys, such as the keys it keeps for itself.
 - The commit messages: how each behavior was decided and verified.
 
 ## In a session
