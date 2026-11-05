@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.22.0 — API keys in /login
+
+### Added
+
+- `/login` lists, under API keys, the providers of the `models.json` files, each with where its key comes from (saved, a variable, or the file), and saves a key you enter in `~/.config/scramjet-rs/auth.json` beside the logins, so it need not be written in `models.json`. Requests to that provider carry it in place of the entry's `apiKey`, as in Scramjet. A key with a space or a line break inside, as a broken paste leaves, is refused. `/logout` removes it.
+
 ## 0.21.0 — Models by provider
 
 ### Changed

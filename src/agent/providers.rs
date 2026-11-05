@@ -6,6 +6,7 @@
 //! holding its providers' credentials, which the agent's tools do not see (`sandbox::Hidden`).
 //! A provider logged in to with `/login` (`login::LOGINS`) adds the models its login listed,
 //! unless a file names it; a provider of that name without an `apiKey` takes the login's key.
+//! An API key `/login` saved for a provider the files name is sent in place of its `apiKey`.
 //! Providers may offer the same id: a model is named by its reference, `provider/id`.
 
 use super::ModelOption;
@@ -171,6 +172,19 @@ pub(super) fn reference(provider: &str, id: &str) -> String {
     format!("{provider}/{id}")
 }
 
+/// Where the key requests to a provider carry comes from, as `/login` shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum KeyFrom {
+    /// `/login` saved it.
+    Saved,
+    /// The variable its entry's `apiKey` names.
+    Variable(String),
+    /// Its entry's `apiKey` text.
+    Entry,
+    /// Its requests carry none.
+    Nowhere,
+}
+
 /// The providers' models, each once, in the order of their files, of the providers in each and
 /// of each provider's `models`; with what was wrong in the files.
 #[derive(Clone, Debug, Default)]
@@ -180,6 +194,8 @@ pub struct Providers {
     #[cfg(test)]
     given: Option<Value>,
     models: Vec<Model>,
+    /// The providers the files name that `/login` may save a key for, each once, in order.
+    keyed: Vec<(String, KeyFrom)>,
     credential_files: Vec<PathBuf>,
     problems: Vec<String>,
     /// Where `/login` saves what it does.
@@ -228,6 +244,12 @@ impl Providers {
             logins: self.logins.clone(),
             ..Reading::default()
         };
+        if let Some(logins) = &self.logins {
+            match super::login::saved(&logins.auth) {
+                Ok(saved) => reading.saved = saved,
+                Err(problem) => reading.problems.push(problem),
+            }
+        }
         for file in &self.files {
             reading.file(file);
         }
@@ -238,6 +260,7 @@ impl Providers {
         }
         reading.logins();
         self.models = reading.models;
+        self.keyed = reading.keyed;
         let previous = std::mem::replace(&mut self.credential_files, reading.credential_files);
         self.problems = reading.problems;
         self.keep_credential_files(previous);
@@ -271,6 +294,12 @@ impl Providers {
 
     pub(super) fn models(&self) -> &[Model] {
         &self.models
+    }
+
+    /// The providers the files name, but those `/login` logs in to, with where their key comes
+    /// from: those `/login` may save a key for.
+    pub fn keyed(&self) -> &[(String, KeyFrom)] {
+        &self.keyed
     }
 
     /// The model `name` names: the one whose reference (`provider/id`) it is, else the first
@@ -360,8 +389,11 @@ struct Reading {
     credential_files: Vec<PathBuf>,
     problems: Vec<String>,
     logins: Option<Logins>,
+    /// What `/login` saved.
+    saved: Map<String, Value>,
     /// The providers the files named.
     named: Vec<String>,
+    keyed: Vec<(String, KeyFrom)>,
 }
 
 impl Reading {
@@ -371,10 +403,7 @@ impl Reading {
         let Some(logins) = self.logins.clone() else {
             return;
         };
-        let saved = match super::login::saved(&logins.auth) {
-            Ok(saved) => saved,
-            Err(problem) => return self.problems.push(problem),
-        };
+        let saved = self.saved.clone();
         for (name, _) in super::login::LOGINS {
             if self.named.iter().any(|named| named == name) {
                 continue;
@@ -453,6 +482,20 @@ impl Reading {
     fn providers(&mut self, providers: Option<Ordered>, what: &str) {
         for (name, entry) in providers.into_iter().flat_map(|ordered| ordered.0) {
             self.named.push(name.clone());
+            let logs_in = super::login::LOGINS.iter().any(|(login, _)| *login == name);
+            if !logs_in && !self.keyed.iter().any(|(keyed, _)| *keyed == name) {
+                let from = match (super::login::key(&self.saved, &name), &entry["apiKey"]) {
+                    (Some(_), _) => KeyFrom::Saved,
+                    (None, Value::String(key))
+                        if std::env::var_os(key).is_some_and(|set| !set.is_empty()) =>
+                    {
+                        KeyFrom::Variable(key.clone())
+                    }
+                    (None, Value::String(_)) => KeyFrom::Entry,
+                    (None, _) => KeyFrom::Nowhere,
+                };
+                self.keyed.push((name.clone(), from));
+            }
             self.provider(&name, &entry, &format!("{what}: provider {name}"));
         }
     }
@@ -520,15 +563,20 @@ impl Reading {
         } = base_url(url).map_err(|problem| format!("model {id}: baseUrl {problem}"))?;
         let mut headers = Vec::new();
         let logs_in = super::login::LOGINS.iter().any(|(login, _)| *login == name);
-        let login = match (&self.logins, text("apiKey")?) {
+        // As Scramjet's, a key `/login` saved is sent in place of the entry's.
+        let key = match super::login::key(&self.saved, name) {
+            Some(saved) => Some((saved, "the API key /login saved")),
+            None => text("apiKey")?.map(|key| (key, "apiKey")),
+        };
+        let login = match (&self.logins, key) {
             (Some(logins), None) if logs_in => Some(Login {
                 provider: name.to_owned(),
                 file: logins.auth.clone(),
             }),
             _ => None,
         };
-        if let Some(key) = text("apiKey")? {
-            let key = resolve(key).map_err(|problem| format!("model {id}: apiKey {problem}"))?;
+        if let Some((key, what)) = key {
+            let key = resolve(key).map_err(|problem| format!("model {id}: {what} {problem}"))?;
             if protocol == Protocol::Messages {
                 headers.push(("x-api-key".to_owned(), key.clone()));
             }
@@ -1140,6 +1188,80 @@ mod tests {
                 .models()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_key_login_saved_is_sent_in_place_of_the_entrys() {
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-providers-keys-{}", std::process::id())),
+        );
+        let logins = Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        // SAFETY: no other test reads this variable.
+        unsafe { std::env::set_var("SCRAMJET_RS_PROVIDERS_KEYED_TEST", "from-variable") };
+        let entry = |key: Option<&str>, api: &str| {
+            let mut entry = json!({"baseUrl": "http://127.0.0.1:9", "api": api,
+                "models": [{"id": format!("m-{api}")}]});
+            if let Some(key) = key {
+                entry["apiKey"] = key.into();
+            }
+            entry
+        };
+        let document = json!({"providers": {
+            "openrouter": entry(None, "openai-completions"),
+            "anthropic": entry(Some("literal"), "anthropic-messages"),
+            "named": entry(Some("SCRAMJET_RS_PROVIDERS_KEYED_TEST"), "openai-responses"),
+            "github-copilot": entry(None, "openai-responses"),
+        }});
+        let headers = |providers: &Providers, model: &str| route(providers, model).headers;
+        let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        let providers = Providers::given_logged_in(document.clone(), logins.clone());
+        assert_eq!(
+            providers.keyed(),
+            [
+                ("anthropic".to_owned(), KeyFrom::Entry),
+                (
+                    "named".to_owned(),
+                    KeyFrom::Variable("SCRAMJET_RS_PROVIDERS_KEYED_TEST".to_owned())
+                ),
+                ("openrouter".to_owned(), KeyFrom::Nowhere),
+            ]
+        );
+        assert!(headers(&providers, "openrouter/m-openai-completions").is_empty());
+        assert_eq!(
+            headers(&providers, "anthropic/m-anthropic-messages"),
+            [pair("x-api-key", "literal")]
+        );
+        let login = super::super::login::save_key;
+        login(&logins.auth, "openrouter", "sk-or").unwrap();
+        login(&logins.auth, "anthropic", "sk-ant").unwrap();
+        // A saved key that names a variable is read from it, as the entry's is.
+        login(&logins.auth, "named", "SCRAMJET_RS_PROVIDERS_KEYED_TEST").unwrap();
+        let providers = Providers::given_logged_in(document, logins.clone());
+        let saved: Vec<KeyFrom> = providers
+            .keyed()
+            .iter()
+            .map(|(_, from)| from.clone())
+            .collect();
+        assert_eq!(saved, [KeyFrom::Saved, KeyFrom::Saved, KeyFrom::Saved]);
+        assert_eq!(
+            headers(&providers, "openrouter/m-openai-completions"),
+            [pair("authorization", "Bearer sk-or")]
+        );
+        assert_eq!(
+            headers(&providers, "anthropic/m-anthropic-messages"),
+            [pair("x-api-key", "sk-ant")]
+        );
+        assert_eq!(
+            headers(&providers, "named/m-openai-responses"),
+            [pair("authorization", "Bearer from-variable")]
+        );
+        // A provider `/login` logs in to keeps its login.
+        let copilot = route(&providers, "github-copilot/m-openai-responses");
+        assert!(copilot.headers.is_empty() && copilot.login.is_some());
+        assert_eq!(providers.problems(), [] as [String; 0]);
     }
 
     #[test]

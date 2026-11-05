@@ -2,7 +2,8 @@
 //! readable by its owner only and hidden from the agent's tools as other credential stores are
 //! (`sandbox::Hidden`). It is in Scramjet's format: an object of the providers logged in to,
 //! each `{"type": "oauth", "refresh", "access", "expires"}` (milliseconds since the epoch) with
-//! what else its login keeps. A process changes it holding a lock on `auth.json.lock`, so that
+//! what else its login keeps, or `{"type": "api_key", "key"}` for a provider of the `models.json`
+//! files, whose requests carry that key in place of the one its entry gives. A process changes it holding a lock on `auth.json.lock`, so that
 //! two refreshing a token at once do not undo each other's, and reads it holding the lock shared.
 //! It is written in place, as Scramjet writes its own: a sandbox hides it by mounting an empty
 //! file over it, and a file renamed over that path would show in every sandbox already running.
@@ -80,6 +81,37 @@ pub fn logged_in(path: &Path) -> Result<Vec<String>, String> {
 pub fn shown_name(provider: &str) -> &str {
     let known = LOGINS.iter().find(|(name, _)| *name == provider);
     known.map_or(provider, |(_, shown)| shown)
+}
+
+/// The providers with an API key saved in `path`.
+pub fn saved_keys(path: &Path) -> Result<Vec<String>, String> {
+    let saved = saved(path)?;
+    let keyed = saved.keys().filter(|name| key(&saved, name).is_some());
+    Ok(keyed.cloned().collect())
+}
+
+/// The API key saved among `saved` for `provider`.
+pub(super) fn key<'a>(saved: &'a Map<String, Value>, provider: &str) -> Option<&'a str> {
+    let credential = saved.get(provider).filter(|c| c["type"] == "api_key")?;
+    credential["key"].as_str()
+}
+
+/// Saves `key`, trimmed, in `path` as the API key requests to `provider` carry.
+pub fn save_key(path: &Path, provider: &str, key: &str) -> Result<(), String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("the key is empty".to_owned());
+    }
+    // Read as configured values are, it would be a command.
+    if key.starts_with('!') {
+        return Err("a key starting with ! is a shell command, which is not run yet".to_owned());
+    }
+    // A space or a line break inside comes of a paste gone wrong; no provider's keys have one.
+    if !key.chars().all(|ch| ch.is_ascii_graphic()) {
+        return Err("an API key is letters, digits and punctuation, without spaces".to_owned());
+    }
+    let credential = serde_json::json!({"type": "api_key", "key": key});
+    save(path, provider, credential)
 }
 
 /// Removes `provider`'s credentials, and what its login listed; returns whether there were any.
@@ -444,6 +476,53 @@ mod tests {
         // Empty, as a sandbox shows it, it holds no logins.
         std::fs::write(&path, "").unwrap();
         assert!(saved(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn api_keys_are_saved_trimmed_and_refused_when_they_cannot_be_sent() {
+        let scratch = scratch("login-keys");
+        let path = scratch.0.join("auth.json");
+        save(
+            &path,
+            "github-copilot",
+            json!({"type": "oauth", "access": "a"}),
+        )
+        .unwrap();
+        save_key(&path, "openrouter", "  sk-or-v1-abc\n").unwrap();
+        let saved = saved(&path).unwrap();
+        assert_eq!(
+            saved["openrouter"],
+            json!({"type": "api_key", "key": "sk-or-v1-abc"})
+        );
+        assert_eq!(key(&saved, "openrouter"), Some("sk-or-v1-abc"));
+        assert_eq!(key(&saved, "github-copilot"), None);
+        assert_eq!(saved_keys(&path).unwrap(), ["openrouter"]);
+        assert_eq!(logged_in(&path).unwrap(), ["github-copilot", "openrouter"]);
+        for (refused, why) in [
+            ("  ", "the key is empty"),
+            ("!pass show key", "a key starting with ! is a shell command"),
+            ("sk-or\nv1", "without spaces"),
+            ("sk or", "without spaces"),
+            ("sk-é", "without spaces"),
+        ] {
+            let error = save_key(&path, "openrouter", refused).unwrap_err();
+            assert!(error.contains(why), "{refused:?}: {error}");
+        }
+        assert_eq!(
+            key(&super::saved(&path).unwrap(), "openrouter"),
+            Some("sk-or-v1-abc")
+        );
+        assert!(
+            logout(
+                &Logins {
+                    auth: path.clone(),
+                    lists: scratch.0.clone()
+                },
+                "openrouter"
+            )
+            .unwrap()
+        );
+        assert!(saved_keys(&path).unwrap().is_empty());
     }
 
     #[test]

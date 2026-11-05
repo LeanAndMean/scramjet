@@ -47,7 +47,7 @@ pub use commands::{Command, Commands, Origin, Set, Sets, sets_in};
 pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use problem::{Problem, ProblemFile};
-pub use providers::Providers;
+pub use providers::{KeyFrom, Providers};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
 pub use session::{

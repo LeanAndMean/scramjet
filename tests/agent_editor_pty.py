@@ -229,9 +229,10 @@ def serve_thoughts(gates):
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
-def serve_replies(replies, models=(), usage=None, backend=None):
+def serve_replies(replies, models=(), usage=None, backend=None, heads=None):
     """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`
-    (and `usage`, when given) from `backend` (`x-served-by`), offering `models` (`offering`)."""
+    (and `usage`, when given) from `backend` (`x-served-by`), offering `models` (`offering`); each
+    request's head is added to `heads` when given."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -261,7 +262,9 @@ def serve_replies(replies, models=(), usage=None, backend=None):
         pending = iter(streams)
         while True:
             connection, _ = listener.accept()
-            receive(connection)
+            head = receive(connection).partition(b'\r\n\r\n')[0].decode()
+            if heads is not None:
+                heads.append(head)
             stream = next(pending)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n%scontent-length: %d\r\n'
                                b'connection: close\r\n\r\n%s' % (served_by, len(stream), stream))
@@ -1245,9 +1248,49 @@ def logins(read, until, send, output):
     on_screen('No saved logins to remove.')
     send(b'/login\r')
     rows = on_screen('Log in to  ')
-    assert any(row.startswith('\u203a ChatGPT Plus/Pro (Codex Subscription)') for row in rows), rows
-    assert any(row.startswith('  GitHub Copilot') for row in rows), rows
+    at = rows.index('  Subscriptions')
+    assert rows[at:at + 5] == ['  Subscriptions', '\u203a   ChatGPT Plus/Pro (Codex Subscription)',
+                               '    GitHub Copilot', '  API keys', '    test'], rows
+    # A provider of models.json takes an API key, saved hidden and sent with its requests.
+    send(b'\x1b[B\x1b[B')
+    on_screen('Its requests carry no key. One saved here is kept in auth.json, as logins are')
+    send(b'\r')
+    on_screen('API key for test  Enter submit \u00b7 Esc cancel')
+    # A key that broke in two as it was copied is refused.
+    send(b'\x1b[200~sk-test\n123\x1b[201~\r')
+    on_screen('Error: the API key for test was not saved: an API key is letters, digits and')
+    assert not os.path.exists(auth) or json.load(open(auth)) == {}
+    send(b'/login\r')
+    on_screen('Log in to  ')
+    send(b'\x1b[B\x1b[B\r')
+    on_screen('API key for test  Enter submit')
+    send(b'sk-test-123\r')
+    on_screen('\u2713 Saved the API key for test in')
+    on_screen(auth)
+    assert json.load(open(auth)) == {'test': {'type': 'api_key', 'key': 'sk-test-123'}}
+    assert oct(os.stat(auth).st_mode & 0o777) == '0o600'
+    send(b'hi\r')
+    on_screen('Keyed reply.')
+    assert '\r\nauthorization: Bearer sk-test-123\r\n' in keyed_heads[-1], keyed_heads
+    send(b'/login\r')
+    on_screen('Log in to  ')
+    send(b'\x1b[B\x1b[B')
+    rows = on_screen('Saved in auth.json, as logins are; entering another replaces it')
+    assert '\u203a   test \u2713 key saved' in rows, rows
+    send(b'\x1b')
+    on_screen('Saved in auth.json', gone=True)
+    send(b'/logout\r')
+    rows = on_screen('Log out of  ')
+    assert '\u203a test API key' in rows, rows
+    send(b'\r')
+    on_screen('\u2713 Removed the saved API key for test; environment variables and models.json')
+    assert json.load(open(auth)) == {}
+    send(b'hi again\r')
+    on_screen('Unkeyed reply.')
+    assert '\nauthorization:' not in keyed_heads[-1], keyed_heads
     # ChatGPT's: the page is opened and copied, and the browser's answer comes back to the port.
+    send(b'/login\r')
+    on_screen('Log in to  ')
     send(b'\r')
     # Port 1455 may be another login's, as another test run's: then the answer is only pasted.
     rows = on_screen("last address, or log in there  Enter submit \u00b7 Esc cancel", either=
@@ -1312,7 +1355,7 @@ def logins(read, until, send, output):
     on_screen('Log in to  ')
     send(b'\x1b[B')
     rows = on_screen('Logged in; logging in again replaces the saved login')
-    assert any(row.startswith('\u203a GitHub Copilot \u2713 logged in') for row in rows), rows
+    assert any(row.startswith('\u203a   GitHub Copilot \u2713 logged in') for row in rows), rows
     send(b'\x1b')
     on_screen('Logged in; logging in again', gone=True)
     send(b'/logout\r')
@@ -1340,7 +1383,10 @@ for name, script in [('xdg-open', 'printf "%s\\n" "$1" > "$OPENED"'), ('wl-copy'
     with open(os.path.join(login_bin, name), 'w') as script_file:
         script_file.write('#!/bin/sh\n' + script + '\n')
     os.chmod(os.path.join(login_bin, name), 0o755)
-run([], logins, variables={'XDG_CONFIG_HOME': login_home, 'PATH': login_bin + os.pathsep + env['PATH'],
+keyed_heads = []
+keyed_server = serve_replies([(['Keyed reply.'], 'Keyed reply.'), (['Unkeyed reply.'], 'Unkeyed reply.')],
+                             heads=keyed_heads)
+run([], logins, keyed_server, variables={'XDG_CONFIG_HOME': login_home, 'PATH': login_bin + os.pathsep + env['PATH'],
                            'WAYLAND_DISPLAY': 'wayland-test', 'OPENED': opened_page, 'CLIPBOARD': login_clipboard},
     columns=80, rows=30)
 

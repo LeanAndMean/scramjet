@@ -3,13 +3,14 @@
 //! while the screen waits, as Scramjet's login dialog does. ChatGPT's is a browser login, which
 //! comes back by itself, or the user pastes the address the browser ended on. While the full
 //! screen is open, the models each login lists are read again in the background as they age.
+//! A provider of the `models.json` files takes an API key, which requests to it then carry.
 
 use super::interactive::Interactive;
 use super::screen::{Answer, Dialog, Optional, Relisting};
 use super::select::{self, Picker};
-use super::text::clip;
-use super::{clipboard, style};
-use scramjet_rs::agent::{codex, copilot, login};
+use super::text::{clip, visible};
+use super::{clipboard, editor, style};
+use scramjet_rs::agent::{KeyFrom, codex, copilot, login};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::process::{Command, Stdio};
@@ -26,8 +27,31 @@ const RELIST_AFTER: Duration = Duration::from_secs(15 * 60);
 /// How often the lists' age is looked at.
 const LOOK_EVERY: Duration = Duration::from_secs(60);
 
+/// A row of `/login`'s list.
+enum Row<'a> {
+    Heading(&'static str),
+    /// A provider's own login: its name, and what the user knows it by.
+    Login(&'static str, &'static str),
+    /// A provider of the files, which takes an API key.
+    Key(&'a str, &'a KeyFrom),
+}
+
+/// `/login`'s rows: the logins, then, under headings, the providers that take an API key.
+fn rows(keyed: &[(String, KeyFrom)]) -> Vec<Row<'_>> {
+    let logins = (login::LOGINS.iter()).map(|(name, shown)| Row::Login(name, shown));
+    if keyed.is_empty() {
+        return logins.collect();
+    }
+    let mut rows = vec![Row::Heading("Subscriptions")];
+    rows.extend(logins);
+    rows.push(Row::Heading("API keys"));
+    rows.extend(keyed.iter().map(|(name, from)| Row::Key(name, from)));
+    rows
+}
+
 impl Interactive {
-    /// `/login`: the providers to log in to, each marked when logged in, then its login.
+    /// `/login`: the providers to log in to, each marked when logged in, and those that take an
+    /// API key, each with where its key comes from; then its login.
     pub(super) fn login(&mut self) {
         let Some(logins) = login::Logins::user() else {
             return self.say("Error: neither XDG_CONFIG_HOME nor HOME is set");
@@ -36,38 +60,86 @@ impl Interactive {
             return self.say("Error: /login needs the full screen");
         };
         let logged_in = login::logged_in(&logins.auth).unwrap_or_default();
-        let notes = (login::LOGINS.iter())
-            .map(
-                |(name, _)| match logged_in.iter().any(|known| known == name) {
-                    true => "Logged in; logging in again replaces the saved login".to_owned(),
-                    false => String::new(),
-                },
-            )
+        let is_logged_in = |name: &str| logged_in.iter().any(|known| known == name);
+        let keyed = self.agent.providers().keyed().to_vec();
+        let rows = rows(&keyed);
+        let notes = (rows.iter())
+            .map(|row| match row {
+                Row::Login(name, _) if is_logged_in(name) => {
+                    "Logged in; logging in again replaces the saved login"
+                }
+                Row::Key(_, KeyFrom::Saved) => {
+                    "Saved in auth.json, as logins are; entering another replaces it"
+                }
+                Row::Key(_, KeyFrom::Variable(_) | KeyFrom::Entry) => {
+                    "A key saved here goes to auth.json, as logins do, and replaces models.json's"
+                }
+                Row::Key(_, KeyFrom::Nowhere) => {
+                    "Its requests carry no key. One saved here is kept in auth.json, as logins are"
+                }
+                _ => "",
+            })
+            .map(str::to_owned)
             .collect();
+        let headed = matches!(rows.first(), Some(Row::Heading(_)));
+        let indent = if headed { "  " } else { "" };
         let row = |index: usize, width| {
-            let (name, shown) = login::LOGINS[index];
-            let mark = match logged_in.iter().any(|known| known == name) {
-                true => format!(" {}✓ logged in{}", style::MUTED, style::RESET),
-                false => String::new(),
+            let mark = |text: &str| format!(" {}✓ {text}{}", style::MUTED, style::RESET);
+            let text = match &rows[index] {
+                Row::Heading(heading) => heading.to_string(),
+                Row::Login(name, shown) if is_logged_in(name) => {
+                    format!("{indent}{shown}{}", mark("logged in"))
+                }
+                Row::Login(_, shown) => format!("{indent}{shown}"),
+                Row::Key(name, from) => {
+                    let from = match from {
+                        KeyFrom::Saved => mark("key saved"),
+                        KeyFrom::Variable(variable) => mark(&format!("key from {variable}")),
+                        KeyFrom::Entry => mark("key in models.json"),
+                        KeyFrom::Nowhere => String::new(),
+                    };
+                    format!("{indent}{}{from}", visible(name))
+                }
             };
-            clip(&format!("{shown}{mark}"), width)
+            clip(&text, width)
         };
         let keys = select::hint("log in", &[], "cancel");
-        let picker = Picker::select(
-            "Log in to",
-            select::VISIBLE,
-            login::LOGINS.len(),
-            0,
-            None,
-            row,
-        );
-        let Some(index) = screen.pick(picker.noting(keys, notes)) else {
+        // The headings take rows.
+        let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
+        let picker = Picker::select("Log in to", visible, rows.len(), 0, None, row);
+        let headings = rows.iter().map(|row| matches!(row, Row::Heading(_)));
+        let picker = picker.noting(keys, notes).headed(headings.collect());
+        let Some(index) = screen.pick(picker) else {
             return;
         };
-        match login::LOGINS[index] {
-            (copilot::PROVIDER, shown) => self.copilot_login(&logins, shown),
-            (codex::PROVIDER, shown) => self.codex_login(&logins, shown),
+        match rows[index] {
+            Row::Login(copilot::PROVIDER, shown) => self.copilot_login(&logins, shown),
+            Row::Login(codex::PROVIDER, shown) => self.codex_login(&logins, shown),
+            Row::Key(provider, _) => self.key_login(&logins, provider),
             _ => {}
+        }
+    }
+
+    /// Asks for `provider`'s API key, and saves it.
+    fn key_login(&mut self, logins: &login::Logins, provider: &str) {
+        let Some(screen) = &self.screen else {
+            return;
+        };
+        let title = format!("API key for {}", visible(provider));
+        let typed = match screen.ask(Dialog::Text(title, String::new(), Optional::No), None) {
+            Some(Answer::Text(Some(typed))) => typed,
+            _ => return,
+        };
+        let shown = visible(provider);
+        match login::save_key(&logins.auth, provider, &typed) {
+            Ok(()) => {
+                let saved = logins.auth.display();
+                self.say(&format!("✓ Saved the API key for {shown} in {saved}"));
+                self.logins_changed();
+            }
+            Err(error) => self.say(&format!(
+                "Error: the API key for {shown} was not saved: {error}"
+            )),
         }
     }
 
@@ -224,9 +296,15 @@ impl Interactive {
                  variables and models.json files are unchanged.",
             );
         }
+        let keys = login::saved_keys(&logins.auth).unwrap_or_default();
+        let is_key = |provider: &str| keys.iter().any(|keyed| keyed == provider);
+        let shown = |provider: &str| match is_key(provider) {
+            true => format!("{} API key", visible(provider)),
+            false => visible(login::shown_name(provider)),
+        };
         let chosen = match &self.screen {
             Some(screen) => {
-                let row = |index: usize, width| clip(login::shown_name(&logged_in[index]), width);
+                let row = |index: usize, width| clip(&shown(&logged_in[index]), width);
                 let keys = select::hint("log out", &[], "cancel");
                 let picker =
                     Picker::select("Log out of", select::VISIBLE, logged_in.len(), 0, None, row);
@@ -241,8 +319,16 @@ impl Interactive {
         };
         let provider = &logged_in[index];
         match login::logout(&logins, provider) {
+            Ok(_) if is_key(provider) => {
+                self.say(&format!(
+                    "✓ Removed the saved API key for {}; environment variables and models.json \
+                     files are unchanged",
+                    visible(provider)
+                ));
+                self.logins_changed();
+            }
             Ok(_) => {
-                self.say(&format!("✓ Logged out of {}", login::shown_name(provider)));
+                self.say(&format!("✓ Logged out of {}", shown(provider)));
                 self.logins_changed();
             }
             Err(error) => self.say(&format!("Error: {error}")),
