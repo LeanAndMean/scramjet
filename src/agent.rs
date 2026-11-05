@@ -138,6 +138,7 @@ pub fn credential_stores(providers: &Providers) -> Vec<PathBuf> {
 pub struct AgentConfig {
     /// The providers requests go to, by their models.
     pub providers: Providers,
+    /// The model's reference (`provider/id`), or its id, which the providers resolve.
     pub model: String,
     pub root: PathBuf,
     pub effort: Option<String>,
@@ -233,6 +234,15 @@ impl ModelOption {
             output: info.output,
             images: info.images,
             rate,
+        }
+    }
+
+    /// `provider/id`, as the agent, its sessions and settings name it; its id for a model no
+    /// provider offers.
+    pub fn reference(&self) -> String {
+        match &self.provider {
+            Some(provider) => providers::reference(provider, &self.id),
+            None => self.id.clone(),
         }
     }
 
@@ -573,7 +583,8 @@ pub struct Inventory {
 }
 
 impl Agent {
-    pub fn start(config: AgentConfig, choice: SessionChoice) -> Result<Self, AgentError> {
+    pub fn start(mut config: AgentConfig, choice: SessionChoice) -> Result<Self, AgentError> {
+        config.model = config.providers.reference(&config.model);
         let directory = || session::directory(&config.root);
         let mut unsaved = None;
         let opened = match choice {
@@ -887,10 +898,16 @@ impl Agent {
     /// The instructions the model's next request starts with: those of the session, then the
     /// current model's identity and the environment's facts.
     pub fn instructions(&self) -> String {
-        let contributors = self.session.contributors();
+        let mut contributors: Vec<String> = Vec::new();
+        for contributor in self.session.contributors() {
+            let contributor = self.config.providers.reference(contributor);
+            if !contributors.contains(&contributor) {
+                contributors.push(contributor);
+            }
+        }
         let model = &self.config.model;
         self.instructions.clone()
-            + &instructions::identity(model, contributors, &self.identities)
+            + &instructions::identity(model, &contributors, &self.identities)
             + &instructions::environment(
                 &self.config.root,
                 self.session_saved().then(|| self.session.path()),
@@ -936,7 +953,7 @@ impl Agent {
         self.restore_command();
         if let Some(model) = model {
             self.info = self.config.providers.info(&model);
-            self.config.model = model;
+            self.config.model = self.config.providers.reference(&model);
         }
         if let Some(level) = effort {
             self.config.effort = Some(level);
@@ -1053,14 +1070,34 @@ impl Agent {
         &self.config.root
     }
 
+    /// The current model's reference: `provider/id` when a provider offers it.
     pub fn model(&self) -> &str {
         &self.config.model
     }
 
+    /// The id the current model's requests name it by.
+    pub fn model_id(&self) -> &str {
+        &self.info.id
+    }
+
+    /// The provider the current model's requests go to; `None` when none offers it.
+    pub fn model_provider(&self) -> Option<&str> {
+        (self.info.route.as_ref()).map(|route| route.provider.as_str())
+    }
+
+    /// Whether a reply of `producer` came from the current model; a reply saved before models
+    /// had references names its id, which resolves as `Providers::find` resolves it.
+    fn produced(&self, producer: &str) -> bool {
+        producer == self.config.model
+            || self.config.providers.reference(producer) == self.config.model
+    }
+
     /// Changes the model used for subsequent requests and records it in the session, so a resume
-    /// continues with it; on failure nothing changes.
+    /// continues with it; on failure nothing changes. `model` is a reference, or an id, which
+    /// names the first provider's model of that id.
     pub fn set_model(&mut self, model: impl Into<String>) -> Result<(), AgentError> {
-        let model = model.into();
+        let model: String = model.into();
+        let model = self.config.providers.reference(&model);
         self.session.record_model(&model)?;
         self.info = self.config.providers.info(&model);
         self.provider = None;
@@ -1210,11 +1247,19 @@ impl Agent {
         self.session.model()
     }
 
-    /// The providers' models, or `None` when they list none.
+    /// The providers' models' references, or `None` when they list none.
     pub fn models(&self) -> Option<Vec<String>> {
         let models = self.config.providers.models();
-        let ids = models.iter().map(|model| model.id.clone());
-        (!models.is_empty()).then(|| ids.collect())
+        let references = models.iter().map(providers::Model::reference);
+        (!models.is_empty()).then(|| references.collect())
+    }
+
+    /// The reference of the model a provider offers that `name`, a reference or an id, names.
+    pub fn offered_model(&self, name: &str) -> Option<String> {
+        self.config
+            .providers
+            .find(name)
+            .map(providers::Model::reference)
     }
 
     /// The providers, as last read.
@@ -1246,7 +1291,10 @@ impl Agent {
     /// when none offers it.
     pub fn model_options(&mut self) -> Vec<ModelOption> {
         let mut options = self.listed_models().unwrap_or_default();
-        if !options.iter().any(|option| option.id == self.config.model) {
+        if !options
+            .iter()
+            .any(|option| option.reference() == self.config.model)
+        {
             let rate = rates::Rates::read(self.rates.as_deref()).median(&self.config.model);
             let id = self.config.model.clone();
             options.insert(0, ModelOption::new(id, None, None, &self.info, rate));
@@ -1266,7 +1314,7 @@ impl Agent {
         let rates = rates::Rates::read(self.rates.as_deref());
         let mut options = self.config.providers.options();
         for option in &mut options {
-            option.rate = rates.median(&option.id);
+            option.rate = rates.median(&option.reference());
         }
         (!options.is_empty()).then_some(options)
     }
@@ -1318,10 +1366,11 @@ impl Agent {
             self.identities = (models.iter())
                 .map(|model| {
                     let identity = instructions::Identity {
+                        id: model.id.clone(),
                         name: model.name.clone(),
                         provider: Some(model.provider.clone()),
                     };
-                    (model.id.clone(), identity)
+                    (model.reference(), identity)
                 })
                 .collect();
         }

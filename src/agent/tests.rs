@@ -465,12 +465,14 @@ fn what_the_model_takes_comes_from_its_provider_read_again_each_time() {
         "openai": openai(json!({"id": "m", "name": "Model M", "contextWindow": 1_050_000,
             "maxTokens": 128_000})),
     }}));
+    // The model the agent started with is the test provider's, which these files do not offer.
     agent.set_providers(Providers::read(vec![file.clone()], None));
-    assert_eq!(agent.context_window(), Some(1_050_000));
-    assert_eq!(agent.info.output, Some(128_000));
-    assert_eq!(agent.provider(), Some("openai"));
+    assert_eq!((agent.info.route.as_ref(), agent.provider()), (None, None));
     agent.set_model("m").unwrap();
+    assert_eq!(agent.model(), "openai/m");
     assert_eq!((agent.info.output, agent.provider()), (Some(128_000), None));
+    assert_eq!(agent.load_model_info(), Some(1_050_000));
+    assert_eq!(agent.provider(), Some("openai"));
     // The provider is named only when the models are those of several.
     write(json!({"providers": {"openai": openai(json!({"id": "m"}))}}));
     assert_eq!(agent.load_model_info(), None);
@@ -482,14 +484,14 @@ fn what_the_model_takes_comes_from_its_provider_read_again_each_time() {
     write(json!({"providersCommand": ["./absent"]}));
     assert_eq!(agent.load_model_info(), Some(5));
     assert!(agent.info.route.is_some());
-    assert!(agent.identities.contains_key("m"));
+    assert!(agent.identities.contains_key("openai/m"));
     // Removed from files read without problems, its requests go nowhere.
     std::fs::remove_file(&file).unwrap();
     assert_eq!(agent.load_model_info(), Some(5));
     assert_eq!(agent.info.route, None);
     let error = agent.turn("Hi", &mut Recorder::default(), &AtomicBool::new(false));
     assert!(
-        matches!(&error, Err(AgentError::Provider(message)) if message.starts_with("no provider offers the model m")),
+        matches!(&error, Err(AgentError::Provider(message)) if message.starts_with("no provider offers the model openai/m;")),
         "{error:?}"
     );
 }
@@ -1175,7 +1177,7 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
         .find(|session| session.path == forked)
         .unwrap();
     assert_eq!(fork.parent.as_deref(), Some(original.as_path()));
-    assert_eq!(agent.model(), "a");
+    assert_eq!(agent.model(), "test/a");
     assert_eq!(agent.prompts(), ["one", "!ls"]);
     assert_eq!(agent.usage.context_tokens, Some(100));
     let mut ui = Recorder::default();
@@ -1193,7 +1195,7 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
     // A compaction before the prompt is copied, and later model changes are not.
     agent.resume_session(&original).unwrap();
     assert_eq!(agent.fork(2).unwrap().as_deref(), Some("three"));
-    assert_eq!(agent.model(), "b");
+    assert_eq!(agent.model(), "test/b");
     let conversation = agent.conversation();
     assert_eq!(conversation.len(), 4);
     assert_eq!(compaction::previous_summary(conversation), Some("s"));
@@ -1205,9 +1207,9 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
     agent.set_model("c").unwrap();
     assert_eq!(agent.fork(0).unwrap().as_deref(), Some("one"));
     assert!(agent.conversation().is_empty());
-    assert_eq!(agent.model(), "c");
+    assert_eq!(agent.model(), "test/c");
     let empty = agent.session_path().to_owned();
-    assert_eq!(Session::open(&empty).unwrap().0.model(), Some("c"));
+    assert_eq!(Session::open(&empty).unwrap().0.model(), Some("test/c"));
     // As Scramjet writes no fork without a reply, it is not kept when left before a prompt or on
     // quitting, so `--continue` takes the conversation before it.
     agent.resume_session(&original).unwrap();
@@ -1274,7 +1276,7 @@ fn a_clone_continues_the_conversation_where_it_is_in_a_new_session() {
     let header: Value = serde_json::from_str(&lines[0]).unwrap();
     assert_eq!(header["parentSession"], json!(original));
     assert_eq!(agent.session_name(), Some("Work"));
-    assert_eq!(agent.model(), "b");
+    assert_eq!(agent.model(), "test/b");
     assert_eq!(agent.prompts(), ["one", "other"]);
 
     let mut ui = Recorder::default();
@@ -1365,7 +1367,7 @@ fn an_export_holds_the_current_branch_and_an_import_continues_in_a_copy() {
         std::fs::read_to_string(&exported).unwrap()
     );
     assert_eq!(agent.session_name(), Some("Work"));
-    assert_eq!(agent.model(), "b");
+    assert_eq!(agent.model(), "test/b");
     assert_eq!(agent.prompts(), ["one", "other"]);
     let mut ui = Recorder::default();
     agent
@@ -1485,7 +1487,7 @@ fn model_switches_are_saved_at_once_and_resumed() {
     agent.set_model("other").unwrap();
     assert_eq!(changes(), 2);
     let (session, items, _) = Session::open(&path).unwrap();
-    assert_eq!((session.model(), items.len()), (Some("other"), 0));
+    assert_eq!((session.model(), items.len()), (Some("test/other"), 0));
 
     agent.set_model("m").unwrap();
     agent
@@ -1504,16 +1506,58 @@ fn model_switches_are_saved_at_once_and_resumed() {
     assert_eq!((session.model(), items.len()), (Some("later"), 2));
 
     agent.new_session().unwrap();
-    assert_eq!(agent.last_model(), Some("m"));
+    assert_eq!(agent.last_model(), Some("test/m"));
     let (session, _, _) = Session::open(agent.session_path()).unwrap();
-    assert_eq!(session.model(), Some("m"));
+    assert_eq!(session.model(), Some("test/m"));
+}
+
+#[test]
+fn the_same_id_from_two_providers_is_two_models() {
+    let (mut agent, _scratch) = agent("127.0.0.1:9".parse().unwrap(), "same-id");
+    let provider = |port: u16| {
+        json!({"baseUrl": format!("http://127.0.0.1:{port}/v1"), "api": "openai-responses",
+            "models": [{"id": "gpt", "name": "GPT"}]})
+    };
+    agent.set_providers(Providers::given(json!({"providers": {
+        "first": provider(9), "second": provider(8),
+    }})));
+    assert_eq!(
+        agent.models(),
+        Some(vec!["first/gpt".to_owned(), "second/gpt".to_owned()])
+    );
+    // An id alone names the first provider's, as a session or setting saved before says it.
+    agent.set_model("gpt").unwrap();
+    assert_eq!(agent.model(), "first/gpt");
+    agent.set_model("second/gpt").unwrap();
+    agent.load_model_info();
+    assert_eq!(
+        (agent.model(), agent.model_id(), agent.model_provider()),
+        ("second/gpt", "gpt", Some("second"))
+    );
+    assert_eq!(agent.info.route.as_ref().unwrap().port, 8);
+    assert_eq!(agent.request()["model"], "gpt");
+    // Reasoning is sent back only to the model that wrote it; a reply saved with an id alone is
+    // the first provider's.
+    let reasoning = |producer: &str| json!({"type": "reasoning", "encrypted_content": producer, "_scramjet_model": producer});
+    agent.conversation = ["first/gpt", "gpt", "second/gpt"].map(reasoning).to_vec();
+    let replayed = |agent: &Agent| -> Vec<Value> {
+        let request = agent.request();
+        let input = request["input"].as_array().unwrap();
+        input
+            .iter()
+            .map(|item| item["encrypted_content"].clone())
+            .collect()
+    };
+    assert_eq!(replayed(&agent), ["second/gpt"]);
+    agent.set_model("first/gpt").unwrap();
+    assert_eq!(replayed(&agent), ["first/gpt", "gpt"]);
 }
 
 #[test]
 fn the_model_list_is_the_providers() {
     let (mut agent, _scratch) = agent("127.0.0.1:9".parse().unwrap(), "model-list");
-    let ids: Vec<String> = SERVED.iter().map(|id| id.to_string()).collect();
-    assert_eq!(agent.models(), Some(ids));
+    let references: Vec<String> = SERVED.iter().map(|id| format!("test/{id}")).collect();
+    assert_eq!(agent.models(), Some(references));
     agent.set_providers(Providers::given(json!({})));
     assert_eq!(agent.models(), None);
 }
@@ -1548,7 +1592,7 @@ fn a_next_step_offers_the_providers_models_and_the_current_one() {
         [
             ModelOption {
                 levels: current.levels.clone(),
-                ..option("m", None, &[])
+                ..option("test/m", None, &[])
             },
             ModelOption {
                 name: Some("Claude".into()),
@@ -1942,7 +1986,7 @@ fn replies_keep_their_models_output_rate_for_the_footer_and_the_model_list() {
     for sample in samples {
         assert_eq!(
             (&sample["model"], &sample["output_tokens"]),
-            (&json!("m"), &json!(5))
+            (&json!("test/m"), &json!(5))
         );
         assert!(sample["duration_ms"].as_f64().unwrap() > 0.0);
     }
@@ -1972,6 +2016,7 @@ fn requests_end_with_the_models_identity_and_the_sessions_file() {
         "openai": provider("m", "Model M"),
         "anthropic": provider("c", "Claude C"),
     }})));
+    agent.set_model("m").unwrap();
     let mut ui = Recorder::default();
     let cancel = AtomicBool::new(false);
     agent.turn("first", &mut ui, &cancel).unwrap();
@@ -2017,13 +2062,13 @@ with material responses in this session branch, the imminent one included:\n{}\n
     // A resume knows them from the file; a move to before `c` replied knows only `m`.
     let path = agent.session_path().to_owned();
     let (mut session, _, _) = Session::open(&path).unwrap();
-    assert_eq!(session.contributors(), ["m", "c"]);
+    assert_eq!(session.contributors(), ["openai/m", "anthropic/c"]);
     let text = std::fs::read_to_string(&path).unwrap();
     let first_reply = (text.lines())
-        .position(|line| line.contains("\"_scramjet_model\":\"m\""))
+        .position(|line| line.contains("\"_scramjet_model\":\"openai/m\""))
         .unwrap();
     session.move_to(Some(first_reply)).unwrap();
-    assert_eq!(session.contributors(), ["m"]);
+    assert_eq!(session.contributors(), ["openai/m"]);
 }
 
 #[test]

@@ -180,36 +180,49 @@ impl Completion {
     }
 
     /// The argument of a built-in command that Scramjet completes: after `/model `, the
-    /// providers' `models` that match it fuzzily; after `/autopilot `, the words starting with it.
+    /// providers' `models` (references, `provider/id`) whose id and provider match it fuzzily,
+    /// each shown by its id with its provider; after `/autopilot `, the words starting with it.
     pub(super) fn argument(before: &str, models: &[String]) -> Option<Self> {
         let (name, typed) = before.strip_prefix('/')?.split_once(' ')?;
         if typed.contains('\n') {
             return None;
         }
-        let words: Vec<&str> = match name {
+        let word = |word: &str| Suggestion {
+            value: word.to_owned(),
+            label: word.to_owned(),
+            description: String::new(),
+        };
+        let items = match name {
             "autopilot" => ["on", "off", "status"]
                 .into_iter()
                 .filter(|word| word.starts_with(typed))
+                .map(word)
                 .collect(),
             "model" => {
-                let ids: Vec<_> = models
-                    .iter()
-                    .map(|id| super::fuzzy::Haystack::new(id))
+                let parts = |reference: &'_ str| {
+                    let (provider, id) = reference.split_once('/').unwrap_or(("", reference));
+                    (provider.to_owned(), id.to_owned())
+                };
+                let texts: Vec<_> = (models.iter())
+                    .map(|reference| {
+                        let (provider, id) = parts(reference);
+                        super::fuzzy::Haystack::new(&format!("{id} {provider}"))
+                    })
                     .collect();
-                super::fuzzy::filter(&super::fuzzy::parse(typed), &ids)
-                    .into_iter()
-                    .map(|index| &*models[index])
+                (super::fuzzy::filter(&super::fuzzy::parse(typed), &texts).into_iter())
+                    .map(|index| {
+                        let (description, label) = parts(&models[index]);
+                        let value = models[index].clone();
+                        Suggestion {
+                            value,
+                            label,
+                            description,
+                        }
+                    })
                     .collect()
             }
             _ => return None,
         };
-        let items = (words.into_iter())
-            .map(|word| Suggestion {
-                value: word.to_owned(),
-                label: word.to_owned(),
-                description: String::new(),
-            })
-            .collect();
         let mut list = Self::new(before.len() - typed.len(), Kind::Argument, items)?;
         list.select_best(typed);
         Some(list)
@@ -223,13 +236,14 @@ impl Completion {
     }
 
     /// Selects the entry that is `typed` or else the first that starts with it, as Scramjet
-    /// selects its best match.
+    /// selects its best match; an argument's shown label counts too, as a model's id does.
     fn select_best(&mut self, typed: &str) {
-        let best = (self.items.iter().position(|item| item.value == typed)).or_else(|| {
-            self.items
-                .iter()
-                .position(|item| item.value.starts_with(typed))
-        });
+        let labelled = matches!(self.kind, Kind::Argument);
+        let any = |test: &dyn Fn(&str) -> bool| {
+            (self.items.iter())
+                .position(|item| test(&item.value) || (labelled && test(&item.label)))
+        };
+        let best = any(&|text| text == typed).or_else(|| any(&|text| text.starts_with(typed)));
         self.selected = best.unwrap_or(0);
     }
 
@@ -537,18 +551,48 @@ mod tests {
 
     #[test]
     fn built_in_arguments_complete_as_scramjets() {
-        let models = ["gpt-6-luna", "claude-haiku-5-5", "gpt-6.1-sol"].map(String::from);
-        // The models in the providers' order, then those matching what is typed, best first.
+        let models = [
+            "openai/gpt-6-luna",
+            "anthropic/claude-haiku-5-5",
+            "openai/gpt-6.1-sol",
+        ]
+        .map(String::from);
+        // The models in the providers' order, then those matching what is typed, best first,
+        // each by its id with its provider.
         let list = Completion::argument("/model ", &models).unwrap();
-        assert_eq!(labels(&list), models);
         assert_eq!(
-            plain(list.rows(40))[..2],
-            ["→ gpt-6-luna", "  claude-haiku-5-5"]
+            labels(&list),
+            ["gpt-6-luna", "claude-haiku-5-5", "gpt-6.1-sol"]
+        );
+        assert_eq!(
+            plain(list.rows(60))[..2],
+            [
+                format!("→ gpt-6-luna{}openai", " ".repeat(22)),
+                format!("  claude-haiku-5-5{}anthropic", " ".repeat(16))
+            ]
         );
         let list = Completion::argument("/model 6 sol", &models).unwrap();
         assert_eq!(labels(&list), ["gpt-6.1-sol"]);
+        let list = Completion::argument("/model luna openai", &models).unwrap();
+        assert_eq!(labels(&list), ["gpt-6-luna"]);
+        // An id two providers offer is two entries, the one typed in full selected.
+        let twice = [
+            "openai/gpt-6.1-sol",
+            "openai/gpt-6-luna",
+            "github-copilot/gpt-6-luna",
+        ];
+        let twice = twice.map(String::from);
+        let list = Completion::argument("/model gpt-6-luna", &twice).unwrap();
+        let shown: Vec<_> = (list.items.iter())
+            .map(|item| (item.label.as_str(), item.description.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [("gpt-6-luna", "openai"), ("gpt-6-luna", "github-copilot")]
+        );
+        assert_eq!(list.items[list.selected].value, "openai/gpt-6-luna");
         // Equal matches put the shorter id first, as Scramjet's `fuzzyFilter` does.
-        let gpt = ["gpt-6.1-sol", "gpt-6-luna"].map(String::from);
+        let gpt = ["openai/gpt-6.1-sol", "openai/gpt-6-luna"].map(String::from);
         let list = Completion::argument("/model gpt", &gpt).unwrap();
         assert_eq!(labels(&list), ["gpt-6-luna", "gpt-6.1-sol"]);
         let list = Completion::slash("/se", &[]).unwrap();
@@ -562,7 +606,7 @@ mod tests {
             .apply(&mut buffer);
         assert_eq!(
             (buffer.text.as_str(), buffer.cursor),
-            ("/model claude-haiku-5-5", 23)
+            ("/model anthropic/claude-haiku-5-5", 33)
         );
         // `/autopilot`'s words are those that start with what is typed, as typed.
         let words = |before| Completion::argument(before, &[]).map(|list| labels(&list).join(" "));

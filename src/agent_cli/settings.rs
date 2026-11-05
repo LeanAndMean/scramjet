@@ -274,7 +274,9 @@ pub(super) struct Settings {
     pub(super) look: Design,
     /// `defaultThinkingLevel`, named as requests send levels.
     pub(super) default_thinking_level: Option<String>,
-    /// `defaultModel`: the model last chosen in any project, as Scramjet saves it.
+    /// `defaultProvider` and `defaultModel`: the model last chosen in any project, as Scramjet
+    /// saves it; a `defaultModel` alone names a model as `--model` does.
+    pub(super) default_provider: Option<String>,
     pub(super) default_model: Option<String>,
     pub(super) startup_model: StartupModel,
     /// The file of the model last chosen in each project, `last-used-models.json` in the state
@@ -354,6 +356,7 @@ impl Settings {
             theme: TERMINAL_COLORS.to_owned(),
             look: Design::Classic,
             default_thinking_level: None,
+            default_provider: None,
             default_model: None,
             startup_model: StartupModel::PerDirectory,
             recall: None,
@@ -450,6 +453,13 @@ impl Settings {
                 "defaultThinkingLevel",
                 &LEVELS.map(|l| format!("\"{l}\"")).join(", "),
             ),
+        }
+        match object.get("defaultProvider") {
+            None => {}
+            Some(Value::String(provider)) if !provider.trim().is_empty() => {
+                self.default_provider = Some(provider.clone())
+            }
+            Some(_) => wrong("defaultProvider", "a provider's name"),
         }
         match object.get("defaultModel") {
             None => {}
@@ -680,8 +690,8 @@ impl Settings {
     }
 
     /// The models chosen before that a launch in the project `root` may start a new session
-    /// with, as Scramjet's: the one last chosen there (with `startupModel` `per-directory`),
-    /// and `defaultModel`.
+    /// with, as Scramjet's, by reference (`provider/id`): the one last chosen there (with
+    /// `startupModel` `per-directory`), and `defaultProvider` and `defaultModel`.
     pub(super) fn remembered_models(&self, root: &Path) -> (Option<String>, Option<String>) {
         let here = match (self.startup_model, &self.recall) {
             (StartupModel::PerDirectory, Some(recall)) => (recalled(recall))
@@ -689,18 +699,38 @@ impl Settings {
                 .and_then(|model| model.as_str().map(str::to_owned)),
             _ => None,
         };
-        (here, self.default_model.clone())
+        let anywhere = (self.default_model.as_ref()).map(|model| match &self.default_provider {
+            Some(provider) => format!("{provider}/{model}"),
+            None => model.clone(),
+        });
+        (here, anywhere)
     }
 
-    /// A model chosen during a session in the project `root`, remembered as Scramjet remembers
-    /// one: as `defaultModel`, and as the one last chosen there. Saves what changed.
-    pub(super) fn remember_model(&mut self, root: &Path, model: &str) -> io::Result<()> {
-        let recalled = self.recall_model(root, model);
-        let saved = match self.default_model.as_deref() == Some(model) {
+    /// The model `id` of `provider` (`None` for a model no provider offers), chosen during a
+    /// session in the project `root`, remembered as Scramjet remembers one: as `defaultProvider`
+    /// and `defaultModel`, and as the one last chosen there. Saves what changed.
+    pub(super) fn remember_model(
+        &mut self,
+        root: &Path,
+        provider: Option<&str>,
+        id: &str,
+    ) -> io::Result<()> {
+        let reference = provider.map_or_else(|| id.to_owned(), |p| format!("{p}/{id}"));
+        let recalled = self.recall_model(root, &reference);
+        let same = self.default_provider.as_deref() == provider
+            && self.default_model.as_deref() == Some(id);
+        let saved = match same {
             true => Ok(()),
             false => {
-                self.default_model = Some(model.to_owned());
-                self.save("defaultModel", json!(model))
+                self.default_provider = provider.map(str::to_owned);
+                self.default_model = Some(id.to_owned());
+                self.update(|object| {
+                    match provider {
+                        Some(provider) => object.insert("defaultProvider".into(), json!(provider)),
+                        None => object.remove("defaultProvider"),
+                    };
+                    object.insert("defaultModel".into(), json!(id));
+                })
             }
         };
         recalled.and(saved)
@@ -1253,28 +1283,36 @@ mod tests {
         settings.recall = Some(scratch.0.join("state/last-used-models.json"));
         let (here, there) = (Path::new("/work/here"), Path::new("/work/there"));
         assert_eq!(settings.remembered_models(here), (None, None));
-        settings.remember_model(here, "claude-opus-5-5").unwrap();
-        settings.remember_model(there, "gpt-6-luna").unwrap();
+        settings
+            .remember_model(here, Some("anthropic"), "claude-opus-5-5")
+            .unwrap();
+        settings
+            .remember_model(there, Some("github-copilot"), "gpt-6-luna")
+            .unwrap();
         let read = |path: &Path| -> Value {
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
         };
         let path = scratch.0.join("settings.json");
         assert_eq!(
             read(&path),
-            json!({"theme": "x", "defaultModel": "gpt-6-luna"})
+            json!({"theme": "x", "defaultProvider": "github-copilot", "defaultModel": "gpt-6-luna"})
         );
         let recall = scratch.0.join("state/last-used-models.json");
         assert_eq!(
             read(&recall),
-            json!({"/work/here": "claude-opus-5-5", "/work/there": "gpt-6-luna"})
+            json!({"/work/here": "anthropic/claude-opus-5-5",
+                "/work/there": "github-copilot/gpt-6-luna"})
         );
         // A later session reads both; another project only the model chosen anywhere.
         let mut later = Settings::read(Some(path.clone()));
         later.recall = Some(recall.clone());
-        let anywhere = Some("gpt-6-luna".to_owned());
+        let anywhere = Some("github-copilot/gpt-6-luna".to_owned());
         assert_eq!(
             later.remembered_models(here),
-            (Some("claude-opus-5-5".to_owned()), anywhere.clone())
+            (
+                Some("anthropic/claude-opus-5-5".to_owned()),
+                anywhere.clone()
+            )
         );
         assert_eq!(
             later.remembered_models(Path::new("/elsewhere")),
@@ -1294,12 +1332,14 @@ mod tests {
         std::fs::write(&recall, "[").unwrap();
         assert_eq!(later.remembered_models(there).0, None);
         later.cycle(Row::StartupModel).unwrap();
-        later.remember_model(there, "gpt-6-terra").unwrap();
+        // A model no provider offers has no provider; a `defaultModel` alone is as written.
+        later.remember_model(there, None, "gpt-6-terra").unwrap();
         assert_eq!(read(&recall), json!({"/work/there": "gpt-6-terra"}));
         assert_eq!(
-            later.remembered_models(there).0.as_deref(),
-            Some("gpt-6-terra")
+            later.remembered_models(there),
+            (Some("gpt-6-terra".into()), Some("gpt-6-terra".into()))
         );
+        assert_eq!(read(&path).get("defaultProvider"), None);
         let wrong = settings_with(&scratch, r#"{"defaultModel": "", "startupModel": "here"}"#);
         let shown_path = shown(&path);
         assert_eq!(

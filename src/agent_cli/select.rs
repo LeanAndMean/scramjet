@@ -161,7 +161,7 @@ impl Route {
 
     pub(super) fn routed(&self) -> Routed {
         Routed {
-            model: (self.at != self.current).then(|| self.models[self.at].id.clone()),
+            model: (self.at != self.current).then(|| self.models[self.at].reference()),
             effort: self.effort.clone().filter(|_| self.cycled),
         }
     }
@@ -193,8 +193,8 @@ impl Route {
         };
         if self.models.len() > 1 {
             let name = match &model.name {
-                Some(name) => format!("{name} ({})", model.id),
-                None => model.id.clone(),
+                Some(name) => format!("{name} ({})", model.reference()),
+                None => model.reference(),
             };
             let change = keymap::part(&[Binding::CursorLeft, Binding::CursorRight], "change");
             let change = change.map_or_else(String::new, |change| format!(" · {change}"));

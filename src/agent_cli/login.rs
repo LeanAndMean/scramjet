@@ -160,9 +160,8 @@ impl Interactive {
     /// The providers' models change with the logins.
     fn logins_changed(&mut self) {
         self.agent.load_model_info();
-        let models = self.agent.listed_models().unwrap_or_default();
         if let Some(screen) = &self.screen {
-            screen.models(models.into_iter().map(|model| model.id).collect());
+            screen.models(self.agent.models().unwrap_or_default());
         }
     }
 }

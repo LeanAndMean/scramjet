@@ -43,7 +43,7 @@ impl Shown {
             context: agent.context_tokens(),
             window: agent.context_window(),
             rate: agent.output_rate(),
-            model: agent.model().to_owned(),
+            model: agent.model_id().to_owned(),
             provider: agent.provider().map(str::to_owned),
             effort: (agent.effort())
                 .filter(|_| agent.reasons())

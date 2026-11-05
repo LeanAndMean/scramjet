@@ -43,11 +43,11 @@ fn scoped_acts() -> String {
     format!("{switches}\n{acts}")
 }
 
-/// A model in the scope, with the effort its pattern sets (`sonnet:high`), named as requests
-/// send levels.
+/// A model in the scope, by reference (`ModelOption::reference`), with the effort its pattern
+/// sets (`sonnet:high`), named as requests send levels.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Scoped {
-    pub(super) id: String,
+    pub(super) model: String,
     pub(super) level: Option<String>,
 }
 
@@ -65,9 +65,10 @@ pub(super) fn resolve(patterns: &[String], models: &[ModelOption]) -> (Vec<Scope
         }
         let (body, level) = match pattern.rsplit_once(':') {
             // An id may have a colon of its own.
-            _ if models
-                .iter()
-                .any(|model| model.id.eq_ignore_ascii_case(pattern)) =>
+            _ if models.iter().any(|model| {
+                model.id.eq_ignore_ascii_case(pattern)
+                    || model.reference().eq_ignore_ascii_case(pattern)
+            }) =>
             {
                 (pattern, None)
             }
@@ -88,12 +89,10 @@ pub(super) fn resolve(patterns: &[String], models: &[ModelOption]) -> (Vec<Scope
             warnings.push(format!("no models match pattern \"{pattern}\""));
         }
         for model in matched {
-            if !scoped.iter().any(|known| known.id == model.id) {
+            let model = model.reference();
+            if !scoped.iter().any(|known| known.model == model) {
                 let level = level.clone();
-                scoped.push(Scoped {
-                    id: model.id.clone(),
-                    level,
-                });
+                scoped.push(Scoped { model, level });
             }
         }
     }
@@ -207,8 +206,8 @@ pub(super) fn exact<'a>(reference: &str, models: &'a [ModelOption]) -> Option<&'
 pub(super) fn named(pattern: &str, models: &[ModelOption]) -> Option<Scoped> {
     let pattern = pattern.trim();
     if let Some(model) = exact(pattern, models) {
-        let id = model.id.clone();
-        return Some(Scoped { id, level: None });
+        let model = model.reference();
+        return Some(Scoped { model, level: None });
     }
     let provider = pattern.split_once('/').and_then(|(provider, rest)| {
         let theirs: Vec<ModelOption> = (models.iter())
@@ -230,8 +229,8 @@ fn named_partly(pattern: &str, models: &[ModelOption]) -> Option<Scoped> {
     if !pattern.contains(['*', '?', '['])
         && let Some(model) = matching(pattern, models).first()
     {
-        let id = model.id.clone();
-        return Some(Scoped { id, level: None });
+        let model = model.reference();
+        return Some(Scoped { model, level: None });
     }
     let (body, suffix) = pattern.rsplit_once(':')?;
     let level = Some(card_level(suffix)?.to_owned());
@@ -321,13 +320,13 @@ fn token_count(count: Option<u64>) -> String {
 /// last. `None` when that is the current model.
 pub(super) fn step<'a>(scope: &'a [Scoped], current: &str, steps: isize) -> Option<&'a Scoped> {
     let count = scope.len() as isize;
-    let at = match scope.iter().position(|scoped| scoped.id == current) {
+    let at = match scope.iter().position(|scoped| scoped.model == current) {
         Some(at) => at as isize,
         None if steps > 0 => -1,
         None => count,
     };
     let next = scope.get((at + steps).checked_rem_euclid(count)? as usize)?;
-    (next.id != current).then_some(next)
+    (next.model != current).then_some(next)
 }
 
 /// Ctrl+P or Shift+Ctrl+P, `steps` times (negative: back): switches to the next model in the
@@ -347,7 +346,7 @@ pub(super) fn cycle(
     let scope = match all {
         true => (models.iter())
             .map(|model| Scoped {
-                id: model.id.clone(),
+                model: model.reference(),
                 level: None,
             })
             .collect(),
@@ -362,11 +361,13 @@ pub(super) fn cycle(
             .to_owned(),
         ));
     };
-    if let Err(error) = agent.set_model(&next.id) {
+    if let Err(error) = agent.set_model(&next.model) {
         return Some(Note::Error(format!("Error: {error}")));
     }
     agent.load_model_info();
-    let mut unsaved = settings.remember_model(agent.root(), &next.id).err();
+    let remembered =
+        settings.remember_model(agent.root(), agent.model_provider(), agent.model_id());
+    let mut unsaved = remembered.err();
     if let Some(level) = &next.level {
         if let Err(error) = agent.set_effort(level.clone()) {
             return Some(Note::Error(format!("Error: {error}")));
@@ -484,16 +485,17 @@ impl Interactive {
             return self.say("No provider offers any model");
         };
         let chosen = match exact(wanted, &models) {
-            Some(model) => Some(model.id.clone()),
+            Some(model) => Some(model.reference()),
             None if self.interactive() => self.pick_model(&models, wanted),
             None if wanted.is_empty() => {
                 for model in &models {
-                    let mark = if model.id == self.agent.model() {
+                    let reference = model.reference();
+                    let mark = if reference == self.agent.model() {
                         "*"
                     } else {
                         " "
                     };
-                    eprintln!("{mark} {}", visible(&model.id));
+                    eprintln!("{mark} {}", visible(&reference));
                 }
                 None
             }
@@ -521,7 +523,7 @@ impl Interactive {
         let screen = self.screen.as_ref()?;
         let (scoped, _) = resolve(&self.scope, models);
         let scoped: Vec<&ModelOption> = (scoped.iter())
-            .filter_map(|scoped| models.iter().find(|model| model.id == scoped.id))
+            .filter_map(|scoped| (models.iter()).find(|model| model.reference() == scoped.model))
             .collect();
         let all: Vec<&ModelOption> = models.iter().collect();
         let current = self.agent.model();
@@ -534,7 +536,8 @@ impl Interactive {
         let mut selected: Option<String> = None;
         loop {
             let shown = if in_scope { &scoped } else { &all };
-            let at = |id: &str| shown.iter().position(|model| model.id == id);
+            let at =
+                |reference: &str| (shown.iter()).position(|model| model.reference() == reference);
             let texts = (shown.iter())
                 .map(|model| {
                     let provider = model.provider.as_deref().unwrap_or_default();
@@ -595,7 +598,7 @@ impl Interactive {
             match screen.pick_or_act(picker) {
                 Picked::Tab(left) => {
                     let row = left.shown.get(left.position);
-                    selected = row.map(|&row| shown[row].id.clone()).or(selected);
+                    selected = row.map(|&row| shown[row].reference()).or(selected);
                     spot = Spot {
                         query: left.query,
                         ..Spot::default()
@@ -605,7 +608,7 @@ impl Interactive {
                 picked => {
                     screen.dismiss();
                     return match picked {
-                        Picked::Row(Some(row)) => Some(shown[row].id.clone()),
+                        Picked::Row(Some(row)) => Some(shown[row].reference()),
                         _ => None,
                     };
                 }
@@ -622,8 +625,8 @@ impl Interactive {
         let models = self.agent.model_options();
         let (scoped, _) = resolve(&self.scope, &models);
         let mut chosen = Chosen {
-            all: models.iter().map(|model| model.id.clone()).collect(),
-            on: (!scoped.is_empty()).then(|| scoped.into_iter().map(|s| s.id).collect()),
+            all: models.iter().map(ModelOption::reference).collect(),
+            on: (!scoped.is_empty()).then(|| scoped.into_iter().map(|s| s.model).collect()),
         };
         if !self.interactive() {
             let on = chosen
@@ -632,8 +635,9 @@ impl Interactive {
                 .map_or("all".to_owned(), |on| on.join(", "));
             return self.say(&format!("{}: {on}", scope_name("Models")));
         }
-        let model = |id: &str| models.iter().find(|model| model.id == id);
-        let provider = |id: &str| model(id).and_then(|model| model.provider.clone());
+        let model = |reference: &str| (models.iter()).find(|model| model.reference() == reference);
+        let provider = |reference: &str| model(reference).and_then(|model| model.provider.clone());
+        let id = |reference: &str| model(reference).map_or(reference.to_owned(), |m| m.id.clone());
         let mut unsaved = false;
         // Where the list was and the model selected, for it to show again so, and what to say.
         let mut place: Option<(Spot, String)> = None;
@@ -644,9 +648,9 @@ impl Interactive {
             };
             let order = chosen.order();
             let texts = (order.iter().enumerate())
-                .map(|(rank, id)| {
-                    let provider = provider(id).unwrap_or_default();
-                    Haystack::ranked(&format!("{id} {provider}"), rank)
+                .map(|(rank, reference)| {
+                    let provider = provider(reference).unwrap_or_default();
+                    Haystack::ranked(&format!("{} {provider}", id(reference)), rank)
                 })
                 .collect();
             let session_only = match keymap::key(Binding::ModelsSave) {
@@ -656,23 +660,24 @@ impl Interactive {
             };
             let acts = scoped_acts();
             let notes = (order.iter())
-                .map(|id| {
-                    let name = model(id).and_then(|model| model.name.clone());
-                    let name = name.unwrap_or_else(|| id.clone());
+                .map(|reference| {
+                    let name = model(reference).and_then(|model| model.name.clone());
+                    let name = name.unwrap_or_else(|| id(reference));
                     format!("{name} · {}{session_only}\n{acts}", chosen.count())
                 })
                 .collect();
             let row = |index: usize, width| {
-                let id = &order[index];
-                let provider = (provider(id)).map_or_else(String::new, |provider| {
-                    format!(" {MUTED}[{provider}]{RESET}")
+                let reference = &order[index];
+                let provider = (provider(reference)).map_or_else(String::new, |provider| {
+                    format!(" {MUTED}[{}]{RESET}", visible(&provider))
                 });
-                let rate = shown_rate(model(id).and_then(|model| model.rate));
-                let mark = match (&chosen.on, chosen.is_on(id)) {
+                let rate = shown_rate(model(reference).and_then(|model| model.rate));
+                let mark = match (&chosen.on, chosen.is_on(reference)) {
                     (None, _) => String::new(),
                     (Some(_), true) => format!(" {MODEL_ON}✓{RESET}"),
                     (Some(_), false) => format!(" {MODEL_OFF}✗{RESET}"),
                 };
+                let id = visible(&id(reference));
                 clip(&format!("{id}{provider}{rate}{mark}"), width)
             };
             let picker = Picker::search(
@@ -802,10 +807,18 @@ mod tests {
         ]
     }
 
+    /// The id of a reference to one of `proxy()`'s models.
+    fn id(reference: String) -> String {
+        match reference.split_once('/') {
+            Some((_, id)) => id.to_owned(),
+            None => reference,
+        }
+    }
+
     fn ids(patterns: &[&str]) -> (Vec<(String, Option<String>)>, Vec<String>) {
         let patterns: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
         let (scoped, warnings) = resolve(&patterns, &proxy());
-        let ids = scoped.into_iter().map(|s| (s.id, s.level)).collect();
+        let ids = scoped.into_iter().map(|s| (id(s.model), s.level)).collect();
         (ids, warnings)
     }
 
@@ -835,7 +848,7 @@ mod tests {
     #[test]
     fn the_model_option_names_one_model_as_scramjets_does() {
         let models = proxy();
-        let named = |pattern| named(pattern, &models).map(|scoped| (scoped.id, scoped.level));
+        let named = |pattern| named(pattern, &models).map(|s| (id(s.model), s.level));
         let at = |id: &str, level: Option<&str>| Some((id.to_owned(), level.map(str::to_owned)));
         assert_eq!(named("Claude-Opus-5-5"), at("claude-opus-5-5", None));
         assert_eq!(named("haiku"), at("claude-haiku-5-5", None));
@@ -912,6 +925,37 @@ mod tests {
             "No models matching \"zzz\"\n"
         );
         assert_eq!(listing(&[], None), "No provider offers any model\n");
+    }
+
+    #[test]
+    fn the_same_id_from_two_providers_is_two_models_named_by_reference() {
+        let mut models = proxy();
+        models.push(model("gpt-6-luna", None, Some("github-copilot")));
+        let patterns = |patterns: &[&str]| -> Vec<String> {
+            let patterns: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
+            (resolve(&patterns, &models).0.into_iter())
+                .map(|scoped| scoped.model)
+                .collect()
+        };
+        // An id alone is the first provider's, as `--model` takes it.
+        assert_eq!(patterns(&["gpt-6-luna"]), ["openai/gpt-6-luna"]);
+        assert_eq!(
+            patterns(&["github-copilot/gpt-6-luna", "*/gpt-6-luna"]),
+            ["github-copilot/gpt-6-luna", "openai/gpt-6-luna"]
+        );
+        assert_eq!(patterns(&["local:7b"]), ["local:7b"]);
+        let named = |pattern| named(pattern, &models).map(|scoped| scoped.model);
+        assert_eq!(named("gpt-6-luna").as_deref(), Some("openai/gpt-6-luna"));
+        assert_eq!(
+            named("github-copilot/luna").as_deref(),
+            Some("github-copilot/gpt-6-luna")
+        );
+        let scope = [&models[5], models.last().unwrap()].map(|model| Scoped {
+            model: model.reference(),
+            level: None,
+        });
+        let next = step(&scope, "openai/gpt-6-luna", 1).map(|s| s.model.as_str());
+        assert_eq!(next, Some("github-copilot/gpt-6-luna"));
     }
 
     #[test]
@@ -1055,11 +1099,11 @@ mod tests {
     fn ctrl_p_steps_through_the_scope_and_wraps_around() {
         let scope: Vec<Scoped> = ["a", "b", "c"]
             .map(|id| Scoped {
-                id: id.into(),
+                model: id.into(),
                 level: None,
             })
             .to_vec();
-        let at = |current: &str, steps| step(&scope, current, steps).map(|s| s.id.as_str());
+        let at = |current: &str, steps| step(&scope, current, steps).map(|s| s.model.as_str());
         assert_eq!(
             [at("a", 1), at("c", 1), at("a", -1), at("b", 4), at("b", -2)],
             [Some("b"), Some("a"), Some("c"), Some("c"), Some("c")]
@@ -1072,7 +1116,10 @@ mod tests {
         // Back where it started, or nowhere to go.
         assert_eq!([at("a", 3), at("a", 0)], [None, None]);
         assert_eq!(step(&scope[..1], "a", 1), None);
-        assert_eq!(step(&scope[..1], "x", 1).map(|s| s.id.as_str()), Some("a"));
+        assert_eq!(
+            step(&scope[..1], "x", 1).map(|s| s.model.as_str()),
+            Some("a")
+        );
         assert_eq!(step(&[], "x", 1), None);
     }
 }

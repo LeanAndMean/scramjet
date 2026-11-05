@@ -4,6 +4,15 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.17.0 — Models named by provider and id
+
+### Changed
+
+- A model is named by its provider and id, `provider/id`, in sessions, `enabledModels`, the model chosen last and output rates, as in Scramjet. Two providers may now offer the same id: GitHub Copilot's `gpt-6-luna`, `claude-opus-5` and others are listed beside the same ids from your `models.json` providers, and the start-up warning about them is gone. An id alone, as in sessions and settings saved before, names the first provider's model.
+- The model chosen last is saved as Scramjet saves it, `defaultProvider` and `defaultModel`.
+- `/model`'s completion shows each model's id with its provider and puts in `provider/id`. With models of several providers, the start line and "Model set to" name the provider, as the footer does: `(github-copilot) gpt-6-luna`.
+- After `/reload`, a session whose model's provider is gone keeps that model (its requests fail, saying so) instead of moving to another provider's model of the same id.
+
 ## 0.16.1 — Credentials stay hidden while a login changes
 
 ### Fixed

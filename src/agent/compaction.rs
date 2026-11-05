@@ -648,7 +648,7 @@ impl Agent {
             .flatten()
             .fold(tokens, u64::min);
         let mut request = json!({
-            "model": self.config.model,
+            "model": self.info.id,
             "instructions": SYSTEM_PROMPT,
             "input": [{"role":"user", "content":prompt}],
             "stream": true,
@@ -725,7 +725,8 @@ impl Agent {
             .conversation
             .iter()
             .rposition(|item| item.get(PRODUCER).is_some())?;
-        (self.conversation[last][PRODUCER] == self.config.model.as_str())
+        (self.conversation[last][PRODUCER].as_str())
+            .is_some_and(|producer| self.produced(producer))
             .then(|| tokens + estimate(&self.conversation[last + 1..]))
     }
 

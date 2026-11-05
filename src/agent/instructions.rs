@@ -161,14 +161,16 @@ flag): {}\n",
 }
 
 /// A model as the Model Identity names it, as its provider describes it.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Identity {
+    pub id: String,
     pub name: Option<String>,
     pub provider: Option<String>,
 }
 
 /// Scramjet's `# Model Identity` for a request to `current`, after replies of `contributors` on
-/// the session's branch: the model attributes published work with it, as Mach 12's reviews ask.
+/// the session's branch, all named by reference as `known` is keyed (a model without an entry,
+/// by its name alone): the model attributes published work with it, as Mach 12's reviews ask.
 /// The current model is listed among them before it has replied, so that the text stays the
 /// same after its first reply, and the cached prefix with it.
 pub(super) fn identity(
@@ -176,13 +178,15 @@ pub(super) fn identity(
     contributors: &[String],
     known: &std::collections::HashMap<String, Identity>,
 ) -> String {
-    let unknown = Identity::default();
     let name = |model: &str| -> String {
-        let identity = known.get(model).unwrap_or(&unknown);
-        let name = identity.name.as_deref().unwrap_or(model);
+        let Some(identity) = known.get(model) else {
+            return format!("{model} (ID: {model})");
+        };
+        let id = &identity.id;
+        let name = identity.name.as_deref().unwrap_or(id);
         match &identity.provider {
-            Some(provider) => format!("{name} (ID: {model}, provider: {provider})"),
-            None => format!("{name} (ID: {model})"),
+            Some(provider) => format!("{name} (ID: {id}, provider: {provider})"),
+            None => format!("{name} (ID: {id})"),
         }
     };
     let mut models: Vec<&str> = contributors.iter().map(String::as_str).collect();
@@ -193,10 +197,9 @@ pub(super) fn identity(
         .iter()
         .map(|model| format!("- {}", name(model)))
         .collect();
-    let short = (known
-        .get(current)
-        .and_then(|identity| identity.name.as_deref()))
-    .unwrap_or(current);
+    let short = (known.get(current)).map_or(current, |identity| {
+        identity.name.as_deref().unwrap_or(&identity.id)
+    });
     format!(
         "\n\n# Model Identity
 Your model for the imminent response is: {current}.
@@ -527,13 +530,14 @@ respects .gitignore)\n- Use read"
     #[test]
     fn the_model_identity_names_models_as_their_cards_do_and_by_id_without_one() {
         let known = std::collections::HashMap::from([(
-            "c".to_owned(),
+            "anthropic/c".to_owned(),
             Identity {
+                id: "c".into(),
                 name: Some("Claude C".into()),
                 provider: Some("anthropic".into()),
             },
         )]);
-        let text = identity("x", &["c".to_owned()], &known);
+        let text = identity("x", &["anthropic/c".to_owned()], &known);
         let expected = "\n\n# Model Identity\nYour model for the imminent response is: x (ID: x).\n\
 Models with material responses in this session branch, the imminent one included:\n- Claude C (ID: \
 c, provider: anthropic)\n- x (ID: x)\nWhen posting to GitHub, use honest contribution-aware \
@@ -542,7 +546,8 @@ models only when their material responses contributed to the published work.\n- 
 model: \"Reviewed by x\"\n- Multiple credited models: describe each model's contribution (e.g., \
 \"Reviewed by X (analysis) and Y (posting)\")";
         assert_eq!(text, expected);
-        assert!(identity("c", &[], &known).contains("is: Claude C (ID: c, provider: anthropic)."));
+        let current = identity("anthropic/c", &[], &known);
+        assert!(current.contains("is: Claude C (ID: c, provider: anthropic)."));
     }
 
     #[test]

@@ -607,14 +607,16 @@ impl Editor {
                 true
             }
             // As in Scramjet, Enter on a command also submits it, and on an argument does not,
-            // but on one already typed in full, which Scramjet puts in again for a second Enter.
+            // but on one already typed in full, which Scramjet puts in again for a second Enter:
+            // its value, or the id a model's reference is shown by.
             _ if (tab || submit) && completion.is_some() => {
                 let list = completion.take().expect("checked above");
                 let typed = &buffer.text[list.start..buffer.cursor];
+                let selected = &list.items[list.selected];
                 let submit = submit
                     && match list.kind {
                         Kind::Slash => true,
-                        Kind::Argument => list.items[list.selected].value == typed,
+                        Kind::Argument => selected.value == typed || selected.label == typed,
                         Kind::Path | Kind::File => false,
                     };
                 list.apply(buffer);

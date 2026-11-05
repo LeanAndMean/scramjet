@@ -502,7 +502,7 @@ impl Interactive {
         let mut picker = select::Picker::question(title, &choices, recommended);
         if self.screen.is_some() {
             let models = self.agent.model_options();
-            let current = models.iter().position(|m| m.id == self.agent.model());
+            let current = (models.iter()).position(|m| m.reference() == self.agent.model());
             let effort = self.agent.effort().map(str::to_owned);
             let route = select::Route::new(models, current.unwrap_or(0), effort);
             picker = picker.routing(route);
@@ -568,8 +568,11 @@ impl Interactive {
     /// Remembers the session's model as the one chosen last, here and anywhere, which sessions
     /// started later begin with (`Settings::remember_model`).
     pub(super) fn remember_model(&mut self) {
-        let model = self.agent.model().to_owned();
-        if let Err(error) = self.settings.remember_model(self.agent.root(), &model) {
+        let (provider, id) = (self.agent.model_provider(), self.agent.model_id());
+        if let Err(error) = self
+            .settings
+            .remember_model(self.agent.root(), provider, id)
+        {
             self.say(&format!("Error: settings not saved: {error}"));
         }
     }
@@ -742,11 +745,16 @@ fn command_entry(command: &Command) -> (String, String) {
     (command.name.clone(), description)
 }
 
-/// The model, and its reasoning effort, as Scramjet's footer shows them.
+/// The model, after its provider when the models are those of several, and its reasoning
+/// effort, as Scramjet's footer shows them.
 pub(super) fn model_line(agent: &Agent) -> String {
+    let model = match agent.provider() {
+        Some(provider) => format!("({provider}) {}", agent.model_id()),
+        None => agent.model_id().to_owned(),
+    };
     match thinking(agent) {
-        Some(thinking) => format!("{} · {thinking}", agent.model()),
-        None => agent.model().to_owned(),
+        Some(thinking) => format!("{model} · {thinking}"),
+        None => model,
     }
 }
 

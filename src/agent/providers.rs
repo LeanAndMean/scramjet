@@ -6,6 +6,7 @@
 //! holding its providers' credentials, which the agent's tools do not see (`sandbox::Hidden`).
 //! A provider logged in to with `/login` (`login::LOGINS`) adds the models its login listed,
 //! unless a file names it; a provider of that name without an `apiKey` takes the login's key.
+//! Providers may offer the same id: a model is named by its reference, `provider/id`.
 
 use super::ModelOption;
 use super::client::Protocol;
@@ -85,6 +86,8 @@ impl std::fmt::Debug for Route {
 /// What the agent needs to know about a model to send it requests.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ModelInfo {
+    /// The id requests name it by.
+    pub id: String,
     pub protocol: Protocol,
     /// The context window (input and output tokens).
     pub window: Option<u64>,
@@ -108,6 +111,7 @@ impl ModelInfo {
     /// What the model's name says, for a model no provider offers.
     pub(super) fn guess(model: &str) -> Self {
         Self {
+            id: model.to_owned(),
             protocol: match model.starts_with("claude-") {
                 true => Protocol::Messages,
                 false => Protocol::Responses,
@@ -154,6 +158,17 @@ pub(super) struct Model {
     pub name: Option<String>,
     pub provider: String,
     pub info: ModelInfo,
+}
+
+impl Model {
+    /// `provider/id`, as the agent, its sessions and settings name the model.
+    pub(super) fn reference(&self) -> String {
+        reference(&self.provider, &self.id)
+    }
+}
+
+pub(super) fn reference(provider: &str, id: &str) -> String {
+    format!("{provider}/{id}")
 }
 
 /// The providers' models, each once, in the order of their files, of the providers in each and
@@ -258,14 +273,29 @@ impl Providers {
         &self.models
     }
 
-    pub(super) fn find(&self, id: &str) -> Option<&Model> {
-        self.models.iter().find(|model| model.id == id)
+    /// The model `name` names: the one whose reference (`provider/id`) it is, else the first
+    /// with that id, as sessions and settings written before references name it.
+    pub(super) fn find(&self, name: &str) -> Option<&Model> {
+        let models = &self.models;
+        (models.iter())
+            .find(|model| {
+                (name.strip_prefix(model.provider.as_str()))
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    .is_some_and(|id| id == model.id)
+            })
+            .or_else(|| models.iter().find(|model| model.id == name))
     }
 
-    /// What a model `id` that no provider offers is sent as.
-    pub(super) fn info(&self, id: &str) -> ModelInfo {
-        self.find(id)
-            .map_or_else(|| ModelInfo::guess(id), |model| model.info.clone())
+    /// The reference of the model `name` names (`find`), else `name`.
+    pub(super) fn reference(&self, name: &str) -> String {
+        self.find(name)
+            .map_or_else(|| name.to_owned(), Model::reference)
+    }
+
+    /// What the model `name` names is sent as; one no provider offers, as its name says.
+    pub(super) fn info(&self, name: &str) -> ModelInfo {
+        self.find(name)
+            .map_or_else(|| ModelInfo::guess(name), |model| model.info.clone())
     }
 
     /// The models, as `/model` and `--list-models` show them.
@@ -336,7 +366,7 @@ struct Reading {
 
 impl Reading {
     /// The models of the providers logged in to that no file named, as their logins listed
-    /// them; those another provider offers already are left out, named in one line.
+    /// them.
     fn logins(&mut self) {
         let Some(logins) = self.logins.clone() else {
             return;
@@ -361,41 +391,13 @@ impl Reading {
                 super::copilot::PROVIDER => super::copilot::entry(credential, &listed),
                 _ => continue,
             };
-            let taken: Vec<String> = (self.models.iter()).map(|model| model.id.clone()).collect();
-            let mut entry = entry;
-            let mut left = Vec::new();
-            if let Some(models) = entry["models"].as_array_mut() {
-                models.retain(|model| {
-                    let id = model["id"].as_str().unwrap_or_default();
-                    let free = !taken.iter().any(|taken| taken == id);
-                    if !free {
-                        left.push(id.to_owned());
-                    }
-                    free
-                });
-            }
-            if entry["models"].as_array().is_some_and(Vec::is_empty) && left.is_empty() {
+            if entry["models"].as_array().is_some_and(Vec::is_empty) {
                 self.problems.push(format!(
                     "{what}: the login listed no models that take tools; /login again"
                 ));
                 continue;
             }
-            if !left.is_empty() {
-                self.problems.push(format!(
-                    "{what}: {} offered by providers read before it, not offered here: {}",
-                    match left.len() {
-                        1 => "1 model is".to_owned(),
-                        n => format!("{n} models are"),
-                    },
-                    left.join(", ")
-                ));
-            }
-            if entry["models"]
-                .as_array()
-                .is_some_and(|models| !models.is_empty())
-            {
-                self.provider(name, &entry, &what);
-            }
+            self.provider(name, &entry, &what);
         }
     }
 
@@ -472,10 +474,13 @@ impl Reading {
         };
         for model in models {
             match self.model(name, entry, model) {
-                Ok(model) if let Some(first) = self.models.iter().find(|m| m.id == model.id) => {
+                Ok(model)
+                    if (self.models.iter())
+                        .any(|m| m.provider == model.provider && m.id == model.id) =>
+                {
                     self.problems.push(format!(
-                        "{what}: model {} is {}'s already; not offered here",
-                        model.id, first.provider
+                        "{what}: model {} is listed already; not offered here",
+                        model.id
                     ));
                 }
                 Ok(model) => self.models.push(model),
@@ -573,6 +578,7 @@ impl Reading {
         };
         let input = entry["input"].as_array();
         let info = ModelInfo {
+            id: id.clone(),
             protocol,
             window: entry["contextWindow"]
                 .as_f64()
@@ -913,6 +919,7 @@ mod tests {
                     {"id": "odd", "api": "openai-completions", "compat": {"supportsStore": 1}},
                     {"id": "shell", "apiKey": "!pass show key"},
                     {"id": "bad", "headers": {"x-bad": "line\nbreak"}},
+                    {"id": "m", "name": "again"},
                 ]},
                 "b": {"baseUrl": "http://b/v1", "api": "openai-responses",
                     "models": [{"id": "m"}, {"id": "n"}]},
@@ -920,9 +927,19 @@ mod tests {
             },
             "providersCommand": "not a list",
         }));
-        let ids: Vec<&str> = providers.models().iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, ["m", "n"]);
-        assert_eq!(providers.find("m").unwrap().provider, "a");
+        let ids: Vec<String> = (providers.models().iter()).map(Model::reference).collect();
+        assert_eq!(ids, ["a/m", "b/m", "b/n"]);
+        // Its reference names a provider's model; its id, the first's.
+        let provider = |name| providers.find(name).map(|model| model.provider.as_str());
+        assert_eq!((provider("m"), provider("b/m")), (Some("a"), Some("b")));
+        assert_eq!(
+            (provider("c/m"), provider("a/n"), provider("/m")),
+            (None, None, None)
+        );
+        assert_eq!(providers.reference("m"), "a/m");
+        assert_eq!(providers.reference("z/m"), "z/m");
+        assert_eq!(providers.info("b/m").id, "m");
+        assert_eq!(providers.info("z/m"), ModelInfo::guess("z/m"));
         assert_eq!(
             providers.problems(),
             [
@@ -932,7 +949,7 @@ mod tests {
                 "models: provider a: model shell: apiKey is a shell command (`!…`), which is not \
                  run yet",
                 "models: provider a: model bad: the header x-bad is not valid in HTTP",
-                "models: provider b: model m is a's already; not offered here",
+                "models: provider a: model m is listed already; not offered here",
                 "models: provider c: lists no models (scramjet-rs has no built-in ones)",
                 "models: providersCommand must be a program and its arguments, as a list of strings",
             ]
@@ -1070,24 +1087,21 @@ mod tests {
             "apiKey": "k", "models": [{"id": "gpt-6-luna"}, {"id": "gpt-6-sol"}]});
         let providers =
             Providers::given_logged_in(json!({"providers": {"openai": openai}}), logins.clone());
-        let ids: Vec<(&str, &str)> = (providers.models().iter())
-            .map(|model| (model.id.as_str(), model.provider.as_str()))
-            .collect();
+        // Models another provider offers too are the login's as well.
+        let ids: Vec<String> = (providers.models().iter()).map(Model::reference).collect();
         assert_eq!(
             ids,
             [
-                ("gpt-6-luna", "openai"),
-                ("gpt-6-sol", "openai"),
-                ("grok-4.6", "github-copilot")
+                "openai/gpt-6-luna",
+                "openai/gpt-6-sol",
+                "github-copilot/gpt-6-luna",
+                "github-copilot/grok-4.6",
+                "github-copilot/gpt-6-sol"
             ]
         );
-        assert_eq!(
-            providers.problems(),
-            [
-                "github-copilot (/login): 2 models are offered by providers read before it, not \
-              offered here: gpt-6-luna, gpt-6-sol"
-            ]
-        );
+        assert_eq!(providers.problems(), [] as [String; 0]);
+        let luna = route(&providers, "github-copilot/gpt-6-luna");
+        assert_eq!((luna.provider.as_str(), luna.tls), ("github-copilot", true));
         let grok = route(&providers, "grok-4.6");
         assert_eq!((grok.tls, grok.authority.as_str()), (true, "api.x.example"));
         assert_eq!(grok.login.unwrap().file, auth);

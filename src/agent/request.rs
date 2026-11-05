@@ -20,7 +20,7 @@ const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
 impl Agent {
     pub(super) fn request(&self) -> Value {
         let mut request = json!({
-            "model": self.config.model,
+            "model": self.info.id,
             "instructions": self.instructions(),
             "input": self.replay_conversation(),
             "tools": self.tool_definitions(),
@@ -51,7 +51,8 @@ impl Agent {
 
     /// The conversation as sent to the current model: the items a model is sent (`sent`). As in
     /// Scramjet, items another model produced lose what only that model accepts: encrypted
-    /// reasoning, and `fc_` ids paired with it.
+    /// reasoning, and `fc_` ids paired with it. The same id from another provider is another
+    /// model.
     fn replay_conversation(&self) -> Vec<Value> {
         self.conversation
             .iter()
@@ -63,7 +64,9 @@ impl Agent {
                     object.retain(|key, _| !key.starts_with("_scramjet_"));
                     producer
                 });
-                if producer.is_some_and(|producer| producer != self.config.model.as_str()) {
+                let current =
+                    |producer: &Value| producer.as_str().is_some_and(|p| self.produced(p));
+                if producer.is_some_and(|producer| !current(&producer)) {
                     if item["type"] == "reasoning" {
                         return Value::Null;
                     }
@@ -333,7 +336,7 @@ response is incomplete; retry the request."});
         assert!(ui.calls.is_empty());
         assert_eq!(agent.usage.requests, 2);
         assert_eq!(agent.usage.context_tokens, Some(15));
-        assert_eq!(agent.conversation()[1]["_scramjet_model"], "m");
+        assert_eq!(agent.conversation()[1]["_scramjet_model"], "test/m");
         assert!(bodies[1]["input"][0].get("_scramjet_model").is_none());
         let kinds: Vec<_> = agent
             .conversation()
@@ -785,7 +788,7 @@ response is incomplete; retry the request."});
             agent.conversation()[1..]
                 .iter()
                 .filter(|item| item.get("type").is_some())
-                .all(|item| item["_scramjet_model"] == "claude-opus-5-5"
+                .all(|item| item["_scramjet_model"] == "test/claude-opus-5-5"
                     || item["type"] == "function_call_output")
         );
     }
@@ -945,7 +948,7 @@ response is incomplete; retry the request."});
         assert_eq!(agent.usage.context_tokens, Some(45));
         // Saved as Responses items, which another model is sent without this one's reasoning.
         assert_eq!(agent.conversation()[1]["type"], "reasoning");
-        assert_eq!(agent.conversation()[1]["_scramjet_model"], "qwen3");
+        assert_eq!(agent.conversation()[1]["_scramjet_model"], "local/qwen3");
         agent.set_model("m").unwrap();
         let replay = agent.replay_conversation();
         assert_eq!(replay[1]["type"], "function_call");

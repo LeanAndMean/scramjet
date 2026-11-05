@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(agent.conversation().len(), 6);
         assert_eq!(agent.conversation()[5]["call_id"], "c2");
         assert_eq!(agent.last_model(), Some("a"));
-        assert_eq!(agent.model(), "b");
+        assert_eq!(agent.model(), "test/b");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
         let tree = agent.tree().unwrap();
         assert_eq!(tree.current, Some(7));

@@ -23,12 +23,13 @@ providersCommand names a program printing more, as {\"version\": 1, \"providers\
 its credentialFiles the files holding their keys, hidden as --list-credential-stores says.
 /login adds the models of GitHub Copilot, its login saved in auth.json beside the settings.
   --project DIR          project directory (default: current directory)
-  --model PATTERN        model, as Scramjet finds it: the one whose id or provider/id PATTERN
-                         is, else the newest whose id or name contains it (after provider/,
-                         among that provider's), with an optional :LEVEL that sets the
-                         thinking level (default: the one a resumed session last used; for a
-                         new session, the one last chosen in this project, else anywhere, as
-                         in Scramjet, else gpt-6-luna)
+  --model PATTERN        model, as Scramjet finds it: the one whose provider/id or id PATTERN
+                         is (an id two providers offer: the first's), else the newest whose
+                         id or name contains it (after provider/, among that provider's),
+                         with an optional :LEVEL that sets the thinking level (default: the
+                         one a resumed session last used; for a new session, the one last
+                         chosen in this project, else anywhere, as in Scramjet, else
+                         gpt-6-luna)
   --models PATTERNS      the models Ctrl+P cycles through, comma-separated, in place of the
                          settings' enabledModels: each a model's id, part of its id or name,
                          or a glob (claude-*), with an optional :LEVEL; a new session without
@@ -173,9 +174,10 @@ Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFi
 (the entries /tree opens with: default, no-tools, user-only, labeled-only or all) and
 defaultThinkingLevel; tools, the agent's coding tools among read, bash, edit, write (the
 default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cycles through;
-defaultModel, the model chosen last, which /model, Ctrl+P, a next step's list and the agent
-save; and startupModel: per-directory (new sessions start with the model chosen last in their
-project, kept in $XDG_STATE_HOME/scramjet-rs/last-used-models.json) or global.";
+defaultProvider and defaultModel, the model chosen last, which /model, Ctrl+P, a next step's
+list and the agent save; and startupModel: per-directory (new sessions start with the model
+chosen last in their project, kept in $XDG_STATE_HOME/scramjet-rs/last-used-models.json) or
+global.";
 
 /// The session the agent starts in.
 pub(super) enum Start {

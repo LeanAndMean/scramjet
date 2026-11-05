@@ -39,8 +39,8 @@ mod tree;
 use args::{Options, Start, USAGE};
 use rustix::termios::{self, QueueSelector};
 use scramjet_rs::agent::{
-    self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, Next,
-    Providers, Session, SessionChoice, SkillOptions,
+    self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
+    Next, Providers, Session, SessionChoice, SkillOptions,
 };
 use settings::Settings;
 use std::{
@@ -178,7 +178,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         let result = print(&mut agent, &mut ui, prompt, &cancel);
         // The agent's `switch_scramjet_model`, remembered as the user's choices are.
         if agent.model() != model
-            && let Err(error) = settings.remember_model(agent.root(), agent.model())
+            && let Err(error) =
+                settings.remember_model(agent.root(), agent.model_provider(), agent.model_id())
         {
             eprintln!("Error: settings not saved: {error}");
         }
@@ -299,7 +300,7 @@ fn start(
                 .map_or("models.json".into(), |file| file.display().to_string())
         ));
     }
-    let model = named.map_or_else(|| default_model(&providers), |named| named.id);
+    let model = named.map_or_else(|| default_model(&providers), |named| named.model);
     let config = AgentConfig {
         providers,
         model,
@@ -322,17 +323,17 @@ fn start(
     };
     warnings.extend((scope_warnings.iter()).map(|warning| format!("{source}: {warning}")));
     warnings.extend(unknown_tools);
-    agent.set_model_scope(scoped.iter().map(|scoped| scoped.id.clone()).collect());
+    agent.set_model_scope(scoped.iter().map(|scoped| scoped.model.clone()).collect());
     let new = !chosen && agent.last_model().is_none();
     let remembered = new
         .then(|| remembered(settings, &agent, &mut warnings))
         .flatten();
     let in_scope = (scoped.iter())
-        .find(|scoped| remembered.as_ref() == Some(&scoped.id))
+        .find(|scoped| remembered.as_ref() == Some(&scoped.model))
         .or(scoped.first())
         .filter(|_| new);
     let model = match agent.last_model() {
-        _ if let Some(scoped) = in_scope => scoped.id.clone(),
+        _ if let Some(scoped) = in_scope => scoped.model.clone(),
         _ if let Some(remembered) = remembered => remembered,
         Some(last) if !chosen => last.to_owned(),
         _ => agent.model().to_owned(),
@@ -365,8 +366,8 @@ fn given_path(path: &str, cwd: &Path) -> PathBuf {
 fn named_model(pattern: &str, providers: &Providers) -> Result<scope::Scoped, String> {
     let models = providers.options();
     if models.is_empty() {
-        let id = pattern.trim().to_owned();
-        return Ok(scope::Scoped { id, level: None });
+        let model = pattern.trim().to_owned();
+        return Ok(scope::Scoped { model, level: None });
     }
     scope::named(pattern, &models).ok_or_else(|| {
         format!(
@@ -375,20 +376,18 @@ fn named_model(pattern: &str, providers: &Providers) -> Result<scope::Scoped, St
     })
 }
 
-/// The model a new session starts with when nothing chooses one: gpt-6-luna, unless the
-/// providers offer others but not it, then the first of theirs.
+/// The model a new session starts with when nothing chooses one: the first provider's
+/// gpt-6-luna, unless the providers offer others but not it, then the first of theirs.
 fn default_model(providers: &Providers) -> String {
     const DEFAULT: &str = "gpt-6-luna";
     let models = providers.options();
-    match models.iter().any(|model| model.id == DEFAULT) {
-        false if let Some(first) = models.first() => first.id.clone(),
-        _ => DEFAULT.to_owned(),
-    }
+    let chosen = (models.iter().find(|model| model.id == DEFAULT)).or(models.first());
+    chosen.map_or_else(|| DEFAULT.to_owned(), ModelOption::reference)
 }
 
 /// The model chosen before that a new session in the agent's project starts with
-/// (`Settings::remembered_models`): the first the providers offer, or either when they list no
-/// models. Says in `warnings` which of them they do not offer.
+/// (`Settings::remembered_models`), by reference: the first the providers offer, or either when
+/// they list no models. Says in `warnings` which of them they do not offer.
 fn remembered(settings: &Settings, agent: &Agent, warnings: &mut Vec<String>) -> Option<String> {
     let (here, anywhere) = settings.remembered_models(agent.root());
     let anywhere = anywhere.filter(|model| here.as_ref() != Some(model));
@@ -407,8 +406,11 @@ fn remembered(settings: &Settings, agent: &Agent, warnings: &mut Vec<String>) ->
         anywhere.map(|model| (format!("settings: {path}: defaultModel {model}"), model)),
     ];
     for (what, model) in remembered.into_iter().flatten() {
-        if listed.as_ref().is_none_or(|ids| ids.contains(&model)) {
+        if listed.is_none() {
             return Some(model);
+        }
+        if let Some(reference) = agent.offered_model(&model) {
+            return Some(reference);
         }
         warnings.push(format!("{what} is not one the providers offer; not used"));
     }

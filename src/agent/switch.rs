@@ -71,11 +71,14 @@ model was not switched."
             );
         };
         let name = found.name.as_deref().unwrap_or(&found.id);
-        if found.id == self.config.model {
-            let text = format!("Already on {name} ({}). No switch needed.", full(found));
+        if found.reference() == self.config.model {
+            let text = format!(
+                "Already on {name} ({}). No switch needed.",
+                found.reference()
+            );
             return Switched::Not(text, false);
         }
-        if let Err(error) = self.set_model(&found.id) {
+        if let Err(error) = self.set_model(found.reference()) {
             let text = format!("Failed to switch to {name}: {error}. The model was not changed.");
             return Switched::Not(text, false);
         }
@@ -106,21 +109,14 @@ fn given(arguments: &Value) -> Result<(&str, &str), Vec<String>> {
     }
 }
 
-fn full(model: &ModelOption) -> String {
-    match &model.provider {
-        Some(provider) => format!("{provider}/{}", model.id),
-        None => model.id.clone(),
-    }
-}
-
 /// The models a switch can go to, as Scramjet lists them after an unknown one: those of the
 /// user's scope when there is one, else all the providers', sorted.
 fn catalog(models: &[ModelOption], scope: &[String]) -> String {
     let mut lines: Vec<String> = (models.iter())
-        .filter(|model| scope.is_empty() || scope.contains(&model.id))
+        .filter(|model| scope.is_empty() || scope.contains(&model.reference()))
         .map(|model| {
             let name = model.name.as_deref().unwrap_or(&model.id);
-            format!("- {} ({name})", full(model))
+            format!("- {} ({name})", model.reference())
         })
         .collect();
     if lines.is_empty() {

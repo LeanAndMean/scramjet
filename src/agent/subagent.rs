@@ -640,7 +640,9 @@ struct Job<'a> {
     agent: Option<&'a Definition>,
     task: String,
     cwd: PathBuf,
+    /// The model's reference (`provider/id`), or the name an agent gives that none offers.
     model: String,
+    info: ModelInfo,
     /// The level its requests ask for, at most the parent's (`child_effort`).
     effort: Option<String>,
     tools: Vec<&'static str>,
@@ -659,6 +661,11 @@ impl<'a> Job<'a> {
         let (tools, warnings) = agent
             .map(|agent| child_tools(agent, sandbox))
             .unwrap_or_default();
+        let model = agent.map_or("", |agent| agent.model.as_deref().unwrap_or(parent.model));
+        let info = match model == parent.model {
+            true => parent.info.clone(),
+            false => parent.providers.info(model),
+        };
         Self {
             name: &task.agent,
             agent,
@@ -667,9 +674,8 @@ impl<'a> Job<'a> {
                 Some(cwd) => tools::resolve(parent.root, cwd),
                 None => parent.root.to_owned(),
             },
-            model: agent
-                .map(|agent| agent.model.as_deref().unwrap_or(parent.model).to_owned())
-                .unwrap_or_default(),
+            model: parent.providers.reference(model),
+            info,
             effort: agent.and(child_effort(task.effort.as_deref(), parent.effort)),
             tools,
             warnings,
@@ -684,7 +690,7 @@ impl<'a> Job<'a> {
                 .agent
                 .map_or("unknown", |agent| agent.source)
                 .to_owned(),
-            model: self.model.clone(),
+            model: self.info.id.clone(),
             // Scramjet's `off` is the endpoint's `none`.
             effort: self.effort.as_deref().map(|effort| match effort {
                 "none" => "off".to_owned(),
@@ -1193,10 +1199,7 @@ fn run_child(
             return run;
         }
     };
-    let info = match job.model == parent.model {
-        true => parent.info.clone(),
-        false => parent.providers.info(&job.model),
-    };
+    let info = &job.info;
     let effort = &job.effort;
     let instructions = instructions::child(
         &job.cwd,
@@ -1212,7 +1215,7 @@ fn run_child(
             return run;
         }
         let mut request = json!({
-            "model": job.model,
+            "model": info.id,
             "instructions": instructions,
             "input": input,
             "tools": tools::child_definitions(tools),
@@ -1233,7 +1236,7 @@ fn run_child(
         let requests = &mut run.usage.requests;
         let sent = request::send(
             &executor,
-            &info,
+            info,
             parent.retries,
             &request,
             false,

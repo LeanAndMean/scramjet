@@ -1503,7 +1503,8 @@ be a non-empty array for select type. failed",
             "anthropic": {"baseUrl": base, "api": "anthropic-messages",
                 "models": [{"id": "claude-y", "name": "Claude Y"}]},
         }})));
-        agent.set_model_scope(vec!["m".into(), "claude-y".into()]);
+        agent.set_model("m").unwrap();
+        agent.set_model_scope(vec!["openai/m".into(), "anthropic/claude-y".into()]);
         let mut ui = Recorder::default();
         (agent.turn("switch", &mut ui, &AtomicBool::new(false))).unwrap();
         let requests = server.join().unwrap();
@@ -1545,14 +1546,14 @@ required property\n  - model: must be string\n\nReceived arguments:"
         let switched: Vec<_> = (ui.shown.iter())
             .filter(|shown| shown.starts_with("switched"))
             .collect();
-        assert_eq!(switched, ["switched gpt-x"]);
+        assert_eq!(switched, ["switched openai/gpt-x"]);
         let reply = agent.conversation().last().unwrap();
-        assert_eq!(reply[PRODUCER], "gpt-x");
+        assert_eq!(reply[PRODUCER], "openai/gpt-x");
         assert_eq!(
             (agent.model(), agent.context_window()),
-            ("gpt-x", Some(400_000))
+            ("openai/gpt-x", Some(400_000))
         );
         let (session, ..) = Session::open(agent.session_path()).unwrap();
-        assert_eq!(session.model(), Some("gpt-x"));
+        assert_eq!(session.model(), Some("openai/gpt-x"));
     }
 }
