@@ -4,6 +4,18 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.13.0 — Packages name their credential stores
+
+### Added
+
+- A `models.json`, the user's or a package's, may list in `credentialFiles` the files and directories that hold its providers' credentials. The agent's tools do not see them wherever they hide the common stores: in subagents always, and in the agent's own turns as `hideCredentials` says. A store inside another hidden directory no longer stops commands from starting.
+- `--list-credential-stores` lists the stores hidden from the agent's tools.
+
+### Changed
+
+- The local Proxy proxy's credential directories are no longer hidden by scramjet-rs itself; its private package names them.
+- `scripts/without-credentials.sh` hides the stores that the scramjet-rs built beside it lists. Without such a build it hides the common ones and says so.
+
 ## 0.12.1 — Provider programs and models fixed
 
 ### Fixed

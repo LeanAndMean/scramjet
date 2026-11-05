@@ -126,6 +126,12 @@ pub fn end() {
     session::end_writes();
 }
 
+/// The credential files and directories that exist and are hidden from the tools that hide them:
+/// the common ones and those `providers`' files name, by their real paths.
+pub fn credential_stores(providers: &Providers) -> Vec<PathBuf> {
+    sandbox::Hidden::listed(providers.credential_files())
+}
+
 pub struct AgentConfig {
     /// The providers requests go to, by their models.
     pub providers: Providers,

@@ -2,7 +2,8 @@
 //! Scramjet's format (`providers`, each with `baseUrl`, `api`, `apiKey`, `headers` and `models`):
 //! the user's, then each installed package's. A file may also name a program in
 //! `providersCommand`, whose output, `{"version": 1, "providers": …}`, adds more providers, as a
-//! package lists models it learns at run time.
+//! package lists models it learns at run time, and in `credentialFiles` the files and directories
+//! holding its providers' credentials, which the agent's tools do not see (`sandbox::Hidden`).
 
 use super::ModelOption;
 use super::client::Protocol;
@@ -140,6 +141,7 @@ pub struct Providers {
     #[cfg(test)]
     given: Option<Value>,
     models: Vec<Model>,
+    credential_files: Vec<PathBuf>,
     problems: Vec<String>,
 }
 
@@ -177,7 +179,21 @@ impl Providers {
             reading.document(&text, Path::new("."), "models");
         }
         self.models = reading.models;
+        // A file that failed to read may name stores again once fixed: they stay hidden.
+        if !reading.problems.is_empty() {
+            let kept = std::mem::take(&mut self.credential_files).into_iter();
+            reading.credential_files.extend(kept);
+        }
+        reading.credential_files.sort();
+        reading.credential_files.dedup();
+        self.credential_files = reading.credential_files;
         self.problems = reading.problems;
+    }
+
+    /// The files' `credentialFiles`, with `~` and relative paths resolved: what the agent's tools
+    /// do not see, besides the common credential stores.
+    pub(super) fn credential_files(&self) -> &[PathBuf] {
+        &self.credential_files
     }
 
     /// The `models.json` files read, as given.
@@ -227,6 +243,9 @@ struct Document {
     providers: Option<Ordered>,
     #[serde(rename = "providersCommand")]
     command: Option<Value>,
+    /// Read from files only: a program that fails would leave the stores it names in view.
+    #[serde(rename = "credentialFiles")]
+    credential_files: Option<Value>,
     version: Option<Value>,
 }
 
@@ -260,6 +279,7 @@ impl<'de> Deserialize<'de> for Ordered {
 #[derive(Default)]
 struct Reading {
     models: Vec<Model>,
+    credential_files: Vec<PathBuf>,
     problems: Vec<String>,
 }
 
@@ -281,6 +301,20 @@ impl Reading {
             Ok(document) => document,
             Err(error) => return self.problems.push(format!("{what}: {error}")),
         };
+        match &document.credential_files {
+            None => {}
+            Some(Value::Array(paths))
+                if (paths.iter())
+                    .all(|path| path.as_str().is_some_and(|p| !p.trim().is_empty())) =>
+            {
+                let paths = paths.iter().filter_map(Value::as_str);
+                let paths = paths.map(|path| in_directory(path, directory));
+                self.credential_files.extend(paths)
+            }
+            Some(_) => self.problems.push(format!(
+                "{what}: credentialFiles must be a list of files and directories"
+            )),
+        }
         self.providers(document.providers, what);
         match document.command {
             None => {}
@@ -516,6 +550,17 @@ fn listed(output: &[u8], what: &str) -> Result<Option<Ordered>, String> {
             "{what} speaks version {version}, not {COMMAND_VERSION}"
         )),
         None => Err(format!("{what}: its output has no version")),
+    }
+}
+
+/// `path` as a settings path is taken: `~` is the home directory, and a relative one is from
+/// `directory`, the file's.
+fn in_directory(path: &str, directory: &Path) -> PathBuf {
+    let path = path.trim();
+    let home = std::env::home_dir().filter(|_| path == "~" || path.starts_with("~/"));
+    match home {
+        Some(home) => home.join(path[1..].trim_start_matches('/')),
+        None => directory.join(path),
     }
 }
 
@@ -826,6 +871,55 @@ mod tests {
             providers.files(),
             [file.as_path(), &scratch.0.join("absent.json")]
         );
+    }
+
+    #[test]
+    fn credential_files_come_from_files_and_stay_while_one_has_problems() {
+        let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
+            "scramjet-rs-providers-credentials-{}",
+            std::process::id()
+        )));
+        let file = scratch.0.join("models.json");
+        let write = |text: &str| std::fs::write(&file, text).unwrap();
+        let program = scratch.0.join("list");
+        let listed = r#"{"version": 1, "credentialFiles": ["/from/program"]}"#;
+        std::fs::write(&program, format!("#!/bin/sh\necho '{listed}'\n")).unwrap();
+        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+        std::fs::set_permissions(&program, mode).unwrap();
+        write(
+            r#"{"credentialFiles": ["~/.config/x", "~", " keys ", "/abs/token"],
+                "providersCommand": ["./list"]}"#,
+        );
+        let mut providers = Providers::read(vec![file.clone()]);
+        let home = std::env::home_dir().unwrap();
+        let mut named = vec![
+            home.join(".config/x"),
+            home.clone(),
+            scratch.0.join("keys"),
+            PathBuf::from("/abs/token"),
+        ];
+        named.sort();
+        assert_eq!(providers.problems(), [] as [String; 0]);
+        assert_eq!(providers.credential_files(), named);
+
+        // A file that cannot be read, or names them wrongly, may name them again once fixed.
+        write("{");
+        providers.reload();
+        assert_eq!(providers.problems().len(), 1);
+        assert_eq!(providers.credential_files(), named);
+        for wrong in [r#""keys""#, r#"["keys", 1]"#, r#"[" "]"#] {
+            write(&format!(r#"{{"credentialFiles": {wrong}}}"#));
+            providers.reload();
+            let problem = format!(
+                "{}: credentialFiles must be a list of files and directories",
+                file.display()
+            );
+            assert_eq!(providers.problems(), [problem]);
+            assert_eq!(providers.credential_files(), named);
+        }
+        write(r#"{"credentialFiles": ["keys"]}"#);
+        providers.reload();
+        assert_eq!(providers.credential_files(), [scratch.0.join("keys")]);
     }
 
     #[test]

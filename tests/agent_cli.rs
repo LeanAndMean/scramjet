@@ -98,6 +98,62 @@ supported yet\n",
     assert_eq!(warnings, problem);
 }
 
+#[test]
+fn list_credential_stores_lists_the_common_ones_and_those_files_name() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-stores-{}", std::process::id())));
+    let (home, config, package) = (
+        scratch.0.join("home"),
+        scratch.0.join("config"),
+        scratch.0.join("package"),
+    );
+    for directory in [home.join(".ssh"), home.join(".fake"), package.clone()] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    std::fs::write(home.join(".netrc"), "").unwrap();
+    std::fs::write(package.join("token"), "").unwrap();
+    provide(&config, "127.0.0.1:9");
+    let file = config.join("scramjet-rs/models.json");
+    let mut models: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    models["credentialFiles"] = serde_json::json!(["~/.fake", "~/.ssh/inside", "~/absent"]);
+    std::fs::write(&file, models.to_string()).unwrap();
+    let package_models = package.join("models.json");
+    std::fs::write(&package_models, r#"{"credentialFiles": ["token"]}"#).unwrap();
+    let settings = serde_json::json!({"commandSets": [package]});
+    std::fs::write(
+        config.join("scramjet-rs/settings.json"),
+        settings.to_string(),
+    )
+    .unwrap();
+    let list = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
+            .arg("--list-credential-stores")
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &config)
+            .env_remove("SCRAMJET_CODING_AGENT_DIR")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = |bytes| String::from_utf8(bytes).unwrap();
+        (text(output.stdout), text(output.stderr))
+    };
+    let real = |path: std::path::PathBuf| std::fs::canonicalize(path).unwrap();
+    let listed: Vec<String> = [home.join(".fake"), home.join(".netrc"), home.join(".ssh")]
+        .into_iter()
+        .chain([package.join("token")])
+        .map(|path| format!("{}\n", real(path).display()))
+        .collect();
+    assert_eq!(list(), (listed.concat(), String::new()));
+    std::fs::write(&package_models, r#"{"credentialFiles": "token"}"#).unwrap();
+    let (_, warnings) = list();
+    let problem = format!(
+        "Warning: {}: credentialFiles must be a list of files and directories\n",
+        package_models.display()
+    );
+    assert_eq!(warnings, problem);
+}
+
 struct Scratch(std::path::PathBuf);
 
 impl Drop for Scratch {

@@ -6,13 +6,22 @@
 set -e
 empty=$(mktemp "${TMPDIR:-/tmp}/without-credentials.XXXXXX")
 args="--dev-bind / / --die-with-parent"
-for f in .scramjet/agent/auth.json .pi/agent/auth.json .netrc .git-credentials .claude/.credentials.json \
-    .claude.json .codex/auth.json .npmrc .pypirc .docker/config.json .vault-token; do
-  if [ -f "$HOME/$f" ]; then args="$args --ro-bind $empty $HOME/$f"; fi
-done
-for d in .aws .ssh .gnupg .config/gh .config/proxy .local/share/proxy .kube .config/gcloud .azure \
-    .local/share/keyrings .password-store; do
-  if [ -d "$HOME/$d" ]; then args="$args --tmpfs $HOME/$d --remount-ro $HOME/$d"; fi
+# The stores as the scramjet-rs built beside this script lists them, with those packages name
+# (credentialFiles); else the common ones of src/agent/sandbox.rs.
+built="$(dirname "$0")/../target/release/scramjet-rs"
+if ! stores=$("$built" --list-credential-stores 2>/dev/null) || [ -z "$stores" ]; then
+  echo "without-credentials.sh: $built cannot list the credential stores; only the common ones are hidden" >&2
+  stores=""
+  for store in .scramjet/agent/auth.json .pi/agent/auth.json .netrc .git-credentials \
+      .claude/.credentials.json .claude.json .codex/auth.json .npmrc .pypirc .docker/config.json \
+      .vault-token .aws .ssh .gnupg .config/gh .kube .config/gcloud .azure .local/share/keyrings \
+      .password-store; do
+    stores="$stores $HOME/$store"
+  done
+fi
+for store in $stores; do
+  if [ -d "$store" ]; then args="$args --tmpfs $store --remount-ro $store"
+  elif [ -f "$store" ]; then args="$args --ro-bind $empty $store"; fi
 done
 # The words of src/agent/sandbox.rs's CREDENTIAL_WORDS, at the end of a name or between underscores.
 for name in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p'); do

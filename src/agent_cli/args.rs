@@ -10,7 +10,8 @@ pub(super) const USAGE: &str =
 [--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
 [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask] [-p]
 [@FILE...] [MESSAGE...]
-       scramjet-rs --list-models [SEARCH] | --export FILE [OUTPUT] | --version
+       scramjet-rs --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
+       scramjet-rs --version
        scramjet-rs install DIR | remove NAME|DIR | list
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
@@ -18,7 +19,8 @@ settings file (by default ~/.config/scramjet-rs/models.json) and in installed co
 Scramjet's format: each provider has a baseUrl (http:// for now), an api (openai-responses or
 anthropic-messages), an apiKey (the value of the environment variable of that name, else the
 text) and its models, with their contextWindow, maxTokens, reasoning, input and cost; a file's
-providersCommand names a program printing more, as {\"version\": 1, \"providers\": ...}.
+providersCommand names a program printing more, as {\"version\": 1, \"providers\": ...}, and
+its credentialFiles the files holding their keys, hidden as --list-credential-stores says.
   --project DIR          project directory (default: current directory)
   --model PATTERN        model, as Scramjet finds it: the one whose id or provider/id PATTERN
                          is, else the newest whose id or name contains it (after provider/,
@@ -89,6 +91,10 @@ providersCommand names a program printing more, as {\"version\": 1, \"providers\
   --list-models [SEARCH] list the providers' models (those SEARCH matches) by provider, with
                          their context window, output limit, and whether they reason and
                          take images, as Scramjet lists them, and exit
+  --list-credential-stores
+                         list the credential files and directories that subagents' tools, and
+                         the agent's in turns nobody started (setting hideCredentials), do not
+                         see: the common ones and those models.json files name, and exit
   -v, --version          print the version and exit
 The session fills the terminal's alternate screen: the conversation above a status line and the
 prompt, and under it the project's directory and Git branch, the session's tokens, how full the
@@ -217,6 +223,7 @@ pub(super) struct Options {
     pub(super) export: Option<PathBuf>,
     /// `--list-models [SEARCH]`.
     pub(super) list_models: Option<Option<String>>,
+    pub(super) list_credential_stores: bool,
     pub(super) version: bool,
 }
 
@@ -243,6 +250,7 @@ impl Options {
             messages: Vec::new(),
             export: None,
             list_models: None,
+            list_credential_stores: false,
             version: false,
         };
         let (mut fork, mut no_session) = (None, false);
@@ -326,6 +334,7 @@ impl Options {
                     });
                     options.list_models = Some(search.and_then(|search| search.into_string().ok()))
                 }
+                Some("--list-credential-stores") => options.list_credential_stores = true,
                 Some("-v" | "--version") => options.version = true,
                 Some("--ask") => options.ask = true,
                 Some("-p" | "--print") => options.print = true,

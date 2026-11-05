@@ -1283,6 +1283,7 @@ fn run_child(
         if calls.is_empty() {
             return run;
         }
+        let hidden = sandbox::Hidden::current(parent.providers.credential_files());
         for item in calls {
             let output = match Call::parse(&item) {
                 Ok(call) => {
@@ -1292,7 +1293,7 @@ fn run_child(
                     }));
                     match tools.contains(&call.name) {
                         true => call
-                            .run_read_only(&job.cwd, cancel)
+                            .run_read_only(&job.cwd, &hidden, cancel)
                             .map(|output| output.sent())
                             .unwrap_or_else(|error| json!(format!("Error: {error}"))),
                         false => json!(format!("Tool {} not found", call.name)),

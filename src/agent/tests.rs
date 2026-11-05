@@ -320,6 +320,11 @@ const SERVED: [&str; 16] = [
 /// (`ModelInfo::guess`): Claude on Messages, the others on Responses, all reasoning at any level
 /// and taking images, with nothing known of their limits or prices.
 pub(super) fn serving(endpoint: SocketAddr) -> Providers {
+    Providers::given(served(endpoint))
+}
+
+/// `serving`'s providers in a `models.json`'s format.
+pub(super) fn served(endpoint: SocketAddr) -> Value {
     let any: serde_json::Map<String, Value> =
         ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
             .iter()
@@ -335,7 +340,7 @@ pub(super) fn serving(endpoint: SocketAddr) -> Providers {
                 "input": ["text", "image"], "thinkingLevelMap": any})
         })
         .collect();
-    Providers::given(json!({"providers": {"test": {"models": models}}}))
+    json!({"providers": {"test": {"models": models}}})
 }
 
 fn settings_level(level: &str) -> &str {

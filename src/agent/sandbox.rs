@@ -12,7 +12,7 @@ pub(super) const PROGRAM: &str = "bwrap";
 
 /// Credential stores in the home directory that subagents, and the main agent when its
 /// credentials are hidden, do not see, after an agent printed `~/.scramjet/agent/auth.json` to
-/// its provider: common ones, not every secret.
+/// its provider: common ones, not every secret. Packages name their own (`credentialFiles`).
 const HIDDEN_FILES: [&str; 11] = [
     ".scramjet/agent/auth.json",
     ".pi/agent/auth.json",
@@ -26,13 +26,11 @@ const HIDDEN_FILES: [&str; 11] = [
     ".docker/config.json",
     ".vault-token",
 ];
-const HIDDEN_DIRECTORIES: [&str; 11] = [
+const HIDDEN_DIRECTORIES: [&str; 9] = [
     ".aws",
     ".ssh",
     ".gnupg",
     ".config/gh",
-    ".config/proxy",
-    ".local/share/proxy",
     ".kube",
     ".config/gcloud",
     ".azure",
@@ -69,16 +67,49 @@ pub(super) struct Hidden {
 
 impl Hidden {
     /// Those of this user's home directory, Scramjet's `auth.json` wherever
-    /// `SCRAMJET_CODING_AGENT_DIR` puts it, and this user's tmux servers.
-    pub(super) fn current() -> Hidden {
-        let auth = super::subagent::agent_directory().map(|dir| dir.join("auth.json"));
-        let mut hidden =
-            std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, auth));
+    /// `SCRAMJET_CODING_AGENT_DIR` puts it, the files and directories `named` (the providers'
+    /// `credentialFiles`), and this user's tmux servers.
+    pub(super) fn current(named: &[PathBuf]) -> Hidden {
+        let mut hidden = Hidden::stores(named);
         let base = std::env::var_os("TMUX_TMPDIR").filter(|base| !base.is_empty());
         let base = base.map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
         let own = super::session::state_directory().map(|directory| directory.join("tmux"));
         hidden.keep_tmux_apart(&base, own.ok());
         hidden
+    }
+
+    /// `current`'s credential stores, without the tmux servers.
+    fn stores(named: &[PathBuf]) -> Hidden {
+        let auth = super::subagent::agent_directory().map(|dir| dir.join("auth.json"));
+        let also = auth.into_iter().chain(named.iter().cloned()).collect();
+        std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, also))
+    }
+
+    /// The stores that exist, files and directories, by their real paths, but those in another.
+    pub(super) fn listed(named: &[PathBuf]) -> Vec<PathBuf> {
+        let hidden = Hidden::stores(named);
+        let (files, directories) = hidden.mounted();
+        let mut listed: Vec<PathBuf> = files.chain(directories).cloned().collect();
+        listed.sort();
+        listed
+    }
+
+    /// The files and the directories to mount over: bubblewrap cannot mount in a hidden
+    /// directory, which is read-only and hides them anyway.
+    fn mounted(
+        &self,
+    ) -> (
+        impl Iterator<Item = &PathBuf>,
+        impl Iterator<Item = &PathBuf>,
+    ) {
+        let outside = |path: &&PathBuf| {
+            let mut directories = self.directories.iter();
+            !directories.any(|directory| path != &directory && path.starts_with(directory))
+        };
+        (
+            self.files.iter().filter(outside),
+            self.directories.iter().filter(outside),
+        )
     }
 
     /// Hides the sockets of tmux servers under `base` (as `TMUX_TMPDIR`), which run what a client
@@ -107,21 +138,16 @@ impl Hidden {
         self.tmux = own;
     }
 
-    pub(super) fn under(home: &Path, auth: Option<PathBuf>) -> Hidden {
-        let existing = |paths: Vec<PathBuf>, directories: bool| {
-            let mut real: Vec<PathBuf> = paths
-                .into_iter()
-                .filter_map(|path| std::fs::canonicalize(path).ok())
-                .filter(|path| path.is_dir() == directories)
-                .collect();
-            real.sort();
-            real.dedup();
-            real
-        };
-        let files = HIDDEN_FILES.iter().map(|name| home.join(name)).chain(auth);
-        let files = existing(files.collect(), false);
-        let directories = HIDDEN_DIRECTORIES.iter().map(|name| home.join(name));
-        let directories = existing(directories.collect(), true);
+    /// The common stores in `home`, and `also`, each a file or a directory.
+    pub(super) fn under(home: &Path, also: Vec<PathBuf>) -> Hidden {
+        let common = HIDDEN_FILES.iter().chain(&HIDDEN_DIRECTORIES);
+        let stores = common.map(|name| home.join(name)).chain(also);
+        let mut real: Vec<PathBuf> = stores
+            .filter_map(|path| std::fs::canonicalize(path).ok())
+            .collect();
+        real.sort();
+        real.dedup();
+        let (directories, files): (Vec<_>, Vec<_>) = real.into_iter().partition(|p| p.is_dir());
         let identities = files
             .iter()
             .chain(&directories)
@@ -241,13 +267,15 @@ fn hide(process: &mut Command, hidden: &Hidden) {
         }
     }
     process.env_remove("TMUX").env_remove("TMUX_PANE");
-    if !hidden.files.is_empty() {
+    let (files, directories) = hidden.mounted();
+    let files: Vec<&PathBuf> = files.collect();
+    if !files.is_empty() {
         let empty = empty_file();
-        for file in &hidden.files {
+        for file in files {
             process.arg("--ro-bind").arg(&empty).arg(file);
         }
     }
-    for directory in &hidden.directories {
+    for directory in directories {
         process.arg("--tmpfs").arg(directory);
         process.arg("--remount-ro").arg(directory);
     }
@@ -289,7 +317,7 @@ fn empty_in(directory: &Path) -> std::io::Result<PathBuf> {
 
 /// Whether commands can run in the sandbox here; otherwise why not.
 pub(super) fn available() -> Result<(), String> {
-    let output = command(Path::new("/"), "true", &Hidden::current())
+    let output = command(Path::new("/"), "true", &Hidden::current(&[]))
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("cannot start {PROGRAM}: {error}"))?;
@@ -327,7 +355,7 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         let ran = run_sandboxed(
             &root,
             &script,
-            &super::Hidden::current(),
+            &super::Hidden::current(&[]),
             None,
             &cancel,
             &mut |_| {},
@@ -372,7 +400,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         let output = super::command(
             &home.join("project"),
             script,
-            &super::Hidden::under(&home, None),
+            &super::Hidden::under(&home, Vec::new()),
         )
         .output()
         .unwrap();
@@ -390,6 +418,54 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             "SECRET-netrc\n"
         );
         assert_eq!(std::fs::read_dir(home.join(".ssh")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn named_stores_are_hidden_also_around_and_inside_others() {
+        let home = std::env::temp_dir().join(format!("scramjet-named-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        for directory in [".config/gh", ".config/fake", ".ssh", "project"] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        for (file, text) in [
+            (".config/gh/hosts.yml", "SECRET-gh\n"),
+            (".config/fake/token", "SECRET-fake\n"),
+            (".ssh/named", "SECRET-inside\n"),
+            ("token.txt", "SECRET-file\n"),
+            ("project/a.txt", "plain\n"),
+        ] {
+            std::fs::write(home.join(file), text).unwrap();
+        }
+        let named = [".config", ".ssh/named", "token.txt", "absent"].map(|name| home.join(name));
+        let hidden = super::Hidden::under(&home, named.to_vec());
+        let (files, directories) = hidden.mounted();
+        let real = |name: &str| std::fs::canonicalize(home.join(name)).unwrap();
+        assert_eq!(files.collect::<Vec<_>>(), [&real("token.txt")]);
+        let directories: Vec<_> = directories.collect();
+        assert_eq!(directories, [&real(".config"), &real(".ssh")]);
+        let script = "cat a.txt; ls -A ../.config; cat ../token.txt ../.ssh/named; grep -r SECRET ..; echo done";
+        let root = home.join("project");
+        for mut process in [
+            super::command(&root, script, &hidden),
+            super::hiding(&root, script, &hidden),
+        ] {
+            let output = process.output().unwrap();
+            let errors = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "plain\ndone\n",
+                "{errors}"
+            );
+            assert!(!errors.contains("SECRET"), "{errors}");
+        }
+        for path in [".config/fake/token", ".ssh/named", "token.txt"] {
+            let refused = hidden.check(&home.join(path)).unwrap_err();
+            assert!(
+                refused.ends_with("hidden, as it holds credentials"),
+                "{refused}"
+            );
+        }
+        assert!(hidden.check(&root.join("a.txt")).is_ok());
     }
 
     #[test]
@@ -467,7 +543,7 @@ setsid sleep {marker} > /dev/null 2>&1 & echo done"
         let output = super::hiding(
             &home.join("project"),
             &script,
-            &super::Hidden::under(&home, None),
+            &super::Hidden::under(&home, Vec::new()),
         )
         .output()
         .unwrap();
@@ -547,7 +623,7 @@ setsid sleep {marker} > /dev/null 2>&1 & echo done"
         let shown = run(&outside, &["run-shell", &cat]);
         assert_eq!(String::from_utf8_lossy(&shown.stdout), "SECRET-netrc\n");
 
-        let mut hidden = super::Hidden::under(&home, None);
+        let mut hidden = super::Hidden::under(&home, Vec::new());
         hidden.keep_tmux_apart(&outside, Some(own.clone()));
         let socket = outside.join(format!(
             "tmux-{}/default",
@@ -597,7 +673,7 @@ TMUX={socket},1,0 tmux run-shell '{cat}'; tmux new-session -d -s own 'sleep 300'
 
         // scramjet-rs run where TMUX_TMPDIR is already its own, as in a session a hidden command
         // started, still has tmux in its hidden commands.
-        let mut nested = super::Hidden::under(&home, None);
+        let mut nested = super::Hidden::under(&home, Vec::new());
         nested.keep_tmux_apart(&own, Some(own.clone()));
         let script = "tmux new-session -d -s nested 'sleep 300' && tmux ls -F '#S'";
         let output = super::hiding(&home.join("project"), script, &nested)
@@ -631,7 +707,7 @@ TMUX={socket},1,0 tmux run-shell '{cat}'; tmux new-session -d -s own 'sleep 300'
             let ran = run_sandboxed(
                 std::path::Path::new("/"),
                 &command,
-                &super::Hidden::current(),
+                &super::Hidden::current(&[]),
                 None,
                 &cancel,
                 &mut |_| {},

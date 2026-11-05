@@ -291,13 +291,9 @@ impl<'a> Call<'a> {
         })
     }
 
-    /// As `run` for a subagent's tools, none of which changes a file or shows the user's
-    /// credential stores: bash, `grep` and `find` run in the read-only sandbox.
-    pub fn run_read_only(&self, root: &Path, cancel: &AtomicBool) -> Result<Output, String> {
-        self.run_hiding(root, &Hidden::current(), cancel)
-    }
-
-    fn run_hiding(
+    /// As `run` for a subagent's tools, none of which changes a file or shows the credential
+    /// stores `hidden`: bash, `grep` and `find` run in the read-only sandbox.
+    pub fn run_read_only(
         &self,
         root: &Path,
         hidden: &Hidden,
@@ -1563,7 +1559,7 @@ disjoint regions."
         let cancel = AtomicBool::new(false);
         let read = |path: &str| {
             call("read", json!({"path":path}))
-                .run_read_only(&root, &cancel)
+                .run_read_only(&root, &Hidden::current(&[]), &cancel)
                 .unwrap()
         };
         let shot = read("shot.png");
@@ -1765,8 +1761,9 @@ inline image size limit.]",
         std::fs::write(root.join(".gitignore"), "ignored.rs\n").unwrap();
         std::fs::write(root.join("ignored.rs"), "").unwrap();
         let cancel = AtomicBool::new(false);
-        let run =
-            |name: &str, arguments: Value| call(name, arguments).run_read_only(&root, &cancel);
+        let run = |name: &str, arguments: Value| {
+            call(name, arguments).run_read_only(&root, &Hidden::current(&[]), &cancel)
+        };
         let text = |name: &str, arguments: Value| run(name, arguments).unwrap().text;
         assert_eq!(
             text("grep", json!({"pattern":"fn alpha","path":"src"})),
@@ -1895,7 +1892,7 @@ to see full lines]",
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(home.join(".netrc"), "SECRET-netrc\n").unwrap();
         std::os::unix::fs::symlink(home.join(".ssh"), root.join("keys")).unwrap();
-        let hidden = Hidden::under(&home, None);
+        let hidden = Hidden::under(&home, Vec::new());
         let cancel = AtomicBool::new(false);
         let run = |name: &str, arguments: Value| {
             call(name, arguments)
@@ -2000,11 +1997,11 @@ to see full lines]",
         std::os::unix::fs::symlink(home.join("other"), root.join("abs")).unwrap();
         std::fs::create_dir_all(home.join("agent")).unwrap();
         std::fs::write(home.join("agent/auth.json"), "SECRET-auth\n").unwrap();
-        let hidden = Hidden::under(&home, Some(home.join("agent/auth.json")));
+        let hidden = Hidden::under(&home, vec![home.join("agent/auth.json")]);
         let cancel = AtomicBool::new(false);
         let run = |name: &str, arguments: Value| {
             call(name, arguments)
-                .run_hiding(&root, &hidden, &cancel)
+                .run_read_only(&root, &hidden, &cancel)
                 .map(|output| output.text)
         };
         let refused = |path: &str| format!("{path}: hidden, as it holds credentials");

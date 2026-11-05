@@ -87,6 +87,16 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         );
         return Ok(());
     }
+    if options.list_credential_stores {
+        let providers = Providers::read(Settings::load().models_files());
+        for problem in providers.problems() {
+            eprintln!("Warning: {problem}");
+        }
+        for store in agent::credential_stores(&providers) {
+            println!("{}", store.display());
+        }
+        return Ok(());
+    }
     if let Some(file) = options.export.take() {
         let output = options.messages.first().map(std::path::PathBuf::from);
         let written = export::file(&file, output)?;

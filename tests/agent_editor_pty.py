@@ -3171,6 +3171,11 @@ def printed_with_credentials(read, until, send, output):
     until(b'Peeked.', until(b'FAKE-env-secret', until(b'FAKE-netrc-secret')))
 
 
+def printed_package_stores(read, until, send, output):
+    # Without the package that names them, they are files like any other.
+    until(b'Peeked.', until(b'FAKE-package-file', until(b'FAKE-package-store')))
+
+
 def printed_question(read, until, send, output):
     # Without the full screen, a question's options are numbered and answered by a line, which shows.
     mark = until(b'  2. Beta \xe2\x80\x94 the second [recommended]\r\n', until(b'Choose an option'))
@@ -3442,6 +3447,23 @@ never = config_home('never', '{"hideCredentials": "never"}')
 run(['-p', 'peek'], printed_with_credentials, serve_items([[peek('call_1')], [message('Peeked.')]]),
     variables=dict(in_fake_home, XDG_CONFIG_HOME=never))
 os.remove(os.path.join(project, 'made.txt'))
+# An installed package's credentialFiles are hidden as the common stores are.
+package = os.path.join(work, 'fake-provider')
+os.makedirs(os.path.join(fake_home, '.config', 'fake-provider'))
+os.makedirs(package)
+for path, text in [(os.path.join(fake_home, '.config', 'fake-provider', 'token'), 'FAKE-package-store\n'),
+                   (os.path.join(package, 'key.txt'), 'FAKE-package-file\n'),
+                   (os.path.join(package, 'models.json'),
+                    json.dumps({'credentialFiles': ['~/.config/fake-provider', 'key.txt']}))]:
+    with open(path, 'w') as file:
+        file.write(text)
+packaged = config_home('packaged', json.dumps({'commandSets': [package]}))
+peek_package = lambda call_id: tool_call(call_id, 'bash', {
+    'command': 'cat ~/.config/fake-provider/token %s; echo ran-$((6*7))' % os.path.join(package, 'key.txt')})
+run(['-p', 'peek'], printed_hides_credentials, serve_items([[peek_package('call_1')], [message('Peeked.')]]),
+    variables=dict(in_fake_home, XDG_CONFIG_HOME=packaged))
+run(['-p', 'peek'], printed_package_stores, serve_items([[peek_package('call_1')], [message('Peeked.')]]),
+    variables=in_fake_home)
 known = set(session_files())
 run(['-p', 'pick'], printed_question, serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {

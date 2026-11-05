@@ -258,7 +258,8 @@ impl Tools<'_> {
             subagent::NAME => subagent::run(&call.arguments, &self.parent, ui, cancel),
             _ => {
                 ui.tool_running(std::time::Instant::now());
-                let hidden = self.hide_credentials.then(sandbox::Hidden::current);
+                let named = self.parent.providers.credential_files();
+                let hidden = (self.hide_credentials).then(|| sandbox::Hidden::current(named));
                 let root = self.parent.root;
                 let output = call
                     .run(root, hidden.as_ref(), cancel, &mut |output| {
@@ -340,7 +341,8 @@ mod tests {
     use super::*;
     use crate::agent::tests::*;
     use crate::agent::{
-        ChildItem, ChildState, Delegation, PRODUCER, Session, approvals, instructions, show_items,
+        ChildItem, ChildState, Delegation, PRODUCER, Providers, Session, approvals, instructions,
+        show_items,
     };
     use crate::provider_fixture as fixture;
     use std::{sync::Arc, time::Duration};
@@ -543,6 +545,62 @@ here\n\nkept.txt says original";
         let mut resumed = Recorder::default();
         show_items(agent.conversation(), None, &mut resumed);
         assert_eq!(resumed.details, ui.details);
+    }
+
+    #[test]
+    fn the_stores_providers_name_are_hidden_from_the_agent_and_its_subagents() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let peek = json!({"command":"cat store/token; echo ran"});
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", "bash", peek.clone()),
+            tool_call(
+                "call_2",
+                subagent::NAME,
+                json!({"agent":"reviewer","task":"Peek."}),
+            ),
+            tool_call("call_3", "bash", peek),
+            tool_call("call_4", "read", json!({"path":"store/token"})),
+            reply("peeked"),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "named-stores");
+        let agents = agent.root().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Reviews\ntools: read, bash\n---\n\nYou review.\n",
+        )
+        .unwrap();
+        agent.agents_directory = Some(agents);
+        let store = agent.root().join("store");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join("token"), "SECRET-named\n").unwrap();
+        let mut document = served(endpoint);
+        document["credentialFiles"] = json!([store]);
+        agent.set_providers(Providers::given(document));
+        agent.set_hide_credentials(true);
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("peek", &mut Recorder::default(), &cancel)
+            .unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 6);
+        let (parent, child) = (last_output(&bodies[1]), last_output(&bodies[3]));
+        for output in [&parent, &child] {
+            assert!(
+                output.ends_with("ran\n") && !output.contains("SECRET"),
+                "{output}"
+            );
+        }
+        let refused = format!(
+            "{}: hidden, as it holds credentials",
+            store.join("token").display()
+        );
+        assert!(
+            last_output(&bodies[4]).contains(&refused),
+            "{}",
+            last_output(&bodies[4])
+        );
     }
 
     #[test]
