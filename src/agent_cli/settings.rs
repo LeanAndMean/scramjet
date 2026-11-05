@@ -94,6 +94,7 @@ pub(super) enum Row {
     Steering,
     FollowUp,
     DoubleEscape,
+    CopyOnSelect,
     BranchSummary,
     TreeFilter,
     Tools,
@@ -104,7 +105,7 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 16] = [
+pub(super) const ROWS: [Row; 17] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
@@ -113,6 +114,7 @@ pub(super) const ROWS: [Row; 16] = [
     Row::Steering,
     Row::FollowUp,
     Row::DoubleEscape,
+    Row::CopyOnSelect,
     Row::BranchSummary,
     Row::TreeFilter,
     Row::Tools,
@@ -134,6 +136,7 @@ impl Row {
             Self::Steering => "Steering messages",
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
+            Self::CopyOnSelect => "Copy on select",
             Self::BranchSummary => "Leaving a branch",
             Self::TreeFilter => "Tree entries",
             Self::Tools => "Tools",
@@ -168,6 +171,10 @@ impl Row {
                 "Sent with Alt+Enter during a turn: how many the model gets when it would stop."
             }
             Self::DoubleEscape => "Escape pressed twice on an empty prompt.",
+            Self::CopyOnSelect => {
+                "Text selected with the mouse is copied as soon as it is selected, ready to paste \
+                 anywhere (Command+V on a Mac). A right click or Ctrl+C copies a selection either way."
+            }
             Self::BranchSummary => {
                 "When /tree moves to another branch: ask whether to summarize the one left behind."
             }
@@ -207,6 +214,9 @@ pub(super) struct Settings {
     path: Option<PathBuf>,
     pub(super) hide_thinking_block: bool,
     pub(super) double_escape: DoubleEscape,
+    /// `copyOnSelect`: a completed mouse selection is copied; by default only on macOS, whose
+    /// terminals keep Command+C to themselves.
+    pub(super) copy_on_select: bool,
     /// `branchSummary.skipPrompt`: leaving a branch in `/tree` summarizes nothing, unasked.
     pub(super) skip_branch_summary_prompt: bool,
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
@@ -287,6 +297,7 @@ impl Settings {
             path,
             hide_thinking_block: false,
             double_escape: DoubleEscape::Tree,
+            copy_on_select: cfg!(target_os = "macos"),
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             markdown_reads: MarkdownReads::Rendered,
@@ -323,6 +334,11 @@ impl Settings {
             Some(Some("fork")) => self.double_escape = DoubleEscape::Fork,
             Some(Some("none")) => self.double_escape = DoubleEscape::Nothing,
             Some(_) => wrong("doubleEscapeAction", r#""tree", "fork" or "none""#),
+        }
+        match object.get("copyOnSelect") {
+            None => {}
+            Some(Value::Bool(copy)) => self.copy_on_select = *copy,
+            Some(_) => wrong("copyOnSelect", "true or false"),
         }
         match object
             .get("branchSummary")
@@ -675,6 +691,8 @@ impl Settings {
                 DoubleEscape::Nothing => "does nothing",
             }
             .into(),
+            Row::CopyOnSelect if self.copy_on_select => "on".into(),
+            Row::CopyOnSelect => "off".into(),
             Row::BranchSummary if self.skip_branch_summary_prompt => "no summary".into(),
             Row::BranchSummary => "asks for a summary".into(),
             Row::TreeFilter => match self.tree_filter {
@@ -752,6 +770,10 @@ impl Settings {
                 };
                 self.double_escape = action;
                 self.save("doubleEscapeAction", json!(name))
+            }
+            Row::CopyOnSelect => {
+                self.copy_on_select = !self.copy_on_select;
+                self.save("copyOnSelect", json!(self.copy_on_select))
             }
             Row::BranchSummary => {
                 self.skip_branch_summary_prompt = !self.skip_branch_summary_prompt;
@@ -910,6 +932,7 @@ mod tests {
         let settings = Settings::read(Some(scratch.0.join("config/settings.json")));
         assert!(!settings.hide_thinking_block);
         assert_eq!(settings.double_escape, DoubleEscape::Tree);
+        assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
         assert!(!settings.skip_branch_summary_prompt);
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
@@ -984,8 +1007,9 @@ mod tests {
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
                 "defaultThinkingLevel": "off", "theme": "pi-light", "treeFilterMode": "labeled-only",
                 "steeringMode": "one-at-a-time", "followUpMode": "all",
-                "markdown": {"toolDisplay": "source"}}"#,
+                "markdown": {"toolDisplay": "source"}, "copyOnSelect": true}"#,
         );
+        assert!(settings.copy_on_select);
         assert_eq!(settings.tree_filter, Filter::Labeled);
         assert_eq!(settings.markdown_reads, MarkdownReads::Source);
         assert_eq!(settings.theme, "pi-light");
@@ -1036,8 +1060,9 @@ mod tests {
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
-                "markdown": {"toolDisplay": "raw"}, "theme": 1}"#,
+                "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on"}"#,
         );
+        assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.theme, "terminal-colors");
         assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
@@ -1049,6 +1074,7 @@ mod tests {
             settings.warnings,
             [
                 format!("{path}: hideThinkingBlock must be true or false; ignored"),
+                format!("{path}: copyOnSelect must be true or false; ignored"),
                 format!("{path}: branchSummary.skipPrompt must be true or false; ignored"),
                 format!(
                     r#"{path}: treeFilterMode must be "default", "no-tools", "user-only", "labeled-only", "all"; ignored"#
@@ -1304,6 +1330,14 @@ mod tests {
             seen(Row::ThinkingBlocks, &mut settings),
             ["shown", "hidden", "shown", "hidden"]
         );
+        let (default, other) = match cfg!(target_os = "macos") {
+            true => ("on", "off"),
+            false => ("off", "on"),
+        };
+        assert_eq!(
+            seen(Row::CopyOnSelect, &mut settings),
+            [default, other, default, other]
+        );
         assert_eq!(
             seen(Row::MarkdownReads, &mut settings),
             ["rendered", "source", "rendered", "source"]
@@ -1336,6 +1370,7 @@ mod tests {
                 "hideCredentials": "unattended",
                 "steeringMode": "one-at-a-time",
                 "hideThinkingBlock": true,
+                "copyOnSelect": !cfg!(target_os = "macos"),
                 "treeFilterMode": "all",
                 "followUpMode": "all",
                 "tools": ["read", "ls"],

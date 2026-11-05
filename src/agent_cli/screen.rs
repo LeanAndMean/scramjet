@@ -83,9 +83,15 @@ enum ToScreen {
     SetText(String),
     Remember(String),
     Note(Note),
-    /// `/reload` read the commands and skills (the `/` list's rows after the built-in ones),
-    /// whether Escape twice on an empty prompt does something, and how Markdown files read show.
-    Reloaded(Vec<(String, String)>, bool, MarkdownReads),
+    /// `/reload` or `/settings` read the commands and skills (the `/` list's rows after the
+    /// built-in ones) and the settings the screen follows.
+    Reloaded {
+        commands: Vec<(String, String)>,
+        /// Escape twice on an empty prompt does something.
+        double_escape: bool,
+        markdown_reads: MarkdownReads,
+        copy_on_select: bool,
+    },
     /// The endpoint's models, which complete `/model`'s argument.
     Models(Vec<String>),
     /// What the footer shows of the session now.
@@ -260,7 +266,11 @@ struct App {
     /// Tool results are shown whole (Ctrl+O).
     whole: bool,
     markdown_reads: MarkdownReads,
+    /// A completed mouse selection is copied (`copyOnSelect`).
+    copy_on_select: bool,
     selection: Option<Selection>,
+    /// The selections made so far, which tells a copy's from those made after it.
+    selections: u64,
     edge: Option<Edge>,
     thumb: Option<Thumb>,
     copying: Option<Copying>,
@@ -307,7 +317,9 @@ impl App {
             top: None,
             whole: false,
             markdown_reads: MarkdownReads::Rendered,
+            copy_on_select: false,
             selection: None,
+            selections: 0,
             edge: None,
             thumb: None,
             copying: None,
@@ -510,9 +522,15 @@ impl App {
             ToScreen::SetText(text) => self.draft.replace(text),
             ToScreen::Remember(prompt) => self.editor.remember(&prompt),
             ToScreen::Note(note) => self.draft.set_note(note),
-            ToScreen::Reloaded(commands, double_escape, markdown_reads) => {
+            ToScreen::Reloaded {
+                commands,
+                double_escape,
+                markdown_reads,
+                copy_on_select,
+            } => {
                 self.editor.reloaded(commands, double_escape);
                 self.markdown_reads = markdown_reads;
+                self.copy_on_select = copy_on_select;
             }
             ToScreen::Models(models) => self.editor.set_models(models),
             ToScreen::Footer(shown) => self.footer.show(shown),

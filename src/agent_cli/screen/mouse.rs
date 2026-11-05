@@ -30,6 +30,8 @@ struct Mark {
 
 /// Text selected with the mouse, from where the left button was pressed to where it went.
 pub(super) struct Selection {
+    /// Which of the selections made this is, counted from 1.
+    id: u64,
     anchor: Mark,
     head: Mark,
     /// The button is held, and moved since it was pressed.
@@ -84,8 +86,12 @@ pub(super) struct Thumb {
     last: usize,
 }
 
-/// A copy under way: the terminal's sequence that copies, if any, or the failure.
-pub(super) type Copying = mpsc::Receiver<Result<Option<String>, String>>;
+/// A copy under way, of the selection `selection`.
+pub(super) struct Copying {
+    /// The terminal's sequence that copies, if any, or the failure.
+    outcome: mpsc::Receiver<Result<Option<String>, String>>,
+    selection: u64,
+}
 
 /// The clipboard read for a right click, or an image's path for Ctrl+V, pasted only into the
 /// editor it was for, unchanged.
@@ -282,9 +288,12 @@ impl App {
             }
             self.edge = None;
             if let Some(selection) = &mut self.selection {
+                let completed = selection.held;
                 selection.held = false;
                 if selection.anchor == selection.head {
                     self.clear_selection();
+                } else if completed && self.copy_on_select {
+                    self.copy();
                 }
             }
             return;
@@ -353,7 +362,9 @@ impl App {
                         3 => (at(0), at(selection::width(&line))),
                         _ => (mark, mark),
                     };
+                    self.selections += 1;
                     self.selection = Some(Selection {
+                        id: self.selections,
                         anchor,
                         head,
                         held: true,
@@ -436,6 +447,9 @@ impl App {
     /// Copies the text selected, as shown, on a thread of its own: a clipboard tool may take a
     /// while.
     pub(super) fn copy(&mut self) {
+        let Some(id) = (self.selection.as_ref()).map(|selection| selection.id) else {
+            return;
+        };
         let Some(selected) = self.selected().filter(|_| self.copying.is_none()) else {
             return;
         };
@@ -467,27 +481,44 @@ impl App {
                 let _ = done.send(clipboard::copy(&text, true));
             });
         match started {
-            Ok(_) => self.copying = Some(outcome),
+            Ok(_) => {
+                self.copying = Some(Copying {
+                    outcome,
+                    selection: id,
+                })
+            }
             Err(error) => self.note(Note::Error(format!("Copy failed: {error}"))),
         }
     }
 
-    /// Ends a copy that has finished: the selection goes once copied, and stays if not.
+    /// Ends a copy that has finished: the selection copied goes, and stays if it failed. With
+    /// copy-on-select, a selection completed meanwhile is copied next.
     pub(super) fn copied(&mut self) -> io::Result<()> {
-        let outcome = match self.copying.as_ref().map(mpsc::Receiver::try_recv) {
-            None | Some(Err(TryRecvError::Empty)) => return Ok(()),
-            Some(Ok(outcome)) => outcome,
-            Some(Err(TryRecvError::Disconnected)) => Err("the clipboard failed".to_owned()),
+        let Some(copying) = &self.copying else {
+            return Ok(());
         };
+        let outcome = match copying.outcome.try_recv() {
+            Err(TryRecvError::Empty) => return Ok(()),
+            Ok(outcome) => outcome,
+            Err(TryRecvError::Disconnected) => Err("the clipboard failed".to_owned()),
+        };
+        let copied = copying.selection;
         self.copying = None;
         match outcome {
             Ok(sequence) => {
                 if let Some(sequence) = sequence {
                     to_terminal(&sequence)?;
                 }
-                self.clear_selection();
+                if self.selection.as_ref().is_some_and(|s| s.id == copied) {
+                    self.clear_selection();
+                }
             }
             Err(error) => self.note(Note::Error(format!("Copy failed: {error}"))),
+        }
+        let waiting = (self.selection.as_ref())
+            .is_some_and(|selection| !selection.held && selection.id != copied);
+        if waiting && self.copy_on_select {
+            self.copy();
         }
         Ok(())
     }

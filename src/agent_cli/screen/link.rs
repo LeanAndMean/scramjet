@@ -120,12 +120,12 @@ impl Link {
         settings: &Settings,
     ) {
         self.modes = (settings.steering_mode, settings.follow_up_mode);
-        let double_escape = settings.double_escape != DoubleEscape::Nothing;
-        self.send(ToScreen::Reloaded(
+        self.send(ToScreen::Reloaded {
             commands,
-            double_escape,
-            settings.markdown_reads,
-        ));
+            double_escape: settings.double_escape != DoubleEscape::Nothing,
+            markdown_reads: settings.markdown_reads,
+            copy_on_select: settings.copy_on_select,
+        });
     }
     pub(in crate::agent_cli) fn models(&self, models: Vec<String>) {
         self.send(ToScreen::Models(models));
@@ -222,13 +222,15 @@ impl Handle {
     /// Takes the terminal for the screen, `editor` editing the prompts. Escape and Ctrl-C set
     /// `cancel` while a turn runs; Ctrl+T flips `hide_thinking`. The agent takes the messages
     /// queued during a turn as `modes` (`steeringMode`, `followUpMode`) say; `!` commands run
-    /// meanwhile run in `root`. Markdown files read show as `markdown_reads` says.
+    /// meanwhile run in `root`. Markdown files read show as `markdown_reads` says, and a
+    /// completed mouse selection is copied if `copy_on_select`.
     pub(in crate::agent_cli) fn start(
         editor: Editor,
         hide_thinking: Arc<AtomicBool>,
         cancel: Arc<AtomicBool>,
         modes: (Delivery, Delivery),
         markdown_reads: MarkdownReads,
+        copy_on_select: bool,
         root: PathBuf,
     ) -> io::Result<Self> {
         let (to, messages) = mpsc::channel();
@@ -251,6 +253,7 @@ impl Handle {
                 let app = App::new(editor, hide_thinking, cancel, inputs, queue, sides);
                 let app = App {
                     markdown_reads,
+                    copy_on_select,
                     ..app
                 };
                 app.run(raw, &messages, woken)

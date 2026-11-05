@@ -249,10 +249,10 @@ fn no_session_saves_none_and_its_directory_goes_at_exit() {
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {
-    // A guard against a hang: the journeys take about 130 seconds.
+    // A guard against a hang: the journeys take about 150 seconds.
     let output = Command::new("timeout")
         .args([
-            "180",
+            "240",
             "python3",
             "tests/agent_editor_pty.py",
             env!("CARGO_BIN_EXE_scramjet-rs"),

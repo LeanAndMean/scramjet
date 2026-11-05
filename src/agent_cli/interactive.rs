@@ -101,6 +101,7 @@ impl Interactive {
                     cancel.clone(),
                     (settings.steering_mode, settings.follow_up_mode),
                     settings.markdown_reads,
+                    settings.copy_on_select,
                     agent.root().to_path_buf(),
                 );
                 Some(started.map_err(|error| format!("cannot show the full screen: {error}"))?)

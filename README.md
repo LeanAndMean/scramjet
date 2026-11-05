@@ -37,7 +37,7 @@ Other main options: `--thinking LEVEL` (or `--effort`), `--models PATTERNS` (the
 
 ## In a session
 
-The conversation fills the terminal above the prompt, which stays usable while the agent works: Enter then steers the agent before its next request, Alt+Enter queues a follow-up for when it would stop, and Escape interrupts. Ctrl+O expands tool output, Ctrl+T hides or shows reasoning, Shift+Tab changes the effort, Ctrl+P the model. `!cmd` runs a shell command and gives its output to the agent; `!!cmd` keeps it out. The mouse scrolls, selects and copies; a right click pastes, and Ctrl+V (or Alt+V) pastes a clipboard image as the path of a file it is saved to.
+The conversation fills the terminal above the prompt, which stays usable while the agent works: Enter then steers the agent before its next request, Alt+Enter queues a follow-up for when it would stop, and Escape interrupts. Ctrl+O expands tool output, Ctrl+T hides or shows reasoning, Shift+Tab changes the effort, Ctrl+P the model. `!cmd` runs a shell command and gives its output to the agent; `!!cmd` keeps it out. The mouse scrolls and selects; a right click or Ctrl+C copies the selection (with Copy on select in `/settings`, on by default on macOS, a selection is copied as soon as it is made), a right click without one pastes, and Ctrl+V (or Alt+V) pastes a clipboard image as the path of a file it is saved to.
 
 Sessions are trees: `/tree` (or Escape twice on an empty prompt) goes back to any earlier point and continues from there, optionally summarizing the branch left behind; `/fork` and `/branch` continue in a new session. `/resume`, `/compact`, `/export` (a self-contained web page) and `/copy` work as in Scramjet.
 

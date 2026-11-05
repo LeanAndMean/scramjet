@@ -4,6 +4,16 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.5.0 — Copy on select
+
+### Added
+
+- Copy on select, in `/settings` (`copyOnSelect` in the settings file): text selected with the mouse is copied as soon as the button is let go, or at a double or triple click, so Command+V or Ctrl+V pastes it anywhere at once. It is on by default on macOS only, whose terminals keep Command+C to themselves; a right click or Ctrl+C still copies a selection either way.
+
+### Fixed
+
+- A copy that ends after a new selection was made no longer takes that new selection away.
+
 ## 0.4.0 — Copy under WSL inside tmux
 
 ### Changed

@@ -1775,7 +1775,7 @@ def settings_menu(read, until, send, output):
     assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
                          '  before its next request.'], rows
-    send(b'\x1b[B' * 5 + b'\r')
+    send(b'\x1b[B' * 6 + b'\r')
     rows = on_screen('Tools  \u2191\u2193 move \u00b7 Enter switch on or off \u00b7 Esc back')
     assert '\u203a [x] read' in rows and '  [ ] grep' in rows and rows[-1] == '  Read file contents', rows
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
@@ -1790,7 +1790,7 @@ def settings_menu(read, until, send, output):
     send(b'/settings\r')
     on_screen('Command: /settings')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[B' * 10 + b'\r')
+    send(b'\x1b[B' * 11 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))
@@ -3762,6 +3762,52 @@ def fullscreen_paste_and_clicks(read, until, send, output):
     send(b'\x15\x04')
 
 
+def fullscreen_copy_on_select(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('Row 40 of the reply.')
+    rows = ended(read, output)
+    row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
+    copies = clipboard + '.log'
+    # With copyOnSelect, a drag's selection is copied as the button is let go.
+    send(b'\x1b[<0;1;%dM\x1b[<32;8;%dM\x1b[<0;8;%dm' % (row, row, row))
+    copied('Row 30')
+    # A click copies nothing, a double click the word; a triple click completed while that copy
+    # runs (the stand-in takes 0.4 s), the line, once it ended.
+    send(b'\x1b[<0;15;%dM\x1b[<0;15;%dm' % (row, row) * 3)
+    copied('Row 30 of the reply.')
+    assert open(copies).read() == 'Row 30\nreply\nRow 30 of the reply.\n', open(copies).read()
+    # The selection went once copied: a right click pastes, here from no clipboard.
+    send(b'\x1b[<2;5;5M\x1b[<2;5;5m')
+    on_screen('Paste failed: Cannot read clipboard text')
+    send(b'/settings\r')
+    on_screen('Settings  \u2191\u2193 move')
+    rows = select_row(read, shown, send, 'Copy on select', b'\x1b[B')
+    assert '\u203a ' + setting('Copy on select', 'on') in rows, rows
+    assert rows[-3:] == ['  Text selected with the mouse is copied as soon as it is',
+                         '  selected, ready to paste anywhere (Command+V on a Mac). A',
+                         '  right click or Ctrl+C copies a selection either way.'], rows
+    send(b'\r')
+    on_screen('\u203a ' + setting('Copy on select', 'off'))
+    send(b'\x1b')
+    rows = on_screen('Settings  \u2191\u2193 move', gone=True)
+    row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
+    # Switched off, a selection waits for Ctrl+C or a right click.
+    mark = len(output)
+    send(b'\x1b[<0;1;%dM\x1b[<32;8;%dM\x1b[<0;8;%dm' % (row, row, row))
+    until(b'\x1b[7mRow 30', mark)
+    read(.8)
+    assert open(copies).read().count('\n') == 3, open(copies).read()
+    send(b'\x1b[<2;5;5M\x1b[<2;5;5m')
+    end = time.monotonic() + 10
+    while open(copies).read().count('\n') < 4:
+        assert time.monotonic() < end, open(copies).read()
+        read(.05)
+    copied('Row 30')
+    send(b'\x15\x04')
+
+
 def fullscreen_paste_image(read, until, send, output):
     shown, on_screen = full_screen(columns=160)(read, output)
     on_screen('\u2500' * 20)
@@ -3970,6 +4016,21 @@ for variables, said in [({'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAY
         copied('Piped **reply**.')
     else:
         assert not os.path.exists(clipboard)
+slow_bin = os.path.join(work, 'slow-clipboard-bin')
+os.mkdir(slow_bin)
+# A wl-copy that takes 0.4 s and logs each copy, a line each.
+with open(os.path.join(slow_bin, 'wl-copy'), 'w') as script_file:
+    script_file.write('#!/bin/sh\ncat > "$CLIPBOARD.new"\nsleep .4\n{ cat "$CLIPBOARD.new"; echo; } >> "$CLIPBOARD.log"\n'
+                      'mv "$CLIPBOARD.new" "$CLIPBOARD"\n')
+os.chmod(os.path.join(slow_bin, 'wl-copy'), 0o755)
+for stale in [clipboard, clipboard + '.log']:
+    if os.path.exists(stale):
+        os.remove(stale)
+selecting = config_home('copy-on-select', '{"copyOnSelect": true}')
+run([], fullscreen_copy_on_select, serve_items([[message(rows_reply)]]), variables={
+    'PATH': slow_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
+    'CLIPBOARD': clipboard, 'XDG_CONFIG_HOME': selecting})
+assert json.load(open(settings_path(selecting))) == {'copyOnSelect': False}, open(settings_path(selecting)).read()
 pastes = os.path.join(work, 'pastes')
 # Stands in for the PowerShell kept for pastes and copies: checks it reads and writes the clipboard's
 # text through Windows Forms, answers each `text` line with the text's length and bytes, and counts
