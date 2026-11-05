@@ -3176,6 +3176,20 @@ def printed_package_stores(read, until, send, output):
     until(b'Peeked.', until(b'FAKE-package-file', until(b'FAKE-package-store')))
 
 
+def package_stores_kept_by_reload(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    # Broken, the package's file names no stores; those it named before stay hidden.
+    with open(os.path.join(package, 'models.json'), 'w') as file:
+        file.write('{')
+    send(b'/reload\r')
+    on_screen('Reloaded settings')
+    send(b'peek\r')
+    until(b'Peeked.', until(b'ran-42'))
+    assert b'FAKE-package' not in output, bytes(output)
+    send(b'\x04')
+
+
 def printed_question(read, until, send, output):
     # Without the full screen, a question's options are numbered and answered by a line, which shows.
     mark = until(b'  2. Beta \xe2\x80\x94 the second [recommended]\r\n', until(b'Choose an option'))
@@ -3464,6 +3478,9 @@ run(['-p', 'peek'], printed_hides_credentials, serve_items([[peek_package('call_
     variables=dict(in_fake_home, XDG_CONFIG_HOME=packaged))
 run(['-p', 'peek'], printed_package_stores, serve_items([[peek_package('call_1')], [message('Peeked.')]]),
     variables=in_fake_home)
+packaged_always = config_home('packaged-always', json.dumps({'commandSets': [package], 'hideCredentials': 'always'}))
+run([], package_stores_kept_by_reload, serve_items([[peek_package('call_1')], [message('Peeked.')]]),
+    variables=dict(in_fake_home, XDG_CONFIG_HOME=packaged_always))
 known = set(session_files())
 run(['-p', 'pick'], printed_question, serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {

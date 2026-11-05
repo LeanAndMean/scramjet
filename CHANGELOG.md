@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.13.1 — Stores stay hidden across /reload
+
+### Fixed
+
+- A package's credential stores stay hidden after `/reload`, or after a change in the settings menu, while its `models.json` cannot be read. Before, they showed to subagents and hidden turns until the file was fixed.
+
 ## 0.13.0 — Packages name their credential stores
 
 ### Added

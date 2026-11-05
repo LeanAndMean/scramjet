@@ -179,15 +179,19 @@ impl Providers {
             reading.document(&text, Path::new("."), "models");
         }
         self.models = reading.models;
-        // A file that failed to read may name stores again once fixed: they stay hidden.
-        if !reading.problems.is_empty() {
-            let kept = std::mem::take(&mut self.credential_files).into_iter();
-            reading.credential_files.extend(kept);
-        }
-        reading.credential_files.sort();
-        reading.credential_files.dedup();
-        self.credential_files = reading.credential_files;
+        let previous = std::mem::replace(&mut self.credential_files, reading.credential_files);
         self.problems = reading.problems;
+        self.keep_credential_files(previous);
+    }
+
+    /// Keeps `previous`, the stores named before, hidden while a file has problems: once fixed,
+    /// it may name them again.
+    pub(super) fn keep_credential_files(&mut self, previous: Vec<PathBuf>) {
+        if !self.problems.is_empty() {
+            self.credential_files.extend(previous);
+        }
+        self.credential_files.sort();
+        self.credential_files.dedup();
     }
 
     /// The files' `credentialFiles`, with `~` and relative paths resolved: what the agent's tools

@@ -495,6 +495,25 @@ fn what_the_model_takes_comes_from_its_provider_read_again_each_time() {
 }
 
 #[test]
+fn providers_read_again_from_a_broken_file_keep_hiding_the_stores_it_named() {
+    let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "kept-stores");
+    let file = scratch.0.join("models.json");
+    let write = |text: &str| std::fs::write(&file, text).unwrap();
+    let named = vec![scratch.0.join("store")];
+    write(r#"{"credentialFiles": ["store"]}"#);
+    agent.set_providers(Providers::read(vec![file.clone()]));
+    assert_eq!(agent.providers().credential_files(), named);
+    // As /reload reads them: anew.
+    write(r#"{"credentialFiles": "store"}"#);
+    agent.set_providers(Providers::read(vec![file.clone()]));
+    assert_eq!(agent.providers().problems().len(), 1);
+    assert_eq!(agent.providers().credential_files(), named);
+    write("{}");
+    agent.set_providers(Providers::read(vec![file.clone()]));
+    assert_eq!(agent.providers().credential_files(), [] as [PathBuf; 0]);
+}
+
+#[test]
 fn a_model_that_does_not_reason_is_asked_nothing_of_reasoning() {
     let (endpoint, server) = serve(vec![stream(&fixture::text_events(
         "plain",

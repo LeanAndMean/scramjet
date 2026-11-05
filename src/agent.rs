@@ -1295,8 +1295,10 @@ impl Agent {
         self.take_model_info()
     }
 
-    /// `/reload`'s: providers read from other files, as `load_model_info` takes them.
-    pub fn set_providers(&mut self, providers: Providers) {
+    /// `/reload`'s: providers read from other files, as `load_model_info` takes them, with the
+    /// stores named before kept hidden as `Providers::reload` keeps them.
+    pub fn set_providers(&mut self, mut providers: Providers) {
+        providers.keep_credential_files(self.config.providers.credential_files().to_vec());
         self.config.providers = providers;
         self.take_model_info();
     }
