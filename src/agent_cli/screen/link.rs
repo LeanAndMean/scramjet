@@ -10,6 +10,7 @@ use crate::agent_cli::record::Event;
 use crate::agent_cli::select::{Picked, Picker, Routed, Spot};
 use crate::agent_cli::settings::{Delivery, DoubleEscape, MarkdownReads, Settings};
 use crate::agent_cli::style::Style;
+use crate::agent_cli::theme::Watched;
 use scramjet_rs::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, CompactRead, Compaction,
     EffortCycle, Purpose, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
@@ -126,6 +127,10 @@ impl Link {
             markdown_reads: settings.markdown_reads,
             copy_on_select: settings.copy_on_select,
         });
+    }
+    /// The file of the theme in use, to read again when it changes; none for a built-in one.
+    pub(in crate::agent_cli) fn watch_theme(&self, watched: Option<Watched>) {
+        self.send(ToScreen::Theme(watched));
     }
     pub(in crate::agent_cli) fn models(&self, models: Vec<String>) {
         self.send(ToScreen::Models(models));

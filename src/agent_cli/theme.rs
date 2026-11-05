@@ -5,7 +5,9 @@
 
 use scramjet_rs::agent::{Problem, agent_directory};
 use serde_json::{Map, Value};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 macro_rules! tokens {
     ($($token:ident = $key:literal),* $(,)?) => {
@@ -184,21 +186,43 @@ pub(super) struct Themes {
     problems: Vec<Problem>,
 }
 
+/// The command line's themes: `--theme`'s files and directories, and `--no-themes`.
+#[derive(Clone, Debug, Default)]
+pub(super) struct ThemeOptions {
+    pub(super) paths: Vec<PathBuf>,
+    pub(super) no_themes: bool,
+}
+
+/// Where themes are looked for, which says how a path that holds none is told.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Place {
+    Directory,
+    /// In the settings' `themes`.
+    Listed,
+    /// Given with `--theme`.
+    Given,
+}
+
 impl Themes {
     /// The built-in themes, then, as Scramjet finds its own, the files in the `themes`
-    /// directory of Scramjet's agent directory and in the project's `.scramjet/themes`.
-    pub(super) fn discover(root: &Path) -> Self {
-        let mut directories: Vec<PathBuf> = agent_directory()
-            .map(|directory| directory.join("themes"))
-            .into_iter()
-            .collect();
-        directories.push(root.join(".scramjet/themes"));
-        Self::load(&directories)
+    /// directory of Scramjet's agent directory and in the project's `.scramjet/themes`, the
+    /// settings' `listed` files and directories, and those `options` give; with `--no-themes`,
+    /// only those it gives.
+    pub(super) fn discover(root: &Path, listed: &[PathBuf], options: &ThemeOptions) -> Self {
+        let mut places = Vec::new();
+        if !options.no_themes {
+            let user = agent_directory().map(|directory| directory.join("themes"));
+            places.extend(user.map(|directory| (directory, Place::Directory)));
+            places.push((root.join(".scramjet/themes"), Place::Directory));
+            places.extend(listed.iter().map(|path| (path.clone(), Place::Listed)));
+        }
+        places.extend((options.paths.iter()).map(|path| (path.clone(), Place::Given)));
+        Self::load(&places)
     }
 
-    /// The built-in themes, then those in the `.json` files of `directories`; of two with one
-    /// name, the first is kept.
-    fn load(directories: &[PathBuf]) -> Self {
+    /// The built-in themes, then those in the `.json` files of `places`; of two with one name,
+    /// the first is kept.
+    fn load(places: &[(PathBuf, Place)]) -> Self {
         let built_in = BUILT_IN.map(|name| Listed {
             name: name.to_owned(),
             file: None,
@@ -209,23 +233,28 @@ impl Themes {
             problems: Vec::new(),
         };
         let mut loaded = std::collections::HashSet::new();
-        for directory in directories {
-            let entries = match std::fs::read_dir(directory) {
-                Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    themes.problems.push(Problem::new(format!(
-                        "{}: failed to read theme directory ({error})",
-                        directory.display()
-                    )));
-                    continue;
+        for (path, place) in places {
+            let files = if *place == Place::Directory || path.is_dir() {
+                match themes.files(path) {
+                    Some(files) => files,
+                    None => continue,
                 }
+            } else if is_json(path) {
+                vec![path.clone()]
+            } else {
+                let wrong = match path.exists() {
+                    true => "is not a json file",
+                    false => "does not exist",
+                };
+                let shown = path.display();
+                themes.problems.push(match place {
+                    Place::Given => {
+                        Problem::new(format!("theme path given with --theme {wrong}: {shown}"))
+                    }
+                    _ => Problem::in_settings(format!("theme path {wrong}: {shown}")),
+                });
+                continue;
             };
-            let mut files: Vec<PathBuf> = (entries.filter_map(Result::ok))
-                .map(|entry| entry.path())
-                .filter(|path| path.extension() == Some("json".as_ref()) && path.is_file())
-                .collect();
-            files.sort();
             for file in files {
                 // The same file reached again, through a link or another directory, is no collision.
                 if loaded.insert(file.canonicalize().unwrap_or_else(|_| file.clone())) {
@@ -234,6 +263,27 @@ impl Themes {
             }
         }
         themes
+    }
+
+    /// The `.json` files in `directory`, in order; none when it does not exist.
+    fn files(&mut self, directory: &Path) -> Option<Vec<PathBuf>> {
+        let entries = match std::fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => {
+                self.problems.push(Problem::new(format!(
+                    "{}: failed to read theme directory ({error})",
+                    directory.display()
+                )));
+                return None;
+            }
+        };
+        let mut files: Vec<PathBuf> = (entries.filter_map(Result::ok))
+            .map(|entry| entry.path())
+            .filter(|path| is_json(path))
+            .collect();
+        files.sort();
+        Some(files)
     }
 
     fn add(&mut self, file: &Path) {
@@ -269,7 +319,7 @@ impl Themes {
         }
     }
 
-    fn get(&self, name: &str) -> Option<&Listed> {
+    pub(super) fn get(&self, name: &str) -> Option<&Listed> {
         self.listed.iter().find(|listed| listed.name == name)
     }
 
@@ -288,6 +338,10 @@ impl Themes {
         });
         missing.into_iter().chain(self.problems.clone()).collect()
     }
+}
+
+fn is_json(path: &Path) -> bool {
+    path.extension() == Some("json".as_ref()) && path.is_file()
 }
 
 pub(super) const TERMINAL_COLORS: &str = "terminal-colors";
@@ -346,6 +400,88 @@ impl Theme {
             })
             .collect::<Result<_, _>>()?;
         Ok((name, Self { colors }))
+    }
+}
+
+/// How often the file of the theme in use is looked at, as the screen looks at the terminal's
+/// size, and how long it stays as it changed before it is read, so that a file still being
+/// written is not (Scramjet waits as long).
+const CHECK: Duration = Duration::from_millis(250);
+const SETTLE: Duration = Duration::from_millis(100);
+
+/// What tells a file's change: its modification time, length and inode, which a save that
+/// replaces the file changes.
+type Stamp = (Option<std::time::SystemTime>, u64, u64);
+
+fn stamp(file: &Path) -> Option<Stamp> {
+    let metadata = std::fs::metadata(file).ok()?;
+    Some((metadata.modified().ok(), metadata.len(), metadata.ino()))
+}
+
+/// The file of the theme in use, read again when it changes, as Scramjet's own are.
+#[derive(Debug)]
+pub(super) struct Watched {
+    pub(super) name: String,
+    file: PathBuf,
+    /// The file as it was read last.
+    read: Option<Stamp>,
+    /// The file as it was when it was first seen changed, and when.
+    changed: Option<(Stamp, Instant)>,
+    checked: Instant,
+    /// It failed to read the last time.
+    pub(super) failed: bool,
+}
+
+impl Watched {
+    /// The listed theme's file, if it has one.
+    pub(super) fn new(listed: &Listed) -> Option<Self> {
+        let file = listed.file.clone()?;
+        Some(Self {
+            name: listed.name.clone(),
+            read: stamp(&file),
+            file,
+            changed: None,
+            checked: Instant::now(),
+            failed: false,
+        })
+    }
+
+    /// How long until it is looked at next.
+    pub(super) fn due(&self, now: Instant) -> Duration {
+        let at = match self.changed {
+            Some((_, changed)) => changed + SETTLE,
+            None => self.checked + CHECK,
+        };
+        at.saturating_duration_since(now)
+    }
+
+    /// The theme read again once its file changed and then stayed as it was for `SETTLE`, or
+    /// why it could not be. A file gone, as while a save replaces it, changes nothing.
+    pub(super) fn check(&mut self, now: Instant) -> Option<Result<Theme, String>> {
+        if !self.due(now).is_zero() {
+            return None;
+        }
+        self.checked = now;
+        let Some(stamp) = stamp(&self.file) else {
+            self.changed = None;
+            return None;
+        };
+        if self.read == Some(stamp) {
+            self.changed = None;
+            return None;
+        }
+        match self.changed {
+            Some((changed, _)) if changed == stamp => self.changed = None,
+            _ => {
+                self.changed = Some((stamp, now));
+                return None;
+            }
+        }
+        self.read = Some(stamp);
+        let read = std::fs::read_to_string(&self.file).map_err(|error| error.to_string());
+        let theme = read.and_then(|text| Theme::parse(&text));
+        self.failed = theme.is_err();
+        Some(theme)
     }
 }
 
@@ -418,6 +554,7 @@ fn terminal_colors() -> Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scramjet_rs::agent::ProblemFile;
 
     #[test]
     fn the_built_in_themes_color_every_token() {
@@ -479,15 +616,8 @@ mod tests {
 
     #[test]
     fn themes_are_found_in_their_directories_the_first_of_a_name_kept() {
-        struct Scratch(PathBuf);
-        impl Drop for Scratch {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let root = std::env::temp_dir().join(format!("scramjet-rs-themes-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let scratch = Scratch(root.clone());
+        let scratch = Scratch::new("found");
+        let root = scratch.0.clone();
         let (user, project) = (root.join("user"), root.join("project"));
         for directory in [&user, &project, &user.join("folder.json")] {
             std::fs::create_dir_all(directory).unwrap();
@@ -521,7 +651,11 @@ mod tests {
         std::os::unix::fs::symlink(root.join("elsewhere/r.json"), project.join("river.json"))
             .unwrap();
 
-        let themes = Themes::load(&[user.clone(), root.join("missing"), project.clone()]);
+        let directories = [user.clone(), root.join("missing"), project.clone()];
+        let places: Vec<_> = (directories.into_iter())
+            .map(|directory| (directory, Place::Directory))
+            .collect();
+        let themes = Themes::load(&places);
         let names: Vec<&str> = themes.listed.iter().map(|l| l.name.as_str()).collect();
         assert_eq!(
             names,
@@ -579,6 +713,173 @@ mod tests {
         );
         assert_eq!(themes.problems("River").len(), 3);
         drop(scratch);
+    }
+
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("scramjet-rs-themes-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A theme whose accent is `accent` and whose other colors are the terminal's.
+    fn accented(name: &str, accent: &str) -> String {
+        let colors: Vec<String> = (KEYS.iter())
+            .map(|key| match *key {
+                "accent" => format!(r#""{key}": "{accent}""#),
+                _ => format!(r#""{key}": """#),
+            })
+            .collect();
+        format!(
+            r#"{{"name": "{name}", "colors": {{{}}}}}"#,
+            colors.join(", ")
+        )
+    }
+
+    #[test]
+    fn the_settings_and_the_command_line_add_files_and_directories_after_the_others() {
+        let scratch = Scratch::new("given");
+        let root = &scratch.0;
+        let (listed, given) = (root.join("listed"), root.join("given"));
+        for directory in [&listed, &given, &root.join(".scramjet/themes")] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let write = |path: PathBuf, text: &str| std::fs::write(path, text).unwrap();
+        write(
+            root.join(".scramjet/themes/a.json"),
+            &accented("Project", ""),
+        );
+        write(listed.join("b.json"), &accented("Listed", ""));
+        write(root.join("one.json"), &accented("File", ""));
+        write(root.join("notes.txt"), "");
+        write(given.join("c.json"), &accented("Given", "#010203"));
+        write(root.join("two.json"), &accented("Project", ""));
+        let settings = [
+            listed,
+            root.join("one.json"),
+            root.join("notes.txt"),
+            root.join("gone"),
+        ];
+        let options = ThemeOptions {
+            paths: vec![given, root.join("two.json"), root.join("missing.json")],
+            no_themes: false,
+        };
+        let names = |themes: &Themes| -> Vec<String> {
+            (themes.listed.iter().skip(BUILT_IN.len()))
+                .map(|listed| listed.name.clone())
+                .collect()
+        };
+        let problems = |themes: &Themes| -> Vec<(String, Option<ProblemFile>)> {
+            (themes.problems.iter())
+                .map(|problem| (problem.text.clone(), problem.file.clone()))
+                .collect()
+        };
+        let shown = |name: &str| root.join(name).display().to_string();
+
+        let themes = Themes::discover(root, &settings, &options);
+        assert_eq!(names(&themes), ["Project", "Listed", "File", "Given"]);
+        assert_eq!(
+            themes.theme("Given").color(Token::Accent),
+            Color::Rgb(1, 2, 3)
+        );
+        let skipped = format!(
+            "skipping theme {}: name Project is already loaded from {}",
+            shown("two.json"),
+            shown(".scramjet/themes/a.json")
+        );
+        assert_eq!(
+            problems(&themes),
+            [
+                (
+                    format!("theme path is not a json file: {}", shown("notes.txt")),
+                    Some(ProblemFile::Settings)
+                ),
+                (
+                    format!("theme path does not exist: {}", shown("gone")),
+                    Some(ProblemFile::Settings)
+                ),
+                (skipped, Some(ProblemFile::Path(root.join("two.json")))),
+                (
+                    format!(
+                        "theme path given with --theme does not exist: {}",
+                        shown("missing.json")
+                    ),
+                    None
+                ),
+            ]
+        );
+
+        // `--no-themes` leaves only those `--theme` gives.
+        let none = ThemeOptions {
+            no_themes: true,
+            ..options
+        };
+        let themes = Themes::discover(root, &settings, &none);
+        assert_eq!(names(&themes), ["Given", "Project"]);
+        assert_eq!(problems(&themes).len(), 1);
+    }
+
+    #[test]
+    fn the_theme_in_use_is_read_again_once_its_file_has_changed_and_settled() {
+        let scratch = Scratch::new("watched");
+        let file = scratch.0.join("ocean.json");
+        // Each write of its own length: two within one tick of the clock that dates files
+        // would otherwise look the same.
+        let write = |accent: &str, version: usize| {
+            let text = accented("Ocean", accent) + &" ".repeat(version);
+            std::fs::write(&file, text).unwrap();
+        };
+        write("#000001", 1);
+        let themes = Themes::load(&[(scratch.0.clone(), Place::Directory)]);
+        let mut watched = Watched::new(themes.get("Ocean").unwrap()).unwrap();
+        assert!(Watched::new(themes.get(TERMINAL_COLORS).unwrap()).is_none());
+        let start = Instant::now();
+        watched.checked = start;
+        let at = |millis| start + Duration::from_millis(millis);
+        assert_eq!(watched.due(start), CHECK);
+        assert!(watched.check(at(0)).is_none());
+        // Unchanged, and looked at no sooner than `CHECK` after the last time.
+        assert!(watched.check(at(250)).is_none());
+        write("#000002", 2);
+        assert!(watched.check(at(300)).is_none());
+        assert!(watched.check(at(500)).is_none());
+        assert_eq!(watched.due(at(500)), SETTLE);
+        // Changed again before it settled: it waits again.
+        write("#000003", 3);
+        assert!(watched.check(at(600)).is_none());
+        let theme = watched.check(at(700)).unwrap().unwrap();
+        assert_eq!(theme.color(Token::Accent), Color::Rgb(0, 0, 3));
+        assert!(!watched.failed);
+        assert!(watched.check(at(950)).is_none());
+
+        // A file that is no theme says why, once, and is read again when it changes.
+        write("#00000x", 4);
+        assert!(watched.check(at(1200)).is_none());
+        let error = watched.check(at(1300)).unwrap().unwrap_err();
+        assert_eq!(error, "accent: #00000x is not #rrggbb");
+        assert!(watched.failed);
+        assert!(watched.check(at(1550)).is_none());
+        // Gone, as while a save replaces it: nothing changes until it is back, nor is it looked
+        // at sooner meanwhile.
+        write("#000005", 5);
+        assert!(watched.check(at(1800)).is_none());
+        std::fs::remove_file(&file).unwrap();
+        assert!(watched.check(at(1900)).is_none());
+        assert_eq!(watched.due(at(1900)), CHECK);
+        write("#000006", 6);
+        assert!(watched.check(at(2150)).is_none());
+        let theme = watched.check(at(2250)).unwrap().unwrap();
+        assert_eq!(theme.color(Token::Accent), Color::Rgb(0, 0, 6));
+        assert!(!watched.failed);
     }
 
     #[test]

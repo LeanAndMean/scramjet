@@ -5,7 +5,6 @@
 use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal::{self, Terminal};
 use super::text::clip;
-use super::theme::Themes;
 use super::{clipboard, completion, export, keymap, style};
 use scramjet_rs::agent::{Agent, AgentError};
 use std::{
@@ -273,8 +272,8 @@ impl Interactive {
     pub(super) fn reload(&mut self) {
         self.save_hide_thinking();
         self.settings.reload();
-        self.themes = Themes::discover(self.agent.root());
-        style::set(&self.themes.theme(&self.settings.theme));
+        self.discover_themes();
+        self.use_theme();
         self.keybindings = keymap::load(self.settings.path());
         let settings = &self.settings;
         (self.hide_thinking).store(settings.hide_thinking_block, Ordering::Relaxed);

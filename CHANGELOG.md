@@ -4,6 +4,17 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.9.0 — Themes show as you edit them
+
+### Added
+
+- The theme in use is read again each time its file is saved, and everything shows in it at once, as in Scramjet. A save that is no theme says why above the prompt, and the colors stay as they were until the file is mended.
+- The `themes` setting and `--theme PATH` (repeatable) add theme files, or directories of them, to those `/settings` offers, as in Scramjet; `--no-themes` leaves only the built-in themes and those `--theme` names.
+
+### Changed
+
+- `/settings`' list of themes reads their files as it opens, so a theme file added meanwhile is offered without `/reload`.
+
 ## 0.8.1 — /hotkeys keeps your search
 
 ### Fixed

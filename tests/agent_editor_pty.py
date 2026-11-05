@@ -2044,6 +2044,62 @@ def user_theme(ocean):
         since = len(output)
         send(b'/reload\r')
         until(b'\x1b[38;2;30;20;10mls\x1b[0m', since)
+        # Changed again, it shows without /reload, as Scramjet reads its own again.
+        theme['colors']['mdCode'] = '#28323c'
+        since = len(output)
+        with open(ocean, 'w') as file:
+            json.dump(theme, file)
+        until(b'\x1b[38;2;40;50;60mls\x1b[0m', since)
+        # Saved as no theme, it says why and keeps its colors; mended, it shows.
+        with open(ocean, 'w') as file:
+            file.write('{"name": "Ocean"}')
+        on_screen('Error: theme Ocean: it has no colors; its colors stay as they were')
+        assert b'\x1b[38;2;40;50;60mls\x1b[0m' in output[since:], bytes(output[-2000:])
+        theme['colors']['mdCode'] = '#323c46'
+        since = len(output)
+        with open(ocean, 'w') as file:
+            json.dump(theme, file)
+        until(b'\x1b[38;2;50;60;70mls\x1b[0m', since)
+        on_screen('Theme Ocean read again')
+        # The list offers it as it is now.
+        send(b'/settings\r')
+        on_screen('Settings  \u2191\u2193 move')
+        select_row(read, shown, send, 'Theme', b'\x1b[B')
+        send(b'\r')
+        rows = on_screen('\u203a Ocean \u2713')
+        assert rows[-1] == '  From ' + ocean + '.', rows
+        # Chosen again, it keeps its colors, not those /reload read.
+        since = len(output)
+        send(b'\r')
+        read(.5)
+        assert b'38;2;30;20;10m' not in output[since:], bytes(output[-2000:])
+        send(b'\x1b')
+        on_screen('\u203a ' + setting('Theme', 'Ocean'))
+        send(b'\x1b')
+        on_screen('Settings  \u2191\u2193 move', gone=True)
+        send(b'\x04')
+    return script
+
+
+def given_themes(given):
+    def script(read, until, send, output):
+        shown, on_screen = full_screen(columns=120)(read, output)
+        on_screen('\u2500' * 20)
+        send(b'/settings\r')
+        on_screen('Settings  \u2191\u2193 move')
+        select_row(read, shown, send, 'Theme', b'\x1b[B')
+        send(b'\r')
+        rows = on_screen('Theme  \u2191\u2193 move \u00b7 Enter use \u00b7 Esc back')
+        title = next(at for at, row in enumerate(rows) if row.startswith('Theme  '))
+        names = [row[2:].strip() for row in rows[title + 1:title + 5]]
+        assert names == ['terminal-colors \u2713', 'scramjet-dark', 'pi-light', 'Given'], rows
+        assert 'Ocean' not in '\n'.join(rows), rows
+        rows = select_row(read, shown, send, 'Given', b'\x1b[B')
+        assert rows[-1] == '  From ' + given + '.', rows
+        send(b'\x1b')
+        on_screen('\u203a ' + setting('Theme', 'terminal-colors'))
+        send(b'\x1b')
+        on_screen('Settings  \u2191\u2193 move', gone=True)
         send(b'\x04')
     return script
 
@@ -2486,6 +2542,13 @@ run([], user_theme(ocean), serve_replies([(['Run `ls` now.'], 'Run `ls` now.')])
     variables={'XDG_CONFIG_HOME': user_theme_home, 'COLORTERM': 'truecolor', 'SCRAMJET_CODING_AGENT_DIR': themes_agent},
     columns=120)
 assert json.load(open(settings_path(user_theme_home))) == {'theme': 'Ocean'}
+# Themes from --theme, without those found elsewhere (--no-themes), the settings' themes included.
+given_theme = os.path.join(work, 'given.json')
+with open(given_theme, 'w') as file:
+    json.dump(dict(theme, name='Given'), file)
+listed_home = config_home('listed-themes', json.dumps({'themes': [os.path.join(themes_agent, 'themes')]}))
+run(['--no-themes', '--theme', given_theme], given_themes(given_theme),
+    variables={'XDG_CONFIG_HOME': listed_home, 'SCRAMJET_CODING_AGENT_DIR': themes_agent}, columns=120)
 run([], missing_theme, variables={'XDG_CONFIG_HOME': config_home('missing-theme', '{"theme": "gone"}')}, columns=120)
 forking_home = config_home('forking', '{"doubleEscapeAction": "fork", "branchSummary": {"skipPrompt": true}}')
 run([], double_escape_forks, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]),

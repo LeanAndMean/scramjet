@@ -279,6 +279,8 @@ pub(super) struct Settings {
     pub(super) command_sets: Vec<PathBuf>,
     /// `skills`: skill files and directories besides those found by default, as `commandSets`'.
     pub(super) skills: Vec<PathBuf>,
+    /// `themes`: theme files and directories besides those found by default, as `skills`.
+    pub(super) themes: Vec<PathBuf>,
     /// `enabledModels`: the patterns of the models Ctrl+P cycles through (`scope::resolve`);
     /// empty: all.
     pub(super) enabled_models: Vec<String>,
@@ -349,6 +351,7 @@ impl Settings {
             follow_up_mode: Delivery::OneAtATime,
             command_sets: Vec::new(),
             skills: Vec::new(),
+            themes: Vec::new(),
             enabled_models: Vec::new(),
             warnings: Vec::new(),
         }
@@ -481,6 +484,14 @@ impl Settings {
             }
             Err(()) => self.warnings.push(format!(
                 "{path}: skills must be a list of files and directories; ignored"
+            )),
+        }
+        match paths(object, "themes") {
+            Ok(entries) => {
+                self.themes = (entries.iter()).map(|entry| self.resolve(entry)).collect()
+            }
+            Err(()) => self.warnings.push(format!(
+                "{path}: themes must be a list of files and directories; ignored"
             )),
         }
         match paths(object, "enabledModels") {
@@ -1062,11 +1073,11 @@ mod tests {
     }
 
     #[test]
-    fn skills_are_paths_from_home_or_the_settings_directory() {
+    fn skills_and_themes_are_paths_from_home_or_the_settings_directory() {
         let scratch = Scratch::new("skills");
         let settings = settings_with(
             &scratch,
-            r#"{"skills": ["~/.claude/skills", "~", "own", "/abs/one.md"]}"#,
+            r#"{"skills": ["~/.claude/skills", "~", "own", "/abs/one.md"], "themes": ["mine.json"]}"#,
         );
         let home = std::env::home_dir().unwrap();
         assert_eq!(
@@ -1078,15 +1089,17 @@ mod tests {
                 PathBuf::from("/abs/one.md"),
             ]
         );
+        assert_eq!(settings.themes, [scratch.0.join("mine.json")]);
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
-        let wrong = settings_with(&scratch, r#"{"skills": "~/.claude/skills"}"#);
-        assert!(wrong.skills.is_empty());
+        let wrong = settings_with(&scratch, r#"{"skills": "~/.claude/skills", "themes": {}}"#);
+        assert!(wrong.skills.is_empty() && wrong.themes.is_empty());
         let path = shown(&scratch.0.join("settings.json"));
         assert_eq!(
             wrong.warnings,
-            [format!(
-                "{path}: skills must be a list of files and directories; ignored"
-            )]
+            [
+                format!("{path}: skills must be a list of files and directories; ignored"),
+                format!("{path}: themes must be a list of files and directories; ignored"),
+            ]
         );
     }
 

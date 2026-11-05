@@ -106,7 +106,14 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     };
     let mut settings = Settings::load();
-    let themes = theme::Themes::discover(&root);
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let theme_options = theme::ThemeOptions {
+        paths: (options.themes.iter())
+            .map(|path| given_path(path, &cwd))
+            .collect(),
+        no_themes: options.no_themes,
+    };
+    let themes = theme::Themes::discover(&root, &settings.themes, &theme_options);
     style::set(&themes.theme(&settings.theme));
     let (patterns, source) = match options.models.take() {
         Some(patterns) => (patterns, "--models"),
@@ -119,6 +126,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let mut ui = Terminal::new(hide_thinking.clone(), true);
     ui.markdown_reads = settings.markdown_reads;
     if !print_only {
+        let themes = (themes, theme_options);
         let mut interactive =
             interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings, themes)?;
         interactive.scope = patterns;

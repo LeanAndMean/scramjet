@@ -17,7 +17,8 @@ use super::selection::Line;
 use super::settings::MarkdownReads;
 use super::slash::Builtin;
 use super::terminal::next_spin;
-use super::{external, job};
+use super::theme::Watched;
+use super::{external, job, style};
 use scramjet_rs::agent::{self, EffortCycle, Shell, Tokens};
 use std::{
     io::{self, PipeReader, PipeWriter, Write},
@@ -92,6 +93,8 @@ enum ToScreen {
         markdown_reads: MarkdownReads,
         copy_on_select: bool,
     },
+    /// The file of the theme in use, read again as it changes.
+    Theme(Option<Watched>),
     /// The endpoint's models, which complete `/model`'s argument.
     Models(Vec<String>),
     /// What the footer shows of the session now.
@@ -269,6 +272,7 @@ struct App {
     /// them, or the prompt does.
     held_keys: Vec<(Key, bool)>,
     footer: Footer,
+    theme: Option<Watched>,
     /// The first line shown, while the user has scrolled away from the end.
     top: Option<Place>,
     /// Tool results are shown whole (Ctrl+O).
@@ -322,6 +326,7 @@ impl App {
             activity: None,
             dialog: None,
             held_keys: Vec::new(),
+            theme: None,
             top: None,
             whole: false,
             markdown_reads: MarkdownReads::Rendered,
@@ -404,6 +409,7 @@ impl App {
             self.copied()?;
             self.pasted();
             self.footer.check_branch();
+            self.check_theme();
             if self
                 .edge
                 .as_ref()
@@ -419,6 +425,9 @@ impl App {
             };
             if let Some(edge) = &self.edge {
                 wait = wait.min(EDGE.saturating_sub(edge.scrolled.elapsed()));
+            }
+            if let Some(theme) = &self.theme {
+                wait = wait.min(theme.due(Instant::now()));
             }
             if self.copying.is_some() || self.pasting.is_some() {
                 wait = wait.min(FRAME);
@@ -540,6 +549,7 @@ impl App {
                 self.markdown_reads = markdown_reads;
                 self.copy_on_select = copy_on_select;
             }
+            ToScreen::Theme(watched) => self.theme = watched,
             ToScreen::Models(models) => self.editor.set_models(models),
             ToScreen::Footer(shown) => self.footer.show(shown),
             ToScreen::Switched(shown, efforts) => {
@@ -584,6 +594,30 @@ impl App {
             }
             ToScreen::Terminal(_) | ToScreen::Edit(..) | ToScreen::Quit => {}
         }
+    }
+
+    /// Shows everything in the theme in use as its file is now, once it changed. A file that is
+    /// no theme leaves the colors as they were, as in Scramjet, and the note says why.
+    fn check_theme(&mut self) {
+        let Some(watched) = &mut self.theme else {
+            return;
+        };
+        let failed = watched.failed;
+        let note = match watched.check(Instant::now()) {
+            None => return,
+            Some(Ok(theme)) => {
+                style::set(&theme);
+                match failed {
+                    true => Note::Info(format!("Theme {} read again", watched.name)),
+                    false => return,
+                }
+            }
+            Some(Err(error)) => Note::Error(format!(
+                "Error: theme {}: {error}; its colors stay as they were",
+                watched.name
+            )),
+        };
+        self.draft.set_note(note);
     }
 
     /// Follows what the agent does for the status line.

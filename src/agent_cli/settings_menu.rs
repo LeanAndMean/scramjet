@@ -222,6 +222,8 @@ impl Interactive {
     /// The themes; Enter shows everything in one at once and keeps the list open to try the
     /// next, and the one chosen last stays.
     fn choose_theme(&mut self) {
+        // As the files are now, the one in use read again as it changed included.
+        self.discover_themes();
         let mut at = None;
         loop {
             let Some(screen) = &self.screen else {
@@ -242,9 +244,10 @@ impl Interactive {
                 return;
             };
             at = Some(index);
-            style::set(&listed[index].theme);
             let name = listed[index].name.clone();
-            if let Err(error) = self.settings.set_theme(&name) {
+            let saved = self.settings.set_theme(&name);
+            self.use_theme();
+            if let Err(error) = saved {
                 self.say(&format!("Error: settings not saved: {error}"));
             }
         }

@@ -7,7 +7,7 @@ use super::select::Routed;
 use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
-use super::theme::Themes;
+use super::theme::{ThemeOptions, Themes, Watched};
 use super::{editor, footer, installed, keymap, scope, select, settings, style};
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Problem,
@@ -38,8 +38,9 @@ pub(super) struct Interactive {
     pub(super) cancel: Arc<AtomicBool>,
     pub(super) hide_thinking: Arc<AtomicBool>,
     pub(super) settings: Settings,
-    /// The themes `/settings` offers, found at start and by `/reload`.
+    /// The themes `/settings` offers, found at start, by `/reload` and as its list opens.
     pub(super) themes: Themes,
+    pub(super) theme_options: ThemeOptions,
     /// What is wrong in the keybindings file, read at start and by `/reload` (`keymap::load`).
     pub(super) keybindings: Vec<Problem>,
     /// The patterns of the models Ctrl+P cycles through (`scope::resolve`); empty: all.
@@ -84,7 +85,7 @@ impl Interactive {
         cancel: Arc<AtomicBool>,
         hide_thinking: Arc<AtomicBool>,
         settings: Settings,
-        themes: Themes,
+        (themes, theme_options): (Themes, ThemeOptions),
     ) -> Result<Self, String> {
         let keybindings = keymap::load(settings.path());
         let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
@@ -111,7 +112,7 @@ impl Interactive {
             }
             false => None,
         };
-        Ok(Self {
+        let interactive = Self {
             agent,
             ui,
             screen,
@@ -120,10 +121,29 @@ impl Interactive {
             hide_thinking,
             settings,
             themes,
+            theme_options,
             keybindings,
             scope: Vec::new(),
             in_turn: false,
-        })
+        };
+        interactive.use_theme();
+        Ok(interactive)
+    }
+
+    /// The themes found now, with the settings' and the command line's.
+    pub(super) fn discover_themes(&mut self) {
+        let (root, listed) = (self.agent.root(), &self.settings.themes);
+        self.themes = Themes::discover(root, listed, &self.theme_options);
+    }
+
+    /// Shows everything in the theme the settings name, and has the screen read its file again
+    /// when it changes.
+    pub(super) fn use_theme(&self) {
+        let name = &self.settings.theme;
+        style::set(&self.themes.theme(name));
+        if let Some(screen) = &self.screen {
+            (screen.link).watch_theme(self.themes.get(name).and_then(Watched::new));
+        }
     }
 
     /// Reads and runs prompts until the user quits or the input ends; with `resume`, after
