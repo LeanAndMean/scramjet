@@ -11,14 +11,14 @@ use super::terminal::{Terminal, usage_line};
 use super::theme::{ThemeOptions, Themes, Watched};
 use super::{editor, footer, installed, keymap, scope, select, settings, style};
 use scramjet_rs::agent::{
-    Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Problem,
-    Source, Step, Suggested,
+    Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Listing, Next,
+    Problem, Source, Step, Suggested,
 };
 use std::{
     io::{BufRead, IsTerminal},
     path::Path,
     sync::{
-        Arc,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -49,6 +49,9 @@ pub(super) struct Interactive {
     pub(super) scope: Vec<String>,
     /// A turn waits for the built-in commands typed during it (`typed_during_turn`).
     pub(super) in_turn: bool,
+    /// The providers that list their models themselves, as the session last read them, for
+    /// those lists to be kept current (`login::keep_lists_current`).
+    pub(super) listings: Arc<Mutex<Vec<Listing>>>,
 }
 
 /// How a prompt came to run.
@@ -91,6 +94,7 @@ impl Interactive {
     ) -> Result<Self, String> {
         let keybindings = keymap::load(settings.path());
         let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+        let listings = Arc::new(Mutex::new(agent.providers().listings().to_vec()));
         let screen = match terminal {
             true => {
                 let editor = editor::Editor::new(
@@ -111,7 +115,7 @@ impl Interactive {
                 let screen =
                     started.map_err(|error| format!("cannot show the full screen: {error}"))?;
                 if let Ok(relisting) = screen.relisting() {
-                    super::login::keep_lists_current(relisting);
+                    super::login::keep_lists_current(relisting, listings.clone());
                 }
                 Some(screen)
             }
@@ -130,6 +134,7 @@ impl Interactive {
             keybindings,
             scope: Vec::new(),
             in_turn: false,
+            listings,
         };
         interactive.use_theme();
         Ok(interactive)
@@ -260,6 +265,8 @@ impl Interactive {
             }
             loop {
                 screen.footer(footer::Shown::of(&self.agent));
+                let listings = self.agent.providers().listings().to_vec();
+                *self.listings.lock().unwrap_or_else(PoisonError::into_inner) = listings;
                 match screen.input() {
                     screen::Input::Prompt(prompt) => return Ok(Read::Prompt(prompt)),
                     screen::Input::DoubleEscape => return Ok(Read::DoubleEscape),

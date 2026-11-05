@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.25.0 — Providers that list their own models
+
+### Added
+
+- A `models.json` provider that lists no `models` offers those its server lists (`GET {baseUrl}/models`, or `/v1/models` under `anthropic-messages`), so a local vLLM or Ollama server, OpenRouter or Anthropic needs only its `baseUrl`, `api` and key. What the list says of each model is taken: Anthropic's window, output, effort levels and images; OpenRouter's limits, reasoning, images and prices, leaving out the models that take no tools; Mistral's, Groq's and vLLM's windows. Scramjet's `modelOverrides` add what a list does not say. The list is saved, read again in the background while the full screen is open once 15 minutes old, and asked for again when `/login` saves the provider's key, which then says how many models it offers.
+
 ## 0.24.0 — GitHub Copilot is told it is scramjet-rs
 
 ### Changed

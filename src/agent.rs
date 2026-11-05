@@ -16,6 +16,7 @@ mod delegate;
 mod forge;
 mod image;
 mod instructions;
+mod listed;
 pub mod login;
 mod messages;
 mod pricing;
@@ -46,6 +47,7 @@ pub use client::StreamProgress;
 pub use commands::{Command, Commands, Origin, Set, Sets, sets_in};
 pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
+pub use listed::Listing;
 pub use problem::{Problem, ProblemFile};
 pub use providers::{KeyFrom, Providers};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
@@ -1266,6 +1268,11 @@ impl Agent {
     /// The providers, as last read.
     pub fn providers(&self) -> &Providers {
         &self.config.providers
+    }
+
+    /// Forgets the list `provider` gave itself, so that it is asked again (`Providers::forget_list`).
+    pub fn forget_list(&mut self, provider: &str) {
+        self.config.providers.forget_list(provider);
     }
 
     /// Why a request for the current model cannot be sent: no provider offers it.

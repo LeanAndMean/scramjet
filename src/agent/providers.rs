@@ -7,16 +7,19 @@
 //! A provider logged in to with `/login` (`login::LOGINS`) adds the models its login listed,
 //! unless a file names it; a provider of that name without an `apiKey` takes the login's key.
 //! An API key `/login` saved for a provider the files name is sent in place of its `apiKey`.
+//! A provider whose entry lists no models offers those its server lists (`listed`).
 //! Providers may offer the same id: a model is named by its reference, `provider/id`.
 
 use super::ModelOption;
 use super::client::Protocol;
 use super::completions::Compat;
+use super::listed::{self, Listing};
 use super::login::Logins;
 use super::pricing::Prices;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::{
+    collections::HashMap,
     io::Read,
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
@@ -200,6 +203,11 @@ pub struct Providers {
     problems: Vec<String>,
     /// Where `/login` saves what it does.
     logins: Option<Logins>,
+    /// The providers that list their models themselves.
+    listings: Vec<Listing>,
+    /// The lists asked for since these providers were made, by `Listing::key`, for those not
+    /// saved: one that could not be read is not asked again at each reading.
+    tried: HashMap<String, Result<Vec<Value>, String>>,
 }
 
 impl Providers {
@@ -242,6 +250,7 @@ impl Providers {
     pub(super) fn reload(&mut self) {
         let mut reading = Reading {
             logins: self.logins.clone(),
+            tried: std::mem::take(&mut self.tried),
             ..Reading::default()
         };
         if let Some(logins) = &self.logins {
@@ -261,6 +270,8 @@ impl Providers {
         reading.logins();
         self.models = reading.models;
         self.keyed = reading.keyed;
+        self.listings = reading.listings;
+        self.tried = reading.tried;
         let previous = std::mem::replace(&mut self.credential_files, reading.credential_files);
         self.problems = reading.problems;
         self.keep_credential_files(previous);
@@ -294,6 +305,20 @@ impl Providers {
 
     pub(super) fn models(&self) -> &[Model] {
         &self.models
+    }
+
+    /// The providers that list their models themselves, as their entries list none.
+    pub fn listings(&self) -> &[Listing] {
+        &self.listings
+    }
+
+    /// Forgets the list `provider` gave, so that it is asked again when the providers are next
+    /// read, as after its key changed.
+    pub fn forget_list(&mut self, provider: &str) {
+        for listing in self.listings.iter().filter(|l| l.provider() == provider) {
+            listing.forget();
+            self.tried.remove(&listing.key());
+        }
     }
 
     /// The providers the files name, but those `/login` logs in to, with where their key comes
@@ -394,6 +419,9 @@ struct Reading {
     /// The providers the files named.
     named: Vec<String>,
     keyed: Vec<(String, KeyFrom)>,
+    listings: Vec<Listing>,
+    /// `Providers::tried`.
+    tried: HashMap<String, Result<Vec<Value>, String>>,
 }
 
 impl Reading {
@@ -505,15 +533,14 @@ impl Reading {
             return self.problems.push(format!("{what}: not a JSON object"));
         };
         let models = match entry.get("models") {
-            Some(Value::Array(models)) if !models.is_empty() => models,
-            Some(Value::Array(_)) | None => {
-                return self.problems.push(format!(
-                    "{what}: lists no models (scramjet-rs has no built-in ones)"
-                ));
-            }
+            Some(Value::Array(models)) if !models.is_empty() => models.clone(),
+            Some(Value::Array(_)) | None => match self.listed(name, entry, what) {
+                Some(models) => models,
+                None => return,
+            },
             Some(_) => return self.problems.push(format!("{what}: models must be a list")),
         };
-        for model in models {
+        for model in &models {
             match self.model(name, entry, model) {
                 Ok(model)
                     if (self.models.iter())
@@ -530,37 +557,116 @@ impl Reading {
         }
     }
 
-    /// A model entry of `provider`, whose fields it falls back to.
-    fn model(
+    /// The models provider `name`'s `entry`, which lists none, lists itself, as its server listed
+    /// them when last asked, else now; `None`, with the problem said, when it cannot.
+    fn listed(&mut self, name: &str, entry: &Map<String, Value>, what: &str) -> Option<Vec<Value>> {
+        let logs_in = super::login::LOGINS.iter().any(|(login, _)| *login == name);
+        let api = entry.get("api").and_then(Value::as_str);
+        let lists = matches!(
+            api,
+            Some("openai-responses" | "openai-completions" | "anthropic-messages")
+        );
+        if logs_in {
+            self.problems.push(format!(
+                "{what}: lists no models; /login's models for it are offered only when no file \
+                 names it"
+            ));
+            return None;
+        }
+        if !lists || !entry.contains_key("baseUrl") {
+            self.problems.push(format!(
+                "{what}: lists no models, and has no baseUrl and api (openai-responses, \
+                 anthropic-messages or openai-completions) to ask its server for them"
+            ));
+            return None;
+        }
+        let overrides = match entry.get("modelOverrides") {
+            None => Map::new(),
+            Some(Value::Object(overrides)) => overrides.clone(),
+            Some(_) => {
+                let problem = format!("{what}: modelOverrides must be an object of model ids");
+                self.problems.push(problem);
+                Map::new()
+            }
+        };
+        let field = |key: &str| entry.get(key);
+        let headed = [entry.get("headers"), None];
+        let (protocol, _, route) = match self.route(name, field, headed, "its model list") {
+            Ok(route) => route,
+            Err(problem) => {
+                self.problems.push(format!("{what}: {problem}"));
+                return None;
+            }
+        };
+        let messages = protocol == Protocol::Messages;
+        let file = self.logins.as_ref().map(|logins| logins.provided(name));
+        let mut listing = Listing::new(&route, messages, file);
+        let read = match listing.saved() {
+            Some(models) => Ok(models),
+            None => {
+                let key = listing.key();
+                // A failure waits for /reload, a new key or the background to ask again.
+                let read = (self.tried.get(&key).cloned()).unwrap_or_else(|| listing.read_now());
+                self.tried.insert(key, read.clone());
+                read
+            }
+        };
+        let models: Result<Vec<Value>, String> = read
+            .map(|read| {
+                let models = read
+                    .iter()
+                    .filter_map(|model| listed::model(model, messages));
+                let models = models.map(|model| listed::overridden(model, &overrides));
+                models.collect()
+            })
+            .map_err(|error| format!("asking its server for them failed: {error}"));
+        let models = models.and_then(|models| match models.is_empty() {
+            true => Err("its server lists none that take tools".to_owned()),
+            false => Ok(models),
+        });
+        listing.offered = models.as_ref().map(Vec::len).map_err(String::clone);
+        self.listings.push(listing);
+        match models {
+            Ok(models) => Some(models),
+            Err(problem) => {
+                self.problems
+                    .push(format!("{what}: lists no models, and {problem}"));
+                None
+            }
+        }
+    }
+
+    /// Where requests of a model whose fields are `field`'s go, of provider `name`, with the
+    /// `headers` of its provider and its own: their protocol, the base URL as written, and the
+    /// route; problems name `subject`.
+    fn route<'v>(
         &self,
         name: &str,
-        provider: &Map<String, Value>,
-        entry: &Value,
-    ) -> Result<Model, String> {
-        let id = entry["id"].as_str().filter(|id| !id.trim().is_empty());
-        let id = id.ok_or("a model has no id")?.to_owned();
-        let field = |key: &str| entry.get(key).or_else(|| provider.get(key));
+        field: impl Fn(&str) -> Option<&'v Value>,
+        headed: [Option<&'v Value>; 2],
+        subject: &str,
+    ) -> Result<(Protocol, &'v str, Route), String> {
         let text = |key: &str| match field(key) {
             None => Ok(None),
             Some(Value::String(text)) => Ok(Some(text.as_str())),
-            Some(_) => Err(format!("model {id}: {key} must be a string")),
+            Some(_) => Err(format!("{subject}: {key} must be a string")),
         };
         let protocol = match text("api")? {
             Some("openai-responses") => Protocol::Responses,
             Some("anthropic-messages") => Protocol::Messages,
             Some("openai-completions") => Protocol::Completions,
             Some("openai-codex-responses") => Protocol::Codex,
-            Some(api) => return Err(format!("model {id}: api {api} is not supported yet")),
-            None => return Err(format!("model {id}: no api")),
+            Some(api) => return Err(format!("{subject}: api {api} is not supported yet")),
+            None => return Err(format!("{subject}: no api")),
         };
-        let url = text("baseUrl")?.ok_or_else(|| format!("model {id}: no baseUrl"))?;
+        let url = text("baseUrl")?.ok_or_else(|| format!("{subject}: no baseUrl"))?;
         let BaseUrl {
             tls,
             host,
             port,
             authority,
             path,
-        } = base_url(url).map_err(|problem| format!("model {id}: baseUrl {problem}"))?;
+        } = base_url(url).map_err(|problem| format!("{subject}: baseUrl {problem}"))?;
         let mut headers = Vec::new();
         let logs_in = super::login::LOGINS.iter().any(|(login, _)| *login == name);
         // As Scramjet's, a key `/login` saved is sent in place of the entry's.
@@ -576,7 +682,7 @@ impl Reading {
             _ => None,
         };
         if let Some((key, what)) = key {
-            let key = resolve(key).map_err(|problem| format!("model {id}: {what} {problem}"))?;
+            let key = resolve(key).map_err(|problem| format!("{subject}: {what} {problem}"))?;
             if protocol == Protocol::Messages {
                 headers.push(("x-api-key".to_owned(), key.clone()));
             }
@@ -584,18 +690,15 @@ impl Reading {
                 headers.push(("authorization".to_owned(), format!("Bearer {key}")));
             }
         }
-        for given in [provider.get("headers"), entry.get("headers")]
-            .into_iter()
-            .flatten()
-        {
+        for given in headed.into_iter().flatten() {
             let given = given.as_object();
-            let given = given.ok_or_else(|| format!("model {id}: headers must be an object"))?;
+            let given = given.ok_or_else(|| format!("{subject}: headers must be an object"))?;
             for (header, value) in given {
                 let value = value.as_str().ok_or_else(|| {
-                    format!("model {id}: the header {header}'s value must be a string")
+                    format!("{subject}: the header {header}'s value must be a string")
                 })?;
                 let value = resolve(value)
-                    .map_err(|problem| format!("model {id}: the header {header} {problem}"))?;
+                    .map_err(|problem| format!("{subject}: the header {header} {problem}"))?;
                 let header = header.to_ascii_lowercase();
                 headers.retain(|(name, _)| *name != header);
                 headers.push((header, value));
@@ -606,10 +709,35 @@ impl Reading {
                 || hyper::header::HeaderValue::from_str(value).is_err()
             {
                 return Err(format!(
-                    "model {id}: the header {header} is not valid in HTTP"
+                    "{subject}: the header {header} is not valid in HTTP"
                 ));
             }
         }
+        let route = Route {
+            provider: name.to_owned(),
+            tls,
+            host,
+            port,
+            authority,
+            path,
+            headers,
+            login,
+        };
+        Ok((protocol, url, route))
+    }
+
+    /// A model entry of `provider`, whose fields it falls back to.
+    fn model(
+        &self,
+        name: &str,
+        provider: &Map<String, Value>,
+        entry: &Value,
+    ) -> Result<Model, String> {
+        let id = entry["id"].as_str().filter(|id| !id.trim().is_empty());
+        let id = id.ok_or("a model has no id")?.to_owned();
+        let field = |key: &str| entry.get(key).or_else(|| provider.get(key));
+        let headed = [provider.get("headers"), entry.get("headers")];
+        let (protocol, url, route) = self.route(name, field, headed, &format!("model {id}"))?;
         let compat = match protocol {
             Protocol::Completions => {
                 let given = [provider.get("compat"), entry.get("compat")];
@@ -640,16 +768,7 @@ impl Reading {
             images: input.is_some_and(|input| input.iter().any(|kind| kind == "image")),
             prices: Prices::of(&entry["cost"]),
             compat,
-            route: Some(Route {
-                provider: name.to_owned(),
-                tls,
-                host,
-                port,
-                authority,
-                path,
-                headers,
-                login,
-            }),
+            route: Some(route),
         };
         Ok(Model {
             id,
@@ -874,7 +993,7 @@ fn run(words: &[&str], directory: &Path) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::tests::ScratchDir;
+    use crate::agent::tests::{ScratchDir, serve_json};
     use serde_json::json;
 
     fn route(models: &Providers, id: &str) -> Route {
@@ -1014,7 +1133,9 @@ mod tests {
                  run yet",
                 "models: provider a: model bad: the header x-bad is not valid in HTTP",
                 "models: provider a: model m is listed already; not offered here",
-                "models: provider c: lists no models (scramjet-rs has no built-in ones)",
+                "models: provider c: lists no models, and has no baseUrl and api \
+                 (openai-responses, anthropic-messages or openai-completions) to ask its server \
+                 for them",
                 "models: providersCommand must be a program and its arguments, as a list of strings",
             ]
         );
@@ -1188,6 +1309,109 @@ mod tests {
                 .models()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_provider_that_lists_no_models_offers_those_its_server_lists() {
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-providers-listed-{}", std::process::id())),
+        );
+        let logins = Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let page = |ids: &[&str], more: bool| {
+            let models = ids.iter().map(|id| {
+                json!({"id": id, "display_name": id.to_uppercase(), "max_input_tokens": 200_000})
+            });
+            json!({"data": models.collect::<Vec<_>>(), "has_more": more, "last_id": ids.last()})
+        };
+        let (base, server) = serve_json(3, move |head, _| {
+            match head.split(' ').nth(1).unwrap_or_default() {
+                "/v1/models" => json!({"object": "list", "data": [
+                    {"id": "gpt-6", "object": "model", "owned_by": "openai"},
+                    {"id": "embedder", "supported_parameters": ["dimensions"]},
+                ]}),
+                "/anthropic/v1/models?limit=1000" => page(&["claude-a"], true),
+                "/anthropic/v1/models?limit=1000&after_id=claude-a" => page(&["claude-b"], false),
+                _ => json!({}),
+            }
+        });
+        let document = |openai: &str| {
+            json!({"providers": {
+                "openai": {"baseUrl": openai, "api": "openai-responses", "apiKey": "sk-test",
+                    "modelOverrides": {"gpt-6": {"reasoning": true, "contextWindow": 400_000}}},
+                "anthropic": {"baseUrl": format!("{base}/anthropic"), "api": "anthropic-messages",
+                    "apiKey": "ant-test"},
+            }})
+        };
+        let listed = document(&format!("{base}/v1"));
+        let providers = Providers::given_logged_in(listed.clone(), logins.clone());
+        assert_eq!(providers.problems(), [] as [String; 0]);
+        let references = |providers: &Providers| -> Vec<String> {
+            providers.models().iter().map(Model::reference).collect()
+        };
+        // The test's document has its keys sorted.
+        let offered = ["anthropic/claude-a", "anthropic/claude-b", "openai/gpt-6"];
+        assert_eq!(references(&providers), offered);
+        let gpt = &providers.find("openai/gpt-6").unwrap().info;
+        assert_eq!((gpt.reasoning, gpt.window), (true, Some(400_000)));
+        let headers = &route(&providers, "gpt-6").headers;
+        assert_eq!(
+            headers[0],
+            ("authorization".into(), "Bearer sk-test".into())
+        );
+        let claude = providers.find("claude-a").unwrap();
+        assert_eq!(
+            (claude.name.as_deref(), claude.info.window),
+            (Some("CLAUDE-A"), Some(200_000))
+        );
+        assert_eq!(claude.info.protocol, Protocol::Messages);
+        let counts: Vec<_> = providers.listings().iter().map(Listing::offered).collect();
+        assert_eq!(counts, [Ok(2), Ok(1)]);
+        // Each with its requests' key; Anthropic's in pages.
+        let requests = server.join().unwrap();
+        let heads: Vec<String> = requests
+            .iter()
+            .map(|(head, _)| head.to_lowercase())
+            .collect();
+        assert!(heads[1].contains("after_id=claude-a"));
+        assert!(heads[1].contains("x-api-key: ant-test\r\n"));
+        assert!(heads[1].contains("anthropic-version: 2023-06-01\r\n"));
+        assert!(
+            heads[2].starts_with("get /v1/models http/1.1\r\n"),
+            "{}",
+            heads[2]
+        );
+        assert!(heads[2].contains("authorization: bearer sk-test\r\n"));
+        assert!(heads[2].contains("accept: application/json\r\n"));
+        // Saved, the lists are not asked for again, though the server is gone.
+        assert!(logins.provided("openai").exists());
+        let again = Providers::given_logged_in(listed, logins.clone());
+        assert_eq!(
+            (references(&again), again.problems()),
+            (offered.map(str::to_owned).to_vec(), &[] as &[String])
+        );
+        // A list read from another URL is not its: it is asked for, and what failed is said, but
+        // not asked again until it is forgotten.
+        let (other, server) = serve_json(1, |_, _| json!({"error": "no"}));
+        let mut moved = Providers::given_logged_in(document(&other), logins.clone());
+        let failed = "models: provider openai: lists no models, and asking its server for them \
+                      failed: openai's model list has no data";
+        assert_eq!(moved.problems(), [failed]);
+        server.join().unwrap();
+        moved.reload();
+        assert_eq!(moved.problems(), [failed]);
+        moved.forget_list("openai");
+        moved.reload();
+        let problem = &moved.problems()[0];
+        assert!(problem.contains("cannot connect to 127.0.0.1"), "{problem}");
+        // A key saved, or logged out of, has what its provider lists asked for again.
+        let saved = logins.provided("anthropic");
+        assert!(saved.exists());
+        super::super::login::save_key(&logins.auth, "anthropic", "k").unwrap();
+        super::super::login::logout(&logins, "anthropic").unwrap();
+        assert!(!saved.exists());
     }
 
     #[test]

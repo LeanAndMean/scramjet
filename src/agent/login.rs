@@ -42,7 +42,8 @@ pub fn auth_file() -> Option<PathBuf> {
     config_directory().map(|directory| directory.join("auth.json"))
 }
 
-/// Where `/login` keeps what it saves: the credentials, and the models each login listed.
+/// Where `/login` keeps what it saves: the credentials, and the models each login listed; and,
+/// beside those lists, the models providers list themselves (`provided`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Logins {
     pub auth: PathBuf,
@@ -62,6 +63,15 @@ impl Logins {
     /// The models `provider`'s login listed.
     pub(super) fn listed(&self, provider: &str) -> PathBuf {
         self.lists.join(format!("{provider}.json"))
+    }
+
+    /// The models `provider`, a provider of the files whose entry lists none, lists itself: in
+    /// `models` beside `lists`, under a name its own cannot lead out of.
+    pub(super) fn provided(&self, provider: &str) -> PathBuf {
+        let name = super::listed::file_name(provider);
+        self.lists
+            .with_file_name("models")
+            .join(format!("{name}.json"))
     }
 }
 
@@ -117,10 +127,13 @@ pub fn save_key(path: &Path, provider: &str, key: &str) -> Result<(), String> {
 /// Removes `provider`'s credentials, and what its login listed; returns whether there were any.
 pub fn logout(logins: &Logins, provider: &str) -> Result<bool, String> {
     let removed = update::<_, String>(&logins.auth, |saved| Ok(saved.remove(provider).is_some()))?;
-    // Only logins list models; a key's provider is named by a models.json file, not a file name.
-    if LOGINS.iter().any(|(login, _)| *login == provider) {
-        let _ = std::fs::remove_file(logins.listed(provider));
+    // A login's provider is named by a file name; a key's, by a models.json file. What a key's
+    // provider listed is asked for again with the key it is left with.
+    match LOGINS.iter().any(|(login, _)| *login == provider) {
+        true => std::fs::remove_file(logins.listed(provider)),
+        false => std::fs::remove_file(logins.provided(provider)),
     }
+    .ok();
     Ok(removed)
 }
 

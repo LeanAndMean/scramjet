@@ -43,6 +43,8 @@ hanging = '127.0.0.1:%d' % silent.getsockname()[1]
 LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 # The models each scripted server offers, by its address (`provide`).
 catalogs = {}
+# More providers, by configuration directory, written as they are after the servers' (`provide`).
+more_providers = {}
 
 
 def model(id, levels=None, provider='test', **fields):
@@ -74,6 +76,7 @@ def provide(endpoint, config):
         messages = entry['api'] == 'anthropic-messages'
         entry.setdefault('baseUrl', 'http://%s%s' % (endpoint, '' if messages else '/v1'))
         providers.setdefault(entry.pop('provider'), {'models': []})['models'].append(entry)
+    providers.update(more_providers.get(config, {}))
     os.makedirs(os.path.join(config, 'scramjet-rs'), exist_ok=True)
     with open(os.path.join(config, 'scramjet-rs', 'models.json'), 'w') as file:
         json.dump({'providers': providers}, file)
@@ -1370,10 +1373,60 @@ def logins(read, until, send, output):
     assert not any('grok' in row for row in shown()), shown()
     send(b'\x1b')
     on_screen('Select model', gone=True)
+    # A provider whose entry lists no models offers those its server lists; refused without a
+    # key, it is asked again once one is saved.
+    assert len(listed_heads) == 1 and '\nauthorization:' not in listed_heads[0], listed_heads
+    send(b'/login\r')
+    on_screen('Log in to  ')
+    send(b'\x1b[B' * 3 + b'\r')
+    on_screen('API key for listed  Enter submit')
+    send(b'sk-listed\r')
+    on_screen('\u2713 Saved the API key for listed in')
+    words = lambda: ' '.join(' '.join(row.split()) for row in shown())
+    end = time.monotonic() + 10
+    while 'it offers 2 models (/model)' not in words():
+        assert time.monotonic() < end, shown()
+        read(.05)
+    assert listed_heads[-1].startswith('GET /v1/models HTTP/1.1\r\n'), listed_heads
+    assert '\r\nauthorization: Bearer sk-listed\r\n' in listed_heads[-1], listed_heads
+    send(b'/model\r')
+    rows = on_screen('    llama-chat')
+    at = rows.index('  listed')
+    assert rows[at:at + 3] == ['  listed', '    qwen-coder', '    llama-chat'], rows
+    send(b'\x1b')
+    on_screen('Select model', gone=True)
     send(b'\x04')
 
 
+def serve_listed_models(heads):
+    """A server whose model list, `GET /v1/models`, is given only to the key `sk-listed`; each
+    request's head is added to `heads`. Returns its address."""
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+
+    def answer():
+        while True:
+            connection, _ = listener.accept()
+            head = receive(connection).partition(b'\r\n\r\n')[0].decode()
+            heads.append(head)
+            if '\r\nauthorization: Bearer sk-listed\r\n' in head:
+                models = [{'id': 'qwen-coder', 'max_model_len': 131072}, {'id': 'llama-chat'}]
+                status, body = '200 OK', json.dumps({'object': 'list', 'data': models})
+            else:
+                status, body = '401 Unauthorized', json.dumps({'error': {'message': 'No key.'}})
+            connection.sendall(('HTTP/1.1 %s\r\ncontent-type: application/json\r\ncontent-length: %d\r\n'
+                                'connection: close\r\n\r\n%s' % (status, len(body), body)).encode())
+            connection.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    return '127.0.0.1:%d' % listener.getsockname()[1]
+
+
 login_home = config_home('login')
+listed_heads = []
+more_providers[login_home] = {'listed': {'baseUrl': 'http://%s/v1' % serve_listed_models(listed_heads),
+                                         'api': 'openai-completions'}}
 copilot_models = os.path.join(work, 'state', 'scramjet-rs', 'logins', 'github-copilot.json')
 # Never the desktop's browser or clipboard: stand-ins that keep what they were given.
 login_bin = os.path.join(work, 'login-bin')
