@@ -3,14 +3,16 @@
 //! (`sandbox::Hidden`). It is in Scramjet's format: an object of the providers logged in to,
 //! each `{"type": "oauth", "refresh", "access", "expires"}` (milliseconds since the epoch) with
 //! what else its login keeps. A process changes it holding a lock on `auth.json.lock`, so that
-//! two refreshing a token at once do not undo each other's, and replaces it whole. What a login
-//! lists that is not secret, its models, is kept apart, in the state directory.
+//! two refreshing a token at once do not undo each other's, and reads it holding the lock shared.
+//! It is written in place, as Scramjet writes its own: a sandbox hides it by mounting an empty
+//! file over it, and a file renamed over that path would show in every sandbox already running.
+//! What a login lists that is not secret, its models, is kept apart, in the state directory.
 
 use super::copilot;
 use serde_json::{Map, Value};
 use std::{
     io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -140,6 +142,22 @@ fn access_with(
     })
 }
 
+/// Makes the credentials file, with no logins, when there is none, as Scramjet does: a sandbox
+/// hides only the files that exist when it starts, and a tmux server started in one keeps it.
+pub(super) fn make(path: &Path) {
+    let directory = path.parent().unwrap_or(Path::new("."));
+    let made = std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(directory);
+    let file = (std::fs::OpenOptions::new().write(true).create_new(true))
+        .mode(0o600)
+        .open(path);
+    if let (Ok(()), Ok(mut file)) = (made, file) {
+        let _ = file.write_all(b"{}\n");
+    }
+}
+
 pub(super) fn now_ms() -> f64 {
     let since = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -147,13 +165,31 @@ pub(super) fn now_ms() -> f64 {
     since.as_millis() as f64
 }
 
-/// The saved credentials; none when the file does not exist.
+/// The saved credentials, read holding the lock shared, so that a change under way is not read
+/// half made; none when the file does not exist.
 pub(super) fn saved(path: &Path) -> Result<Map<String, Value>, String> {
+    // Without the lock, in a sandbox that cannot open it, the file is read anyway.
+    let lock = std::fs::File::open(lock_file(path)).ok();
+    if let Some(lock) = &lock {
+        let _ = rustix::fs::flock(lock, rustix::fs::FlockOperation::LockShared);
+    }
+    read(path)
+}
+
+fn lock_file(path: &Path) -> PathBuf {
+    path.with_file_name("auth.json.lock")
+}
+
+/// The credentials in `path`; none when it does not exist or is empty, as it reads in a sandbox.
+fn read(path: &Path) -> Result<Map<String, Value>, String> {
     let text = match std::fs::read(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
         Err(error) => return Err(format!("{}: {error}", path.display())),
     };
+    if text.trim_ascii().is_empty() {
+        return Ok(Map::new());
+    }
     match serde_json::from_slice(&text) {
         Ok(Value::Object(saved)) => Ok(saved),
         Ok(_) => Err(format!("{}: not a JSON object", path.display())),
@@ -178,32 +214,28 @@ fn update<T>(
         .create(true)
         .append(true)
         .mode(0o600))
-    .open(path.with_file_name("auth.json.lock"))
+    .open(lock_file(path))
     .map_err(failed)?;
     rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)
         .map_err(|error| failed(error.into()))?;
-    let mut saved = saved(path)?;
+    let mut saved = read(path)?;
     let before = saved.clone();
     let result = change(&mut saved)?;
     if saved != before {
         let mut text = serde_json::to_string_pretty(&Value::Object(saved)).unwrap_or_default();
         text.push('\n');
-        let written = path.with_file_name(format!(".auth.json.{}", std::process::id()));
         let write = || {
             let mut file = (std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
                 .truncate(true))
             .mode(0o600)
-            .open(&written)?;
+            .open(path)?;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
             file.write_all(text.as_bytes())?;
-            file.sync_all()?;
-            std::fs::rename(&written, path)
+            file.sync_all()
         };
-        if let Err(error) = write() {
-            let _ = std::fs::remove_file(&written);
-            return Err(failed(error));
-        }
+        write().map_err(failed)?;
     }
     Ok(result)
 }
@@ -244,7 +276,7 @@ mod tests {
             Value::Object(saved),
             json!({"github-copilot": {"type": "oauth", "access": "a"}})
         );
-        // Only the file and its lock are left: the file written is moved into place.
+        // Only the file and its lock are left: it is written in place.
         let mut names: Vec<String> = (std::fs::read_dir(path.parent().unwrap()).unwrap())
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
@@ -283,6 +315,55 @@ mod tests {
         let failed = access_with(&path, "github-copilot", |_| Err("HTTP 401".to_owned()));
         assert_eq!(failed.unwrap_err(), "HTTP 401");
         assert_eq!(saved(&path).unwrap()["github-copilot"], expired);
+    }
+
+    #[test]
+    fn a_sandbox_running_while_a_login_is_saved_still_sees_the_file_empty() {
+        use crate::agent::sandbox;
+        let scratch = scratch("login-hidden");
+        let path = scratch.0.join("config/auth.json");
+        make(&path);
+        let hidden = sandbox::Hidden::under(&scratch.0, vec![path.clone()]);
+        let script = format!(
+            "cat {0}; : > ready; while [ ! -e go ]; do sleep 0.02; done; cat {0}; echo end",
+            path.display()
+        );
+        let running = sandbox::hiding(&scratch.0, &script, &hidden)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        while !scratch.0.join("ready").exists() {
+            assert!(
+                started.elapsed().as_secs() < 10,
+                "the sandbox did not start"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let credential = json!({"type": "oauth", "access": "SECRET"});
+        save(&path, "github-copilot", credential).unwrap();
+        std::fs::write(scratch.0.join("go"), "").unwrap();
+        let output = running.wait_with_output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "end\n");
+        assert_eq!(saved(&path).unwrap()["github-copilot"]["access"], "SECRET");
+    }
+
+    #[test]
+    fn the_file_is_made_without_logins_and_kept_for_its_owner() {
+        let scratch = scratch("login-made");
+        let path = scratch.0.join("config/auth.json");
+        make(&path);
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}\n");
+        assert_eq!((mode(&path), mode(path.parent().unwrap())), (0o600, 0o700));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save(&path, "github-copilot", json!({"type": "oauth"})).unwrap();
+        assert_eq!(mode(&path), 0o600);
+        make(&path);
+        assert_eq!(logged_in(&path).unwrap(), ["github-copilot"]);
+        // Empty, as a sandbox shows it, it holds no logins.
+        std::fs::write(&path, "").unwrap();
+        assert!(saved(&path).unwrap().is_empty());
     }
 
     #[test]

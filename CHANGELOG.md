@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.16.1 — Credentials stay hidden while a login changes
+
+### Fixed
+
+- Saving or renewing a login no longer shows `~/.config/scramjet-rs/auth.json` to the agent's commands that are already running, such as a tmux server it started; before, each renewal of GitHub Copilot's short-lived token did. The file is now made, without logins, before the agent's first command, so a first `/login` stays hidden from those too.
+- A practice run under `scripts/without-credentials.sh` no longer warns at start that the hidden `auth.json` is not JSON.
+
 ## 0.16.0 — GitHub Copilot login
 
 ### Added

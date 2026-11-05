@@ -82,6 +82,9 @@ impl Hidden {
     fn stores(named: &[PathBuf]) -> Hidden {
         let auth = super::subagent::agent_directory().map(|dir| dir.join("auth.json"));
         let own = super::login::auth_file();
+        if let Some(own) = &own {
+            super::login::make(own);
+        }
         let also = (auth.into_iter().chain(own))
             .chain(named.iter().cloned())
             .collect();
