@@ -374,6 +374,86 @@ async fn exchange(
     result.map(|reply| Reply { priced_by, ..reply })
 }
 
+/// What a request other than a model's (a login's) was answered: its status and body.
+pub(super) struct Fetched {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
+const FETCHED_BYTES: usize = 4 << 20;
+const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Sends a request other than a model's, such as a login's, to `url` for `what` (a provider's
+/// name, in failures), `body` with its content type, and waits at most 30 seconds for its answer.
+pub(super) async fn fetch(
+    what: &str,
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<(&str, Vec<u8>)>,
+) -> Result<Fetched, String> {
+    let parts = super::providers::base_url(url)?;
+    let route = Route {
+        provider: what.to_owned(),
+        tls: parts.tls,
+        host: parts.host,
+        port: parts.port,
+        authority: parts.authority,
+        path: parts.path,
+        headers: Vec::new(),
+        login: None,
+    };
+    let exchange = async {
+        let (mut sender, driver) = connect(&route).await.map_err(|f| f.message)?;
+        let path = match route.path.as_str() {
+            "" => "/",
+            path => path,
+        };
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("Host", &route.authority);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let (kind, body) = body.unwrap_or_default();
+        if !kind.is_empty() {
+            request = request.header("Content-Type", kind);
+        }
+        if method != "GET" {
+            request = request.header("Content-Length", body.len());
+        }
+        let request = (request.body(Full::new(Bytes::from(body)))).map_err(|e| e.to_string())?;
+        let response = (sender.send_request(request).await)
+            .map_err(|e| format!("request to {} failed: {e}", route.authority))?;
+        let status = response.status().as_u16();
+        let mut body = response.into_body();
+        let mut bytes = Vec::new();
+        while let Some(frame) = body.frame().await {
+            let frame = frame.map_err(|e| format!("{}'s answer failed: {e}", route.authority))?;
+            if let Ok(data) = frame.into_data() {
+                bytes.extend_from_slice(&data);
+            }
+            if bytes.len() > FETCHED_BYTES {
+                return Err(format!("{}'s answer is over 4 MB", route.authority));
+            }
+        }
+        driver.abort();
+        Ok(Fetched {
+            status,
+            body: bytes,
+        })
+    };
+    match tokio::time::timeout(FETCH_TIMEOUT, exchange).await {
+        Ok(fetched) => fetched,
+        Err(_) => Err(format!(
+            "{} gave no answer within {}s",
+            route.authority,
+            FETCH_TIMEOUT.as_secs()
+        )),
+    }
+}
+
 type Connection = (
     http1::SendRequest<Full<Bytes>>,
     JoinHandle<hyper::Result<()>>,

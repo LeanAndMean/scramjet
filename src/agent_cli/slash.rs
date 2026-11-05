@@ -1,7 +1,8 @@
 //! The built-in commands: `/export`, `/import`, `/copy`, `/clear`, `/rename`, `/status`,
 //! `/compact`, `/autopilot`, `/reload`, and `!` commands. `/settings` is in `settings_menu.rs`;
 //! `/hotkeys` and `/keybindings` in `hotkeys.rs`; `/resume`, `/fork`, `/branch`, `/clone` and
-//! `/tree` in `sessions.rs`; `/model` and `/scoped-models` in `scope.rs`.
+//! `/tree` in `sessions.rs`; `/model` and `/scoped-models` in `scope.rs`; `/login` and `/logout`
+//! in `login.rs`.
 use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal::{self, Terminal};
 use super::text::clip;
@@ -33,6 +34,8 @@ pub(super) enum Builtin<'a> {
     Tree(&'a str),
     Model(&'a str),
     ScopedModels,
+    Login,
+    Logout,
     Compact(&'a str),
     Autopilot(&'a str),
     Reload,
@@ -63,6 +66,8 @@ impl<'a> Builtin<'a> {
             "tree" => Self::Tree(argument),
             "model" => Self::Model(argument),
             "scoped-models" if argument.is_empty() => Self::ScopedModels,
+            "login" if argument.is_empty() => Self::Login,
+            "logout" if argument.is_empty() => Self::Logout,
             "compact" => Self::Compact(argument),
             "autopilot" => Self::Autopilot(argument),
             "reload" if argument.is_empty() => Self::Reload,
@@ -87,6 +92,8 @@ impl<'a> Builtin<'a> {
                 | Self::Keybindings
                 | Self::Model(_)
                 | Self::ScopedModels
+                | Self::Login
+                | Self::Logout
                 | Self::Autopilot(_)
                 | Self::Reload
         )
@@ -122,6 +129,8 @@ impl Interactive {
             Some(Builtin::Tree(wanted)) => self.tree(wanted),
             Some(Builtin::Model(wanted)) => self.model(wanted),
             Some(Builtin::ScopedModels) => self.scoped_models(),
+            Some(Builtin::Login) => self.login(),
+            Some(Builtin::Logout) => self.logout(),
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Reload) => self.reload(),
@@ -283,8 +292,10 @@ impl Interactive {
             settings.command_sets.clone(),
             settings.skills.clone(),
         );
-        self.agent
-            .set_providers(Providers::read(settings.models_files()));
+        self.agent.set_providers(Providers::read(
+            settings.models_files(),
+            scramjet_rs::agent::login::Logins::user(),
+        ));
         if let Some(screen) = &mut self.screen {
             (screen.link).reloaded(completions(&self.agent), &self.settings);
             (screen.link).models(self.agent.models().unwrap_or_default());
@@ -431,6 +442,8 @@ mod tests {
             "/model",
             "/model gpt-6-terra",
             "/scoped-models",
+            "/login",
+            "/logout",
             "/autopilot on",
             "/reload",
         ] {
@@ -454,6 +467,7 @@ mod tests {
             "/hotkeys all",
             "/copy all",
             "/scoped-models luna",
+            "/login github",
             "/exit now",
             "/quit now",
             "/reload all",

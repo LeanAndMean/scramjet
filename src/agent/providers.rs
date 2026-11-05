@@ -4,10 +4,13 @@
 //! `providersCommand`, whose output, `{"version": 1, "providers": …}`, adds more providers, as a
 //! package lists models it learns at run time, and in `credentialFiles` the files and directories
 //! holding its providers' credentials, which the agent's tools do not see (`sandbox::Hidden`).
+//! A provider logged in to with `/login` (`login::LOGINS`) adds the models its login listed,
+//! unless a file names it; a provider of that name without an `apiKey` takes the login's key.
 
 use super::ModelOption;
 use super::client::Protocol;
 use super::completions::Compat;
+use super::login::Logins;
 use super::pricing::Prices;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -53,6 +56,15 @@ pub(super) struct Route {
     pub path: String,
     /// Authentication and the entries' `headers`.
     pub headers: Vec<(String, String)>,
+    /// The login whose token each request carries, fresh, besides `headers`.
+    pub login: Option<Login>,
+}
+
+/// A provider's login (`login::LOGINS`), saved in `file`.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Login {
+    pub provider: String,
+    pub file: PathBuf,
 }
 
 /// Leaves the headers' values out: they hold keys.
@@ -65,6 +77,7 @@ impl std::fmt::Debug for Route {
             .field("authority", &self.authority)
             .field("path", &self.path)
             .field("headers", &names)
+            .field("login", &self.login)
             .finish()
     }
 }
@@ -77,6 +90,9 @@ pub(super) struct ModelInfo {
     pub window: Option<u64>,
     /// The most output tokens a response may have.
     pub output: Option<u64>,
+    /// The most input tokens a request may have, when less than the window leaves
+    /// (`maxInputTokens`): compaction runs past it too.
+    pub input: Option<u64>,
     pub reasoning: bool,
     /// The effort levels it takes, as requests name them, in order; empty: any.
     pub levels: Vec<String>,
@@ -98,6 +114,7 @@ impl ModelInfo {
             },
             window: None,
             output: None,
+            input: None,
             reasoning: true,
             levels: Vec::new(),
             images: true,
@@ -150,13 +167,17 @@ pub struct Providers {
     models: Vec<Model>,
     credential_files: Vec<PathBuf>,
     problems: Vec<String>,
+    /// Where `/login` saves what it does.
+    logins: Option<Logins>,
 }
 
 impl Providers {
-    /// The providers of the `models.json` files `files` that exist, in their order.
-    pub fn read(files: Vec<PathBuf>) -> Self {
+    /// The providers of the `models.json` files `files` that exist, in their order, then those
+    /// logged in to, as `logins` saved them.
+    pub fn read(files: Vec<PathBuf>, logins: Option<Logins>) -> Self {
         let mut providers = Self {
             files,
+            logins,
             ..Self::default()
         };
         providers.reload();
@@ -174,9 +195,24 @@ impl Providers {
         providers
     }
 
+    /// As `given`, with what `logins` saved.
+    #[cfg(test)]
+    pub(crate) fn given_logged_in(document: Value, logins: Logins) -> Self {
+        let mut providers = Self {
+            given: Some(document),
+            logins: Some(logins),
+            ..Self::default()
+        };
+        providers.reload();
+        providers
+    }
+
     /// Reads the files again and runs their programs again.
     pub(super) fn reload(&mut self) {
-        let mut reading = Reading::default();
+        let mut reading = Reading {
+            logins: self.logins.clone(),
+            ..Reading::default()
+        };
         for file in &self.files {
             reading.file(file);
         }
@@ -185,6 +221,7 @@ impl Providers {
             let text = document.to_string().into_bytes();
             reading.document(&text, Path::new("."), "models");
         }
+        reading.logins();
         self.models = reading.models;
         let previous = std::mem::replace(&mut self.credential_files, reading.credential_files);
         self.problems = reading.problems;
@@ -292,9 +329,76 @@ struct Reading {
     models: Vec<Model>,
     credential_files: Vec<PathBuf>,
     problems: Vec<String>,
+    logins: Option<Logins>,
+    /// The providers the files named.
+    named: Vec<String>,
 }
 
 impl Reading {
+    /// The models of the providers logged in to that no file named, as their logins listed
+    /// them; those another provider offers already are left out, named in one line.
+    fn logins(&mut self) {
+        let Some(logins) = self.logins.clone() else {
+            return;
+        };
+        let saved = match super::login::saved(&logins.auth) {
+            Ok(saved) => saved,
+            Err(problem) => return self.problems.push(problem),
+        };
+        for (name, _) in super::login::LOGINS {
+            if self.named.iter().any(|named| named == name) {
+                continue;
+            }
+            let Some(credential) = saved.get(name) else {
+                continue;
+            };
+            let what = format!("{name} (/login)");
+            // Missing or unreadable, it lists no models: the login is to be done again.
+            let listed = std::fs::read(logins.listed(name)).ok();
+            let listed =
+                (listed.and_then(|text| serde_json::from_slice(&text).ok())).unwrap_or(Value::Null);
+            let entry = match name {
+                super::copilot::PROVIDER => super::copilot::entry(credential, &listed),
+                _ => continue,
+            };
+            let taken: Vec<String> = (self.models.iter()).map(|model| model.id.clone()).collect();
+            let mut entry = entry;
+            let mut left = Vec::new();
+            if let Some(models) = entry["models"].as_array_mut() {
+                models.retain(|model| {
+                    let id = model["id"].as_str().unwrap_or_default();
+                    let free = !taken.iter().any(|taken| taken == id);
+                    if !free {
+                        left.push(id.to_owned());
+                    }
+                    free
+                });
+            }
+            if entry["models"].as_array().is_some_and(Vec::is_empty) && left.is_empty() {
+                self.problems.push(format!(
+                    "{what}: the login listed no models that take tools; /login again"
+                ));
+                continue;
+            }
+            if !left.is_empty() {
+                self.problems.push(format!(
+                    "{what}: {} offered by providers read before it, not offered here: {}",
+                    match left.len() {
+                        1 => "1 model is".to_owned(),
+                        n => format!("{n} models are"),
+                    },
+                    left.join(", ")
+                ));
+            }
+            if entry["models"]
+                .as_array()
+                .is_some_and(|models| !models.is_empty())
+            {
+                self.provider(name, &entry, &what);
+            }
+        }
+    }
+
     fn file(&mut self, path: &Path) {
         let shown = path.display().to_string();
         let text = match std::fs::read(path) {
@@ -348,6 +452,7 @@ impl Reading {
 
     fn providers(&mut self, providers: Option<Ordered>, what: &str) {
         for (name, entry) in providers.into_iter().flat_map(|ordered| ordered.0) {
+            self.named.push(name.clone());
             self.provider(&name, &entry, &format!("{what}: provider {name}"));
         }
     }
@@ -410,6 +515,14 @@ impl Reading {
             path,
         } = base_url(url).map_err(|problem| format!("model {id}: baseUrl {problem}"))?;
         let mut headers = Vec::new();
+        let logs_in = super::login::LOGINS.iter().any(|(login, _)| *login == name);
+        let login = match (&self.logins, text("apiKey")?) {
+            (Some(logins), None) if logs_in => Some(Login {
+                provider: name.to_owned(),
+                file: logins.auth.clone(),
+            }),
+            _ => None,
+        };
         if let Some(key) = text("apiKey")? {
             let key = resolve(key).map_err(|problem| format!("model {id}: apiKey {problem}"))?;
             if protocol == Protocol::Messages {
@@ -466,6 +579,9 @@ impl Reading {
                 .filter(|w| *w >= 1.0)
                 .map(|w| w as u64),
             output: entry["maxTokens"].as_u64().filter(|tokens| *tokens > 0),
+            input: entry["maxInputTokens"]
+                .as_u64()
+                .filter(|tokens| *tokens > 0),
             reasoning,
             levels,
             images: input.is_some_and(|input| input.iter().any(|kind| kind == "image")),
@@ -479,6 +595,7 @@ impl Reading {
                 authority,
                 path,
                 headers,
+                login,
             }),
         };
         Ok(Model {
@@ -523,18 +640,18 @@ fn resolve(value: &str) -> Result<String, String> {
 }
 
 #[derive(Debug, PartialEq)]
-struct BaseUrl {
-    tls: bool,
-    host: String,
+pub(super) struct BaseUrl {
+    pub tls: bool,
+    pub host: String,
     /// 80 for `http://` and 443 for `https://` unless the URL names one.
-    port: u16,
-    authority: String,
+    pub port: u16,
+    pub authority: String,
     /// Without a trailing `/`.
-    path: String,
+    pub path: String,
 }
 
 /// An `http://` or `https://` URL's parts.
-fn base_url(url: &str) -> Result<BaseUrl, String> {
+pub(super) fn base_url(url: &str) -> Result<BaseUrl, String> {
     let scheme = |prefix: &str| {
         url.get(..prefix.len())
             .is_some_and(|s| s.eq_ignore_ascii_case(prefix))
@@ -704,7 +821,7 @@ mod tests {
                 "headers": {"X-Team": "core"},
                 "models": [
                     {"id": "luna", "name": "Luna", "reasoning": true, "input": ["text", "image"],
-                        "contextWindow": 1_050_000, "maxTokens": 128_000,
+                        "contextWindow": 1_050_000, "maxTokens": 128_000, "maxInputTokens": 922_000,
                         "thinkingLevelMap": {"minimal": null, "xhigh": "xhigh"}},
                     {"id": "claude", "api": "anthropic-messages", "baseUrl": "http://[::1]:9",
                         "authHeader": true, "headers": {"x-team": "messages"}},
@@ -723,6 +840,7 @@ mod tests {
         let info = &luna.info;
         assert_eq!(info.protocol, Protocol::Responses);
         assert_eq!((info.window, info.output), (Some(1_050_000), Some(128_000)));
+        assert_eq!(info.input, Some(922_000));
         assert!(info.reasoning && info.images);
         assert_eq!(info.levels, ["none", "low", "medium", "high", "xhigh"]);
         // A level sent as another's is taken once, as in Scramjet's maps for GPT-5.
@@ -863,7 +981,8 @@ mod tests {
                 "models": [{"id": "own"}]}},
             "providersCommand": ["./list", "arg"],
         }));
-        let mut providers = Providers::read(vec![file.clone(), scratch.0.join("absent.json")]);
+        let mut providers =
+            Providers::read(vec![file.clone(), scratch.0.join("absent.json")], None);
         let ids: Vec<&str> = providers.models().iter().map(|m| m.id.as_str()).collect();
         assert_eq!(
             (ids, providers.problems()),
@@ -923,6 +1042,77 @@ mod tests {
     }
 
     #[test]
+    fn a_login_adds_its_models_after_the_files_unless_a_file_names_its_provider() {
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-providers-login-{}", std::process::id())),
+        );
+        let logins = Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let auth = logins.auth.clone();
+        let listed = |id: &str| {
+            json!({"id": id, "capabilities": {"type": "chat", "supports": {"tool_calls": true}},
+                "supported_endpoints": ["/responses"]})
+        };
+        let credential = json!({"type": "oauth", "access": "tid=1;proxy-ep=proxy.x.example"});
+        super::super::login::save(&auth, "github-copilot", credential).unwrap();
+        // Logged in without the list, the login is to be done again.
+        let providers = Providers::given_logged_in(json!({}), logins.clone());
+        assert_eq!(
+            providers.problems(),
+            ["github-copilot (/login): the login listed no models that take tools; /login again"]
+        );
+        let list = json!({"data": [listed("gpt-6-luna"), listed("grok-4.6"), listed("gpt-6-sol")]});
+        std::fs::create_dir_all(&logins.lists).unwrap();
+        std::fs::write(logins.listed("github-copilot"), list.to_string()).unwrap();
+        let openai = json!({"baseUrl": "http://127.0.0.1:9/v1", "api": "openai-responses",
+            "apiKey": "k", "models": [{"id": "gpt-6-luna"}, {"id": "gpt-6-sol"}]});
+        let providers =
+            Providers::given_logged_in(json!({"providers": {"openai": openai}}), logins.clone());
+        let ids: Vec<(&str, &str)> = (providers.models().iter())
+            .map(|model| (model.id.as_str(), model.provider.as_str()))
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                ("gpt-6-luna", "openai"),
+                ("gpt-6-sol", "openai"),
+                ("grok-4.6", "github-copilot")
+            ]
+        );
+        assert_eq!(
+            providers.problems(),
+            [
+                "github-copilot (/login): 2 models are offered by providers read before it, not \
+              offered here: gpt-6-luna, gpt-6-sol"
+            ]
+        );
+        let grok = route(&providers, "grok-4.6");
+        assert_eq!((grok.tls, grok.authority.as_str()), (true, "api.x.example"));
+        assert_eq!(grok.login.unwrap().file, auth);
+        // A file that names the provider replaces the login's list, and takes its key.
+        let named = json!({"providers": {"github-copilot": {"baseUrl": "http://127.0.0.1:9",
+            "api": "openai-completions", "models": [{"id": "kimi-k3"}]}}});
+        let providers = Providers::given_logged_in(named, logins.clone());
+        let ids: Vec<&str> = providers
+            .models()
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect();
+        assert_eq!((ids, providers.problems().len()), (vec!["kimi-k3"], 0));
+        assert!(route(&providers, "kimi-k3").login.is_some());
+        // Logged out, the login's models go.
+        super::super::login::logout(&logins, "github-copilot").unwrap();
+        assert!(!logins.listed("github-copilot").exists());
+        assert!(
+            Providers::given_logged_in(json!({}), logins)
+                .models()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn credential_files_come_from_files_and_stay_while_one_has_problems() {
         let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
             "scramjet-rs-providers-credentials-{}",
@@ -939,7 +1129,7 @@ mod tests {
             r#"{"credentialFiles": ["~/.config/x", "~", " keys ", "/abs/token"],
                 "providersCommand": ["./list"]}"#,
         );
-        let mut providers = Providers::read(vec![file.clone()]);
+        let mut providers = Providers::read(vec![file.clone()], None);
         let home = std::env::home_dir().unwrap();
         let mut named = vec![
             home.join(".config/x"),
@@ -989,7 +1179,7 @@ mod tests {
             provider("a")
         );
         std::fs::write(&file, text).unwrap();
-        let providers = Providers::read(vec![file]);
+        let providers = Providers::read(vec![file], None);
         let ids: Vec<&str> = providers.models().iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["z", "a"]);
     }

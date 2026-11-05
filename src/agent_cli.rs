@@ -19,6 +19,7 @@ mod interactive;
 mod job;
 mod keymap;
 mod keys;
+mod login;
 mod markdown;
 mod record;
 mod scope;
@@ -77,7 +78,10 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     }
     if let Some(search) = options.list_models.take() {
-        let providers = Providers::read(Settings::load().models_files());
+        let providers = Providers::read(
+            Settings::load().models_files(),
+            agent::login::Logins::user(),
+        );
         for problem in providers.problems() {
             eprintln!("Warning: {problem}");
         }
@@ -88,7 +92,10 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     }
     if options.list_credential_stores {
-        let providers = Providers::read(Settings::load().models_files());
+        let providers = Providers::read(
+            Settings::load().models_files(),
+            agent::login::Logins::user(),
+        );
         for problem in providers.problems() {
             eprintln!("Warning: {problem}");
         }
@@ -261,7 +268,7 @@ fn start(
     settings: &Settings,
     (patterns, source): (&[String], &str),
 ) -> Result<(Agent, Vec<String>), String> {
-    let providers = Providers::read(settings.models_files());
+    let providers = Providers::read(settings.models_files(), agent::login::Logins::user());
     // Before the session starts, so that a pattern naming no model leaves none behind.
     let named = match &options.model {
         Some(pattern) => Some(named_model(pattern, &providers)?),

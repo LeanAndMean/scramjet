@@ -20,12 +20,12 @@ const FINE_GRAINED_TOOL_STREAMING_BETA: &str = "fine-grained-tool-streaming-2025
 const MIN_OUTPUT_TOKENS: u64 = 1024;
 
 /// Whether `model` takes adaptive thinking: Claude 4.6 and later (Proxy rewrites budget thinking
-/// for 4.7 and later, which reject it).
+/// for 4.7 and later, which reject it), also as GitHub Copilot names them (`claude-opus-4.7`).
 pub(super) fn adaptive_thinking(model: &str) -> bool {
     let Some(rest) = model.strip_prefix("claude-") else {
         return false;
     };
-    let mut parts = rest.split('-');
+    let mut parts = rest.split(['-', '.']);
     if !parts
         .next()
         .is_some_and(|family| family.chars().all(|c| c.is_ascii_alphabetic()))
@@ -377,7 +377,14 @@ impl Stream {
         data: &str,
         progress: &mut dyn FnMut(StreamProgress),
     ) -> Result<(), Failure> {
-        let event: Value = serde_json::from_str(data).map_err(|_| malformed("invalid JSON"))?;
+        // As Anthropic's SDK, which reads only the events it knows: a proxy may end with `[DONE]`.
+        if data.trim() == "[DONE]" {
+            return Ok(());
+        }
+        let event: Value = serde_json::from_str(data).map_err(|_| {
+            let shown: String = data.chars().take(200).collect();
+            malformed(&format!("invalid JSON: {shown}"))
+        })?;
         match event["type"].as_str().unwrap_or("") {
             "message_start" => {
                 let message = &event["message"];
@@ -580,6 +587,8 @@ mod tests {
             "claude-haiku-5-5",
             "claude-sonnet-4-6",
             "claude-opus-5",
+            "claude-opus-4.7",
+            "claude-sonnet-5.5",
         ] {
             assert!(adaptive_thinking(model), "{model}");
         }
@@ -588,6 +597,7 @@ mod tests {
             "claude-haiku-4-5-20251001",
             "claude-sonnet-4-20250514",
             "claude-3-7-sonnet-20250219",
+            "claude-haiku-4.5",
             "gpt-6-luna",
             "deepseek-v4-pro",
         ] {

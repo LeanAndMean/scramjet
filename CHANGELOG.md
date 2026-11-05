@@ -4,6 +4,18 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.16.0 — GitHub Copilot login
+
+### Added
+
+- `/login` logs in to GitHub Copilot with GitHub's device login, for github.com or a GitHub Enterprise domain. Your account's Copilot models are offered from then on, with the context, input and output limits, effort levels and token prices Copilot lists, so the footer shows their cost. `/logout` removes the login.
+- The login is saved in `~/.config/scramjet-rs/auth.json`, readable by you only and hidden from the agent's tools as other credential stores are. Its short-lived Copilot token is renewed when it expires.
+- A model's `maxInputTokens`, as in Scramjet: automatic compaction also runs once the context passes it.
+
+### Fixed
+
+- Messages streams that end with `data: [DONE]` (GitHub Copilot's) are read, and Responses streams whose events each name new ids (GitHub Copilot's) too.
+
 ## 0.15.0 — Chat Completions providers
 
 ### Added

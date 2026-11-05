@@ -332,11 +332,19 @@ impl App {
                 prompt_rows(&text.draft, &mut rows, width, room)
             }
             Some(Open {
-                shown: Shown::Press(title, note),
+                shown: Shown::Press(title, note) | Shown::Wait(title, note),
                 ..
             }) => {
+                // A key pressed for `/hotkeys` is taken as it is: Escape is not remapped there.
+                let cancel = match &self.dialog {
+                    Some(Open {
+                        shown: Shown::Wait(..),
+                        ..
+                    }) => keymap::hint([keymap::part(&[Binding::SelectCancel], "cancel")]),
+                    _ => "Esc cancels".to_owned(),
+                };
                 let title = format!(
-                    "{}{title}{}  {}Esc cancels{}",
+                    "{}{title}{}  {}{cancel}{}",
                     style::SELECTOR_TITLE,
                     style::RESET,
                     style::MUTED,

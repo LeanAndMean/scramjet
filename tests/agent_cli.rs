@@ -118,6 +118,8 @@ fn list_credential_stores_lists_the_common_ones_and_those_files_name() {
     std::fs::write(home.join(".netrc"), "").unwrap();
     std::fs::write(package.join("token"), "").unwrap();
     provide(&config, "127.0.0.1:9");
+    // scramjet-rs's own logins, beside the settings.
+    std::fs::write(config.join("scramjet-rs/auth.json"), "{}").unwrap();
     let file = config.join("scramjet-rs/models.json");
     let mut models: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
@@ -144,9 +146,13 @@ fn list_credential_stores_lists_the_common_ones_and_those_files_name() {
         (text(output.stdout), text(output.stderr))
     };
     let real = |path: std::path::PathBuf| std::fs::canonicalize(path).unwrap();
-    let listed: Vec<String> = [home.join(".fake"), home.join(".netrc"), home.join(".ssh")]
+    let listed: Vec<String> = [config.join("scramjet-rs/auth.json"), home.join(".fake")]
         .into_iter()
-        .chain([package.join("token")])
+        .chain([
+            home.join(".netrc"),
+            home.join(".ssh"),
+            package.join("token"),
+        ])
         .map(|path| format!("{}\n", real(path).display()))
         .collect();
     assert_eq!(list(), (listed.concat(), String::new()));

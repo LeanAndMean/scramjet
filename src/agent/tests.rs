@@ -465,7 +465,7 @@ fn what_the_model_takes_comes_from_its_provider_read_again_each_time() {
         "openai": openai(json!({"id": "m", "name": "Model M", "contextWindow": 1_050_000,
             "maxTokens": 128_000})),
     }}));
-    agent.set_providers(Providers::read(vec![file.clone()]));
+    agent.set_providers(Providers::read(vec![file.clone()], None));
     assert_eq!(agent.context_window(), Some(1_050_000));
     assert_eq!(agent.info.output, Some(128_000));
     assert_eq!(agent.provider(), Some("openai"));
@@ -501,15 +501,15 @@ fn providers_read_again_from_a_broken_file_keep_hiding_the_stores_it_named() {
     let write = |text: &str| std::fs::write(&file, text).unwrap();
     let named = vec![scratch.0.join("store")];
     write(r#"{"credentialFiles": ["store"]}"#);
-    agent.set_providers(Providers::read(vec![file.clone()]));
+    agent.set_providers(Providers::read(vec![file.clone()], None));
     assert_eq!(agent.providers().credential_files(), named);
     // As /reload reads them: anew.
     write(r#"{"credentialFiles": "store"}"#);
-    agent.set_providers(Providers::read(vec![file.clone()]));
+    agent.set_providers(Providers::read(vec![file.clone()], None));
     assert_eq!(agent.providers().problems().len(), 1);
     assert_eq!(agent.providers().credential_files(), named);
     write("{}");
-    agent.set_providers(Providers::read(vec![file.clone()]));
+    agent.set_providers(Providers::read(vec![file.clone()], None));
     assert_eq!(agent.providers().credential_files(), [] as [PathBuf; 0]);
 }
 

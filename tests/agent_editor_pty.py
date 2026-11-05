@@ -1223,6 +1223,58 @@ def changed_keys(read, until, send, output):
     send(b'\x18')
 
 
+def logins(read, until, send, output):
+    shown, on_screen = full_screen(columns=80, rows=30)(read, output)
+    auth = os.path.join(login_home, 'scramjet-rs', 'auth.json')
+    on_screen('\u2500' * 20)
+    send(b'/logout\r')
+    on_screen('No saved logins to remove.')
+    send(b'/login\r')
+    rows = on_screen('Log in to  ')
+    assert any(row.startswith('\u203a GitHub Copilot') for row in rows), rows
+    send(b'\r')
+    on_screen('GitHub Enterprise URL or domain (empty for github.com)')
+    send(b'not a domain\r')
+    on_screen('Error: not a domain is not a GitHub Enterprise URL or domain')
+    # A login saved: its models are offered after the others, which come first.
+    listed = lambda id: {'id': id, 'name': id.upper(), 'supported_endpoints': ['/responses'],
+                         'capabilities': {'type': 'chat', 'supports': {'tool_calls': True}}}
+    with open(auth, 'w') as file:
+        json.dump({'github-copilot': {'type': 'oauth', 'refresh': 'gho', 'access': 'tid=1', 'expires': 0}}, file)
+    os.makedirs(os.path.dirname(copilot_models), exist_ok=True)
+    with open(copilot_models, 'w') as file:
+        json.dump({'data': [listed('gpt-6-luna'), listed('grok-4.6')]}, file)
+    send(b'/model\r')
+    rows = on_screen('grok-4.6 [github-copilot]')
+    assert any(re.match('\u203a gpt-6-luna \\[test\\]', row) for row in rows), rows
+    assert not any('gpt-6-luna [github-copilot]' in row for row in rows), rows
+    send(b'\x1b')
+    on_screen('grok-4.6', gone=True)
+    send(b'/login\r')
+    rows = on_screen('Logged in; logging in again replaces the saved login')
+    assert any(row.startswith('\u203a GitHub Copilot \u2713 logged in') for row in rows), rows
+    send(b'\x1b')
+    on_screen('Log in to', gone=True)
+    send(b'/logout\r')
+    on_screen('Log out of  ')
+    send(b'\r')
+    on_screen('\u2713 Logged out of GitHub Copilot')
+    assert json.load(open(auth)) == {}
+    assert oct(os.stat(auth).st_mode & 0o777) == '0o600'
+    assert not os.path.exists(copilot_models)
+    send(b'/model\r')
+    on_screen('Select model')
+    assert not any('grok' in row for row in shown()), shown()
+    send(b'\x1b')
+    on_screen('Select model', gone=True)
+    send(b'\x04')
+
+
+login_home = config_home('login')
+copilot_models = os.path.join(work, 'state', 'scramjet-rs', 'logins', 'github-copilot.json')
+run([], logins, variables={'XDG_CONFIG_HOME': login_home}, columns=80, rows=30)
+
+
 changing_home = config_home('changing')
 seen_keys = os.path.join(work, 'seen-keys.json')
 keys_edit = os.path.join(work, 'keys-edit.sh')
@@ -1292,7 +1344,7 @@ def completes_paths_and_commands(read, until, send, output):
     on_screen('Autopilot is off')
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     send(b'/')
-    on_screen('(1/19)')
+    on_screen('(1/21)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count

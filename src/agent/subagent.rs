@@ -1236,6 +1236,7 @@ fn run_child(
             &info,
             parent.retries,
             &request,
+            false,
             cancel,
             &mut |event| {
                 if let Sending::Attempt = event {

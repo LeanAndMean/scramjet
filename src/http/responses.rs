@@ -544,11 +544,6 @@ impl ResponsesParser {
             self.check_response(response, "in_progress")?;
             return Ok(());
         }
-        if let Some(response_id) = event.get("response_id")
-            && response_id.as_str() != self.response_id.as_deref()
-        {
-            return Err(Outcome::Framing);
-        }
         if kind.ends_with(".delta") {
             let bytes = string(&event, "delta")?.len();
             self.provisional_bytes = self
@@ -614,11 +609,12 @@ impl ResponsesParser {
                 self.failure.field = Some("item/id");
                 let item = &event["item"];
                 validate_item(item, true)?;
-                let state = self
+                let position = (self
                     .items
-                    .iter_mut()
-                    .find(|state| state.added["id"] == item["id"])
-                    .ok_or(Outcome::Framing)?;
+                    .iter()
+                    .position(|state| state.added["id"] == item["id"]))
+                .or_else(|| self.under_way());
+                let state = &mut self.items[position.ok_or(Outcome::Framing)?];
                 if state.done.is_some() || item["type"] != state.added["type"] {
                     return Err(Outcome::Framing);
                 }
@@ -859,12 +855,10 @@ impl ResponsesParser {
         }
         Ok(())
     }
+    /// The response's status and model; its id may change from event to event, as GitHub
+    /// Copilot's does, and as Scramjet's client allows.
     fn check_response(&mut self, response: &Value, status: &str) -> Result<(), Outcome> {
         self.failure.stage = ProviderFailureStage::ResponseMetadata;
-        self.failure.field = Some("response.id");
-        if response["id"].as_str() != self.response_id.as_deref() {
-            return Err(Outcome::Framing);
-        }
         self.failure.field = Some("response.status");
         if string(response, "status")? != status {
             return Err(Outcome::Framing);
@@ -886,15 +880,20 @@ impl ResponsesParser {
     }
     fn item(&mut self, event: &Value, kind: &str) -> Result<&mut ItemState, Outcome> {
         let id = string(event, "item_id")?;
-        let state = self
-            .items
-            .iter_mut()
-            .find(|state| state.added["id"] == id)
-            .ok_or(Outcome::Framing)?;
+        let position = (self.items.iter().position(|state| state.added["id"] == id))
+            .or_else(|| self.under_way());
+        let state = &mut self.items[position.ok_or(Outcome::Framing)?];
         if state.done.is_some() || state.added["type"] != kind {
             return Err(Outcome::Framing);
         }
         Ok(state)
+    }
+    /// The item an event that names no known item is for, as Scramjet's client takes every event:
+    /// the last one added, if not yet done. GitHub Copilot's Responses API gives each event an
+    /// id of its own, the response's and the items' alike.
+    fn under_way(&self) -> Option<usize> {
+        let last = self.items.len().checked_sub(1)?;
+        self.items[last].done.is_none().then_some(last)
     }
     pub(crate) fn complete(self) -> Result<ParsedResponse, Outcome> {
         if !self.frame.is_empty() {

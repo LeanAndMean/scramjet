@@ -128,6 +128,9 @@ pub(super) enum Dialog {
     Approve(String),
     /// Waits for a key, under the title and the note: `/hotkeys`' new key. Escape cancels.
     Press(String, String),
+    /// Shows the title and the note until Escape (answered `Pressed(None)`) or the session
+    /// dismisses it: a login waiting for the user.
+    Wait(String, String),
 }
 
 /// Whether a dialog's text may be left empty.
@@ -230,6 +233,7 @@ enum Shown {
     Approve(String),
     /// The title and the note.
     Press(String, String),
+    Wait(String, String),
 }
 
 struct TextDialog {
@@ -585,6 +589,7 @@ impl App {
                     }
                     Dialog::Approve(question) => Shown::Approve(question),
                     Dialog::Press(title, note) => Shown::Press(title, note),
+                    Dialog::Wait(title, note) => Shown::Wait(title, note),
                 };
                 self.dialog = Some(Open {
                     shown,
@@ -692,7 +697,7 @@ impl App {
             Shown::Pick(_) => Answer::Picked(None),
             Shown::Text(_) => Answer::Text(None),
             Shown::Approve(_) => Answer::Approved(agent::Answer::Deny),
-            Shown::Press(..) => Answer::Pressed(None),
+            Shown::Press(..) | Shown::Wait(..) => Answer::Pressed(None),
         });
         let _ = open.reply.send(answer);
         if !self.exiting && matches!(&open.shown, Shown::Pick(picker) if picker.is_held()) {

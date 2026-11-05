@@ -57,17 +57,16 @@ fn rejects_identity_order_terminal_and_strict_argument_mutations() {
             "response",
             json!({"id":"","status":"in_progress","output":[]}),
         ),
-        (2, "item_id", json!("foreign")),
         (3, "arguments", json!("{\"x\":1}")),
         (
             4,
             "item",
-            json!({"type":"function_call","id":"fc_foreign","call_id":"call_1","name":"inert","status":"completed","arguments":"{}"}),
+            json!({"type":"function_call","id":"fc_1","call_id":"call_foreign","name":"inert","status":"completed","arguments":"{}"}),
         ),
         (
             5,
             "response",
-            json!({"id":"resp_foreign","status":"completed","output":[]}),
+            json!({"id":"resp_1","status":"in_progress","output":[]}),
         ),
     ] {
         let mut events = good.clone();
@@ -121,6 +120,34 @@ fn rejects_identity_order_terminal_and_strict_argument_mutations() {
         bytes.extend_from_slice(suffix);
         assert!(parse(&bytes).unwrap().envelope.is_some());
     }
+}
+#[test]
+fn events_naming_ids_of_their_own_are_for_the_item_under_way() {
+    // As GitHub Copilot's Responses API streams: each event's ids are new.
+    let mut events = fixture::call_events("{\"path\":\"a\"}", fixture::known_usage());
+    for (i, event) in events.iter_mut().enumerate() {
+        let own = format!("opaque-{i}");
+        if event.get("item_id").is_some() {
+            event["item_id"] = json!(own);
+        }
+        if event["response"].is_object() {
+            event["response"]["id"] = json!(format!("resp-{own}"));
+        }
+        if event["item"].is_object() && i > 1 {
+            event["item"]["id"] = json!(own);
+        }
+    }
+    let parsed = parse(&fixture::wire(&events, false)).unwrap();
+    let items = parsed.envelope.unwrap().items;
+    assert_eq!(items.len(), 1);
+    // The done event's copy is the one kept, as it came.
+    assert_eq!(items[0].raw()["id"], events[4]["item"]["id"]);
+    assert_eq!(items[0].raw()["arguments"], "{\"path\":\"a\"}");
+    // A done item of another type than the one under way is still refused.
+    let mut wrong = events.clone();
+    wrong[4]["item"] = json!({"type":"message","id":"m","role":"assistant","status":"completed",
+        "content":[]});
+    assert!(parse(&fixture::wire(&wrong, false)).is_err());
 }
 #[test]
 fn bounded_opaque_ids_are_correlated_and_replayed_without_character_normalization() {

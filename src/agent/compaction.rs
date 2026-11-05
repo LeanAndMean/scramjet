@@ -138,9 +138,11 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 pub(super) const RESERVE_TOKENS: u64 = 16_384;
 
 /// Whether a context of `tokens` should be compacted for a model whose window is `window`, as
-/// Scramjet's `shouldCompact`: a window no larger than the reserve never compacts.
-pub(super) fn should_compact(tokens: u64, window: u64) -> bool {
-    window > RESERVE_TOKENS && tokens > window - RESERVE_TOKENS
+/// Scramjet's `shouldCompact`, or that takes at most `input` tokens, as its `maxInputTokens`
+/// check: a window no larger than the reserve never compacts.
+pub(super) fn should_compact(tokens: u64, window: u64, input: Option<u64>) -> bool {
+    window > RESERVE_TOKENS
+        && (tokens > window - RESERVE_TOKENS || input.is_some_and(|input| tokens > input))
 }
 
 /// The paths a summarized conversation gave to read, write and edit calls.
@@ -709,7 +711,7 @@ impl Agent {
         let (Some(tokens), Some(window)) = (self.usage.context_tokens, self.info.window) else {
             return Ok(());
         };
-        if should_compact(tokens, window) {
+        if should_compact(tokens, window, self.info.input) {
             self.auto_compact(AutoCompaction::Threshold, ui, cancel)?;
         }
         Ok(())
@@ -736,7 +738,7 @@ impl Agent {
         let (Some(tokens), Some(window)) = (self.context_size(), self.info.window) else {
             return Ok(());
         };
-        if !should_compact(tokens, window) {
+        if !should_compact(tokens, window, self.info.input) {
             return Ok(());
         }
         match self.auto_compact(AutoCompaction::Threshold, ui, cancel) {
@@ -901,11 +903,15 @@ mod tests {
 
     #[test]
     fn compaction_runs_past_the_window_less_the_reserve() {
-        assert!(!should_compact(20_000, 36_384));
-        assert!(should_compact(20_001, 36_384));
-        assert!(should_compact(u64::MAX, u64::MAX));
-        assert!(!should_compact(1_000_000, RESERVE_TOKENS));
-        assert!(!should_compact(0, 0));
+        assert!(!should_compact(20_000, 36_384, None));
+        assert!(should_compact(20_001, 36_384, None));
+        assert!(should_compact(u64::MAX, u64::MAX, None));
+        assert!(!should_compact(1_000_000, RESERVE_TOKENS, None));
+        assert!(!should_compact(0, 0, None));
+        // A model's input limit below its window is a threshold of its own.
+        assert!(!should_compact(272_000, 400_000, Some(272_000)));
+        assert!(should_compact(272_001, 400_000, Some(272_000)));
+        assert!(!should_compact(272_001, RESERVE_TOKENS, Some(272_000)));
     }
 
     #[test]

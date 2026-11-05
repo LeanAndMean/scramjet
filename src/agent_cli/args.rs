@@ -21,6 +21,7 @@ anthropic-messages or openai-completions, with its compat), an apiKey (the value
 text) and its models, with their contextWindow, maxTokens, reasoning, input and cost; a file's
 providersCommand names a program printing more, as {\"version\": 1, \"providers\": ...}, and
 its credentialFiles the files holding their keys, hidden as --list-credential-stores says.
+/login adds the models of GitHub Copilot, its login saved in auth.json beside the settings.
   --project DIR          project directory (default: current directory)
   --model PATTERN        model, as Scramjet finds it: the one whose id or provider/id PATTERN
                          is, else the newest whose id or name contains it (after provider/,

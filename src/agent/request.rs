@@ -104,6 +104,7 @@ impl Agent {
             &self.info,
             retries,
             request,
+            purpose == Purpose::Reply,
             cancel,
             &mut |event| match event {
                 Sending::Attempt => {
@@ -138,12 +139,14 @@ pub(super) enum Sending<'a> {
 }
 
 /// Sends `request` to the model `info` describes, sending it again after transient failures. A
-/// failed response's items are discarded, so a retry never runs a tool call from it.
+/// failed response's items are discarded, so a retry never runs a tool call from it. `replying`:
+/// it is a step of the user's turn, not a summary or a subagent's, which Copilot bills apart.
 pub(super) fn send(
     executor: &tokio::runtime::Runtime,
     info: &ModelInfo,
     retries: u32,
     request: &Value,
+    replying: bool,
     cancel: &AtomicBool,
     on: &mut dyn FnMut(Sending),
 ) -> Result<client::Reply, AgentError> {
@@ -190,6 +193,16 @@ pub(super) fn send(
     let body = body.map_err(std::io::Error::from)?;
     let mut attempt = 0;
     loop {
+        // A login's token, refreshed when it expired, which it may have during a retry's wait.
+        let mut headers = headers.clone();
+        if let Some(login) = &route.login {
+            let token = (super::login::access(&login.file, &login.provider))
+                .map_err(AgentError::Provider)?;
+            headers.push(("authorization", format!("Bearer {token}")));
+            if login.provider == super::copilot::PROVIDER {
+                headers.extend(super::copilot::request_headers(request, replying));
+            }
+        }
         on(Sending::Attempt);
         let started = Instant::now();
         let sent = client::Sent {
@@ -788,6 +801,73 @@ response is incomplete; retry the request."});
             body.len()
         )
         .into_bytes()
+    }
+
+    #[test]
+    fn a_provider_logged_in_to_sends_the_logins_token_and_copilots_headers() {
+        let (endpoint, server) = serve_requests(vec![
+            tool_call("call_1", "read", json!({"path": "notes.txt"})),
+            stream(&fixture::text_events(
+                "It says hello.",
+                fixture::known_usage(),
+            )),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "copilot-login");
+        std::fs::write(scratch.0.join("notes.txt"), "hello\n").unwrap();
+        let logins = super::super::login::Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let auth = logins.auth.clone();
+        let expires = super::super::login::now_ms() + 600_000.0;
+        let credential = json!({"type": "oauth", "refresh": "gho", "access": "tid=9;exp=1",
+            "expires": expires});
+        super::super::login::save(&auth, "github-copilot", credential).unwrap();
+        // As a models.json names it, at the test's server; without an apiKey, the login's.
+        agent.config.providers = crate::agent::Providers::given_logged_in(
+            json!({"providers": {"github-copilot": {
+                "baseUrl": format!("http://{endpoint}/v1"), "api": "openai-responses",
+                "headers": {"Copilot-Integration-Id": "vscode-chat"},
+                "models": [{"id": "gpt-6-luna", "reasoning": true}],
+            }}}),
+            logins.clone(),
+        );
+        agent.set_model("gpt-6-luna").unwrap();
+        let mut ui = Recorder::default();
+        let said = agent.turn("What is in notes.txt?", &mut ui, &AtomicBool::new(false));
+        said.unwrap();
+        assert_eq!(ui.replies, ["It says hello."]);
+        let requests = server.join().unwrap();
+        for (head, _) in &requests {
+            assert!(
+                head.starts_with("post /v1/responses http/1.1\r\n"),
+                "{head}"
+            );
+            assert!(
+                head.contains("authorization: bearer tid=9;exp=1\r\n"),
+                "{head}"
+            );
+            assert!(
+                head.contains("openai-intent: conversation-edits\r\n"),
+                "{head}"
+            );
+            assert!(
+                head.contains("copilot-integration-id: vscode-chat\r\n"),
+                "{head}"
+            );
+            assert!(!head.contains("copilot-vision-request"), "{head}");
+        }
+        // The user asked for the first; the agent for the one after the tool's result.
+        assert!(requests[0].0.contains("x-initiator: user\r\n"));
+        assert!(requests[1].0.contains("x-initiator: agent\r\n"));
+        // Logged out, the request is not sent.
+        super::super::login::logout(&logins, "github-copilot").unwrap();
+        let failed = agent.turn("Again?", &mut ui, &AtomicBool::new(false));
+        assert!(
+            matches!(&failed, Err(AgentError::Provider(message))
+                if message == "not logged in to GitHub Copilot (/login)"),
+            "{failed:?}"
+        );
     }
 
     #[test]

@@ -51,6 +51,8 @@ Models come from the providers in `~/.config/scramjet-rs/models.json` and in the
 
 A model may also give its own `api`, `baseUrl` and `headers`, and a `thinkingLevelMap` as in Scramjet. What a Chat Completions server accepts is told from its provider's name and URL as Scramjet tells it, and a provider's or model's `compat` (Scramjet's fields, such as `maxTokensField`, `thinkingFormat` or `requiresToolResultName`) says otherwise. A file may name a program in `providersCommand` (`["bin/models", "arg"]`, a path from the file's directory) whose output, `{"version": 1, "providers": {...}}`, adds the providers it learns at run time; a package installed with `scramjet-rs install DIR` can bring one, as the private package for the author's local proxy does. A file's `credentialFiles` (`["~/.config/acme", "token.json"]`) names the files and directories holding its providers' credentials, which the agent's tools do not see, as the common stores below. What is wrong in these files is said at start and by `--list-models`.
 
+`/login` logs in to GitHub Copilot (github.com or a GitHub Enterprise domain): you enter the code it shows on GitHub's page, and Copilot's models for your account are offered after those of the files, with their limits, effort levels and prices. The login is saved in `~/.config/scramjet-rs/auth.json`, readable by you only and hidden from the agent's tools; `/logout` removes it. A model id another provider offers first is not offered from Copilot for now (`/login` says which).
+
 ## Where the rest is
 
 - `scramjet-rs --help`: every option, the keys and the built-in commands.
@@ -71,7 +73,7 @@ A command set is a directory of commands (`commands/<set>:<name>.md`) and agents
 
 ## Coming from Scramjet
 
-- Its providers are those of its own `models.json` files, which have no built-in models to fall back on: each provider lists its models. They speak HTTP or HTTPS, with the Responses, Messages or Chat Completions API, not through a proxy (`HTTPS_PROXY`). There is no login yet and no Pi extension API.
+- Its providers are those of its own `models.json` files, which have no built-in models to fall back on: each provider lists its models; GitHub Copilot's come from your account once you `/login`. They speak HTTP or HTTPS, with the Responses, Messages or Chat Completions API, not through a proxy (`HTTPS_PROXY`). `/login` knows GitHub Copilot only (not ChatGPT, Anthropic or API keys yet), and there is no Pi extension API.
 - Its settings (`~/.config/scramjet-rs/settings.json`) and sessions (`~/.local/state/scramjet-rs/sessions/`) are its own, with Scramjet's setting names. It shares Scramjet's `autonomy.yaml` files, agents (`~/.scramjet/agent/agents`), skills, `SYSTEM.md`, and `CLAUDE.md`/`AGENTS.md` context files. Scramjet's session files cannot be imported.
 - Built-in commands carry Claude Code's and Codex's names (`/clear`, `/exit`, `/rename`, `/status`); Scramjet's (`/new`, `/quit`, `/name`, `/session`) still work. One `/settings` holds everything; there is no `/scramjet settings`.
 - A command's status is `completed` or `abandoned` (only after you confirm); there is no `blocked`, `incomplete` or `continuing`. A reply that ends without a report gets a short status check, at most 3 in a row.

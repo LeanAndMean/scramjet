@@ -352,6 +352,8 @@ impl App {
                 _ => None,
             },
             Shown::Press(..) => None,
+            Shown::Wait(..) if key.is(Binding::SelectCancel) => Some(Answer::Pressed(None)),
+            Shown::Wait(..) => None,
         };
         if answer.is_some() {
             self.answer(answer);

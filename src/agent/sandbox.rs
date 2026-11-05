@@ -67,8 +67,8 @@ pub(super) struct Hidden {
 
 impl Hidden {
     /// Those of this user's home directory, Scramjet's `auth.json` wherever
-    /// `SCRAMJET_CODING_AGENT_DIR` puts it, the files and directories `named` (the providers'
-    /// `credentialFiles`), and this user's tmux servers.
+    /// `SCRAMJET_CODING_AGENT_DIR` puts it, scramjet-rs's own (`login::auth_file`), the files and
+    /// directories `named` (the providers' `credentialFiles`), and this user's tmux servers.
     pub(super) fn current(named: &[PathBuf]) -> Hidden {
         let mut hidden = Hidden::stores(named);
         let base = std::env::var_os("TMUX_TMPDIR").filter(|base| !base.is_empty());
@@ -81,7 +81,10 @@ impl Hidden {
     /// `current`'s credential stores, without the tmux servers.
     fn stores(named: &[PathBuf]) -> Hidden {
         let auth = super::subagent::agent_directory().map(|dir| dir.join("auth.json"));
-        let also = auth.into_iter().chain(named.iter().cloned()).collect();
+        let own = super::login::auth_file();
+        let also = (auth.into_iter().chain(own))
+            .chain(named.iter().cloned())
+            .collect();
         std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, also))
     }
 
