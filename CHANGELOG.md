@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.21.0 — Models by provider
+
+### Changed
+
+- `/model` lists the models under a heading for each provider, the current model's provider first, so the same model from two providers is easy to tell apart. A query keeps the models it matches under their providers' headings, the best match selected, and typing a provider's name (`copilot`, `chatgpt`) shows its models. The list takes up to half the terminal's height. The scope's list (with `enabledModels`, Tab) keeps its order and names each model's provider.
+- `/hotkeys` keeps the shortcuts a query matches under their headings.
+
 ## 0.20.1 — Package fixes
 
 ### Fixed

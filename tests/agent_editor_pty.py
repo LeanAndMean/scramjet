@@ -1292,16 +1292,20 @@ def logins(read, until, send, output):
     with open(copilot_models, 'w') as file:
         json.dump({'fetched': time.time() * 1000, 'data': [listed('gpt-6-luna'), listed('grok-4.6')]}, file)
     send(b'/model\r')
-    rows = on_screen('grok-4.6 [github-copilot]')
-    assert any(re.match('\u203a gpt-6-luna \\[test\\] \u2713', row) for row in rows), rows
-    assert any(row.startswith('  gpt-6-luna [github-copilot]') for row in rows), rows
+    # Under a heading for each provider, the current model's first.
+    rows = on_screen('    grok-4.6')
+    at = rows.index('  GitHub Copilot')
+    assert rows[at - 2:at + 3] == ['  test', '\u203a   gpt-6-luna \u2713', '  GitHub Copilot',
+                                   '    gpt-6-luna', '    grok-4.6'], rows
     send(b'\x1b[B\r')
     on_screen('Model set to (github-copilot) gpt-6-luna')
     settings = json.load(open(settings_path(login_home)))
     assert (settings['defaultProvider'], settings['defaultModel']) == ('github-copilot', 'gpt-6-luna'), settings
     send(b'/model\r')
-    rows = on_screen('grok-4.6 [github-copilot]')
-    assert any(re.match('\u203a gpt-6-luna \\[github-copilot\\] \u2713', row) for row in rows), rows
+    rows = on_screen('    grok-4.6')
+    at = rows.index('  GitHub Copilot')
+    assert rows[at:at + 5] == ['  GitHub Copilot', '\u203a   gpt-6-luna \u2713', '    grok-4.6', '  test',
+                               '    gpt-6-luna'], rows
     send(b'\x1b')
     on_screen('grok-4.6', gone=True)
     send(b'/login\r')
@@ -1392,7 +1396,7 @@ def relisted_at_start(read, until, send, output):
     at = rows.index('GitHub Copilot now offers grok-5 (/model)')
     assert rows[at + 1] == 'GitHub Copilot no longer offers grok-4.6', rows
     send(b'/model\r')
-    rows = on_screen('grok-5 [github-copilot]')
+    rows = on_screen('    grok-5')
     picked = rows[[row.startswith('Select model') for row in rows].index(True):]
     assert not any('grok-4.6' in row for row in picked), rows
     send(b'\x1b')
@@ -1404,7 +1408,7 @@ def relisting_fails(read, until, send, output):
     shown, on_screen = full_screen(columns=80, rows=30)(read, output)
     rows = on_screen("Warning: GitHub Copilot's models could not be read again, so those it listed")
     send(b'/model\r')
-    on_screen('grok-5 [github-copilot]')
+    on_screen('    grok-5')
     send(b'\x1b')
     on_screen('Select model', gone=True)
     send(b'\x04')
@@ -1666,7 +1670,7 @@ def fork_session(read, until, send, output):
     assert 'Reply two.' in rows, rows
     send(b'/model\r')
     rows = on_screen('Select model')
-    assert '\u203a gpt-6-luna [test] \u2713' in rows, rows
+    assert '\u203a   gpt-6-luna \u2713' in rows, rows
     send(b'\x1b[B\r')
     on_screen('\u2713 Model set to claude-haiku-5-5')
     # A fork before the first prompt, quit before anything is said in it, is not kept.
@@ -2096,18 +2100,20 @@ def model_list_in_a_scope(read, until, send, output):
     text = '\n'.join(rows)
     assert '\u203a gpt-6-luna [openai] \u2713\n  claude-haiku-5-5 [anthropic]\n' in text, text
     assert 'terra' not in text and rows[-1] == '  GPT-6 Luna', rows
-    # Tab shows all of them, the model selected staying so.
+    # Tab shows all of them under their providers, the current one's first, the model selected
+    # staying so.
     send(b'\x1b[B\t')
     rows = on_screen('All models  \u2191\u2193 move \u00b7 Enter select \u00b7 Tab models for Ctrl+P')
     text = '\n'.join(rows)
-    assert '  gpt-6-luna [openai] \u2713\n  gpt-6-terra [openai]\n\u203a claude-haiku-5-5 [anthropic]' in text, text
+    grouped = '  openai\n    gpt-6-luna \u2713\n    gpt-6-terra\n  anthropic\n\u203a   claude-haiku-5-5\n'
+    assert grouped in text, text
     # The query stays across Tab, matching nothing in the scope.
     send(b'terra\t')
     rows = on_screen('No matching models')
     text = '\n'.join(rows)
     assert 'Models for Ctrl+P  ' in text and '> terra\n  No matching models' in text, text
     send(b'\t')
-    on_screen('\u203a gpt-6-terra [openai]')
+    on_screen('  openai\n\u203a   gpt-6-terra')
     send(b'\r')
     # With models of several providers, the model is named after its provider, as in the footer.
     on_screen('\u2713 Model set to (openai) gpt-6-terra \u00b7 thinking medium')
@@ -2488,7 +2494,7 @@ def search_selectors(read, until, send, output):
     send(b'/model\r')
     on_screen('Select model')
     send(b'haiku')
-    on_screen('\u203a claude-haiku-5-5')
+    on_screen('\u203a   claude-haiku-5-5')
     send(b'\r')
     on_screen('\u2713 Model set to claude-haiku-5-5')
     # After `/model `, the providers' models are completed, each with its provider, as a reference.
@@ -3895,7 +3901,7 @@ def fullscreen_lists(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'/model\r')
     rows = on_screen('Select model')
-    assert any(row.startswith('\u203a gpt-6-luna') for row in rows), rows
+    assert any(row.startswith('\u203a   gpt-6-luna') for row in rows), rows
     send(b'\x1b[B\r')
     on_screen('\u2713 Model set to gpt-6-terra')
     send(b'pick\r')

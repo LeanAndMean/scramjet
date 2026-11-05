@@ -1,7 +1,7 @@
 //! Choosing models: `/model`, and the scope Ctrl+P cycles through, as Scramjet's: the models the
 //! patterns of `--models` or the settings' `enabledModels` choose, else all the providers';
 //! `/scoped-models` chooses them.
-use super::editor::Note;
+use super::editor::{self, Note};
 use super::fuzzy::{self, Haystack};
 use super::interactive::{Interactive, model_line};
 use super::keymap::{self, Binding};
@@ -10,7 +10,7 @@ use super::settings::{Settings, card_level};
 use super::style::{MODEL_OFF, MODEL_ON, MUTED, RESET};
 use super::terminal;
 use super::text::{clip, visible};
-use scramjet_rs::agent::{Agent, ModelOption};
+use scramjet_rs::agent::{Agent, ModelOption, login};
 use unicode_width::UnicodeWidthStr;
 
 /// What the scope is called, after `models`: `Models for Ctrl+P`.
@@ -516,44 +516,68 @@ impl Interactive {
         }
     }
 
-    /// `/model`'s list, as Scramjet's selector: each model with its provider, and its name under
-    /// the list, searched from `query`. With a scope it shows the scope's models in their order,
-    /// and Tab switches to all the providers' and back, keeping the query and the model selected.
+    /// `/model`'s list, as Scramjet's selector, each model's name under it, searched from `query`:
+    /// all the providers' models under a heading for each, the current model's provider first,
+    /// a query keeping the models it matches under theirs. With a scope it shows the scope's
+    /// models in their order, each with its provider, and Tab switches to all the providers' and
+    /// back, keeping the query and the model selected.
     fn pick_model(&self, models: &[ModelOption], query: &str) -> Option<String> {
         let screen = self.screen.as_ref()?;
         let (scoped, _) = resolve(&self.scope, models);
-        let scoped: Vec<&ModelOption> = (scoped.iter())
+        let scoped: Vec<Row> = (scoped.iter())
             .filter_map(|scoped| (models.iter()).find(|model| model.reference() == scoped.model))
+            .map(Row::Model)
             .collect();
-        let all: Vec<&ModelOption> = models.iter().collect();
         let current = self.agent.model();
+        let all = grouped(models, current);
         let mut in_scope = !scoped.is_empty();
-        let mut spot = Spot {
-            query: query.to_owned(),
-            ..Spot::default()
-        };
+        let mut query = query.to_owned();
         // The model selected when Tab was pressed, to stay selected in the other list.
         let mut selected: Option<String> = None;
         loop {
             let shown = if in_scope { &scoped } else { &all };
-            let at =
-                |reference: &str| (shown.iter()).position(|model| model.reference() == reference);
-            let texts = (shown.iter())
-                .map(|model| {
-                    let provider = model.provider.as_deref().unwrap_or_default();
-                    Haystack::new(&format!("{} {provider}", model.id))
+            let model = |index: usize| match shown[index] {
+                Row::Model(model) => Some(model),
+                Row::Provider(_) => None,
+            };
+            let at = |reference: &str| {
+                (0..shown.len())
+                    .position(|index| model(index).is_some_and(|m| m.reference() == reference))
+            };
+            let texts = (0..shown.len())
+                .map(|index| match model(index) {
+                    Some(model) => {
+                        let provider = model.provider.as_deref().unwrap_or_default();
+                        let name = login::shown_name(provider);
+                        let name = if name == provider { "" } else { name };
+                        Haystack::new(&format!("{} {provider} {name}", model.id))
+                    }
+                    None => Haystack::new(""),
                 })
                 .collect();
-            let notes = (shown.iter())
-                .map(|model| visible(model.name.as_deref().unwrap_or(&model.id)))
+            let notes = (0..shown.len())
+                .map(|index| {
+                    let name = model(index).map(|model| model.name.as_deref().unwrap_or(&model.id));
+                    visible(name.unwrap_or_default())
+                })
                 .collect();
             let row = |index: usize, width| {
-                let model = shown[index];
-                let provider = (model.provider.as_deref()).map_or_else(String::new, |provider| {
-                    format!(" {MUTED}[{}]{RESET}", visible(provider))
-                });
+                let model = match shown[index] {
+                    Row::Model(model) => model,
+                    Row::Provider(provider) => {
+                        return clip(&visible(login::shown_name(provider)), width);
+                    }
+                };
+                // Under its provider's heading, or with its provider.
+                let (indent, provider) = match model.provider.as_deref() {
+                    Some(provider) if in_scope => {
+                        ("", format!(" {MUTED}[{}]{RESET}", visible(provider)))
+                    }
+                    _ => ("  ", String::new()),
+                };
                 let rate = shown_rate(model.rate);
-                clip(&format!("{}{provider}{rate}", visible(&model.id)), width)
+                let id = visible(&model.id);
+                clip(&format!("{indent}{id}{provider}{rate}"), width)
             };
             let (title, keys) = match (scoped.is_empty(), in_scope) {
                 (true, _) => (
@@ -573,22 +597,21 @@ impl Interactive {
             let current_row = at(current);
             let initial = current_row.unwrap_or(0);
             let none = "No matching models";
-            let picker = Picker::search(
-                &title,
-                select::VISIBLE,
-                texts,
-                initial,
-                current_row,
-                none,
-                row,
-            );
+            // The headings take rows.
+            let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
+            let picker = Picker::search(&title, visible, texts, initial, current_row, none, row);
             let keep = match &selected {
                 Some(id) => at(id).or(current_row),
                 // A query starts at its best match.
-                None if spot.query.is_empty() => current_row,
+                None if query.is_empty() => current_row,
                 None => None,
             };
-            let mut picker = picker.noting(keys, notes).held().at(spot, None);
+            let mut picker = picker.noting(keys, notes).held();
+            if !in_scope {
+                let headings = (0..shown.len()).map(|index| model(index).is_none());
+                picker = picker.in_order().headed(headings.collect());
+            }
+            let mut picker = picker.query(std::mem::take(&mut query));
             if !scoped.is_empty() {
                 picker = picker.tabbing();
             }
@@ -598,17 +621,15 @@ impl Interactive {
             match screen.pick_or_act(picker) {
                 Picked::Tab(left) => {
                     let row = left.shown.get(left.position);
-                    selected = row.map(|&row| shown[row].reference()).or(selected);
-                    spot = Spot {
-                        query: left.query,
-                        ..Spot::default()
-                    };
+                    let row = row.and_then(|&row| model(row));
+                    selected = row.map(ModelOption::reference).or(selected);
+                    query = left.query;
                     in_scope = !in_scope;
                 }
                 picked => {
                     screen.dismiss();
                     return match picked {
-                        Picked::Row(Some(row)) => Some(shown[row].reference()),
+                        Picked::Row(Some(row)) => model(row).map(ModelOption::reference),
                         _ => None,
                     };
                 }
@@ -757,6 +778,37 @@ impl Interactive {
     }
 }
 
+/// A row of `/model`'s list: a provider's heading, or one of its models.
+enum Row<'a> {
+    Provider(&'a str),
+    Model(&'a ModelOption),
+}
+
+/// `models` under a heading for each provider, the provider of the `current` model (a reference)
+/// first, the others in their order.
+fn grouped<'a>(models: &'a [ModelOption], current: &str) -> Vec<Row<'a>> {
+    let provider = |model: &'a ModelOption| model.provider.as_deref().unwrap_or_default();
+    let mut providers: Vec<&str> = Vec::new();
+    for model in models {
+        if !providers.contains(&provider(model)) {
+            providers.push(provider(model));
+        }
+    }
+    let theirs = (models.iter()).find(|model| model.reference() == current);
+    if let Some(at) = theirs.and_then(|model| providers.iter().position(|&p| p == provider(model)))
+    {
+        let first = providers.remove(at);
+        providers.insert(0, first);
+    }
+    let mut rows = Vec::new();
+    for name in providers {
+        rows.push(Row::Provider(name));
+        let theirs = models.iter().filter(|model| provider(model) == name);
+        rows.extend(theirs.map(Row::Model));
+    }
+    rows
+}
+
 /// A model's output rate after its provider in a list, as Scramjet's selectors show it.
 fn shown_rate(rate: Option<f64>) -> String {
     rate.map_or_else(String::new, |rate| {
@@ -805,6 +857,45 @@ mod tests {
             model("gpt-5.6-luna", Some("GPT-5.6 Luna"), Some("openai")),
             model("local:7b", None, None),
         ]
+    }
+
+    #[test]
+    fn the_models_are_grouped_by_provider_the_current_ones_first() {
+        let models = [
+            model("claude-sonnet-5", None, Some("anthropic")),
+            model("gpt-6-luna", None, Some("openai")),
+            model("claude-haiku-5-5", None, Some("anthropic")),
+            model("claude-sonnet-5", None, Some("github-copilot")),
+        ];
+        let shown = |current: &str| -> Vec<String> {
+            (grouped(&models, current).into_iter())
+                .map(|row| match row {
+                    Row::Provider(provider) => format!("# {provider}"),
+                    Row::Model(model) => model.id.clone(),
+                })
+                .collect()
+        };
+        let copilot = [
+            "# github-copilot",
+            "claude-sonnet-5",
+            "# anthropic",
+            "claude-sonnet-5",
+        ];
+        let rest = ["claude-haiku-5-5", "# openai", "gpt-6-luna"];
+        assert_eq!(
+            shown("github-copilot/claude-sonnet-5"),
+            [&copilot[..], &rest[..]].concat()
+        );
+        // A model no provider offers leaves them in their order.
+        let anthropic = ["# anthropic", "claude-sonnet-5", "claude-haiku-5-5"];
+        let others = [
+            "# openai",
+            "gpt-6-luna",
+            "# github-copilot",
+            "claude-sonnet-5",
+        ];
+        assert_eq!(shown("local:7b"), [&anthropic[..], &others[..]].concat());
+        assert_eq!(shown("anthropic/claude-haiku-5-5"), shown("local:7b"));
     }
 
     /// The id of a reference to one of `proxy()`'s models.

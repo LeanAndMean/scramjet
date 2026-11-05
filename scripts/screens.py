@@ -16,6 +16,8 @@ A scenario (scripts/screens/*.json) holds:
     "size":     COLUMNSxROWS, unless --size gives one;
     "files":    the project's files, committed to a Git repository first;
     "settings": scramjet-rs's settings, which --set (a JSON value, else a string) adds to;
+    "model":    the scripted server's model (default gpt-6-luna);
+    "providers": more models.json providers, listed after the scripted server's ("screens");
     "prompt":   the first message;
     "replies":  each response's items, in turn: {"reasoning": TEXT}, {"text": TEXT} or
                 {"call": NAME, "arguments": {...}}; the tools run for real;
@@ -299,12 +301,12 @@ def main():
         for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'TMUX', 'VISUAL', 'EDITOR']:
             env.pop(name, None)
 
-        # The scripted server is the one provider, offering the scenario's model.
+        # The scripted server is the first provider, offering the scenario's model.
         model = scenario.get('model', 'gpt-6-luna')
-        provider = {'baseUrl': 'http://%s/v1' % serve(scenario['replies']), 'api': 'openai-responses',
+        provider = {'baseUrl': 'http://%s/v1' % serve(scenario.get('replies', [])), 'api': 'openai-responses',
                     'models': [{'id': model, 'reasoning': True, 'input': ['text', 'image']}]}
         with open(os.path.join(work, 'config/scramjet-rs/models.json'), 'w') as file:
-            json.dump({'providers': {'screens': provider}}, file)
+            json.dump({'providers': dict({'screens': provider}, **scenario.get('providers', {}))}, file)
 
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))

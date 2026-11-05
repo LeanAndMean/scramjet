@@ -441,7 +441,8 @@ impl Picker {
         self
     }
 
-    /// Keeps the rows a query matches in their order, rather than best first.
+    /// Keeps the rows a query matches in their order, rather than best first; with headings, each
+    /// under its heading, the best selected.
     pub(super) fn in_order(mut self) -> Self {
         if let Some(search) = &mut self.list.search {
             search.ordered = true;
@@ -477,6 +478,15 @@ impl Picker {
                 .collect();
         }
         self.list.tree = prefixes;
+        self
+    }
+
+    /// Shows the rows `query` matches, as if typed.
+    pub(super) fn query(mut self, query: String) -> Self {
+        if let Some(search) = &mut self.list.search {
+            search.query = query;
+            self.list.filter();
+        }
         self
     }
 
@@ -978,12 +988,34 @@ impl List {
         if tokens.is_empty() {
             self.rows = (0..search.texts.len()).collect();
             self.selected = search.initial;
+        } else if search.ordered && !self.headings.is_empty() {
+            let heading = |row: usize| self.headings.get(row) == Some(&true);
+            let best: Vec<usize> = (fuzzy::filter(&tokens, &search.texts).into_iter())
+                .filter(|&row| !heading(row))
+                .collect();
+            let mut matched = best.clone();
+            matched.sort_unstable();
+            let mut rows = Vec::new();
+            for row in matched {
+                let above = (0..row).rev().find(|&above| heading(above));
+                if let Some(above) = above.filter(|above| !rows.contains(above)) {
+                    rows.push(above);
+                }
+                rows.push(row);
+            }
+            let first = best.first();
+            self.selected =
+                (first.and_then(|best| rows.iter().position(|row| row == best))).unwrap_or(0);
+            self.rows = rows;
         } else {
             self.rows = fuzzy::filter(&tokens, &search.texts);
             if search.ordered {
                 self.rows.sort_unstable();
             }
             self.selected = 0;
+        }
+        if !self.rows.is_empty() {
+            self.settle(false);
         }
     }
 }
@@ -1071,17 +1103,19 @@ fn lines(
             format!("  {tree}{text}{mark}")
         });
     }
-    if visible < shown {
-        // Of the rows that can be selected.
-        let rows = |end| (0..end).filter(|&at| !list.is_heading(at)).count();
-        let (at, of) = (rows(list.selected + 1), rows(shown));
+    // Of the rows that can be selected.
+    let rows = |end| (0..end).filter(|&at| !list.is_heading(at)).count();
+    let at = if shown > 0 {
+        rows(list.selected + 1)
+    } else {
+        0
+    };
+    if visible < shown || filter.is_some() {
         lines.push(format!(
-            "  {MUTED}({at}/{of}){}{RESET}",
+            "  {MUTED}({at}/{}){}{RESET}",
+            rows(shown),
             filter.unwrap_or("")
         ));
-    } else if let Some(filter) = filter {
-        let at = usize::from(shown > 0) * (list.selected + 1);
-        lines.push(format!("  {MUTED}({at}/{shown}){filter}{RESET}"));
     }
     lines
 }
@@ -1222,6 +1256,65 @@ mod tests {
 
     fn haystacks(texts: &[String]) -> Vec<Haystack> {
         texts.iter().map(|text| Haystack::new(text)).collect()
+    }
+
+    #[test]
+    fn a_query_in_order_keeps_each_match_under_its_heading_and_selects_the_best() {
+        let texts: Vec<String> = [
+            "",
+            "gpt-5 one",
+            "sonnet one",
+            "",
+            "gpt-5-mini two",
+            "gpt-5 two",
+        ]
+        .map(str::to_owned)
+        .into();
+        let headings = texts.iter().map(String::is_empty).collect();
+        let mut list = List::searching(haystacks(&texts), 0, 10, "None");
+        list.headings = headings;
+        list.search.as_mut().unwrap().ordered = true;
+        let type_in = |list: &mut List, query: &str| {
+            list.search.as_mut().unwrap().query = query.into();
+            list.filter();
+        };
+        type_in(&mut list, "two");
+        // "gpt-5 two" is the shorter text, so the better match.
+        assert_eq!((list.rows.clone(), list.selected), (vec![3, 4, 5], 2));
+        type_in(&mut list, "gpt");
+        assert_eq!((list.rows.clone(), list.selected), (vec![0, 1, 3, 4, 5], 1));
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
+        let shown = |list: &List| {
+            let filter = Some("");
+            plain(lines(
+                ("Pick", HINT, style::MUTED),
+                list,
+                searched(list),
+                filter,
+                None,
+                (40, 24),
+                &row,
+            ))
+        };
+        assert_eq!(
+            shown(&list),
+            [
+                "Pick  ↑↓ move · Enter select · Esc can…",
+                "> gpt ",
+                "  ",
+                "› gpt-5 one",
+                "  ",
+                "  gpt-5-mini two",
+                "  gpt-5 two",
+                "  (1/3)"
+            ]
+        );
+        type_in(&mut list, "zzz");
+        assert!(list.rows.is_empty());
+        assert_eq!(shown(&list).last().unwrap(), "  (0/0)");
+        // Without a query, all the rows again, off the heading the list started on.
+        type_in(&mut list, "");
+        assert_eq!((list.rows.len(), list.selected), (6, 1));
     }
 
     #[test]
