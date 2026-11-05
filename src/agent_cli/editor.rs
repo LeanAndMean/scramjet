@@ -3,6 +3,7 @@
 
 use super::completion::{Completion, Kind, Lookup};
 use super::file_search;
+use super::keymap::Binding;
 use super::keys::Key;
 use super::text::{FROM, JOINED, SPACE};
 use rustix::termios;
@@ -99,40 +100,77 @@ impl Buffer {
             self.cursor = at;
         }
     }
-    fn apply(&mut self, key: &Key) {
-        match key {
-            Key::Text(text) | Key::Paste(text) => self.insert(text),
-            Key::NewLine | Key::AltEnter => self.insert("\n"),
-            Key::Backspace => self.remove(self.previous(), self.cursor),
-            Key::Delete => {
+    fn apply(&mut self, edit: Edit) {
+        match edit {
+            Edit::Backspace => self.remove(self.previous(), self.cursor),
+            Edit::Delete => {
                 let end = self.next();
                 self.remove(self.cursor, end);
             }
-            Key::Left => self.cursor = self.previous(),
-            Key::Right => self.cursor = self.next(),
-            Key::WordLeft => self.cursor = self.word_start(),
-            Key::WordRight => self.cursor = self.word_end(),
-            Key::LineStart | Key::CtrlA => self.cursor = self.line_start(),
-            Key::LineEnd => self.cursor = self.line_end(),
-            Key::DeleteWordBack => self.remove(self.word_start(), self.cursor),
-            Key::DeleteWordForward => {
+            Edit::Left => self.cursor = self.previous(),
+            Edit::Right => self.cursor = self.next(),
+            Edit::WordLeft => self.cursor = self.word_start(),
+            Edit::WordRight => self.cursor = self.word_end(),
+            Edit::LineStart => self.cursor = self.line_start(),
+            Edit::LineEnd => self.cursor = self.line_end(),
+            Edit::DeleteWordBack => self.remove(self.word_start(), self.cursor),
+            Edit::DeleteWordForward => {
                 let end = self.word_end();
                 self.remove(self.cursor, end);
             }
-            Key::KillStart => match self.line_start() {
+            Edit::KillStart => match self.line_start() {
                 start if start == self.cursor => self.remove(self.previous(), self.cursor),
                 start => self.remove(start, self.cursor),
             },
-            Key::KillEnd => match self.line_end() {
+            Edit::KillEnd => match self.line_end() {
                 end if end == self.cursor => {
                     let next = self.next();
                     self.remove(self.cursor, next);
                 }
                 end => self.remove(self.cursor, end),
             },
-            _ => {}
         }
     }
+}
+
+/// What a key does to the text and the cursor, apart from typing.
+#[derive(Clone, Copy, PartialEq)]
+enum Edit {
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    WordLeft,
+    WordRight,
+    LineStart,
+    LineEnd,
+    DeleteWordBack,
+    DeleteWordForward,
+    KillStart,
+    KillEnd,
+}
+
+/// The edits' actions, the kills' last.
+const EDITS: [(Binding, Edit); 12] = [
+    (Binding::DeleteCharBackward, Edit::Backspace),
+    (Binding::DeleteCharForward, Edit::Delete),
+    (Binding::CursorLeft, Edit::Left),
+    (Binding::CursorRight, Edit::Right),
+    (Binding::CursorWordLeft, Edit::WordLeft),
+    (Binding::CursorWordRight, Edit::WordRight),
+    (Binding::CursorLineStart, Edit::LineStart),
+    (Binding::CursorLineEnd, Edit::LineEnd),
+    (Binding::DeleteWordBackward, Edit::DeleteWordBack),
+    (Binding::DeleteWordForward, Edit::DeleteWordForward),
+    (Binding::DeleteToLineStart, Edit::KillStart),
+    (Binding::DeleteToLineEnd, Edit::KillEnd),
+];
+
+/// The edit `key` makes, if any.
+fn edit(key: &Key) -> Option<Edit> {
+    (EDITS.iter())
+        .find(|&&(binding, _)| key.is(binding))
+        .map(|&(_, edit)| edit)
 }
 
 /// Screen rows for the text, with the row and column of every cursor position.
@@ -429,12 +467,6 @@ impl Editor {
     /// Edits `draft` with `key`, or says what the caller should do for it; `pending`: more keys
     /// are already typed, so an `@` search waits for them.
     pub(super) fn key(&mut self, draft: &mut Draft, key: Key, pending: bool) -> Action {
-        let key = match key {
-            Key::AltEnter => Key::NewLine,
-            Key::AltUp => Key::Up,
-            Key::AltDown | Key::CtrlN => Key::Down,
-            key => key,
-        };
         let Draft {
             buffer,
             browsing,
@@ -448,43 +480,65 @@ impl Editor {
             last,
             jump,
         } = draft;
-        if key == Key::Escape {
+        let escape = key.is(Binding::Interrupt);
+        if escape {
             *lookup = None;
         }
         let armed = std::mem::take(exit_armed);
         let noted = note.take();
         let previous = std::mem::take(last);
         let prior = buffer.clone();
+        let (up, down) = (key.is(Binding::CursorUp), key.is(Binding::CursorDown));
         // As Scramjet's, going through history is undone at once, to the text it started from.
-        let browsing_on = browsing.is_some() && matches!(key, Key::Up | Key::Down);
-        let undoing = key == Key::Undo;
-        let tab = matches!(&key, Key::Text(text) if text == "\t");
+        let browsing_on = browsing.is_some() && (up || down);
+        let undoing = key.is(Binding::Undo);
+        let tab = key.is(Binding::Tab);
+        // At the prompt the follow-up key sends between turns, as Scramjet's; a dialog's text has
+        // no queue, and it is a new line there.
+        let follow_up = key.is(Binding::FollowUp);
+        let submit = key.is(Binding::Submit) || (follow_up && !self.dialog);
+        let new_line = key.is(Binding::NewLine) || (follow_up && self.dialog);
+        let jump_key = match (key.is(Binding::JumpForward), key.is(Binding::JumpBackward)) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
+        };
+        let kill = [
+            Binding::DeleteToLineStart,
+            Binding::DeleteToLineEnd,
+            Binding::DeleteWordBackward,
+            Binding::DeleteWordForward,
+        ]
+        .into_iter()
+        .any(|binding| key.is(binding));
+        let edit = edit(&key);
+        let empty = buffer.text.is_empty();
         // As Scramjet's, a space is undone apart from the word before it, and with the one after.
         let typed = match &key {
             Key::Text(text) if !tab => Some(text.starts_with(char::is_whitespace)),
             _ => None,
         };
         let jumping = jump.take();
-        let changed = match key {
+        let changed = match &key {
             // The jump's key again cancels it; a key that types no character cancels it and
             // does what it does.
-            Key::Jump(_) if jumping.is_some() => {
+            _ if jump_key.is_some() && jumping.is_some() => {
                 *last = previous;
                 true
             }
-            Key::Text(text) if jumping.is_some() && !text.starts_with(char::is_control) => {
+            Key::Text(text) if jumping.is_some() => {
                 *completion = None;
-                buffer.jump(&text, jumping == Some(true));
+                buffer.jump(text, jumping == Some(true));
                 true
             }
-            Key::Jump(forward) => {
-                *jump = Some(forward);
+            _ if jump_key.is_some() => {
+                *jump = jump_key;
                 *exit_armed = armed;
                 *note = noted;
                 *last = previous;
                 false
             }
-            Key::Undo => {
+            _ if undoing => {
                 if let Some(snapshot) = undo.pop() {
                     *buffer = snapshot;
                 }
@@ -492,7 +546,7 @@ impl Editor {
                 *browsing = None;
                 true
             }
-            Key::Yank => {
+            _ if key.is(Binding::Yank) => {
                 match self.kills.last() {
                     Some(text) => {
                         buffer.insert(text);
@@ -503,7 +557,7 @@ impl Editor {
                 }
                 true
             }
-            Key::YankPop => {
+            _ if key.is(Binding::YankPop) => {
                 let yanked = self.kills.last().map_or(0, String::len);
                 if previous == Last::Yank
                     && self.kills.len() > 1
@@ -518,13 +572,13 @@ impl Editor {
                 }
                 true
             }
-            Key::KillStart | Key::KillEnd | Key::DeleteWordBack | Key::DeleteWordForward => {
+            _ if kill && let Some(edit) = edit => {
                 *completion = None;
-                buffer.apply(&key);
+                buffer.apply(edit);
                 let removed = prior.text.len() - buffer.text.len();
                 if removed > 0 {
                     let text = prior.text[buffer.cursor..buffer.cursor + removed].to_owned();
-                    let backward = matches!(key, Key::KillStart | Key::DeleteWordBack);
+                    let backward = matches!(edit, Edit::KillStart | Edit::DeleteWordBack);
                     self.kill(text, backward, previous == Last::Kill);
                     *last = Last::Kill;
                 } else {
@@ -532,32 +586,32 @@ impl Editor {
                 }
                 true
             }
-            Key::Idle | Key::Suspend => {
+            _ if key == Key::Idle || key.is(Binding::Suspend) => {
                 *exit_armed = armed;
                 *note = noted;
                 *last = previous;
                 *jump = jumping;
                 return match key {
-                    Key::Suspend => Action::Suspend,
-                    _ => Action::Edited(false),
+                    Key::Idle => Action::Edited(false),
+                    _ => Action::Suspend,
                 };
             }
-            Key::Escape if completion.is_some() => {
+            _ if escape && completion.is_some() => {
                 *completion = None;
                 true
             }
-            Key::Up | Key::Down if completion.is_some() => {
+            _ if (up || down) && completion.is_some() => {
                 if let Some(list) = completion {
-                    list.select(key == Key::Up);
+                    list.select(up);
                 }
                 true
             }
             // As in Scramjet, Enter on a command also submits it, and on an argument does not,
             // but on one already typed in full, which Scramjet puts in again for a second Enter.
-            Key::Text(_) | Key::Enter if (tab || key == Key::Enter) && completion.is_some() => {
+            _ if (tab || submit) && completion.is_some() => {
                 let list = completion.take().expect("checked above");
                 let typed = &buffer.text[list.start..buffer.cursor];
-                let submit = key == Key::Enter
+                let submit = submit
                     && match list.kind {
                         Kind::Slash => true,
                         Kind::Argument => list.items[list.selected].value == typed,
@@ -570,9 +624,9 @@ impl Editor {
                 }
                 true
             }
-            Key::Escape | Key::Interrupt if self.dialog => return Action::Exit,
-            Key::EndOfInput if self.dialog && buffer.text.is_empty() => return Action::Exit,
-            Key::Escape if self.double_escape && buffer.text.trim().is_empty() => {
+            _ if self.dialog && key.is(Binding::SelectCancel) => return Action::Exit,
+            _ if self.dialog && empty && key.is(Binding::Exit) => return Action::Exit,
+            _ if escape && self.double_escape && buffer.text.trim().is_empty() => {
                 if last_escape.is_some_and(|at| at.elapsed() < DOUBLE_ESCAPE) {
                     *last_escape = None;
                     return Action::DoubleEscape;
@@ -582,66 +636,51 @@ impl Editor {
                 *note = noted;
                 false
             }
-            Key::BackTab if !self.dialog => return Action::CycleEffort,
-            Key::CycleModel(forward) if !self.dialog => {
-                return Action::CycleModel(if forward { 1 } else { -1 });
+            _ if !self.dialog && key.is(Binding::ThinkingCycle) => return Action::CycleEffort,
+            _ if !self.dialog && key.is(Binding::ModelCycleForward) => {
+                return Action::CycleModel(1);
             }
-            Key::Ignored
-            | Key::Mouse(_)
-            | Key::BackTab
-            | Key::CycleModel(_)
-            | Key::SelectModel
-            | Key::Save
-            | Key::ClearAll
-            | Key::Expand
-            | Key::Escape
-            | Key::PageUp
-            | Key::PageDown
-            | Key::Top
-            | Key::Bottom => {
-                *exit_armed = armed;
-                *note = noted;
-                *last = previous;
-                false
+            _ if !self.dialog && key.is(Binding::ModelCycleBackward) => {
+                return Action::CycleModel(-1);
             }
-            Key::ToggleThinking => {
+            _ if key.is(Binding::ThinkingToggle) => {
                 let hidden = !self.hide_thinking.fetch_xor(true, Ordering::Relaxed);
                 *note = Some((Note::Info(thinking_note(hidden).to_owned()), Instant::now()));
                 true
             }
-            Key::External => {
+            _ if key.is(Binding::External) => {
                 *completion = None;
                 return Action::External;
             }
-            Key::Enter if buffer.text[..buffer.cursor].ends_with('\\') => {
-                buffer.apply(&Key::Backspace);
-                buffer.apply(&Key::NewLine);
+            _ if submit && buffer.text[..buffer.cursor].ends_with('\\') => {
+                buffer.apply(Edit::Backspace);
+                buffer.insert("\n");
                 true
             }
-            Key::Enter if buffer.text.trim().is_empty() => true,
-            Key::Enter => {
+            _ if submit && buffer.text.trim().is_empty() => true,
+            _ if submit => {
                 // As in Scramjet, the prompt is sent trimmed, and shown as sent.
                 buffer.set(buffer.text.trim().to_owned());
                 return Action::Submit(buffer.text.clone());
             }
-            Key::Interrupt if buffer.text.is_empty() => {
+            _ if empty && key.is(Binding::Clear) => {
                 if armed {
                     return Action::Exit;
                 }
                 *exit_armed = true;
                 true
             }
-            Key::Interrupt => {
+            _ if key.is(Binding::Clear) => {
                 *buffer = Buffer::default();
                 *completion = None;
                 *browsing = None;
                 true
             }
-            Key::EndOfInput if buffer.text.is_empty() => return Action::Exit,
+            _ if empty && key.is(Binding::Exit) => return Action::Exit,
             // Scramjet completes only commands and their arguments after a `/` that starts the
             // prompt; a path there is completed when nothing else matches. An `@` word is
             // looked for.
-            Key::Text(_) if tab && !self.dialog => {
+            _ if tab && !self.dialog => {
                 let before = &buffer.text[..buffer.cursor];
                 *completion = Completion::slash(before, &self.commands)
                     .or_else(|| Completion::argument(before, &self.models));
@@ -662,31 +701,18 @@ impl Editor {
                 }
                 true
             }
+            _ if tab => {
+                buffer.insert("\t");
+                true
+            }
             // A list follows what is typed, a path's while the same word is typed; commands
             // are listed as soon as a `/` starts the prompt, entries for an `@` word once
             // typing pauses, the list before staying until they are found.
-            Key::Text(_) | Key::Backspace if !self.dialog => {
-                buffer.apply(&key);
-                let before = &buffer.text[..buffer.cursor];
-                *completion = match (file_search::Mention::typed(before), completion.take()) {
-                    (Some(mention), list) => {
-                        let kept = list
-                            .filter(|list| list.kind == Kind::File && list.start == mention.start);
-                        if !pending {
-                            *lookup = Lookup::start(&self.root, mention, buffer, false);
-                        }
-                        kept
-                    }
-                    (None, Some(list)) if list.kind == Kind::Path => {
-                        Completion::path(before, &self.root).filter(|next| next.start == list.start)
-                    }
-                    (None, _) => Completion::slash(before, &self.commands)
-                        .or_else(|| Completion::argument(before, &self.models)),
-                };
-                true
+            Key::Text(_) if !self.dialog => self.typed(buffer, completion, lookup, &key, pending),
+            _ if !self.dialog && edit == Some(Edit::Backspace) => {
+                self.typed(buffer, completion, lookup, &key, pending)
             }
-            Key::Up | Key::Down => {
-                let up = key == Key::Up;
+            _ if up || down => {
                 let layout = Layout::new(&buffer.text, terminal_size().0);
                 if let Some(cursor) = layout.vertical(buffer.cursor, up) {
                     buffer.cursor = cursor;
@@ -709,15 +735,27 @@ impl Editor {
                 }
                 true
             }
-            Key::EndOfInput => {
+            _ if new_line => {
                 *completion = None;
-                buffer.apply(&Key::Delete);
+                buffer.insert("\n");
                 true
             }
-            key => {
+            Key::Text(text) | Key::Paste(text) => {
                 *completion = None;
-                buffer.apply(&key);
+                buffer.insert(text);
                 true
+            }
+            _ if let Some(edit) = edit => {
+                *completion = None;
+                buffer.apply(edit);
+                true
+            }
+            // Other keys leave the prompt as it is.
+            _ => {
+                *exit_armed = armed;
+                *note = noted;
+                *last = previous;
+                false
             }
         };
         if let Some(space) = typed.filter(|_| buffer.text != prior.text) {
@@ -730,6 +768,38 @@ impl Editor {
             undo.push(prior);
         }
         Action::Edited(changed)
+    }
+
+    /// Text typed, or Backspace, at the prompt: the completion list follows.
+    fn typed(
+        &self,
+        buffer: &mut Buffer,
+        completion: &mut Option<Completion>,
+        lookup: &mut Option<Lookup>,
+        key: &Key,
+        pending: bool,
+    ) -> bool {
+        match key {
+            Key::Text(text) => buffer.insert(text),
+            _ => buffer.apply(Edit::Backspace),
+        }
+        let before = &buffer.text[..buffer.cursor];
+        *completion = match (file_search::Mention::typed(before), completion.take()) {
+            (Some(mention), list) => {
+                let kept =
+                    list.filter(|list| list.kind == Kind::File && list.start == mention.start);
+                if !pending {
+                    *lookup = Lookup::start(&self.root, mention, buffer, false);
+                }
+                kept
+            }
+            (None, Some(list)) if list.kind == Kind::Path => {
+                Completion::path(before, &self.root).filter(|next| next.start == list.start)
+            }
+            (None, _) => Completion::slash(before, &self.commands)
+                .or_else(|| Completion::argument(before, &self.models)),
+        };
+        true
     }
 
     /// Shows the entries an `@` search found, once it found them for the draft as it is;
@@ -896,7 +966,11 @@ mod tests {
             cursor,
         };
         for key in keys(input) {
-            buffer.apply(&key);
+            match (&key, super::edit(&key)) {
+                (Key::Text(text) | Key::Paste(text), _) => buffer.insert(text),
+                (_, Some(edit)) => buffer.apply(edit),
+                _ => panic!("{key:?} is no edit"),
+            }
         }
         (buffer.text, buffer.cursor)
     }
@@ -905,7 +979,10 @@ mod tests {
     fn paste_is_inserted_literally_without_submitting() {
         assert_eq!(
             keys(b"\x1b[200~one\r\ntwo\rthree\x03\x1b[A\tend\x1b[201~\r"),
-            [Key::Paste("one\ntwo\nthree[A\tend".into()), Key::Enter]
+            [
+                Key::Paste("one\ntwo\nthree[A\tend".into()),
+                crate::agent_cli::keys::tests::key("enter")
+            ]
         );
         assert_eq!(
             edit("ab", 1, b"\x1b[200~x\ny\x1b[201~"),

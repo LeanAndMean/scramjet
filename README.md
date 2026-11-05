@@ -31,7 +31,7 @@ Other main options: `--thinking LEVEL` (or `--effort`), `--models PATTERNS` (the
 ## Where the rest is
 
 - `scramjet-rs --help`: every option, the keys and the built-in commands.
-- `/hotkeys`: every key. `/` lists the commands and skills as you type.
+- `/hotkeys`: every key, and the file that changes them. `/` lists the commands and skills as you type.
 - `/settings`: every setting, each with a line saying what it does; also each command's next steps, publication approval, and what the session loaded from where, with any problems (Enter on a file opens it in `$EDITOR`).
 - [docs/TERMINALS.md](docs/TERMINALS.md): what your terminal does with copying, pasting and scramjet-rs's keys, such as the keys it keeps for itself.
 - The commit messages: how each behavior was decided and verified.
@@ -56,6 +56,7 @@ A command set is a directory of commands (`commands/<set>:<name>.md`) and agents
 - In turns nobody started (a next step that runs by itself, autopilot, `-p`), the agent's tools cannot see common credential stores (`~/.ssh`, `~/.netrc`, Proxy's…) or credential variables. The `hideCredentials` setting makes that `always` or `never`. tmux servers the agent starts then get their own socket directory: attach with `TMUX_TMPDIR=~/.local/state/scramjet-rs/tmux tmux attach`.
 - `edit` changes only the text it matched, also when it matched with trailing whitespace or typographic quotes aside (Scramjet then rewrites the whole file normalized).
 - Themes: `terminal-colors` (the terminal's own 16 colors, the default), Scramjet's `scramjet-dark` and Pi's `pi-light`, and theme files in Scramjet's format from `~/.scramjet/agent/themes/` and the project's `.scramjet/themes/`, chosen in `/settings` (`theme`). `/reload` reads them again.
+- Keys: `~/.config/scramjet-rs/keybindings.json` gives an action other keys, in Scramjet's format and with its action ids (`{"app.message.followUp": "ctrl+q"}`); `[]` leaves an action without keys. `tui.viewport.pageUp` and `pageDown` are Page Up and Page Down; scramjet-rs adds `tui.viewport.top` and `bottom` (Ctrl+Home, Ctrl+End) and `tui.select.first` and `last` (Home, End). `/reload` reads it again.
 - Not yet: images shown in the terminal, GitLab publications.
 
 ## Coming from Claude Code or Codex

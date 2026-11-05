@@ -4,6 +4,18 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.7.0 — Keys of your own
+
+### Added
+
+- Keys can be changed: `~/.config/scramjet-rs/keybindings.json`, in Scramjet's format and with its action ids, gives an action other keys, for example `{"app.message.followUp": "ctrl+q"}` where the terminal keeps Alt+Enter, as Windows Terminal does. `[]` leaves an action without keys. It is read at start and by `/reload`; what is wrong in it is said at start and listed in `/settings`' Installed.
+- `/hotkeys` lists every action with the keys it has now, those of `/resume`, `/scoped-models`, `/tree` and the lists included, and names the file that changes them.
+
+### Changed
+
+- Ctrl+Up, Shift+Up and other arrows with a modifier no key uses no longer act as the plain arrow, as in Scramjet; Alt+Up and Alt+Down are no longer Up and Down in a dialog's text. Tab no longer adds a space to a list's search.
+- Keys the terminal reports in the kitty or modifyOtherKeys forms are all read, not only some, as are F1–F12, Insert, and rxvt's Shift and Ctrl forms.
+
 ## 0.6.0 — The terminal's paste key
 
 ### Changed

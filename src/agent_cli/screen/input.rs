@@ -5,6 +5,7 @@ use super::{Answer, App, BUSY, Flow, Input, MODEL_NEXT, NOTHING_QUEUED, Open, Op
 use crate::agent_cli::clipboard;
 use crate::agent_cli::editor::{Action, Note};
 use crate::agent_cli::interactive::effort_note;
+use crate::agent_cli::keymap::Binding;
 use crate::agent_cli::keys::{ByteSource, ESCAPE_WAIT, Key};
 use crate::agent_cli::select::Picked;
 use crate::agent_cli::slash::Builtin;
@@ -109,51 +110,56 @@ impl App {
         }
         // As in Scramjet, Ctrl+C copies what is selected, Escape lets it go and goes back to the
         // end, and other keys let it go and do what they do.
+        let paging = match (key.is(Binding::PageUp), key.is(Binding::PageDown)) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
+        };
         if self.selection.is_some() {
-            match key {
-                Key::Interrupt => {
-                    self.copy();
-                    return Flow::Go;
-                }
-                Key::Escape => {
-                    self.clear_selection();
-                    self.top = None;
-                    return Flow::Go;
-                }
-                Key::Idle | Key::PageUp | Key::PageDown => {}
-                _ => self.clear_selection(),
+            if key.is(Binding::Copy) {
+                self.copy();
+                return Flow::Go;
+            }
+            if key.is(Binding::Interrupt) {
+                self.clear_selection();
+                self.top = None;
+                return Flow::Go;
+            }
+            if key != Key::Idle && paging.is_none() {
+                self.clear_selection();
             }
         }
+        let listing = matches!(
+            self.dialog,
+            Some(Open {
+                shown: Shown::Pick(_),
+                ..
+            })
+        );
         match key {
             Key::Idle => return Flow::Go,
-            Key::Suspend => return Flow::Suspend,
-            Key::PasteImage => {
+            _ if key.is(Binding::Suspend) => return Flow::Suspend,
+            _ if key.is(Binding::PasteImage) => {
                 self.paste(clipboard::paste_image);
                 return Flow::Go;
             }
-            Key::Expand if !self.list_takes(&key) => {
+            _ if key.is(Binding::ToolsExpand) && !self.list_takes(&key) => {
                 self.whole = !self.whole;
                 return Flow::Go;
             }
-            Key::PageUp | Key::PageDown
-                if !matches!(
-                    self.dialog,
-                    Some(Open {
-                        shown: Shown::Pick(_),
-                        ..
-                    })
-                ) =>
+            _ if let Some(up) = paging
+                && !listing =>
             {
                 let page = self.rows.saturating_sub(1).max(1) as isize;
-                self.navigate(if key == Key::PageUp { -page } else { page });
+                self.navigate(if up { -page } else { page });
                 return Flow::Go;
             }
-            Key::Top | Key::Bottom => {
-                self.navigate(if key == Key::Top {
-                    isize::MIN
-                } else {
-                    isize::MAX
-                });
+            _ if key.is(Binding::Top) => {
+                self.navigate(isize::MIN);
+                return Flow::Go;
+            }
+            _ if key.is(Binding::Bottom) => {
+                self.navigate(isize::MAX);
                 return Flow::Go;
             }
             _ => {}
@@ -162,7 +168,7 @@ impl App {
             return self.dialog_key(key, pending);
         }
         let running = self.activity.is_some();
-        if key == Key::Escape && !self.draft.completing() {
+        if key.is(Binding::Interrupt) && !self.draft.completing() {
             if self.top.is_some() {
                 self.top = None;
                 return Flow::Go;
@@ -178,40 +184,36 @@ impl App {
                 return Flow::Go;
             }
         }
-        if key == Key::Interrupt && running {
+        if key.is(Binding::Clear) && running {
             self.cancel.store(true, Ordering::Relaxed);
         }
-        let key = match key {
-            Key::AltUp => {
-                let empty = self.queue().is_empty();
-                match empty {
-                    true => (self.draft).set_note(Note::Info(NOTHING_QUEUED.to_owned())),
-                    false => self.restore(),
-                }
-                return Flow::Go;
+        if key.is(Binding::Dequeue) {
+            let empty = self.queue().is_empty();
+            match empty {
+                true => (self.draft).set_note(Note::Info(NOTHING_QUEUED.to_owned())),
+                false => self.restore(),
             }
-            Key::AltEnter if running => {
-                self.enqueue(true);
-                return Flow::Go;
+            return Flow::Go;
+        }
+        // Between turns, the editor sends it as Enter, as Scramjet's.
+        if key.is(Binding::FollowUp) && running {
+            self.enqueue(true);
+            return Flow::Go;
+        }
+        // `/model`, as typed, but the draft stays.
+        if key.is(Binding::ModelSelect) {
+            let model = "/model".to_owned();
+            if running {
+                self.queue().commands.push(model);
+            } else if self.ready {
+                self.ready = false;
+                self.top = None;
+                let _ = self.inputs.send(Input::Prompt(model));
+            } else {
+                self.draft.set_note(Note::Info(BUSY.to_owned()));
             }
-            // As Scramjet's, Alt+Enter sends between turns as Enter does.
-            Key::AltEnter => Key::Enter,
-            // `/model`, as typed, but the draft stays.
-            Key::SelectModel => {
-                let model = "/model".to_owned();
-                if running {
-                    self.queue().commands.push(model);
-                } else if self.ready {
-                    self.ready = false;
-                    self.top = None;
-                    let _ = self.inputs.send(Input::Prompt(model));
-                } else {
-                    self.draft.set_note(Note::Info(BUSY.to_owned()));
-                }
-                return Flow::Go;
-            }
-            key => key,
-        };
+            return Flow::Go;
+        }
         match self.editor.key(&mut self.draft, key, pending) {
             Action::Edited(_) => {}
             // The draft holds the text sent.
@@ -271,7 +273,7 @@ impl App {
             self.held_keys.push((key, pending));
             return Flow::Go;
         }
-        if key == Key::Interrupt
+        if key.is(Binding::Clear)
             && matches!(
                 self.dialog,
                 Some(Open {
@@ -293,7 +295,7 @@ impl App {
             return Flow::Go;
         };
         let answer = match &mut open.shown {
-            Shown::Pick(picker) if key == Key::ToggleThinking && !picker.takes(&key) => {
+            Shown::Pick(picker) if key.is(Binding::ThinkingToggle) && !picker.takes(&key) => {
                 self.hide_thinking.fetch_xor(true, Ordering::Relaxed);
                 None
             }
@@ -317,11 +319,13 @@ impl App {
                 Key::Text(text) if text.eq_ignore_ascii_case("n") => {
                     Some(Answer::Approved(agent::Answer::Deny))
                 }
-                Key::Enter | Key::Escape => Some(Answer::Approved(agent::Answer::Deny)),
+                _ if key.is(Binding::SelectConfirm) || key.is(Binding::SelectCancel) => {
+                    Some(Answer::Approved(agent::Answer::Deny))
+                }
                 _ => None,
             },
             Shown::Text(text)
-                if key == Key::Enter
+                if key.is(Binding::Submit)
                     && text.optional == Optional::Yes
                     && text.draft.text().trim().is_empty()
                     && !text.draft.completing() =>

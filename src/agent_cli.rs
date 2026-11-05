@@ -15,6 +15,7 @@ mod install;
 mod installed;
 mod interactive;
 mod job;
+mod keymap;
 mod keys;
 mod markdown;
 mod record;

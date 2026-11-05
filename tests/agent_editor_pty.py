@@ -928,6 +928,31 @@ def ctrl_t_hides_reasoning(read, until, send, output):
     send(b'\x04')
 
 
+def remapped_keys(read, until, send, output):
+    shown, on_screen = full_screen(columns=100, rows=40)(read, output)
+    # The file's problem, said once at start; the action keeps its default key.
+    on_screen('keybindings.json: app.model.select: "hyper+l" is')
+    # The follow-up key sends between turns, as Alt+Enter did; Alt+Enter is no key now.
+    send(b'first\x1b\r')
+    read(.3)
+    assert 'Reply one.' not in '\n'.join(shown()), shown()
+    send(b'\x11')
+    on_screen('Reply one.')
+    send(b'\x14')
+    read(.3)
+    assert 'Thinking blocks' not in '\n'.join(shown()), shown()
+    send(b'\x1bOQ')
+    on_screen('Thinking blocks: hidden')
+    send(b'/hotkeys\r')
+    on_screen('/reload reads it again.')
+    # The keys of the section Other, a page above the listing's end.
+    send(b'\x1b[5~')
+    rows = on_screen('Queue follow-up message')
+    assert any(row.strip() == 'Ctrl+Q          Queue follow-up message (or send)' for row in rows), rows
+    assert any(row.strip() == 'F2              Toggle thinking block visibility' for row in rows), rows
+    send(b'\x04')
+
+
 def hidden_from_the_start(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -1064,6 +1089,11 @@ run([], ctrl_t_hides_reasoning, serve_thoughts([thought_gate]), variables={'XDG_
 # Ctrl+T's last choice, hidden, is saved and read by the next start.
 assert json.load(open(settings_path(hiding))) == {'hideThinkingBlock': True}
 run([], hidden_from_the_start, serve_quiet_reasoning(), variables={'XDG_CONFIG_HOME': hiding})
+keys_home = config_home('keys')
+with open(os.path.join(keys_home, 'scramjet-rs', 'keybindings.json'), 'w') as file:
+    json.dump({'app.message.followUp': 'ctrl+q', 'app.thinking.toggle': ['f2'], 'app.model.select': 'hyper+l'}, file)
+run([], remapped_keys, serve_replies([(['Reply one.'], 'Reply one.')]), variables={'XDG_CONFIG_HOME': keys_home},
+    columns=100, rows=40)
 run([], running_counts_seconds, calling)
 run([], running_shows_output, talking)
 run([], final_texts_replace_lost_deltas, replies)
@@ -2441,7 +2471,7 @@ def reloads(read, until, send, output):
     with open(settings_path(reloading), 'w') as file:
         file.write('{"tools": ["read", "bash"], "followUpMode": "each"}')
     send(b'/reload\r')
-    rows = on_screen('Reloaded settings, themes, command sets, agents, skills and context files')
+    rows = on_screen('Reloaded settings, keybindings, themes, command sets, agents, skills and context files')
     assert ('settings: %s: followUpMode must be "all" or "one-at-a-time"; ignored'
             % settings_path(reloading)) in rows, rows
     send(b'/fresh:h')
@@ -2503,7 +2533,7 @@ def installed_view(read, until, send, output):
     select_row(read, shown, send, '/demo:greet', b'\x1b[A')
     send(b'\r')
     rows = on_screen('\u203a   /demo:greet  Greet someone kindly')
-    assert 'Reloaded settings, themes, command sets, agents, skills and context files' in rows, rows
+    assert 'Reloaded settings, keybindings, themes, command sets, agents, skills and context files' in rows, rows
     assert rows.count(attention) == 2, rows
     # On a link that leads nowhere, it asks before removing the link; Escape keeps it.
     rows = select_row(read, shown, send, 'agents: ', b'\x1b[A')
@@ -2607,7 +2637,7 @@ def installed_edited_during_turn(read, until, send, output):
     on_screen('Done.')
     ended(read, output, 120, 40)
     send(b'/reload\r')
-    on_screen('Reloaded settings, themes, command sets, agents, skills and context files')
+    on_screen('Reloaded settings, keybindings, themes, command sets, agents, skills and context files')
     send(b'/demo:g')
     on_screen('\u2192 /demo:greet  <name> \u2014 Greet someone kindly')
     send(b'\x03')

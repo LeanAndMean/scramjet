@@ -1,6 +1,8 @@
 //! Keys read from the terminal in raw mode: escape sequences, SGR mouse reports and
-//! bracketed pastes decoded into `Key`s.
+//! bracketed pastes decoded into `Key`s, the keys pressed with their modifiers; what each does is
+//! the keymap's (`keymap.rs`).
 
+use super::keymap::{self, Binding};
 use rustix::termios::{self, OptionalActions, Termios};
 use std::{
     io::{self, Write},
@@ -12,81 +14,82 @@ pub(super) const ESCAPE_WAIT: Duration = Duration::from_millis(30);
 
 #[derive(Debug, PartialEq)]
 pub(super) enum Key {
+    /// A character typed, never a control character.
     Text(String),
     Paste(String),
-    Enter,
-    NewLine,
-    /// A new line in a dialog's text; at the prompt the full screen sends with it, or queues a
-    /// follow-up during a turn.
-    AltEnter,
-    Backspace,
-    Delete,
-    Left,
-    Right,
-    WordLeft,
-    WordRight,
-    Up,
-    Down,
-    /// Puts the messages queued during a turn back in the editor; Up in a dialog's text; moves
-    /// a model up in `/scoped-models`.
-    AltUp,
-    /// Down, but in `/scoped-models`, where it moves a model down.
-    AltDown,
-    /// Ctrl+N: Down, but in `/resume`, where it shows only the named sessions, as in Scramjet.
-    CtrlN,
-    PageUp,
-    PageDown,
-    LineStart,
-    /// Ctrl+A: as Home (`LineStart`), but in `/scoped-models`, where it switches on all models.
-    CtrlA,
-    LineEnd,
-    DeleteWordBack,
-    DeleteWordForward,
-    KillStart,
-    KillEnd,
-    /// Ctrl+Y: the text deleted last, put in again.
-    Yank,
-    /// Alt+Y, after Ctrl+Y: that text replaced with the one deleted before it.
-    YankPop,
-    /// Ctrl+-.
-    Undo,
-    /// Ctrl+] (`true`) or Ctrl+Alt+]: to the next or previous place of the character typed next.
-    Jump(bool),
-    /// Ctrl+L, Scramjet's key to open the model selector.
-    SelectModel,
-    /// Ctrl+Home and Ctrl+End: the conversation's start and end.
-    Top,
-    Bottom,
-    Interrupt,
-    EndOfInput,
-    /// Ctrl+V, Scramjet's key to paste an image, or Alt+V, which still reaches the program in
-    /// a terminal that takes Ctrl+V to paste text, as Windows Terminal does.
-    PasteImage,
-    ToggleThinking,
-    /// Shift+Tab, `ESC [ Z`.
-    BackTab,
-    /// Ctrl+P, Scramjet's key to switch to the next model; `false`: Shift+Ctrl+P, to the one
-    /// before, which only a terminal reporting modified keys tells apart.
-    CycleModel(bool),
-    External,
-    /// Ctrl+O, Scramjet's key to expand tool output.
-    Expand,
-    /// Shift+Ctrl+O, which cycles `/tree`'s filters backwards; only a terminal reporting modified
-    /// keys tells it apart.
-    ExpandBack,
-    /// Ctrl+R, Scramjet's key to rename a session in `/resume`.
-    Rename,
-    /// Ctrl+S, Scramjet's key to save the models chosen in `/scoped-models`.
-    Save,
-    /// Ctrl+X, Scramjet's key to switch off all models in `/scoped-models`.
-    ClearAll,
-    Suspend,
-    /// A lone Escape.
-    Escape,
+    /// Any other key, with the modifiers held; what it does is the keymap's (`Key::is`).
+    Press(Press),
     /// A mouse report, which only the full screen asks the terminal for.
     Mouse(Mouse),
     Idle,
     Ignored,
+}
+
+impl Key {
+    /// The key as a press: a character typed as its key, an upper-case letter as Shift and the
+    /// letter, so that `shift+l` is `L`, as in Scramjet.
+    pub(super) fn press(&self) -> Option<Press> {
+        match self {
+            Key::Press(press) => Some(*press),
+            Key::Text(text) => {
+                let mut chars = text.chars();
+                let (Some(c), None) = (chars.next(), chars.next()) else {
+                    return None;
+                };
+                Some(match c.is_ascii_uppercase() {
+                    true => Press::new(Code::Char(c.to_ascii_lowercase()), SHIFT),
+                    false => Press::new(Code::Char(c), 0),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the key is one of `binding`'s.
+    pub(super) fn is(&self, binding: Binding) -> bool {
+        self.press()
+            .is_some_and(|press| keymap::bound(binding, press))
+    }
+}
+
+/// A key on the keyboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Code {
+    /// A printable character's key: a letter in lower case, `' '` for Space.
+    Char(char),
+    Enter,
+    Tab,
+    Escape,
+    Backspace,
+    Delete,
+    Insert,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Up,
+    Down,
+    Left,
+    Right,
+    F(u8),
+}
+
+/// A key pressed with the modifiers held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Press {
+    pub(super) code: Code,
+    /// `SHIFT`, `ALT` and `CTRL`: the bits of xterm's modifier parameter, less one.
+    pub(super) modifiers: u8,
+}
+
+pub(super) const SHIFT: u8 = 1;
+pub(super) const ALT: u8 = 2;
+pub(super) const CTRL: u8 = 4;
+
+impl Press {
+    pub(super) const fn new(code: Code, modifiers: u8) -> Self {
+        Self { code, modifiers }
+    }
 }
 
 /// An SGR mouse report (`ESC [ < button ; column ; row M`, `m` on release).
@@ -112,34 +115,6 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
     };
     Ok(match byte {
         0x1b => escape(source)?,
-        b'\r' => Key::Enter,
-        b'\n' => Key::NewLine,
-        b'\t' => Key::Text("\t".into()),
-        0x7f | 8 => Key::Backspace,
-        1 => Key::CtrlA,
-        2 => Key::Left,
-        3 => Key::Interrupt,
-        4 => Key::EndOfInput,
-        5 => Key::LineEnd,
-        6 => Key::Right,
-        7 => Key::External,
-        11 => Key::KillEnd,
-        12 => Key::SelectModel,
-        14 => Key::CtrlN,
-        15 => Key::Expand,
-        16 => Key::CycleModel(true),
-        18 => Key::Rename,
-        19 => Key::Save,
-        20 => Key::ToggleThinking,
-        21 => Key::KillStart,
-        22 => Key::PasteImage,
-        23 => Key::DeleteWordBack,
-        24 => Key::ClearAll,
-        25 => Key::Yank,
-        26 => Key::Suspend,
-        29 => Key::Jump(true),
-        // Ctrl+_, which terminals also send for Ctrl+-.
-        31 => Key::Undo,
         0x20..=0x7e => Key::Text(char::from(byte).to_string()),
         0xc2..=0xf4 => {
             let length = match byte {
@@ -156,44 +131,74 @@ pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> 
             }
             String::from_utf8(bytes).map_or(Key::Ignored, Key::Text)
         }
-        _ => Key::Ignored,
+        _ => control(byte).map_or(Key::Ignored, Key::Press),
     })
+}
+
+/// The key that sends a control byte: Ctrl and a letter, but for the keys that send their own.
+fn control(byte: u8) -> Option<Press> {
+    let (code, modifiers) = match byte {
+        b'\r' => (Code::Enter, 0),
+        b'\t' => (Code::Tab, 0),
+        0x7f | 8 => (Code::Backspace, 0),
+        0 => (Code::Char(' '), CTRL),
+        1..=26 => (Code::Char(char::from(b'a' + byte - 1)), CTRL),
+        28 => (Code::Char('\\'), CTRL),
+        29 => (Code::Char(']'), CTRL),
+        // Ctrl+_, which terminals also send for Ctrl+-.
+        31 => (Code::Char('-'), CTRL),
+        _ => return None,
+    };
+    Some(Press::new(code, modifiers))
+}
+
+/// A printable character's key: a letter in lower case, Shift added for an upper-case one.
+fn printable(c: char, modifiers: u8) -> Press {
+    match c.is_ascii_uppercase() {
+        true => Press::new(Code::Char(c.to_ascii_lowercase()), modifiers | SHIFT),
+        false => Press::new(Code::Char(c), modifiers),
+    }
 }
 
 fn escape(source: &mut impl ByteSource) -> io::Result<Key> {
     let mut next = source.byte(Some(ESCAPE_WAIT))?;
     // Some terminals send Alt+key as an extra Escape before the key's own sequence.
-    let mut alt = false;
+    let mut alt = 0;
     while next == Some(0x1b) {
-        alt = true;
+        alt = ALT;
         next = source.byte(Some(ESCAPE_WAIT))?;
     }
-    Ok(match next {
-        None => Key::Escape,
-        Some(b'[') => match csi(source)? {
-            Key::Up if alt => Key::AltUp,
-            Key::Down if alt => Key::AltDown,
-            key => key,
-        },
+    let key = match next {
+        None => return Ok(Key::Press(Press::new(Code::Escape, 0))),
+        Some(b'[') => csi(source)?,
         Some(b'O') => match source.byte(Some(ESCAPE_WAIT))? {
-            Some(b'A') => Key::Up,
-            Some(b'B') => Key::Down,
-            Some(b'C') => Key::Right,
-            Some(b'D') => Key::Left,
-            Some(b'H') => Key::LineStart,
-            Some(b'F') => Key::LineEnd,
-            _ => Key::Ignored,
+            Some(byte) => ss3(byte).map_or(Key::Ignored, |code| Key::Press(Press::new(code, 0))),
+            None => Key::Ignored,
         },
-        Some(b'\r') => Key::AltEnter,
-        Some(b'\n') => Key::NewLine,
-        Some(0x7f | 8) => Key::DeleteWordBack,
-        Some(b'b') => Key::WordLeft,
-        Some(b'f') => Key::WordRight,
-        Some(b'd') => Key::DeleteWordForward,
-        Some(b'v') => Key::PasteImage,
-        Some(b'y') => Key::YankPop,
-        Some(29) => Key::Jump(false),
-        Some(_) => Key::Ignored,
+        // Alt and a key, which the terminal sends as Escape before the key.
+        Some(byte @ 0x20..=0x7e) => Key::Press(printable(char::from(byte), ALT)),
+        Some(byte) => match control(byte) {
+            Some(press) => Key::Press(Press::new(press.code, press.modifiers | ALT)),
+            None => Key::Ignored,
+        },
+    };
+    Ok(match key {
+        Key::Press(press) => Key::Press(Press::new(press.code, press.modifiers | alt)),
+        key => key,
+    })
+}
+
+/// The key of `ESC O` and `byte`, as terminals send some keys in application mode.
+fn ss3(byte: u8) -> Option<Code> {
+    Some(match byte {
+        b'A' => Code::Up,
+        b'B' => Code::Down,
+        b'C' => Code::Right,
+        b'D' => Code::Left,
+        b'H' => Code::Home,
+        b'F' => Code::End,
+        b'P'..=b'S' => Code::F(byte - b'P' + 1),
+        _ => return None,
     })
 }
 
@@ -203,7 +208,8 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         let Some(byte) = source.byte(Some(ESCAPE_WAIT))? else {
             return Ok(Key::Ignored);
         };
-        if (0x40..=0x7e).contains(&byte) {
+        // rxvt ends Shift's keys with `$`, which is no final byte.
+        if (0x40..=0x7e).contains(&byte) || byte == b'$' {
             break byte;
         }
         if parameters.len() < 32 {
@@ -221,41 +227,94 @@ fn csi(source: &mut impl ByteSource) -> io::Result<Key> {
         }
         return Ok(Key::Ignored);
     }
-    let modifier = parameters.split(';').nth(1);
-    let word = matches!(modifier, Some("3" | "5"));
-    Ok(match (last, parameters.as_ref()) {
-        (b'A', "1;3") => Key::AltUp,
-        (b'B', "1;3") => Key::AltDown,
-        (b'A', _) => Key::Up,
-        (b'B', _) => Key::Down,
-        (b'C', _) if word => Key::WordRight,
-        (b'D', _) if word => Key::WordLeft,
-        (b'C', _) => Key::Right,
-        (b'D', _) => Key::Left,
-        (b'H', "1;5") | (b'^', "7") => Key::Top,
-        (b'F', "1;5") | (b'^', "8") => Key::Bottom,
-        (b'H', _) | (b'~', "1" | "7") => Key::LineStart,
-        (b'F', _) | (b'~', "4" | "8") => Key::LineEnd,
-        (b'~', "3") => Key::Delete,
-        (b'~', "5") => Key::PageUp,
-        (b'~', "6") => Key::PageDown,
-        (b'~', "3;3" | "3;5") => Key::DeleteWordForward,
-        (b'~', "200") => paste(source)?,
-        (b'~', "27;2;13") | (b'u', "13;2") => Key::NewLine,
-        (b'~', "27;3;13") | (b'u', "13;3") => Key::AltEnter,
-        (b'u', "13") => Key::Enter,
-        (b'Z', _) | (b'~', "27;2;9") | (b'u', "9;2") => Key::BackTab,
-        (b'~', "27;5;112") | (b'u', "112;5") => Key::CycleModel(true),
-        (b'~', "27;6;112" | "27;6;80") | (b'u', "112;6") => Key::CycleModel(false),
-        (b'~', "27;5;108") | (b'u', "108;5") => Key::SelectModel,
-        (b'~', "27;6;111" | "27;6;79") | (b'u', "111;6") => Key::ExpandBack,
-        (b'~', "27;5;121") | (b'u', "121;5") => Key::Yank,
-        (b'~', "27;3;121") | (b'u', "121;3") => Key::YankPop,
-        (b'~', "27;5;45") | (b'u', "45;5") => Key::Undo,
-        (b'~', "27;5;93") | (b'u', "93;5") => Key::Jump(true),
-        (b'~', "27;7;93") | (b'u', "93;7") => Key::Jump(false),
-        _ => Key::Ignored,
+    // Each parameter's first part: the kitty protocol adds others after `:`.
+    let mut numbers = (parameters.split(';')).map(|parameter| parameter.split(':').next());
+    let first = numbers.next().flatten().unwrap_or("");
+    let modifiers = match numbers.next().flatten().map(str::parse::<u8>) {
+        Some(Ok(parameter)) => parameter.saturating_sub(1) & (SHIFT | ALT | CTRL),
+        _ => 0,
+    };
+    let third = numbers.next().flatten();
+    let code = match (last, first) {
+        (b'A', _) => Code::Up,
+        (b'B', _) => Code::Down,
+        (b'C', _) => Code::Right,
+        (b'D', _) => Code::Left,
+        (b'H', _) => Code::Home,
+        (b'F', _) => Code::End,
+        (b'Z', _) => return Ok(Key::Press(Press::new(Code::Tab, modifiers | SHIFT))),
+        (b'~', "200") => return paste(source),
+        // xterm's modifyOtherKeys: `CSI 27 ; modifiers ; code ~`.
+        (b'~', "27") => return Ok(codepoint(third, modifiers)),
+        (b'u', _) => return Ok(codepoint(Some(first), modifiers)),
+        // rxvt's: `^` with Ctrl, `$` with Shift, `@` with both.
+        (b'~' | b'^' | b'$' | b'@', number) => {
+            let Some(code) = tilde(number) else {
+                return Ok(Key::Ignored);
+            };
+            let held = match last {
+                b'^' => CTRL,
+                b'$' => SHIFT,
+                b'@' => CTRL | SHIFT,
+                _ => 0,
+            };
+            return Ok(Key::Press(Press::new(code, modifiers | held)));
+        }
+        _ => return Ok(Key::Ignored),
+    };
+    Ok(Key::Press(Press::new(code, modifiers)))
+}
+
+/// The key of `CSI number ~`.
+fn tilde(number: &str) -> Option<Code> {
+    Some(match number {
+        "1" | "7" => Code::Home,
+        "2" => Code::Insert,
+        "3" => Code::Delete,
+        "4" | "8" => Code::End,
+        "5" => Code::PageUp,
+        "6" => Code::PageDown,
+        "11" => Code::F(1),
+        "12" => Code::F(2),
+        "13" => Code::F(3),
+        "14" => Code::F(4),
+        "15" => Code::F(5),
+        "17" => Code::F(6),
+        "18" => Code::F(7),
+        "19" => Code::F(8),
+        "20" => Code::F(9),
+        "21" => Code::F(10),
+        "23" => Code::F(11),
+        "24" => Code::F(12),
+        _ => return None,
     })
+}
+
+/// The key of a character's code with `modifiers`, as the kitty protocol and modifyOtherKeys
+/// report it; a printable character without Ctrl or Alt is text.
+fn codepoint(code: Option<&str>, modifiers: u8) -> Key {
+    let Some(c) = code
+        .and_then(|code| code.parse().ok())
+        .and_then(char::from_u32)
+    else {
+        return Key::Ignored;
+    };
+    let code = match c {
+        '\r' => Code::Enter,
+        '\t' => Code::Tab,
+        '\x1b' => Code::Escape,
+        '\x7f' | '\x08' => Code::Backspace,
+        c if c.is_control() => return Key::Ignored,
+        c if modifiers & !SHIFT == 0 && (modifiers == 0 || c.is_ascii_alphabetic()) => {
+            let typed = match modifiers {
+                0 => c,
+                _ => c.to_ascii_uppercase(),
+            };
+            return Key::Text(typed.to_string());
+        }
+        c => return Key::Press(printable(c, modifiers)),
+    };
+    Key::Press(Press::new(code, modifiers))
 }
 
 fn mouse(report: &str, last: u8) -> Option<Mouse> {
@@ -358,59 +417,103 @@ pub(super) mod tests {
         }
     }
 
+    /// The key `name` names, as the keybindings file does (`ctrl+a`, `pageUp`).
+    pub(in crate::agent_cli) fn key(name: &str) -> Key {
+        Key::Press(keymap::parse(name).unwrap_or_else(|| panic!("{name} is no key")))
+    }
+
+    fn named(names: &[&str]) -> Vec<Key> {
+        names.iter().map(|name| key(name)).collect()
+    }
+
     #[test]
     fn decodes_keys_terminals_send() {
         assert_eq!(
-            keys("aé界\r\n\x1b\r\x1b[13;2u\x1b[27;2;13~\x1b[13;3u\x1b[27;3;13~".as_bytes()),
+            keys("aé界\r\n\x1b\r\x1b[13;2u\x1b[27;2;13~\x1b[13;3u\x1b[27;3;13~\x1b[13u".as_bytes()),
             [
                 Key::Text("a".into()),
                 Key::Text("é".into()),
                 Key::Text("界".into()),
-                Key::Enter,
-                Key::NewLine,
-                Key::AltEnter,
-                Key::NewLine,
-                Key::NewLine,
-                Key::AltEnter,
-                Key::AltEnter,
+                key("enter"),
+                key("ctrl+j"),
+                key("alt+enter"),
+                key("shift+enter"),
+                key("shift+enter"),
+                key("alt+enter"),
+                key("alt+enter"),
+                key("enter"),
             ]
         );
         assert_eq!(
-            keys(b"\x1b[1;3A\x1b\x1b[A\x1b[A\x1b[1;5A"),
-            [Key::AltUp, Key::AltUp, Key::Up, Key::Up]
+            keys(b"\x1b[1;3A\x1b\x1b[A\x1b[A\x1bOA\x1b[1;5A\x1b[1;2B"),
+            named(&["alt+up", "alt+up", "up", "up", "ctrl+up", "shift+down"])
         );
         assert_eq!(
             keys(b"\x1b[D\x1bOC\x1b[1;5D\x1b[1;3C\x1bb\x1b[H\x1b[4~\x1b[3~\x1b[3;5~\x1b\x7f\x17"),
-            [
-                Key::Left,
-                Key::Right,
-                Key::WordLeft,
-                Key::WordRight,
-                Key::WordLeft,
-                Key::LineStart,
-                Key::LineEnd,
-                Key::Delete,
-                Key::DeleteWordForward,
-                Key::DeleteWordBack,
-                Key::DeleteWordBack,
-            ]
+            named(&[
+                "left",
+                "right",
+                "ctrl+left",
+                "alt+right",
+                "alt+b",
+                "home",
+                "end",
+                "delete",
+                "ctrl+delete",
+                "alt+backspace",
+                "ctrl+w",
+            ])
         );
         assert_eq!(
-            keys(b"\x03\x04\x14\x16\x1bv\x1b\x1b[D\x1b[99;5u\x1b[5~\x1b[6~\x1bx\x1b"),
+            keys(b"\x03\x04\x14\x16\x1bv\x1b\x1b[D\x1b[99;5u\x1b[5~\x1b[6~\x1bX\x08\t\x1b"),
+            named(&[
+                "ctrl+c",
+                "ctrl+d",
+                "ctrl+t",
+                "ctrl+v",
+                "alt+v",
+                "alt+left",
+                "ctrl+c",
+                "pageUp",
+                "pageDown",
+                "alt+shift+x",
+                "backspace",
+                "tab",
+                "escape",
+            ])
+        );
+        assert_eq!(
+            keys(b"\x1bOP\x1b[24~\x1b[2~\x1b[5;5~\x1b[3$\x1b[99;9u\x1b[9999999u\x1b[?1u\x1bO"),
             [
-                Key::Interrupt,
-                Key::EndOfInput,
-                Key::ToggleThinking,
-                Key::PasteImage,
-                Key::PasteImage,
-                Key::Left,
+                key("f1"),
+                key("f12"),
+                key("insert"),
+                key("ctrl+pageUp"),
+                key("shift+delete"),
+                Key::Text("c".into()),
                 Key::Ignored,
-                Key::PageUp,
-                Key::PageDown,
                 Key::Ignored,
-                Key::Escape
+                Key::Ignored,
             ]
         );
+    }
+
+    #[test]
+    fn characters_with_shift_alone_are_text_and_upper_case_letters_are_shift_and_the_letter() {
+        assert_eq!(
+            keys(b"\x1b[27;2;76~\x1b[108;2u\x1b[97u\x1b[49;2u"),
+            [
+                Key::Text("L".into()),
+                Key::Text("L".into()),
+                Key::Text("a".into()),
+                key("shift+1"),
+            ]
+        );
+        assert_eq!(Key::Text("L".into()).press(), keymap::parse("shift+l"));
+        assert_eq!(Key::Text("l".into()).press(), keymap::parse("l"));
+        assert_eq!(Key::Text("!".into()).press(), keymap::parse("!"));
+        assert_eq!(Key::Paste("L".into()).press(), None);
+        assert_eq!(Key::Text("ab".into()).press(), None);
     }
 
     #[test]
@@ -444,28 +547,19 @@ pub(super) mod tests {
     fn shift_tab_is_back_tab() {
         assert_eq!(
             keys(b"\x1b[Z\x1b[27;2;9~\x1b[9;2u"),
-            [Key::BackTab, Key::BackTab, Key::BackTab]
+            named(&["shift+tab"; 3])
         );
     }
 
     #[test]
-    fn ctrl_p_cycles_models_and_with_shift_back_where_the_terminal_tells_them_apart() {
-        let forward = keys(b"\x10\x1b[112;5u\x1b[27;5;112~");
-        assert_eq!(forward, [const { Key::CycleModel(true) }; 3]);
-        let back = keys(b"\x1b[112;6u\x1b[27;6;112~\x1b[27;6;80~");
-        assert_eq!(back, [const { Key::CycleModel(false) }; 3]);
-    }
-
-    #[test]
-    fn ctrl_g_opens_the_external_editor_and_ctrl_z_suspends() {
+    fn ctrl_p_with_shift_where_the_terminal_tells_them_apart() {
         assert_eq!(
-            keys(b"ab\x07\x1a"),
-            [
-                Key::Text("a".into()),
-                Key::Text("b".into()),
-                Key::External,
-                Key::Suspend
-            ]
+            keys(b"\x10\x1b[112;5u\x1b[27;5;112~"),
+            named(&["ctrl+p"; 3])
+        );
+        assert_eq!(
+            keys(b"\x1b[112;6u\x1b[27;6;112~\x1b[27;6;80~"),
+            named(&["ctrl+shift+p"; 3])
         );
     }
 
@@ -473,30 +567,61 @@ pub(super) mod tests {
     fn decodes_scramjets_kill_ring_undo_jump_and_scroll_keys() {
         assert_eq!(
             keys(b"\x19\x1by\x1f\x1d\x1b\x1d\x0c\x1b[1;5H\x1b[1;5F\x1b[7^\x1b[8^"),
-            [
-                Key::Yank,
-                Key::YankPop,
-                Key::Undo,
-                Key::Jump(true),
-                Key::Jump(false),
-                Key::SelectModel,
-                Key::Top,
-                Key::Bottom,
-                Key::Top,
-                Key::Bottom,
-            ]
+            named(&[
+                "ctrl+y",
+                "alt+y",
+                "ctrl+-",
+                "ctrl+]",
+                "ctrl+alt+]",
+                "ctrl+l",
+                "ctrl+home",
+                "ctrl+end",
+                "ctrl+home",
+                "ctrl+end",
+            ])
         );
         assert_eq!(
             keys(b"\x1b[121;5u\x1b[121;3u\x1b[45;5u\x1b[93;5u\x1b[27;7;93~\x1b[108;5u\x1b[1H"),
-            [
-                Key::Yank,
-                Key::YankPop,
-                Key::Undo,
-                Key::Jump(true),
-                Key::Jump(false),
-                Key::SelectModel,
-                Key::LineStart,
-            ]
+            named(&[
+                "ctrl+y",
+                "alt+y",
+                "ctrl+-",
+                "ctrl+]",
+                "ctrl+alt+]",
+                "ctrl+l",
+                "home",
+            ])
         );
+    }
+
+    #[test]
+    fn keys_mean_their_actions_by_default() {
+        let cases = [
+            (&b"\x01"[..], Binding::CursorLineStart),
+            (b"\x01", Binding::SelectFirst),
+            (b"\x01", Binding::ModelsEnableAll),
+            (b"\x01", Binding::TreeFilterAll),
+            (b"\x0e", Binding::CursorDown),
+            (b"\x0e", Binding::SessionToggleNamedFilter),
+            (b"\x1b\r", Binding::FollowUp),
+            (b"\x1b[1;3A", Binding::Dequeue),
+            (b"\x1b[1;3B", Binding::ModelsReorderDown),
+            (b"\x1b[27;6;79~", Binding::TreeFilterCycleBackward),
+            (b"\x1b[3;3~", Binding::DeleteWordForward),
+            (b"L", Binding::TreeEditLabel),
+            (b"\x1b", Binding::Interrupt),
+            (b"\x1b", Binding::SelectCancel),
+            (b"\x03", Binding::SelectCancel),
+            (b"\x16", Binding::PasteImage),
+        ];
+        for (bytes, binding) in cases {
+            let [key] = &keys(bytes)[..] else {
+                panic!("{bytes:?}");
+            };
+            assert!(key.is(binding), "{bytes:?} {binding:?}");
+        }
+        assert!(!Key::Text("l".into()).is(Binding::TreeEditLabel));
+        assert!(!key("ctrl+up").is(Binding::CursorUp));
+        assert!(!Key::Idle.is(Binding::Interrupt));
     }
 }

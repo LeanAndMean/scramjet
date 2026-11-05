@@ -383,6 +383,7 @@ mod tests {
     use super::*;
     use crate::agent_cli::editor::{Action, Editor};
     use crate::agent_cli::keys::Key;
+    use crate::agent_cli::keys::tests::key;
     use std::{path::PathBuf, sync::Arc};
 
     #[test]
@@ -576,13 +577,13 @@ mod tests {
         }
         assert_eq!(plain(draft.completion_rows(40)), ["→ gpt-6-luna"]);
         assert_eq!(
-            editor.key(&mut draft, Key::Enter, false),
+            editor.key(&mut draft, key("enter"), false),
             Action::Edited(true)
         );
         assert_eq!(draft.text(), "/model gpt-6-luna");
         assert!(!draft.completing());
         assert_eq!(
-            editor.key(&mut draft, Key::Enter, false),
+            editor.key(&mut draft, key("enter"), false),
             Action::Submit("/model gpt-6-luna".into())
         );
         // One typed in full is sent at once.
@@ -593,7 +594,7 @@ mod tests {
         );
         assert_eq!(plain(draft.completion_rows(40)), ["→ on"]);
         assert_eq!(
-            editor.key(&mut draft, Key::Enter, false),
+            editor.key(&mut draft, key("enter"), false),
             Action::Submit("/autopilot on".into())
         );
     }

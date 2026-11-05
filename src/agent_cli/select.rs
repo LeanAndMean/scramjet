@@ -5,6 +5,7 @@
 
 use super::editor::terminal_size;
 use super::fuzzy::{self, Haystack};
+use super::keymap::Binding;
 use super::keys::Key;
 use super::settings::scramjet_level;
 use super::style::{self, Style};
@@ -20,6 +21,16 @@ pub(super) const HINT: &str = "↑↓ move · Enter select · Esc cancel";
 const TREE_HINT: &str = "↑↓ move · ←→ page · Ctrl+←→ fold/branch · Shift+L label · \
      Ctrl+D/T/U/L/A filters (Ctrl+O cycle) · Shift+T label time · Esc cancel";
 const CONFIRM_DELETE: &str = "Delete session? Enter confirm · Esc cancel";
+/// The tree's filters' actions; `None`: cycling through them.
+const TREE_FILTERS: [(Binding, Option<Filter>); 7] = [
+    (Binding::TreeFilterDefault, Some(Filter::Default)),
+    (Binding::TreeFilterNoTools, Some(Filter::NoTools)),
+    (Binding::TreeFilterUserOnly, Some(Filter::UserOnly)),
+    (Binding::TreeFilterLabeledOnly, Some(Filter::Labeled)),
+    (Binding::TreeFilterAll, Some(Filter::All)),
+    (Binding::TreeFilterCycleForward, None),
+    (Binding::TreeFilterCycleBackward, None),
+];
 /// Options shown at once in a question's list, as in Scramjet.
 const QUESTION_VISIBLE: usize = 8;
 /// Rows an option's label or description takes at most, as in Scramjet.
@@ -121,9 +132,11 @@ impl Route {
     fn key(&mut self, key: &Key) -> bool {
         let count = self.models.len();
         match key {
-            Key::Left if count > 1 => self.at = (self.at + count - 1) % count,
-            Key::Right if count > 1 => self.at = (self.at + 1) % count,
-            Key::BackTab => {
+            _ if count > 1 && key.is(Binding::CursorLeft) => {
+                self.at = (self.at + count - 1) % count;
+            }
+            _ if count > 1 && key.is(Binding::CursorRight) => self.at = (self.at + 1) % count,
+            _ if key.is(Binding::ThinkingCycle) => {
                 let model = &self.models[self.at];
                 if let Some(level) = model.next_effort(self.effort.as_deref()) {
                     (self.effort, self.cycled) = (Some(level), true);
@@ -296,7 +309,7 @@ impl Picker {
     /// Ctrl+T and Ctrl+O choose its filters.
     pub(super) fn takes(&self, key: &Key) -> bool {
         matches!(self.shape, Shape::Tree(..))
-            && matches!(key, Key::ToggleThinking | Key::Expand | Key::ExpandBack)
+            && TREE_FILTERS.iter().any(|&(binding, _)| key.is(binding))
     }
 
     /// The label of the tree's `entry` (`Picker::tree`).
@@ -539,13 +552,12 @@ impl Picker {
         }
         let row = self.list.rows.get(self.list.selected).copied();
         if self.list.warned {
-            match key {
-                Key::Enter => {
-                    self.list.warned = false;
-                    return Some(self.act(Act::Delete, row?));
-                }
-                Key::Escape | Key::Interrupt => self.list.warned = false,
-                _ => {}
+            if key.is(Binding::SelectConfirm) {
+                self.list.warned = false;
+                return Some(self.act(Act::Delete, row?));
+            }
+            if key.is(Binding::SelectCancel) {
+                self.list.warned = false;
             }
             return None;
         }
@@ -556,32 +568,37 @@ impl Picker {
         {
             return None;
         }
-        let scoped = match key {
-            Key::Enter => Some(Act::Toggle),
-            Key::CtrlA => Some(Act::EnableAll),
-            Key::ClearAll => Some(Act::ClearAll),
-            Key::CycleModel(true) => Some(Act::Provider),
-            Key::AltUp => Some(Act::Earlier),
-            Key::AltDown => Some(Act::Later),
-            Key::Save => Some(Act::Save),
-            _ => None,
-        };
+        let scoped = [
+            (Binding::SelectConfirm, Act::Toggle),
+            (Binding::ModelsEnableAll, Act::EnableAll),
+            (Binding::ModelsClearAll, Act::ClearAll),
+            (Binding::ModelsToggleProvider, Act::Provider),
+            (Binding::ModelsReorderUp, Act::Earlier),
+            (Binding::ModelsReorderDown, Act::Later),
+            (Binding::ModelsSave, Act::Save),
+        ];
         if self.scoping
-            && let Some(act) = scoped
+            && let Some(&(_, act)) = scoped.iter().find(|&&(binding, _)| key.is(binding))
         {
             return row.map(|row| self.act(act, row));
         }
+        let toggles = [
+            (Binding::SessionToggleSort, Toggle::Sort),
+            (Binding::SessionToggleNamedFilter, Toggle::Named),
+            (Binding::SessionTogglePath, Toggle::Paths),
+        ];
         match key {
-            Key::Text(text) if self.tabs && text == "\t" => {
-                return Some(Picked::Tab(self.spot()));
+            _ if self.tabs && key.is(Binding::Tab) => return Some(Picked::Tab(self.spot())),
+            _ if self.acts && key.is(Binding::SessionRename) => {
+                return row.map(|row| self.act(Act::Rename, row));
             }
-            Key::Rename if self.acts => return row.map(|row| self.act(Act::Rename, row)),
-            Key::Save if self.acts => return Some(Picked::Toggle(Toggle::Sort, self.spot())),
-            Key::CtrlN if self.acts => return Some(Picked::Toggle(Toggle::Named, self.spot())),
-            Key::CycleModel(true) if self.acts => {
-                return Some(Picked::Toggle(Toggle::Paths, self.spot()));
+            _ if self.acts
+                && let Some(&(_, toggle)) =
+                    toggles.iter().find(|&&(binding, _)| key.is(binding)) =>
+            {
+                return Some(Picked::Toggle(toggle, self.spot()));
             }
-            Key::EndOfInput if self.acts => {
+            _ if self.acts && key.is(Binding::SessionDelete) => {
                 let current = match &self.shape {
                     Shape::Rows { current, .. } => *current,
                     Shape::Question { .. } | Shape::Tree(..) => None,
@@ -715,10 +732,11 @@ fn tree_key(
     let shown = view.rows().get(list.selected).map(|&(entry, _)| entry);
     let selected = shown.or(*last);
     let mut query = view.query().to_owned();
+    let filter = TREE_FILTERS.iter().find(|&&(binding, _)| key.is(binding));
     match key {
         // As in Scramjet, where Shift+L and Shift+T are these keys, not text.
-        Key::Text(text) if text == "L" => return shown.map(Picked::Label),
-        Key::Text(text) if text == "T" => view.toggle_times(),
+        _ if key.is(Binding::TreeEditLabel) => return shown.map(Picked::Label),
+        _ if key.is(Binding::TreeToggleLabelTimestamp) => view.toggle_times(),
         Key::Text(text) | Key::Paste(text) => {
             let text = text
                 .chars()
@@ -726,40 +744,33 @@ fn tree_key(
             query.extend(text.filter(|ch| !ch.is_control()));
             view.set_query(query);
         }
-        Key::Backspace => {
+        _ if key.is(Binding::DeleteCharBackward) => {
             query.pop()?;
             view.set_query(query);
         }
-        Key::Escape if !query.is_empty() => view.set_query(String::new()),
-        Key::EndOfInput => view.toggle(Filter::Default),
-        Key::ToggleThinking => view.toggle(Filter::NoTools),
-        Key::KillStart => view.toggle(Filter::UserOnly),
-        Key::SelectModel => view.toggle(Filter::Labeled),
-        Key::CtrlA => view.toggle(Filter::All),
-        Key::Expand => view.cycle(true),
-        Key::ExpandBack => view.cycle(false),
-        Key::WordLeft | Key::WordRight => {
-            let row = match key {
-                Key::WordLeft => view.fold_or_up(list.selected),
-                _ => view.unfold_or_down(list.selected),
+        _ if !query.is_empty() && key.is(Binding::SelectCancel) => view.set_query(String::new()),
+        _ if let Some(&(_, filter)) = filter => match filter {
+            Some(filter) => view.toggle(filter),
+            None => view.cycle(key.is(Binding::TreeFilterCycleForward)),
+        },
+        _ if key.is(Binding::TreeFoldOrUp) || key.is(Binding::TreeUnfoldOrDown) => {
+            let row = match key.is(Binding::TreeFoldOrUp) {
+                true => view.fold_or_up(list.selected),
+                false => view.unfold_or_down(list.selected),
             };
             *list = List::new(view.rows().len(), row, list.visible);
             return None;
         }
-        Key::Left => return list.key(&Key::PageUp).map(|_| Picked::Row(None)),
-        Key::Right => return list.key(&Key::PageDown).map(|_| Picked::Row(None)),
-        Key::Enter => return shown.map(|entry| Picked::Row(Some(entry))),
-        Key::Up
-        | Key::Down
-        | Key::CtrlN
-        | Key::PageUp
-        | Key::PageDown
-        | Key::LineStart
-        | Key::LineEnd => {
-            return list.key(key).map(|_| Picked::Row(None));
+        // As in Scramjet, Left and Right page.
+        _ if key.is(Binding::CursorLeft) => {
+            return list.page(true).map(|_| Picked::Row(None));
         }
-        Key::Escape | Key::Interrupt => return Some(Picked::Row(None)),
-        _ => return None,
+        _ if key.is(Binding::CursorRight) => {
+            return list.page(false).map(|_| Picked::Row(None));
+        }
+        _ if key.is(Binding::SelectConfirm) => return shown.map(|entry| Picked::Row(Some(entry))),
+        _ if key.is(Binding::SelectCancel) => return Some(Picked::Row(None)),
+        _ => return list.key(key).map(|_| Picked::Row(None)),
     }
     reselect(view, list, last, selected);
     None
@@ -857,7 +868,7 @@ impl List {
                     search.query.extend(text.filter(|ch| !ch.is_control()));
                     true
                 }
-                Key::Backspace => search.query.pop().is_some(),
+                _ if key.is(Binding::DeleteCharBackward) => search.query.pop().is_some(),
                 _ => false,
             };
             if edited {
@@ -866,23 +877,34 @@ impl List {
             }
         }
         let Some(last) = self.rows.len().checked_sub(1) else {
-            return matches!(key, Key::Escape | Key::Interrupt).then_some(None);
+            return key.is(Binding::SelectCancel).then_some(None);
         };
-        let page = self.visible;
+        let up = key.is(Binding::SelectUp);
         self.selected = match key {
-            Key::Up if self.selected == 0 => last,
-            Key::Up => self.selected - 1,
-            Key::Down | Key::CtrlN if self.selected == last => 0,
-            Key::Down | Key::CtrlN => self.selected + 1,
-            Key::PageUp => self.selected.saturating_sub(page),
-            Key::PageDown => (self.selected + page).min(last),
-            Key::LineStart | Key::CtrlA => 0,
-            Key::LineEnd => last,
-            Key::Enter => return Some(Some(self.rows[self.selected])),
-            Key::Escape | Key::Interrupt => return Some(None),
+            _ if up && self.selected == 0 => last,
+            _ if up => self.selected - 1,
+            _ if key.is(Binding::SelectDown) && self.selected == last => 0,
+            _ if key.is(Binding::SelectDown) => self.selected + 1,
+            _ if key.is(Binding::SelectPageUp) => return self.page(true),
+            _ if key.is(Binding::SelectPageDown) => return self.page(false),
+            _ if key.is(Binding::SelectFirst) => 0,
+            _ if key.is(Binding::SelectLast) => last,
+            _ if key.is(Binding::SelectConfirm) => return Some(Some(self.rows[self.selected])),
+            _ if key.is(Binding::SelectCancel) => return Some(None),
             _ => self.selected,
         };
-        self.settle(matches!(key, Key::Up));
+        self.settle(up);
+        None
+    }
+
+    /// Moves the selection a page up, or down.
+    fn page(&mut self, up: bool) -> Option<Option<usize>> {
+        let last = self.rows.len().checked_sub(1)?;
+        self.selected = match up {
+            true => self.selected.saturating_sub(self.visible),
+            false => (self.selected + self.visible).min(last),
+        };
+        self.settle(false);
         None
     }
 
@@ -1122,6 +1144,7 @@ pub(super) fn tail(text: &str, width: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_cli::keys::tests::key;
 
     fn searched(list: &List) -> Option<(&str, &str)> {
         (list.search.as_ref()).map(|search| (search.query.as_str(), search.none.as_str()))
@@ -1143,24 +1166,24 @@ mod tests {
         let mut list = List::new(25, 0, 10);
         let mut moved = Vec::new();
         for key in [
-            Key::Up,
-            Key::Up,
-            Key::Down,
-            Key::Down,
-            Key::PageUp,
-            Key::PageUp,
-            Key::PageDown,
-            Key::LineStart,
-            Key::LineEnd,
+            key("up"),
+            key("up"),
+            key("down"),
+            key("down"),
+            key("pageUp"),
+            key("pageUp"),
+            key("pageDown"),
+            key("home"),
+            key("end"),
             Key::Text("j".into()),
         ] {
             assert_eq!(list.key(&key), None);
             moved.push(list.selected);
         }
         assert_eq!(moved, [24, 23, 24, 0, 0, 0, 10, 0, 24, 24]);
-        assert_eq!(list.key(&Key::Enter), Some(Some(24)));
-        assert_eq!(list.key(&Key::Escape), Some(None));
-        assert_eq!(list.key(&Key::Interrupt), Some(None));
+        assert_eq!(list.key(&key("enter")), Some(Some(24)));
+        assert_eq!(list.key(&key("escape")), Some(None));
+        assert_eq!(list.key(&key("ctrl+c")), Some(None));
     }
 
     #[test]
@@ -1286,14 +1309,14 @@ mod tests {
         assert_eq!(list.selected, 1);
         let mut moved = Vec::new();
         for key in [
-            Key::Up,
-            Key::Down,
-            Key::Up,
-            Key::LineStart,
-            Key::Down,
-            Key::Down,
-            Key::Down,
-            Key::PageUp,
+            key("up"),
+            key("down"),
+            key("up"),
+            key("home"),
+            key("down"),
+            key("down"),
+            key("down"),
+            key("pageUp"),
         ] {
             assert_eq!(list.key(&key), None);
             moved.push(list.selected);
@@ -1456,7 +1479,7 @@ mod tests {
         );
         assert_eq!(picker.routed(), Some(Routed::default()));
         // The next model has the session's effort fitted to its levels; Shift+Tab cycles them.
-        assert_eq!(picker.key(&Key::Right), None);
+        assert_eq!(picker.key(&key("right")), None);
         assert_eq!(
             tail(&picker),
             [
@@ -1464,27 +1487,27 @@ mod tests {
                 "effort: low · Shift+Tab cycle"
             ]
         );
-        assert_eq!(picker.key(&Key::BackTab), None);
+        assert_eq!(picker.key(&key("shift+tab")), None);
         assert_eq!(tail(&picker)[1], "effort: medium · Shift+Tab cycle");
         // Left wraps around to the last, which does not reason: nothing to cycle there.
-        for key in [Key::Left, Key::Left, Key::BackTab] {
+        for key in [key("left"), key("left"), key("shift+tab")] {
             assert_eq!(picker.key(&key), None);
         }
         assert_eq!(
             tail(&picker),
             ["model: claude-haiku-4-5 · ←/→ change", "effort: off"]
         );
-        for key in [Key::Right, Key::Right] {
+        for key in [key("right"), key("right")] {
             assert_eq!(picker.key(&key), None);
         }
-        assert_eq!(picker.key(&Key::Enter), Some(Picked::Row(Some(1))));
+        assert_eq!(picker.key(&key("enter")), Some(Picked::Row(Some(1))));
         let chosen = Routed {
             model: Some("claude-opus-5-5".into()),
             effort: Some("medium".into()),
         };
         assert_eq!(picker.routed(), Some(chosen));
         // Back at the session's model, only the effort changes.
-        picker.key(&Key::Left);
+        picker.key(&key("left"));
         let effort = Some("medium".to_owned());
         let only_effort = Routed {
             model: None,
@@ -1497,7 +1520,7 @@ mod tests {
         let route = Route::new(vec![alone], 0, None);
         let mut single = Picker::question("Select next step", &options, None).routing(route);
         assert_eq!(tail(&single), ["effort: high · Shift+Tab cycle"]);
-        assert_eq!(single.key(&Key::Right), None);
+        assert_eq!(single.key(&key("right")), None);
         assert_eq!(single.routed(), Some(Routed::default()));
         // Other questions have neither.
         let question = Picker::question("Which?", &options, None);
@@ -1517,32 +1540,32 @@ mod tests {
             shown: shown.to_vec(),
         };
         let acts = [
-            (Key::Enter, Act::Toggle),
-            (Key::CtrlA, Act::EnableAll),
-            (Key::ClearAll, Act::ClearAll),
-            (Key::CycleModel(true), Act::Provider),
-            (Key::AltUp, Act::Earlier),
-            (Key::AltDown, Act::Later),
-            (Key::Save, Act::Save),
+            (key("enter"), Act::Toggle),
+            (key("ctrl+a"), Act::EnableAll),
+            (key("ctrl+x"), Act::ClearAll),
+            (key("ctrl+p"), Act::Provider),
+            (key("alt+up"), Act::Earlier),
+            (key("alt+down"), Act::Later),
+            (key("ctrl+s"), Act::Save),
         ];
         for (key, act) in acts {
             let acted = Some(Picked::Act(act, 0, spot("", 0, &[0, 1, 2])));
             assert_eq!(list.key(&key), acted, "{key:?}");
         }
-        for key in [Key::Text("gpt".into()), Key::Down] {
+        for key in [Key::Text("gpt".into()), key("down")] {
             assert_eq!(list.key(&key), None);
         }
         let acted = Some(Picked::Act(Act::Toggle, 1, spot("gpt", 1, &[0, 1])));
-        assert_eq!(list.key(&Key::Enter), acted);
+        assert_eq!(list.key(&key("enter")), acted);
         // Nothing shown, nothing to act on; Escape closes.
         assert_eq!(list.key(&Key::Text("zzz".into())), None);
-        assert_eq!(list.key(&Key::CtrlA), None);
-        assert_eq!(list.key(&Key::Escape), Some(Picked::Row(None)));
+        assert_eq!(list.key(&key("ctrl+a")), None);
+        assert_eq!(list.key(&key("escape")), Some(Picked::Row(None)));
         // Elsewhere Ctrl+A goes to the first row, as Home does, and Enter chooses.
         let mut plain_list = picker();
-        plain_list.key(&Key::Down);
-        assert_eq!(plain_list.key(&Key::CtrlA), None);
-        assert_eq!(plain_list.key(&Key::Enter), Some(Picked::Row(Some(0))));
+        plain_list.key(&key("down"));
+        assert_eq!(plain_list.key(&key("ctrl+a")), None);
+        assert_eq!(plain_list.key(&key("enter")), Some(Picked::Row(Some(0))));
         // A list shown again selects the row acted on, where it is now.
         let again = picker().scoping().on_row(2);
         assert_eq!(plain(again.lines((40, 24)))[4], "› claude-haiku-5-5");
@@ -1553,10 +1576,10 @@ mod tests {
         let texts = ["gpt-6-luna", "gpt-6-terra", "claude-haiku-5-5"].map(String::from);
         let row = |index: usize, width: usize| text::clip(&texts[index], width);
         let picker = || Picker::search("Models", 10, haystacks(&texts), 0, None, "None", row);
-        let tab = Key::Text("\t".into());
+        let tab = key("tab");
         let mut list = picker().tabbing();
         list.key(&Key::Text("gpt".into()));
-        list.key(&Key::Down);
+        list.key(&key("down"));
         let spot = |query: &str, position, shown: Vec<usize>| Spot {
             query: query.into(),
             position,
@@ -1571,7 +1594,7 @@ mod tests {
         // Elsewhere Tab is typed into the query, as a space.
         let mut plain_list = picker();
         assert_eq!(plain_list.key(&tab), None);
-        assert_eq!(plain_list.key(&Key::Escape), Some(Picked::Row(None)));
+        assert_eq!(plain_list.key(&key("escape")), Some(Picked::Row(None)));
     }
 
     #[test]
@@ -1589,49 +1612,49 @@ mod tests {
             shown(&list)[2..],
             ["› root parser", "     └─ fork parser", "  other ✓"]
         );
-        assert_eq!(list.key(&Key::Down), None);
+        assert_eq!(list.key(&key("down")), None);
         let place = |query: &str, position, shown: &[usize]| Spot {
             query: query.into(),
             position,
             shown: shown.to_vec(),
         };
         assert_eq!(
-            list.key(&Key::Rename),
+            list.key(&key("ctrl+r")),
             Some(Picked::Act(Act::Rename, 1, place("", 1, &[0, 1, 2])))
         );
         // Ctrl+D asks first; Escape takes the question back, and other keys wait for an answer.
-        assert_eq!(list.key(&Key::EndOfInput), None);
+        assert_eq!(list.key(&key("ctrl+d")), None);
         let asked = shown(&list);
         assert_eq!(
             asked[0],
             "Resume  Delete session? Enter confirm · Esc cancel"
         );
-        for key in [Key::Down, Key::Text("x".into()), Key::Rename] {
+        for key in [key("down"), Key::Text("x".into()), key("ctrl+r")] {
             assert_eq!(list.key(&key), None);
         }
-        assert_eq!(list.key(&Key::Escape), None);
+        assert_eq!(list.key(&key("escape")), None);
         assert_eq!(
             shown(&list)[0],
             "Resume  ↑↓ move · Enter select · Esc cancel"
         );
         assert_eq!(shown(&list)[3], "›    └─ fork parser");
         // A query shows the rows without their tree lines; the current row is not deleted.
-        for key in [Key::Text("pars".into()), Key::Down, Key::EndOfInput] {
+        for key in [Key::Text("pars".into()), key("down"), key("ctrl+d")] {
             assert_eq!(list.key(&key), None);
         }
         assert_eq!(
-            list.key(&Key::Enter),
+            list.key(&key("enter")),
             Some(Picked::Act(Act::Delete, 1, place("pars", 1, &[0, 1])))
         );
         let mut current = picker();
-        current.key(&Key::Up);
-        assert_eq!(current.key(&Key::EndOfInput), None);
+        current.key(&key("up"));
+        assert_eq!(current.key(&key("ctrl+d")), None);
         let refused = shown(&current);
         assert!(
             refused[0].ends_with("Cannot delete the currently active session"),
             "{refused:?}"
         );
-        assert_eq!(current.key(&Key::Up), None);
+        assert_eq!(current.key(&key("up")), None);
         assert_eq!(
             shown(&current)[0],
             "Resume  ↑↓ move · Enter select · Esc cancel"
@@ -1648,9 +1671,9 @@ mod tests {
         assert_eq!(lines[..2], ["Resume  Session deleted", "> pars "]);
         assert_eq!(lines[2..], ["  root parser", "› fork parser"]);
         let mut plain_list = Picker::search("Resume", 10, haystacks(&texts), 0, None, "None", row);
-        assert_eq!(plain_list.key(&Key::Rename), None);
-        assert_eq!(plain_list.key(&Key::EndOfInput), None);
-        assert_eq!(plain_list.key(&Key::Enter), Some(Picked::Row(Some(0))));
+        assert_eq!(plain_list.key(&key("ctrl+r")), None);
+        assert_eq!(plain_list.key(&key("ctrl+d")), None);
+        assert_eq!(plain_list.key(&key("enter")), Some(Picked::Row(Some(0))));
     }
 
     #[test]
@@ -1668,9 +1691,9 @@ mod tests {
         // Best first: `parse` is the shorter match.
         assert_eq!(list.spot(), place("pars", 0, &[2, 0]));
         for (key, toggle) in [
-            (Key::Save, Toggle::Sort),
-            (Key::CtrlN, Toggle::Named),
-            (Key::CycleModel(true), Toggle::Paths),
+            (key("ctrl+s"), Toggle::Sort),
+            (key("ctrl+n"), Toggle::Named),
+            (key("ctrl+p"), Toggle::Paths),
         ] {
             let ended = Some(Picked::Toggle(toggle, place("pars", 0, &[2, 0])));
             assert_eq!(list.key(&key), ended);
@@ -1681,10 +1704,10 @@ mod tests {
         assert_eq!(ordered.spot(), place("pars", 0, &[0, 2]));
         // Elsewhere Ctrl+N moves down and the other keys do nothing.
         let mut plain_list = picker();
-        for key in [Key::CtrlN, Key::Save, Key::CycleModel(true)] {
+        for key in [key("ctrl+n"), key("ctrl+s"), key("ctrl+p")] {
             assert_eq!(plain_list.key(&key), None);
         }
-        assert_eq!(plain_list.key(&Key::Enter), Some(Picked::Row(Some(1))));
+        assert_eq!(plain_list.key(&key("enter")), Some(Picked::Row(Some(1))));
         // A session list without rows shows, saying so, for Ctrl+N to bring them back.
         let none = |_: usize, _: usize| String::new();
         let empty = || Picker::search("Resume", 10, Vec::new(), 0, None, "No named", none);
@@ -1692,9 +1715,9 @@ mod tests {
         let mut named = empty().acting();
         assert!(!named.is_empty());
         assert_eq!(plain(named.lines((60, 24)))[2], "  No named");
-        assert_eq!(named.key(&Key::Enter), None);
+        assert_eq!(named.key(&key("enter")), None);
         let ended = Some(Picked::Toggle(Toggle::Named, place("", 0, &[])));
-        assert_eq!(named.key(&Key::CtrlN), ended);
+        assert_eq!(named.key(&key("ctrl+n")), ended);
     }
 
     #[test]
@@ -1715,8 +1738,8 @@ mod tests {
                 "  (6/8)",
             ]
         );
-        assert!(picker.takes(&Key::Expand) && picker.takes(&Key::ToggleThinking));
-        assert_eq!(picker.key(&Key::KillStart), None);
+        assert!(picker.takes(&key("ctrl+o")) && picker.takes(&key("ctrl+t")));
+        assert_eq!(picker.key(&key("ctrl+u")), None);
         assert_eq!(
             text(&picker)[2..],
             [
@@ -1727,15 +1750,15 @@ mod tests {
             ]
         );
         // Through the labeled entries, none here, the selection stays on its entry.
-        assert_eq!(picker.key(&Key::Expand), None);
+        assert_eq!(picker.key(&key("ctrl+o")), None);
         assert_eq!(
             text(&picker)[1..],
             [">  ", "  No entries found", "  (0/0) [labeled]"]
         );
-        assert_eq!(picker.key(&Key::Enter), None);
-        assert_eq!(picker.key(&Key::Expand), None);
+        assert_eq!(picker.key(&key("enter")), None);
+        assert_eq!(picker.key(&key("ctrl+o")), None);
         assert_eq!(text(&picker).last().unwrap(), "  (5/9) [all]");
-        assert_eq!(picker.key(&Key::EndOfInput), None);
+        assert_eq!(picker.key(&key("ctrl+d")), None);
         for key in ["o", "t", "h"] {
             assert_eq!(picker.key(&Key::Text(key.into())), None);
         }
@@ -1744,14 +1767,14 @@ mod tests {
             ["> oth ", "› user: other way", "  (1/1)"]
         );
         // Escape clears the query, keeping the row; again, it cancels.
-        assert_eq!(picker.key(&Key::Escape), None);
+        assert_eq!(picker.key(&key("escape")), None);
         assert_eq!(text(&picker)[1], ">  ");
-        assert_eq!(picker.key(&Key::Enter), Some(Picked::Row(Some(7))));
-        assert_eq!(picker.key(&Key::WordLeft), None);
+        assert_eq!(picker.key(&key("enter")), Some(Picked::Row(Some(7))));
+        assert_eq!(picker.key(&key("alt+left")), None);
         assert_eq!(text(&picker).last().unwrap(), "  (7/7)");
-        assert_eq!(picker.key(&Key::Left), None);
-        assert_eq!(picker.key(&Key::Enter), Some(Picked::Row(Some(3))));
-        assert_eq!(picker.key(&Key::Escape), Some(Picked::Row(None)));
+        assert_eq!(picker.key(&key("left")), None);
+        assert_eq!(picker.key(&key("enter")), Some(Picked::Row(Some(3))));
+        assert_eq!(picker.key(&key("escape")), Some(Picked::Row(None)));
         let mut empty = Picker::tree(
             View::new(super::super::tree::sample(), false, Filter::Default),
             4,
@@ -1764,7 +1787,7 @@ mod tests {
             text(&empty)[1..],
             ["> zz ", "  No entries found", "  (0/0)"]
         );
-        assert_eq!(empty.key(&Key::Enter), None);
+        assert_eq!(empty.key(&key("enter")), None);
     }
 
     #[test]
@@ -1782,7 +1805,7 @@ mod tests {
         assert_eq!(picker.tree_label(6), Some("green"));
         assert_eq!(text(&picker)[4], "› │     • [green] assistant: tests pass");
         // Ctrl+L shows the labeled entries, and again the others.
-        assert_eq!(picker.key(&Key::SelectModel), None);
+        assert_eq!(picker.key(&key("ctrl+l")), None);
         assert_eq!(
             text(&picker)[1..],
             [
@@ -1793,14 +1816,14 @@ mod tests {
         );
         assert_eq!(picker.key(&Key::Text("T".into())), None);
         assert_eq!(text(&picker)[3], "  (1/1) [labeled] [+label time]");
-        assert_eq!(picker.key(&Key::SelectModel), None);
+        assert_eq!(picker.key(&key("ctrl+l")), None);
         assert_eq!(text(&picker)[6], "  (6/8) [+label time]");
         // Taken away while the labeled entries show, the selection goes back to its entry after.
-        picker.key(&Key::SelectModel);
+        picker.key(&key("ctrl+l"));
         picker.relabel(6, Some(None), None);
         assert_eq!(text(&picker)[3], "  (0/0) [labeled] [+label time]");
         assert_eq!(picker.key(&Key::Text("L".into())), None);
-        picker.key(&Key::SelectModel);
+        picker.key(&key("ctrl+l"));
         assert_eq!(text(&picker)[6], "  (6/8) [+label time]");
         // A label that could not be saved is not shown; why shows until the next key.
         picker.relabel(
@@ -1813,7 +1836,7 @@ mod tests {
             "Session Tree  Failed to save the label: full"
         );
         assert_eq!(picker.tree_label(6), None);
-        picker.key(&Key::Up);
+        picker.key(&key("up"));
         assert!(text(&picker)[0].starts_with("Session Tree  ↑↓ move"));
         // Lowercase is text, as in Scramjet.
         assert_eq!(picker.key(&Key::Text("l".into())), None);
@@ -1856,25 +1879,25 @@ mod tests {
                 "  fix the parser ✓"
             ]
         );
-        assert_eq!(list.key(&Key::Down), None);
-        assert_eq!(list.key(&Key::Enter), Some(Some(0)));
+        assert_eq!(list.key(&key("down")), None);
+        assert_eq!(list.key(&key("enter")), Some(Some(0)));
         // Nothing matches: Enter and the arrows do nothing, Escape still cancels.
         assert_eq!(list.key(&Key::Paste("\nzz".into())), None);
         assert_eq!(shown(&list)[1..], ["> pars zz ", "  No matching rows"]);
-        for key in [Key::Enter, Key::Up, Key::LineEnd] {
+        for key in [key("enter"), key("up"), key("end")] {
             assert_eq!(list.key(&key), None);
         }
         for _ in 0..3 {
-            assert_eq!(list.key(&Key::Backspace), None);
+            assert_eq!(list.key(&key("backspace")), None);
         }
         assert_eq!(list.rows, [2, 0]);
         // Without a query every row is back, with the first selection.
         for _ in 0..4 {
-            assert_eq!(list.key(&Key::Backspace), None);
+            assert_eq!(list.key(&key("backspace")), None);
         }
         assert_eq!((&list.rows[..], list.selected), (&[0, 1, 2, 3][..], 1));
-        assert_eq!(list.key(&Key::Backspace), None);
-        assert_eq!(list.key(&Key::Escape), Some(None));
+        assert_eq!(list.key(&key("backspace")), None);
+        assert_eq!(list.key(&key("escape")), Some(None));
         // A query wider than the line shows its end.
         list.key(&Key::Text("a very long query".into()));
         let narrow = plain(lines(

@@ -6,8 +6,8 @@ use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal::{self, Terminal};
 use super::text::clip;
 use super::theme::Themes;
-use super::{clipboard, completion, export, style};
-use scramjet_rs::agent::{Agent, AgentError};
+use super::{clipboard, completion, export, keymap, style};
+use scramjet_rs::agent::{Agent, AgentError, shortened};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -111,7 +111,10 @@ impl Interactive {
             }
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.agent, &self.ui).trim_end()),
-            Some(Builtin::Hotkeys) => self.say(hotkeys(&self.ui).trim_end()),
+            Some(Builtin::Hotkeys) => {
+                let text = hotkeys(&self.ui, self.settings.path());
+                self.say(text.trim_end());
+            }
             Some(Builtin::Resume(wanted)) => {
                 self.resume(wanted);
             }
@@ -272,6 +275,7 @@ impl Interactive {
         self.settings.reload();
         self.themes = Themes::discover(self.agent.root());
         style::set(&self.themes.theme(&self.settings.theme));
+        self.keybindings = keymap::load(self.settings.path());
         let settings = &self.settings;
         (self.hide_thinking).store(settings.hide_thinking_block, Ordering::Relaxed);
         self.ui.markdown_reads = settings.markdown_reads;
@@ -287,7 +291,7 @@ impl Interactive {
         for notice in self.problem_notices() {
             self.ui().notice(&notice);
         }
-        let done = "Reloaded settings, themes, command sets, agents, skills and context files";
+        let done = "Reloaded settings, keybindings, themes, command sets, agents, skills and context files";
         self.say_styled(style::MUTED, done);
     }
 
@@ -368,107 +372,24 @@ fn session_info(agent: &Agent, ui: &Terminal) -> String {
     info
 }
 
-/// The keys `/hotkeys` lists, in Scramjet's sections and words where the key does what
-/// Scramjet's does.
-const HOTKEYS: [(&str, &[(&str, &str)]); 4] = [
-    (
-        "Navigation",
-        &[
-            (
-                "Up / Down / Left / Right",
-                "Move cursor / browse history (Up on the first line)",
-            ),
-            ("Ctrl+B / Ctrl+F", "Move cursor left / right"),
-            ("Alt+Left / Alt+Right", "Move by word"),
-            ("Ctrl+Left / Ctrl+Right", "Move by word"),
-            ("Alt+B / Alt+F", "Move by word"),
-            ("Home / Ctrl+A", "Start of line"),
-            ("End / Ctrl+E", "End of line"),
-            ("Ctrl+]", "Jump forward to character"),
-            ("Ctrl+Alt+]", "Jump backward to character"),
-            (
-                "Page Up / Page Down",
-                "Scroll the conversation by page (Escape: to its end)",
-            ),
-            (
-                "Ctrl+Home / Ctrl+End",
-                "Scroll to the conversation's start / end",
-            ),
-        ],
-    ),
-    (
-        "Editing",
-        &[
-            ("Enter", "Send message (during a turn: steer)"),
-            ("Backspace", "Delete character backwards"),
-            (
-                "Shift+Enter / Ctrl+J",
-                "New line (also a trailing \\ and Enter)",
-            ),
-            ("Ctrl+W / Alt+Backspace", "Delete word backwards"),
-            ("Alt+D / Alt+Delete", "Delete word forwards"),
-            ("Delete / Ctrl+D", "Delete character forwards"),
-            ("Ctrl+U", "Delete to start of line"),
-            ("Ctrl+K", "Delete to end of line"),
-            ("Ctrl+Y", "Paste the most-recently-deleted text"),
-            ("Alt+Y", "Cycle through the deleted text after pasting"),
-            ("Ctrl+-", "Undo"),
-        ],
-    ),
-    (
-        "Other",
-        &[
-            ("Tab", "Path completion / accept autocomplete"),
-            ("Escape", "Cancel autocomplete / interrupt the turn"),
-            (
-                "Escape Escape",
-                "Open /tree on an empty prompt (doubleEscapeAction)",
-            ),
-            ("Ctrl+C", "Clear editor (first) / exit (second)"),
-            ("Ctrl+D", "Exit (when editor is empty)"),
-            ("Ctrl+Z", "Suspend to background"),
-            ("Shift+Tab", "Cycle thinking level"),
-            ("Ctrl+P / Shift+Ctrl+P", "Cycle models"),
-            ("Ctrl+L", "Open model selector"),
-            ("Ctrl+O", "Toggle tool output expansion"),
-            ("Ctrl+T", "Toggle thinking block visibility"),
-            ("Ctrl+G", "Edit message in external editor"),
-            ("Alt+Enter", "Queue follow-up message (or send)"),
-            ("Alt+Up", "Restore queued messages"),
-            ("Ctrl+V / Alt+V", "Paste image from clipboard"),
-            ("/", "Slash commands"),
-            ("!", "Run bash command"),
-            ("!!", "Run bash command (excluded from context)"),
-        ],
-    ),
-    (
-        "Mouse",
-        &[
-            ("Wheel", "Scroll the conversation"),
-            ("Drag", "Select text; Ctrl+C or a right click copies it"),
-            ("Double / triple click", "Select a word / the line"),
-            (
-                "Right click",
-                "Paste text into the prompt (with no selection)",
-            ),
-        ],
-    ),
-];
-
-/// `/hotkeys`, as Scramjet's: the keys by section, in two columns.
-fn hotkeys(ui: &Terminal) -> String {
-    let sections = HOTKEYS.iter();
-    let width = (sections.flat_map(|(_, keys)| keys.iter()))
-        .map(|(key, _)| key.width())
-        .max()
-        .unwrap_or(0);
+/// `/hotkeys`, as Scramjet's: the keys by section, in two columns, and the file that changes them
+/// beside the `settings` file.
+fn hotkeys(ui: &Terminal, settings: Option<&Path>) -> String {
     let mut text = format!("{}\n", ui.styled(style::INFO_HEADING, "Keyboard Shortcuts"));
-    for (section, keys) in HOTKEYS {
+    for (section, keys) in keymap::listing() {
+        let width = keys.iter().map(|(key, _)| key.width()).max().unwrap_or(0);
         text += &format!("\n{}\n", ui.styled(style::INFO_HEADING, section));
         for (key, action) in keys {
             let pad = " ".repeat(width - key.width());
-            text += &format!("  {}{pad}  {action}\n", ui.styled(style::CODE, key));
+            text += &format!("  {}{pad}  {action}\n", ui.styled(style::CODE, &key));
         }
+    }
+    if let Some(settings) = settings {
+        let file = shortened(&keymap::path(settings).display().to_string());
+        text += &format!(
+            "\nOther keys for an action go in {file}, as in Scramjet's keybindings.json: \
+             {{\"app.message.followUp\": [\"ctrl+q\"]}}. /reload reads it again.\n"
+        );
     }
     text
 }
@@ -595,30 +516,47 @@ mod tests {
     }
 
     #[test]
-    fn hotkeys_line_up_their_actions_within_80_columns() {
+    fn hotkeys_list_every_action_with_its_keys_in_columns_within_80() {
         let ui = Terminal::new(std::sync::Arc::default(), false);
-        let text = hotkeys(&ui);
+        let settings = Path::new("/config/scramjet-rs/settings.json");
+        let text = hotkeys(&ui, Some(settings));
         let text = [style::CODE.get(), style::INFO_HEADING.get(), style::RESET]
             .iter()
             .fold(text, |text, code| text.replace(code, ""));
         let lines: Vec<_> = text.lines().collect();
         assert_eq!(lines[..3], ["Keyboard Shortcuts", "", "Navigation"]);
-        assert_eq!(
-            lines[3],
-            "  Up / Down / Left / Right  Move cursor / browse history (Up on the first line)"
-        );
+        // Each section's actions start in one column, after its widest keys.
+        let row = |width: usize, key: &str, action: &str| format!("  {key:<width$}  {action}");
+        assert_eq!(lines[3], row(30, "Up", "Move cursor up / browse history"));
+        for line in [
+            row(30, "Home / Ctrl+A", "Start of line"),
+            row(14, "Ctrl+Shift+P", "Cycle to the previous model"),
+            row(
+                14,
+                "Escape Escape",
+                "Open /tree on an empty prompt (doubleEscapeAction)",
+            ),
+            row(30, "Shift+L", "Label the entry"),
+            row(
+                21,
+                "Right click",
+                "Paste text into the prompt (with no selection)",
+            ),
+        ] {
+            assert!(lines.contains(&line.as_str()), "{line:?} in {text}");
+        }
         let rows: Vec<_> = lines.iter().filter(|line| line.starts_with("  ")).collect();
-        assert_eq!(
-            rows.len(),
-            HOTKEYS.map(|(_, keys)| keys.len()).iter().sum::<usize>()
-        );
+        let listed: usize = keymap::listing().iter().map(|(_, rows)| rows.len()).sum();
+        assert_eq!(rows.len(), listed);
         for row in rows {
             assert!(row.width() <= 80, "{row}");
-            assert!(
-                row[..28].ends_with("  ") && !row[28..].starts_with(' '),
-                "{row}"
-            );
         }
+        assert!(
+            lines.last().unwrap().starts_with(
+                "Other keys for an action go in /config/scramjet-rs/keybindings.json, as in"
+            ),
+            "{text}"
+        );
     }
 
     #[test]
