@@ -36,6 +36,22 @@ fn deliver(queued: &mut Vec<String>, delivery: Delivery) -> Vec<String> {
     }
 }
 
+/// Tells the session, once it waits for input, that the logins' model lists changed.
+pub(in crate::agent_cli) struct Relisting {
+    queue: Arc<Mutex<Queue>>,
+    wake: PipeWriter,
+}
+
+impl Relisting {
+    /// The lists changed, with `notes` to say of it, after those not yet said.
+    pub(in crate::agent_cli) fn changed(&self, notes: Vec<String>) {
+        let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+        queue.relisted.get_or_insert_default().extend(notes);
+        drop(queue);
+        let _ = (&self.wake).write(&[0]);
+    }
+}
+
 /// Sends to the screen; also the agent's interface during a turn.
 pub(in crate::agent_cli) struct Link {
     to: mpsc::Sender<ToScreen>,
@@ -96,6 +112,17 @@ impl Link {
             false => queue.commands.len(),
         };
         queue.commands.drain(..count).collect()
+    }
+    /// What to say of the logins' model lists since they changed, if they did.
+    pub(in crate::agent_cli) fn take_relisted(&self) -> Option<Vec<String>> {
+        self.queue().relisted.take()
+    }
+    /// What another thread tells the session of the logins' model lists with.
+    pub(in crate::agent_cli) fn relisting(&self) -> io::Result<Relisting> {
+        Ok(Relisting {
+            queue: self.queue.clone(),
+            wake: self.wake.try_clone()?,
+        })
     }
     /// The effort level Shift+Tab chose during a turn that no request took.
     pub(in crate::agent_cli) fn take_effort(&self) -> Option<String> {

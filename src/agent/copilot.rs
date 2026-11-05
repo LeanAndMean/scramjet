@@ -130,9 +130,7 @@ impl DeviceLogin {
     pub fn finish(self, logins: &login::Logins, cancel: &AtomicBool) -> Result<(), String> {
         let github = self.wait(cancel)?;
         let credential = buy(&self.urls.copilot, &github, self.enterprise.as_deref())?;
-        let models = models(&credential, self.urls.api.as_deref())?;
-        let list = json!({"fetched": login::now_ms(), "data": models});
-        login::save_list(&logins.listed(PROVIDER), &list)?;
+        save_models(&credential, self.urls.api.as_deref(), logins)?;
         login::save(&logins.auth, PROVIDER, credential)
     }
 
@@ -192,6 +190,30 @@ impl DeviceLogin {
             }
         }
     }
+}
+
+/// Saves the models Copilot lists for the login `credential`, read at `api` or at the host its
+/// token names, in place of those listed before.
+fn save_models(
+    credential: &Value,
+    api: Option<&str>,
+    logins: &login::Logins,
+) -> Result<(), String> {
+    let models = models(credential, api)?;
+    let list = json!({"fetched": login::now_ms(), "data": models});
+    login::save_list(&logins.listed(PROVIDER), &list)
+}
+
+/// Reads again the models Copilot lists for the login saved in `logins`.
+pub(super) fn relist(logins: &login::Logins) -> Result<(), String> {
+    relist_at(logins, None)
+}
+
+fn relist_at(logins: &login::Logins, api: Option<&str>) -> Result<(), String> {
+    login::access(&logins.auth, PROVIDER)?;
+    let credential = login::saved(&logins.auth)?.remove(PROVIDER);
+    let credential = credential.ok_or("not logged in to GitHub Copilot (/login)")?;
+    save_models(&credential, api, logins)
 }
 
 /// A Copilot token bought anew with the GitHub token `credential` keeps.
@@ -618,6 +640,50 @@ mod tests {
         let entry = entry(credential, &list);
         assert_eq!(entry["baseUrl"], "https://api.business.githubcopilot.com");
         assert_eq!(entry["headers"]["X-GitHub-Api-Version"], "2026-06-01");
+    }
+
+    #[test]
+    fn a_saved_login_reads_its_models_again_and_keeps_them_when_that_fails() {
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-copilot-relist-{}", std::process::id())),
+        );
+        let logins = login::Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        assert_eq!(
+            relist_at(&logins, Some("http://127.0.0.1:1")).unwrap_err(),
+            "not logged in to GitHub Copilot (/login)"
+        );
+        let credential = json!({"type": "oauth", "refresh": "gho", "access": "tid=1",
+            "expires": login::now_ms() + 60_000.0});
+        login::save(&logins.auth, PROVIDER, credential).unwrap();
+        let before = json!({"fetched": 0, "data": [listed()[1]]});
+        login::save_list(&logins.listed(PROVIDER), &before).unwrap();
+        let read = || {
+            let text = std::fs::read_to_string(logins.listed(PROVIDER)).unwrap();
+            serde_json::from_str::<Value>(&text).unwrap()
+        };
+        // Unreachable, Copilot leaves the list as it was.
+        assert!(relist_at(&logins, Some("http://127.0.0.1:1")).is_err());
+        assert_eq!(read(), before);
+        let (base, server) = serve_json(2, |head, _| match head.split(' ').nth(1) {
+            Some("/models") => json!({"data": listed()}),
+            _ => json!({}),
+        });
+        let started = login::now_ms();
+        relist_at(&logins, Some(&base)).unwrap();
+        let requests = server.join().unwrap();
+        assert!(requests[0].0.contains("authorization: Bearer tid=1\r\n"));
+        // As at a login, a model whose terms wait is enabled.
+        assert_eq!(
+            requests[1].0.lines().next(),
+            Some("POST /models/claude-opus-5.5/policy HTTP/1.1")
+        );
+        let list = read();
+        assert!(list["fetched"].as_f64().unwrap() >= started);
+        assert_eq!(list["data"].as_array().unwrap().len(), 6);
+        assert_eq!(list["data"][0]["policy"]["state"], "enabled");
     }
 
     #[test]

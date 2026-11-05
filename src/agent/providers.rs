@@ -384,13 +384,10 @@ impl Reading {
             };
             let what = format!("{name} (/login)");
             // Missing or unreadable, it lists no models: the login is to be done again.
-            let listed = std::fs::read(logins.listed(name)).ok();
-            let listed =
-                (listed.and_then(|text| serde_json::from_slice(&text).ok())).unwrap_or(Value::Null);
-            let entry = match name {
-                super::copilot::PROVIDER => super::copilot::entry(credential, &listed),
-                super::codex::PROVIDER => super::codex::entry(&listed),
-                _ => continue,
+            let listed = super::login::List::read(&logins, name);
+            let listed = listed.map_or(Value::Null, |listed| listed.0);
+            let Some(entry) = super::login::entry(name, credential, &listed) else {
+                continue;
             };
             if entry["models"].as_array().is_some_and(Vec::is_empty) {
                 self.problems.push(format!(

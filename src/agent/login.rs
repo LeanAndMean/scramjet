@@ -15,7 +15,7 @@ use std::{
     io::Write,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 /// The providers `/login` logs in to: their names, as providers and in `auth.json`, and what
@@ -87,6 +87,51 @@ pub fn logout(logins: &Logins, provider: &str) -> Result<bool, String> {
     let removed = update(&logins.auth, |saved| Ok(saved.remove(provider).is_some()))?;
     let _ = std::fs::remove_file(logins.listed(provider));
     Ok(removed)
+}
+
+/// The models a login listed, as saved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct List(pub(super) Value);
+
+impl List {
+    /// `provider`'s, unless there is none or it cannot be read.
+    pub fn read(logins: &Logins, provider: &str) -> Option<Self> {
+        let text = std::fs::read(logins.listed(provider)).ok()?;
+        serde_json::from_slice(&text).ok().map(Self)
+    }
+
+    /// How long ago it was read; `None` when it does not say.
+    pub fn age(&self) -> Option<Duration> {
+        let fetched = self.0["fetched"].as_f64()?;
+        Some(Duration::from_millis((now_ms() - fetched).max(0.0) as u64))
+    }
+
+    /// The models it offers as `provider`'s, as a `models.json` gives them, each with its id.
+    pub fn models(&self, provider: &str) -> Vec<Value> {
+        let entry = entry(provider, &Value::Null, &self.0);
+        let models = entry.and_then(|mut entry| entry["models"].as_array_mut().map(std::mem::take));
+        models.unwrap_or_default()
+    }
+}
+
+/// The provider, as a `models.json` entry, that what `provider`'s login `listed` makes with its
+/// `credential`; `None` for a provider `/login` does not log in to.
+pub(super) fn entry(provider: &str, credential: &Value, listed: &Value) -> Option<Value> {
+    match provider {
+        copilot::PROVIDER => Some(copilot::entry(credential, listed)),
+        codex::PROVIDER => Some(codex::entry(listed)),
+        _ => None,
+    }
+}
+
+/// Reads again the models `provider`'s login lists, in place of those saved, which stay when
+/// that fails; with a warning when they are not quite current.
+pub fn relist(logins: &Logins, provider: &str) -> Result<Option<String>, String> {
+    match provider {
+        copilot::PROVIDER => copilot::relist(logins).map(|()| None),
+        codex::PROVIDER => codex::relist(logins),
+        _ => Err(format!("{provider} is not a login that lists models")),
+    }
 }
 
 /// Saves `credential` in `path` as `provider`'s, in place of any it had.

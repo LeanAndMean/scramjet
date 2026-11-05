@@ -1,20 +1,30 @@
 //! `/login` and `/logout`: scramjet-rs's own logins, whose credentials it keeps in its own file
 //! (`agent::login`). GitHub Copilot's is a device login: the user enters a code on GitHub's page
 //! while the screen waits, as Scramjet's login dialog does. ChatGPT's is a browser login, which
-//! comes back by itself, or the user pastes the address the browser ended on.
+//! comes back by itself, or the user pastes the address the browser ended on. While the full
+//! screen is open, the models each login lists are read again in the background as they age.
 
 use super::interactive::Interactive;
-use super::screen::{Answer, Dialog, Optional};
+use super::screen::{Answer, Dialog, Optional, Relisting};
 use super::select::{self, Picker};
 use super::text::clip;
 use super::{clipboard, style};
 use scramjet_rs::agent::{codex, copilot, login};
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::process::{Command, Stdio};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
+use std::time::{Duration, Instant};
+
+/// How old a login's model list grows before it is read again, at start or while the full
+/// screen is open; also how long one that could not be read waits before it is tried again.
+const RELIST_AFTER: Duration = Duration::from_secs(15 * 60);
+/// How often the lists' age is looked at.
+const LOOK_EVERY: Duration = Duration::from_secs(60);
 
 impl Interactive {
     /// `/login`: the providers to log in to, each marked when logged in, then its login.
@@ -248,6 +258,139 @@ impl Interactive {
     }
 }
 
+/// Keeps the logins' model lists current while the full screen is open: each is read again in
+/// the background once `RELIST_AFTER` old, at start too, and `relisting` hears when what they
+/// offer changes, with what to tell the user. A list another process read is taken up as well.
+pub(super) fn keep_lists_current(relisting: Relisting) {
+    let Some(logins) = login::Logins::user() else {
+        return;
+    };
+    let looking = std::thread::Builder::new().name("relist".into());
+    let _ = looking.spawn(move || {
+        let mut lists = Lists::new(&logins);
+        loop {
+            if let Some(notes) = lists.look(&logins, Instant::now(), login::relist) {
+                relisting.changed(notes);
+            }
+            std::thread::sleep(LOOK_EVERY);
+        }
+    });
+}
+
+/// What the logins' lists offered when last looked at.
+struct Lists {
+    models: HashMap<String, Vec<Value>>,
+    /// The logins whose list could not be read again, when to try again.
+    retry: HashMap<String, Instant>,
+    /// The logins whose trouble reading their list was said, until one is read well.
+    said: HashSet<String>,
+}
+
+impl Lists {
+    /// As the session read them at start.
+    fn new(logins: &login::Logins) -> Self {
+        let logged_in = login::logged_in(&logins.auth).unwrap_or_default();
+        let models = (login::LOGINS.iter())
+            .filter(|(name, _)| logged_in.iter().any(|known| known == name))
+            .map(|(name, _)| (name.to_string(), offered(logins, name)))
+            .collect();
+        Self {
+            models,
+            retry: HashMap::new(),
+            said: HashSet::new(),
+        }
+    }
+
+    /// Reads again with `relist` each list due at `now`; returns what to tell the user when
+    /// what the lists offer changed, or there is trouble not yet said.
+    fn look(
+        &mut self,
+        logins: &login::Logins,
+        now: Instant,
+        relist: impl Fn(&login::Logins, &str) -> Result<Option<String>, String>,
+    ) -> Option<Vec<String>> {
+        let logged_in = login::logged_in(&logins.auth).unwrap_or_default();
+        let (mut notes, mut changed) = (Vec::new(), false);
+        for (name, shown) in login::LOGINS {
+            if !logged_in.iter().any(|known| known == name) {
+                changed |= self.models.remove(name).is_some();
+                self.retry.remove(name);
+                self.said.remove(name);
+                continue;
+            }
+            let before = login::List::read(logins, name);
+            let due =
+                (before.as_ref().and_then(login::List::age)).is_none_or(|age| age >= RELIST_AFTER);
+            let waiting = self.retry.get(name).is_some_and(|retry| now < *retry);
+            if due && !waiting {
+                let before = before.map(|list| list.models(name)).unwrap_or_default();
+                match relist(logins, name) {
+                    Ok(warning) => {
+                        self.retry.remove(name);
+                        match warning {
+                            Some(warning) if self.said.insert(name.to_owned()) => {
+                                notes.push(format!("Warning: {warning}"));
+                            }
+                            Some(_) => {}
+                            None => {
+                                self.said.remove(name);
+                            }
+                        }
+                        notes.extend(differences(shown, &before, &offered(logins, name)));
+                    }
+                    Err(error) => {
+                        self.retry.insert(name.to_owned(), now + RELIST_AFTER);
+                        if self.said.insert(name.to_owned()) {
+                            notes.push(format!(
+                                "Warning: {shown}'s models could not be read again, so those it \
+                                 listed before are offered: {error}"
+                            ));
+                        }
+                    }
+                }
+            }
+            let models = offered(logins, name);
+            if self.models.get(name) != Some(&models) {
+                self.models.insert(name.to_owned(), models);
+                changed = true;
+            }
+        }
+        (changed || !notes.is_empty()).then_some(notes)
+    }
+}
+
+/// The models `provider`'s saved list offers.
+fn offered(logins: &login::Logins, provider: &str) -> Vec<Value> {
+    let list = login::List::read(logins, provider);
+    list.map(|list| list.models(provider)).unwrap_or_default()
+}
+
+/// What to say of the models `shown` offers now, `after`, that it did not, `before`, and of
+/// those it no longer offers.
+fn differences(shown: &str, before: &[Value], after: &[Value]) -> Vec<String> {
+    let ids = |models: &[Value]| -> Vec<String> {
+        let ids = models.iter().filter_map(|model| model["id"].as_str());
+        ids.map(str::to_owned).collect()
+    };
+    let (before, after) = (ids(before), ids(after));
+    let added: Vec<&str> = (after.iter())
+        .filter(|id| !before.contains(id))
+        .map(String::as_str)
+        .collect();
+    let removed: Vec<&str> = (before.iter())
+        .filter(|id| !after.contains(id))
+        .map(String::as_str)
+        .collect();
+    let mut notes = Vec::new();
+    if !added.is_empty() {
+        notes.push(format!("{shown} now offers {} (/model)", added.join(", ")));
+    }
+    if !removed.is_empty() {
+        notes.push(format!("{shown} no longer offers {}", removed.join(", ")));
+    }
+    notes
+}
+
 /// Opens `url` in the user's browser, as Scramjet's login dialog does (`open` on macOS, else
 /// `xdg-open`, which WSL's `wslview` serves); the page is shown and copied besides.
 fn open_in_browser(url: &str) {
@@ -263,5 +406,110 @@ fn open_in_browser(url: &str) {
         .spawn();
     if let Ok(mut opener) = opened {
         std::thread::spawn(move || opener.wait());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::cell::Cell;
+    use std::path::PathBuf;
+
+    struct Scratch(PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn now_ms() -> f64 {
+        let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        since.unwrap().as_millis() as f64
+    }
+
+    /// Saves a Copilot list of `ids`, read `minutes` ago.
+    fn list(logins: &login::Logins, minutes: f64, ids: &[&str]) {
+        let models: Vec<Value> = (ids.iter())
+            .map(|id| {
+                json!({"id": id, "supported_endpoints": ["/responses"],
+                    "capabilities": {"type": "chat", "supports": {"tool_calls": true}}})
+            })
+            .collect();
+        let list = json!({"fetched": now_ms() - minutes * 60_000.0, "data": models});
+        std::fs::create_dir_all(&logins.lists).unwrap();
+        let path = logins.lists.join("github-copilot.json");
+        std::fs::write(path, list.to_string()).unwrap();
+    }
+
+    #[test]
+    fn lists_are_read_again_as_they_age_and_changes_and_trouble_are_said_once() {
+        let scratch = Scratch(
+            std::env::temp_dir().join(format!("scramjet-rs-relist-{}", std::process::id())),
+        );
+        let logins = login::Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        let credential = r#"{"github-copilot": {"type": "oauth", "access": "a", "expires": 0}}"#;
+        std::fs::write(&logins.auth, credential).unwrap();
+        list(&logins, 1.0, &["a", "b"]);
+        let mut lists = Lists::new(&logins);
+        let start = Instant::now();
+        let never = |_: &login::Logins, _: &str| -> Result<Option<String>, String> {
+            panic!("read again while fresh")
+        };
+        assert_eq!(lists.look(&logins, start, never), None);
+        // Old enough, it is read again, and what it offers now and no longer is said.
+        list(&logins, 16.0, &["a", "b"]);
+        let relisted = |logins: &login::Logins, name: &str| {
+            assert_eq!(name, "github-copilot");
+            list(logins, 0.0, &["a", "c"]);
+            Ok(None)
+        };
+        assert_eq!(
+            lists.look(&logins, start, relisted),
+            Some(vec![
+                "GitHub Copilot now offers c (/model)".to_owned(),
+                "GitHub Copilot no longer offers b".to_owned(),
+            ])
+        );
+        // Another process read it: taken up, nothing said.
+        list(&logins, 0.0, &["a", "c", "d"]);
+        assert_eq!(lists.look(&logins, start, never), Some(vec![]));
+        // Trouble is said once, the list kept, and tried again only after a while.
+        list(&logins, 16.0, &["a", "c", "d"]);
+        let tries = Cell::new(0);
+        let failing = |_: &login::Logins, _: &str| {
+            tries.set(tries.get() + 1);
+            Err("offline".to_owned())
+        };
+        assert_eq!(
+            lists.look(&logins, start, failing),
+            Some(vec![
+                "Warning: GitHub Copilot's models could not be read again, so those it listed \
+                 before are offered: offline"
+                    .to_owned()
+            ])
+        );
+        assert_eq!(lists.look(&logins, start, failing), None);
+        let later = start + RELIST_AFTER;
+        assert_eq!(lists.look(&logins, later, failing), None);
+        assert_eq!(tries.get(), 2);
+        // Read well, a later trouble is said again.
+        let unchanged = |logins: &login::Logins, _: &str| {
+            list(logins, 0.0, &["a", "c", "d"]);
+            Ok(None)
+        };
+        assert_eq!(lists.look(&logins, later + RELIST_AFTER, unchanged), None);
+        list(&logins, 16.0, &["a", "c", "d"]);
+        let warned = |_: &login::Logins, _: &str| Ok(Some("npm is out of reach".to_owned()));
+        let said = lists.look(&logins, later + RELIST_AFTER, warned);
+        assert_eq!(said, Some(vec!["Warning: npm is out of reach".to_owned()]));
+        // Logged out, its models are gone.
+        std::fs::write(&logins.auth, "{}").unwrap();
+        assert_eq!(lists.look(&logins, later, never), Some(vec![]));
+        assert!(lists.models.is_empty());
     }
 }

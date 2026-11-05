@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.19.0 — Model lists kept current
+
+### Added
+
+- GitHub Copilot's and ChatGPT's model lists are read again in the background while the full screen is open, once 15 minutes old and at start too, so a model the provider adds is offered without a restart or a new `/login`. The models it now offers or no longer offers are named; a list that cannot be read again stays as it was, and that is said once.
+
 ## 0.18.1 — ChatGPT login fixes
 
 ### Fixed

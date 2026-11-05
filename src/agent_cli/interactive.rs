@@ -106,7 +106,12 @@ impl Interactive {
                     &settings,
                     agent.root().to_path_buf(),
                 );
-                Some(started.map_err(|error| format!("cannot show the full screen: {error}"))?)
+                let screen =
+                    started.map_err(|error| format!("cannot show the full screen: {error}"))?;
+                if let Ok(relisting) = screen.relisting() {
+                    super::login::keep_lists_current(relisting);
+                }
+                Some(screen)
             }
             false => None,
         };
@@ -270,6 +275,14 @@ impl Interactive {
                     }
                     screen::Input::Shells => add_shells(&mut self.agent, screen),
                     screen::Input::Commands => return Ok(Read::Again),
+                    screen::Input::Relisted => {
+                        let notes = screen.take_relisted().unwrap_or_default();
+                        self.agent.load_model_info();
+                        screen.models(self.agent.models().unwrap_or_default());
+                        if !notes.is_empty() {
+                            screen.say(&notes.join("\n"));
+                        }
+                    }
                     screen::Input::End => return Ok(Read::End),
                 }
             }

@@ -41,7 +41,7 @@ mod transcript;
 
 use draw::Activity;
 use input::Source;
-pub(super) use link::Handle;
+pub(super) use link::{Handle, Relisting};
 use mouse::{Click, Copying, Edge, Pasting, Selection, Thumb};
 use transcript::{Place, Transcript};
 
@@ -176,6 +176,8 @@ pub(super) enum Input {
     Shells,
     /// A built-in command typed during a turn waits: `Link::take_commands` has it.
     Commands,
+    /// The logins' model lists changed: `Link::take_relisted` has what to say of it.
+    Relisted,
     /// Ctrl-C twice or Ctrl-D on an empty prompt, or the screen is gone.
     End,
 }
@@ -194,6 +196,9 @@ struct Queue {
     shells: Vec<Side>,
     /// Built-in commands typed during a turn, until the session runs them.
     commands: Vec<String>,
+    /// What to say of the logins' model lists, which changed, until the session reads them
+    /// again (`Relisting`).
+    relisted: Option<Vec<String>>,
 }
 
 /// A `!` command run apart from the session.
@@ -400,6 +405,10 @@ impl App {
             if self.ready && !self.queue().commands.is_empty() {
                 self.ready = false;
                 let _ = self.inputs.send(Input::Commands);
+            }
+            if self.ready && self.queue().relisted.is_some() {
+                self.ready = false;
+                let _ = self.inputs.send(Input::Relisted);
             }
             self.editor.poll(&mut self.draft);
             if let Some(Open {

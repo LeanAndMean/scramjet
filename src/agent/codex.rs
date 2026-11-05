@@ -147,28 +147,7 @@ impl BrowserLogin {
             true => "logged in, but the model list was cancelled: /login again for it".to_owned(),
             false => format!("logged in, but {error}"),
         };
-        let path = logins.listed(PROVIDER);
-        let before = std::fs::read(&path).ok();
-        let before = before.and_then(|text| serde_json::from_slice::<Value>(&text).ok());
-        let (release, warning) = match codex_release(&self.urls.release, cancel) {
-            Ok(release) => (release, None),
-            Err(error) if error == login::CANCELLED => return Err(kept(error)),
-            Err(error) => match before.as_ref().and_then(|list| list["release"].as_str()) {
-                Some(known) => {
-                    let warning = format!(
-                        "{error}; ChatGPT's models are those it lists for Codex {known}, the \
-                         release known last"
-                    );
-                    (known.to_owned(), Some(warning))
-                }
-                None => return Err(kept(error)),
-            },
-        };
-        let models = models(&credential, &self.urls.api, &release, cancel);
-        let models = models.map_err(kept)?;
-        let list = json!({"fetched": login::now_ms(), "release": release, "models": models});
-        login::save_list(&path, &list)?;
-        Ok(warning)
+        save_models(&credential, &self.urls, logins, cancel).map_err(kept)
     }
 
     /// The authorization code, from whichever comes first: the browser or the user.
@@ -240,6 +219,50 @@ impl BrowserLogin {
         let _ = connection.write_all(answer.as_bytes());
         code
     }
+}
+
+/// Saves the models ChatGPT lists for the login `credential`, in place of those listed before,
+/// asked for as Codex's current release asks; with a warning when npm, out of reach, left them
+/// asked for as the release known last.
+fn save_models(
+    credential: &Value,
+    urls: &Urls,
+    logins: &login::Logins,
+    cancel: &AtomicBool,
+) -> Result<Option<String>, String> {
+    let path = logins.listed(PROVIDER);
+    let before = std::fs::read(&path).ok();
+    let before = before.and_then(|text| serde_json::from_slice::<Value>(&text).ok());
+    let (release, warning) = match codex_release(&urls.release, cancel) {
+        Ok(release) => (release, None),
+        Err(error) if error == login::CANCELLED => return Err(error),
+        Err(error) => match before.as_ref().and_then(|list| list["release"].as_str()) {
+            Some(known) => {
+                let warning = format!(
+                    "{error}; ChatGPT's models are those it lists for Codex {known}, the release \
+                     known last"
+                );
+                (known.to_owned(), Some(warning))
+            }
+            None => return Err(error),
+        },
+    };
+    let models = models(credential, &urls.api, &release, cancel)?;
+    let list = json!({"fetched": login::now_ms(), "release": release, "models": models});
+    login::save_list(&path, &list)?;
+    Ok(warning)
+}
+
+/// Reads again the models ChatGPT lists for the login saved in `logins`, as `save_models`.
+pub(super) fn relist(logins: &login::Logins) -> Result<Option<String>, String> {
+    relist_at(logins, &Urls::default())
+}
+
+fn relist_at(logins: &login::Logins, urls: &Urls) -> Result<Option<String>, String> {
+    login::access(&logins.auth, PROVIDER)?;
+    let credential = login::saved(&logins.auth)?.remove(PROVIDER);
+    let credential = credential.ok_or("not logged in to ChatGPT (/login)")?;
+    save_models(&credential, urls, logins, &AtomicBool::new(false))
 }
 
 /// The access token renewed with the refresh token `credential` keeps.
@@ -1021,6 +1044,44 @@ mod tests {
         let models = list["models"].as_array().unwrap().len();
         assert_eq!((list["release"].as_str(), models), (Some("0.165.0"), 4));
         server.join().unwrap();
+    }
+
+    #[test]
+    fn a_saved_login_reads_its_models_again_as_codexs_current_release() {
+        let scratch = scratch("relist");
+        let logins = login::Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let credential = json!({"type": "oauth", "access": token("acc-1"), "refresh": "rt",
+            "expires": login::now_ms() + 60_000.0, "accountId": "acc-1"});
+        login::save(&logins.auth, PROVIDER, credential).unwrap();
+        let before = json!({"fetched": 0, "release": "0.165.0", "models": []});
+        login::save_list(&logins.listed(PROVIDER), &before).unwrap();
+        let read = || {
+            let text = std::fs::read_to_string(logins.listed(PROVIDER)).unwrap();
+            serde_json::from_str::<Value>(&text).unwrap()
+        };
+        // Neither npm nor ChatGPT answering, the list stays as it was.
+        assert!(relist_at(&logins, &closed()).is_err());
+        assert_eq!(read(), before);
+        let (base, server) = serve_json(2, |head, _| match head.split(' ').nth(1) {
+            Some("/codex/latest") => json!({"version": "0.171.0"}),
+            Some("/codex/models?client_version=0.171.0") => json!({"models": listed()}),
+            _ => json!({}),
+        });
+        let urls = Urls {
+            api: base.clone(),
+            release: format!("{base}/codex/latest"),
+            ..closed()
+        };
+        assert_eq!(relist_at(&logins, &urls), Ok(None));
+        let requests = server.join().unwrap();
+        assert!(requests[1].0.contains("chatgpt-account-id: acc-1\r\n"));
+        let list = read();
+        let models = list["models"].as_array().unwrap().len();
+        assert_eq!((list["release"].as_str(), models), (Some("0.171.0"), 4));
+        assert!(list["fetched"].as_f64().unwrap() > 0.0);
     }
 
     #[test]

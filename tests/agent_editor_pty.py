@@ -13,6 +13,7 @@ import select
 import shutil
 import signal
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -1287,8 +1288,9 @@ def logins(read, until, send, output):
     with open(auth, 'w') as file:
         json.dump({'github-copilot': {'type': 'oauth', 'refresh': 'gho', 'access': 'tid=1', 'expires': 0}}, file)
     os.makedirs(os.path.dirname(copilot_models), exist_ok=True)
+    # Dated now, it is not read again from GitHub in the background while the test runs.
     with open(copilot_models, 'w') as file:
-        json.dump({'data': [listed('gpt-6-luna'), listed('grok-4.6')]}, file)
+        json.dump({'fetched': time.time() * 1000, 'data': [listed('gpt-6-luna'), listed('grok-4.6')]}, file)
     send(b'/model\r')
     rows = on_screen('grok-4.6 [github-copilot]')
     assert any(re.match('\u203a gpt-6-luna \\[test\\] \u2713', row) for row in rows), rows
@@ -1337,6 +1339,92 @@ for name, script in [('xdg-open', 'printf "%s\\n" "$1" > "$OPENED"'), ('wl-copy'
 run([], logins, variables={'XDG_CONFIG_HOME': login_home, 'PATH': login_bin + os.pathsep + env['PATH'],
                            'WAYLAND_DISPLAY': 'wayland-test', 'OPENED': opened_page, 'CLIPBOARD': login_clipboard},
     columns=80, rows=30)
+
+
+def serve_copilot_models(ids):
+    """Copilot's API over TLS for localhost (tests/tls), listing models of `ids`; returns its port
+    and the request lines it took."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tls')
+    context.load_cert_chain(os.path.join(tls, 'localhost.pem'), os.path.join(tls, 'localhost.key'))
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+    taken = []
+    models = [{'id': id, 'supported_endpoints': ['/responses'],
+               'capabilities': {'type': 'chat', 'supports': {'tool_calls': True}}} for id in ids]
+    body = json.dumps({'data': models}).encode()
+
+    def answer():
+        while True:
+            connection, _ = listener.accept()
+            try:
+                with context.wrap_socket(connection, server_side=True) as secure:
+                    head = receive(secure).decode()
+                    taken.append(head.split('\r\n')[0])
+                    authorized = re.search(r'(?im)^authorization: (.*)\r$', head)
+                    taken.append(authorized and authorized.group(1))
+                    secure.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n'
+                                   b'content-length: %d\r\nconnection: close\r\n\r\n' % len(body) + body)
+            except (ssl.SSLError, OSError):
+                pass
+    threading.Thread(target=answer, daemon=True).start()
+    return listener.getsockname()[1], taken
+
+
+def relisting_copilot(host, minutes, ids):
+    """A Copilot login whose requests go to `host`, its list of `ids` read `minutes` ago."""
+    os.makedirs(os.path.join(relisting_home, 'scramjet-rs'), exist_ok=True)
+    with open(os.path.join(relisting_home, 'scramjet-rs', 'auth.json'), 'w') as file:
+        json.dump({'github-copilot': {'type': 'oauth', 'refresh': 'gho', 'access': 'tid=1;proxy-ep=' + host,
+                                      'expires': (time.time() + 3600) * 1000}}, file)
+    listed = [{'id': id, 'supported_endpoints': ['/responses'],
+               'capabilities': {'type': 'chat', 'supports': {'tool_calls': True}}} for id in ids]
+    os.makedirs(os.path.dirname(relisted_models), exist_ok=True)
+    with open(relisted_models, 'w') as file:
+        json.dump({'fetched': (time.time() - minutes * 60) * 1000, 'data': listed}, file)
+
+
+def relisted_at_start(read, until, send, output):
+    shown, on_screen = full_screen(columns=80, rows=30)(read, output)
+    # Twenty minutes old, the list is read again as the session starts, and the change is said.
+    rows = on_screen('GitHub Copilot now offers grok-5 (/model)')
+    at = rows.index('GitHub Copilot now offers grok-5 (/model)')
+    assert rows[at + 1] == 'GitHub Copilot no longer offers grok-4.6', rows
+    send(b'/model\r')
+    rows = on_screen('grok-5 [github-copilot]')
+    picked = rows[[row.startswith('Select model') for row in rows].index(True):]
+    assert not any('grok-4.6' in row for row in picked), rows
+    send(b'\x1b')
+    on_screen('Select model', gone=True)
+    send(b'\x04')
+
+
+def relisting_fails(read, until, send, output):
+    shown, on_screen = full_screen(columns=80, rows=30)(read, output)
+    rows = on_screen("Warning: GitHub Copilot's models could not be read again, so those it listed")
+    send(b'/model\r')
+    on_screen('grok-5 [github-copilot]')
+    send(b'\x1b')
+    on_screen('Select model', gone=True)
+    send(b'\x04')
+
+
+relisting_home, relisting_state = config_home('relisting'), os.path.join(work, 'relisting-state')
+relisted_models = os.path.join(relisting_state, 'scramjet-rs', 'logins', 'github-copilot.json')
+in_relisting = {'XDG_CONFIG_HOME': relisting_home, 'XDG_STATE_HOME': relisting_state,
+                'SSL_CERT_FILE': os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tls', 'ca.pem')}
+copilot_port, copilot_taken = serve_copilot_models(['gpt-6-luna', 'grok-5'])
+relisting_copilot('localhost:%d' % copilot_port, 20, ['gpt-6-luna', 'grok-4.6'])
+run([], relisted_at_start, variables=in_relisting, columns=80, rows=30)
+assert copilot_taken == ['GET /models HTTP/1.1', 'Bearer tid=1;proxy-ep=localhost:%d' % copilot_port], copilot_taken
+relisted = json.load(open(relisted_models))
+assert [model['id'] for model in relisted['data']] == ['gpt-6-luna', 'grok-5'], relisted
+assert time.time() * 1000 - relisted['fetched'] < 60_000, relisted
+# Copilot out of reach: said, and the list kept.
+relisting_copilot(closed, 20, ['gpt-6-luna', 'grok-5'])
+run([], relisting_fails, variables=in_relisting, columns=80, rows=30)
+assert [model['id'] for model in json.load(open(relisted_models))['data']] == ['gpt-6-luna', 'grok-5']
 
 
 changing_home = config_home('changing')
