@@ -1242,7 +1242,7 @@ fn run_child(
             false,
             cancel,
             &mut |event| {
-                if let Sending::Attempt = event {
+                if let Sending::Sent = event {
                     *requests += 1;
                 }
             },

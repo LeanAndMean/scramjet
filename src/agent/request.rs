@@ -2,13 +2,16 @@
 //! does.
 use super::client::{self, ClientError, Protocol};
 use super::completions;
-use super::providers::ModelInfo;
+use super::providers::{Login, ModelInfo};
 use super::{
     Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, rates, sent, tools,
 };
 use serde_json::{Value, json};
 use std::{
-    sync::atomic::AtomicBool,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -110,10 +113,8 @@ impl Agent {
             purpose == Purpose::Reply,
             cancel,
             &mut |event| match event {
-                Sending::Attempt => {
-                    ui.waiting(purpose);
-                    *requests += 1;
-                }
+                Sending::Attempt => ui.waiting(purpose),
+                Sending::Sent => *requests += 1,
                 Sending::Progress(update) if purpose == Purpose::Reply => ui.progress(update),
                 Sending::Progress(_) => {}
                 Sending::Retrying(error, attempt, delay) => {
@@ -134,8 +135,11 @@ impl Agent {
 
 /// What happens while a request is sent.
 pub(super) enum Sending<'a> {
-    /// An attempt starts.
+    /// An attempt starts; a login's token is read, and renewed when it expired, before its
+    /// request is sent.
     Attempt,
+    /// The attempt's request is sent.
+    Sent,
     Progress(&'a StreamProgress),
     /// An attempt failed transiently; the next one, the given attempt, starts after the delay.
     Retrying(&'a str, u32, Duration),
@@ -200,49 +204,54 @@ pub(super) fn send(
     let body = body.map_err(std::io::Error::from)?;
     let mut attempt = 0;
     loop {
-        // A login's token, refreshed when it expired, which it may have during a retry's wait.
-        let mut headers = headers.clone();
-        let mut token = None;
-        if let Some(login) = &route.login {
-            let access = (super::login::access(&login.file, &login.provider))
-                .map_err(AgentError::Provider)?;
-            headers.push(("authorization", format!("Bearer {access}")));
-            if login.provider == super::copilot::PROVIDER {
-                headers.extend(super::copilot::request_headers(request, replying));
-            }
-            token = Some(access);
-        }
-        if info.protocol == Protocol::Codex {
-            // A models.json's key, else the login's, names the account.
-            let keyed = (route.headers.iter())
-                .find(|(name, _)| name == "authorization")
-                .and_then(|(_, value)| value.strip_prefix("Bearer "));
-            let token = keyed.or(token.as_deref()).unwrap_or_default();
-            let codex = super::codex::request_headers(token, request);
-            headers.extend(codex.map_err(AgentError::Provider)?);
-        }
         on(Sending::Attempt);
-        let started = Instant::now();
-        let sent = client::Sent {
-            route,
-            protocol: info.protocol,
-            headers: &headers,
-            priced_by: info.prices.header(),
-            compat: &info.compat,
-        };
-        let failure =
-            match executor.block_on(client::respond(sent, body.clone(), cancel, &mut |update| {
-                on(Sending::Progress(&update))
-            })) {
-                Ok(mut reply) => {
-                    reply.elapsed = started.elapsed();
-                    reply.cost = (reply.usage.as_ref())
-                        .and_then(|usage| info.prices.cost(usage, reply.priced_by.as_deref()));
-                    return Ok(reply);
+        // A login's token, renewed when it expired, which it may have during a retry's wait.
+        let token = (route.login.as_ref())
+            .map(|login| login_token(login, cancel))
+            .transpose();
+        let failure = match token {
+            Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
+            Err(ClientError::Failed(failure)) => failure,
+            Ok(token) => {
+                let mut headers = headers.clone();
+                if let (Some(login), Some(token)) = (&route.login, &token) {
+                    headers.push(("authorization", format!("Bearer {token}")));
+                    if login.provider == super::copilot::PROVIDER {
+                        headers.extend(super::copilot::request_headers(request, replying));
+                    }
                 }
-                Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
-                Err(ClientError::Failed(failure)) => failure,
-            };
+                if info.protocol == Protocol::Codex {
+                    // A models.json's key, else the login's, names the account.
+                    let keyed = (route.headers.iter())
+                        .find(|(name, _)| name == "authorization")
+                        .and_then(|(_, value)| value.strip_prefix("Bearer "));
+                    let token = keyed.or(token.as_deref()).unwrap_or_default();
+                    let codex = super::codex::request_headers(token, request);
+                    headers.extend(codex.map_err(AgentError::Provider)?);
+                }
+                on(Sending::Sent);
+                let started = Instant::now();
+                let sent = client::Sent {
+                    route,
+                    protocol: info.protocol,
+                    headers: &headers,
+                    priced_by: info.prices.header(),
+                    compat: &info.compat,
+                };
+                let mut progress = |update: StreamProgress| on(Sending::Progress(&update));
+                match executor.block_on(client::respond(sent, body.clone(), cancel, &mut progress))
+                {
+                    Ok(mut reply) => {
+                        reply.elapsed = started.elapsed();
+                        reply.cost = (reply.usage.as_ref())
+                            .and_then(|usage| info.prices.cost(usage, reply.priced_by.as_deref()));
+                        return Ok(reply);
+                    }
+                    Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
+                    Err(ClientError::Failed(failure)) => failure,
+                }
+            }
+        };
         let backoff = RETRY_DELAY * 2u32.pow(attempt.min(5));
         let delay = backoff
             .min(MAX_RETRY_WAIT)
@@ -269,6 +278,28 @@ pub(super) fn send(
         });
         if interrupted {
             return Err(AgentError::Cancelled);
+        }
+    }
+}
+
+/// The token `login` keeps, renewed when it expired. Escape stops the wait at once, but not the
+/// renewal, which goes on by itself and saves what it gets: OpenAI's renewal answers with a new
+/// refresh token, and the old one may not be taken again.
+fn login_token(login: &Login, cancel: &AtomicBool) -> Result<String, ClientError> {
+    let (file, provider) = (login.file.clone(), login.provider.clone());
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || sender.send(super::login::access(&file, &provider)));
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ClientError::Cancelled);
+        }
+        match receiver.recv_timeout(Duration::from_millis(50)) {
+            Ok(token) => return token.map_err(ClientError::Failed),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let failed = "reading the login's token failed".to_owned();
+                return Err(ClientError::Failed(failed.into()));
+            }
         }
     }
 }
@@ -955,6 +986,114 @@ response is incomplete; retry the request."});
             assert_eq!(body["store"], false);
             assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
         }
+    }
+
+    #[test]
+    fn a_failed_token_renewal_is_retried_when_it_may_succeed_and_escape_stops_waiting_for_one() {
+        use super::super::login::{self, Logins, now_ms};
+        let (endpoint, server) = serve_requests(vec![
+            stream(&fixture::text_events("Renewed.", fixture::known_usage())),
+            stream(&fixture::text_events(
+                "After Escape.",
+                fixture::known_usage(),
+            )),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "login-renewal");
+        let logins = Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let auth = logins.auth.clone();
+        agent.config.providers = crate::agent::Providers::given_logged_in(
+            json!({"providers": {"openai-codex": {
+                "baseUrl": format!("http://{endpoint}/v1"), "api": "openai-responses",
+                "models": [{"id": "gpt-6-luna"}],
+            }}}),
+            logins,
+        );
+        agent.set_model("openai-codex/gpt-6-luna").unwrap();
+        let request = agent.request();
+        let fresh = |access: &str| {
+            json!({"type": "oauth", "refresh": "rt-2", "access": access,
+                "expires": now_ms() + 600_000.0})
+        };
+        let expired = json!({"type": "oauth", "refresh": "rt", "access": "old", "expires": 0});
+        let mut events = Vec::new();
+        let send_it = |cancel: &AtomicBool, events: &mut Vec<String>| {
+            send(
+                &agent.executor,
+                &agent.info,
+                2,
+                &request,
+                true,
+                cancel,
+                &mut |event| {
+                    match event {
+                        Sending::Attempt => events.push("attempt".to_owned()),
+                        Sending::Sent => events.push("sent".to_owned()),
+                        Sending::Retrying(error, attempt, delay) => {
+                            events.push(format!("retry {attempt} in {delay:?}: {error}"));
+                            // Another process renews it during the wait.
+                            login::save(&auth, "openai-codex", fresh("fresh")).unwrap();
+                        }
+                        Sending::Progress(_) => {}
+                    }
+                },
+            )
+        };
+        // OpenAI's token endpoint is out of reach in tests (`codex::Urls`): it may answer later.
+        login::save(&auth, "openai-codex", expired.clone()).unwrap();
+        let reply = send_it(&AtomicBool::new(false), &mut events).unwrap();
+        assert_eq!(reply.items[0]["content"][0]["text"], "Renewed.");
+        assert_eq!(events.len(), 4, "{events:?}");
+        assert!(
+            events[1].starts_with("retry 1 in 2s: cannot connect to 127.0.0.1:1 ")
+                && events[1].ends_with(" (renewing the ChatGPT token; /login if it goes on)"),
+            "{events:?}"
+        );
+        assert_eq!(
+            [&events[0], &events[2], &events[3]],
+            ["attempt", "attempt", "sent"]
+        );
+        // A login that cannot be renewed fails at once.
+        events.clear();
+        let unrenewable = json!({"type": "oauth", "access": "old", "expires": 0});
+        login::save(&auth, "openai-codex", unrenewable).unwrap();
+        let failed = send_it(&AtomicBool::new(false), &mut events);
+        assert!(
+            matches!(&failed, Err(AgentError::Provider(message))
+                if message == "the ChatGPT login keeps no refresh token: /login again"),
+            "{:?}",
+            failed.err()
+        );
+        assert_eq!(events, ["attempt"]);
+        events.clear();
+        // Escape stops the wait while another process holds the login to renew it.
+        login::save(&auth, "openai-codex", expired).unwrap();
+        let lock = std::fs::File::open(scratch.0.join("auth.json.lock")).unwrap();
+        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+        let cancel = AtomicBool::new(false);
+        let started = Instant::now();
+        let failed = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            });
+            send_it(&cancel, &mut events)
+        });
+        assert!(matches!(failed, Err(AgentError::Cancelled)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        // Waiting for the reply shows from the start; nothing was sent.
+        assert_eq!(events, ["attempt"]);
+        // Its renewal saved, the next request carries it.
+        let renewed = json!({"openai-codex": fresh("after")}).to_string();
+        std::fs::write(scratch.0.join("auth.json"), renewed).unwrap();
+        drop(lock);
+        let reply = send_it(&AtomicBool::new(false), &mut events).unwrap();
+        assert_eq!(reply.items[0]["content"][0]["text"], "After Escape.");
+        let requests = server.join().unwrap();
+        assert!(requests[0].0.contains("authorization: bearer fresh\r\n"));
+        assert!(requests[1].0.contains("authorization: bearer after\r\n"));
     }
 
     #[test]

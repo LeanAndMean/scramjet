@@ -4,7 +4,7 @@
 //! go to the host the token names. The login also saves the models Copilot lists for the
 //! account (`GET /models`, as VS Code's Copilot reads them), which become the provider's.
 
-use super::client;
+use super::client::{self, Failure};
 use super::login;
 use serde_json::{Value, json};
 use std::{
@@ -217,28 +217,36 @@ fn relist_at(logins: &login::Logins, api: Option<&str>) -> Result<(), String> {
 }
 
 /// A Copilot token bought anew with the GitHub token `credential` keeps.
-pub(super) fn refresh(credential: &Value) -> Result<Value, String> {
+pub(super) fn refresh(credential: &Value) -> Result<Value, Failure> {
     let github = credential["refresh"]
         .as_str()
         .filter(|token| !token.is_empty());
-    let github = github.ok_or("the GitHub Copilot login keeps no GitHub token: /login again")?;
+    let github = github.ok_or_else(|| {
+        Failure::from("the GitHub Copilot login keeps no GitHub token: /login again".to_owned())
+    })?;
     let enterprise = credential["enterpriseUrl"].as_str();
     let domain = enterprise.unwrap_or("github.com");
-    let bought = buy(&Urls::of(domain).copilot, github, enterprise);
-    bought.map_err(|error| format!("{error} (renewing the Copilot token; /login if it goes on)"))
+    buy(&Urls::of(domain).copilot, github, enterprise).map_err(|failure| Failure {
+        message: format!(
+            "{} (renewing the Copilot token; /login if it goes on)",
+            failure.message
+        ),
+        ..failure
+    })
 }
 
 /// The credential of a Copilot token bought with `github`, the GitHub token.
-fn buy(url: &str, github: &str, enterprise: Option<&str>) -> Result<Value, String> {
+fn buy(url: &str, github: &str, enterprise: Option<&str>) -> Result<Value, Failure> {
     let authorization = format!("Bearer {github}");
     let mut headers = vec![("Accept", "application/json")];
     headers.extend(HEADERS);
     headers.push(("Authorization", &authorization));
-    let fetched = login::blocking(client::fetch(PROVIDER, "GET", url, &headers, None))?;
-    let answer = login::answer(fetched, "GitHub's Copilot token")?;
+    let fetched = login::blocking(client::fetch(PROVIDER, "GET", url, &headers, None));
+    let answer = login::renewal(fetched, "GitHub's Copilot token")?;
     let (Some(token), Some(expires)) = (answer["token"].as_str(), answer["expires_at"].as_f64())
     else {
-        return Err("GitHub's Copilot token answer lacks the token or its expiry".to_owned());
+        let lacking = "GitHub's Copilot token answer lacks the token or its expiry";
+        return Err(lacking.to_owned().into());
     };
     let mut credential = json!({
         "type": "oauth",

@@ -9,7 +9,7 @@
 //! (user decision, 2026-11-05: providers' own lists, never lists kept here), while the login and
 //! the model requests say they are scramjet-rs's.
 
-use super::client;
+use super::client::{self, Failure};
 use super::login;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -61,6 +61,7 @@ pub(super) struct Urls {
     release: String,
 }
 
+#[cfg(not(test))]
 impl Default for Urls {
     fn default() -> Self {
         Self {
@@ -69,6 +70,14 @@ impl Default for Urls {
             api: BASE_URL.to_owned(),
             release: "https://registry.npmjs.org/%40openai%2Fcodex/latest".to_owned(),
         }
+    }
+}
+
+/// A test renewing a token, as a request does, reaches none of them.
+#[cfg(test)]
+impl Default for Urls {
+    fn default() -> Self {
+        tests::closed()
     }
 }
 
@@ -266,39 +275,50 @@ fn relist_at(logins: &login::Logins, urls: &Urls) -> Result<Option<String>, Stri
 }
 
 /// The access token renewed with the refresh token `credential` keeps.
-pub(super) fn refresh(credential: &Value) -> Result<Value, String> {
+pub(super) fn refresh(credential: &Value) -> Result<Value, Failure> {
     refresh_at(&Urls::default().token, credential)
 }
 
-fn refresh_at(url: &str, credential: &Value) -> Result<Value, String> {
+fn refresh_at(url: &str, credential: &Value) -> Result<Value, Failure> {
     let refresh = credential["refresh"]
         .as_str()
         .filter(|token| !token.is_empty());
-    let refresh = refresh.ok_or("the ChatGPT login keeps no refresh token: /login again")?;
+    let refresh = refresh.ok_or_else(|| {
+        Failure::from("the ChatGPT login keeps no refresh token: /login again".to_owned())
+    })?;
     let form = form(&[
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh),
         ("client_id", CLIENT_ID),
     ]);
-    let renewed = tokens(url, form, &AtomicBool::new(false));
-    renewed.map_err(|error| format!("{error} (renewing the ChatGPT token; /login if it goes on)"))
+    tokens(url, form, &AtomicBool::new(false)).map_err(|failure| Failure {
+        message: format!(
+            "{} (renewing the ChatGPT token; /login if it goes on)",
+            failure.message
+        ),
+        ..failure
+    })
 }
 
 /// The credential OpenAI's token endpoint at `url` answers `form` with, in Scramjet's format.
-fn tokens(url: &str, form: String, cancel: &AtomicBool) -> Result<Value, String> {
+fn tokens(url: &str, form: String, cancel: &AtomicBool) -> Result<Value, Failure> {
     let headers = [("Accept", "application/json")];
     let body = Some(("application/x-www-form-urlencoded", form.into_bytes()));
-    let fetched = cancellable(cancel, client::fetch(PROVIDER, "POST", url, &headers, body))?;
-    let answer = login::answer(fetched, "OpenAI's token endpoint")?;
+    let fetched = cancellable(cancel, client::fetch(PROVIDER, "POST", url, &headers, body));
+    let answer = login::renewal(fetched, "OpenAI's token endpoint")?;
     let access = answer["access_token"].as_str();
     let (Some(access), Some(refresh), Some(seconds)) = (
         access,
         answer["refresh_token"].as_str(),
         answer["expires_in"].as_f64(),
     ) else {
-        return Err("OpenAI's token answer lacks a token or its expiry".to_owned());
+        return Err("OpenAI's token answer lacks a token or its expiry"
+            .to_owned()
+            .into());
     };
-    let account = account_id(access).ok_or("OpenAI's access token names no ChatGPT account")?;
+    let account = account_id(access).ok_or_else(|| {
+        Failure::from("OpenAI's access token names no ChatGPT account".to_owned())
+    })?;
     Ok(json!({
         "type": "oauth",
         "access": access,
@@ -504,14 +524,14 @@ fn user_agent(name: &str, version: &str) -> String {
 }
 
 /// `future`, unless `cancel` is set first.
-fn cancellable<T>(
+fn cancellable<T, E: From<String>>(
     cancel: &AtomicBool,
-    future: impl Future<Output = Result<T, String>>,
-) -> Result<T, String> {
+    future: impl Future<Output = Result<T, E>>,
+) -> Result<T, E> {
     login::blocking(async {
         tokio::select! {
             biased;
-            () = client::cancelled(cancel) => Err(login::CANCELLED.to_owned()),
+            () = client::cancelled(cancel) => Err(E::from(login::CANCELLED.to_owned())),
             done = future => done,
         }
     })
@@ -676,7 +696,7 @@ mod tests {
     }
 
     /// OpenAI, npm and ChatGPT on a closed port: a test that should send nothing reaches none.
-    fn closed() -> Urls {
+    pub(super) fn closed() -> Urls {
         Urls {
             authorize: "http://127.0.0.1:1/oauth/authorize".to_owned(),
             token: "http://127.0.0.1:1/oauth/token".to_owned(),
@@ -1102,19 +1122,27 @@ mod tests {
         );
         let failed = refresh_at(&url, &json!({"refresh": "rt-0"})).unwrap_err();
         assert_eq!(
-            failed,
-            "OpenAI's token answer lacks a token or its expiry (renewing the ChatGPT token; /login if it goes on)"
+            (failed.message.as_str(), failed.transient),
+            (
+                "OpenAI's token answer lacks a token or its expiry (renewing the ChatGPT token; /login if it goes on)",
+                false
+            )
         );
         let requests = server.join().unwrap();
         assert_eq!(
             requests[0].1,
             format!("grant_type=refresh_token&refresh_token=rt-1&client_id={CLIENT_ID}")
         );
+        // OpenAI out of reach, it may answer later.
+        let failed = refresh(&credential).unwrap_err();
+        assert!(failed.transient, "{failed:?}");
         assert!(
-            refresh(&json!({"type": "oauth"}))
-                .unwrap_err()
-                .contains("/login again")
+            failed
+                .message
+                .ends_with(" (renewing the ChatGPT token; /login if it goes on)")
         );
+        let failed = refresh(&json!({"type": "oauth"})).unwrap_err();
+        assert!(failed.message.contains("/login again") && !failed.transient);
     }
 
     #[test]

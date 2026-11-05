@@ -9,7 +9,7 @@
 //! file over it, and a file renamed over that path would show in every sandbox already running.
 //! What a login lists that is not secret, its models, is kept apart, in the state directory.
 
-use super::client::Fetched;
+use super::client::{Failure, Fetched};
 use super::{codex, copilot};
 use serde_json::{Map, Value};
 use std::{
@@ -116,7 +116,7 @@ pub fn save_key(path: &Path, provider: &str, key: &str) -> Result<(), String> {
 
 /// Removes `provider`'s credentials, and what its login listed; returns whether there were any.
 pub fn logout(logins: &Logins, provider: &str) -> Result<bool, String> {
-    let removed = update(&logins.auth, |saved| Ok(saved.remove(provider).is_some()))?;
+    let removed = update::<_, String>(&logins.auth, |saved| Ok(saved.remove(provider).is_some()))?;
     // Only logins list models; a key's provider is named by a models.json file, not a file name.
     if LOGINS.iter().any(|(login, _)| *login == provider) {
         let _ = std::fs::remove_file(logins.listed(provider));
@@ -178,15 +178,12 @@ pub(super) fn save(path: &Path, provider: &str, credential: Value) -> Result<(),
 }
 
 /// What a request to `provider` authenticates with: the access token its login keeps in `path`,
-/// renewed first when it has expired.
-pub(super) fn access(path: &Path, provider: &str) -> Result<String, String> {
+/// renewed first when it has expired. A renewal that failed transiently may succeed if retried.
+pub(super) fn access(path: &Path, provider: &str) -> Result<String, Failure> {
     access_with(path, provider, |credential| match provider {
         copilot::PROVIDER => copilot::refresh(credential),
         codex::PROVIDER => codex::refresh(credential),
-        _ => Err(format!(
-            "not logged in to {} (/login)",
-            shown_name(provider)
-        )),
+        _ => Err(format!("not logged in to {} (/login)", shown_name(provider)).into()),
     })
 }
 
@@ -194,9 +191,14 @@ pub(super) fn access(path: &Path, provider: &str) -> Result<String, String> {
 fn access_with(
     path: &Path,
     provider: &str,
-    refresh: impl FnOnce(&Value) -> Result<Value, String>,
-) -> Result<String, String> {
-    let unusable = || format!("not logged in to {} (/login)", shown_name(provider));
+    refresh: impl FnOnce(&Value) -> Result<Value, Failure>,
+) -> Result<String, Failure> {
+    let unusable = || {
+        Failure::from(format!(
+            "not logged in to {} (/login)",
+            shown_name(provider)
+        ))
+    };
     let current = |saved: &Map<String, Value>| {
         let credential = saved.get(provider).filter(|c| c["type"] == "oauth");
         credential.cloned().ok_or_else(unusable)
@@ -255,6 +257,14 @@ pub(super) fn save_list(path: &Path, list: &Value) -> Result<(), String> {
     std::fs::rename(&written, path).map_err(failed)
 }
 
+/// A renewal's JSON answer from `what`, as `answer` reads it, or what failed; transiently when
+/// asking again may succeed: no answer, or HTTP 408, 429 or 5xx.
+pub(super) fn renewal(fetched: Result<Fetched, Failure>, what: &str) -> Result<Value, Failure> {
+    let fetched = fetched?;
+    let transient = matches!(fetched.status, 408 | 429 | 500..);
+    answer(fetched, what).map_err(|message| Failure::new(message, transient))
+}
+
 /// A login's JSON answer from `what`, or what failed.
 pub(super) fn answer(fetched: Fetched, what: &str) -> Result<Value, String> {
     let text = String::from_utf8_lossy(&fetched.body);
@@ -266,11 +276,15 @@ pub(super) fn answer(fetched: Fetched, what: &str) -> Result<Value, String> {
 }
 
 /// Runs `future` to its end on a runtime of its own: logins run apart from any turn.
-pub(super) fn blocking<T>(future: impl Future<Output = Result<T, String>>) -> Result<T, String> {
+pub(super) fn blocking<T, E: From<String>>(
+    future: impl Future<Output = Result<T, E>>,
+) -> Result<T, E> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build();
-    runtime.map_err(|error| error.to_string())?.block_on(future)
+    runtime
+        .map_err(|error| E::from(error.to_string()))?
+        .block_on(future)
 }
 
 pub(super) fn now_ms() -> f64 {
@@ -314,11 +328,11 @@ fn read(path: &Path) -> Result<Map<String, Value>, String> {
 
 /// Runs `change` on the saved credentials holding the file's lock, and writes them when it
 /// changed them. A file that cannot be read is left as it is.
-fn update<T>(
+fn update<T, E: From<String>>(
     path: &Path,
-    change: impl FnOnce(&mut Map<String, Value>) -> Result<T, String>,
-) -> Result<T, String> {
-    let failed = |error: std::io::Error| format!("{}: {error}", path.display());
+    change: impl FnOnce(&mut Map<String, Value>) -> Result<T, E>,
+) -> Result<T, E> {
+    let failed = |error: std::io::Error| E::from(format!("{}: {error}", path.display()));
     let directory = path.parent().unwrap_or(Path::new("."));
     let made = std::fs::DirBuilder::new()
         .recursive(true)
@@ -371,7 +385,7 @@ mod tests {
     fn credentials_are_saved_for_their_owner_only_and_removed_by_provider() {
         let scratch = scratch("login-store");
         let path = scratch.0.join("config/scramjet-rs/auth.json");
-        update(&path, |saved| {
+        update::<_, String>(&path, |saved| {
             saved.insert(
                 "github-copilot".into(),
                 json!({"type": "oauth", "access": "a"}),
@@ -384,7 +398,8 @@ mod tests {
         assert_eq!(mode(&path), 0o600);
         assert_eq!(mode(path.parent().unwrap()), 0o700);
         assert_eq!(saved(&path).unwrap().len(), 2);
-        let removed = update(&path, |saved| Ok(saved.remove("other").is_some())).unwrap();
+        let removed = update::<_, String>(&path, |saved| Ok(saved.remove("other").is_some()));
+        let removed = removed.unwrap();
         assert!(removed);
         let saved = saved(&path).unwrap();
         assert_eq!(
@@ -422,14 +437,53 @@ mod tests {
         // Fresh now, it is used as it is.
         let token = access_with(&path, "github-copilot", &mut refresh).unwrap();
         assert_eq!((token.as_str(), refreshes), ("new", 1));
-        let failed = access_with(&path, "other", |_| unreachable!());
-        assert_eq!(failed.unwrap_err(), "not logged in to other (/login)");
-        // A refresh that fails leaves the login as it was.
+        let failed = access_with(&path, "other", |_| unreachable!()).unwrap_err();
+        assert_eq!(failed.message, "not logged in to other (/login)");
+        assert!(!failed.transient);
+        // A refresh that fails leaves the login as it was, and says whether to try again.
         let expired = json!({"type": "oauth", "refresh": "gho", "access": "old", "expires": 0});
         save(&path, "github-copilot", expired.clone()).unwrap();
-        let failed = access_with(&path, "github-copilot", |_| Err("HTTP 401".to_owned()));
-        assert_eq!(failed.unwrap_err(), "HTTP 401");
-        assert_eq!(saved(&path).unwrap()["github-copilot"], expired);
+        for transient in [false, true] {
+            let failure = Failure::new("HTTP 5xx or 401", transient);
+            let failed = access_with(&path, "github-copilot", |_| Err(failure)).unwrap_err();
+            assert_eq!(
+                (failed.message.as_str(), failed.transient),
+                ("HTTP 5xx or 401", transient)
+            );
+            assert_eq!(saved(&path).unwrap()["github-copilot"], expired);
+        }
+    }
+
+    #[test]
+    fn a_renewal_that_asking_again_may_cure_fails_transiently() {
+        let fetched = |status, body: &str| {
+            let body = body.as_bytes().to_vec();
+            Ok(Fetched { status, body })
+        };
+        for (status, transient) in [(408, true), (429, true), (500, true), (503, true)]
+            .into_iter()
+            .chain([(400, false), (401, false), (403, false), (404, false)])
+        {
+            let failed = renewal(
+                fetched(status, r#"{"error":"invalid_grant"}"#),
+                "The endpoint",
+            );
+            let failed = failed.unwrap_err();
+            assert_eq!(failed.transient, transient, "{status}");
+            let said =
+                format!("The endpoint answered HTTP {status}: {{\"error\":\"invalid_grant\"}}");
+            assert_eq!(failed.message, said);
+        }
+        let unanswered = Failure::new("x gave no answer within 30s", true);
+        let unanswered = renewal(Err(unanswered), "The endpoint");
+        assert!(unanswered.unwrap_err().transient);
+        assert!(
+            !renewal(fetched(200, "<html>"), "The endpoint")
+                .unwrap_err()
+                .transient
+        );
+        let answered = renewal(fetched(200, r#"{"token":"t"}"#), "The endpoint").unwrap();
+        assert_eq!(answered["token"], "t");
     }
 
     #[test]
@@ -535,7 +589,7 @@ mod tests {
         let scratch = scratch("login-broken");
         let path = scratch.0.join("auth.json");
         std::fs::write(&path, "{not json").unwrap();
-        let changed = update(&path, |saved| {
+        let changed = update::<_, String>(&path, |saved| {
             saved.insert("github-copilot".into(), json!({}));
             Ok(())
         });

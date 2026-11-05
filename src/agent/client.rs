@@ -113,6 +113,7 @@ pub(super) enum ClientError {
     Failed(Failure),
 }
 
+#[derive(Debug)]
 pub(super) struct Failure {
     pub message: String,
     /// Whether another attempt may succeed: rate limits, overload, server and connection failures.
@@ -121,6 +122,19 @@ pub(super) struct Failure {
     pub overflow: bool,
     /// The provider's Retry-After wait; `Duration::MAX` when it is unrepresentable.
     pub wait: Option<Duration>,
+}
+
+/// A failure nothing says another attempt may cure, such as a file's.
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self::new(message, false)
+    }
+}
+
+impl From<Failure> for String {
+    fn from(failure: Failure) -> Self {
+        failure.message
+    }
 }
 
 impl Failure {
@@ -394,13 +408,14 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Sends a request other than a model's, such as a login's, to `url` for `what` (a provider's
 /// name, in failures), `body` with its content type, and waits at most 30 seconds for its answer.
+/// A failure is transient when no answer came, as a model request's.
 pub(super) async fn fetch(
     what: &str,
     method: &str,
     url: &str,
     headers: &[(&str, &str)],
     body: Option<(&str, Vec<u8>)>,
-) -> Result<Fetched, String> {
+) -> Result<Fetched, Failure> {
     let (url, query) = match url.split_once('?') {
         Some((url, query)) => (url, format!("?{query}")),
         None => (url, String::new()),
@@ -417,7 +432,7 @@ pub(super) async fn fetch(
         login: None,
     };
     let exchange = async {
-        let (mut sender, driver) = connect(&route).await.map_err(|f| f.message)?;
+        let (mut sender, driver) = connect(&route).await?;
         let path = match route.path.as_str() {
             "" => "/",
             path => path,
@@ -437,18 +452,21 @@ pub(super) async fn fetch(
             request = request.header("Content-Length", body.len());
         }
         let request = (request.body(Full::new(Bytes::from(body)))).map_err(|e| e.to_string())?;
-        let response = (sender.send_request(request).await)
-            .map_err(|e| format!("request to {} failed: {e}", route.authority))?;
+        let response = (sender.send_request(request).await).map_err(|e| {
+            Failure::new(format!("request to {} failed: {e}", route.authority), true)
+        })?;
         let status = response.status().as_u16();
         let mut body = response.into_body();
         let mut bytes = Vec::new();
         while let Some(frame) = body.frame().await {
-            let frame = frame.map_err(|e| format!("{}'s answer failed: {e}", route.authority))?;
+            let frame = frame.map_err(|e| {
+                Failure::new(format!("{}'s answer failed: {e}", route.authority), true)
+            })?;
             if let Ok(data) = frame.into_data() {
                 bytes.extend_from_slice(&data);
             }
             if bytes.len() > FETCHED_BYTES {
-                return Err(format!("{}'s answer is over 4 MB", route.authority));
+                return Err(format!("{}'s answer is over 4 MB", route.authority).into());
             }
         }
         driver.abort();
@@ -459,10 +477,13 @@ pub(super) async fn fetch(
     };
     match tokio::time::timeout(FETCH_TIMEOUT, exchange).await {
         Ok(fetched) => fetched,
-        Err(_) => Err(format!(
-            "{} gave no answer within {}s",
-            route.authority,
-            FETCH_TIMEOUT.as_secs()
+        Err(_) => Err(Failure::new(
+            format!(
+                "{} gave no answer within {}s",
+                route.authority,
+                FETCH_TIMEOUT.as_secs()
+            ),
+            true,
         )),
     }
 }

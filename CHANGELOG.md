@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.22.2 — Token renewals retried, and Escape stops them
+
+### Fixed
+
+- When renewing a GitHub Copilot or ChatGPT login's token fails because GitHub or OpenAI did not answer, or answered with an overload or server error, the request is tried again as other transient failures are, instead of ending the turn at once. A refused renewal (a revoked login) still ends it, saying to `/login`.
+- Escape stops a request whose login's token is being renewed, at once, where it waited up to 30 seconds for GitHub or OpenAI; the renewal ends by itself and keeps what it got. "Waiting for reply" shows from the start of each attempt, the renewal included.
+
 ## 0.22.1 — /logout of an API key removes only the key
 
 ### Fixed
