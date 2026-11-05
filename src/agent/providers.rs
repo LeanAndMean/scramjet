@@ -389,6 +389,7 @@ impl Reading {
                 (listed.and_then(|text| serde_json::from_slice(&text).ok())).unwrap_or(Value::Null);
             let entry = match name {
                 super::copilot::PROVIDER => super::copilot::entry(credential, &listed),
+                super::codex::PROVIDER => super::codex::entry(&listed),
                 _ => continue,
             };
             if entry["models"].as_array().is_some_and(Vec::is_empty) {
@@ -508,6 +509,7 @@ impl Reading {
             Some("openai-responses") => Protocol::Responses,
             Some("anthropic-messages") => Protocol::Messages,
             Some("openai-completions") => Protocol::Completions,
+            Some("openai-codex-responses") => Protocol::Codex,
             Some(api) => return Err(format!("model {id}: api {api} is not supported yet")),
             None => return Err(format!("model {id}: no api")),
         };
@@ -631,6 +633,23 @@ fn levels(map: &Value) -> Vec<String> {
         }
     }
     levels
+}
+
+/// The `thinkingLevelMap` of a model a login lists with the effort levels `efforts`, as
+/// requests name them: each of Scramjet's levels sent as it is when listed, else not taken.
+pub(super) fn level_map(efforts: &[&str]) -> Value {
+    let map = LEVELS.iter().map(|(level, sent, _)| {
+        let taken = efforts.contains(sent);
+        (
+            level.to_string(),
+            if taken {
+                Value::from(*sent)
+            } else {
+                Value::Null
+            },
+        )
+    });
+    Value::Object(map.collect())
 }
 
 /// A configured value, as Scramjet resolves it: the environment variable of that name when one

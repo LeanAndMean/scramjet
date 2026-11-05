@@ -4,6 +4,15 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.18.0 — ChatGPT (Codex) login
+
+### Added
+
+- `/login` logs in to a ChatGPT Plus or Pro subscription (Codex): your browser opens OpenAI's login page, and the answer comes back to scramjet-rs by itself. The page's address is shown and copied, so you can open it in another browser or a private window, or paste the address the browser ends on.
+- ChatGPT's Codex models for your account are offered as ChatGPT lists them at login, with their context windows and effort levels, including models newer than any list kept by hand. Their requests go to ChatGPT's Codex backend, and the token is renewed when it expires.
+- Reaching a ChatGPT usage limit ends the turn at once, saying which plan and when to try again, rather than retrying.
+- A `models.json` provider may use `"api": "openai-codex-responses"`, as in Scramjet.
+
 ## 0.17.0 — Models named by provider and id
 
 ### Changed

@@ -296,6 +296,48 @@ pub(super) fn serve_answering(
     (address, server)
 }
 
+/// A login's servers (GitHub's, OpenAI's): answers `count` requests, each with what `answer`
+/// makes of its head (request line and headers, as sent) and body, as JSON; returns them as
+/// they came, with the server's base URL.
+pub(super) fn serve_json(
+    count: usize,
+    mut answer: impl FnMut(&str, &str) -> Value + Send + 'static,
+) -> (String, std::thread::JoinHandle<Vec<(String, String)>>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for _ in 0..count {
+            let (connection, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(connection);
+            let (mut head, mut length) = (String::new(), 0);
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+                if line == "\r\n" {
+                    break;
+                }
+                head.push_str(&line);
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let body = String::from_utf8(body).unwrap();
+            let answer = answer(&head, &body).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{answer}",
+                answer.len()
+            );
+            reader.get_mut().write_all(response.as_bytes()).unwrap();
+            requests.push((head, body));
+        }
+        requests
+    });
+    (base, server)
+}
+
 /// The models the tests use.
 const SERVED: [&str; 16] = [
     "m",

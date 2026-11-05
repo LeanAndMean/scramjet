@@ -1,16 +1,19 @@
 //! `/login` and `/logout`: scramjet-rs's own logins, whose credentials it keeps in its own file
 //! (`agent::login`). GitHub Copilot's is a device login: the user enters a code on GitHub's page
-//! while the screen waits, as Scramjet's login dialog does.
+//! while the screen waits, as Scramjet's login dialog does. ChatGPT's is a browser login, which
+//! comes back by itself, or the user pastes the address the browser ended on.
 
 use super::interactive::Interactive;
 use super::screen::{Answer, Dialog, Optional};
 use super::select::{self, Picker};
 use super::text::clip;
 use super::{clipboard, style};
-use scramjet_rs::agent::{copilot, login};
+use scramjet_rs::agent::{codex, copilot, login};
+use std::process::{Command, Stdio};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
+    mpsc,
 };
 
 impl Interactive {
@@ -51,9 +54,78 @@ impl Interactive {
         let Some(index) = screen.pick(picker.noting(keys, notes)) else {
             return;
         };
-        let (provider, shown) = login::LOGINS[index];
-        if provider == copilot::PROVIDER {
-            self.copilot_login(&logins, shown);
+        match login::LOGINS[index] {
+            (copilot::PROVIDER, shown) => self.copilot_login(&logins, shown),
+            (codex::PROVIDER, shown) => self.codex_login(&logins, shown),
+            _ => {}
+        }
+    }
+
+    /// ChatGPT's browser login: the page is opened and copied, and the address the browser ends
+    /// on comes back by itself or is pasted, whichever comes first, as in Scramjet's dialog.
+    fn codex_login(&mut self, logins: &login::Logins, shown: &str) {
+        let Some(screen) = &self.screen else {
+            return;
+        };
+        let browser = match codex::BrowserLogin::start() {
+            Ok(browser) => browser,
+            Err(error) => return self.say(&format!("Error: login to {shown} failed: {error}")),
+        };
+        let copied = match clipboard::copy(&browser.url, false) {
+            Ok(_) => " (copied)",
+            Err(_) => "",
+        };
+        open_in_browser(&browser.url);
+        screen.say(&format!(
+            "Log in to {shown} in the browser that opened, or open this page in the one you \
+             choose, such as a private window{copied}:\n{}",
+            browser.url
+        ));
+        let title = match browser.listening() {
+            true => "Paste the browser's last address, or log in there",
+            false => "Port 1455 is in use: paste the browser's last address",
+        };
+        let (paste, pasted) = mpsc::channel();
+        let [answered, done, cancel] = [(); 3].map(|()| Arc::new(AtomicBool::new(false)));
+        let finishing = {
+            let (logins, answered, done, cancel) = (
+                logins.clone(),
+                answered.clone(),
+                done.clone(),
+                cancel.clone(),
+            );
+            std::thread::spawn(move || {
+                let finished = browser.finish(&pasted, &answered, &logins, &cancel);
+                // Ended without an answer, as for a pasted text that is none, it ends the dialog.
+                answered.store(true, Ordering::Relaxed);
+                done.store(true, Ordering::Relaxed);
+                finished
+            })
+        };
+        let dialog = Dialog::Text(title.to_owned(), String::new(), Optional::No);
+        match screen.ask(dialog, Some(&answered)) {
+            Some(Answer::Text(Some(text))) => {
+                let _ = paste.send(text);
+            }
+            // Escape, or the screen gone.
+            _ if !answered.load(Ordering::Relaxed) => cancel.store(true, Ordering::Relaxed),
+            _ => {}
+        }
+        if !cancel.load(Ordering::Relaxed) {
+            let note = "Taking the tokens from OpenAI and the models from ChatGPT…".to_owned();
+            screen.ask(
+                Dialog::Wait(format!("Log in to {shown}"), note),
+                Some(&done),
+            );
+            if !done.load(Ordering::Relaxed) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        }
+        let finished = (finishing.join()).unwrap_or_else(|_| Err("the login failed".to_owned()));
+        let warning = finished.as_ref().ok().cloned().flatten();
+        self.finished_login(shown, logins, finished.map(drop));
+        if let Some(warning) = warning {
+            self.say(&format!("Warning: {warning}"));
         }
     }
 
@@ -102,6 +174,16 @@ impl Interactive {
             cancel.store(true, Ordering::Relaxed);
         }
         let finished = (finishing.join()).unwrap_or_else(|_| Err("the login failed".to_owned()));
+        self.finished_login(shown, logins, finished);
+    }
+
+    /// Says how a login ended.
+    fn finished_login(
+        &mut self,
+        shown: &str,
+        logins: &login::Logins,
+        finished: Result<(), String>,
+    ) {
         match finished {
             Ok(()) => {
                 let saved = logins.auth.display();
@@ -110,7 +192,7 @@ impl Interactive {
                 ));
                 self.logins_changed();
             }
-            Err(error) if error == copilot::CANCELLED => {
+            Err(error) if error == login::CANCELLED => {
                 self.say_styled(style::MUTED, "Login cancelled")
             }
             Err(error) => self.say(&format!("Error: login to {shown} failed: {error}")),
@@ -163,5 +245,23 @@ impl Interactive {
         if let Some(screen) = &self.screen {
             screen.models(self.agent.models().unwrap_or_default());
         }
+    }
+}
+
+/// Opens `url` in the user's browser, as Scramjet's login dialog does (`open` on macOS, else
+/// `xdg-open`, which WSL's `wslview` serves); the page is shown and copied besides.
+fn open_in_browser(url: &str) {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let opened = (Command::new(program).arg(url))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    if let Ok(mut opener) = opened {
+        std::thread::spawn(move || opener.wait());
     }
 }

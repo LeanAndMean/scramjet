@@ -242,6 +242,8 @@ pub(super) async fn cancelled(flag: &AtomicBool) {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Protocol {
     Responses,
+    /// ChatGPT's Codex backend: Responses, with what it takes (`codex`).
+    Codex,
     Messages,
     /// Chat Completions, with what the server accepts.
     Completions,
@@ -287,6 +289,7 @@ async fn exchange(
     let (mut sender, driver) = connect(route).await?;
     let mut request = match protocol {
         Protocol::Responses => Request::builder().uri(format!("{}/responses", route.path)),
+        Protocol::Codex => Request::builder().uri(super::codex::path(&route.path)),
         Protocol::Completions => Request::builder().uri(format!("{}/chat/completions", route.path)),
         Protocol::Messages => Request::builder()
             .uri(format!("{}/v1/messages", route.path))
@@ -342,18 +345,24 @@ async fn exchange(
         }
         text.truncate(ERROR_BODY_BYTES);
         let text = String::from_utf8_lossy(&text);
-        Err(Failure {
-            message: format!("HTTP {status}: {}", text.trim()),
-            transient: matches!(status.as_u16(), 408 | 429 | 500..)
-                && !mentions(&text, PERMANENT_WORDS),
-            // Cerebras reports an oversized request as a 400 or 413 without a body.
-            overflow: overflows(&text)
-                || (matches!(status.as_u16(), 400 | 413) && text.trim().is_empty()),
-            wait,
-        })
+        let limit = (protocol == Protocol::Codex)
+            .then(|| super::codex::usage_limit(&text))
+            .flatten();
+        match limit {
+            Some(limit) => Err(Failure::new(format!("HTTP {status}: {limit}"), false)),
+            None => Err(Failure {
+                message: format!("HTTP {status}: {}", text.trim()),
+                transient: matches!(status.as_u16(), 408 | 429 | 500..)
+                    && !mentions(&text, PERMANENT_WORDS),
+                // Cerebras reports an oversized request as a 400 or 413 without a body.
+                overflow: overflows(&text)
+                    || (matches!(status.as_u16(), 400 | 413) && text.trim().is_empty()),
+                wait,
+            }),
+        }
     } else {
         match protocol {
-            Protocol::Responses => responses_reply(&mut body, progress).await,
+            Protocol::Responses | Protocol::Codex => responses_reply(&mut body, progress).await,
             Protocol::Messages => {
                 let mut stream = super::messages::Stream::default();
                 match read_body(&mut body, |data| stream.feed(data, progress)).await {
@@ -392,6 +401,10 @@ pub(super) async fn fetch(
     headers: &[(&str, &str)],
     body: Option<(&str, Vec<u8>)>,
 ) -> Result<Fetched, String> {
+    let (url, query) = match url.split_once('?') {
+        Some((url, query)) => (url, format!("?{query}")),
+        None => (url, String::new()),
+    };
     let parts = super::providers::base_url(url)?;
     let route = Route {
         provider: what.to_owned(),
@@ -411,7 +424,7 @@ pub(super) async fn fetch(
         };
         let mut request = Request::builder()
             .method(method)
-            .uri(path)
+            .uri(format!("{path}{query}"))
             .header("Host", &route.authority);
         for (name, value) in headers {
             request = request.header(*name, *value);

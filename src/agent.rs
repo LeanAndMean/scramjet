@@ -7,6 +7,7 @@ mod autonomy;
 mod batch;
 mod calls;
 mod client;
+pub mod codex;
 mod commands;
 mod compaction;
 mod completions;

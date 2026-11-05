@@ -20,6 +20,9 @@ import tempfile
 import termios
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import zlib
 
 BINARY = sys.argv[1]
@@ -588,6 +591,14 @@ def full_screen(columns=60, rows=24):
             return shown()
         return shown, on_screen
     return make
+def until_file(path):
+    """Waits until a program the agent started has written `path`."""
+    end = time.monotonic() + 10
+    while not (os.path.exists(path) and open(path).read().endswith('\n')):
+        assert time.monotonic() < end, path
+        time.sleep(.05)
+
+
 def ending(read, output, expected, columns=60, rows=24):
     """Waits until the screen's last rows are `expected`, as the editor or a dialog shows them;
     returns the rows."""
@@ -1231,8 +1242,35 @@ def logins(read, until, send, output):
     on_screen('No saved logins to remove.')
     send(b'/login\r')
     rows = on_screen('Log in to  ')
-    assert any(row.startswith('\u203a GitHub Copilot') for row in rows), rows
+    assert any(row.startswith('\u203a ChatGPT Plus/Pro (Codex Subscription)') for row in rows), rows
+    assert any(row.startswith('  GitHub Copilot') for row in rows), rows
+    # ChatGPT's: the page is opened and copied, and the browser's answer comes back to the port.
     send(b'\r')
+    on_screen("Paste the browser's last address, or log in there  Enter submit \u00b7 Esc cancel")
+    until_file(opened_page)
+    page = open(opened_page).read().strip()
+    assert page.startswith('https://auth.openai.com/oauth/authorize?response_type=code&'), page
+    assert open(login_clipboard).read() == page
+    on_screen('such as a private window (copied):')
+    state = urllib.parse.parse_qs(urllib.parse.urlsplit(page).query)['state'][0]
+    try:
+        urllib.request.urlopen('http://127.0.0.1:1455/auth/callback?code=c&state=other', timeout=5)
+        assert False, 'another login\'s answer was taken'
+    except urllib.error.HTTPError as error:
+        assert error.code == 400 and b'State mismatch.' in error.read()
+    send(b'\x1b')
+    on_screen('Login cancelled')
+    # Pasted, another login's answer ends it before OpenAI is asked anything.
+    send(b'/login\r')
+    on_screen('Log in to  ')
+    send(b'\r')
+    on_screen("Paste the browser's last address, or log in there  Enter submit \u00b7 Esc cancel")
+    send(b'\x1b[200~http://localhost:1455/auth/callback?code=c&state=' + state.encode() + b'\x1b[201~\r')
+    on_screen("another login's (its state differs)")
+    assert not os.path.exists(auth) or json.load(open(auth)) == {}
+    send(b'/login\r')
+    on_screen('Log in to  ')
+    send(b'\x1b[B\r')
     on_screen('GitHub Enterprise URL or domain (empty for github.com)')
     send(b'not a domain\r')
     on_screen('Error: not a domain is not a GitHub Enterprise URL or domain')
@@ -1258,10 +1296,12 @@ def logins(read, until, send, output):
     send(b'\x1b')
     on_screen('grok-4.6', gone=True)
     send(b'/login\r')
+    on_screen('Log in to  ')
+    send(b'\x1b[B')
     rows = on_screen('Logged in; logging in again replaces the saved login')
     assert any(row.startswith('\u203a GitHub Copilot \u2713 logged in') for row in rows), rows
     send(b'\x1b')
-    on_screen('Log in to', gone=True)
+    on_screen('Logged in; logging in again', gone=True)
     send(b'/logout\r')
     on_screen('Log out of  ')
     send(b'\r')
@@ -1279,7 +1319,17 @@ def logins(read, until, send, output):
 
 login_home = config_home('login')
 copilot_models = os.path.join(work, 'state', 'scramjet-rs', 'logins', 'github-copilot.json')
-run([], logins, variables={'XDG_CONFIG_HOME': login_home}, columns=80, rows=30)
+# Never the desktop's browser or clipboard: stand-ins that keep what they were given.
+login_bin = os.path.join(work, 'login-bin')
+os.mkdir(login_bin)
+opened_page, login_clipboard = os.path.join(work, 'opened.txt'), os.path.join(work, 'login-clipboard.txt')
+for name, script in [('xdg-open', 'printf "%s\\n" "$1" > "$OPENED"'), ('wl-copy', 'cat > "$CLIPBOARD"')]:
+    with open(os.path.join(login_bin, name), 'w') as script_file:
+        script_file.write('#!/bin/sh\n' + script + '\n')
+    os.chmod(os.path.join(login_bin, name), 0o755)
+run([], logins, variables={'XDG_CONFIG_HOME': login_home, 'PATH': login_bin + os.pathsep + env['PATH'],
+                           'WAYLAND_DISPLAY': 'wayland-test', 'OPENED': opened_page, 'CLIPBOARD': login_clipboard},
+    columns=80, rows=30)
 
 
 changing_home = config_home('changing')

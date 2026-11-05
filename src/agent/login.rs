@@ -8,7 +8,8 @@
 //! file over it, and a file renamed over that path would show in every sandbox already running.
 //! What a login lists that is not secret, its models, is kept apart, in the state directory.
 
-use super::copilot;
+use super::client::Fetched;
+use super::{codex, copilot};
 use serde_json::{Map, Value};
 use std::{
     io::Write,
@@ -18,8 +19,13 @@ use std::{
 };
 
 /// The providers `/login` logs in to: their names, as providers and in `auth.json`, and what
-/// the user knows them by.
-pub const LOGINS: [(&str, &str); 1] = [(copilot::PROVIDER, "GitHub Copilot")];
+/// the user knows them by, in the order Scramjet lists them.
+pub const LOGINS: [(&str, &str); 2] = [
+    (codex::PROVIDER, "ChatGPT Plus/Pro (Codex Subscription)"),
+    (copilot::PROVIDER, "GitHub Copilot"),
+];
+/// What a login fails with when it was cancelled.
+pub const CANCELLED: &str = "cancelled";
 
 /// `$XDG_CONFIG_HOME/scramjet-rs`, by default `~/.config/scramjet-rs`: where the settings are.
 pub fn config_directory() -> Option<PathBuf> {
@@ -96,6 +102,7 @@ pub(super) fn save(path: &Path, provider: &str, credential: Value) -> Result<(),
 pub(super) fn access(path: &Path, provider: &str) -> Result<String, String> {
     access_with(path, provider, |credential| match provider {
         copilot::PROVIDER => copilot::refresh(credential),
+        codex::PROVIDER => codex::refresh(credential),
         _ => Err(format!(
             "not logged in to {} (/login)",
             shown_name(provider)
@@ -156,6 +163,34 @@ pub(super) fn make(path: &Path) {
     if let (Ok(()), Ok(mut file)) = (made, file) {
         let _ = file.write_all(b"{}\n");
     }
+}
+
+/// Saves what a login listed, `list`, in `path`, replacing it whole: it is no secret.
+pub(super) fn save_list(path: &Path, list: &Value) -> Result<(), String> {
+    let failed = |error: std::io::Error| format!("{}: {error}", path.display());
+    std::fs::create_dir_all(path.parent().unwrap_or(Path::new("."))).map_err(failed)?;
+    let written = path.with_extension(format!("{}.tmp", std::process::id()));
+    let text = serde_json::to_string_pretty(list).unwrap_or_default() + "\n";
+    std::fs::write(&written, text).map_err(failed)?;
+    std::fs::rename(&written, path).map_err(failed)
+}
+
+/// A login's JSON answer from `what`, or what failed.
+pub(super) fn answer(fetched: Fetched, what: &str) -> Result<Value, String> {
+    let text = String::from_utf8_lossy(&fetched.body);
+    if !(200..300).contains(&fetched.status) {
+        let said = text.trim().chars().take(400).collect::<String>();
+        return Err(format!("{what} answered HTTP {}: {said}", fetched.status));
+    }
+    serde_json::from_str(&text).map_err(|error| format!("{what}'s answer is not JSON: {error}"))
+}
+
+/// Runs `future` to its end on a runtime of its own: logins run apart from any turn.
+pub(super) fn blocking<T>(future: impl Future<Output = Result<T, String>>) -> Result<T, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build();
+    runtime.map_err(|error| error.to_string())?.block_on(future)
 }
 
 pub(super) fn now_ms() -> f64 {

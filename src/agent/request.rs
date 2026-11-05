@@ -163,16 +163,20 @@ pub(super) fn send(
     let request = without_images.as_ref().unwrap_or(request);
     let mut headers = Vec::new();
     let body = match info.protocol {
-        // As Scramjet's, a model that does not reason is asked nothing of reasoning.
-        Protocol::Responses if !info.reasoning => {
-            let mut request = request.clone();
-            if let Some(object) = request.as_object_mut() {
+        Protocol::Responses | Protocol::Codex => {
+            let mut request = match info.protocol {
+                Protocol::Codex => super::codex::body(request),
+                _ => request.clone(),
+            };
+            // As Scramjet's, a model that does not reason is asked nothing of reasoning.
+            if !info.reasoning
+                && let Some(object) = request.as_object_mut()
+            {
                 object.remove("reasoning");
                 object.remove("include");
             }
             serde_json::to_vec(&request)
         }
-        Protocol::Responses => serde_json::to_vec(request),
         Protocol::Messages => {
             let body = messages::request(
                 request,
@@ -198,13 +202,24 @@ pub(super) fn send(
     loop {
         // A login's token, refreshed when it expired, which it may have during a retry's wait.
         let mut headers = headers.clone();
+        let mut token = None;
         if let Some(login) = &route.login {
-            let token = (super::login::access(&login.file, &login.provider))
+            let access = (super::login::access(&login.file, &login.provider))
                 .map_err(AgentError::Provider)?;
-            headers.push(("authorization", format!("Bearer {token}")));
+            headers.push(("authorization", format!("Bearer {access}")));
             if login.provider == super::copilot::PROVIDER {
                 headers.extend(super::copilot::request_headers(request, replying));
             }
+            token = Some(access);
+        }
+        if info.protocol == Protocol::Codex {
+            // A models.json's key, else the login's, names the account.
+            let keyed = (route.headers.iter())
+                .find(|(name, _)| name == "authorization")
+                .and_then(|(_, value)| value.strip_prefix("Bearer "));
+            let token = keyed.or(token.as_deref()).unwrap_or_default();
+            let codex = super::codex::request_headers(token, request);
+            headers.extend(codex.map_err(AgentError::Provider)?);
         }
         on(Sending::Attempt);
         let started = Instant::now();
@@ -871,6 +886,75 @@ response is incomplete; retry the request."});
                 if message == "not logged in to GitHub Copilot (/login)"),
             "{failed:?}"
         );
+    }
+
+    #[test]
+    fn a_codex_login_sends_its_account_and_session_to_codexs_backend() {
+        let limit = json!({"error": {"code": "usage_limit_reached", "plan_type": "pro",
+            "message": "The usage limit has been reached"}})
+        .to_string();
+        let (endpoint, server) = serve_requests(vec![
+            stream(&fixture::text_events("Hi.", fixture::known_usage())),
+            format!(
+                "HTTP/1.1 429 Too Many Requests\r\ncontent-length: {}\r\n\r\n{limit}",
+                limit.len()
+            )
+            .into_bytes(),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "codex-login");
+        let logins = super::super::login::Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        // An access token naming the account `acc-9`.
+        let claims = json!({"https://api.openai.com/auth": {"chatgpt_account_id": "acc-9"}});
+        let claims = crate::agent::image::base64(claims.to_string().as_bytes());
+        let token = format!("e30.{}.c2ln", claims.trim_end_matches('='));
+        let expires = super::super::login::now_ms() + 600_000.0;
+        let credential = json!({"type": "oauth", "refresh": "rt", "access": token,
+            "expires": expires, "accountId": "acc-9"});
+        super::super::login::save(&logins.auth, "openai-codex", credential).unwrap();
+        agent.config.providers = crate::agent::Providers::given_logged_in(
+            json!({"providers": {"openai-codex": {
+                "baseUrl": format!("http://{endpoint}/backend-api"),
+                "api": "openai-codex-responses", "headers": {"originator": "scramjet-rs"},
+                "models": [{"id": "gpt-6-luna", "reasoning": true}],
+            }}}),
+            logins,
+        );
+        agent.set_model("openai-codex/gpt-6-luna").unwrap();
+        agent.config.max_output_tokens = Some(500);
+        let mut ui = Recorder::default();
+        agent
+            .turn("Hello", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(ui.replies, ["Hi."]);
+        // A usage limit ends the turn at once, saying when, not sent again.
+        let failed = agent.turn("Again", &mut ui, &AtomicBool::new(false));
+        assert!(
+            matches!(&failed, Err(AgentError::Provider(message)) if message
+                == "HTTP 429 Too Many Requests: You have hit your ChatGPT usage limit (pro plan)."),
+            "{failed:?}"
+        );
+        assert!(ui.retries.is_empty());
+        let requests = server.join().unwrap();
+        let session = agent.session.id().to_lowercase();
+        for (head, body) in &requests {
+            for header in [
+                "post /backend-api/codex/responses http/1.1\r\n".to_owned(),
+                format!("authorization: bearer {}\r\n", token.to_lowercase()),
+                "chatgpt-account-id: acc-9\r\n".to_owned(),
+                format!("session_id: {session}\r\n"),
+                format!("x-client-request-id: {session}\r\n"),
+                "originator: scramjet-rs\r\n".to_owned(),
+            ] {
+                assert!(head.contains(&header), "{header} in {head}");
+            }
+            assert!(body.get("max_output_tokens").is_none(), "{body}");
+            assert_eq!(body["text"], json!({"verbosity": "low"}));
+            assert_eq!(body["store"], false);
+            assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+        }
     }
 
     #[test]

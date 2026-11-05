@@ -4,19 +4,16 @@
 //! go to the host the token names. The login also saves the models Copilot lists for the
 //! account (`GET /models`, as VS Code's Copilot reads them), which become the provider's.
 
-use super::client::{self, Fetched};
+use super::client;
 use super::login;
 use serde_json::{Value, json};
 use std::{
-    path::Path,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
 /// The provider's name, in `auth.json` and as a provider.
 pub const PROVIDER: &str = "github-copilot";
-/// What `DeviceLogin::finish` fails with when it was cancelled.
-pub const CANCELLED: &str = "cancelled";
 /// VS Code's Copilot client, as Scramjet and other open clients log in.
 const CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
 /// What Copilot's own client says of itself, as Scramjet sends it.
@@ -102,7 +99,7 @@ impl DeviceLogin {
 
     pub(super) fn start_at(urls: Urls, enterprise: Option<String>) -> Result<Self, String> {
         let form = format!("client_id={CLIENT_ID}&scope=read:user");
-        let answer = blocking(post_form(&urls.device, form))?;
+        let answer = login::blocking(post_form(&urls.device, form))?;
         let field = |name: &str| answer[name].as_str().map(str::to_owned);
         let number = |name: &str| answer[name].as_f64().filter(|n| *n >= 0.0);
         match (
@@ -135,7 +132,7 @@ impl DeviceLogin {
         let credential = buy(&self.urls.copilot, &github, self.enterprise.as_deref())?;
         let models = models(&credential, self.urls.api.as_deref())?;
         let list = json!({"fetched": login::now_ms(), "data": models});
-        save_list(&logins.listed(PROVIDER), &list)?;
+        login::save_list(&logins.listed(PROVIDER), &list)?;
         login::save(&logins.auth, PROVIDER, credential)
     }
 
@@ -162,14 +159,14 @@ impl DeviceLogin {
             let until = Instant::now() + wait.min(left);
             while Instant::now() < until {
                 if cancel.load(Ordering::Relaxed) {
-                    return Err(CANCELLED.to_owned());
+                    return Err(login::CANCELLED.to_owned());
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            let answer = blocking(async {
+            let answer = login::blocking(async {
                 tokio::select! {
                     biased;
-                    () = client::cancelled(cancel) => Err(CANCELLED.to_owned()),
+                    () = client::cancelled(cancel) => Err(login::CANCELLED.to_owned()),
                     answer = post_form(&self.urls.token, form.clone()) => answer,
                 }
             })?;
@@ -215,8 +212,8 @@ fn buy(url: &str, github: &str, enterprise: Option<&str>) -> Result<Value, Strin
     let mut headers = vec![("Accept", "application/json")];
     headers.extend(HEADERS);
     headers.push(("Authorization", &authorization));
-    let fetched = blocking(client::fetch(PROVIDER, "GET", url, &headers, None))?;
-    let answer = answer(fetched, "GitHub's Copilot token")?;
+    let fetched = login::blocking(client::fetch(PROVIDER, "GET", url, &headers, None))?;
+    let answer = login::answer(fetched, "GitHub's Copilot token")?;
     let (Some(token), Some(expires)) = (answer["token"].as_str(), answer["expires_at"].as_f64())
     else {
         return Err("GitHub's Copilot token answer lacks the token or its expiry".to_owned());
@@ -250,8 +247,8 @@ fn models(credential: &Value, api: Option<&str>) -> Result<Vec<Value>, String> {
     headers.extend(HEADERS);
     headers.push(("Authorization", &authorization));
     let url = format!("{base}/models");
-    let listed = blocking(client::fetch(PROVIDER, "GET", &url, &headers, None))?;
-    let listed = answer(listed, "Copilot's model list")?;
+    let listed = login::blocking(client::fetch(PROVIDER, "GET", &url, &headers, None))?;
+    let listed = login::answer(listed, "Copilot's model list")?;
     let mut models = match listed["data"].as_array() {
         Some(models) => models.clone(),
         None => return Err(format!("Copilot's model list has no data: {listed}")),
@@ -272,21 +269,12 @@ fn models(credential: &Value, api: Option<&str>) -> Result<Vec<Value>, String> {
         }
         let url = format!("{base}/models/{id}/policy");
         let body = Some(("application/json", br#"{"state":"enabled"}"#.to_vec()));
-        let enabled = blocking(client::fetch(PROVIDER, "POST", &url, &policy, body));
+        let enabled = login::blocking(client::fetch(PROVIDER, "POST", &url, &policy, body));
         if enabled.is_ok_and(|enabled| (200..300).contains(&enabled.status)) {
             model["policy"]["state"] = json!("enabled");
         }
     }
     Ok(models)
-}
-
-fn save_list(path: &Path, list: &Value) -> Result<(), String> {
-    let failed = |error: std::io::Error| format!("{}: {error}", path.display());
-    std::fs::create_dir_all(path.parent().unwrap_or(Path::new("."))).map_err(failed)?;
-    let written = path.with_extension(format!("{}.tmp", std::process::id()));
-    let text = serde_json::to_string_pretty(list).unwrap_or_default() + "\n";
-    std::fs::write(&written, text).map_err(failed)?;
-    std::fs::rename(&written, path).map_err(failed)
 }
 
 /// The provider the models a login `listed` make, as a `models.json` entry: those that take
@@ -378,20 +366,7 @@ fn model(listed: &Value) -> Option<Value> {
     }
     // The levels it lists, each sent as it is; with none listed, Scramjet's ordinary ones.
     if !efforts.is_empty() {
-        let mut map = serde_json::Map::new();
-        for (level, sent) in [
-            ("off", "none"),
-            ("minimal", "minimal"),
-            ("low", "low"),
-            ("medium", "medium"),
-            ("high", "high"),
-            ("xhigh", "xhigh"),
-            ("max", "max"),
-        ] {
-            let taken = efforts.contains(&sent);
-            map.insert(level.into(), if taken { json!(sent) } else { Value::Null });
-        }
-        entry["thinkingLevelMap"] = Value::Object(map);
+        entry["thinkingLevelMap"] = super::providers::level_map(&efforts);
     }
     Some(entry)
 }
@@ -487,76 +462,16 @@ pub(super) fn host(token: &str, enterprise: Option<&str>) -> String {
 async fn post_form(url: &str, form: String) -> Result<Value, String> {
     let headers = [("Accept", "application/json"), ("User-Agent", HEADERS[0].1)];
     let body = Some(("application/x-www-form-urlencoded", form.into_bytes()));
-    answer(
+    login::answer(
         client::fetch(PROVIDER, "POST", url, &headers, body).await?,
         "GitHub",
     )
 }
 
-/// A JSON answer, or what failed.
-fn answer(fetched: Fetched, what: &str) -> Result<Value, String> {
-    let text = String::from_utf8_lossy(&fetched.body);
-    if !(200..300).contains(&fetched.status) {
-        let said = text.trim().chars().take(400).collect::<String>();
-        return Err(format!("{what} answered HTTP {}: {said}", fetched.status));
-    }
-    serde_json::from_str(&text).map_err(|error| format!("{what}'s answer is not JSON: {error}"))
-}
-
-/// Runs `future` to its end on a runtime of its own: logins run apart from any turn.
-pub(super) fn blocking<T>(future: impl Future<Output = Result<T, String>>) -> Result<T, String> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build();
-    runtime.map_err(|error| error.to_string())?.block_on(future)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::tests::ScratchDir;
-    use std::io::{BufRead, BufReader, Read, Write};
-
-    /// A GitHub and Copilot of the test's: answers `count` requests, each with what `answer`
-    /// makes of its request line, head and body, as JSON; returns them as they came.
-    fn github(
-        count: usize,
-        mut answer: impl FnMut(&str, &str) -> Value + Send + 'static,
-    ) -> (String, std::thread::JoinHandle<Vec<(String, String)>>) {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let server = std::thread::spawn(move || {
-            let mut requests = Vec::new();
-            for _ in 0..count {
-                let (connection, _) = listener.accept().unwrap();
-                let mut reader = BufReader::new(connection);
-                let (mut head, mut length) = (String::new(), 0);
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
-                        length = value.trim().parse().unwrap();
-                    }
-                    if line == "\r\n" {
-                        break;
-                    }
-                    head.push_str(&line);
-                }
-                let mut body = vec![0; length];
-                reader.read_exact(&mut body).unwrap();
-                let body = String::from_utf8(body).unwrap();
-                let answer = answer(&head, &body).to_string();
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{answer}",
-                    answer.len()
-                );
-                reader.get_mut().write_all(response.as_bytes()).unwrap();
-                requests.push((head, body));
-            }
-            requests
-        });
-        (base, server)
-    }
+    use crate::agent::tests::{ScratchDir, serve_json};
 
     fn listed() -> Value {
         json!([
@@ -595,7 +510,7 @@ mod tests {
     fn a_device_login_waits_for_the_code_then_saves_a_copilot_token_and_the_models() {
         let expires = (login::now_ms() / 1000.0) as u64 + 1800;
         let mut polls = 0;
-        let (base, server) = github(7, move |head, _| {
+        let (base, server) = serve_json(7, move |head, _| {
             let path = head.split(' ').nth(1).unwrap_or_default();
             match path {
                 "/login/device/code" => json!({"device_code": "dc-1", "user_code": "ABCD-1234",
@@ -707,7 +622,7 @@ mod tests {
 
     #[test]
     fn a_device_login_stops_when_cancelled_even_while_github_has_not_answered() {
-        let (base, _) = github(1, |_, _| {
+        let (base, _) = serve_json(1, |_, _| {
             json!({"device_code": "dc", "user_code": "C", "verification_uri": "u",
                 "interval": 0, "expires_in": 900})
         });
@@ -741,7 +656,7 @@ mod tests {
             lists: "/nonexistent".into(),
         };
         let finished = device.finish(&nowhere, &cancel);
-        assert_eq!(finished.unwrap_err(), CANCELLED);
+        assert_eq!(finished.unwrap_err(), login::CANCELLED);
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "{:?}",
