@@ -25,6 +25,7 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 - Those and other cheaper models only test the harness against live endpoints. Never adopt code, tests or documents they write, not even as a draft to rework: what goes into the repository is written by the model the main agent runs (claude-opus-5-5 at present). User decision, 2026-11-03, after 22 commits had adopted drafts from practice runs on test-only models (their review is in `docs/TASKS.md`).
 - To run a practice run (limits under Authorization): clone this repo to `/tmp` and set the clone's `.scramjet/autonomy.yaml` edge `rs:loop: rs:loop` to `pause`; start a release build of `HEAD` in tmux (large `history-limit`) through `scripts/without-credentials.sh`; count responses as the session file's top-level items carrying `_scramjet_context_tokens` (subagents' requests show only on the usage line); stop with Escape at about 30 and save the scrollback (`tmux capture-pane -p -S -`). Size the task to fit: command discovery plus editor wiring did not fit 30 claude-haiku-5-5 requests. Nothing the practice agent writes is adopted: discard the clone, and turn what the run showed about the harness into a task or a fix written by the loop, with the run's summary (model, requests, findings) in that commit's message. A background job started from a tool call dies when the call returns; start a full test run alongside with `setsid nohup … & disown`.
 - Commit small coherent changes. The message says what changed, why, and how it was verified; Git history is the record of finished work, and there are no content fingerprints, candidate manifests or per-turn activity logs. A product choice the user may want to revisit goes in its commit as a trailer, one line per choice in the message's last paragraph: `Choice: <what was chosen, and the alternative>`. `/rs:steer` reviews them.
+- Version every change (user decision, 2026-11-04). Here each such commit is the release, unlike the usual end-of-release bump. A commit that changes the program bumps `version` in `Cargo.toml` (and `Cargo.lock`): minor for a new feature or changed behavior, patch for a fix. Docs-, test- and refactor-only commits keep it. `CHANGELOG.md` lists the newest first, so nobody reads to its end. As the work goes, add one or two user-facing lines per change under `### Added`, `### Changed` or `### Fixed` in the `## Unreleased` section at its top. In the commit that finishes the change, rename that section `## <version> — <title>` and put a new empty `## Unreleased` above it.
 - Independent review only when the user asks for it or a change is genuinely risky (destructive file operations, credentials, process isolation).
 - Fix tests that encode removed behavior rather than preserving the behavior for the test's sake.
 
@@ -33,6 +34,7 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 - `README.md`: how to use the harness and its truthful current status. Keep it short.
 - `docs/DESIGN.md`: product direction and essential invariants agreed with the user.
 - `docs/ROADMAP.md`: rough stages.
+- `CHANGELOG.md`: what changed in each version, for users, newest first (Workflow).
 - `docs/TASKS.md`: pending work only: the current focus, next candidates with their obstacles, known issues, open questions and the `Last steer:` commit. Remove what is finished.
 
 ## When to stop for the user
@@ -50,7 +52,10 @@ When asking, give the decision, the relevant evidence, the options and a recomme
 - Local builds, tests and experiments: go ahead.
 - Small live tests through the local Proxy endpoint (127.0.0.1:18080) for development are approved (user decision, 2026-10-30). Ask before anything large or long-running, such as load tests.
 - Practice runs (an agent on a test-only model doing a real task in a clone of this repo, to find what hurts in the harness; its output is discarded): at most one per loop session, only when no clearer item is waiting, and stopped at about 30 requests (watch the usage line). User decision, 2026-10-30.
-- Ask before pushing, publishing, creating remote issues/PRs, destructive operations outside scratch directories, or desktop/clipboard automation.
+- Clipboard checks on this WSL desktop are approved (user decision, 2026-11-04): briefly replacing the clipboard with a test string, reading it back through each route, timing the reads and watching the Windows `%TEMP%` for new files. The agent has no `sudo`, so installing system packages is for the user, and scramjet-rs should need none ([design](docs/DESIGN.md#copy-paste-and-keys-2026-11-04)).
+- The private provider package ([design](docs/DESIGN.md#packages-providers-and-mcp-2026-11-04)) lives in its own local repository, `~/repos/scramjet-rs-provider-proxy` (working name), without a remote; the loop creates and develops it as it does this one. Proxy's details go there, not into this repository.
+- Not yet approved: live requests to other providers (GitHub Copilot, OpenAI Codex). Ask when that work needs them; the user does the login.
+- Ask before pushing, publishing, creating remote issues/PRs, destructive operations outside scratch directories, or other desktop/clipboard automation.
 - Don't read credentials or personal data. Don't upload unpublished code to external services.
 - Python tooling: use `uv` with an isolated environment; never install into the system Python.
 - `~/repos/pi_agent_rust` has a restrictive license rider: do not copy or port its implementation.

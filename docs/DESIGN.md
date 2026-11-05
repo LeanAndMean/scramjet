@@ -9,10 +9,10 @@ Established 2026-10-08 from the founding discussion. This file owns product dire
 - Improve current usage first: independent project tabs, a main agent, and efficient parallel subagents.
 - Preserve valuable Scramjet outcomes: coding tools, reusable commands/agents/skills, project instructions, command composition and continuation, graduated autonomy, informed approval, model selection, and useful session continuity.
 - Keep the retained alternate-screen experience: browse unfinished output, edit while browsing, expand tool/agent details, and copy selected text without disrupting live work.
-- Treat normal macOS Command+C/Command+V behavior as an early native feasibility question, not late polish.
+- On macOS, Command+C cannot reach a terminal program (the terminal handles it as a menu shortcut); copy-on-select makes Command+V work after selecting ([copy and paste](#copy-paste-and-keys-2026-11-04)).
 - Investigate approximately 8,000 simultaneous LLM requests from one node. Queued tasks, open requests, engine-scheduled requests, and completed-request throughput are separate measurements.
 - Actively manage provider concurrency and rate limits. On-prem vLLM behind a reverse proxy is a first-class deployment scenario, not the only provider type.
-- Preserve extensible boundaries, but defer a general extension system. No Python, TypeScript, Pi extension API, or Pi ecosystem compatibility is required.
+- Extensions are packages of data and separate executables ([packages](#packages-providers-and-mcp-2026-11-04)). No Python, TypeScript, Pi extension API, or Pi ecosystem compatibility is required.
 - PromptSwarm is a reference for scale ambition, not a workflow model to port or a runtime dependency.
 
 ## Current direction (2026-11-03)
@@ -25,7 +25,7 @@ Scramjet (`~/repos/scramjet`) and Proxy (`~/repos/proxy`) are the working refere
 
 Familiar names (user decision, 2026-11-04). The UI should be no less familiar than Claude Code's or Codex's. Where they and Pi/Scramjet name or bind the same action differently, the name their users know is the one listed and documented, and the other names a user would type stay accepted without being listed, so that typing one never sends it to the model as a prompt. `/clear` is listed, with `/new` and `/reset` accepted (both Claude Code and Codex understand `/new`). By the user's choice, `/settings` stays listed over Claude Code's `/config`, which is accepted.
 
-Proxy keeps authentication; Rust never reads OAuth credentials or changes Proxy state. Missing usage is recorded as unknown, not zero, and local cancellation is not proof that remote generation or billing stopped.
+On the local Proxy route, Proxy keeps authentication: scramjet-rs talks to it as to OpenAI and Anthropic endpoints, as Scramjet does through its `models.json`, and never changes Proxy state. scramjet-rs's own logins ([providers](#packages-providers-and-mcp-2026-11-04)) store only their own credentials, in its own file; it never reads other tools' credential stores. Missing usage is recorded as unknown, not zero, and local cancellation is not proof that remote generation or billing stopped.
 
 ### Agreed product shape (2026-11-03)
 
@@ -44,7 +44,7 @@ User decisions from `/rs:steer` on 2026-11-03:
 
 ### Look and themes (2026-11-04)
 
-User decisions from `/rs:steer` on 2026-11-04 ([the task list](TASKS.md) holds the order: after items 4, 5, 8 and 9, before the later work, which makes the theme editor an exception to building beyond Scramjet only once the daily driver is solid):
+User decisions from `/rs:steer` on 2026-11-04 ([the task list](TASKS.md) holds the order; the theme editor is an exception to building beyond Scramjet only once the daily driver is solid):
 
 - **Scrollbar.** Scramjet's: the rightmost column, shown while the conversation is taller than the view, clickable and draggable. It is a visual aid to where the reader is.
 - **The editor's box holds only the prompt and its completion list.** Notes and messages go to the status row above it.
@@ -64,6 +64,28 @@ User decisions from `/rs:steer` on 2026-11-04 ([the task list](TASKS.md) holds t
   A contrast guard keeps every text/background pair within a good band, neither too faint nor too harsh: after each step it nudges lightness as little as needed, or the color skips that step. Contrast bumps change only lightness.
 
   Colors with a meaning (errors, success, warnings, diff added/removed) keep their hue ranges and are pulled toward the harmony only within them; each can be set by hand or have its range switched off. Which color wheel defines "opposite" (the artist's or a perceptual one) and which contrast formula to use (WCAG 2's ratio or APCA) are the loop's choices, judged by how the randomizer's results look, with `Choice:` trailers.
+
+### Copy, paste and keys (2026-11-04)
+
+User decisions from the second `/rs:steer` of 2026-11-04. Copy and paste are used constantly, so they come first.
+
+- **One executable, nothing else to install.** Clipboard access is built into scramjet-rs (for example talking to X11 or Wayland directly, as the `arboard` crate does; `pbcopy` and `pbpaste` on macOS; Windows' own PowerShell under WSL). Tools such as `xclip` or `wl-paste` are fallbacks, not requirements. Requiring other software is a last resort, if there is provably no better option.
+- **Nothing that alarms endpoint security, and no stray files.** No compiled code and no encoded commands. Under WSL: a warm PowerShell process that only calls the built-in `System.Windows.Forms.Clipboard`, unless WSLg's own clipboard (read from its X11 display, with no Windows process) proves fast and reliable. Scramjet's warm reader compiles C# with `Add-Type` at each start, which left randomly named DLLs in the user's Windows `%TEMP%` that endpoint security software flagged (Scramjet issue #642).
+- **No OS-level input monitoring** (focus tracking, global key listeners), as an agent once proposed for Command+C in Scramjet: it is fragile across sleep and many processes. macOS terminals handle Command+C and Command+V themselves and send the program nothing (Command+V works because the terminal pastes the text), so no program can see Command+C.
+- **Copy-on-select**, a setting, on by default on macOS only: a completed mouse selection is copied, so Command+V works anywhere afterwards (Scramjet issue #643). Elsewhere, right-click copies a selection and pastes without one, and Ctrl+C copies a selection, as today.
+- When no clipboard route works, say once which key pastes through the terminal itself. Each terminal's quirks (Windows Terminal, Apple Terminal, iTerm2's `ReportRightClick`, xterm, VTE terminals such as Raspberry Pi OS's) are documented in this repository.
+- **Key remapping**, as Codex's `/keymap`: `/hotkeys` lists every key and also changes one (press the new key; conflicts shown), saved to a keybindings file; `/keybindings` (Claude Code's name) and `/keymap` open it. It is also the fallback where a terminal keeps right-click or a key to itself.
+- **Effort levels stay as they are**: the UI offers only the levels the model lists, the footer shows the level sent, and the level chosen is kept and fitted to each model, so switching back restores it. With more providers, the levels come from each provider's model list.
+
+### Packages, providers and MCP (2026-11-04)
+
+User decisions from the second `/rs:steer` of 2026-11-04:
+
+- **Packages are the extension model.** A package is installed by reference, as command sets are today, and brings data (commands, agents, skills, themes, keybindings, provider and MCP server entries) and, for what needs code, separate executables speaking versioned JSON over stdio (login, token and model-list helpers, MCP servers, later hooks), as Claude Code's and Codex's plugins do. No package code runs inside scramjet-rs: no shared libraries (Rust has no stable interface for them), no embedded scripting, and WebAssembly only if sandboxed third-party distribution earns its cost.
+- **The public core has no Proxy code.** scramjet-rs is to be public, and Proxy is proprietary: it must not be revealed in detail there. The local Proxy route becomes configuration (the OpenAI and Anthropic protocols at a local address, as Scramjet's `~/.scramjet/agent/models.json` points its `openai` and `anthropic` providers at Proxy). Proxy's own parts (its model and price cards, and the direct login and routing that Scramjet's private provider package reimplements) move to a private package in a repository of its own.
+- **Providers.** One boundary for every provider: HTTPS, the OpenAI Responses and Anthropic Messages protocols, and Chat Completions for open servers (vLLM, Ollama, llama.cpp). GitHub Copilot and OpenAI Codex (a ChatGPT subscription) come first, with `/login` and `/logout`, since the user has both accounts and can test their login. Adding another provider takes only a provider entry. scramjet-rs keeps its own logins' credentials in its own file, hidden from the agent's tools like other credential stores.
+- **Less clutter in `/model`.** A provider appears once the user logs in to it or enables it, in `/model` and `/scoped-models` alike, grouped by provider with the current one first and filterable by provider; `/login` lists the others. (Pi lists every provider with any credential, an environment variable such as `HF_TOKEN` included, so the user scrolls past catalogs they never use.)
+- **MCP**, beyond Scramjet like the theme editor: a client in the core (the official Rust SDK, `rmcp`), servers declared in the settings or packages, over stdio and streamable HTTP. Progressive disclosure is the harness's job: MCP has none (its roadmap lists it, and a working group formed in 2026-09), while MCP's client best-practices page, Claude Code (by default) and the Claude and OpenAI APIs (`defer_loading` and tool search) all disclose tools on the client side. Each server is listed in one line, as skills are; a fixed pair of tools searches the tools and calls one, loading its schema on demand, which keeps the prompt cache stable on every provider. A server whose tools are small (MCP's page suggests a threshold of 1–5% of the context window) may have them loaded directly. Provider-native tool search may come later as an optimization; "code mode" (tools as an API the model scripts) needs an embedded runtime and is not planned. Researched 2026-11-04 (the specification changelogs to 2026-07-28, the roadmap and client best practices at modelcontextprotocol.io; Anthropic's tool search and code execution with MCP; the installed Codex 0.166 speaks `MCP-Protocol-Version` 2026-07-28); recheck before building.
 
 ## Essential responsibilities and invariants
 
@@ -127,16 +149,16 @@ A small supervised worker-process pool can follow demonstrated crash-containment
 
 Start with simple local session storage and rebuildable indexes. Append-only journals and SQLite are candidates, not parallel required stores. A single shared SQLite database on a cluster filesystem is not a default coordination strategy.
 
-Use internal Rust contracts for tools, provider transport, typed events, and structured interaction requests. If independently installable extensions become necessary, consider versioned Rust executable IPC; do not promise a stable Rust dynamic-library ABI or unrestricted mutable hooks. WASI is a later option only if sandboxed distribution earns its cost.
+Use internal Rust contracts for tools, provider transport, typed events, and structured interaction requests. Installable extensions are packages whose code runs as separate executables over versioned JSON ([packages](#packages-providers-and-mcp-2026-11-04)); do not promise a stable Rust dynamic-library ABI or unrestricted mutable hooks. WASI is a later option only if sandboxed distribution earns its cost.
 
 Candidate supporting libraries: Tokio, Reqwest/Rustls, Serde, Tracing, Ratatui/Crossterm, pulldown-cmark, Unicode segmentation/width crates, and an appropriate clipboard backend. Select and pin only what the current slice needs. Verify full enabled-feature/transitive licenses and required notices; permissive dependencies retain their licenses. Cargo-deny is a candidate development check, not a runtime dependency.
 
 ## Open decisions, resolved when needed
 
-- First real provider/authentication routes and corporate proxy/TLS needs: resolve before live integration; do not implement every inherited provider.
+- Providers beyond the first (GitHub Copilot and OpenAI Codex, 2026-11-04) and corporate proxy/TLS needs: resolve when needed; do not implement every inherited provider.
 - Exact command and session-import contracts: choose representative valuable behavior, not broad compatibility by appearance.
-- Native clipboard/input integration and terminal matrix: investigate in the early TUI track.
-- Storage representation, first-party crate boundaries, adaptive algorithm, and public extension protocol: choose from demonstrated consumers and constraints.
+- The terminal matrix for copy and paste: established with the [copy and paste](#copy-paste-and-keys-2026-11-04) work.
+- Storage representation, first-party crate boundaries, adaptive algorithm, and the package executables' protocol: choose from demonstrated consumers (the private provider package, MCP) and constraints.
 - Cross-tab quota sharing and remote workers: establish need before adding coordination infrastructure.
 - Target host/workload envelope and acceptance thresholds: record before a capacity claim, not from speculative benchmark targets.
 
