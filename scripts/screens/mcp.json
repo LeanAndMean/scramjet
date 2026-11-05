@@ -1,0 +1,29 @@
+{
+  "size": "100x50",
+  "settings": {
+    "theme": "scramjet-dark",
+    "mcpServers": {
+      "time": {"command": "uvx", "args": ["mcp-server-time", "--local-timezone", "UTC"]},
+      "everything": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]},
+      "broken": {"command": "sh", "args": ["-c", "echo 'missing API key' >&2; exit 1"]}
+    }
+  },
+  "files": {
+    "README.md": "# Clock\n"
+  },
+  "prompt": "What time is it in Tokyo?",
+  "replies": [
+    [{"call": "mcp_search", "arguments": {"query": "current time timezone"}}],
+    [{"call": "mcp_call", "arguments": {"server": "time", "tool": "get_current_time", "arguments": {"timezone": "Asia/Tokyo"}}}],
+    [{"call": "mcp_call", "arguments": {"server": "everything", "tool": "echo", "arguments": {"message": "hello"}}}],
+    [{"text": "It is evening in Tokyo."}]
+  ],
+  "steps": [
+    {"until": "It is evening in Tokyo."},
+    {"shot": "turn"},
+    {"type": "/mcp\r"},
+    {"until": "MCP Servers"},
+    {"sleep": 0.5},
+    {"shot": "servers"}
+  ]
+}

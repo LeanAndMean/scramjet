@@ -4,7 +4,7 @@
 use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, delegate,
-    forge, publish, question, sandbox, status, subagent, suggest, switch,
+    forge, mcp, publish, question, sandbox, status, subagent, suggest, switch,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,6 +52,7 @@ impl Agent {
                 rates: self.rates.as_deref(),
             },
             hide_credentials: self.hide_credentials,
+            mcp: self.mcp.as_ref(),
         }
     }
 
@@ -244,6 +245,7 @@ impl Agent {
 pub(super) struct Tools<'a> {
     parent: subagent::Parent<'a>,
     hide_credentials: bool,
+    mcp: Option<&'a mcp::Servers>,
 }
 
 impl Tools<'_> {
@@ -254,8 +256,32 @@ impl Tools<'_> {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> (Output, Usage) {
+        let failure = |error: String| Output {
+            text: format!("Error: {error}"),
+            detail: None,
+            failed: true,
+            image: None,
+        };
         let (output, usage) = match call.name {
             subagent::NAME => subagent::run(&call.arguments, &self.parent, ui, cancel),
+            mcp::SEARCH | mcp::CALL => {
+                ui.tool_running(std::time::Instant::now());
+                let servers = self
+                    .mcp
+                    .ok_or_else(|| "no MCP server is configured".to_owned());
+                let output = match call.name {
+                    mcp::SEARCH => {
+                        (servers.and_then(|mcp| mcp.search(&call.arguments))).map(|text| Output {
+                            text,
+                            detail: None,
+                            failed: false,
+                            image: None,
+                        })
+                    }
+                    _ => servers.and_then(|mcp| mcp.call(&call.arguments, cancel)),
+                };
+                (output.unwrap_or_else(failure), Usage::default())
+            }
             _ => {
                 ui.tool_running(std::time::Instant::now());
                 let named = self.parent.providers.credential_files();
@@ -265,12 +291,7 @@ impl Tools<'_> {
                     .run(root, hidden.as_ref(), cancel, &mut |output| {
                         ui.tool_output(output)
                     })
-                    .unwrap_or_else(|error| Output {
-                        text: format!("Error: {error}"),
-                        detail: None,
-                        failed: true,
-                        image: None,
-                    });
+                    .unwrap_or_else(failure);
                 (output, Usage::default())
             }
         };

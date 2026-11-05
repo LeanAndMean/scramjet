@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 21] = [
+const SLASH_COMMANDS: [(&str, &str); 22] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -44,6 +44,7 @@ const SLASH_COMMANDS: [(&str, &str); 21] = [
         "autopilot",
         "Toggle command auto-continuation: /autopilot on|off|status",
     ),
+    ("mcp", "Show the MCP servers and their tools"),
     ("exit", "Quit scramjet-rs"),
 ];
 
@@ -467,6 +468,7 @@ mod tests {
                 "/resume",
                 "/reload",
                 "/autopilot",
+                "/mcp",
                 "/exit",
             ]
         );
@@ -478,7 +480,7 @@ mod tests {
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /export         Export session (HTML default, or specify…",
                 "  /import         Import and resume a session from a JSONL…",
-                "  (1/21)",
+                "  (1/22)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -494,10 +496,10 @@ mod tests {
                 "→ /hotkeys",
                 "  /keybindings",
                 "  /fork",
-                "  (9/21)"
+                "  (9/22)"
             ]
         );
-        for _ in 0..13 {
+        for _ in 0..14 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);
@@ -524,7 +526,7 @@ mod tests {
         assert_eq!(labels(&list), ["/model", "/scoped-models"]);
 
         let list = Completion::slash("/m", &[]).unwrap();
-        assert_eq!(labels(&list)[0], "/model");
+        assert_eq!(labels(&list)[..2], ["/mcp", "/model"]);
         assert!(labels(&list).contains(&"/compact"));
         assert!(Completion::slash("/zzz", &[]).is_none());
     }

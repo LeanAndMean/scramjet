@@ -405,6 +405,7 @@ pub(super) fn config(endpoint: SocketAddr, root: &Path) -> AgentConfig {
         skills: Vec::new(),
         skill_options: Default::default(),
         prompt: Default::default(),
+        mcp_servers: Vec::new(),
     }
 }
 
@@ -846,6 +847,7 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
         skills: Vec::new(),
         skill_options: Default::default(),
         prompt: Default::default(),
+        mcp_servers: Vec::new(),
     };
     let resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
     assert_eq!(resumed.session_name(), Some("Parser work"));

@@ -8,8 +8,8 @@ use super::packages::{self, Source};
 use super::theme::TERMINAL_COLORS;
 use super::tree::Filter;
 use scramjet_rs::agent::{
-    CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, sets_in, shortened, state_directory,
-    write_replacing,
+    CODING_TOOLS, DEFAULT_TOOLS, McpServer, Origin, Set, search_program, sets_in, shortened,
+    state_directory, write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -315,6 +315,8 @@ pub(super) struct Settings {
     /// `enabledModels`: the patterns of the models Ctrl+P cycles through (`scope::resolve`);
     /// empty: all.
     pub(super) enabled_models: Vec<String>,
+    /// `mcpServers`: the MCP servers, by name.
+    pub(super) mcp_servers: Vec<McpServer>,
     /// What is wrong in the file; those keys keep their defaults.
     pub(super) warnings: Vec<String>,
 }
@@ -396,6 +398,7 @@ impl Settings {
             skills: Vec::new(),
             themes: Vec::new(),
             enabled_models: Vec::new(),
+            mcp_servers: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -582,6 +585,21 @@ impl Settings {
             Ok(patterns) => self.enabled_models = patterns,
             Err(()) => self.warnings.push(format!(
                 "{path}: enabledModels must be a list of model patterns; ignored"
+            )),
+        }
+        match object.get("mcpServers") {
+            None => {}
+            Some(Value::Object(servers)) => {
+                for (name, entry) in servers {
+                    match mcp_server(name, entry) {
+                        Ok(server) => self.mcp_servers.push(server),
+                        Err(why) => (self.warnings)
+                            .push(format!("{path}: mcpServers: {name}: {why}; ignored")),
+                    }
+                }
+            }
+            Some(_) => self.warnings.push(format!(
+                "{path}: mcpServers must be an object of servers by name; ignored"
             )),
         }
     }
@@ -1117,6 +1135,53 @@ fn recalled(path: &Path) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+/// An entry of `mcpServers`, as Claude Code's: `command`, with `args` and `env`; `type`, if
+/// given, `stdio`.
+fn mcp_server(name: &str, entry: &Value) -> Result<McpServer, String> {
+    let Value::Object(entry) = entry else {
+        return Err("must be an object with a command".to_owned());
+    };
+    match entry.get("type").map(Value::as_str) {
+        Some(Some("http" | "sse" | "streamable-http")) => {
+            return Err("servers over HTTP are not supported yet".to_owned());
+        }
+        None if entry.contains_key("url") => {
+            return Err("servers over HTTP are not supported yet".to_owned());
+        }
+        None | Some(Some("stdio")) => {}
+        Some(_) => return Err(r#"type must be "stdio""#.to_owned()),
+    }
+    if name.trim().is_empty() {
+        return Err("a server needs a name".to_owned());
+    }
+    let command = match entry.get("command") {
+        Some(Value::String(command)) if !command.trim().is_empty() => command.clone(),
+        _ => return Err("command must be the program to run".to_owned()),
+    };
+    let args = match entry.get("args") {
+        None => Vec::new(),
+        Some(Value::Array(args)) => (args.iter())
+            .map(|arg| arg.as_str().map(str::to_owned))
+            .collect::<Option<_>>()
+            .ok_or("args must be a list of strings")?,
+        Some(_) => return Err("args must be a list of strings".to_owned()),
+    };
+    let env = match entry.get("env") {
+        None => Vec::new(),
+        Some(Value::Object(env)) => (env.iter())
+            .map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+            .collect::<Option<_>>()
+            .ok_or("env's values must be strings")?,
+        Some(_) => return Err("env must be an object of strings".to_owned()),
+    };
+    Ok(McpServer {
+        name: name.to_owned(),
+        command,
+        args,
+        env,
+    })
+}
+
 /// `commandSets`' entries; an error when it is not a list of strings.
 fn command_sets(object: &Map<String, Value>) -> Result<Vec<String>, ()> {
     paths(object, "commandSets")
@@ -1291,6 +1356,62 @@ mod tests {
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
         let none = settings_with(&scratch, r#"{"doubleEscapeAction": "none"}"#);
         assert_eq!(none.double_escape, DoubleEscape::Nothing);
+    }
+
+    #[test]
+    fn mcp_servers_are_read_as_claude_codes_entries() {
+        let scratch = Scratch::new("mcp");
+        let settings = settings_with(
+            &scratch,
+            r#"{"mcpServers": {
+                "time": {"command": "uvx", "args": ["mcp-server-time"], "env": {"TZ": "UTC"}},
+                "plain": {"type": "stdio", "command": "server"},
+                "remote": {"type": "http", "url": "https://example.com/mcp"},
+                "bare": {"url": "https://example.com/mcp"},
+                "nameless": {"args": ["x"]},
+                "odd": {"command": "x", "args": [1]},
+                "other": {"type": "websocket", "command": "x"}
+            }}"#,
+        );
+        let server = |name: &str, command: &str, args: &[&str], env: &[(&str, &str)]| McpServer {
+            name: name.to_owned(),
+            command: command.to_owned(),
+            args: args.iter().map(|arg| arg.to_string()).collect(),
+            env: (env.iter())
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        };
+        assert_eq!(
+            settings.mcp_servers,
+            [
+                server("plain", "server", &[], &[]),
+                server("time", "uvx", &["mcp-server-time"], &[("TZ", "UTC")]),
+            ]
+        );
+        let path = shown(&scratch.0.join("settings.json"));
+        assert_eq!(
+            settings.warnings,
+            [
+                format!(
+                    "{path}: mcpServers: bare: servers over HTTP are not supported yet; ignored"
+                ),
+                format!(
+                    "{path}: mcpServers: nameless: command must be the program to run; ignored"
+                ),
+                format!("{path}: mcpServers: odd: args must be a list of strings; ignored"),
+                format!("{path}: mcpServers: other: type must be \"stdio\"; ignored"),
+                format!(
+                    "{path}: mcpServers: remote: servers over HTTP are not supported yet; ignored"
+                ),
+            ]
+        );
+        let wrong = settings_with(&scratch, r#"{"mcpServers": ["time"]}"#);
+        assert_eq!(
+            wrong.warnings,
+            [format!(
+                "{path}: mcpServers must be an object of servers by name; ignored"
+            )]
+        );
     }
 
     #[test]

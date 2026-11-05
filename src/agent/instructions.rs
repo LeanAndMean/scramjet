@@ -1,6 +1,7 @@
 //! The system instructions of the agent and of its subagents.
 use super::{
-    Commands, Problem, Skills, SystemPrompt, publish, question, status, subagent, suggest, switch,
+    Commands, Problem, Skills, SystemPrompt, mcp, publish, question, status, subagent, suggest,
+    switch,
 };
 use std::path::{Path, PathBuf};
 
@@ -54,6 +55,8 @@ disjoint edits in one call"
             (subagent::NAME, subagent::SNIPPET.to_owned()),
             (switch::NAME, switch::SNIPPET.to_owned()),
             (suggest::NAME, suggest::SNIPPET.to_owned()),
+            (mcp::SEARCH, mcp::SEARCH_SNIPPET.to_owned()),
+            (mcp::CALL, mcp::CALL_SNIPPET.to_owned()),
         ]);
     listed.extend(
         (snippets.filter(|(tool, _)| has(tool))).map(|(tool, text)| format!("- {tool}: {text}")),
@@ -470,6 +473,7 @@ mod tests {
         let tools = super::super::tools::offered(
             &super::super::tools::DEFAULT_TOOLS.map(String::from),
             None,
+            false,
         );
         let text = agent(
             root,
@@ -502,16 +506,21 @@ git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use
         let guidelines = format!("Guidelines:\n{}\n- Be concise", suggest::GUIDELINE);
         assert!(text.contains(&guidelines), "{text}");
         let listed = format!(
-            "- {}: {}\n- {}: {}\n\nGuidelines:",
+            "- {}: {}\n- {}: {}\n- {}: {}\n- {}: {}\n\nGuidelines:",
             switch::NAME,
             switch::SNIPPET,
             suggest::NAME,
-            suggest::SNIPPET
+            suggest::SNIPPET,
+            mcp::SEARCH,
+            mcp::SEARCH_SNIPPET,
+            mcp::CALL,
+            mcp::CALL_SNIPPET
         );
         assert!(text.contains(&listed), "{text}");
         let all = super::super::tools::offered(
             &super::super::tools::CODING_TOOLS.map(String::from),
             None,
+            false,
         );
         let text = agent(
             root,
@@ -659,6 +668,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {README};
         let tools = super::super::tools::offered(
             &super::super::tools::DEFAULT_TOOLS.map(String::from),
             None,
+            false,
         );
         let text = agent(
             &scratch,

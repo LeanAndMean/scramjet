@@ -186,6 +186,36 @@ pub(super) fn base64(bytes: &[u8]) -> String {
     text
 }
 
+const BASE64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/// What base64 or base64url text, padded or not, holds; `None` for anything else.
+pub(super) fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| match c {
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => BASE64URL
+            .iter()
+            .position(|known| *known == c)
+            .map(|at| at as u32),
+    };
+    let text = text.trim_end_matches('=').as_bytes();
+    let mut bytes = Vec::new();
+    for chunk in text.chunks(4) {
+        if chunk.len() == 1 {
+            return None;
+        }
+        let mut bits = 0u32;
+        for c in chunk {
+            bits = bits << 6 | value(*c)?;
+        }
+        let bits = bits << (6 * (4 - chunk.len()));
+        for index in 0..chunk.len() - 1 {
+            bytes.push((bits >> (16 - 8 * index)) as u8);
+        }
+    }
+    Some(bytes)
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;

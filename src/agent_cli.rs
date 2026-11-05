@@ -317,6 +317,7 @@ fn start(
         skills: settings.skills.clone(),
         skill_options,
         prompt: options.prompt,
+        mcp_servers: settings.mcp_servers.clone(),
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
     let (scoped, scope_warnings) = match patterns.is_empty() {

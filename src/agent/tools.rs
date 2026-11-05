@@ -18,8 +18,8 @@ use std::{
 
 mod matching;
 
-const MAX_LINES: usize = 2000;
-const MAX_BYTES: usize = 50 * 1024;
+pub(super) const MAX_LINES: usize = 2000;
+pub(super) const MAX_BYTES: usize = 50 * 1024;
 /// How the line that says what a cut read left out starts.
 pub const READ_MORE: &str = "[Showing lines ";
 /// Bash output kept in memory while a command runs; only the tail is shown to the model.
@@ -46,7 +46,7 @@ pub const CODING_TOOLS: [&str; 7] = ["read", "bash", "edit", "write", "grep", "f
 pub const DEFAULT_TOOLS: [&str; 4] = ["read", "bash", "edit", "write"];
 
 /// The harness's own tools, which the model sees after the coding tools, in this order.
-pub const HARNESS_TOOLS: [&str; 10] = [
+pub const HARNESS_TOOLS: [&str; 12] = [
     super::status::NAME,
     super::publish::TOOLS[0],
     super::publish::TOOLS[1],
@@ -57,15 +57,19 @@ pub const HARNESS_TOOLS: [&str; 10] = [
     super::subagent::NAME,
     super::switch::NAME,
     super::suggest::NAME,
+    super::mcp::SEARCH,
+    super::mcp::CALL,
 ];
 
 /// The tools the model has, in the order it sees them: the coding tools `coding` lists, then the
-/// harness's own; with `only` (`--tools`), those it names alone, as Scramjet's allowlist.
-pub(super) fn offered(coding: &[String], only: Option<&[String]>) -> Vec<&'static str> {
+/// harness's own, those for MCP servers' tools only with `mcp` (servers are configured); with
+/// `only` (`--tools`), those it names alone, as Scramjet's allowlist.
+pub(super) fn offered(coding: &[String], only: Option<&[String]>, mcp: bool) -> Vec<&'static str> {
     let named = |names: &[String], tool: &str| names.iter().any(|name| name == tool);
     let coding = (CODING_TOOLS.into_iter()).filter(|tool| named(only.unwrap_or(coding), tool));
-    let harness =
-        (HARNESS_TOOLS.into_iter()).filter(|tool| only.is_none_or(|only| named(only, tool)));
+    let harness = (HARNESS_TOOLS.into_iter())
+        .filter(|tool| only.is_none_or(|only| named(only, tool)))
+        .filter(|tool| mcp || !super::mcp::TOOLS.contains(tool));
     coding.chain(harness).collect()
 }
 
@@ -81,6 +85,7 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
     tools.push(super::subagent::definition());
     tools.push(super::switch::definition());
     tools.push(super::suggest::definition());
+    tools.extend(super::mcp::definitions());
     tools.retain(|tool| (tool["name"].as_str()).is_some_and(|name| offered.contains(&name)));
     Value::Array(tools)
 }
@@ -200,6 +205,9 @@ impl<'a> Call<'a> {
                 super::publish::summary(name, &self.arguments)
             }
             super::status::NAME => self.arguments["status"].as_str().unwrap_or("").to_owned(),
+            super::mcp::SEARCH | super::mcp::CALL => {
+                super::mcp::summary_line(self.name, &self.arguments)
+            }
             super::status::RECORD => super::status::record_summary(&self.arguments),
             "read" => {
                 let path = shortened(self.arguments["path"].as_str().unwrap_or(""));
@@ -247,6 +255,11 @@ impl<'a> Call<'a> {
     }
     pub fn approval(&self, root: &Path) -> Approval {
         match self.name {
+            super::mcp::CALL => Approval::Ask(format!(
+                "Call {} on MCP server {}",
+                self.arguments["tool"].as_str().unwrap_or(""),
+                self.arguments["server"].as_str().unwrap_or("")
+            )),
             // The call line above the question shows the whole command.
             "bash" => Approval::Ask(format!("Run in {}", root.display())),
             "write" | "edit" => {
@@ -928,6 +941,17 @@ impl Group {
         let group = child.id() as i32;
         groups.push(group);
         Ok((child, Self(group)))
+    }
+
+    /// As `spawn`, for a process `start` starts in a process group of its own and returns
+    /// with its id.
+    pub(super) fn started<T>(
+        start: impl FnOnce() -> io::Result<(T, u32)>,
+    ) -> io::Result<(T, Self)> {
+        let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
+        let (started, id) = start()?;
+        groups.push(id as i32);
+        Ok((started, Self(id as i32)))
     }
 
     pub(super) fn kill(&self) {

@@ -203,6 +203,7 @@ finish and is not checked on. Reply to continue.",
             if ui.pause() {
                 return Err(AgentError::Paused);
             }
+            self.settle_mcp(ui, cancel)?;
             let request = self.request();
             let reply = match self.respond(&request, Purpose::Reply, ui, cancel) {
                 Ok(reply) => reply,
@@ -583,6 +584,7 @@ mod tests {
             skills: Vec::new(),
             skill_options: Default::default(),
             prompt: Default::default(),
+            mcp_servers: Vec::new(),
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
         agent.instructions = instructions::agent(
@@ -802,6 +804,7 @@ scramjet-rs\n",
                 skills: Vec::new(),
                 skill_options: Default::default(),
                 prompt: Default::default(),
+                mcp_servers: Vec::new(),
             };
             let path = agent.session_path().to_owned();
             drop(agent);

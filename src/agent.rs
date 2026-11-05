@@ -18,6 +18,7 @@ mod image;
 mod instructions;
 mod listed;
 pub mod login;
+mod mcp;
 mod messages;
 mod pricing;
 mod problem;
@@ -48,6 +49,7 @@ pub use commands::{Command, Commands, Origin, Set, Sets, sets_in};
 pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use listed::Listing;
+pub use mcp::{CALL as MCP_CALL, SEARCH as MCP_SEARCH, Server as McpServer, State as McpState};
 pub use problem::{Problem, ProblemFile};
 pub use providers::{KeyFrom, Providers};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
@@ -76,6 +78,7 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 /// Guards against a model that never stops calling tools.
@@ -162,6 +165,8 @@ pub struct AgentConfig {
     /// `--skill` and `--no-skills`.
     pub skill_options: SkillOptions,
     pub prompt: SystemPrompt,
+    /// The MCP servers the settings list (`mcpServers`).
+    pub mcp_servers: Vec<McpServer>,
 }
 
 /// What the command line changes in the agent's instructions, as Scramjet's options do. A text
@@ -500,6 +505,8 @@ pub struct Agent {
     hide_credentials: bool,
     /// Whether a completed command's recommended next step runs without the user choosing it.
     autopilot: bool,
+    /// The MCP servers, while the model is offered their tools.
+    mcp: Option<mcp::Servers>,
     pub usage: Usage,
 }
 
@@ -648,6 +655,7 @@ impl Agent {
             model_scope: Vec::new(),
             hide_credentials: false,
             autopilot,
+            mcp: None,
             config,
             conversation,
             prompts,
@@ -660,20 +668,82 @@ impl Agent {
             },
         };
         agent.load();
+        agent.start_mcp();
         agent.answer_interrupted_calls()?;
         Ok(agent)
     }
 
     /// `/reload`: finds the command sets, their commands and agents, the skills and the context
     /// files again, as at start, with the settings' `tools`, `command_sets` and `skills`, as
-    /// Scramjet's reload does. The conversation and the command running stay; what is wrong in
-    /// `autonomy.yaml` is said again at the next routing.
-    pub fn reload(&mut self, tools: Vec<String>, command_sets: Vec<PathBuf>, skills: Vec<PathBuf>) {
+    /// Scramjet's reload does, and starts the MCP servers whose entries changed. The
+    /// conversation and the command running stay; what is wrong in `autonomy.yaml` is said again
+    /// at the next routing.
+    pub fn reload(
+        &mut self,
+        tools: Vec<String>,
+        command_sets: Vec<PathBuf>,
+        skills: Vec<PathBuf>,
+        mcp_servers: Vec<McpServer>,
+    ) {
         self.config.tools = tools;
         self.config.command_sets = command_sets;
         self.config.skills = skills;
+        self.config.mcp_servers = mcp_servers;
         self.autonomy_diagnostics.clear();
         self.load();
+        self.start_mcp();
+    }
+
+    /// Starts the MCP servers when the model is offered their tools; servers already running as
+    /// configured keep running, the others stop.
+    fn start_mcp(&mut self) {
+        let offered = self.offered();
+        let wanted = &self.config.mcp_servers;
+        if wanted.is_empty() || !mcp::TOOLS.iter().any(|tool| offered.contains(tool)) {
+            self.mcp = None;
+            return;
+        }
+        let running = self.mcp.as_ref().map(mcp::Servers::configs);
+        if running.is_some_and(|running| running.into_iter().eq(wanted.iter())) {
+            return;
+        }
+        self.mcp = None;
+        self.mcp = Some(mcp::Servers::start(wanted, &self.config.root));
+    }
+
+    /// The MCP servers and how each is, in the settings' order.
+    pub fn mcp_servers(&self) -> Vec<(McpServer, McpState)> {
+        let states = self
+            .mcp
+            .as_ref()
+            .map(mcp::Servers::states)
+            .unwrap_or_default();
+        (states.into_iter())
+            .map(|(server, state)| (server.clone(), state))
+            .collect()
+    }
+
+    /// Waits for the MCP servers still starting, saying so, and says which could not start, each
+    /// once, before a request: the instructions list them as they are then.
+    fn settle_mcp(&self, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> Result<(), AgentError> {
+        let Some(mcp) = &self.mcp else {
+            return Ok(());
+        };
+        let starting = mcp.starting();
+        if !starting.is_empty() {
+            ui.notice(&format!(
+                "Waiting for MCP servers to start: {}",
+                starting.join(", ")
+            ));
+            mcp.settle(cancel);
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AgentError::Cancelled);
+            }
+        }
+        for (name, why) in mcp.unreported_failures() {
+            ui.notice(&format!("MCP server {name} is not available: {why}"));
+        }
+        Ok(())
     }
 
     fn load(&mut self) {
@@ -691,9 +761,10 @@ impl Agent {
         let directory = self.agent_directory.as_deref();
         let loaded = instructions::load(&config.prompt, &config.root, directory);
         let agents = subagent::registered(&self.sets, &mut Vec::new());
+        let mcp = !config.mcp_servers.is_empty();
         self.instructions = instructions::agent(
             &config.root,
-            &tools::offered(&config.tools, config.only_tools.as_deref()),
+            &tools::offered(&config.tools, config.only_tools.as_deref(), mcp),
             &self.commands,
             &agents,
             &self.skills,
@@ -909,7 +980,9 @@ impl Agent {
             }
         }
         let model = &self.config.model;
+        let servers = self.mcp.as_ref().map(mcp::Servers::section);
         self.instructions.clone()
+            + &servers.unwrap_or_default()
             + &instructions::identity(model, &contributors, &self.identities)
             + &instructions::environment(
                 &self.config.root,
@@ -924,7 +997,9 @@ impl Agent {
 
     /// The tools the model has, coding tools first.
     fn offered(&self) -> Vec<&'static str> {
-        tools::offered(&self.config.tools, self.config.only_tools.as_deref())
+        let config = &self.config;
+        let mcp = !config.mcp_servers.is_empty();
+        tools::offered(&config.tools, config.only_tools.as_deref(), mcp)
     }
 
     fn offers(&self, tool: &str) -> bool {

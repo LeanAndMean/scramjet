@@ -7,7 +7,7 @@ use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal::{self, Terminal};
 use super::text::clip;
 use super::{clipboard, completion, export, keymap, style};
-use scramjet_rs::agent::{Agent, AgentError, Providers};
+use scramjet_rs::agent::{Agent, AgentError, McpState, Providers};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -38,6 +38,7 @@ pub(super) enum Builtin<'a> {
     Logout,
     Compact(&'a str),
     Autopilot(&'a str),
+    Mcp,
     Reload,
     Exit,
 }
@@ -70,6 +71,7 @@ impl<'a> Builtin<'a> {
             "logout" if argument.is_empty() => Self::Logout,
             "compact" => Self::Compact(argument),
             "autopilot" => Self::Autopilot(argument),
+            "mcp" if argument.is_empty() => Self::Mcp,
             "reload" if argument.is_empty() => Self::Reload,
             "exit" if argument.is_empty() => Self::Exit,
             _ => return None,
@@ -95,6 +97,7 @@ impl<'a> Builtin<'a> {
                 | Self::Login
                 | Self::Logout
                 | Self::Autopilot(_)
+                | Self::Mcp
                 | Self::Reload
         )
     }
@@ -133,6 +136,7 @@ impl Interactive {
             Some(Builtin::Logout) => self.logout(),
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
+            Some(Builtin::Mcp) => self.mcp(),
             Some(Builtin::Reload) => self.reload(),
             Some(Builtin::Exit) | None => return false,
         }
@@ -275,6 +279,56 @@ impl Interactive {
         self.say_styled(style::MUTED, &format!("Autopilot is {state}"));
     }
 
+    /// `/mcp`, as Codex's: the MCP servers, how each is, and its tools.
+    fn mcp(&mut self) {
+        let servers = self.agent.mcp_servers();
+        if servers.is_empty() {
+            let settings = (self.settings.path()).map_or("the settings".into(), |path| {
+                scramjet_rs::agent::shortened(&path.to_string_lossy())
+            });
+            return match self.settings.mcp_servers.is_empty() {
+                true => self.say_styled(
+                    style::MUTED,
+                    &format!(
+                        "No MCP servers. Add them to mcpServers in {settings}, as Claude Code's \
+.mcp.json lists them: {{\"name\": {{\"command\": \"program\", \"args\": [\"…\"]}}}}"
+                    ),
+                ),
+                false => self.say_styled(
+                    style::MUTED,
+                    "The MCP servers are not started: the model has no MCP tools in this run",
+                ),
+            };
+        }
+        let ui = &self.ui;
+        let row = |label: &str, value: &str| format!("  {} {value}\n", ui.dim(label));
+        let mut info = format!("{}\n", ui.styled(style::INFO_HEADING, "MCP Servers"));
+        for (server, state) in servers {
+            info += "\n";
+            let said = match &state {
+                McpState::Starting => "starting".to_owned(),
+                McpState::Ready { tools, .. } if tools.len() == 1 => "1 tool".to_owned(),
+                McpState::Ready { tools, .. } => format!("{} tools", tools.len()),
+                McpState::Failed(_) => "not available".to_owned(),
+            };
+            info += &format!("{} {}\n", server.name, ui.dim(&format!("· {said}")));
+            info += &row("Command:", &server.command_line());
+            match &state {
+                McpState::Ready { tools, about } => {
+                    if let Some(about) = about {
+                        info += &row("About:", about);
+                    }
+                    if !tools.is_empty() {
+                        info += &row("Tools:", &tools.join(", "));
+                    }
+                }
+                McpState::Failed(why) => info += &row("Error:", &why.replace('\n', "\n    ")),
+                McpState::Starting => {}
+            }
+        }
+        self.say(info.trim_end());
+    }
+
     /// `/reload`, as Scramjet's: the settings, the themes, the command sets with their commands and
     /// agents, the skills and the context files read again, and what is wrong in them said as at
     /// start.
@@ -291,6 +345,7 @@ impl Interactive {
             settings.tools.clone(),
             settings.command_sets.clone(),
             settings.skills.clone(),
+            settings.mcp_servers.clone(),
         );
         self.agent.set_providers(Providers::read(
             settings.models_files(),

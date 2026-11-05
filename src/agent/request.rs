@@ -524,6 +524,7 @@ response is incomplete; retry the request."});
             skills: Vec::new(),
             skill_options: Default::default(),
             prompt: Default::default(),
+            mcp_servers: Vec::new(),
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
         let replay = agent.replay_conversation();
@@ -1300,6 +1301,7 @@ reached the output token limit (max_output_tokens)"),
             skills: Vec::new(),
             skill_options: Default::default(),
             prompt: Default::default(),
+            mcp_servers: Vec::new(),
         };
         let agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
         assert_eq!(agent.request()["prompt_cache_key"], "1700000000000-42");

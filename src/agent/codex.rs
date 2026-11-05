@@ -10,6 +10,7 @@
 //! the model requests say they are scramjet-rs's.
 
 use super::client::{self, Failure};
+use super::image::decode_base64;
 use super::login;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -510,7 +511,7 @@ pub(super) fn account_id(token: &str) -> Option<String> {
     let [_, payload, _] = parts[..] else {
         return None;
     };
-    let claims: Value = serde_json::from_slice(&base64url_decode(payload)?).ok()?;
+    let claims: Value = serde_json::from_slice(&decode_base64(payload)?).ok()?;
     let account = claims[CLAIM]["chatgpt_account_id"].as_str();
     account.filter(|id| !id.is_empty()).map(str::to_owned)
 }
@@ -634,34 +635,6 @@ fn base64url(bytes: &[u8]) -> String {
     text
 }
 
-/// What base64url (or base64) text without padding holds; `None` for anything else.
-fn base64url_decode(text: &str) -> Option<Vec<u8>> {
-    let value = |c: u8| match c {
-        b'+' => Some(62),
-        b'/' => Some(63),
-        _ => BASE64URL
-            .iter()
-            .position(|known| *known == c)
-            .map(|at| at as u32),
-    };
-    let text = text.trim_end_matches('=').as_bytes();
-    let mut bytes = Vec::new();
-    for chunk in text.chunks(4) {
-        if chunk.len() == 1 {
-            return None;
-        }
-        let mut bits = 0u32;
-        for c in chunk {
-            bits = bits << 6 | value(*c)?;
-        }
-        let bits = bits << (6 * (4 - chunk.len()));
-        for index in 0..chunk.len() - 1 {
-            bytes.push((bits >> (16 - 8 * index)) as u8);
-        }
-    }
-    Some(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,17 +694,17 @@ mod tests {
         assert_eq!(verifier, "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk");
         let challenge = base64url(&Sha256::digest(verifier.as_bytes()));
         assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
-        assert_eq!(base64url_decode(&verifier).unwrap(), octets);
+        assert_eq!(decode_base64(&verifier).unwrap(), octets);
         for length in 0..7 {
             let bytes: Vec<u8> = (0..length).map(|n| 250 - n as u8).collect();
-            assert_eq!(base64url_decode(&base64url(&bytes)).unwrap(), bytes);
+            assert_eq!(decode_base64(&base64url(&bytes)).unwrap(), bytes);
         }
         assert_eq!(
-            base64url_decode("a+b/").unwrap(),
-            base64url_decode("a-b_").unwrap()
+            decode_base64("a+b/").unwrap(),
+            decode_base64("a-b_").unwrap()
         );
-        assert_eq!(base64url_decode("abcde"), None);
-        assert_eq!(base64url_decode("ab$d"), None);
+        assert_eq!(decode_base64("abcde"), None);
+        assert_eq!(decode_base64("ab$d"), None);
         // The account is the token's claim; anything else names none.
         assert_eq!(account_id(&token("acc-1")).as_deref(), Some("acc-1"));
         assert_eq!(account_id(&token("")), None);

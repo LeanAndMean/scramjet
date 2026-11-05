@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.26.0 — MCP servers' tools
+
+### Added
+
+- MCP servers run from the settings' `mcpServers`, written as Claude Code's `.mcp.json` lists them (`{"time": {"command": "uvx", "args": ["mcp-server-time"], "env": {…}}}`), each started in the background in the project directory as the session starts. The model gets two tools however many servers and tools there are: `mcp_search` finds the servers' tools by words from their names and descriptions and shows how to call each, and `mcp_call` runs one; the instructions list each server in one line. Servers speaking MCP's 2026-07-28 revision and older ones (the `initialize` handshake) are both understood; only servers run as programs (stdio) for now, not over HTTP.
+- `/mcp` shows each server, the command it runs, its tools, or why it is not available with the end of what it wrote to its standard error. A server that cannot start is also said once when the first request goes out, which waits for servers still starting (30 seconds at most). Escape stops a tool call and cancels its request; `--ask` asks before each call.
+
 ## 0.25.0 — Providers that list their own models
 
 ### Added
