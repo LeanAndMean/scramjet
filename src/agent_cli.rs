@@ -57,7 +57,11 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         && let Some(command) = command.to_str()
     {
         let rest: Option<Vec<String>> = rest.iter().map(|a| a.to_str().map(String::from)).collect();
-        if let Some(result) = install::run(command, &rest.unwrap_or_default()) {
+        let rest = rest.unwrap_or_default();
+        if let Some(result) = clipboard::run(command, &rest) {
+            return result;
+        }
+        if let Some(result) = install::run(command, &rest) {
             return result;
         }
     }

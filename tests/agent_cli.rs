@@ -1,4 +1,8 @@
-use std::process::Command;
+use std::{
+    io::{BufRead, BufReader, Write},
+    process::{Child, Command, Stdio},
+    time::{Duration, Instant},
+};
 
 #[test]
 fn help_shows_the_agents_usage_and_other_words_are_refused() {
@@ -261,4 +265,48 @@ fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn a_copys_owner_serves_until_another_takes_the_selection() {
+    let selection = format!("SCRAMJET_RS_TEST_{}_owner", std::process::id());
+    let start = |text: &str| -> (Child, String) {
+        let mut owner = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
+            .args(["__x11-selection-owner", &selection])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        owner
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(text.as_bytes())
+            .unwrap();
+        let mut said = String::new();
+        let stdout = owner.stdout.take().unwrap();
+        BufReader::new(stdout).read_line(&mut said).unwrap();
+        (owner, said)
+    };
+    let (mut first, said) = start("first");
+    if said != "ok\n" {
+        eprintln!("no X server reached ({said:?}): the X11 owner is not tested");
+        let _ = first.wait();
+        return;
+    }
+    assert_eq!(first.try_wait().unwrap(), None);
+    let (mut second, said) = start("second");
+    assert_eq!(said, "ok\n");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        match first.try_wait().unwrap() {
+            Some(status) => break status,
+            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            None => panic!("the first owner kept serving"),
+        }
+    };
+    assert!(status.success());
+    second.kill().unwrap();
+    second.wait().unwrap();
 }

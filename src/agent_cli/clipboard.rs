@@ -1,7 +1,7 @@
-//! The desktop's clipboard as Scramjet uses it. Copying: with the platform's tool (`pbcopy`;
-//! `wl-copy` under Wayland, `xclip` or `xsel` under X11), else, and also in a remote session,
-//! through the terminal with OSC 52. Pasting: with a PowerShell kept running under WSL
-//! (`powershell.rs`), `pbpaste` on macOS, else from the X server itself (`x11.rs`), then with
+//! The desktop's clipboard as Scramjet uses it. Copying: with `pbcopy` on macOS, else `wl-copy`
+//! under Wayland, then the X server itself (`x11.rs`), `xclip` or `xsel`; else, and also in a
+//! remote session, through the terminal with OSC 52. Pasting: with a PowerShell kept running
+//! under WSL (`powershell.rs`), `pbpaste` on macOS, else from the X server itself, then with
 //! `wl-paste`, `xclip` or `xsel`; never in a remote session, whose clipboard is the terminal's.
 //! An image is pasted as Scramjet pastes it, as the path of a file it is saved to.
 
@@ -35,10 +35,19 @@ const IMAGE_TYPES: [(&str, &str); 4] = [
     ("image/gif", "gif"),
 ];
 
+/// Runs the command line's `command` if it is the clipboard's own: scramjet-rs started again to
+/// own a copy (`x11::copy`).
+pub(super) fn run(command: &str, arguments: &[String]) -> Option<Result<(), String>> {
+    match (command, arguments) {
+        (x11::SERVE, [selection]) => Some(x11::serve(selection)),
+        _ => None,
+    }
+}
+
 /// Copies `text`. `Ok(Some(sequence))`: write `sequence` to the terminal, which copies it; never
 /// without a `terminal` to write it to.
 pub(super) fn copy(text: &str, terminal: bool) -> Result<Option<String>, String> {
-    let copied = by_tool(text);
+    let copied = directly(text);
     if copied && !(terminal && remote()) {
         return Ok(None);
     }
@@ -249,18 +258,20 @@ fn output(program: &str, arguments: &[&str], max: usize) -> Option<Vec<u8>> {
     finished(&mut child, deadline).then_some(bytes)
 }
 
-fn by_tool(text: &str) -> bool {
+/// Copies `text` to the desktop's clipboard, not through the terminal; whether it did.
+fn directly(text: &str) -> bool {
     if cfg!(target_os = "macos") {
-        return run("pbcopy", &[], text);
+        return give("pbcopy", &[], text);
     }
-    (set("WAYLAND_DISPLAY") && run("wl-copy", &[], text))
+    (set("WAYLAND_DISPLAY") && give("wl-copy", &[], text))
+        || x11(set) && x11::copy(text).is_ok()
         || set("DISPLAY")
-            && (run("xclip", &["-selection", "clipboard"], text)
-                || run("xsel", &["--clipboard", "--input"], text))
+            && (give("xclip", &["-selection", "clipboard"], text)
+                || give("xsel", &["--clipboard", "--input"], text))
 }
 
 /// Gives `text` to `program`; whether it took it and succeeded within the time allowed.
-fn run(program: &str, arguments: &[&str], text: &str) -> bool {
+fn give(program: &str, arguments: &[&str], text: &str) -> bool {
     let child = Command::new(program)
         .args(arguments)
         .stdin(Stdio::piped())
