@@ -14,6 +14,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+    env:
+      SCRAMJET_NATIVE_SANDBOX_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +27,29 @@ jobs:
       - name: Install dependencies
         # postinstall cleanup has a dedicated isolated smoke test.
         run: npm ci --ignore-scripts
+
+      - name: Provision native read-only sandbox
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if sysctl kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Native sandbox environment
+        run: |
+          uname -a
+          node --version
+          if [ "$RUNNER_OS" = Linux ]; then
+            bwrap --version
+            findmnt -T "$GITHUB_WORKSPACE"
+          else
+            sw_vers
+            ls -l /usr/bin/sandbox-exec
+            df "$GITHUB_WORKSPACE"
+          fi
 
       - name: Type-check
         run: npm run typecheck

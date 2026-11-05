@@ -62,7 +62,9 @@ export interface BashOperations {
  * This is useful for extensions that intercept user_bash and still want pi's
  * standard local shell behavior while wrapping or rewriting commands.
  */
-export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
+// SCRAMJET-DIVERGENCE: Allow native sandbox launchers without changing shell execution or settlement.
+export function createLocalBashOperations(options?: { shellPath?: string; argvPrefix?: string[] }): BashOperations {
+	if (options?.argvPrefix?.length === 0) throw new Error("argvPrefix must contain an executable");
 	return {
 		exec: (command, cwd, { onData, signal, timeout, env }) => {
 			return new Promise((resolve, reject) => {
@@ -71,7 +73,9 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 					reject(new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`));
 					return;
 				}
-				const child = spawn(shell, [...args, command], {
+				const [executable, ...prefixArgs] = options?.argvPrefix ?? [shell];
+				const commandArgs = options?.argvPrefix ? [...prefixArgs, shell, ...args, command] : [...args, command];
+				const child = spawn(executable, commandArgs, {
 					cwd,
 					detached: process.platform !== "win32",
 					env: env ?? getShellEnv(),
