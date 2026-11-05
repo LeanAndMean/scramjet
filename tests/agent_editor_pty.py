@@ -583,10 +583,12 @@ def full_screen(columns=60, rows=24):
         def shown():
             return Screen(output, columns, rows).rows()
 
-        def on_screen(text, gone=False):
+        def on_screen(text, gone=False, either=None):
+            """Waits until `text`, or `either` when given, is on screen (or is `gone`)."""
             end = time.monotonic() + 10
-            while (text in '\n'.join(shown())) == gone:
-                assert time.monotonic() < end, (text, '\n'.join(shown()))
+            texts = [text] if either is None else [text, either]
+            while any(t in '\n'.join(shown()) for t in texts) == gone:
+                assert time.monotonic() < end, (texts, '\n'.join(shown()))
                 read(.05)
             return shown()
         return shown, on_screen
@@ -1246,7 +1248,10 @@ def logins(read, until, send, output):
     assert any(row.startswith('  GitHub Copilot') for row in rows), rows
     # ChatGPT's: the page is opened and copied, and the browser's answer comes back to the port.
     send(b'\r')
-    on_screen("Paste the browser's last address, or log in there  Enter submit \u00b7 Esc cancel")
+    # Port 1455 may be another login's, as another test run's: then the answer is only pasted.
+    rows = on_screen("last address, or log in there  Enter submit \u00b7 Esc cancel", either=
+                     "Port 1455 is in use: paste the browser's last address  Enter submit")
+    listening = any('or log in there' in row for row in rows)
     until_file(opened_page)
     page = open(opened_page).read().strip()
     assert page.startswith('https://auth.openai.com/oauth/authorize?response_type=code&'), page
@@ -1254,8 +1259,9 @@ def logins(read, until, send, output):
     on_screen('such as a private window (copied):')
     state = urllib.parse.parse_qs(urllib.parse.urlsplit(page).query)['state'][0]
     try:
-        urllib.request.urlopen('http://127.0.0.1:1455/auth/callback?code=c&state=other', timeout=5)
-        assert False, 'another login\'s answer was taken'
+        if listening:
+            urllib.request.urlopen('http://127.0.0.1:1455/auth/callback?code=c&state=other', timeout=5)
+            assert False, 'another login\'s answer was taken'
     except urllib.error.HTTPError as error:
         assert error.code == 400 and b'State mismatch.' in error.read()
     send(b'\x1b')
@@ -1264,7 +1270,8 @@ def logins(read, until, send, output):
     send(b'/login\r')
     on_screen('Log in to  ')
     send(b'\r')
-    on_screen("Paste the browser's last address, or log in there  Enter submit \u00b7 Esc cancel")
+    on_screen("last address, or log in there  Enter submit \u00b7 Esc cancel", either=
+              "Port 1455 is in use: paste the browser's last address  Enter submit")
     send(b'\x1b[200~http://localhost:1455/auth/callback?code=c&state=' + state.encode() + b'\x1b[201~\r')
     on_screen("another login's (its state differs)")
     assert not os.path.exists(auth) or json.load(open(auth)) == {}

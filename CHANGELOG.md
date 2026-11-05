@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.18.1 — ChatGPT login fixes
+
+### Fixed
+
+- At ChatGPT's login, a pasted query (`?code=…&state=…`) or an address without `http://` (`localhost:1455/auth/callback?…`) is taken, as in Scramjet, rather than ending the login.
+- Pressing Escape at ChatGPT's login after its tokens were saved now says you are logged in but the model list was cancelled, rather than "Login cancelled".
+
 ## 0.18.0 — ChatGPT (Codex) login
 
 ### Added

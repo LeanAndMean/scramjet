@@ -143,12 +143,16 @@ impl BrowserLogin {
         let credential = tokens(&self.urls.token, form, cancel)?;
         // Kept even when the list fails, which needs no new login to be read again.
         login::save(&logins.auth, PROVIDER, credential.clone())?;
+        let kept = |error: String| match error == login::CANCELLED {
+            true => "logged in, but the model list was cancelled: /login again for it".to_owned(),
+            false => format!("logged in, but {error}"),
+        };
         let path = logins.listed(PROVIDER);
         let before = std::fs::read(&path).ok();
         let before = before.and_then(|text| serde_json::from_slice::<Value>(&text).ok());
         let (release, warning) = match codex_release(&self.urls.release, cancel) {
             Ok(release) => (release, None),
-            Err(error) if error == login::CANCELLED => return Err(error),
+            Err(error) if error == login::CANCELLED => return Err(kept(error)),
             Err(error) => match before.as_ref().and_then(|list| list["release"].as_str()) {
                 Some(known) => {
                     let warning = format!(
@@ -157,11 +161,11 @@ impl BrowserLogin {
                     );
                     (known.to_owned(), Some(warning))
                 }
-                None => return Err(format!("logged in, but {error}")),
+                None => return Err(kept(error)),
             },
         };
         let models = models(&credential, &self.urls.api, &release, cancel);
-        let models = models.map_err(|error| format!("logged in, but {error}"))?;
+        let models = models.map_err(kept)?;
         let list = json!({"fetched": login::now_ms(), "release": release, "models": models});
         login::save_list(&path, &list)?;
         Ok(warning)
@@ -496,8 +500,9 @@ fn parse_pasted(text: &str) -> (Option<String>, Option<String>) {
     if text.is_empty() {
         return (None, None);
     }
-    if let Some((_, rest)) = text.split_once("://") {
-        let query = rest.split_once('?').map_or("", |(_, query)| query);
+    // An address, also without its scheme (`localhost:1455/…`), or its query (`?code=…`).
+    if text.contains("://") || text.contains('?') {
+        let query = text.split_once('?').map_or("", |(_, query)| query);
         let query = query.split('#').next().unwrap_or_default();
         return (query_value(query, "code"), query_value(query, "state"));
     }
@@ -645,6 +650,16 @@ mod tests {
              "input_modalities": ["text"]},
             {"slug": "bare"},
         ])
+    }
+
+    /// OpenAI, npm and ChatGPT on a closed port: a test that should send nothing reaches none.
+    fn closed() -> Urls {
+        Urls {
+            authorize: "http://127.0.0.1:1/oauth/authorize".to_owned(),
+            token: "http://127.0.0.1:1/oauth/token".to_owned(),
+            api: "http://127.0.0.1:1/backend-api".to_owned(),
+            release: "http://127.0.0.1:1/codex".to_owned(),
+        }
     }
 
     fn scratch(name: &str) -> ScratchDir {
@@ -834,13 +849,18 @@ mod tests {
 
     #[test]
     fn a_pasted_address_or_code_is_the_answer_unless_it_is_another_logins() {
-        let browser = BrowserLogin::start_at(Urls::default(), "127.0.0.1:0").unwrap();
+        let browser = BrowserLogin::start_at(closed(), "127.0.0.1:0").unwrap();
         let state = browser.state.clone();
         let address =
             format!("http://localhost:1455/auth/callback?code=ac_1%2F2&scope=x&state={state}");
         for (text, code) in [
             (address.as_str(), "ac_1/2"),
             (&format!(" code=ab&state={state} "), "ab"),
+            (&format!("?code=ab&state={state}"), "ab"),
+            (
+                &format!("localhost:1455/auth/callback?code=ab&state={state}"),
+                "ab",
+            ),
             (&format!("ab#{state}"), "ab"),
             ("just-the-code", "just-the-code"),
             ("http://localhost:1455/auth/callback?code=c#fragment", "c"),
@@ -870,7 +890,7 @@ mod tests {
         );
         assert!(!answered.load(Ordering::Relaxed));
         // Cancelled, it stops waiting.
-        let browser = BrowserLogin::start_at(Urls::default(), "127.0.0.1:0").unwrap();
+        let browser = BrowserLogin::start_at(closed(), "127.0.0.1:0").unwrap();
         let (_paste, pasted) = mpsc::channel();
         let finished = browser.finish(&pasted, &answered, &nowhere, &AtomicBool::new(true));
         assert_eq!(finished.unwrap_err(), login::CANCELLED);
@@ -878,7 +898,7 @@ mod tests {
         let taken = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = taken.local_addr().unwrap().to_string();
         assert!(
-            !BrowserLogin::start_at(Urls::default(), &address)
+            !BrowserLogin::start_at(closed(), &address)
                 .unwrap()
                 .listening()
         );
@@ -917,6 +937,35 @@ mod tests {
         assert_eq!(login::logged_in(&logins.auth).unwrap(), [PROVIDER]);
         assert!(!logins.listed(PROVIDER).exists());
         server.join().unwrap();
+        // Cancelled once the tokens are saved, the login is kept, and says so.
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let (served, cancelling) = (token("acc-2"), cancel.clone());
+        let (base, _server) = serve_json(2, move |head, _| match head.split(' ').nth(1) {
+            Some("/oauth/token") => {
+                json!({"access_token": served, "refresh_token": "rt", "expires_in": 60})
+            }
+            _ => {
+                cancelling.store(true, Ordering::Relaxed);
+                std::thread::sleep(Duration::from_millis(300));
+                json!({})
+            }
+        });
+        let urls = Urls {
+            authorize: String::new(),
+            token: format!("{base}/oauth/token"),
+            api: base.clone(),
+            release: format!("{base}/codex"),
+        };
+        let browser = BrowserLogin::start_at(urls, "127.0.0.1:0").unwrap();
+        let (paste, pasted) = mpsc::channel();
+        paste.send(format!("c#{}", browser.state)).unwrap();
+        std::fs::remove_file(&logins.auth).unwrap();
+        let finished = browser.finish(&pasted, &answered, &logins, &cancel);
+        assert_eq!(
+            finished.unwrap_err(),
+            "logged in, but the model list was cancelled: /login again for it"
+        );
+        assert_eq!(login::logged_in(&logins.auth).unwrap(), [PROVIDER]);
         // npm's record must name a release, which goes into the list's request.
         let (base, server) = serve_json(1, |_, _| json!({"version": "1.2.3&x=y"}));
         let named = codex_release(&format!("{base}/codex"), &AtomicBool::new(false));
