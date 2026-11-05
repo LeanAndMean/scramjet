@@ -549,3 +549,212 @@ fn a_copys_owner_serves_until_another_takes_the_selection() {
     second.kill().unwrap();
     second.wait().unwrap();
 }
+
+#[test]
+fn packages_from_git_are_cloned_listed_updated_and_removed() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-packages-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&scratch.0);
+    let (work, project) = (scratch.0.join("work"), scratch.0.join("project"));
+    std::fs::create_dir_all(&project).unwrap();
+    let git = |directory: &std::path::Path, arguments: &[&str]| {
+        let output = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "-C",
+            ])
+            .arg(directory)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {arguments:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    let file = |path: &str, text: &str| {
+        let path = work.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    let commit = |message: &str| {
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "--quiet", "-m", message]);
+    };
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "--quiet"]);
+    file("README.md", "A kit\n");
+    file("packages/kit/mach12/set.yaml", "name: mach12\n");
+    file(
+        "packages/kit/mach12/commands/mach12:hello.md",
+        "Say hello\n",
+    );
+    file(
+        "packages/kit/tests/fixture/commands/fixture:x.md",
+        "Not a set\n",
+    );
+    file(
+        "providers/models.json",
+        r#"{"providersCommand": ["bin/models", "--all"]}"#,
+    );
+    commit("First");
+    let first = git(&work, &["rev-parse", "--short", "HEAD"]);
+    let upstream = scratch.0.join("upstream.git");
+    git(
+        &scratch.0,
+        &["clone", "--quiet", "--bare", "work", "upstream.git"],
+    );
+    git(
+        &work,
+        &["remote", "add", "origin", upstream.to_str().unwrap()],
+    );
+    let branch = git(&work, &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+    let run = |arguments: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
+            .args(arguments)
+            .current_dir(&project)
+            .env("HOME", &scratch.0)
+            .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+            .env("XDG_DATA_HOME", scratch.0.join("data"))
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env_remove("SCRAMJET_CACHE")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let text = |bytes| String::from_utf8(bytes).unwrap();
+        (
+            output.status.success(),
+            text(output.stdout),
+            text(output.stderr),
+        )
+    };
+    let source = format!("file://{}", upstream.display());
+    let clones = scratch.0.join("data/scramjet-rs/git");
+    let clone = clones
+        .join("localhost")
+        .join(scratch.0.strip_prefix("/").unwrap())
+        .join("upstream");
+    let shown_clone = format!("~/{}", clone.strip_prefix(&scratch.0).unwrap().display());
+    let settings = scratch.0.join("config/scramjet-rs/settings.json");
+    let packages = || {
+        let text = std::fs::read_to_string(&settings).unwrap();
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["packages"].clone()
+    };
+
+    let (ok, out, err) = run(&["install", &source]);
+    assert!(ok, "{out}{err}");
+    assert_eq!(
+        out,
+        format!(
+            "Cloning {source} into {shown_clone}\nInstalled {source} from {shown_clone}:\n  \
+mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 commands, \
+0 agents, and providers (models.json)\nIt runs at each start:\n  bin/models --all \
+(providersCommand in providers/models.json, run in its directory)\n"
+        )
+    );
+    assert_eq!(packages(), serde_json::json!([source]));
+    let (ok, out, _) = run(&["list"]);
+    assert!(ok);
+    assert!(
+        out.contains(&format!(
+            "mach12     {source}  {shown_clone}/packages/kit/mach12  1 command"
+        )),
+        "{out}"
+    );
+    assert!(!out.contains("fixture"), "{out}");
+    assert!(out.contains("(commandSets, packages)"), "{out}");
+
+    let (ok, _, err) = run(&["install", &source]);
+    assert!(!ok);
+    assert_eq!(err, format!("scramjet-rs: {source} is already installed\n"));
+    let pinned = format!("{source}@{first}");
+    let (ok, _, err) = run(&["install", &pinned]);
+    assert!(!ok);
+    let identity = format!("git:localhost{}", scratch.0.join("upstream").display());
+    assert_eq!(
+        err,
+        format!("scramjet-rs: {identity} is installed as {source}; remove it first\n")
+    );
+    let (ok, _, err) = run(&["remove", "mach12"]);
+    assert!(!ok);
+    assert!(
+        err.contains(&format!(
+            "mach12 came with {source}; `scramjet-rs remove {source}`"
+        )),
+        "{err}"
+    );
+
+    // An update pulls what was pushed and keeps what was changed in the clone.
+    file("packages/kit/mach12/commands/mach12:second.md", "Again\n");
+    commit("Second");
+    let second = git(&work, &["rev-parse", "--short", "HEAD"]);
+    git(&work, &["push", "--quiet", "origin", &branch]);
+    std::fs::write(clone.join("README.md"), "Changed here\n").unwrap();
+    let (ok, out, err) = run(&["update"]);
+    assert!(ok, "{out}{err}");
+    assert_eq!(out, format!("Updated {source}: {first}..{second}\n"));
+    assert_eq!(
+        std::fs::read_to_string(clone.join("README.md")).unwrap(),
+        "Changed here\n"
+    );
+    let (ok, out, _) = run(&["update", "mach12"]);
+    assert!(ok);
+    assert_eq!(out, format!("{source}: up to date ({second})\n"));
+    assert!(run(&["list"]).1.contains("2 commands"));
+
+    // A clone gone is said at start and cloned again by an update.
+    std::fs::remove_dir_all(&clone).unwrap();
+    let (ok, _, err) = run(&["list"]);
+    assert!(ok);
+    assert!(
+        err.contains(&format!(
+            "{source}: not cloned into {shown_clone}; `scramjet-rs update` clones it"
+        )),
+        "{err}"
+    );
+    let (ok, out, _) = run(&["update", &source]);
+    assert!(ok);
+    assert_eq!(out, format!("Cloned {source} into {shown_clone}\n"));
+
+    let (ok, out, err) = run(&["remove", &source]);
+    assert!(ok, "{err}");
+    assert_eq!(
+        out,
+        format!("Removed {source} and its clone in {shown_clone}\n")
+    );
+    assert!(!clone.exists());
+    assert_eq!(std::fs::read_dir(&clones).unwrap().count(), 0);
+    assert_eq!(packages(), serde_json::json!([]));
+
+    // A ref pins a package.
+    let (ok, out, err) = run(&["install", &pinned]);
+    assert!(ok, "{out}{err}");
+    assert!(
+        out.contains("mach12 (packages/kit/mach12): 1 command"),
+        "{out}"
+    );
+    let (ok, out, _) = run(&["update"]);
+    assert!(ok);
+    assert_eq!(out, format!("{pinned}: pinned to {first}; left as it is\n"));
+    assert!(run(&["uninstall", &source]).0);
+
+    // A repository without a set, or one that cannot be cloned, leaves nothing.
+    let plain = scratch.0.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    git(&plain, &["init", "--quiet"]);
+    std::fs::write(plain.join("notes.md"), "Notes\n").unwrap();
+    git(&plain, &["add", "-A"]);
+    git(&plain, &["commit", "--quiet", "-m", "Notes"]);
+    let plain = format!("file://{}", plain.display());
+    let (ok, _, err) = run(&["install", &plain]);
+    assert!(!ok);
+    assert!(err.ends_with(&format!("scramjet-rs: {plain} holds no command set: no commands, agents or models.json at its top or in its top directories, and no set.yaml deeper\n")), "{err}");
+    let missing = format!("file://{}", scratch.0.join("missing.git").display());
+    let (ok, _, err) = run(&["install", &missing]);
+    assert!(!ok);
+    assert!(err.ends_with("scramjet-rs: git clone failed\n"), "{err}");
+    assert_eq!(std::fs::read_dir(&clones).unwrap().count(), 0);
+    assert_eq!(packages(), serde_json::json!([]));
+}

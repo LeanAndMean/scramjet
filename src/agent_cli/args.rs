@@ -12,7 +12,7 @@ pub(super) const USAGE: &str =
 [@FILE...] [MESSAGE...]
        scramjet-rs --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet-rs --version
-       scramjet-rs install DIR | remove NAME|DIR | list
+       scramjet-rs install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME] | list
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
 settings file (by default ~/.config/scramjet-rs/models.json) and in installed command sets, in
@@ -165,7 +165,12 @@ commands/SET:COMMAND.md is sent with the arguments substituted, inside <scramjet
 sets are those installed, then those under $XDG_DATA_HOME/scramjet (~/.local/share/scramjet)
 and the project's .scramjet. `scramjet-rs install DIR` installs the set in DIR by reference,
 recorded in the settings' commandSets; `remove NAME` takes it out and `list` shows the sets
-loaded in the current directory, what each brings and what was skipped.
+loaded in the current directory, what each brings and what was skipped. `install REPO` clones
+a package from git (git:github.com/USER/REPO[@REF], git:git@github.com:USER/REPO, or an
+https://, ssh://, git:// or file:// URL) into $XDG_DATA_HOME/scramjet-rs/git, recorded in the
+settings' packages: its sets are its top directory when that is a set, else the sets at its
+top and those with a set.yaml deeper. `update` pulls the packages not pinned to a REF, and
+`remove REPO` deletes the clone.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
 Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scramjet-rs/),

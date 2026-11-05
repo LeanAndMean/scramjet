@@ -3,10 +3,11 @@
 //! behavior matches.
 use super::design::Design;
 use super::keymap::{self, Binding};
+use super::packages::{self, Source};
 use super::theme::TERMINAL_COLORS;
 use super::tree::Filter;
 use scramjet_rs::agent::{
-    CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, shortened, state_directory,
+    CODING_TOOLS, DEFAULT_TOOLS, Origin, Set, search_program, sets_in, shortened, state_directory,
     write_replacing,
 };
 use serde_json::{Map, Value, json};
@@ -287,9 +288,13 @@ pub(super) struct Settings {
     pub(super) hide_credentials: HideCredentials,
     pub(super) steering_mode: Delivery,
     pub(super) follow_up_mode: Delivery,
-    /// `commandSets`: the directories of the installed command sets; a relative one is relative
-    /// to the settings file's directory.
+    /// The directories of the installed command sets: `commandSets`' (a relative one is
+    /// relative to the settings file's directory), then those in the clones of `packages`.
     pub(super) command_sets: Vec<PathBuf>,
+    /// `packages`: the git repositories installed, as Scramjet's `packages` lists them.
+    pub(super) packages: Vec<Source>,
+    /// Where packages are cloned (`packages::clones`); `None`: nowhere.
+    clones: Option<PathBuf>,
     /// `skills`: skill files and directories besides those found by default, as `commandSets`'.
     pub(super) skills: Vec<PathBuf>,
     /// `themes`: theme files and directories besides those found by default, as `skills`.
@@ -308,13 +313,20 @@ impl Settings {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
             .map(|config| config.join("scramjet-rs/settings.json"));
-        let mut settings = Self::read(path);
+        let mut settings = Self::read_with(path, packages::clones());
         settings.recall = (state_directory().ok()).map(|state| state.join("last-used-models.json"));
         settings
     }
 
+    #[cfg(test)]
     fn read(path: Option<PathBuf>) -> Self {
+        Self::read_with(path, None)
+    }
+
+    /// The settings in `path`, with packages cloned under `clones`.
+    fn read_with(path: Option<PathBuf>, clones: Option<PathBuf>) -> Self {
         let mut settings = Self::defaults(path);
+        settings.clones = clones;
         let Some(path) = &settings.path else {
             return settings;
         };
@@ -335,9 +347,9 @@ impl Settings {
         };
         match read_object(path) {
             Ok(object) => {
-                let recall = self.recall.take();
+                let (recall, clones) = (self.recall.take(), self.clones.take());
                 *self = Self::defaults(self.path.take());
-                self.recall = recall;
+                (self.recall, self.clones) = (recall, clones);
                 self.apply(&object);
             }
             Err(error) => self.warnings = vec![format!("{error}; kept as they were")],
@@ -365,6 +377,8 @@ impl Settings {
             steering_mode: Delivery::All,
             follow_up_mode: Delivery::OneAtATime,
             command_sets: Vec::new(),
+            packages: Vec::new(),
+            clones: None,
             skills: Vec::new(),
             themes: Vec::new(),
             enabled_models: Vec::new(),
@@ -508,6 +522,24 @@ impl Settings {
                 "{path}: commandSets must be a list of directories; ignored"
             )),
         }
+        match paths(object, "packages") {
+            Ok(entries) => {
+                for entry in entries {
+                    match Source::parse(&entry) {
+                        Some(Ok(source)) => self.packages.push(source),
+                        Some(Err(why)) => (self.warnings)
+                            .push(format!("{path}: packages: {why}; ignored")),
+                        None => self.warnings.push(format!(
+                            "{path}: packages: {entry} is not a git repository (a directory goes in commandSets); ignored"
+                        )),
+                    }
+                }
+                self.add_package_sets();
+            }
+            Err(()) => self.warnings.push(format!(
+                "{path}: packages must be a list of git repositories; ignored"
+            )),
+        }
         match paths(object, "skills") {
             Ok(entries) => {
                 self.skills = (entries.iter()).map(|entry| self.resolve(entry)).collect()
@@ -560,8 +592,8 @@ impl Settings {
                 shown(&path)
             )
         })?;
-        for entry in &entries {
-            let known = self.resolve(entry);
+        let known = entries.iter().map(|entry| self.resolve(entry));
+        for known in known.chain(self.command_sets.iter().cloned()) {
             if known.file_name() == directory.file_name() {
                 return Err(match same_directory(&known, &directory) {
                     true => format!("{} is already installed", set.name),
@@ -578,6 +610,104 @@ impl Settings {
         write_object(&path, object)?;
         self.command_sets.push(directory);
         Ok(set)
+    }
+
+    /// Adds to `command_sets` the sets in each package's clone.
+    fn add_package_sets(&mut self) {
+        for source in &self.packages {
+            let Some(root) = &self.clones else {
+                (self.warnings).push(format!(
+                    "{}: not loaded, as neither XDG_DATA_HOME nor HOME is set",
+                    source.written
+                ));
+                continue;
+            };
+            let directory = source.clone_directory(root);
+            let sets = sets_in(&directory);
+            match directory.is_dir() {
+                false => self.warnings.push(format!(
+                    "{}: not cloned into {}; `scramjet-rs update` clones it",
+                    source.written,
+                    shown(&directory)
+                )),
+                true if sets.is_empty() => self.warnings.push(format!(
+                    "{}: {} holds no command set",
+                    source.written,
+                    shown(&directory)
+                )),
+                true => self.command_sets.extend(sets),
+            }
+        }
+    }
+
+    /// Where packages are cloned.
+    pub(super) fn clones(&self) -> Result<&Path, String> {
+        (self.clones.as_deref()).ok_or_else(|| {
+            "no directory for packages: neither XDG_DATA_HOME nor HOME is set".into()
+        })
+    }
+
+    /// The installed package `source` names (in any of its forms, at any ref), or the one that
+    /// brings the command set named `source`.
+    pub(super) fn package(&self, source: &str) -> Option<&Source> {
+        if let Some(Ok(source)) = Source::parse(source) {
+            let identity = source.identity();
+            return self
+                .packages
+                .iter()
+                .find(|known| known.identity() == identity);
+        }
+        let root = self.clones.as_deref()?;
+        let set = (self.command_sets.iter())
+            .find(|set| set.file_name().is_some_and(|name| name == source))?;
+        (self.packages.iter()).find(|known| set.starts_with(known.clone_directory(root)))
+    }
+
+    /// Adds `source`, cloned with its `sets`, to `packages`.
+    pub(super) fn add_package(&mut self, source: Source, sets: Vec<PathBuf>) -> Result<(), String> {
+        let path = self
+            .path
+            .clone()
+            .ok_or("no settings file: HOME is not set")?;
+        let mut object = read_object(&path)?;
+        let mut entries = paths(&object, "packages").map_err(|()| {
+            format!(
+                "{}: packages must be a list of git repositories",
+                shown(&path)
+            )
+        })?;
+        entries.push(source.written.clone());
+        object.insert("packages".into(), json!(entries));
+        write_object(&path, object)?;
+        self.packages.push(source);
+        self.command_sets.extend(sets);
+        Ok(())
+    }
+
+    /// Removes `source`, as `package` found it, from `packages`. Returns its clone's directory,
+    /// which is left for the caller to delete.
+    pub(super) fn remove_package(&mut self, source: &Source) -> Result<PathBuf, String> {
+        let path = self
+            .path
+            .clone()
+            .ok_or("no settings file: HOME is not set")?;
+        let directory = source.clone_directory(self.clones()?);
+        let mut object = read_object(&path)?;
+        let mut entries = paths(&object, "packages").map_err(|()| {
+            format!(
+                "{}: packages must be a list of git repositories",
+                shown(&path)
+            )
+        })?;
+        let identity = source.identity();
+        entries.retain(|entry| {
+            !matches!(Source::parse(entry), Some(Ok(known)) if known.identity() == identity)
+        });
+        object.insert("packages".into(), json!(entries));
+        write_object(&path, object)?;
+        self.packages.retain(|known| known.identity() != identity);
+        self.command_sets.retain(|set| !set.starts_with(&directory));
+        Ok(directory)
     }
 
     /// Removes from `commandSets` the set named `reference`, or installed from that directory.

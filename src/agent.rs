@@ -43,7 +43,7 @@ pub use autonomy::{
     Approval, Approvals, Edge, NextStep, NextSteps, Publication, Scope, Setting, Suggestion,
 };
 pub use client::StreamProgress;
-pub use commands::{Command, Commands, Origin, Set, Sets};
+pub use commands::{Command, Commands, Origin, Set, Sets, sets_in};
 pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use problem::{Problem, ProblemFile};

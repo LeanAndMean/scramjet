@@ -21,6 +21,7 @@ mod keymap;
 mod keys;
 mod login;
 mod markdown;
+mod packages;
 mod record;
 mod scope;
 mod screen;

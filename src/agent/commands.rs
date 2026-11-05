@@ -74,6 +74,38 @@ impl Set {
     }
 }
 
+/// The command sets in a package's directory `root`: `root` itself when it is one; else the
+/// sets at its top and, deeper, those holding Scramjet's `set.yaml`, as LeanAndMean/scramjet
+/// keeps Mach 12 in `packages/scramjet/mach12` beside test fixtures that look like sets. Hidden
+/// directories, `node_modules`, links and the inside of a set are not searched. In path order.
+pub fn sets_in(root: &Path) -> Vec<PathBuf> {
+    if Set::at(root, Origin::Installed).is_ok() {
+        return vec![root.to_path_buf()];
+    }
+    let mut found = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), 0)];
+    while let Some((directory, depth)) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name();
+            let searched = !name.to_string_lossy().starts_with('.') && name != "node_modules";
+            if !searched || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let path = entry.path();
+            let marked = depth == 0 || path.join("set.yaml").is_file();
+            match marked && Set::at(&path, Origin::Installed).is_ok() {
+                true => found.push(path),
+                false => pending.push((path, depth + 1)),
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 /// The command sets of a session, in the order their commands and agents are registered.
 #[derive(Clone, Debug, Default)]
 pub struct Sets {
@@ -847,6 +879,36 @@ mod tests {
     /// The sets of `project` alone, as a session without installed sets or a global root.
     fn project_sets(project: &Path) -> Sets {
         Sets::find(&[], None, project)
+    }
+
+    #[test]
+    fn a_package_is_one_set_or_holds_sets_at_its_top_and_marked_deeper() {
+        let scratch = Scratch::new("package");
+        scratch.file("root/commands/root:x.md", "");
+        scratch.file("root/inner/commands/inner:y.md", "");
+        assert_eq!(sets_in(&scratch.0.join("root")), [scratch.0.join("root")]);
+
+        let repo = scratch.0.join("repo");
+        scratch.file("repo/README.md", "");
+        scratch.file("repo/top/agents/top:a.md", "");
+        scratch.file("repo/top/nested/set.yaml", "");
+        scratch.file("repo/top/nested/commands/nested:x.md", "");
+        scratch.file("repo/packages/kit/mach12/set.yaml", "name: mach12\n");
+        scratch.file("repo/packages/kit/mach12/commands/mach12:x.md", "");
+        scratch.file("repo/packages/kit/providers/set.yaml", "");
+        scratch.file("repo/packages/kit/providers/models.json", "{}");
+        scratch.file("repo/packages/kit/tests/fixture/commands/fixture:x.md", "");
+        scratch.file("repo/packages/kit/marked/set.yaml", "");
+        scratch.file("repo/.hidden/set.yaml", "");
+        scratch.file("repo/.hidden/commands/hidden:x.md", "");
+        scratch.file("repo/node_modules/dep/set.yaml", "");
+        scratch.file("repo/node_modules/dep/commands/dep:x.md", "");
+        std::os::unix::fs::symlink(repo.join("packages/kit"), repo.join("link")).unwrap();
+        assert_eq!(
+            sets_in(&repo),
+            ["packages/kit/mach12", "packages/kit/providers", "top"].map(|set| repo.join(set))
+        );
+        assert!(sets_in(&scratch.0.join("missing")).is_empty());
     }
 
     #[test]

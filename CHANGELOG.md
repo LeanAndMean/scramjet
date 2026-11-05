@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.20.0 — Packages from git
+
+### Added
+
+- `scramjet-rs install git:github.com/USER/REPO[@REF]` (or `git:git@github.com:USER/REPO`, or an `https://`, `ssh://`, `git://` or `file://` URL) clones a repository with `git` into `~/.local/share/scramjet-rs/git/` and loads its command sets: the repository itself when it is one, else the sets at its top and, deeper, those with a `set.yaml`, so `git:github.com/LeanAndMean/scramjet` brings Mach 12 and `scramjet`. It says which programs the package runs. The settings list it under `packages`.
+- `scramjet-rs update` pulls the packages not pinned to a ref, keeping changes made in their clones, and clones those missing; `scramjet-rs remove REPO` (or `uninstall`) deletes the clone. `list` shows which package each set came from.
+
 ## 0.19.0 — Model lists kept current
 
 ### Added
