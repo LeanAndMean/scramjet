@@ -10,7 +10,7 @@
 use super::editor::{Draft, Editor, Note, RESIZE_CHECK};
 use super::footer::{self, Footer};
 use super::keymap::{self, Binding};
-use super::keys::{Key, RawMode, read_key};
+use super::keys::{Key, Press, RawMode, read_key};
 use super::record::{self, Event};
 use super::select::{Act, Picker, Routed, Spot, Toggle};
 use super::selection::Line;
@@ -121,6 +121,8 @@ pub(super) enum Dialog {
     Text(String, String, Optional),
     /// An `--ask` approval question.
     Approve(String),
+    /// Waits for a key, under the title and the note: `/hotkeys`' new key. Escape cancels.
+    Press(String, String),
 }
 
 /// Whether a dialog's text may be left empty.
@@ -147,6 +149,8 @@ pub(super) enum Answer {
     Expired(usize),
     Text(Option<String>),
     Approved(agent::Answer),
+    /// The key pressed, `None` for Escape.
+    Pressed(Option<Press>),
 }
 
 /// What the user enters while the session waits for it.
@@ -217,6 +221,8 @@ enum Shown {
     Pick(Box<Picker>),
     Text(Box<TextDialog>),
     Approve(String),
+    /// The title and the note.
+    Press(String, String),
 }
 
 struct TextDialog {
@@ -557,6 +563,7 @@ impl App {
                         }))
                     }
                     Dialog::Approve(question) => Shown::Approve(question),
+                    Dialog::Press(title, note) => Shown::Press(title, note),
                 };
                 self.dialog = Some(Open {
                     shown,
@@ -640,6 +647,7 @@ impl App {
             Shown::Pick(_) => Answer::Picked(None),
             Shown::Text(_) => Answer::Text(None),
             Shown::Approve(_) => Answer::Approved(agent::Answer::Deny),
+            Shown::Press(..) => Answer::Pressed(None),
         });
         let _ = open.reply.send(answer);
         if !self.exiting && matches!(&open.shown, Shown::Pick(picker) if picker.is_held()) {

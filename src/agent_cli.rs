@@ -11,6 +11,7 @@ mod file_search;
 mod footer;
 mod fuzzy;
 mod highlight;
+mod hotkeys;
 mod install;
 mod installed;
 mod interactive;

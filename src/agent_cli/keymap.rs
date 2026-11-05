@@ -5,8 +5,8 @@
 //! name the keys in use.
 
 use super::keys::{ALT, CTRL, Code, Press, SHIFT};
-use scramjet_rs::agent::Problem;
-use serde_json::Value;
+use scramjet_rs::agent::{Problem, shortened, write_replacing};
+use serde_json::{Map, Value};
 use std::{
     io,
     path::{Path, PathBuf},
@@ -238,6 +238,10 @@ impl Keymap {
         self.0[binding as usize].contains(&press)
     }
 
+    fn of(&self, binding: Binding) -> &[Press] {
+        &self.0[binding as usize]
+    }
+
     /// The first key of each of `bindings` that has any, named together as hints do: `Ctrl+O`;
     /// arrows with the same modifiers as `↑↓` or `Ctrl+←→`, other keys with the same ones as
     /// `Ctrl+D/T/U`, else `Ctrl+O/Ctrl+Shift+O`; `None` when none has a key.
@@ -355,13 +359,150 @@ pub(super) fn path(settings: &Path) -> PathBuf {
     settings.with_file_name(FILE)
 }
 
+/// `binding`'s keys now.
+pub(super) fn keys_of(binding: Binding) -> Vec<Press> {
+    current().of(binding).to_vec()
+}
+
+/// `binding`'s default keys.
+pub(super) fn defaults_of(binding: Binding) -> Vec<Press> {
+    Keymap::defaults().of(binding).to_vec()
+}
+
+/// What `binding` does, as `/hotkeys` says.
+pub(super) fn description(binding: Binding) -> &'static str {
+    DEFINITIONS[binding as usize].description
+}
+
+/// `binding`'s id in the keybindings file: `app.message.followUp`.
+pub(super) fn id(binding: Binding) -> &'static str {
+    DEFINITIONS[binding as usize].id
+}
+
+/// Actions the screen does in lists too, as at the prompt.
+const EVERYWHERE: [Binding; 6] = [
+    B::Suspend,
+    B::PasteImage,
+    B::ToolsExpand,
+    B::ThinkingToggle,
+    B::Top,
+    B::Bottom,
+];
+
+/// Whether a key of `a` can also mean `b`: both act at the prompt, both in the same list (those
+/// of all lists in each), or one acts everywhere.
+fn together(a: Binding, b: Binding) -> bool {
+    let at_prompt = |binding: Binding| {
+        let section = DEFINITIONS[binding as usize].section;
+        matches!(section, S::Navigation | S::Editing | S::Other)
+    };
+    let (s, t) = (
+        DEFINITIONS[a as usize].section,
+        DEFINITIONS[b as usize].section,
+    );
+    match (at_prompt(a), at_prompt(b)) {
+        (true, true) => true,
+        (false, false) => s == t || s == S::Lists || t == S::Lists,
+        (true, false) => EVERYWHERE.contains(&a),
+        (false, true) => EVERYWHERE.contains(&b),
+    }
+}
+
+/// What else `press` does where `binding` acts: each other action with it there, as `what (its
+/// heading)`, and, for a character without Ctrl or Alt at the prompt, typing it.
+pub(super) fn conflicts(binding: Binding, press: Press) -> Vec<String> {
+    let keymap = current();
+    let mut also: Vec<String> = (DEFINITIONS.iter())
+        .filter(|other| other.binding != binding && keymap.has(other.binding, press))
+        .filter(|other| together(binding, other.binding))
+        .map(|other| {
+            let heading = SECTIONS
+                .iter()
+                .find(|(section, _)| *section == other.section);
+            let heading = heading.map_or("", |(_, heading)| heading);
+            format!("{} ({heading})", other.description)
+        })
+        .collect();
+    let section = DEFINITIONS[binding as usize].section;
+    let typed = matches!(press.code, Code::Char(_)) && press.modifiers & (CTRL | ALT) == 0;
+    if typed && matches!(section, S::Navigation | S::Editing | S::Other) {
+        also.push("typing it in the prompt".to_owned());
+    }
+    also
+}
+
+/// A key as the keybindings file names it, as Scramjet's does: `ctrl+shift+p`, `pageUp`,
+/// `space`; `None` for a character outside ASCII, which the file cannot name.
+pub(super) fn name(press: Press) -> Option<String> {
+    let key = match press.code {
+        Code::Char(' ') => "space".to_owned(),
+        Code::Char(c) if c.is_ascii_graphic() => c.to_ascii_lowercase().to_string(),
+        Code::Char(_) => return None,
+        Code::F(n) => format!("f{n}"),
+        code => match code {
+            Code::Enter => "enter",
+            Code::Tab => "tab",
+            Code::Escape => "escape",
+            Code::Backspace => "backspace",
+            Code::Delete => "delete",
+            Code::Insert => "insert",
+            Code::Home => "home",
+            Code::End => "end",
+            Code::PageUp => "pageUp",
+            Code::PageDown => "pageDown",
+            Code::Up => "up",
+            Code::Down => "down",
+            Code::Left => "left",
+            _ => "right",
+        }
+        .to_owned(),
+    };
+    let modifiers: String = [(CTRL, "ctrl+"), (SHIFT, "shift+"), (ALT, "alt+")]
+        .into_iter()
+        .filter(|&(bit, _)| press.modifiers & bit != 0)
+        .map(|(_, name)| name)
+        .collect();
+    Some(modifiers + &key)
+}
+
+/// Saves `keys` as `binding`'s in the keybindings file beside `settings`, keeping the rest of
+/// it, or takes its entry out when they are its defaults. A file that cannot be read is left as
+/// it is. The keys take effect once the file is read again (`load`).
+pub(super) fn save(settings: &Path, binding: Binding, keys: &[Press]) -> Result<(), String> {
+    let path = path(settings);
+    let shown = shortened(&path.display().to_string());
+    let mut object = match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(Value::Object(object)) => object,
+            Ok(_) => return Err(format!("{shown} is not a JSON object")),
+            Err(error) => return Err(format!("{shown}: {error}")),
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Map::new(),
+        Err(error) => return Err(format!("{shown}: {error}")),
+    };
+    let id = DEFINITIONS[binding as usize].id.to_owned();
+    if keys == defaults_of(binding) {
+        object.remove(&id);
+    } else {
+        let names: Option<Vec<String>> = keys.iter().map(|&key| name(key)).collect();
+        let names = names.ok_or("a key outside ASCII cannot be saved")?;
+        let value = match names.as_slice() {
+            [one] => Value::String(one.clone()),
+            _ => Value::Array(names.into_iter().map(Value::String).collect()),
+        };
+        object.insert(id, value);
+    }
+    let text = serde_json::to_string_pretty(&Value::Object(object)).map_err(|e| e.to_string())?;
+    write_replacing(&path, &(text + "\n")).map_err(|error| format!("{shown}: {error}"))
+}
+
 /// Reads the keybindings file beside `settings`, at start and at `/reload`, its keys taking the
 /// place of the defaults; what is wrong in it. Without it every action has its default keys.
 pub(super) fn load(settings: Option<&Path>) -> Vec<Problem> {
     let Some(path) = settings.map(path) else {
         return Vec::new();
     };
-    let shown = scramjet_rs::agent::shortened(&path.display().to_string());
+    let shown = shortened(&path.display().to_string());
     let (keymap, warnings) = match std::fs::read_to_string(&path) {
         Ok(text) => Keymap::read(&text),
         Err(error) if error.kind() == io::ErrorKind::NotFound => (Keymap::defaults(), Vec::new()),
@@ -479,9 +620,9 @@ fn arrow(code: Code) -> Option<char> {
     }
 }
 
-/// `binding`'s keys as `/hotkeys` shows them: `Home / Ctrl+A`; `(none)` without any.
-fn shown_keys(keymap: &Keymap, binding: Binding) -> String {
-    match keymap.0[binding as usize].as_slice() {
+/// Keys as `/hotkeys` shows them: `Home / Ctrl+A`; `(none)` without any.
+pub(super) fn shown_keys(keys: &[Press]) -> String {
+    match keys {
         [] => "(none)".to_owned(),
         keys => keys
             .iter()
@@ -491,26 +632,42 @@ fn shown_keys(keymap: &Keymap, binding: Binding) -> String {
     }
 }
 
+/// A row of `/hotkeys`: keys, what they do, and the action they are, when they are one.
+pub(super) struct Shortcut {
+    pub(super) keys: String,
+    pub(super) what: &'static str,
+    pub(super) binding: Option<Binding>,
+}
+
+fn fixed(keys: impl Into<String>, what: &'static str) -> Shortcut {
+    Shortcut {
+        keys: keys.into(),
+        what,
+        binding: None,
+    }
+}
+
 /// What `/hotkeys` lists: under each heading, each action's keys and what it does, with the keys
 /// that are not actions of their own (Escape twice, `/` and `!` at the prompt) and the mouse's.
-pub(super) fn listing() -> Vec<(&'static str, Vec<(String, &'static str)>)> {
+pub(super) fn listing() -> Vec<(&'static str, Vec<Shortcut>)> {
     let keymap = current();
     let mut sections: Vec<_> = (SECTIONS.iter())
         .map(|&(section, heading)| {
             let rows: Vec<_> = (DEFINITIONS.iter())
                 .filter(|definition| definition.section == section)
                 .flat_map(|definition| {
-                    let row = (
-                        shown_keys(&keymap, definition.binding),
-                        definition.description,
-                    );
+                    let row = Shortcut {
+                        keys: shown_keys(keymap.of(definition.binding)),
+                        what: definition.description,
+                        binding: Some(definition.binding),
+                    };
                     let twice = (definition.binding == Binding::Interrupt)
-                        .then(|| keymap.0[Binding::Interrupt as usize].first())
+                        .then(|| keymap.of(Binding::Interrupt).first())
                         .flatten()
                         .map(|&key| {
                             let key = shown(key);
                             let what = "Open /tree on an empty prompt (doubleEscapeAction)";
-                            (format!("{key} {key}"), what)
+                            fixed(format!("{key} {key}"), what)
                         });
                     std::iter::once(row).chain(twice)
                 })
@@ -524,7 +681,7 @@ pub(super) fn listing() -> Vec<(&'static str, Vec<(String, &'static str)>)> {
         ("!", "Run bash command"),
         ("!!", "Run bash command (excluded from context)"),
     ] {
-        other.push((key.to_owned(), what));
+        other.push(fixed(key, what));
     }
     let mouse = [
         ("Wheel", "Scroll the conversation"),
@@ -535,8 +692,7 @@ pub(super) fn listing() -> Vec<(&'static str, Vec<(String, &'static str)>)> {
             "Paste text into the prompt (with no selection)",
         ),
     ];
-    let mouse = mouse.map(|(key, what)| (key.to_owned(), what));
-    sections.push(("Mouse", mouse.into()));
+    sections.push(("Mouse", mouse.map(|(key, what)| fixed(key, what)).into()));
     sections
 }
 
@@ -581,6 +737,113 @@ mod tests {
         for name in ["", "ctrl+", "hyper+a", "f13", "ab", "ctrl+é"] {
             assert_eq!(parse(name), None, "{name}");
         }
+    }
+
+    #[test]
+    fn keys_are_named_as_the_file_names_them_and_read_back_the_same() {
+        let keymap = Keymap::defaults();
+        for press in keymap.0.iter().flatten() {
+            let name = name(*press).unwrap_or_else(|| panic!("{press:?}"));
+            assert_eq!(parse(&name), Some(*press), "{name}");
+        }
+        let cases = [
+            (Press::new(Code::Char('p'), CTRL | SHIFT), "ctrl+shift+p"),
+            (Press::new(Code::PageUp, 0), "pageUp"),
+            (Press::new(Code::Char(' '), ALT), "alt+space"),
+            (Press::new(Code::Char('+'), CTRL), "ctrl++"),
+            (Press::new(Code::F(12), SHIFT), "shift+f12"),
+            (Press::new(Code::Char(']'), CTRL | ALT), "ctrl+alt+]"),
+        ];
+        for (press, expected) in cases {
+            assert_eq!(name(press).as_deref(), Some(expected));
+            assert_eq!(parse(expected), Some(press), "{expected}");
+        }
+        assert_eq!(name(Press::new(Code::Char('é'), 0)), None);
+    }
+
+    #[test]
+    fn a_key_conflicts_with_the_actions_that_act_where_it_would() {
+        let ctrl = |c| Press::new(Code::Char(c), CTRL);
+        // The defaults, which tests meanwhile keep.
+        let cases: [(Binding, Press, &[&str]); 7] = [
+            (B::FollowUp, ctrl('k'), &["Delete to end of line (Editing)"]),
+            // The editor's and the lists' keys do not meet; those of each list and all lists do.
+            (B::CursorDown, ctrl('r'), &[]),
+            (
+                B::SelectDown,
+                ctrl('r'),
+                &["Rename the session (In /resume)"],
+            ),
+            (B::SessionRename, ctrl('l'), &[]),
+            (
+                B::SessionRename,
+                ctrl('o'),
+                &["Toggle tool output expansion (Other)"],
+            ),
+            (
+                B::FollowUp,
+                Press::new(Code::Char('q'), SHIFT),
+                &["typing it in the prompt"],
+            ),
+            (B::SelectUp, Press::new(Code::Char('k'), 0), &[]),
+        ];
+        for (binding, press, expected) in cases {
+            assert_eq!(conflicts(binding, press), expected, "{binding:?} {press:?}");
+        }
+    }
+
+    #[test]
+    fn saving_sets_one_actions_keys_and_keeps_the_rest_of_the_file() {
+        let directory =
+            std::env::temp_dir().join(format!("scramjet-rs-keys-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let settings = directory.join("settings.json");
+        let read = || -> Value {
+            serde_json::from_str(&std::fs::read_to_string(path(&settings)).unwrap()).unwrap()
+        };
+        let ctrl = |c| Press::new(Code::Char(c), CTRL);
+        let saved = [
+            save(&settings, B::FollowUp, &[ctrl('q')]),
+            save(
+                &settings,
+                B::ModelSelect,
+                &[ctrl('l'), Press::new(Code::F(5), 0)],
+            ),
+            save(&settings, B::ThinkingToggle, &[]),
+        ];
+        let text = std::fs::read_to_string(path(&settings)).unwrap();
+        // Another program's entry stays, as does a key the user wrote wrong.
+        std::fs::write(
+            path(&settings),
+            text.replacen('{', "{\"app.nothing\": 1, \"app.exit\": \"hyper+x\",", 1),
+        )
+        .unwrap();
+        // The defaults take the entry out.
+        let restored = save(&settings, B::FollowUp, &defaults_of(B::FollowUp));
+        let file = read();
+        std::fs::write(path(&settings), "{\"app.exit\": ").unwrap();
+        let broken = save(&settings, B::Exit, &[ctrl('x')]);
+        let left = std::fs::read_to_string(path(&settings)).unwrap();
+        let _ = std::fs::remove_dir_all(&directory);
+        assert!(saved.iter().all(Result::is_ok), "{saved:?}");
+        assert_eq!(restored, Ok(()));
+        assert_eq!(
+            file,
+            serde_json::json!({
+                "app.nothing": 1,
+                "app.exit": "hyper+x",
+                "app.model.select": ["ctrl+l", "f5"],
+                "app.thinking.toggle": [],
+            })
+        );
+        assert!(text.ends_with("}\n") && text.contains("\n  \"app.message.followUp\": \"ctrl+q\""));
+        // A file that cannot be read stays as it is.
+        assert!(
+            broken
+                .unwrap_err()
+                .contains("keybindings.json: EOF while parsing")
+        );
+        assert_eq!(left, "{\"app.exit\": ");
     }
 
     #[test]

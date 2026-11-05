@@ -331,6 +331,26 @@ impl App {
                 rows.push(selection::row(&clip(&title, width.saturating_sub(1))));
                 prompt_rows(&text.draft, &mut rows, width, room)
             }
+            Some(Open {
+                shown: Shown::Press(title, note),
+                ..
+            }) => {
+                let title = format!(
+                    "{}{title}{}  {}Esc cancels{}",
+                    style::SELECTOR_TITLE,
+                    style::RESET,
+                    style::MUTED,
+                    style::RESET
+                );
+                rows.push(selection::row(&clip(&title, width.saturating_sub(1))));
+                let mut wrap = Wrap::new(width.saturating_sub(3).max(10));
+                let note = wrap.push(&visible(note)) + &wrap.finish();
+                for line in note.split('\n') {
+                    let line = format!("  {}{line}{}", style::MUTED, style::RESET);
+                    rows.push(selection::row(&line));
+                }
+                None
+            }
             None => {
                 rows.push(Line::rule(&format!(
                     "{}{}{}",

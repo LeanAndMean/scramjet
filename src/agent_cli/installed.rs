@@ -240,10 +240,15 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
         .collect();
     listing.section("Context files", context);
     let (project, global) = &installed.autonomy;
+    let keybindings = loaded.settings.map(super::keymap::path);
     let mut files = Vec::new();
     if let Some(path) = loaded.settings {
         let what = "scramjet-rs's settings: those in this list, saved as you change them.";
         files.push((path, "settings", what, "a setting"));
+    }
+    if let Some(path) = &keybindings {
+        let what = "scramjet-rs's keys, in Scramjet's format: those /hotkeys changes.";
+        files.push((path, "keys", what, "a key in /hotkeys"));
     }
     if let Some(path) = global {
         let what = "Scramjet's, which it reads too: what follows each command, and whether its \
@@ -482,6 +487,10 @@ mod tests {
                 "Settings files".into(),
                 format!("  {:width$}  settings", shown(&settings)),
                 format!(
+                    "  {:width$}  keys",
+                    shown(&base.join("config/keybindings.json"))
+                ),
+                format!(
                     "  {:width$}  next steps and publishing, all projects",
                     shown(&base.join("config/autonomy.yaml"))
                 ),
@@ -551,10 +560,13 @@ mod tests {
         // The settings file is there; the autonomy.yaml files are not yet.
         assert!(list.notes[19].ends_with("saved as you change them."));
         assert!(list.notes[20].ends_with(
+            "those /hotkeys changes. Not there yet: changing a key in /hotkeys writes it."
+        ));
+        assert!(list.notes[21].ends_with(
             " Not there yet: changing a next step or publishing for all projects writes it."
         ));
         assert!(
-            list.notes[21]
+            list.notes[22]
                 .ends_with(" Not there yet: changing a next step for this project writes it.")
         );
         assert_eq!(

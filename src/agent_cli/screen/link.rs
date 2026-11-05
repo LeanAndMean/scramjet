@@ -5,7 +5,7 @@ use super::{Answer, App, Dialog, Input, Queue, Sides, ToScreen, stops_turn};
 use crate::agent_cli::clipboard;
 use crate::agent_cli::editor::{Editor, Note};
 use crate::agent_cli::footer;
-use crate::agent_cli::keys::RawMode;
+use crate::agent_cli::keys::{Press, RawMode};
 use crate::agent_cli::record::Event;
 use crate::agent_cli::select::{Picked, Picker, Routed};
 use crate::agent_cli::settings::{Delivery, DoubleEscape, MarkdownReads, Settings};
@@ -170,6 +170,14 @@ impl Link {
     pub(in crate::agent_cli) fn dismiss(&self) {
         self.send(ToScreen::Dismiss);
     }
+    /// The key pressed under `title` and `note`; `None` for Escape.
+    pub(in crate::agent_cli) fn press(&self, title: &str, note: &str) -> Option<Press> {
+        match self.ask(Dialog::Press(title.to_owned(), note.to_owned()), None) {
+            Some(Answer::Pressed(press)) => press,
+            _ => None,
+        }
+    }
+
     /// The row chosen from `picker`, `None` when cancelled.
     pub(in crate::agent_cli) fn pick(&self, picker: Picker) -> Option<usize> {
         self.pick_timed(picker).map(|(row, ..)| row)

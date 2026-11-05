@@ -6,7 +6,7 @@ use crate::agent_cli::clipboard;
 use crate::agent_cli::editor::{Action, Note};
 use crate::agent_cli::interactive::effort_note;
 use crate::agent_cli::keymap::Binding;
-use crate::agent_cli::keys::{ByteSource, ESCAPE_WAIT, Key};
+use crate::agent_cli::keys::{ByteSource, Code, ESCAPE_WAIT, Key, Press};
 use crate::agent_cli::select::Picked;
 use crate::agent_cli::slash::Builtin;
 use rustix::{
@@ -103,6 +103,18 @@ impl App {
         }
         if let Key::Mouse(mouse) = key {
             self.mouse(mouse);
+            return Flow::Go;
+        }
+        // Every key but Escape is the one wanted, those the screen takes for itself included.
+        if let Some(Open {
+            shown: Shown::Press(..),
+            ..
+        }) = &self.dialog
+        {
+            if let Some(press) = key.press() {
+                let escape = Press::new(Code::Escape, 0);
+                self.answer(Some(Answer::Pressed(Some(press).filter(|&p| p != escape))));
+            }
             return Flow::Go;
         }
         if key != Key::Idle {
@@ -338,6 +350,7 @@ impl App {
                 Action::Suspend => return Flow::Suspend,
                 _ => None,
             },
+            Shown::Press(..) => None,
         };
         if answer.is_some() {
             self.answer(answer);

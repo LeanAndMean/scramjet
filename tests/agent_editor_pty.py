@@ -943,13 +943,17 @@ def remapped_keys(read, until, send, output):
     assert 'Thinking blocks' not in '\n'.join(shown()), shown()
     send(b'\x1bOQ')
     on_screen('Thinking blocks: hidden')
+    # `/hotkeys` lists the keys in use, under each action's id and default keys.
     send(b'/hotkeys\r')
-    on_screen('/reload reads it again.')
-    # The keys of the section Other, a page above the listing's end.
-    send(b'\x1b[5~')
-    rows = on_screen('Queue follow-up message')
-    assert any(row.strip() == 'Ctrl+Q          Queue follow-up message (or send)' for row in rows), rows
-    assert any(row.strip() == 'F2              Toggle thinking block visibility' for row in rows), rows
+    on_screen('Keyboard shortcuts  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc close')
+    send(b'queue follow')
+    rows = on_screen('app.message.followUp, by default Alt+Enter')
+    assert any(re.fullmatch('\u203a Ctrl\\+Q +Queue follow-up message \\(or send\\)', row) for row in rows), rows
+    send(b'\x7f' * 12 + b'thinking block')
+    rows = on_screen('app.thinking.toggle, by default Ctrl+T')
+    assert any(re.fullmatch('\u203a F2 +Toggle thinking block visibility', row) for row in rows), rows
+    send(b'\x1b')
+    on_screen('Keyboard shortcuts', gone=True)
     # The hints name the keys in use.
     send(b'/resume\r')
     on_screen('Resume session (threaded)  Ctrl+S sort \u00b7 Ctrl+N named \u00b7 Ctrl+P path \u00b7 '
@@ -1103,6 +1107,89 @@ with open(os.path.join(keys_home, 'scramjet-rs', 'keybindings.json'), 'w') as fi
                'app.exit': 'ctrl+x', 'app.session.delete': 'f4'}, file)
 run([], remapped_keys, serve_replies([(['Reply one.'], 'Reply one.')]), variables={'XDG_CONFIG_HOME': keys_home},
     columns=100, rows=40)
+
+
+def changed_keys(read, until, send, output):
+    shown, on_screen = full_screen(columns=80, rows=30)(read, output)
+    keys_file = os.path.join(changing_home, 'scramjet-rs', 'keybindings.json')
+    on_screen('\u2500' * 20)
+    send(b'/hotkeys\r')
+    on_screen('Keyboard shortcuts  \u2191\u2193 move')
+    send(b'queue follow')
+    on_screen('app.message.followUp, by default Alt+Enter')
+    send(b'\r')
+    rows = on_screen('Queue follow-up message (or send): Alt+Enter  \u2191\u2193 move \u00b7 Enter choose \u00b7 Esc back')
+    assert rows[-5:] == ['\u203a Press a new key', '  Press another key', '  Remove Alt+Enter', '',
+                         '  In place of Alt+Enter.'], rows
+    send(b'\r')
+    on_screen('Press the new key  Esc cancels')
+    on_screen('For Queue follow-up message (or send), now Alt+Enter.')
+    # A key the editor uses is taken there; another is asked for.
+    send(b'\x0b')
+    rows = on_screen('Ctrl+K is taken')
+    assert '  Ctrl+K already means: Delete to end of line (Editing). Where they act' in rows, rows
+    send(b'\r')
+    on_screen('Press the new key  Esc cancels')
+    # Ctrl+O, which the screen takes for itself elsewhere, is a key like the others here.
+    send(b'\x0f')
+    rows = on_screen('Ctrl+O is taken')
+    send(b'\x1b')
+    on_screen('Queue follow-up message (or send): Alt+Enter')
+    send(b'\r')
+    on_screen('Press the new key  Esc cancels')
+    send(b'\x11')
+    rows = on_screen('Keyboard shortcuts  Saved in ')
+    assert any(re.fullmatch('\u203a Ctrl\\+Q +Queue follow-up message \\(or send\\)', row) for row in rows), rows
+    assert json.load(open(keys_file)) == {'app.message.followUp': 'ctrl+q'}
+    send(b'\x1b')
+    on_screen('Keyboard shortcuts', gone=True)
+    # The new key works at once, and the old one no longer does.
+    send(b'first\x1b\r')
+    read(.3)
+    assert 'Reply one.' not in '\n'.join(shown()), shown()
+    send(b'\x11')
+    on_screen('Reply one.')
+    # Another key besides it, then the default back, which takes the entry out of the file.
+    send(b'/hotkeys\r')
+    on_screen('Keyboard shortcuts  \u2191\u2193 move')
+    send(b'queue follow')
+    on_screen('app.message.followUp, by default Alt+Enter')
+    # Keys typed at once each reach the list or the wait for a key the one before them leaves.
+    send(b'\r\x1b[B\r')
+    on_screen('Press another key  Esc cancels')
+    send(b'\x1bOS')
+    rows = on_screen('Keyboard shortcuts  Saved in ')
+    assert any(re.fullmatch('\u203a Ctrl\\+Q / F4 +Queue follow-up message \\(or send\\)', row)
+               for row in rows), rows
+    assert json.load(open(keys_file)) == {'app.message.followUp': ['ctrl+q', 'f4']}
+    send(b'\r')
+    rows = on_screen('Restore the default: Alt+Enter')
+    assert rows[-6:-2] == ['  Press another key', '  Remove Ctrl+Q', '  Remove F4',
+                           '  Restore the default: Alt+Enter'], rows
+    send(b'\x1b[B' * 4 + b'\r')
+    rows = on_screen('Keyboard shortcuts  Saved in ')
+    assert json.load(open(keys_file)) == {}
+    send(b'\x1b')
+    on_screen('Keyboard shortcuts', gone=True)
+    # `/keybindings` opens the file in the editor and reads it once the editor exits.
+    send(b'/keybindings\r')
+    on_screen('app.bogus is no action; ignored')
+    assert json.load(open(seen_keys)) == {}
+    send(b'\x04')
+    read(.3)
+    assert 'Ctrl+C again' not in '\n'.join(shown()), shown()
+    send(b'\x18')
+
+
+changing_home = config_home('changing')
+seen_keys = os.path.join(work, 'seen-keys.json')
+keys_edit = os.path.join(work, 'keys-edit.sh')
+with open(keys_edit, 'w') as script_file:
+    script_file.write('#!/bin/sh\ncp "$1" %s\nprintf \'{"app.exit": "ctrl+x", "app.bogus": "f1"}\\n\' > "$1"\n'
+                      % seen_keys)
+os.chmod(keys_edit, 0o755)
+run([], changed_keys, serve_replies([(['Reply one.'], 'Reply one.')]),
+    variables={'XDG_CONFIG_HOME': changing_home, 'VISUAL': keys_edit}, columns=80, rows=30)
 run([], running_counts_seconds, calling)
 run([], running_shows_output, talking)
 run([], final_texts_replace_lost_deltas, replies)
@@ -1163,7 +1250,7 @@ def completes_paths_and_commands(read, until, send, output):
     on_screen('Autopilot is off')
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     send(b'/')
-    on_screen('(1/18)')
+    on_screen('(1/19)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count

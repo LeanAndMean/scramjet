@@ -1,19 +1,18 @@
 //! The built-in commands: `/export`, `/import`, `/copy`, `/clear`, `/rename`, `/status`,
-//! `/hotkeys`, `/compact`, `/autopilot`, `/reload`, and `!` commands. `/settings` is in
-//! `settings_menu.rs`; `/resume`, `/fork`, `/branch`, `/clone` and `/tree` in `sessions.rs`;
-//! `/model` and `/scoped-models` in `scope.rs`.
+//! `/compact`, `/autopilot`, `/reload`, and `!` commands. `/settings` is in `settings_menu.rs`;
+//! `/hotkeys` and `/keybindings` in `hotkeys.rs`; `/resume`, `/fork`, `/branch`, `/clone` and
+//! `/tree` in `sessions.rs`; `/model` and `/scoped-models` in `scope.rs`.
 use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal::{self, Terminal};
 use super::text::clip;
 use super::theme::Themes;
 use super::{clipboard, completion, export, keymap, style};
-use scramjet_rs::agent::{Agent, AgentError, shortened};
+use scramjet_rs::agent::{Agent, AgentError};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
     sync::atomic::Ordering,
 };
-use unicode_width::UnicodeWidthStr;
 
 /// A built-in command as typed, with its argument.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,6 +26,7 @@ pub(super) enum Builtin<'a> {
     Rename(&'a str),
     Status,
     Hotkeys,
+    Keybindings,
     Resume(&'a str),
     Fork(&'a str),
     /// With the new session's name, if given.
@@ -57,6 +57,7 @@ impl<'a> Builtin<'a> {
             "rename" => Self::Rename(argument),
             "status" if argument.is_empty() => Self::Status,
             "hotkeys" if argument.is_empty() => Self::Hotkeys,
+            "keybindings" if argument.is_empty() => Self::Keybindings,
             "resume" => Self::Resume(argument),
             "fork" => Self::Fork(argument),
             "branch" => Self::Branch(argument),
@@ -84,6 +85,7 @@ impl<'a> Builtin<'a> {
                 | Self::Rename(_)
                 | Self::Status
                 | Self::Hotkeys
+                | Self::Keybindings
                 | Self::Model(_)
                 | Self::ScopedModels
                 | Self::Autopilot(_)
@@ -111,10 +113,8 @@ impl Interactive {
             }
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.agent, &self.ui).trim_end()),
-            Some(Builtin::Hotkeys) => {
-                let text = hotkeys(&self.ui, self.settings.path());
-                self.say(text.trim_end());
-            }
+            Some(Builtin::Hotkeys) => self.hotkeys(),
+            Some(Builtin::Keybindings) => self.keybindings(),
             Some(Builtin::Resume(wanted)) => {
                 self.resume(wanted);
             }
@@ -372,28 +372,6 @@ fn session_info(agent: &Agent, ui: &Terminal) -> String {
     info
 }
 
-/// `/hotkeys`, as Scramjet's: the keys by section, in two columns, and the file that changes them
-/// beside the `settings` file.
-fn hotkeys(ui: &Terminal, settings: Option<&Path>) -> String {
-    let mut text = format!("{}\n", ui.styled(style::INFO_HEADING, "Keyboard Shortcuts"));
-    for (section, keys) in keymap::listing() {
-        let width = keys.iter().map(|(key, _)| key.width()).max().unwrap_or(0);
-        text += &format!("\n{}\n", ui.styled(style::INFO_HEADING, section));
-        for (key, action) in keys {
-            let pad = " ".repeat(width - key.width());
-            text += &format!("  {}{pad}  {action}\n", ui.styled(style::CODE, &key));
-        }
-    }
-    if let Some(settings) = settings {
-        let file = shortened(&keymap::path(settings).display().to_string());
-        text += &format!(
-            "\nOther keys for an action go in {file}, as in Scramjet's keybindings.json: \
-             {{\"app.message.followUp\": [\"ctrl+q\"]}}. /reload reads it again.\n"
-        );
-    }
-    text
-}
-
 /// A count with thousands separators, as Scramjet's `toLocaleString` writes it.
 /// The path a command's argument starts with, as Scramjet reads one: up to the first space, or
 /// within quotes; `None` when there is none.
@@ -441,6 +419,8 @@ mod tests {
             "/export",
             "/export out.jsonl",
             "/hotkeys",
+            "/keybindings",
+            "/keymap",
             "/copy",
             "/rename",
             "/rename  my work ",
@@ -509,54 +489,11 @@ mod tests {
             ("/clone", Builtin::Branch("")),
             ("/continue 2", Builtin::Resume("2")),
             ("/help", Builtin::Hotkeys),
+            ("/keymap", Builtin::Hotkeys),
         ] {
             assert_eq!(Builtin::parse(typed), Some(listed), "{typed}");
         }
         assert_eq!(Builtin::parse("/session now"), None);
-    }
-
-    #[test]
-    fn hotkeys_list_every_action_with_its_keys_in_columns_within_80() {
-        let ui = Terminal::new(std::sync::Arc::default(), false);
-        let settings = Path::new("/config/scramjet-rs/settings.json");
-        let text = hotkeys(&ui, Some(settings));
-        let text = [style::CODE.get(), style::INFO_HEADING.get(), style::RESET]
-            .iter()
-            .fold(text, |text, code| text.replace(code, ""));
-        let lines: Vec<_> = text.lines().collect();
-        assert_eq!(lines[..3], ["Keyboard Shortcuts", "", "Navigation"]);
-        // Each section's actions start in one column, after its widest keys.
-        let row = |width: usize, key: &str, action: &str| format!("  {key:<width$}  {action}");
-        assert_eq!(lines[3], row(30, "Up", "Move cursor up / browse history"));
-        for line in [
-            row(30, "Home / Ctrl+A", "Start of line"),
-            row(14, "Ctrl+Shift+P", "Cycle to the previous model"),
-            row(
-                14,
-                "Escape Escape",
-                "Open /tree on an empty prompt (doubleEscapeAction)",
-            ),
-            row(30, "Shift+L", "Label the entry"),
-            row(
-                21,
-                "Right click",
-                "Paste text into the prompt (with no selection)",
-            ),
-        ] {
-            assert!(lines.contains(&line.as_str()), "{line:?} in {text}");
-        }
-        let rows: Vec<_> = lines.iter().filter(|line| line.starts_with("  ")).collect();
-        let listed: usize = keymap::listing().iter().map(|(_, rows)| rows.len()).sum();
-        assert_eq!(rows.len(), listed);
-        for row in rows {
-            assert!(row.width() <= 80, "{row}");
-        }
-        assert!(
-            lines.last().unwrap().starts_with(
-                "Other keys for an action go in /config/scramjet-rs/keybindings.json, as in"
-            ),
-            "{text}"
-        );
     }
 
     #[test]

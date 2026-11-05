@@ -132,16 +132,18 @@ loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH end
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
 with this project's sessions. /copy copies the last reply's text, as the model wrote it, to the
 clipboard. The keys named here are the defaults: keybindings.json beside the settings file
-gives actions others, and /hotkeys lists those in use. /settings lists the settings, each with what it does, and
+gives actions others; /hotkeys lists those in use and changes them, and /keybindings opens the
+file in your editor. /settings lists the settings, each with what it does, and
 changes them; it also shows each command's next steps, publication approval, and what the
 session loaded from where, with any problems. /reload reads the settings, command sets, agents,
 skills and context files again. /skill:NAME ARGS sends a skill's instructions with ARGS.
 /autopilot on|off|status: when on, a finished command's recommended next step runs after 3s.
-Typed while a turn runs, /status, /hotkeys, /rename, /model, /scoped-models, /copy, /export,
-/settings and /autopilot run before its next request, /reload is refused, and the other
-commands stop the turn and run once it has.
+Typed while a turn runs, /status, /hotkeys, /keybindings, /rename, /model, /scoped-models,
+/copy, /export, /settings and /autopilot run before its next request, /reload is refused, and
+the other commands stop the turn and run once it has.
 Scramjet's names of the commands named otherwise here are accepted too (/new, /quit, /name,
-/session, /clone), and so are Claude Code's /reset, /config, /continue, /usage and /help.
+/session, /clone), and so are Claude Code's /reset, /config, /continue, /usage and /help, and
+Codex's /keymap.
 As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
 commands/SET:COMMAND.md is sent with the arguments substituted, inside <scramjet-command>. The
 sets are those installed, then those under $XDG_DATA_HOME/scramjet (~/.local/share/scramjet)

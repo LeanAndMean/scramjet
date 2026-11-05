@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 18] = [
+const SLASH_COMMANDS: [(&str, &str); 19] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     ("scoped-models", "Enable/disable models for Ctrl+P cycling"),
@@ -21,7 +21,8 @@ const SLASH_COMMANDS: [(&str, &str); 18] = [
     ("copy", "Copy last agent message to clipboard"),
     ("rename", "Set session display name"),
     ("status", "Show session info and stats"),
-    ("hotkeys", "Show all keyboard shortcuts"),
+    ("hotkeys", "Show all keyboard shortcuts, and change them"),
+    ("keybindings", "Open your keyboard shortcuts file"),
     ("fork", "Create a new fork from a previous user message"),
     (
         "branch",
@@ -44,7 +45,7 @@ const SLASH_COMMANDS: [(&str, &str); 18] = [
 
 /// Other names of the listed commands, accepted but not listed: Scramjet's, and Claude Code's
 /// and Codex's for the same action.
-const ALIASES: [(&str, &str); 12] = [
+const ALIASES: [(&str, &str); 13] = [
     ("new", "clear"),
     ("reset", "clear"),
     ("quit", "exit"),
@@ -57,6 +58,7 @@ const ALIASES: [(&str, &str); 12] = [
     ("clone", "branch"),
     ("continue", "resume"),
     ("help", "hotkeys"),
+    ("keymap", "hotkeys"),
 ];
 
 /// The listed name of the built-in command typed as `name` (without its `/`).
@@ -425,6 +427,7 @@ mod tests {
                 "/rename",
                 "/status",
                 "/hotkeys",
+                "/keybindings",
                 "/fork",
                 "/branch",
                 "/tree",
@@ -444,7 +447,7 @@ mod tests {
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /export         Export session (HTML default, or specify…",
                 "  /import         Import and resume a session from a JSONL…",
-                "  (1/18)",
+                "  (1/19)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -458,12 +461,12 @@ mod tests {
                 "  /rename",
                 "  /status",
                 "→ /hotkeys",
+                "  /keybindings",
                 "  /fork",
-                "  /branch",
-                "  (9/18)"
+                "  (9/19)"
             ]
         );
-        for _ in 0..10 {
+        for _ in 0..11 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);

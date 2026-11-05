@@ -4,6 +4,14 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.8.0 — Change keys in /hotkeys
+
+### Added
+
+- `/hotkeys` (or Codex's name, `/keymap`) lists every key on the full screen, to search as you type; Enter on an action offers to press a new key for it, add another, remove one or restore its default. Before taking a key, it says what else that key already does where the action works, such as Ctrl+K deleting to the end of the line. The change is saved in `keybindings.json` at once and used at once. With piped input, `/hotkeys` prints the list as before.
+- `/keybindings`, as in Claude Code, opens `keybindings.json` in your editor and reads it again when the editor exits, saying what is wrong in it.
+- `/settings`' Installed lists `keybindings.json` among the settings files.
+
 ## 0.7.1 — Hints name your keys
 
 ### Fixed
