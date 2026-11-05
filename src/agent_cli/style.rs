@@ -70,6 +70,25 @@ styles! {
     REASONING: [] ThinkingText;
     /// The line shown in place of hidden reasoning.
     THINKING_HIDDEN: [ITALIC] ThinkingText;
+    /// In the looks other than the classic one (`design`): reasoning, and the margin's label
+    /// beside it; the mark beside a prompt, the margin's label and a prompt's text; the rails
+    /// beside reasoning and a call's result, a failed one's and a running one's; a call's tool;
+    /// how a call went, and the margin's label for it.
+    THOUGHT: [ITALIC] ThinkingText;
+    THOUGHT_LABEL: [] Dim;
+    PROMPT_MARK: [] Accent;
+    PROMPT_LABEL: [BOLD] Accent;
+    PROMPT_TEXT: [BOLD] UserMessageText;
+    RAIL: [] BorderMuted;
+    RAIL_FAILED: [] Error;
+    RAIL_RUNNING: [] Warning;
+    TOOL_NAME: [BOLD] ToolTitle;
+    OUTCOME_RUNNING: [] Warning;
+    OUTCOME_DONE: [] Success;
+    OUTCOME_FAILED: [] Error;
+    LABEL_RUNNING: [BOLD] Warning;
+    LABEL_DONE: [BOLD] Success;
+    LABEL_FAILED: [BOLD] Error;
     /// A compaction summary.
     SUMMARY: [] CustomMessageText;
     /// A section heading in an information block such as `/session`'s.
@@ -197,6 +216,42 @@ pub(super) fn base() -> &'static str {
     &table[SPECS.len()]
 }
 
+/// A background across the full screen's rows that a look puts blocks on (`design`): a
+/// prompt's, and a call's while it runs, once done and when it failed. A row is on one when it
+/// holds its `mark`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Band {
+    Prompt,
+    Running,
+    Done,
+    Failed,
+}
+
+const BANDS: [(Band, Token, char); 4] = [
+    (Band::Prompt, Token::UserMessageBg, '\x11'),
+    (Band::Running, Token::ToolPendingBg, '\x12'),
+    (Band::Done, Token::ToolSuccessBg, '\x13'),
+    (Band::Failed, Token::ToolErrorBg, '\x14'),
+];
+
+impl Band {
+    pub(super) fn mark(self) -> char {
+        BANDS[self as usize].2
+    }
+    /// The band `mark` stands for.
+    pub(super) fn marked(mark: char) -> Option<Self> {
+        BANDS.iter().find(|band| band.2 == mark).map(|band| band.0)
+    }
+    /// As `base`, the escape sequence that starts the band in the theme in use: its background
+    /// with the theme's text color, or the base where the theme has no such background.
+    pub(super) fn get(self) -> &'static str {
+        let table = *TABLE
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        &table[SPECS.len() + 1 + self as usize]
+    }
+}
+
 /// `row` on `base`, which each reset in it starts again.
 pub(super) fn painted(row: &str, base: &str) -> String {
     match base.is_empty() {
@@ -211,7 +266,7 @@ impl fmt::Display for Style {
     }
 }
 
-/// The styles' escape sequences in a theme, then its base's.
+/// The styles' escape sequences in a theme, then its base's and its bands'.
 fn table(theme: &Theme, mode: Mode) -> Vec<String> {
     let sequence = |spec: &Spec| {
         let mut attributes = spec.attributes.to_vec();
@@ -230,16 +285,19 @@ fn table(theme: &Theme, mode: Mode) -> Vec<String> {
             false => format!("\x1b[{}m", parameters.join(";")),
         }
     };
-    let base = theme.background().background(mode).map(|background| {
-        let text = theme.color(Token::Text).foreground(mode);
-        let parameters: Vec<String> = text.into_iter().chain([background]).collect();
-        format!("\x1b[{}m", parameters.join(";"))
-    });
-    SPECS
-        .iter()
-        .map(sequence)
-        .chain([base.unwrap_or_default()])
-        .collect()
+    let on = |background: Color| {
+        background.background(mode).map(|background| {
+            let text = theme.color(Token::Text).foreground(mode);
+            let parameters: Vec<String> = text.into_iter().chain([background]).collect();
+            format!("\x1b[{}m", parameters.join(";"))
+        })
+    };
+    let base = on(theme.background()).unwrap_or_default();
+    let bands = BANDS.map(|(_, token, _)| on(theme.color(token)).unwrap_or_else(|| base.clone()));
+    let mut table: Vec<String> = SPECS.iter().map(sequence).collect();
+    table.push(base);
+    table.extend(bands);
+    table
 }
 
 static TABLE: LazyLock<RwLock<&'static [String]>> = LazyLock::new(|| {
@@ -313,7 +371,7 @@ mod tests {
                 &format!(r##""text": {text}, "background": "#10141c","##),
             );
             let theme = Theme::parse(&theme).unwrap();
-            table(&theme, mode).pop().unwrap()
+            table(&theme, mode).swap_remove(SPECS.len())
         };
         assert_eq!(
             base(r##""#e0e4ec""##, Mode::TrueColor),
@@ -323,7 +381,7 @@ mod tests {
         assert_eq!(base("15", Mode::Indexed), "\x1b[97;48;5;16m");
         for name in BUILT_IN {
             let theme = Theme::built_in(name).unwrap();
-            assert_eq!(table(&theme, Mode::TrueColor).last().unwrap(), "");
+            assert_eq!(table(&theme, Mode::TrueColor)[SPECS.len()], "");
         }
 
         let row = "plain \x1b[1mbold\x1b[0m end\x1b[0m";

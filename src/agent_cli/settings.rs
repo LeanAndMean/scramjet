@@ -1,6 +1,7 @@
 //! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet-rs/settings.json` (by default
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
+use super::design::Design;
 use super::keymap::{self, Binding};
 use super::theme::TERMINAL_COLORS;
 use super::tree::Filter;
@@ -92,6 +93,7 @@ pub(super) enum Row {
     ThinkingBlocks,
     MarkdownReads,
     Theme,
+    Look,
     Steering,
     FollowUp,
     DoubleEscape,
@@ -106,12 +108,13 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 17] = [
+pub(super) const ROWS: [Row; 18] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
     Row::MarkdownReads,
     Row::Theme,
+    Row::Look,
     Row::Steering,
     Row::FollowUp,
     Row::DoubleEscape,
@@ -134,6 +137,7 @@ impl Row {
             Self::ThinkingBlocks => "Thinking blocks",
             Self::MarkdownReads => "Markdown reads",
             Self::Theme => "Theme",
+            Self::Look => "Look",
             Self::Steering => "Steering messages",
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
@@ -180,6 +184,11 @@ impl Row {
                 );
             }
             Self::Theme => "The colors of the conversation and of everything around it.",
+            Self::Look => {
+                "How the conversation shows prompts, reasoning, tool calls and replies: classic, \
+                 or a variant to try (rails, panels, margin; panels needs a theme with \
+                 backgrounds, such as scramjet-dark)."
+            }
             Self::Steering => {
                 let with = with(Binding::Submit, " with ");
                 return format!(
@@ -261,6 +270,8 @@ pub(super) struct Settings {
     pub(super) markdown_reads: MarkdownReads,
     /// `theme`: the name of the theme everything is shown in.
     pub(super) theme: String,
+    /// `look`: how the full screen shows prompts, reasoning, calls and replies.
+    pub(super) look: Design,
     /// `defaultThinkingLevel`, named as the model cards name levels.
     pub(super) default_thinking_level: Option<String>,
     /// `defaultModel`: the model last chosen in any project, as Scramjet saves it.
@@ -341,6 +352,7 @@ impl Settings {
             tree_filter: Filter::Default,
             markdown_reads: MarkdownReads::Rendered,
             theme: TERMINAL_COLORS.to_owned(),
+            look: Design::Classic,
             default_thinking_level: None,
             default_model: None,
             startup_model: StartupModel::PerDirectory,
@@ -416,6 +428,14 @@ impl Settings {
             None => {}
             Some(Value::String(name)) if !name.trim().is_empty() => self.theme = name.clone(),
             Some(_) => wrong("theme", "a theme's name"),
+        }
+        match object.get("look").map(|value| value.as_str()) {
+            None => {}
+            Some(Some(name)) if let Some(design) = Design::named(name) => self.look = design,
+            Some(_) => wrong(
+                "look",
+                &Design::ALL.map(|d| format!("\"{}\"", d.name())).join(", "),
+            ),
         }
         match object
             .get("defaultThinkingLevel")
@@ -719,6 +739,7 @@ impl Settings {
             | Row::Publishing
             | Row::Installed => String::new(),
             Row::Theme => self.theme.clone(),
+            Row::Look => self.look.name().into(),
             Row::StartupModel => match self.startup_model {
                 StartupModel::PerDirectory => "last chosen here",
                 StartupModel::Global => "last chosen anywhere",
@@ -794,6 +815,10 @@ impl Settings {
                 self.save("startupModel", json!(name))
             }
             Row::ThinkingBlocks => self.set_hide_thinking_block(!self.hide_thinking_block),
+            Row::Look => {
+                self.look = self.look.next();
+                self.save("look", json!(self.look.name()))
+            }
             Row::MarkdownReads => {
                 let (reads, name) = match self.markdown_reads {
                     MarkdownReads::Rendered => (MarkdownReads::Source, "source"),
@@ -1380,6 +1405,13 @@ mod tests {
             seen(Row::ThinkingBlocks, &mut settings),
             ["shown", "hidden", "shown", "hidden"]
         );
+        assert_eq!(
+            seen(Row::Look, &mut settings),
+            ["classic", "rails", "panels", "margin"]
+        );
+        // Then round to the first again, and on.
+        settings.cycle(Row::Look).unwrap();
+        settings.cycle(Row::Look).unwrap();
         let (default, other) = match cfg!(target_os = "macos") {
             true => ("on", "off"),
             false => ("off", "on"),
@@ -1425,6 +1457,7 @@ mod tests {
                 "followUpMode": "all",
                 "tools": ["read", "ls"],
                 "theme": "scramjet-dark",
+                "look": "rails",
             })
         );
         let reread = Settings::read(Some(path.clone()));

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.11.0 — Three new looks to try
+
+### Added
+
+- `/settings` has a Look row: Enter changes how the conversation shows prompts, reasoning, tool calls and replies, at once. `classic` is the look so far; `rails` puts a colored rail beside each block, `panels` puts prompts and calls on the theme's backgrounds (scramjet-dark has them), and `margin` labels each block in a column at the left. In the new looks, a call's line says how it went (✓, ✗, or ○ while it runs) and how long a command took. One of them is to become the default once picked; printed output (`-p`) keeps the classic look.
+
 ## 0.10.0 — A theme's own background
 
 ### Added

@@ -7,6 +7,7 @@
 //! to it through a `Handle` (`link.rs`). The thread's `App` keeps the conversation shown
 //! (`transcript.rs`), takes keys (`input.rs`) and the mouse (`mouse.rs`), and draws (`draw.rs`).
 
+use super::design::Design;
 use super::editor::{Draft, Editor, Note, RESIZE_CHECK};
 use super::footer::{self, Footer};
 use super::keymap::{self, Binding};
@@ -92,6 +93,7 @@ enum ToScreen {
         double_escape: bool,
         markdown_reads: MarkdownReads,
         copy_on_select: bool,
+        design: Design,
     },
     /// The file of the theme in use, read again as it changes.
     Theme(Option<Watched>),
@@ -278,6 +280,8 @@ struct App {
     /// Tool results are shown whole (Ctrl+O).
     whole: bool,
     markdown_reads: MarkdownReads,
+    /// How prompts, reasoning, calls and replies look (`look`).
+    design: Design,
     /// A completed mouse selection is copied (`copyOnSelect`).
     copy_on_select: bool,
     selection: Option<Selection>,
@@ -331,6 +335,7 @@ impl App {
             top: None,
             whole: false,
             markdown_reads: MarkdownReads::Rendered,
+            design: Design::Classic,
             copy_on_select: false,
             selection: None,
             selections: 0,
@@ -546,10 +551,12 @@ impl App {
                 double_escape,
                 markdown_reads,
                 copy_on_select,
+                design,
             } => {
                 self.editor.reloaded(commands, double_escape);
                 self.markdown_reads = markdown_reads;
                 self.copy_on_select = copy_on_select;
+                self.design = design;
             }
             ToScreen::Theme(watched) => self.theme = watched,
             ToScreen::Models(models) => self.editor.set_models(models),

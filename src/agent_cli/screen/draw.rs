@@ -8,7 +8,7 @@ use crate::agent_cli::editor::{Draft, Note, terminal_size};
 use crate::agent_cli::keymap::{self, Binding};
 use crate::agent_cli::record::{self, Event};
 use crate::agent_cli::selection::{self, Line};
-use crate::agent_cli::style;
+use crate::agent_cli::style::{self, Band};
 use crate::agent_cli::terminal::{
     COMMAND_LINES, Terminal, elapsed, retrying, spinner, waiting_for,
 };
@@ -403,6 +403,7 @@ impl App {
             whole: self.whole,
             markdown_reads: self.markdown_reads,
             theme: style::generation(),
+            design: self.design,
         };
         self.transcript.render(look, &self.hide_thinking);
         let last = self.transcript.len().saturating_sub(rows);
@@ -413,17 +414,21 @@ impl App {
         }
         self.docked = dock;
         let selected = self.selected();
-        let shown = |line: &Line, at: usize| match selected.as_ref().and_then(|s| s.columns(at)) {
-            Some((left, right)) => selection::highlight(&line.shown, left, right),
-            None => line.shown.clone(),
+        // A row on a band is erased and painted on it rather than on the base.
+        let shown = |line: &Line, at: usize| {
+            let shown = match selected.as_ref().and_then(|s| s.columns(at)) {
+                Some((left, right)) => selection::highlight(&line.shown, left, right),
+                None => line.shown.clone(),
+            };
+            (shown, line.band.map_or(base, Band::get))
         };
         let window = self.transcript.window(top, rows);
-        let mut frame: Vec<String> = (window.iter().zip(top..))
+        let mut frame: Vec<(String, &str)> = (window.iter().zip(top..))
             .map(|(line, at)| shown(line, at))
             .collect();
-        frame.resize(rows, String::new());
+        frame.resize(rows, (String::new(), base));
         if let Some((size, first)) = self.thumb() {
-            for (row, line) in frame.iter_mut().enumerate() {
+            for (row, (line, _)) in frame.iter_mut().enumerate() {
                 let cell = match (first..first + size).contains(&row) {
                     true => '█',
                     false => '│',
@@ -434,17 +439,22 @@ impl App {
         let length = self.transcript.len();
         frame.extend((self.docked.iter().zip(length..)).map(|(line, at)| shown(line, at)));
         frame.truncate(height);
+        // Erased first: without autowrap, a row as wide as the screen leaves the cursor on its
+        // last cell, which erasing after it would take. Erasing fills the row with the
+        // background it is painted on.
+        let frame: Vec<String> = (frame.into_iter())
+            .map(|(row, base)| {
+                let (row, reset) = (style::painted(&row, base), style::RESET);
+                format!("{base}\x1b[2K{row}{reset}")
+            })
+            .collect();
         let cursor = cursor.map(|(row, column)| (rows + row, column));
         if frame == self.drawn && cursor == self.cursor {
             return Ok(());
         }
         for (index, row) in frame.iter().enumerate() {
             if self.drawn.get(index) != Some(row) {
-                // Erased first: without autowrap, a row as wide as the screen leaves the
-                // cursor on its last cell, which erasing after it would take. Erasing fills
-                // the row with the base's background.
-                let (row, reset) = (style::painted(row, base), style::RESET);
-                write!(out, "\x1b[{};1H{base}\x1b[2K{row}{reset}", index + 1).unwrap();
+                write!(out, "\x1b[{};1H{row}", index + 1).unwrap();
             }
         }
         if let Some((row, column)) = cursor.filter(|(row, _)| *row < height) {

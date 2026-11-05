@@ -1911,6 +1911,7 @@ def settings_menu(read, until, send, output):
     rows = on_screen('Settings  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc close')
     assert '\u203a ' + setting('Thinking level', 'medium') in rows, rows
     assert '  ' + setting('Theme', 'terminal-colors') in rows, rows
+    assert '  ' + setting('Look', 'classic') in rows, rows
     assert rows[-1] == '  start at. Shift+Tab cycles it.', rows
     # The thinking level is chosen from the card's levels; Enter takes one and goes back.
     send(b'\r')
@@ -1919,7 +1920,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B\r')
     on_screen(setting('Thinking level', 'high'))
     # Keys typed at once each reach the list the one before them leaves, none lost between.
-    send(b'\x1b[B\x1b[B\r\x1b[B\x1b[B\x1b[B\r')
+    send(b'\x1b[B\x1b[B\r\x1b[B\x1b[B\x1b[B\x1b[B\r')
     rows = on_screen(setting('Steering messages', 'one at a time'))
     assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
@@ -1939,7 +1940,7 @@ def settings_menu(read, until, send, output):
     send(b'/settings\r')
     on_screen('Command: /settings')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[B' * 11 + b'\r')
+    send(b'\x1b[B' * 12 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))

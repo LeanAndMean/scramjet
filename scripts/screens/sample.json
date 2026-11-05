@@ -1,0 +1,107 @@
+{
+  "size": "100x90",
+  "settings": {
+    "theme": "scramjet-dark"
+  },
+  "files": {
+    ".gitignore": "target\n",
+    "Cargo.toml": "[package]\nname = \"words\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    "src/lib.rs": "/// Splits `text` into words.\npub fn words(text: &str) -> Vec<&str> {\n    text.split(' ').collect()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn splits_on_spaces() {\n        assert_eq!(words(\"a b  c\"), [\"a\", \"b\", \"c\"]);\n    }\n}\n"
+  },
+  "prompt": "The words test fails. Fix it.",
+  "replies": [
+    [
+      {
+        "reasoning": "**Looking at the splitter**\n\nThe test expects runs of spaces to collapse, so `split(' ')` must be the problem. I'll run the tests first, then read the file."
+      },
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "cargo test -q"
+        }
+      }
+    ],
+    [
+      {
+        "call": "read",
+        "arguments": {
+          "path": "src/lib.rs"
+        }
+      }
+    ],
+    [
+      {
+        "reasoning": "`split_whitespace` drops empty pieces and handles tabs too."
+      },
+      {
+        "call": "edit",
+        "arguments": {
+          "path": "src/lib.rs",
+          "edits": [
+            {
+              "oldText": "    text.split(' ').collect()",
+              "newText": "    text.split_whitespace().collect()"
+            }
+          ]
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "cargo test -q 2>&1 | tail -n 3"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Fixed. `words` split on every single space, so `\"a b  c\"` gave an empty word between the two spaces.\n\n## What changed\n\n- `src/lib.rs`: `split(' ')` became `split_whitespace()`, which also skips tabs and newlines.\n- The test `splits_on_spaces` now passes.\n\n```rust\npub fn words(text: &str) -> Vec<&str> {\n    text.split_whitespace().collect()\n}\n```\n\n> Note: leading and trailing spaces are dropped too, which the callers in this crate expect."
+      }
+    ],
+    [
+      {
+        "reasoning": "A check that takes a moment, then a missing file, to show a failure."
+      },
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "sleep 2; echo checked"
+        }
+      }
+    ],
+    [
+      {
+        "call": "read",
+        "arguments": {
+          "path": "src/main.rs"
+        }
+      }
+    ],
+    [
+      {
+        "text": "There is no `src/main.rs`: this crate is a library only. Run its tests with `cargo test`."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "Fixed."
+    },
+    {
+      "type": "And src/main.rs?\r"
+    },
+    {
+      "until": "echo checked"
+    },
+    {
+      "shot": "running"
+    },
+    {
+      "until": "library only"
+    },
+    {
+      "shot": "end"
+    }
+  ]
+}

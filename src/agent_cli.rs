@@ -2,6 +2,7 @@ mod args;
 mod children;
 mod clipboard;
 mod completion;
+mod design;
 mod diff;
 mod editor;
 mod exit;

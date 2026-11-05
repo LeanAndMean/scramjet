@@ -7,8 +7,10 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// A line's copy starts after `FROM`, the cells before it being a gutter. A line with `JOINED`
 /// was wrapped from the one before: its copy starts after the mark and follows the untrimmed
 /// copy of the line before with a space for each `SPACE` after the mark, not a line break. A line
-/// with `RULE` is a rule between blocks, which a copy leaves out.
+/// with `RULE` is a rule between blocks, which a copy leaves out. A line's copy ends at `UNTIL`,
+/// before what is shown at its right.
 pub(super) const FROM: char = '\x1d';
+pub(super) const UNTIL: char = '\x10';
 pub(super) const RULE: char = '\x1c';
 pub(super) const JOINED: char = '\x1e';
 pub(super) const SPACE: char = '\x1f';
@@ -372,7 +374,7 @@ pub(super) fn plain(text: &str) -> String {
 }
 
 /// The style sequence (`ESC [ … m`) `text` starts with.
-fn style_at(text: &str) -> Option<&str> {
+pub(super) fn style_at(text: &str) -> Option<&str> {
     let parameters = text.strip_prefix("\x1b[")?;
     let end = parameters.find(|c: char| !c.is_ascii_digit() && c != ';')?;
     parameters[end..].starts_with('m').then(|| &text[..end + 3])

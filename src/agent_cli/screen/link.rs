@@ -8,7 +8,7 @@ use crate::agent_cli::footer;
 use crate::agent_cli::keys::{Press, RawMode};
 use crate::agent_cli::record::Event;
 use crate::agent_cli::select::{Picked, Picker, Routed, Spot};
-use crate::agent_cli::settings::{Delivery, DoubleEscape, MarkdownReads, Settings};
+use crate::agent_cli::settings::{Delivery, DoubleEscape, Settings};
 use crate::agent_cli::style::Style;
 use crate::agent_cli::theme::Watched;
 use scramjet_rs::agent::{
@@ -126,6 +126,7 @@ impl Link {
             double_escape: settings.double_escape != DoubleEscape::Nothing,
             markdown_reads: settings.markdown_reads,
             copy_on_select: settings.copy_on_select,
+            design: settings.look,
         });
     }
     /// The file of the theme in use, to read again when it changes; none for a built-in one.
@@ -242,18 +243,19 @@ pub(in crate::agent_cli) struct Handle {
 impl Handle {
     /// Takes the terminal for the screen, `editor` editing the prompts. Escape and Ctrl-C set
     /// `cancel` while a turn runs; Ctrl+T flips `hide_thinking`. The agent takes the messages
-    /// queued during a turn as `modes` (`steeringMode`, `followUpMode`) say; `!` commands run
-    /// meanwhile run in `root`. Markdown files read show as `markdown_reads` says, and a
-    /// completed mouse selection is copied if `copy_on_select`.
+    /// queued during a turn as the `settings` say (`steeringMode`, `followUpMode`), which also
+    /// say how Markdown files read show, whether a completed mouse selection is copied and how
+    /// the conversation looks; `!` commands run meanwhile run in `root`.
     pub(in crate::agent_cli) fn start(
         editor: Editor,
         hide_thinking: Arc<AtomicBool>,
         cancel: Arc<AtomicBool>,
-        modes: (Delivery, Delivery),
-        markdown_reads: MarkdownReads,
-        copy_on_select: bool,
+        settings: &Settings,
         root: PathBuf,
     ) -> io::Result<Self> {
+        let modes = (settings.steering_mode, settings.follow_up_mode);
+        let (markdown_reads, copy_on_select) = (settings.markdown_reads, settings.copy_on_select);
+        let design = settings.look;
         let (to, messages) = mpsc::channel();
         let (inputs, from) = mpsc::channel();
         let (woken, wake) = io::pipe()?;
@@ -275,6 +277,7 @@ impl Handle {
                 let app = App {
                     markdown_reads,
                     copy_on_select,
+                    design,
                     ..app
                 };
                 app.run(raw, &messages, woken)

@@ -1,6 +1,7 @@
 //! The agent's display calls, kept as events: the full screen keeps the conversation so, and
 //! renders it again from them at its width.
 
+use super::design::Outcome;
 use super::style::Style;
 use super::terminal::Terminal;
 use scramjet_rs::agent::{
@@ -95,6 +96,47 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::Styled(style, text) => {
             let text = ui.styled(*style, text);
             ui.said(&text)
+        }
+    }
+}
+
+/// How each call among `events` went, in the order `replay` shows them: done or failed once
+/// its result came, with how long it ran, else still running.
+pub(super) fn outcomes(events: &[Event]) -> Vec<(Outcome, Option<Duration>)> {
+    let mut found = Vec::new();
+    scan(events, &mut found);
+    found
+}
+
+fn scan(events: &[Event], found: &mut Vec<(Outcome, Option<Duration>)>) {
+    for (index, event) in events.iter().enumerate() {
+        match event {
+            Event::ToolCall(..) => {
+                let rest = &events[index + 1..];
+                let end = (rest
+                    .iter()
+                    .position(|event| matches!(event, Event::ToolCall(..))))
+                .unwrap_or(rest.len());
+                let mut since = None;
+                let mut outcome = (Outcome::Running, None);
+                for event in &rest[..end] {
+                    match event {
+                        Event::ToolRunning(at) => since = Some(*at),
+                        Event::ToolResult(_, _, _, failed, at) => {
+                            let took = since.map(|since| at.saturating_duration_since(since));
+                            outcome = match failed {
+                                true => (Outcome::Failed, took),
+                                false => (Outcome::Done, took),
+                            };
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                found.push(outcome);
+            }
+            Event::Calls(calls) => calls.iter().for_each(|call| scan(call, found)),
+            _ => {}
         }
     }
 }

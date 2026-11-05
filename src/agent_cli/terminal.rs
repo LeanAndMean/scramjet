@@ -1,13 +1,14 @@
 //! The agent's output as text: printed as it streams for `-p` and piped input, with a status
 //! line under it on a terminal, or captured for the full screen to show; and the terminal modes
 //! of a `-p` turn.
+use super::design::{Design, Gutter, Outcome};
 use super::editor::NOTE_TIME;
 use super::highlight::{self, Highlighter};
 use super::interactive::thinking;
 use super::keymap::{self, Binding};
 use super::settings::MarkdownReads;
 use super::style::{self, Style};
-use super::text::{FROM, RULE, Wrap, call_line, clip, printable, visible};
+use super::text::{FROM, RULE, Wrap, call_line, clip, printable, style_at, visible};
 use super::{children, diff, editor, job, markdown};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -20,6 +21,7 @@ use scramjet_rs::agent::{
     StreamProgress, ToolDetail, UserCommand, publication_choices,
 };
 use std::{
+    collections::VecDeque,
     io::{BufRead, IsTerminal, Write},
     sync::{
         Arc, LazyLock, Mutex,
@@ -298,6 +300,67 @@ pub(super) struct Terminal {
     full: bool,
     /// The output marks gutters and wrapped lines for the full screen's copy (`text::FROM`).
     marked: bool,
+    /// How prompts, reasoning, calls and replies look; the classic look but on the full screen.
+    pub(super) design: Design,
+    /// How each call still to be shown went, in turn, and how long it ran (`record::outcomes`),
+    /// for a look whose headings say it.
+    pub(super) outcomes: VecDeque<(Outcome, Option<Duration>)>,
+    /// How the call shown last went.
+    outcome: Outcome,
+    /// What goes before each row of the block streamed now.
+    lead: Option<Lead>,
+}
+
+/// Puts a gutter before each row of streamed text that has text in it, keeping its styles on
+/// after the gutter.
+struct Lead {
+    gutter: Gutter,
+    /// The first row had its gutter.
+    started: bool,
+    /// At the start of a row, before its text.
+    at_start: bool,
+    /// The style sequences on since the last reset.
+    active: String,
+}
+
+impl Lead {
+    fn new(gutter: Gutter) -> Self {
+        Self {
+            gutter,
+            started: false,
+            at_start: true,
+            active: String::new(),
+        }
+    }
+    fn apply(&mut self, text: &str) -> String {
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(c) = rest.chars().next() {
+            if let Some(sequence) = style_at(rest) {
+                match sequence {
+                    style::RESET | "\x1b[m" => self.active.clear(),
+                    _ => self.active += sequence,
+                }
+                out += sequence;
+                rest = &rest[sequence.len()..];
+                continue;
+            }
+            rest = &rest[c.len_utf8()..];
+            if c == '\n' {
+                self.at_start = true;
+            } else if std::mem::take(&mut self.at_start) {
+                let gutter = match std::mem::replace(&mut self.started, true) {
+                    true => &self.gutter.rest,
+                    false => &self.gutter.first,
+                };
+                out += style::RESET;
+                out += gutter;
+                out += &self.active;
+            }
+            out.push(c);
+        }
+        out
+    }
 }
 
 impl Terminal {
@@ -311,7 +374,12 @@ impl Terminal {
         at: Instant,
     ) {
         self.clear();
-        let width = self.width().saturating_sub(2).max(20);
+        let outcome = match failed {
+            true => Outcome::Failed,
+            false => Outcome::Done,
+        };
+        let gutter = self.design.output(outcome, self.marked);
+        let width = self.width().saturating_sub(gutter.columns).max(20);
         let full = self.full;
         let compact = std::mem::take(&mut self.compact);
         let took = (self.tool_started.take()).map(|started| at.saturating_duration_since(started));
@@ -481,16 +549,15 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                 styled(preview(output, shown(Shown::First(lines)), width))
             }
         };
-        let gutter = self.gutter();
-        for row in rows {
-            match row.is_empty() {
-                true => self.err("\n"),
-                false => self.err(&format!("{gutter}{row}\n")),
-            }
+        for (index, row) in rows.iter().enumerate() {
+            let row = gutter.row(index == 0, row);
+            self.err(&format!("{row}\n"));
         }
+        // The other looks say it in the call's heading.
+        let took = took.filter(|_| self.design == Design::Classic);
         if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
             let took = self.dim(&format!("Took {:.1}s", took.as_secs_f64()));
-            self.err(&format!("{gutter}{took}\n"));
+            self.err(&format!("{}{took}\n", gutter.rest));
         }
         // As in Scramjet, a blank line separates each tool block from what follows.
         self.err("\n");
@@ -607,6 +674,10 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             expandable: false,
             full: false,
             marked: false,
+            design: Design::Classic,
+            outcomes: VecDeque::new(),
+            outcome: Outcome::Running,
+            lead: None,
         }
     }
     /// Shows `activity` on the status line now, or only once it lasts a second.
@@ -655,13 +726,6 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         let rows = wrap.push(&text) + &wrap.finish();
         rows.lines().map(str::to_owned).collect()
     }
-    /// The indent of a block under its heading, such as a tool's result under its call.
-    fn gutter(&self) -> String {
-        match self.marked {
-            true => format!("  {FROM}"),
-            false => "  ".into(),
-        }
-    }
     pub(super) fn dim(&self, text: &str) -> String {
         self.styled(style::MUTED, text)
     }
@@ -688,11 +752,21 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                 _ => self.color,
             };
             let base = if kind == Streaming::Reasoning {
-                style::REASONING.get()
+                self.design.reasoning_style().get()
             } else {
                 ""
             };
-            let width = if styled { self.width() } else { 0 };
+            let lead = match kind {
+                Streaming::Reasoning => self.design.reasoning(self.marked),
+                Streaming::Text => self.design.reply(self.marked),
+                Streaming::None => None,
+            };
+            self.lead = lead.filter(|_| styled).map(Lead::new);
+            let width = match (styled, &self.lead) {
+                (false, _) => 0,
+                (true, Some(lead)) => self.width().saturating_sub(lead.gutter.columns).max(10),
+                (true, None) => self.width(),
+            };
             self.markdown = self.markdown(styled, base, width);
             self.wrap = self.markdown_wrapper(width);
             self.streaming = kind;
@@ -750,7 +824,8 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                     true => format!("{}Thinking...{}", style::THINKING_HIDDEN, style::RESET),
                     false => "Thinking...".into(),
                 };
-                self.err(&format!("{marker}\n\n"));
+                let lead = (self.design.reasoning(self.marked)).map_or(String::new(), |g| g.first);
+                self.err(&format!("{lead}{marker}\n\n"));
                 self.streaming = Streaming::Reasoning;
                 self.printed_newlines = 2;
                 self.show("Thinking".into(), true);
@@ -760,6 +835,14 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         self.reasoning_hidden = hide;
     }
     fn print_streamed(&mut self, text: &str) {
+        let led;
+        let text = match &mut self.lead {
+            Some(lead) => {
+                led = lead.apply(text);
+                &led
+            }
+            None => text,
+        };
         if self.streaming == Streaming::Text {
             if let Some(rows) = &mut self.text_rows {
                 *rows += text.matches('\n').count();
@@ -792,6 +875,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         }
         self.printed_newlines = 0;
         self.streaming = Streaming::None;
+        self.lead = None;
     }
     pub(super) fn print_usage(&self, agent: &Agent) {
         eprintln!("{}", self.dim(&self.wrapped(&usage_line(agent))));
@@ -885,14 +969,23 @@ impl AgentUi for Terminal {
         }
         self.text_rows = None;
         if !text.is_empty() {
-            let width = match self.styled_replies() {
-                true => self.width(),
-                false => 0,
+            let lead = self
+                .design
+                .reply(self.marked)
+                .filter(|_| self.styled_replies());
+            let width = match (self.styled_replies(), &lead) {
+                (false, _) => 0,
+                (true, Some(lead)) => self.width().saturating_sub(lead.columns).max(10),
+                (true, None) => self.width(),
             };
             let mut markdown = self.markdown(width > 0, "", width);
             let text = markdown.push(text.trim_end()) + &markdown.finish();
             let mut wrap = self.markdown_wrapper(width);
             let text = wrap.push(&text) + &wrap.finish();
+            let text = match lead {
+                Some(lead) => Lead::new(lead).apply(&text),
+                None => text,
+            };
             self.out(&format!("{text}\n\n"));
         }
     }
@@ -902,7 +995,8 @@ impl AgentUi for Terminal {
         let width = if self.color { self.width() } else { 0 };
         let compact = compact.filter(|_| !self.full);
         self.compact = compact.is_some();
-        let line = match compact {
+        let tool = name;
+        let (name, summary) = match compact {
             // As Scramjet's compact reads: what was read, without its result until expanded.
             Some(compact) => {
                 let (name, read) = match compact {
@@ -914,11 +1008,20 @@ impl AgentUi for Terminal {
                     Some(key) if self.expandable => format!(" ({key} to expand)"),
                     _ => String::new(),
                 };
-                call_line(name, &format!("{read}{hint}"), width, self.marked)
+                (name, format!("{read}{hint}"))
             }
-            None => call_line(name, summary, width, self.marked),
+            None => (name, summary.to_owned()),
         };
-        let line = self.dim(&line);
+        let (outcome, took) = (self.outcomes.pop_front()).unwrap_or((Outcome::Running, None));
+        self.outcome = outcome;
+        let line = match self.design {
+            Design::Classic => self.dim(&call_line(name, &summary, width, self.marked)),
+            design => {
+                let took = (took.filter(|took| tool == "bash" && *took >= Duration::from_secs(1)))
+                    .map(|took| format!("{:.1}s", took.as_secs_f64()));
+                design.heading(name, &summary, outcome, took.as_deref(), width, self.marked)
+            }
+        };
         self.err(&format!("{line}\n"));
     }
     fn tool_running(&mut self, since: Instant) {
@@ -1059,16 +1162,14 @@ impl AgentUi for Terminal {
     /// As Scramjet shows the message in the tool's row: markdown, under the call line.
     fn question(&mut self, message: &str) {
         self.clear();
+        let gutter = self.design.output(self.outcome, self.marked);
         let width = match self.color {
-            true => self.width().saturating_sub(2).max(20),
+            true => self.width().saturating_sub(gutter.columns).max(20),
             false => 0,
         };
-        let gutter = self.gutter();
         for line in self.markdown_rows(message, width) {
-            match line.is_empty() {
-                true => self.err("\n"),
-                false => self.err(&format!("{gutter}{line}\n")),
-            }
+            let line = gutter.row(false, &line);
+            self.err(&format!("{line}\n"));
         }
         self.err("\n");
     }
@@ -1175,10 +1276,11 @@ impl Terminal {
     /// when the results are shown whole.
     /// The rows of a running `subagent` call's children, as its result shows them.
     pub(super) fn running_subagents(&mut self, shown: &Children) {
-        let width = self.width().saturating_sub(2).max(20);
-        let gutter = self.gutter();
+        let gutter = self.design.output(self.outcome, self.marked);
+        let width = self.width().saturating_sub(gutter.columns).max(20);
         for row in children::rows(shown, &self.look(width)) {
-            self.err(&format!("{gutter}{row}\n"));
+            let row = gutter.row(false, &row);
+            self.err(&format!("{row}\n"));
         }
     }
     /// Ends the note about the lines a preview leaves out, as Scramjet's does: `, Ctrl+O to
@@ -1203,15 +1305,15 @@ impl Terminal {
         if let Some((command, include)) = self.command.take() {
             return self.command_block(&command, include, output, None);
         }
-        let width = self.width().saturating_sub(2).max(20);
+        let gutter = self.design.output(self.outcome, self.marked);
+        let width = self.width().saturating_sub(gutter.columns).max(20);
         let shown = match self.full {
             true => Shown::All,
             false => Shown::Last(BASH_LINES),
         };
-        let gutter = self.gutter();
         for row in preview(output.trim_end_matches('\n'), shown, width, "", self.marked) {
-            let row = self.styled(style::STATUS, &row);
-            self.err(&format!("{gutter}{row}\n"));
+            let row = gutter.row(false, &self.styled(style::STATUS, &row));
+            self.err(&format!("{row}\n"));
         }
     }
     /// A command the user ran, in Scramjet's block: between rules colored as it was run with `!`
@@ -1344,9 +1446,34 @@ impl Terminal {
             true => self.width(),
             false => usize::MAX,
         };
-        for row in editor::prompt_rows(prompt, width, self.marked) {
-            self.err(&format!("{row}\n"));
+        let Some(gutter) = self.design.prompt(self.marked) else {
+            for row in editor::prompt_rows(prompt, width, self.marked) {
+                self.err(&format!("{row}\n"));
+            }
+            return;
+        };
+        // The editor's rows, in place of the two columns of its `>` before each.
+        let rows = editor::prompt_rows(
+            prompt,
+            width.saturating_sub(gutter.columns - 2),
+            self.marked,
+        );
+        // Rows of the band alone, which a copy leaves out.
+        let rule = if self.marked {
+            RULE.to_string()
+        } else {
+            String::new()
+        };
+        let band = (self.design.prompt_band())
+            .map_or(String::new(), |band| format!("{}{rule}\n", band.mark()));
+        let mut block = band.clone();
+        for (index, row) in rows.iter().enumerate() {
+            let text = format!("{}{}{}", style::PROMPT_TEXT, &row[2..], style::RESET);
+            block += &gutter.row(index == 0, &text);
+            block.push('\n');
         }
+        block += &band;
+        self.err(&block);
     }
     /// `options` numbered under `title`, as `numbered_choice` asks.
     fn numbered(

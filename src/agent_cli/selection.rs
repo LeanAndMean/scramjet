@@ -3,8 +3,8 @@
 //! shown reversed, copied as displayed but for gutters, rules and the line breaks of wrapping.
 //! Lines are the screen's (`lines`), which hold only style sequences besides the text.
 
-use super::style;
-use super::text::{FROM, JOINED, RULE, SPACE};
+use super::style::{self, Band};
+use super::text::{FROM, JOINED, RULE, SPACE, UNTIL};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -15,10 +15,14 @@ pub(super) struct Line {
     pub(super) shown: String,
     /// The column its copy starts at; the cells before are a gutter.
     from: usize,
+    /// The column its copy ends at, if not its end.
+    until: Option<usize>,
     /// When the next line continues it, what goes between them in a copy.
     joined: Option<String>,
     /// A rule between blocks, which a copy leaves out.
     rule: bool,
+    /// The background it is drawn on across the screen, if not the base.
+    pub(super) band: Option<Band>,
 }
 
 impl Line {
@@ -59,6 +63,7 @@ fn split<'a>(rows: impl Iterator<Item = &'a str>) -> Vec<Line> {
     for line in rows {
         let mut shown = active.clone();
         let (mut column, mut from, mut joined, mut rule) = (0, 0, None::<String>, false);
+        let (mut band, mut until) = (None, None);
         let mut chars = line.chars().peekable();
         while let Some(c) = chars.next() {
             match c {
@@ -86,11 +91,13 @@ fn split<'a>(rows: impl Iterator<Item = &'a str>) -> Vec<Line> {
                 }
                 FROM => from = column,
                 RULE => rule = true,
+                UNTIL => until = Some(column),
                 JOINED => {
                     from = column;
                     joined = Some(String::new());
                 }
                 SPACE => joined.iter_mut().for_each(|joined| joined.push(' ')),
+                c if let Some(marked) = Band::marked(c) => band = Some(marked),
                 c if c.is_control() => {}
                 c => {
                     shown.push(c);
@@ -107,8 +114,10 @@ fn split<'a>(rows: impl Iterator<Item = &'a str>) -> Vec<Line> {
         lines.push(Line {
             shown,
             from,
+            until,
             joined: None,
             rule,
+            band,
         });
     }
     lines
@@ -277,6 +286,7 @@ pub(super) fn text(lines: &[Line], left: usize, right: usize) -> String {
     for (index, line) in lines.iter().enumerate().filter(|(_, line)| !line.rule) {
         let from = if index == 0 { left } else { 0 }.max(line.from);
         let to = if index == last { right } else { usize::MAX };
+        let to = to.min(line.until.unwrap_or(usize::MAX));
         let cut = cut(&line.shown, from, to);
         text += between;
         match &line.joined {

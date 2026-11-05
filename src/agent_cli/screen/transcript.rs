@@ -1,5 +1,6 @@
 //! The conversation the screen shows, in parts that each render on their own.
 
+use crate::agent_cli::design::Design;
 use crate::agent_cli::record::{self, Event};
 use crate::agent_cli::selection::{self, Line};
 use crate::agent_cli::settings::MarkdownReads;
@@ -17,6 +18,7 @@ pub(super) struct Look {
     pub(super) markdown_reads: MarkdownReads,
     /// `style::generation()`: the theme's.
     pub(super) theme: usize,
+    pub(super) design: Design,
 }
 
 /// A line of the conversation by its part, so that it stays in view as parts before it or it
@@ -157,6 +159,8 @@ fn add(events: &mut Vec<Event>, event: Event) {
 fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> Vec<Line> {
     let mut ui = Terminal::capture_shown(look.width, hide_thinking, look.whole);
     ui.markdown_reads = look.markdown_reads;
+    ui.design = look.design;
+    ui.outcomes = record::outcomes(events).into();
     for event in events {
         record::replay(event, &mut ui);
     }
@@ -172,6 +176,8 @@ fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> Vec<L
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_cli::design::Outcome;
+    use crate::agent_cli::style::Band;
     use crate::agent_cli::text::plain;
     use std::time::{Duration, Instant};
 
@@ -183,6 +189,7 @@ mod tests {
             whole,
             markdown_reads: MarkdownReads::Rendered,
             theme: 0,
+            design: Design::Classic,
         }
     }
 
@@ -333,6 +340,202 @@ mod tests {
         assert_eq!(
             selection::text(&lines[failed..=failed], 0, usize::MAX),
             "test agent::tests::co…"
+        );
+    }
+
+    /// A turn that thinks, runs a command that fails after two seconds, and replies, then a
+    /// prompt that leaves a call running; as each look shows it, 40 columns wide, its rows
+    /// without styles and the bands they are on.
+    fn shown_in(design: Design) -> Vec<(String, Option<Band>)> {
+        let hide = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::default();
+        let started = Instant::now();
+        transcript.push(Event::UserPrompt("fix the test".into()));
+        let thought = "Looking at it.\n\n";
+        transcript.push(Event::Progress(StreamProgress::Reasoning(thought.into())));
+        transcript.push(Event::ToolCall("bash".into(), "cargo test".into(), None));
+        transcript.push(Event::ToolRunning(started));
+        let output = "1 failed\n\nCommand exited with code 101";
+        let ended = started + Duration::from_secs(2);
+        let result = Event::ToolResult("bash".into(), output.into(), None, true, ended);
+        transcript.push(result);
+        transcript.push(Event::Progress(StreamProgress::Text("It fails.".into())));
+        transcript.push(Event::Assistant("It fails.".into()));
+        transcript.split();
+        transcript.push(Event::UserPrompt("again".into()));
+        transcript.push(Event::ToolCall("bash".into(), "make".into(), None));
+        transcript.push(Event::ToolRunning(started));
+        transcript.push(Event::ToolOutput("building".into()));
+        let look = Look {
+            design,
+            ..look(40, false)
+        };
+        transcript.render(look, &hide);
+        let lines = transcript.window(0, 100).into_iter();
+        lines.map(|line| (plain(&line.shown), line.band)).collect()
+    }
+
+    fn rows(shown: &[(String, Option<Band>)]) -> Vec<&str> {
+        shown.iter().map(|(row, _)| row.trim_end()).collect()
+    }
+
+    #[test]
+    fn each_look_shows_prompts_reasoning_calls_and_replies_its_own_way() {
+        let classic = shown_in(Design::Classic);
+        assert_eq!(
+            rows(&classic),
+            [
+                "> fix the test",
+                "",
+                "Looking at it.",
+                "",
+                "● bash cargo test",
+                "  1 failed",
+                "  Command exited with code 101",
+                "  Took 2.0s",
+                "",
+                "It fails.",
+                "",
+                "> again",
+                "",
+                "● bash make",
+                "  building",
+                "",
+            ]
+        );
+        assert!(classic.iter().all(|(_, band)| band.is_none()));
+        assert_eq!(
+            rows(&shown_in(Design::Rails)),
+            [
+                "▌ fix the test",
+                "",
+                "┊ Looking at it.",
+                "",
+                "✗ bash cargo test                   2.0s",
+                "│ 1 failed",
+                "│ Command exited with code 101",
+                "",
+                "It fails.",
+                "",
+                "▌ again",
+                "",
+                "○ bash make",
+                "│ building",
+                "",
+            ]
+        );
+        assert_eq!(
+            rows(&shown_in(Design::Margin)),
+            [
+                "   you fix the test",
+                "",
+                " think Looking at it.",
+                "",
+                "  bash cargo test                   2.0s",
+                "     │ 1 failed",
+                "     │ Command exited with code 101",
+                "",
+                "       It fails.",
+                "",
+                "   you again",
+                "",
+                "  bash make",
+                "     │ building",
+                "",
+            ]
+        );
+        // Panels put prompts on a band of their own, and each call on one for how it went.
+        let panels = shown_in(Design::Panels);
+        let (prompt, failed, running) =
+            (Some(Band::Prompt), Some(Band::Failed), Some(Band::Running));
+        assert_eq!(
+            panels
+                .iter()
+                .map(|(row, band)| (row.trim_end(), *band))
+                .collect::<Vec<_>>(),
+            [
+                ("", prompt),
+                (" › fix the test", prompt),
+                ("", prompt),
+                ("", None),
+                ("  Looking at it.", None),
+                ("", None),
+                (" bash  cargo test                2.0s ✗", failed),
+                (" 1 failed", failed),
+                (" Command exited with code 101", failed),
+                ("", None),
+                ("It fails.", None),
+                ("", None),
+                ("", prompt),
+                (" › again", prompt),
+                ("", prompt),
+                ("", None),
+                (" bash  make                           ○", running),
+                (" building", running),
+                ("", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_copy_leaves_out_what_a_look_puts_before_the_rows() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::default();
+        let prompt = "please run the tests,  then say what fails";
+        transcript.push(Event::UserPrompt(prompt.into()));
+        transcript.push(Event::Progress(StreamProgress::Reasoning(
+            "Run them all.".into(),
+        )));
+        let command = "cargo test --offline --no-fail-fast";
+        transcript.push(Event::ToolCall("bash".into(), command.into(), None));
+        let output = "test a ... ok\ntest agent::tests::compaction ... FAILED";
+        let result = Event::ToolResult("bash".into(), output.into(), None, true, Instant::now());
+        transcript.push(result);
+        // As a resumed session shows a reply: whole, not streamed.
+        let reply = "One fails: compaction, in the agent's tests.";
+        transcript.push(Event::Assistant(reply.into()));
+        for design in [Design::Rails, Design::Panels, Design::Margin] {
+            let look = Look {
+                design,
+                ..look(24, true)
+            };
+            transcript.render(look, &hide);
+            let lines = transcript.window(0, 100);
+            assert_eq!(
+                selection::text(&lines[..lines.len() - 1], 0, usize::MAX).trim(),
+                format!("{prompt}\n\nRun them all.\n\n{command}\n{output}\n\n{reply}"),
+                "{design:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn calls_are_found_in_the_order_they_show_with_how_they_went() {
+        let started = Instant::now();
+        let ended = |failed, seconds| {
+            let at = started + Duration::from_secs(seconds);
+            Event::ToolResult("bash".into(), String::new(), None, failed, at)
+        };
+        let call = || Event::ToolCall("bash".into(), "x".into(), None);
+        let events = [
+            call(),
+            Event::ToolRunning(started),
+            ended(true, 1),
+            Event::Calls(vec![
+                vec![call(), ended(false, 0)],
+                Vec::new(),
+                vec![call(), Event::ToolRunning(started)],
+            ]),
+            call(),
+        ];
+        assert_eq!(
+            record::outcomes(&events),
+            [
+                (Outcome::Failed, Some(Duration::from_secs(1))),
+                (Outcome::Done, None),
+                (Outcome::Running, None),
+                (Outcome::Running, None),
+            ]
         );
     }
 }
