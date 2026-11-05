@@ -701,7 +701,11 @@ impl Interactive {
             }
             let (act, index, spot) = match screen.pick_or_act(picker) {
                 Picked::Act(act, index, spot) => (act, index, spot),
-                Picked::Row(_) | Picked::Tab(_) | Picked::Toggle(..) | Picked::Label(_) => {
+                Picked::Row(_)
+                | Picked::Tab(_)
+                | Picked::Toggle(..)
+                | Picked::Label(_)
+                | Picked::Placed(..) => {
                     return screen.dismiss();
                 }
             };

@@ -7,7 +7,7 @@ use crate::agent_cli::editor::{Editor, Note};
 use crate::agent_cli::footer;
 use crate::agent_cli::keys::{Press, RawMode};
 use crate::agent_cli::record::Event;
-use crate::agent_cli::select::{Picked, Picker, Routed};
+use crate::agent_cli::select::{Picked, Picker, Routed, Spot};
 use crate::agent_cli::settings::{Delivery, DoubleEscape, MarkdownReads, Settings};
 use crate::agent_cli::style::Style;
 use scramjet_rs::agent::{
@@ -181,6 +181,14 @@ impl Link {
     /// The row chosen from `picker`, `None` when cancelled.
     pub(in crate::agent_cli) fn pick(&self, picker: Picker) -> Option<usize> {
         self.pick_timed(picker).map(|(row, ..)| row)
+    }
+
+    /// As `pick`, with where the list was when the row was chosen (`Picker::placing`).
+    pub(in crate::agent_cli) fn pick_placed(&self, picker: Picker) -> Option<(usize, Spot)> {
+        match self.ask(Dialog::Pick(Box::new(picker.placing())), None) {
+            Some(Answer::Placed(row, place)) => Some((row, place)),
+            _ => None,
+        }
     }
 
     /// As `pick`, or what one of the list's own keys asked for (`Picker::acting`).

@@ -142,6 +142,8 @@ pub(super) enum Answer {
     Toggled(Toggle, Spot),
     /// Tab in a picker that takes it (`Picker::tabbing`).
     Tabbed(Spot),
+    /// The row chosen with Enter, and where the list was (`Picker::placing`).
+    Placed(usize, Spot),
     /// Shift+L in `/tree`'s list on an entry, with the list as it was, to show again once the
     /// label is given; the screen puts the list in.
     Label(usize, Option<Box<Picker>>),

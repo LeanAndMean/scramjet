@@ -192,7 +192,13 @@ impl Row {
                     "Sent{with} during a turn: how many the model gets when it would stop."
                 );
             }
-            Self::DoubleEscape => "Escape pressed twice on an empty prompt.",
+            Self::DoubleEscape => {
+                return match keymap::key(Binding::Interrupt) {
+                    Some(key) => format!("{key} pressed twice on an empty prompt."),
+                    None => "The interrupt key pressed twice on an empty prompt; it has none now."
+                        .to_owned(),
+                };
+            }
             Self::CopyOnSelect => {
                 let with = with(Binding::Copy, " or ");
                 return format!(

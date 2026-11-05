@@ -225,6 +225,8 @@ pub(super) enum Picked {
     Tab(Spot),
     /// Shift+L in `/tree`, to label the entry, an index into the tree's entries.
     Label(usize),
+    /// The row chosen with Enter in a list that is shown again after it (`Picker::placing`).
+    Placed(usize, Spot),
 }
 
 /// A list for a screen that draws it and passes it the keys; it returns the row chosen with
@@ -242,6 +244,8 @@ pub(super) struct Picker {
     scoping: bool,
     /// Whether Tab ends the list (`tabbing`).
     tabs: bool,
+    /// Whether Enter returns where the list was (`placing`).
+    places: bool,
     /// Said in place of the keys' hint until the next key: what a key did, or why it could not
     /// (`true`: a warning).
     status: Option<(String, bool)>,
@@ -323,6 +327,7 @@ impl Picker {
             acts: false,
             scoping: false,
             tabs: false,
+            places: false,
             status: None,
         }
     }
@@ -340,6 +345,7 @@ impl Picker {
             acts: false,
             scoping: false,
             tabs: false,
+            places: false,
             status: None,
         }
     }
@@ -425,6 +431,13 @@ impl Picker {
     /// rows, as Tab switches between all models and the scope in Scramjet's model selector.
     pub(super) fn tabbing(mut self) -> Self {
         self.tabs = true;
+        self
+    }
+
+    /// Makes Enter end the list with where it was, its query and selection, for the session to
+    /// show it there again (`at`).
+    pub(super) fn placing(mut self) -> Self {
+        self.places = true;
         self
     }
 
@@ -566,6 +579,7 @@ impl Picker {
             acts: false,
             scoping: false,
             tabs: false,
+            places: false,
             status: None,
         }
     }
@@ -652,7 +666,10 @@ impl Picker {
             }
             _ => {}
         }
-        self.list.key(key).map(Picked::Row)
+        match self.list.key(key) {
+            Some(Some(row)) if self.places => Some(Picked::Placed(row, self.spot())),
+            picked => picked.map(Picked::Row),
+        }
     }
 
     fn act(&self, act: Act, row: usize) -> Picked {
@@ -1641,6 +1658,26 @@ mod tests {
         let mut plain_list = picker();
         assert_eq!(plain_list.key(&tab), None);
         assert_eq!(plain_list.key(&key("escape")), Some(Picked::Row(None)));
+    }
+
+    #[test]
+    fn a_placing_list_ends_with_where_it_was_and_shows_there_again() {
+        let texts = ["gpt-6-luna", "gpt-6-terra", "claude-haiku-5-5"].map(String::from);
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
+        let picker = || Picker::search("Models", 10, haystacks(&texts), 0, None, "None", row);
+        let mut list = picker().placing();
+        list.key(&Key::Text("gpt".into()));
+        list.key(&key("down"));
+        let Some(Picked::Placed(1, spot)) = list.key(&key("enter")) else {
+            panic!("not placed");
+        };
+        assert_eq!((spot.query.as_str(), spot.position), ("gpt", 1));
+        let again = picker().at(spot, None).on_row(1);
+        let lines = plain(again.lines((40, 24)));
+        assert_eq!(lines[1..], ["> gpt ", "  gpt-6-luna", "› gpt-6-terra"]);
+        // Cancelling is still cancelling.
+        let mut list = picker().placing();
+        assert_eq!(list.key(&key("escape")), Some(Picked::Row(None)));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 use super::editor::Buffer;
 use super::file_search;
+use super::keymap::{self, Binding};
 use super::text;
 use std::{fs, path::Path};
 use unicode_width::UnicodeWidthStr;
@@ -12,7 +13,8 @@ use unicode_width::UnicodeWidthStr;
 const SLASH_COMMANDS: [(&str, &str); 19] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
-    ("scoped-models", "Enable/disable models for Ctrl+P cycling"),
+    // Shown with the key that cycles in place of "model" (`scoped_models`).
+    ("scoped-models", "Enable/disable models for model cycling"),
     (
         "export",
         "Export session (HTML default, or specify path: .html/.jsonl)",
@@ -67,6 +69,13 @@ pub(super) fn listed(name: &str) -> &str {
         .iter()
         .find(|&&(alias, _)| alias == name)
         .map_or(name, |&(_, listed)| listed)
+}
+
+/// `/scoped-models`' description, as Scramjet's, with the key that cycles now: `Enable/disable
+/// models for Ctrl+P cycling`.
+fn scoped_models() -> Option<String> {
+    keymap::key(Binding::ModelCycleForward)
+        .map(|key| format!("Enable/disable models for {key} cycling"))
 }
 
 /// Rows of the completion list, as Scramjet's autocomplete shows at most.
@@ -131,9 +140,13 @@ impl Completion {
         if typed.contains(char::is_whitespace) {
             return None;
         }
+        let scoped = scoped_models();
         let builtin = SLASH_COMMANDS
             .iter()
-            .map(|&(name, description)| (name, description));
+            .map(|&(name, description)| match name {
+                "scoped-models" => (name, scoped.as_deref().unwrap_or(description)),
+                _ => (name, description),
+            });
         let loaded = loaded
             .iter()
             .map(|(name, description)| (&**name, &**description));

@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.8.1 — /hotkeys keeps your search
+
+### Fixed
+
+- After a change, `/hotkeys` shows again with the search you typed, its matches and the action you changed selected, rather than the whole list.
+- The last texts naming default keys name yours: Installed's notes (`Enter opens …`, `Enter removes it once you confirm`, `Enter opens it or forgets the approval`), `/scoped-models`' description in the command list (`Ctrl+P cycling`) and the Escape twice setting's description.
+
 ## 0.8.0 — Change keys in /hotkeys
 
 ### Added

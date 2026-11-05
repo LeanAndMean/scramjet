@@ -319,6 +319,7 @@ impl App {
                 Picked::Act(act, row, place) => Answer::Acted(act, row, place),
                 Picked::Toggle(toggle, place) => Answer::Toggled(toggle, place),
                 Picked::Tab(place) => Answer::Tabbed(place),
+                Picked::Placed(row, place) => Answer::Placed(row, place),
                 Picked::Label(entry) => Answer::Label(entry, None),
             }),
             Shown::Approve(_) => match key {

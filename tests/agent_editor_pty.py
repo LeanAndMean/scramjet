@@ -945,7 +945,7 @@ def remapped_keys(read, until, send, output):
     on_screen('Thinking blocks: hidden')
     # `/hotkeys` lists the keys in use, under each action's id and default keys.
     send(b'/hotkeys\r')
-    on_screen('Keyboard shortcuts  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc close')
+    on_screen('Keyboard shortcuts  \u2191\u2193 move \u00b7 F6 change \u00b7 Esc close')
     send(b'queue follow')
     rows = on_screen('app.message.followUp, by default Alt+Enter')
     assert any(re.fullmatch('\u203a Ctrl\\+Q +Queue follow-up message \\(or send\\)', row) for row in rows), rows
@@ -960,6 +960,25 @@ def remapped_keys(read, until, send, output):
               'Ctrl+R rename \u00b7 F4 delete')
     send(b'\x1b')
     on_screen('Resume session', gone=True)
+    # And so does the prose: the command list's, and Installed's notes.
+    send(b'/scoped')
+    on_screen('/scoped-models  Enable/disable models for F7 cycling')
+    send(b'\x7f' * 7)
+    on_screen('/scoped-models', gone=True)
+    send(b'/settings\r')
+    on_screen('Settings  \u2191\u2193 move \u00b7 F6 change')
+    send(b'\x1b[A')
+    on_screen('\u203a Installed')
+    send(b'\x1b[17~')
+    rows = on_screen('Installed  \u2191\u2193 move \u00b7 F6 edit \u00b7 Esc back')
+    title = next(at for at, row in enumerate(rows) if row.startswith('Installed  '))
+    note = ' '.join(row.strip() for row in rows[rows.index('', title) + 1:]).strip()
+    assert note.endswith('"hyper+l" is no key; ignored F6 opens %s.'
+                         % os.path.join(keys_home, 'scramjet-rs', 'keybindings.json')), rows
+    send(b'\x1b')
+    on_screen('Settings  \u2191\u2193 move')
+    send(b'\x1b')
+    on_screen('Settings  \u2191\u2193 move', gone=True)
     send(b'\x03')
     on_screen('Ctrl+C again or Ctrl+X to exit')
     send(b'\x18')
@@ -1104,7 +1123,8 @@ run([], hidden_from_the_start, serve_quiet_reasoning(), variables={'XDG_CONFIG_H
 keys_home = config_home('keys')
 with open(os.path.join(keys_home, 'scramjet-rs', 'keybindings.json'), 'w') as file:
     json.dump({'app.message.followUp': 'ctrl+q', 'app.thinking.toggle': ['f2'], 'app.model.select': 'hyper+l',
-               'app.exit': 'ctrl+x', 'app.session.delete': 'f4'}, file)
+               'app.exit': 'ctrl+x', 'app.session.delete': 'f4', 'tui.select.confirm': ['f6', 'enter'],
+               'app.model.cycleForward': 'f7'}, file)
 run([], remapped_keys, serve_replies([(['Reply one.'], 'Reply one.')]), variables={'XDG_CONFIG_HOME': keys_home},
     columns=100, rows=40)
 
@@ -1140,6 +1160,9 @@ def changed_keys(read, until, send, output):
     send(b'\x11')
     rows = on_screen('Keyboard shortcuts  Saved in ')
     assert any(re.fullmatch('\u203a Ctrl\\+Q +Queue follow-up message \\(or send\\)', row) for row in rows), rows
+    # The list shows again as it was left: its query, the rows it matches, the row changed.
+    assert any(row.startswith('> queue follow') for row in rows), rows
+    assert not any('Move cursor up' in row for row in rows), rows
     assert json.load(open(keys_file)) == {'app.message.followUp': 'ctrl+q'}
     send(b'\x1b')
     on_screen('Keyboard shortcuts', gone=True)

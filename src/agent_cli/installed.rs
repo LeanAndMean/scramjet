@@ -1,5 +1,6 @@
 //! `/settings`' Installed: what the session loaded, each with where it comes from, and what is
 //! wrong there, so that the user can find and fix it. Launch says at most one line about it.
+use super::keymap::{self, Binding};
 use scramjet_rs::agent::{
     AgentSource, Command, Installed, Origin, Problem, ProblemFile, ProjectApproval, Skill,
     shortened,
@@ -153,27 +154,35 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
                     "In your agent directory.".to_owned()
                 }
                 AgentSource::Project(approval) => {
+                    let enter = keymap::key(Binding::SelectConfirm);
+                    let opens = |key: &String| format!("{key} opens it or forgets the approval");
                     let (state, from) = match approval {
                         ProjectApproval::Approved => (
                             "approved",
-                            "In this project's .scramjet/agents. You approved running this \
-                             project's agents with this file as it is; Enter opens it or forgets \
-                             the approval.",
+                            format!(
+                                "In this project's .scramjet/agents. You approved running this \
+                                 project's agents with this file as it is{}.",
+                                enter.map_or_else(String::new, |key| format!("; {}", opens(&key)))
+                            ),
                         ),
                         ProjectApproval::Changed => (
                             "changed since approved",
-                            "In this project's .scramjet/agents, changed since you approved \
-                             running this project's agents: a subagent call naming one asks \
-                             again. Enter opens it or forgets the approval.",
+                            format!(
+                                "In this project's .scramjet/agents, changed since you approved \
+                                 running this project's agents: a subagent call naming one asks \
+                                 again.{}",
+                                enter.map_or_else(String::new, |key| format!(" {}.", opens(&key)))
+                            ),
                         ),
                         ProjectApproval::NotApproved => (
                             "not approved",
                             "In this project's .scramjet/agents, not approved: a subagent call \
-                             naming one of this project's agents asks before it runs.",
+                             naming one of this project's agents asks before it runs."
+                                .to_owned(),
                         ),
                     };
                     columns.extend(["project".to_owned(), state.to_owned()]);
-                    from.to_owned()
+                    from
                 }
             };
             let note = format!("{}\n{from} {}", shown(&agent.path), agent.description);
@@ -293,10 +302,14 @@ fn problem_row(problem: &Problem, settings: Option<&Path>) -> Row {
         Some(ProblemFile::Settings) => settings,
         None => None,
     };
-    let action = file.and_then(|file| match broken_link(file) {
-        Some(_) => Some("A link that leads nowhere: Enter removes it once you confirm.".to_owned()),
-        None if file.is_file() => Some(format!("Enter opens {}.", shown(file))),
-        None => None,
+    let enter = keymap::key(Binding::SelectConfirm);
+    let action = file.and_then(|file| match (broken_link(file), enter) {
+        (Some(_), Some(key)) => Some(format!(
+            "A link that leads nowhere: {key} removes it once you confirm."
+        )),
+        (Some(_), None) => Some("A link that leads nowhere.".to_owned()),
+        (None, Some(key)) if file.is_file() => Some(format!("{key} opens {}.", shown(file))),
+        (None, _) => None,
     });
     match action {
         Some(action) => {

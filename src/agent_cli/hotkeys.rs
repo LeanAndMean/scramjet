@@ -92,14 +92,15 @@ impl Rows {
 
 impl Interactive {
     /// `/hotkeys`: on the full screen, every shortcut in a list to search, where Enter changes an
-    /// action's keys; else, or without a settings file to save them beside, the list printed.
+    /// action's keys, the list then showing again with its query and the row; else, or without a
+    /// settings file to save them beside, the list printed.
     pub(super) fn hotkeys(&mut self) {
         let settings = self.settings.path().map(Path::to_path_buf);
         let (Some(_), Some(settings)) = (&self.screen, settings) else {
             let text = printed(&self.ui, self.settings.path());
             return self.say(text.trim_end());
         };
-        let mut at = None;
+        let mut place: Option<(Spot, usize)> = None;
         let mut status = None;
         loop {
             let Some(screen) = &self.screen else {
@@ -107,27 +108,26 @@ impl Interactive {
             };
             let mut rows = Rows::now();
             let texts = std::mem::take(&mut rows.texts);
-            let row = at.unwrap_or(1);
             let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
             let picker = Picker::search(
                 "Keyboard shortcuts",
                 visible,
                 texts,
-                row,
+                1,
                 None,
                 "No matching shortcut",
                 |index, width| rows.shown(index, width),
             );
-            let picker = (picker.in_order().headed(rows.headings.clone()))
-                .noting(select::hint("change", &[], "close"), rows.notes.clone());
-            let spot = Spot {
-                position: row,
-                ..Spot::default()
-            };
-            let Some(index) = screen.pick(picker.at(spot, status.take()).held()) else {
+            let mut picker = (picker.in_order().headed(rows.headings.clone()))
+                .noting(select::hint("change", &[], "close"), rows.notes.clone())
+                .held();
+            if let Some((spot, index)) = place.take() {
+                picker = picker.at(spot, status.take()).on_row(index);
+            }
+            let Some((index, spot)) = screen.pick_placed(picker) else {
                 break;
             };
-            at = Some(index);
+            place = Some((spot, index));
             if let Some(binding) = rows.bindings[index] {
                 status = self.change_keys(&settings, binding);
             }

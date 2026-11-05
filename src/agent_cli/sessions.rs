@@ -190,8 +190,8 @@ impl Interactive {
                     spot = Some((at, None));
                     continue;
                 }
-                // Not keys of this list (`Picker::tabbing`, `Picker::tree`).
-                select::Picked::Tab(_) | select::Picked::Label(_) => {
+                // Not keys of this list (`Picker::tabbing`, `Picker::tree`, `Picker::placing`).
+                select::Picked::Tab(_) | select::Picked::Label(_) | select::Picked::Placed(..) => {
                     screen.dismiss();
                     return None;
                 }
