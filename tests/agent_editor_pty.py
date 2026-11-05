@@ -664,7 +664,7 @@ def first(read, until, send, output):
     send(b'\x03')
     ending(read, output, EMPTY)
     send(b'\x03')
-    on_screen('Ctrl-C again')
+    on_screen('Ctrl+C again')
     send(b'\x03')
 
 
@@ -950,7 +950,15 @@ def remapped_keys(read, until, send, output):
     rows = on_screen('Queue follow-up message')
     assert any(row.strip() == 'Ctrl+Q          Queue follow-up message (or send)' for row in rows), rows
     assert any(row.strip() == 'F2              Toggle thinking block visibility' for row in rows), rows
-    send(b'\x04')
+    # The hints name the keys in use.
+    send(b'/resume\r')
+    on_screen('Resume session (threaded)  Ctrl+S sort \u00b7 Ctrl+N named \u00b7 Ctrl+P path \u00b7 '
+              'Ctrl+R rename \u00b7 F4 delete')
+    send(b'\x1b')
+    on_screen('Resume session', gone=True)
+    send(b'\x03')
+    on_screen('Ctrl+C again or Ctrl+X to exit')
+    send(b'\x18')
 
 
 def hidden_from_the_start(read, until, send, output):
@@ -1091,7 +1099,8 @@ assert json.load(open(settings_path(hiding))) == {'hideThinkingBlock': True}
 run([], hidden_from_the_start, serve_quiet_reasoning(), variables={'XDG_CONFIG_HOME': hiding})
 keys_home = config_home('keys')
 with open(os.path.join(keys_home, 'scramjet-rs', 'keybindings.json'), 'w') as file:
-    json.dump({'app.message.followUp': 'ctrl+q', 'app.thinking.toggle': ['f2'], 'app.model.select': 'hyper+l'}, file)
+    json.dump({'app.message.followUp': 'ctrl+q', 'app.thinking.toggle': ['f2'], 'app.model.select': 'hyper+l',
+               'app.exit': 'ctrl+x', 'app.session.delete': 'f4'}, file)
 run([], remapped_keys, serve_replies([(['Reply one.'], 'Reply one.')]), variables={'XDG_CONFIG_HOME': keys_home},
     columns=100, rows=40)
 run([], running_counts_seconds, calling)
@@ -1723,7 +1732,7 @@ def scoped_models_list(read, until, send, output):
     rows = on_screen('GPT-6 Terra \u00b7 1 of 3 on, for this session until Ctrl+S saves them')
     text = '\n'.join(rows)
     assert '\u203a gpt-6-terra [openai] \u2713\n  gpt-6-luna [openai] \u2717' in text, text
-    assert rows[-1] == "  Ctrl+A/Ctrl+X: all shown on/off \u00b7 Ctrl+P: its provider's \u00b7 Alt+\u2191\u2193: move it", rows
+    assert rows[-1] == "  Ctrl+A/X: all shown on/off \u00b7 Ctrl+P: its provider's \u00b7 Alt+\u2191\u2193: move it", rows
     # A query shows those it matches; Enter switches one on after those on.
     send(b'luna\r')
     on_screen('GPT-6 Luna \u00b7 2 of 3 on')
@@ -2691,7 +2700,7 @@ def next_steps(read, until, send, output):
     rows = on_screen('Select next step')
     text = '\n'.join(rows)
     for expected in ['\u2192 0: /flow:step two', 'Do the second.', '1: /flow:done',
-                     'model: GPT-6 Luna (gpt-6-luna) \u00b7 \u2190/\u2192 change',
+                     'model: GPT-6 Luna (gpt-6-luna) \u00b7 \u2190\u2192 change',
                      'effort: medium \u00b7 Shift+Tab cycle']:
         assert expected in text, (expected, text)
     # Right chooses the model the step runs with, Shift+Tab its effort, among the model's levels.
@@ -3433,7 +3442,7 @@ def fullscreen_lists(read, until, send, output):
     send(b'\x1b[A\r')
     on_screen('Chose alpha.')
     send(b'\x03')
-    on_screen('Ctrl-C again')
+    on_screen('Ctrl+C again')
     send(b'\x03')
 
 
@@ -3618,17 +3627,17 @@ def fullscreen_mouse(read, until, send, output):
     read(.3)
     assert b'\x1b[7m' not in output[copied:], 'still selected'
     rows = shown()
-    assert '6 more lines below' in '\n'.join(rows) and 'Ctrl-C again' not in '\n'.join(rows), rows
+    assert '6 more lines below' in '\n'.join(rows) and 'Ctrl+C again' not in '\n'.join(rows), rows
     # A click selects nothing; Escape lets a selection go and goes back to the end.
     send(b'\x1b[<0;3;3M\x1b[<0;3;3m\x03')
-    rows = on_screen('Ctrl-C again')
+    rows = on_screen('Ctrl+C again')
     # The note keeps its room, and how far the view is from the end is cut short.
-    assert rows[-3] == 'Ctrl-C again or Ctrl-D to exit' + ' ' * 27 + '\u21936', rows
+    assert rows[-3] == 'Ctrl+C again or Ctrl+D to exit' + ' ' * 27 + '\u21936', rows
     send(b'\x1b[<0;1;3M\x1b[<32;4;3M\x1b[<0;4;3m\x1b')
     on_screen('\u21936', gone=True)
     # The next key the editor takes lets the note go.
     send(b'\x15')
-    on_screen('Ctrl-C again', gone=True)
+    on_screen('Ctrl+C again', gone=True)
     # In the last column, beside the conversation's rows and not the dock's: at the end, the thumb
     # at the bottom, sized to the share shown.
     at_end = bar()

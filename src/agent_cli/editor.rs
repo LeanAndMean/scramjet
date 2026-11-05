@@ -3,7 +3,7 @@
 
 use super::completion::{Completion, Kind, Lookup};
 use super::file_search;
-use super::keymap::Binding;
+use super::keymap::{self, Binding};
 use super::keys::Key;
 use super::text::{FROM, JOINED, SPACE};
 use rustix::termios;
@@ -891,13 +891,13 @@ impl Draft {
     }
 
     /// The status row's note: how to exit after a first Ctrl-C, or the note set, while it lasts.
-    pub(super) fn note(&self) -> Option<&str> {
+    pub(super) fn note(&self) -> Option<String> {
         if self.exit_armed {
-            return Some(EXIT_HINT);
+            return Some(exit_hint());
         }
         match &self.note {
-            Some((Note::Error(text), _)) => Some(text),
-            Some((Note::Info(text), at)) if at.elapsed() < NOTE_TIME => Some(text),
+            Some((Note::Error(text), _)) => Some(text.clone()),
+            Some((Note::Info(text), at)) if at.elapsed() < NOTE_TIME => Some(text.clone()),
             _ => None,
         }
     }
@@ -945,7 +945,14 @@ impl Draft {
     }
 }
 
-const EXIT_HINT: &str = "Ctrl-C again or Ctrl-D to exit";
+fn exit_hint() -> String {
+    match (keymap::key(Binding::Clear), keymap::key(Binding::Exit)) {
+        (Some(clear), Some(exit)) => format!("{clear} again or {exit} to exit"),
+        (Some(clear), None) => format!("{clear} again to exit"),
+        (None, Some(exit)) => format!("{exit} to exit"),
+        (None, None) => "/exit to exit".to_owned(),
+    }
+}
 
 /// As Scramjet reports a Ctrl+T.
 pub(super) fn thinking_note(hidden: bool) -> &'static str {
@@ -1097,10 +1104,10 @@ mod tests {
         let mut editor = prompt_editor(Vec::new());
         let mut draft = editor.draft(String::new());
         draft.set_note(Note::Info("Copied".into()));
-        assert_eq!(draft.note(), Some("Copied"));
+        assert_eq!(draft.note().as_deref(), Some("Copied"));
         // Keys that leave the prompt as it is keep it.
         type_in(&mut editor, &mut draft, b"\x1b[5~");
-        assert_eq!(draft.note(), Some("Copied"));
+        assert_eq!(draft.note().as_deref(), Some("Copied"));
         type_in(&mut editor, &mut draft, b"a");
         assert_eq!(draft.note(), None);
         let set = |draft: &mut Draft, note, ago| {
@@ -1113,12 +1120,15 @@ mod tests {
             Note::Error("Copy failed".into()),
             NOTE_TIME * 10,
         );
-        assert_eq!(draft.note(), Some("Copy failed"));
+        assert_eq!(draft.note().as_deref(), Some("Copy failed"));
         type_in(&mut editor, &mut draft, b"\x7f");
         assert_eq!(draft.note(), None);
         // The exit's note lasts as long as the second Ctrl-C would exit.
         type_in(&mut editor, &mut draft, b"\x15\x03");
-        assert_eq!(draft.note(), Some(EXIT_HINT));
+        assert_eq!(
+            draft.note().as_deref(),
+            Some("Ctrl+C again or Ctrl+D to exit")
+        );
         type_in(&mut editor, &mut draft, b"b");
         assert_eq!(draft.note(), None);
     }

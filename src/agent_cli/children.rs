@@ -25,7 +25,7 @@ pub(super) struct Look {
     pub(super) color: bool,
     pub(super) marked: bool,
     pub(super) full: bool,
-    pub(super) hint: &'static str,
+    pub(super) hint: String,
 }
 
 /// The rows showing `children`, running or ended.
@@ -447,7 +447,7 @@ mod tests {
             color: false,
             marked: false,
             full,
-            hint: ", Ctrl+O to expand",
+            hint: ", Ctrl+O to expand".to_owned(),
         };
         rows(children, &look)
     }
@@ -700,7 +700,7 @@ mod tests {
             color: true,
             marked: true,
             full: true,
-            hint: "",
+            hint: String::new(),
         };
         let rows = rows(&single, &look);
         assert!(

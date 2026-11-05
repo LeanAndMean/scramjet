@@ -1,7 +1,8 @@
 //! What each key does: every action with its id and keys, Scramjet's where the action is
 //! Scramjet's, and the user's `keybindings.json` beside the settings, in Scramjet's format, which
 //! gives an action other keys. Each part asks whether a key means one of its actions
-//! (`Key::is`), so one key can mean one thing in the editor and another in a list.
+//! (`Key::is`), so one key can mean one thing in the editor and another in a list, and the hints
+//! name the keys in use.
 
 use super::keys::{ALT, CTRL, Code, Press, SHIFT};
 use scramjet_rs::agent::Problem;
@@ -9,7 +10,7 @@ use serde_json::Value;
 use std::{
     io,
     path::{Path, PathBuf},
-    sync::{LazyLock, PoisonError, RwLock},
+    sync::{LazyLock, PoisonError, RwLock, RwLockReadGuard},
 };
 
 pub(super) const FILE: &str = "keybindings.json";
@@ -237,6 +238,36 @@ impl Keymap {
         self.0[binding as usize].contains(&press)
     }
 
+    /// The first key of each of `bindings` that has any, named together as hints do: `Ctrl+O`;
+    /// arrows with the same modifiers as `↑↓` or `Ctrl+←→`, other keys with the same ones as
+    /// `Ctrl+D/T/U`, else `Ctrl+O/Ctrl+Shift+O`; `None` when none has a key.
+    fn hinted(&self, bindings: &[Binding]) -> Option<String> {
+        let presses: Vec<Press> = (bindings.iter())
+            .filter_map(|&binding| self.0[binding as usize].first().copied())
+            .collect();
+        let first = *presses.first()?;
+        let shared =
+            presses.len() > 1 && (presses.iter()).all(|press| press.modifiers == first.modifiers);
+        if shared {
+            let prefix = modifiers(first.modifiers);
+            let arrows: Option<String> = presses.iter().map(|press| arrow(press.code)).collect();
+            if let Some(arrows) = arrows {
+                return Some(prefix + &arrows);
+            }
+            if first.modifiers != 0 {
+                let names: Vec<_> = presses
+                    .iter()
+                    .map(|press| named(press.code, true))
+                    .collect();
+                return Some(prefix + &names.join("/"));
+            }
+        }
+        let names: Vec<_> = (presses.iter())
+            .map(|press| modifiers(press.modifiers) + &named(press.code, true))
+            .collect();
+        Some(names.join("/"))
+    }
+
     /// The keymap `text` gives, Scramjet's: an object of actions' ids, each with a key or a list
     /// of keys (an empty list leaves the action without any); what is wrong in it, each of those
     /// actions keeping its default keys.
@@ -289,12 +320,34 @@ impl Keymap {
 
 static CURRENT: LazyLock<RwLock<Keymap>> = LazyLock::new(|| RwLock::new(Keymap::defaults()));
 
+fn current() -> RwLockReadGuard<'static, Keymap> {
+    CURRENT.read().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Whether `press` is one of `binding`'s keys.
 pub(super) fn bound(binding: Binding, press: Press) -> bool {
-    CURRENT
-        .read()
-        .unwrap_or_else(PoisonError::into_inner)
-        .has(binding, press)
+    current().has(binding, press)
+}
+
+/// `binding`'s first key as hints name it, `Ctrl+O`; `None` when it has none.
+pub(super) fn key(binding: Binding) -> Option<String> {
+    current().hinted(&[binding])
+}
+
+/// The first keys of `bindings` named together as hints do: `↑↓`, `Ctrl+D/T/U`.
+pub(super) fn keys(bindings: &[Binding]) -> Option<String> {
+    current().hinted(bindings)
+}
+
+/// A hint's part, `↑↓ move`: `bindings`' keys and what they do; `None` without keys.
+pub(super) fn part(bindings: &[Binding], what: &str) -> Option<String> {
+    keys(bindings).map(|keys| format!("{keys} {what}"))
+}
+
+/// A hint of the parts that have keys: `↑↓ move · Enter select · Esc cancel`.
+pub(super) fn hint(parts: impl IntoIterator<Item = Option<String>>) -> String {
+    let parts: Vec<_> = parts.into_iter().flatten().collect();
+    parts.join(" · ")
 }
 
 /// The keybindings file, beside the settings file.
@@ -374,17 +427,28 @@ pub(super) fn parse(name: &str) -> Option<Press> {
 
 /// A key as `/hotkeys` shows it: `Ctrl+Shift+P`, `Page Up`, `Shift+L`.
 pub(super) fn shown(press: Press) -> String {
-    let mut text = String::new();
-    for (bit, name) in [(CTRL, "Ctrl+"), (SHIFT, "Shift+"), (ALT, "Alt+")] {
-        if press.modifiers & bit != 0 {
-            text.push_str(name);
-        }
-    }
-    match press.code {
-        Code::Char(' ') => text.push_str("Space"),
-        Code::Char(c) => text.push(c.to_ascii_uppercase()),
-        Code::F(n) => text.push_str(&format!("F{n}")),
-        code => text.push_str(match code {
+    modifiers(press.modifiers) + &named(press.code, false)
+}
+
+/// The modifiers' part of a key's name: `Ctrl+Shift+`.
+fn modifiers(bits: u8) -> String {
+    [(CTRL, "Ctrl+"), (SHIFT, "Shift+"), (ALT, "Alt+")]
+        .into_iter()
+        .filter(|&(bit, _)| bits & bit != 0)
+        .map(|(_, name)| name)
+        .collect()
+}
+
+/// A key's name without its modifiers, `short` as hints have it: `Esc`, `PgUp`, `PgDn`.
+fn named(code: Code, short: bool) -> String {
+    match code {
+        Code::Char(' ') => "Space".to_owned(),
+        Code::Char(c) => c.to_ascii_uppercase().to_string(),
+        Code::F(n) => format!("F{n}"),
+        Code::Escape if short => "Esc".to_owned(),
+        Code::PageUp if short => "PgUp".to_owned(),
+        Code::PageDown if short => "PgDn".to_owned(),
+        code => match code {
             Code::Enter => "Enter",
             Code::Tab => "Tab",
             Code::Escape => "Escape",
@@ -399,9 +463,20 @@ pub(super) fn shown(press: Press) -> String {
             Code::Down => "Down",
             Code::Left => "Left",
             _ => "Right",
-        }),
+        }
+        .to_owned(),
     }
-    text
+}
+
+/// An arrow key's arrow, as hints show arrows together.
+fn arrow(code: Code) -> Option<char> {
+    match code {
+        Code::Up => Some('↑'),
+        Code::Down => Some('↓'),
+        Code::Left => Some('←'),
+        Code::Right => Some('→'),
+        _ => None,
+    }
 }
 
 /// `binding`'s keys as `/hotkeys` shows them: `Home / Ctrl+A`; `(none)` without any.
@@ -419,7 +494,7 @@ fn shown_keys(keymap: &Keymap, binding: Binding) -> String {
 /// What `/hotkeys` lists: under each heading, each action's keys and what it does, with the keys
 /// that are not actions of their own (Escape twice, `/` and `!` at the prompt) and the mouse's.
 pub(super) fn listing() -> Vec<(&'static str, Vec<(String, &'static str)>)> {
-    let keymap = CURRENT.read().unwrap_or_else(PoisonError::into_inner);
+    let keymap = current();
     let mut sections: Vec<_> = (SECTIONS.iter())
         .map(|&(section, heading)| {
             let rows: Vec<_> = (DEFINITIONS.iter())
@@ -506,6 +581,44 @@ mod tests {
         for name in ["", "ctrl+", "hyper+a", "f13", "ab", "ctrl+é"] {
             assert_eq!(parse(name), None, "{name}");
         }
+    }
+
+    #[test]
+    fn hints_name_each_actions_first_key_and_keys_alike_together() {
+        let keymap = Keymap::defaults();
+        let hinted = |keymap: &Keymap, bindings: &[Binding]| keymap.hinted(bindings);
+        let filters = [
+            B::TreeFilterDefault,
+            B::TreeFilterNoTools,
+            B::TreeFilterUserOnly,
+        ];
+        let cases: [(&[Binding], &str); 7] = [
+            (&[B::SelectUp, B::SelectDown], "↑↓"),
+            (&[B::TreeFoldOrUp, B::TreeUnfoldOrDown], "Ctrl+←→"),
+            (&filters, "Ctrl+D/T/U"),
+            (
+                &[B::TreeFilterCycleForward, B::TreeFilterCycleBackward],
+                "Ctrl+O/Ctrl+Shift+O",
+            ),
+            (&[B::SelectConfirm, B::SelectCancel], "Enter/Esc"),
+            (&[B::PageDown], "PgDn"),
+            (&[B::Dequeue], "Alt+Up"),
+        ];
+        for (bindings, hint) in cases {
+            assert_eq!(hinted(&keymap, bindings).as_deref(), Some(hint));
+        }
+        // The user's keys, and actions left without any.
+        let (keymap, _) = Keymap::read(
+            r#"{"tui.select.up": ["ctrl+k", "up"], "tui.select.down": [],
+                "app.message.dequeue": "ctrl+q", "app.tree.filter.noTools": []}"#,
+        );
+        assert_eq!(
+            hinted(&keymap, &[B::SelectUp, B::SelectDown]).as_deref(),
+            Some("Ctrl+K")
+        );
+        assert_eq!(hinted(&keymap, &[B::SelectDown]), None);
+        assert_eq!(hinted(&keymap, &[B::Dequeue]).as_deref(), Some("Ctrl+Q"));
+        assert_eq!(hinted(&keymap, &filters).as_deref(), Some("Ctrl+D/U"));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! `/branch`, `/clone` and `/tree`.
 use super::fuzzy::Haystack;
 use super::interactive::{Interactive, model_line, saved_line};
+use super::keymap::{self, Binding};
 use super::screen;
 use super::text::{clip, one_line};
 use super::{editor, select, style, tree};
@@ -9,8 +10,15 @@ use scramjet_rs::agent::{AgentError, Navigated, Removal, SessionInfo, shortened}
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
-const RESUME_KEYS: &str =
-    "Ctrl+S sort · Ctrl+N named · Ctrl+P path · Ctrl+R rename · Ctrl+D delete";
+fn resume_keys() -> String {
+    keymap::hint([
+        keymap::part(&[Binding::SessionToggleSort], "sort"),
+        keymap::part(&[Binding::SessionToggleNamedFilter], "named"),
+        keymap::part(&[Binding::SessionTogglePath], "path"),
+        keymap::part(&[Binding::SessionRename], "rename"),
+        keymap::part(&[Binding::SessionDelete], "delete"),
+    ])
+}
 
 impl Interactive {
     /// `/resume`: chooses a session to continue in, by its number with piped input. Returns
@@ -134,13 +142,21 @@ impl Interactive {
                 true => format!("Resume session (named, {})", sort.label()),
                 false => format!("Resume session ({})", sort.label()),
             };
-            let none = match named_only {
-                true => "No named sessions (Ctrl+N shows all)",
-                false => "No matching sessions",
+            let none = match keymap::key(Binding::SessionToggleNamedFilter) {
+                _ if !named_only => "No matching sessions".to_owned(),
+                Some(key) => format!("No named sessions ({key} shows all)"),
+                None => "No named sessions".to_owned(),
             };
-            let picker =
-                select::Picker::search(&title, select::VISIBLE, texts, initial, current, none, row);
-            let mut picker = picker.noting(RESUME_KEYS, Vec::new()).acting().held();
+            let picker = select::Picker::search(
+                &title,
+                select::VISIBLE,
+                texts,
+                initial,
+                current,
+                &none,
+                row,
+            );
+            let mut picker = picker.noting(resume_keys(), Vec::new()).acting().held();
             match sort {
                 Sort::Threaded => {
                     let tree = sessions.iter().map(|(_, tree)| tree.clone()).collect();

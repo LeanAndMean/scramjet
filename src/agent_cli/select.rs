@@ -5,7 +5,7 @@
 
 use super::editor::terminal_size;
 use super::fuzzy::{self, Haystack};
-use super::keymap::Binding;
+use super::keymap::{self, Binding};
 use super::keys::Key;
 use super::settings::scramjet_level;
 use super::style::{self, Style};
@@ -17,10 +17,6 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Rows shown at once, as in Scramjet's selectors other than its tree.
 pub(super) const VISIBLE: usize = 10;
-pub(super) const HINT: &str = "↑↓ move · Enter select · Esc cancel";
-const TREE_HINT: &str = "↑↓ move · ←→ page · Ctrl+←→ fold/branch · Shift+L label · \
-     Ctrl+D/T/U/L/A filters (Ctrl+O cycle) · Shift+T label time · Esc cancel";
-const CONFIRM_DELETE: &str = "Delete session? Enter confirm · Esc cancel";
 /// The tree's filters' actions; `None`: cycling through them.
 const TREE_FILTERS: [(Binding, Option<Filter>); 7] = [
     (Binding::TreeFilterDefault, Some(Filter::Default)),
@@ -31,6 +27,48 @@ const TREE_FILTERS: [(Binding, Option<Filter>); 7] = [
     (Binding::TreeFilterCycleForward, None),
     (Binding::TreeFilterCycleBackward, None),
 ];
+/// A list's hint: `↑↓ move · Enter {confirm}`, then `others`' keys, then `Esc {cancel}`.
+pub(super) fn hint(confirm: &str, others: &[(Binding, &str)], cancel: &str) -> String {
+    let others = (others.iter()).map(|&(binding, what)| keymap::part(&[binding], what));
+    let first = [
+        keymap::part(&[Binding::SelectUp, Binding::SelectDown], "move"),
+        keymap::part(&[Binding::SelectConfirm], confirm),
+    ];
+    let last = keymap::part(&[Binding::SelectCancel], cancel);
+    keymap::hint(first.into_iter().chain(others).chain([last]))
+}
+
+fn tree_hint() -> String {
+    let filters: Vec<_> = (TREE_FILTERS.iter())
+        .filter_map(|&(binding, filter)| filter.map(|_| binding))
+        .collect();
+    let cycle = keymap::key(Binding::TreeFilterCycleForward);
+    let filters = match (keymap::keys(&filters), cycle) {
+        (Some(keys), Some(cycle)) => Some(format!("{keys} filters ({cycle} cycle)")),
+        (keys, cycle) => keys.or(cycle).map(|keys| format!("{keys} filters")),
+    };
+    keymap::hint([
+        keymap::part(&[Binding::SelectUp, Binding::SelectDown], "move"),
+        keymap::part(&[Binding::CursorLeft, Binding::CursorRight], "page"),
+        keymap::part(
+            &[Binding::TreeFoldOrUp, Binding::TreeUnfoldOrDown],
+            "fold/branch",
+        ),
+        keymap::part(&[Binding::TreeEditLabel], "label"),
+        filters,
+        keymap::part(&[Binding::TreeToggleLabelTimestamp], "label time"),
+        keymap::part(&[Binding::SelectCancel], "cancel"),
+    ])
+}
+
+fn confirm_delete() -> String {
+    let keys = keymap::hint([
+        keymap::part(&[Binding::SelectConfirm], "confirm"),
+        keymap::part(&[Binding::SelectCancel], "cancel"),
+    ]);
+    format!("Delete session? {keys}")
+}
+
 /// Options shown at once in a question's list, as in Scramjet.
 const QUESTION_VISIBLE: usize = 8;
 /// Rows an option's label or description takes at most, as in Scramjet.
@@ -158,17 +196,18 @@ impl Route {
                 Some(name) => format!("{name} ({})", model.id),
                 None => model.id.clone(),
             };
-            lines.push(format!("model: {name} · ←/→ change"));
+            let change = keymap::part(&[Binding::CursorLeft, Binding::CursorRight], "change");
+            let change = change.map_or_else(String::new, |change| format!(" · {change}"));
+            lines.push(format!("model: {name}{change}"));
         }
         let effort = match model.effort(self.effort.as_deref()) {
             Some(level) => scramjet_level(&level).to_owned(),
             None if model.reasoning => "model default".to_owned(),
             None => "off".to_owned(),
         };
-        let cycle = match model.next_effort(self.effort.as_deref()) {
-            Some(_) => " · Shift+Tab cycle",
-            None => "",
-        };
+        let cycle = (model.next_effort(self.effort.as_deref()))
+            .and_then(|_| keymap::part(&[Binding::ThinkingCycle], "cycle"))
+            .map_or_else(String::new, |cycle| format!(" · {cycle}"));
         lines.push(format!("effort: {effort}{cycle}"));
         lines
     }
@@ -212,7 +251,7 @@ enum Shape {
     /// A selector's rows, given at the width they take on the terminal when the list opens.
     Rows {
         title: String,
-        hint: &'static str,
+        hint: String,
         current: Option<usize>,
         rows: Vec<String>,
         /// Shown under the list for the selected row, when there is one for each row.
@@ -340,7 +379,7 @@ impl Picker {
     }
 
     /// Says `hint` on the keys after the title, and under the rows the selected one's note.
-    pub(super) fn noting(mut self, keys: &'static str, row_notes: Vec<String>) -> Self {
+    pub(super) fn noting(mut self, keys: String, row_notes: Vec<String>) -> Self {
         if let Shape::Rows { hint, notes, .. } = &mut self.shape {
             (*hint, *notes) = (keys, row_notes);
         }
@@ -516,7 +555,7 @@ impl Picker {
             list,
             shape: Shape::Rows {
                 title: title.to_owned(),
-                hint: HINT,
+                hint: hint("select", &[], "cancel"),
                 current,
                 rows,
                 notes: Vec::new(),
@@ -658,9 +697,11 @@ impl Picker {
                     true => rows,
                     false => threaded,
                 };
+                let confirm;
                 let header = match &self.status {
                     _ if self.list.warned => {
-                        (title.as_str(), CONFIRM_DELETE, style::SELECTOR_WARNING)
+                        confirm = confirm_delete();
+                        (title.as_str(), confirm.as_str(), style::SELECTOR_WARNING)
                     }
                     Some((status, true)) => {
                         (title.as_str(), status.as_str(), style::SELECTOR_WARNING)
@@ -668,7 +709,7 @@ impl Picker {
                     Some((status, false)) => {
                         (title.as_str(), status.as_str(), style::SELECTOR_DONE)
                     }
-                    None => (title.as_str(), *hint, style::MUTED),
+                    None => (title.as_str(), hint.as_str(), style::MUTED),
                 };
                 let search = (self.list.search.as_ref())
                     .map(|search| (search.query.as_str(), search.none.as_str()));
@@ -678,6 +719,7 @@ impl Picker {
                 shown
             }
             Shape::Tree(view, _) => {
+                let tree_hint = tree_hint();
                 let header = match &self.status {
                     Some((status, true)) => {
                         ("Session Tree", status.as_str(), style::SELECTOR_WARNING)
@@ -685,7 +727,7 @@ impl Picker {
                     Some((status, false)) => {
                         ("Session Tree", status.as_str(), style::SELECTOR_DONE)
                     }
-                    None => ("Session Tree", TREE_HINT, style::MUTED),
+                    None => ("Session Tree", tree_hint.as_str(), style::MUTED),
                 };
                 let search = Some((view.query(), "No entries found"));
                 let rows = view.rows();
@@ -701,15 +743,16 @@ impl Picker {
                 route,
             } => {
                 let mut tail = route.as_ref().map_or_else(Vec::new, Route::lines);
+                let keys = hint("select", &[], "cancel");
                 let hint = match self.deadline {
                     Some(deadline) => {
                         let left = deadline.saturating_duration_since(Instant::now());
                         let seconds = left.as_secs_f64().ceil() as u64;
                         // Shorter than Scramjet's `auto-selects recommendation in 3s`, so that
                         // the seconds show on a narrow terminal.
-                        format!("{HINT} · auto-selects in {seconds}s")
+                        format!("{keys} · auto-selects in {seconds}s")
                     }
-                    None => HINT.to_owned(),
+                    None => keys,
                 };
                 tail.push(hint);
                 let question = (title.as_str(), options.as_slice(), *recommended);
@@ -1146,6 +1189,9 @@ mod tests {
     use super::*;
     use crate::agent_cli::keys::tests::key;
 
+    /// A list's hint with the default keys, which the tests run with.
+    const HINT: &str = "↑↓ move · Enter select · Esc cancel";
+
     fn searched(list: &List) -> Option<(&str, &str)> {
         (list.search.as_ref()).map(|search| (search.query.as_str(), search.none.as_str()))
     }
@@ -1473,7 +1519,7 @@ mod tests {
         assert_eq!(
             tail(&picker),
             [
-                "model: GPT-6 Luna (gpt-6-luna) · ←/→ change",
+                "model: GPT-6 Luna (gpt-6-luna) · ←→ change",
                 "effort: off · Shift+Tab cycle"
             ]
         );
@@ -1483,7 +1529,7 @@ mod tests {
         assert_eq!(
             tail(&picker),
             [
-                "model: Claude Opus 5.5 (claude-opus-5-5) · ←/→ change",
+                "model: Claude Opus 5.5 (claude-opus-5-5) · ←→ change",
                 "effort: low · Shift+Tab cycle"
             ]
         );
@@ -1495,7 +1541,7 @@ mod tests {
         }
         assert_eq!(
             tail(&picker),
-            ["model: claude-haiku-4-5 · ←/→ change", "effort: off"]
+            ["model: claude-haiku-4-5 · ←→ change", "effort: off"]
         );
         for key in [key("right"), key("right")] {
             assert_eq!(picker.key(&key), None);
@@ -1725,7 +1771,10 @@ mod tests {
         let view = View::new(super::super::tree::sample(), false, Filter::Default);
         let mut picker = Picker::tree(view, 4, Some(6));
         let text = |picker: &Picker| plain(picker.lines((80, 24)));
-        let hint = format!("Session Tree  {}", text::clip(TREE_HINT, 79 - 14));
+        let keys = "↑↓ move · ←→ page · Ctrl+←→ fold/branch · Shift+L label · \
+            Ctrl+D/T/U/L/A filters (Ctrl+O cycle) · Shift+T label time · Esc cancel";
+        assert_eq!(tree_hint(), keys);
+        let hint = format!("Session Tree  {}", text::clip(keys, 79 - 14));
         assert_eq!(
             text(&picker),
             [

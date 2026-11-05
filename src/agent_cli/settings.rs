@@ -1,6 +1,7 @@
 //! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet-rs/settings.json` (by default
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
+use super::keymap::{self, Binding};
 use super::theme::TERMINAL_COLORS;
 use super::tree::Filter;
 use scramjet_rs::agent::{
@@ -149,37 +150,66 @@ impl Row {
     }
 
     /// What the row is about, shown under the list while it is selected.
-    pub(super) fn description(self) -> &'static str {
-        match self {
+    pub(super) fn description(self) -> String {
+        // Its key and what it does, after the sentence that comes first: ` Ctrl+T toggles it.`
+        let then = |binding, does: &str| {
+            keymap::key(binding).map_or_else(String::new, |key| format!(" {key} {does}"))
+        };
+        let with = |binding, words: &str| {
+            keymap::key(binding).map_or_else(String::new, |key| format!("{words}{key}"))
+        };
+        let text = match self {
             Self::ThinkingLevel => {
-                "How much the model reasons; also the level new sessions start at. Shift+Tab cycles it."
+                let then = then(Binding::ThinkingCycle, "cycles it.");
+                return format!(
+                    "How much the model reasons; also the level new sessions start at.{then}"
+                );
             }
             Self::StartupModel => {
                 "The model a new session starts with when scramjet-rs starts, unless --model names \
                  one: the one last chosen in this project (else anywhere), or anywhere."
             }
-            Self::ThinkingBlocks => "The model's reasoning in the conversation. Ctrl+T toggles it.",
+            Self::ThinkingBlocks => {
+                let then = then(Binding::ThinkingToggle, "toggles it.");
+                return format!("The model's reasoning in the conversation.{then}");
+            }
             Self::MarkdownReads => {
-                "Markdown files the agent reads: shown as documents, or as their source. Ctrl+O \
-                 expands either."
+                let then = then(Binding::ToolsExpand, "expands either.");
+                return format!(
+                    "Markdown files the agent reads: shown as documents, or as their source.{then}"
+                );
             }
             Self::Theme => "The colors of the conversation and of everything around it.",
             Self::Steering => {
-                "Sent with Enter during a turn: how many the model gets before its next request."
+                let with = with(Binding::Submit, " with ");
+                return format!(
+                    "Sent{with} during a turn: how many the model gets before its next request."
+                );
             }
             Self::FollowUp => {
-                "Sent with Alt+Enter during a turn: how many the model gets when it would stop."
+                let with = with(Binding::FollowUp, " with ");
+                return format!(
+                    "Sent{with} during a turn: how many the model gets when it would stop."
+                );
             }
             Self::DoubleEscape => "Escape pressed twice on an empty prompt.",
             Self::CopyOnSelect => {
-                "Text selected with the mouse is copied as soon as it is selected, ready to paste \
-                 anywhere (Command+V on a Mac). A right click or Ctrl+C copies a selection either way."
+                let with = with(Binding::Copy, " or ");
+                return format!(
+                    "Text selected with the mouse is copied as soon as it is selected, ready to \
+                     paste anywhere (Command+V on a Mac). A right click{with} copies a selection \
+                     either way."
+                );
             }
             Self::BranchSummary => {
                 "When /tree moves to another branch: ask whether to summarize the one left behind."
             }
             Self::TreeFilter => {
-                "The entries /tree shows when it opens; there Ctrl+O cycles through the choices."
+                let there = keymap::key(Binding::TreeFilterCycleForward)
+                    .map_or_else(String::new, |key| {
+                        format!("; there {key} cycles through the choices")
+                    });
+                return format!("The entries /tree shows when it opens{there}.");
             }
             Self::Tools => "The coding tools the agent has. Subagents have their own.",
             Self::Credentials => {
@@ -204,7 +234,8 @@ impl Row {
                 "What this session loaded: command sets, commands, agents, skills, system prompt, \
                  context and settings files, where each comes from, and what is wrong there."
             }
-        }
+        };
+        text.to_owned()
     }
 }
 

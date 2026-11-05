@@ -5,6 +5,7 @@
 use super::transcript::Look;
 use super::{ALLOW, App, EDITOR_SHARE, Open, Shown};
 use crate::agent_cli::editor::{Draft, Note, terminal_size};
+use crate::agent_cli::keymap::{self, Binding};
 use crate::agent_cli::record::{self, Event};
 use crate::agent_cli::selection::{self, Line};
 use crate::agent_cli::style;
@@ -78,10 +79,11 @@ impl Activity {
     }
     /// The status line's text, with what Escape does when `escape` says it does that now.
     fn line(&self, escape: bool) -> String {
-        let hint = match self.escape.filter(|_| escape) {
-            Some(does) => format!(" (Esc to {does})"),
-            None => String::new(),
-        };
+        let hint = (self.escape.filter(|_| escape))
+            .and_then(|does| {
+                keymap::key(Binding::Interrupt).map(|key| format!(" ({key} to {does})"))
+            })
+            .unwrap_or_default();
         match self.countdown {
             Some(wait) => {
                 let left = wait.saturating_sub(self.since.elapsed()).as_secs_f64();
@@ -207,13 +209,15 @@ impl App {
         );
         let escape =
             self.selection.is_some() || (self.dialog.is_none() && !self.draft.completing());
+        let page = page.then(|| keymap::key(Binding::PageDown)).flatten();
+        let escape = escape.then(|| keymap::key(Binding::Interrupt)).flatten();
         let back = match (page, escape) {
-            (true, true) => " · PgDn or Esc to go back",
-            (true, false) => " · PgDn to go back",
-            (false, true) => " · Esc to go back",
-            (false, false) => "",
+            (Some(page), Some(escape)) => format!(" · {page} or {escape} to go back"),
+            (Some(key), None) | (None, Some(key)) => format!(" · {key} to go back"),
+            (None, None) => String::new(),
         };
-        status_rows(activity, self.shown_draft().note(), below, back, width)
+        let note = self.shown_draft().note();
+        status_rows(activity, note.as_deref(), below, &back, width)
     }
 
     /// The draft whose note the status line shows: a text dialog's, else the prompt's.
@@ -279,12 +283,11 @@ impl App {
             );
             rows.push(muted(&line));
         }
-        if !queue.is_empty() {
-            let hint = clip(
-                "↳ Alt+Up to edit all queued messages",
-                width.saturating_sub(1),
-            );
-            rows.push(muted(&hint));
+        if !queue.is_empty()
+            && let Some(key) = keymap::key(Binding::Dequeue)
+        {
+            let hint = format!("↳ {key} to edit all queued messages");
+            rows.push(muted(&clip(&hint, width.saturating_sub(1))));
         }
         drop(queue);
         let footer = self.footer.lines(width);
@@ -313,8 +316,12 @@ impl App {
                 shown: Shown::Text(text),
                 ..
             }) => {
+                let keys = keymap::hint([
+                    keymap::part(&[Binding::Submit], "submit"),
+                    keymap::part(&[Binding::SelectCancel], "cancel"),
+                ]);
                 let title = format!(
-                    "{}{}{}  {}Enter submit · Esc cancel{}",
+                    "{}{}{}  {}{keys}{}",
                     style::SELECTOR_TITLE,
                     text.title,
                     style::RESET,

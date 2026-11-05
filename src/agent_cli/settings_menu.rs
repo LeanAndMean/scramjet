@@ -15,13 +15,7 @@ use std::{
 };
 use unicode_width::UnicodeWidthStr;
 
-const SETTINGS_KEYS: &str = "↑↓ move · Enter change · Esc close";
 const NO_LEVELS: &str = "The model's card lists no thinking levels to choose from.";
-const BACK_KEYS: &str = "↑↓ move · Enter select · Esc back";
-const TOOLS_KEYS: &str = "↑↓ move · Enter switch on or off · Esc back";
-const CHANGE_KEYS: &str = "↑↓ move · Enter change · Esc back";
-const THEME_KEYS: &str = "↑↓ move · Enter use · Esc back";
-const INSTALLED_KEYS: &str = "↑↓ move · Enter edit · Esc back";
 /// What a next step can be set to, in the order `/settings` offers them.
 const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
     (
@@ -46,6 +40,11 @@ const AUTOPILOT_DECIDES: &str = "With autopilot on, the recommended step runs af
     countdown; off, the next steps wait for you to choose.";
 
 /// What a theme is, as `/settings` says under its row.
+/// The hint of a list under `/settings`' own.
+fn back_keys(confirm: &str) -> String {
+    select::hint(confirm, &[], "back")
+}
+
 fn theme_note(listed: &Listed) -> String {
     let note = match (listed.name.as_str(), &listed.file) {
         (_, Some(file)) => format!("From {}.", shortened(&file.display().to_string())),
@@ -120,7 +119,7 @@ impl Interactive {
                     Row::Publishing if let Some(problem) = &publishing => {
                         format!("{} {}", row.description(), every_one_asks(problem))
                     }
-                    row => row.description().to_owned(),
+                    row => row.description(),
                 })
                 .collect();
             let picker = select::Picker::select(
@@ -131,7 +130,9 @@ impl Interactive {
                 None,
                 |index, width| clip(&rows[index], width),
             );
-            let picker = picker.noting(SETTINGS_KEYS, notes).held();
+            let picker = picker
+                .noting(select::hint("change", &[], "close"), notes)
+                .held();
             let Some(index) = screen.pick(picker) else {
                 break;
             };
@@ -206,7 +207,7 @@ impl Interactive {
             current,
             |index, width| clip(scramjet_level(&levels[index]), width),
         );
-        let Some(index) = screen.pick(picker.noting(BACK_KEYS, Vec::new()).held()) else {
+        let Some(index) = screen.pick(picker.noting(back_keys("select"), Vec::new()).held()) else {
             return;
         };
         let level = &levels[index];
@@ -237,7 +238,7 @@ impl Interactive {
                 current,
                 |index, width| clip(&listed[index].name, width),
             );
-            let Some(index) = screen.pick(picker.noting(THEME_KEYS, notes).held()) else {
+            let Some(index) = screen.pick(picker.noting(back_keys("use"), notes).held()) else {
                 return;
             };
             at = Some(index);
@@ -280,7 +281,9 @@ impl Interactive {
                 None,
                 |index, width| clip(&rows[index], width),
             );
-            let Some(index) = screen.pick(picker.noting(TOOLS_KEYS, notes).held()) else {
+            let Some(index) =
+                screen.pick(picker.noting(back_keys("switch on or off"), notes).held())
+            else {
                 return;
             };
             at = index;
@@ -366,7 +369,10 @@ impl Interactive {
                 None,
                 |index, width| clip(&rows[index], width),
             );
-            let picker = picker.headed(headings).noting(CHANGE_KEYS, notes).held();
+            let picker = picker
+                .headed(headings)
+                .noting(back_keys("change"), notes)
+                .held();
             let Some(index) = screen.pick(picker) else {
                 return;
             };
@@ -439,7 +445,7 @@ impl Interactive {
             None,
             |index, width| clip(choices[index].0, width),
         );
-        let Some(index) = screen.pick(picker.noting(BACK_KEYS, notes).held()) else {
+        let Some(index) = screen.pick(picker.noting(back_keys("select"), notes).held()) else {
             return;
         };
         if let Err(error) = self.agent.apply_suggestions(choices[index].1) {
@@ -524,7 +530,7 @@ impl Interactive {
             current,
             |index, width| clip(STEP_CHOICES[index].0, width),
         );
-        let Some(index) = screen.pick(picker.noting(BACK_KEYS, notes).held()) else {
+        let Some(index) = screen.pick(picker.noting(back_keys("select"), notes).held()) else {
             return;
         };
         let target = step.target.as_deref();
@@ -576,7 +582,10 @@ impl Interactive {
                 None,
                 |index, width| clip(&rows[index], width),
             );
-            let picker = picker.headed(headings).noting(CHANGE_KEYS, notes).held();
+            let picker = picker
+                .headed(headings)
+                .noting(back_keys("change"), notes)
+                .held();
             let Some(index) = screen.pick(picker) else {
                 return;
             };
@@ -648,7 +657,7 @@ impl Interactive {
             Some(current),
             |index, width| clip(&choices[index].0, width),
         );
-        let Some(index) = screen.pick(picker.noting(BACK_KEYS, notes).held()) else {
+        let Some(index) = screen.pick(picker.noting(back_keys("select"), notes).held()) else {
             return;
         };
         let chosen = choices[index].1;
@@ -687,7 +696,7 @@ impl Interactive {
                 None,
                 |index, width| clip(&rows[index], width),
             );
-            let picker = (picker.headed(listing.headings)).noting(INSTALLED_KEYS, listing.notes);
+            let picker = (picker.headed(listing.headings)).noting(back_keys("edit"), listing.notes);
             let Some(index) = screen.pick(picker.held()) else {
                 return;
             };

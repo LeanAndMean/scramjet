@@ -9,6 +9,7 @@
 
 use super::editor::{Draft, Editor, Note, RESIZE_CHECK};
 use super::footer::{self, Footer};
+use super::keymap::{self, Binding};
 use super::keys::{Key, RawMode, read_key};
 use super::record::{self, Event};
 use super::select::{Act, Picker, Routed, Spot, Toggle};
@@ -63,7 +64,6 @@ const WHEEL_UP: u16 = 64;
 const WHEEL_DOWN: u16 = 65;
 const ALLOW: &str = "Allow? [y/N, a = allow all until exit]";
 const BUSY: &str = "Busy: the session is not ready for a prompt yet";
-const SHELL_BUSY: &str = "A bash command is already running. Press Esc to cancel it first.";
 const RELOAD_BUSY: &str = "Wait for the current response to finish before reloading.";
 const MODEL_NEXT: &str = "The model changes before the next request";
 const NOTHING_QUEUED: &str = "No queued messages to restore";
@@ -732,7 +732,12 @@ impl App {
         let mut queue = self.queue();
         if queue.shells.iter().any(|side| side.ended.is_none()) {
             drop(queue);
-            self.draft.set_note(Note::Info(SHELL_BUSY.to_owned()));
+            let busy = "A bash command is already running.";
+            let busy = match keymap::key(Binding::Interrupt) {
+                Some(key) => format!("{busy} Press {key} to cancel it first."),
+                None => busy.to_owned(),
+            };
+            self.draft.set_note(Note::Info(busy));
             return true;
         }
         let cancel = Arc::new(AtomicBool::new(false));

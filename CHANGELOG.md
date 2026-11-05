@@ -4,6 +4,16 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.7.1 — Hints name your keys
+
+### Fixed
+
+- The hints name the keys `keybindings.json` gives: those of the lists, `/tree`, `/resume`, `/scoped-models` and `/settings`, `Esc to interrupt`, the queue's `Alt+Up to edit`, `Ctrl+O to expand`, the exit's `Ctrl+C again`, and the settings' descriptions. A hint leaves out an action without keys. `--help` says its keys are the defaults.
+
+### Changed
+
+- Hints write keys alike together, as `Ctrl+A/X` and `←→`, and the exit's hint `Ctrl+C`, not `Ctrl-C`. With piped input, `/scoped-models` says `Models for Ctrl+P: …`.
+
 ## 0.7.0 — Keys of your own
 
 ### Added

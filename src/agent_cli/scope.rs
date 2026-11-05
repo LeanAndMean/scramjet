@@ -4,6 +4,7 @@
 use super::editor::Note;
 use super::fuzzy::{self, Haystack};
 use super::interactive::{Interactive, model_line};
+use super::keymap::{self, Binding};
 use super::select::{self, Act, Picked, Picker, Spot};
 use super::settings::{Settings, card_level};
 use super::style::{MODEL_OFF, MODEL_ON, MUTED, RESET};
@@ -12,11 +13,35 @@ use super::text::{clip, visible};
 use scramjet_rs::agent::{Agent, ModelOption};
 use unicode_width::UnicodeWidthStr;
 
-const IN_SCOPE_KEYS: &str = "↑↓ move · Enter select · Tab all models · Esc cancel";
-const ALL_KEYS: &str = "↑↓ move · Enter select · Tab models for Ctrl+P · Esc cancel";
-const SCOPED_KEYS: &str = "↑↓ move · Enter on/off · Ctrl+S save · Esc close";
-const SCOPED_ACTS: &str = "Ctrl+P switches among those on, in this order.\n\
-    Ctrl+A/Ctrl+X: all shown on/off · Ctrl+P: its provider's · Alt+↑↓: move it";
+/// What the scope is called, after `models`: `Models for Ctrl+P`.
+fn scope_name(models: &str) -> String {
+    match keymap::key(Binding::ModelCycleForward) {
+        Some(key) => format!("{models} for {key}"),
+        None => format!("{models} to cycle through"),
+    }
+}
+
+/// What `/scoped-models`' keys do, under its list.
+fn scoped_acts() -> String {
+    let switches = match keymap::key(Binding::ModelCycleForward) {
+        Some(key) => format!("{key} switches among those on, in this order."),
+        None => "Cycling switches among those on, in this order.".to_owned(),
+    };
+    let act =
+        |bindings: &[Binding], what| keymap::keys(bindings).map(|keys| format!("{keys}: {what}"));
+    let acts = keymap::hint([
+        act(
+            &[Binding::ModelsEnableAll, Binding::ModelsClearAll],
+            "all shown on/off",
+        ),
+        act(&[Binding::ModelsToggleProvider], "its provider's"),
+        act(
+            &[Binding::ModelsReorderUp, Binding::ModelsReorderDown],
+            "move it",
+        ),
+    ]);
+    format!("{switches}\n{acts}")
+}
 
 /// A model in the scope, with the effort its pattern sets (`sonnet:high`), named as the model
 /// cards name levels.
@@ -532,15 +557,25 @@ impl Interactive {
                 clip(&format!("{}{provider}{rate}", visible(&model.id)), width)
             };
             let (title, keys) = match (scoped.is_empty(), in_scope) {
-                (true, _) => ("Select model", select::HINT),
-                (false, true) => ("Models for Ctrl+P", IN_SCOPE_KEYS),
-                (false, false) => ("All models", ALL_KEYS),
+                (true, _) => (
+                    "Select model".to_owned(),
+                    select::hint("select", &[], "cancel"),
+                ),
+                (false, true) => {
+                    let keys = select::hint("select", &[(Binding::Tab, "all models")], "cancel");
+                    (scope_name("Models"), keys)
+                }
+                (false, false) => {
+                    let scope = scope_name("models");
+                    let keys = select::hint("select", &[(Binding::Tab, &scope)], "cancel");
+                    ("All models".to_owned(), keys)
+                }
             };
             let current_row = at(current);
             let initial = current_row.unwrap_or(0);
             let none = "No matching models";
             let picker = Picker::search(
-                title,
+                &title,
                 select::VISIBLE,
                 texts,
                 initial,
@@ -599,7 +634,7 @@ impl Interactive {
                 .on
                 .as_ref()
                 .map_or("all".to_owned(), |on| on.join(", "));
-            return self.say(&format!("Models Ctrl+P cycles through: {on}"));
+            return self.say(&format!("{}: {on}", scope_name("Models")));
         }
         let model = |id: &str| models.iter().find(|model| model.id == id);
         let provider = |id: &str| model(id).and_then(|model| model.provider.clone());
@@ -618,15 +653,17 @@ impl Interactive {
                     Haystack::ranked(&format!("{id} {provider}"), rank)
                 })
                 .collect();
-            let session_only = match unsaved {
-                true => ", for this session until Ctrl+S saves them",
-                false => "",
+            let session_only = match keymap::key(Binding::ModelsSave) {
+                _ if !unsaved => String::new(),
+                Some(key) => format!(", for this session until {key} saves them"),
+                None => ", for this session".to_owned(),
             };
+            let acts = scoped_acts();
             let notes = (order.iter())
                 .map(|id| {
                     let name = model(id).and_then(|model| model.name.clone());
                     let name = name.unwrap_or_else(|| id.clone());
-                    format!("{name} · {}{session_only}\n{SCOPED_ACTS}", chosen.count())
+                    format!("{name} · {}{session_only}\n{acts}", chosen.count())
                 })
                 .collect();
             let row = |index: usize, width| {
@@ -643,7 +680,7 @@ impl Interactive {
                 clip(&format!("{id}{provider}{rate}{mark}"), width)
             };
             let picker = Picker::search(
-                "Models for Ctrl+P",
+                &scope_name("Models"),
                 select::VISIBLE,
                 texts,
                 0,
@@ -651,7 +688,13 @@ impl Interactive {
                 "No matching models",
                 row,
             );
-            let mut picker = picker.noting(SCOPED_KEYS, notes).scoping().held();
+            let mut picker = picker
+                .noting(
+                    select::hint("on/off", &[(Binding::ModelsSave, "save")], "close"),
+                    notes,
+                )
+                .scoping()
+                .held();
             if let Some((spot, id)) = place.take() {
                 let at = order.iter().position(|known| *known == id).unwrap_or(0);
                 picker = picker.at(spot, status.take()).on_row(at);

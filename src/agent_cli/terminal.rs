@@ -4,6 +4,7 @@
 use super::editor::NOTE_TIME;
 use super::highlight::{self, Highlighter};
 use super::interactive::thinking;
+use super::keymap::{self, Binding};
 use super::settings::MarkdownReads;
 use super::style::{self, Style};
 use super::text::{FROM, RULE, Wrap, call_line, clip, printable, visible};
@@ -325,9 +326,9 @@ impl Terminal {
             lines.into_iter().map(row).collect()
         };
         let shown = |limited: Shown| if full { Shown::All } else { limited };
-        let hint = if self.expandable { EXPAND_HINT } else { "" };
+        let hint = self.expand_hint();
         let marked = self.marked;
-        let preview = |text: &str, shown: Shown, width| preview(text, shown, width, hint, marked);
+        let preview = |text: &str, shown: Shown, width| preview(text, shown, width, &hint, marked);
         // As Scramjet's, a file's text in its language when its name shows one: the lines of
         // `source` it starts with, the rest and the note on what was cut in the tool's style.
         let code = |text: &str, path: &str, source: &str, limited: Shown| {
@@ -342,7 +343,7 @@ impl Terminal {
                 }
             };
             let shown = shown(limited);
-            let mut rows = preview_shown(text, shown, width, hint, marked, &mut show);
+            let mut rows = preview_shown(text, shown, width, &hint, marked, &mut show);
             if matches!(shown, Shown::First(n) if text.lines().count() > n) {
                 let note = rows.pop().unwrap_or_default();
                 rows.push(format!("{style}{note}{reset}"));
@@ -353,7 +354,7 @@ impl Terminal {
             _ if compact && !failed => Vec::new(),
             (_, Some(ToolDetail::Diff(diff))) => {
                 let limit = if full { usize::MAX } else { diff::ROWS };
-                diff::rows(diff, width, self.color, marked, limit, hint)
+                diff::rows(diff, width, self.color, marked, limit, &hint)
             }
             // As in Scramjet, trailing blank lines of a written file are not counted.
             (_, Some(ToolDetail::Written { path, content })) => {
@@ -434,7 +435,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                             1 => "1 line".to_owned(),
                             count => format!("{count} lines"),
                         };
-                        rows.push(self.dim(&format!("… ({lines}{EXPAND_HINT})")));
+                        rows.push(self.dim(&format!("… ({lines}{})", self.expand_hint())));
                     }
                     rows
                 }
@@ -457,7 +458,8 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                         1 => "1 line".to_owned(),
                         count => format!("{count} lines"),
                     };
-                    rows.push(self.dim(&format!("… ({what}, {lines}{EXPAND_HINT})")));
+                    let hint = self.expand_hint();
+                    rows.push(self.dim(&format!("… ({what}, {lines}{hint})")));
                 }
                 rows
             }
@@ -908,10 +910,9 @@ impl AgentUi for Terminal {
                     CompactRead::Resource(path) => ("read resource", path),
                     CompactRead::Docs(path) => ("read docs", path),
                 };
-                let hint = if self.expandable {
-                    " (Ctrl+O to expand)"
-                } else {
-                    ""
+                let hint = match keymap::key(Binding::ToolsExpand) {
+                    Some(key) if self.expandable => format!(" ({key} to expand)"),
+                    _ => String::new(),
                 };
                 call_line(name, &format!("{read}{hint}"), width, self.marked)
             }
@@ -1016,7 +1017,7 @@ impl AgentUi for Terminal {
                 1 => "1 line".to_owned(),
                 count => format!("{count} lines"),
             };
-            let hint = self.dim(&format!("… (sent as {lines}{EXPAND_HINT})"));
+            let hint = self.dim(&format!("… (sent as {lines}{})", self.expand_hint()));
             self.err(&format!("{hint}\n"));
         }
         self.err("\n");
@@ -1180,6 +1181,14 @@ impl Terminal {
             self.err(&format!("{gutter}{row}\n"));
         }
     }
+    /// Ends the note about the lines a preview leaves out, as Scramjet's does: `, Ctrl+O to
+    /// expand`, when the key shows everything.
+    fn expand_hint(&self) -> String {
+        match keymap::key(Binding::ToolsExpand) {
+            Some(key) if self.expandable => format!(", {key} to expand"),
+            _ => String::new(),
+        }
+    }
     /// How a tool block's rows `width` columns wide are laid out.
     fn look(&self, width: usize) -> children::Look {
         children::Look {
@@ -1187,7 +1196,7 @@ impl Terminal {
             color: self.color,
             marked: self.marked,
             full: self.full,
-            hint: if self.expandable { EXPAND_HINT } else { "" },
+            hint: self.expand_hint(),
         }
     }
     pub(super) fn running_output(&mut self, output: &str) {
@@ -1250,7 +1259,7 @@ impl Terminal {
         }
         let mut status = Vec::new();
         if earlier > 0 {
-            let hint = if self.expandable { EXPAND_HINT } else { "" };
+            let hint = self.expand_hint();
             status.push(self.dim(&format!("… {earlier} earlier lines{hint}")));
         }
         match ending {
@@ -1323,7 +1332,8 @@ impl Terminal {
             return format!("{text}{reset}");
         }
         let more = rows.len() - SUMMARY_LINES;
-        let hint = format!("… ({more} more lines, {} total{EXPAND_HINT})", rows.len());
+        let hint = self.expand_hint();
+        let hint = format!("… ({more} more lines, {} total{hint})", rows.len());
         let kept = rows[..SUMMARY_LINES].join("\n");
         format!("{kept}{reset}\n{}", self.dim(&hint))
     }
@@ -1429,8 +1439,6 @@ const GREP_LINES: usize = 15;
 const LISTING_LINES: usize = 20;
 const RESULT_LINES: usize = 6;
 const SUMMARY_LINES: usize = 10;
-/// Ends the note about the lines a preview leaves out, as Scramjet's does.
-const EXPAND_HINT: &str = ", Ctrl+O to expand";
 
 #[derive(Clone, Copy)]
 enum Shown {
@@ -1521,7 +1529,7 @@ mod tests {
                 &bash_shown(&failed, true),
                 Shown::Last(5),
                 80,
-                EXPAND_HINT,
+                ", Ctrl+O to expand",
                 false
             ),
             [

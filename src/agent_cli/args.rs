@@ -131,7 +131,8 @@ Ctrl+Home and Ctrl+End scroll to the conversation's start and end.
 loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
 with this project's sessions. /copy copies the last reply's text, as the model wrote it, to the
-clipboard. /hotkeys lists the keys. /settings lists the settings, each with what it does, and
+clipboard. The keys named here are the defaults: keybindings.json beside the settings file
+gives actions others, and /hotkeys lists those in use. /settings lists the settings, each with what it does, and
 changes them; it also shows each command's next steps, publication approval, and what the
 session loaded from where, with any problems. /reload reads the settings, command sets, agents,
 skills and context files again. /skill:NAME ARGS sends a skill's instructions with ARGS.
