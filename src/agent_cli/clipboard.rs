@@ -1,9 +1,9 @@
 //! The desktop's clipboard as Scramjet uses it. Copying: with the platform's tool (`pbcopy`;
 //! `wl-copy` under Wayland, `xclip` or `xsel` under X11), else, and also in a remote session,
 //! through the terminal with OSC 52. Pasting: with a PowerShell kept running under WSL
-//! (`powershell.rs`), `pbpaste`, `wl-paste`, `xclip` or `xsel`; never in a remote session, whose
-//! clipboard is the terminal's. An image is pasted as Scramjet pastes it, as the path of a file
-//! it is saved to.
+//! (`powershell.rs`), `pbpaste` on macOS, else from the X server itself (`x11.rs`), then with
+//! `wl-paste`, `xclip` or `xsel`; never in a remote session, whose clipboard is the terminal's.
+//! An image is pasted as Scramjet pastes it, as the path of a file it is saved to.
 
 use std::{
     env,
@@ -16,6 +16,7 @@ use std::{
 };
 
 mod powershell;
+mod x11;
 
 /// How long a clipboard tool may take, as Scramjet's.
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -69,9 +70,21 @@ pub(super) fn paste() -> Result<String, String> {
             )),
         };
     }
-    (readers(set).into_iter())
-        .find_map(|(program, arguments)| read(program, arguments))
-        .ok_or_else(|| "Cannot read clipboard text; use your terminal's Paste command".to_owned())
+    let built_in = x11(set).then(|| x11::text(PASTE_MAX));
+    if let Some(Ok(Some(text))) = built_in {
+        return Ok(text);
+    }
+    let mut tools = readers(set).into_iter();
+    if let Some(text) = tools.find_map(|(program, arguments)| read(program, arguments)) {
+        return Ok(text);
+    }
+    Err(match built_in {
+        Some(Ok(_)) => "No text on the clipboard".to_owned(),
+        Some(Err(error)) => {
+            format!("Cannot read clipboard text ({error}); use your terminal's Paste command")
+        }
+        None => "Cannot read clipboard text; use your terminal's Paste command".to_owned(),
+    })
 }
 
 /// Saves the clipboard's image to a new file only the user can read, for its path to be pasted.
@@ -87,8 +100,8 @@ pub(super) fn paste_image() -> Result<String, String> {
 }
 
 /// The clipboard's image, if any, and its extension, given which variables are `set`: under WSL
-/// Windows' as PNG, as for text; else with `wl-paste` under Wayland, then `xclip` under X11, in a
-/// type the tool lists among `IMAGE_TYPES`.
+/// Windows' as PNG, as for text; else from the X server, then with `wl-paste` under Wayland, then
+/// `xclip` under X11, in a type offered among `IMAGE_TYPES`.
 fn image(set: impl Fn(&str) -> bool) -> Result<Option<(Vec<u8>, &'static str)>, String> {
     let nonempty = |read: Option<(Vec<u8>, _)>| read.filter(|(bytes, _)| !bytes.is_empty());
     if wsl(&set) {
@@ -107,7 +120,7 @@ fn image(set: impl Fn(&str) -> bool) -> Result<Option<(Vec<u8>, &'static str)>, 
         let bytes = output("wl-paste", &["--type", kind, "--no-newline"], IMAGE_MAX)?;
         Some((bytes, extension))
     };
-    let x11 = || {
+    let xclip = || {
         let (kind, extension) =
             listed("xclip", &["-selection", "clipboard", "-t", "TARGETS", "-o"])?;
         let bytes = output(
@@ -117,8 +130,16 @@ fn image(set: impl Fn(&str) -> bool) -> Result<Option<(Vec<u8>, &'static str)>, 
         )?;
         Some((bytes, extension))
     };
-    Ok(nonempty(set("WAYLAND_DISPLAY").then(wayland).flatten())
-        .or_else(|| nonempty(set("DISPLAY").then(x11).flatten())))
+    let built_in = x11(&set).then(|| x11::image(IMAGE_MAX).map(nonempty));
+    if let Some(Ok(Some(image))) = built_in {
+        return Ok(Some(image));
+    }
+    let tools = nonempty(set("WAYLAND_DISPLAY").then(wayland).flatten())
+        .or_else(|| nonempty(set("DISPLAY").then(xclip).flatten()));
+    match (tools, built_in) {
+        (None, Some(Err(error))) => Err(format!("Cannot read the clipboard's image ({error})")),
+        (tools, _) => Ok(tools),
+    }
 }
 
 /// The first of `IMAGE_TYPES` among the types a tool lists, one a line, ignoring parameters such
@@ -168,6 +189,11 @@ fn set(name: &str) -> bool {
 
 fn wsl(set: impl Fn(&str) -> bool) -> bool {
     set("WSL_DISTRO_NAME") || set("WSL_INTEROP")
+}
+
+/// Whether the clipboard is read from an X server: on Linux, outside WSL, with a `DISPLAY`.
+fn x11(set: impl Fn(&str) -> bool) -> bool {
+    !cfg!(target_os = "macos") && !wsl(&set) && set("DISPLAY")
 }
 
 /// The tools that read the clipboard outside WSL, in Scramjet's order, given which variables are
@@ -310,6 +336,9 @@ mod tests {
         if cfg!(target_os = "macos") {
             return;
         }
+        let x11 = |variables: &[&str]| x11(|name: &str| variables.contains(&name));
+        assert!(x11(&["DISPLAY"]) && x11(&["WAYLAND_DISPLAY", "DISPLAY"]));
+        assert!(!x11(&["WAYLAND_DISPLAY"]) && !x11(&["WSL_INTEROP", "DISPLAY"]));
         assert_eq!(
             names(&["WAYLAND_DISPLAY", "DISPLAY"]),
             ["wl-paste", "xclip", "xsel"]
