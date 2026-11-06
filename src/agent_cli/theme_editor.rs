@@ -1091,6 +1091,9 @@ pub(super) fn sample() -> Vec<Vec<Event>> {
                  ```rust\n/// Splits `text` into words.\npub fn words(text: &str) -> Vec<&str> {\n    \
                  text.split_whitespace().collect()\n}\n\n#[test]\nfn splits_on_spaces() {\n    \
                  assert_eq!(words(\"a b  c\").len(), 3);\n}\n```\n\n\
+                 What `words(\"a b  c\")` gives:\n\n\
+                 ```\nbefore: [\"a\", \"b\", \"\", \"c\"]\nafter:  [\"a\", \"b\", \"c\"]\n```\n\n\
+                 ---\n\n\
                  > Leading and trailing spaces are dropped too.";
     let call = |name: &str, summary: &str| Event::ToolCall(name.into(), summary.into(), None);
     let turn = vec![
@@ -1128,6 +1131,12 @@ pub(super) fn sample() -> Vec<Vec<Event>> {
             .into(),
     };
     let notice = "/fix is waiting for you: it asked a question. Reply to continue.";
+    let running = vec![
+        Event::UserPrompt("Yes, and run clippy too.".into()),
+        call("bash", "cargo clippy -q"),
+        Event::ToolRunning(after(3.0)),
+        Event::ToolOutput("    Checking words v0.1.0 (/home/me/words)".into()),
+    ];
     vec![
         turn,
         vec![
@@ -1136,6 +1145,7 @@ pub(super) fn sample() -> Vec<Vec<Event>> {
         ],
         vec![Event::Compacted(compaction, None)],
         vec![Event::Notice(notice.into())],
+        running,
     ]
 }
 
@@ -1873,9 +1883,9 @@ mod tests {
     }
 
     #[test]
-    fn the_sample_session_shows_a_failed_and_a_passing_call_a_diff_and_a_reply() {
+    fn the_sample_session_shows_a_failed_and_a_passing_call_a_diff_a_reply_and_a_running_call() {
         let parts = sample();
-        assert_eq!(parts.len(), 4);
+        assert_eq!(parts.len(), 5);
         let results: Vec<bool> = (parts[0].iter())
             .filter_map(|event| match event {
                 Event::ToolResult(_, _, _, failed, _) => Some(*failed),
@@ -1887,5 +1897,16 @@ mod tests {
             event,
             Event::ToolResult(_, _, Some(ToolDetail::Diff(_)), ..)
         )));
+        let reply = (parts[0].iter())
+            .find_map(|event| match event {
+                Event::Assistant(reply) => Some(reply.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        // Highlighted code, code that is not (`mdCodeBlock`) and a rule (`mdHr`).
+        assert!(reply.contains("```rust\n") && reply.contains("\n\n```\nbefore:"));
+        assert!(reply.contains("\n\n---\n\n"));
+        // The last part's call still runs, on `toolPendingBg` in the panels look.
+        assert!(matches!(parts[4].last(), Some(Event::ToolOutput(_))));
     }
 }

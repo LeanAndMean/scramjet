@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.38.0 — More of a theme in the theme editor's sample
+
+### Changed
+
+- The theme editor's sample session shows a code block without a language and a horizontal rule in its reply, and ends with a call still running, so `mdCodeBlock`, `mdHr` and `toolPendingBg` (behind a running call in the panels look) can be seen as they are edited.
+
 ## 0.37.0 — A new theme from the terminal's own colors
 
 ### Added
