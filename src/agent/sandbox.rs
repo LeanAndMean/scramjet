@@ -371,15 +371,9 @@ impl Hidden {
         path: &Path,
         file: std::io::Result<std::fs::File>,
     ) -> Result<std::fs::File, String> {
-        use std::os::fd::AsRawFd;
         let failed = |error: std::io::Error| format!("{}: {error}", path.display());
         let file = file.map_err(failed)?;
-        let metadata = file.metadata().map_err(failed)?;
-        let opened = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()));
-        let real = opened.unwrap_or_else(|_| std::fs::canonicalize(path).unwrap_or_default());
-        let directories = real.ancestors().skip(1).filter_map(identity);
-        let mut found = std::iter::once((metadata.dev(), metadata.ino())).chain(directories);
-        match found.any(|found| self.identities.contains(&found)) {
+        match self.holds(&file, path).map_err(failed)? {
             true => Err(format!(
                 "{}: hidden, as it holds credentials",
                 path.display()
@@ -387,7 +381,53 @@ impl Hidden {
             false => Ok(file),
         }
     }
+
+    /// Whether `file` (opened at `path`) is, or is in, a store, walking up from the directory
+    /// holding it by `..`, never by path: a bash call with the stores hidden cannot move their
+    /// mount points, but can rename the directories above them while a path is looked up.
+    fn holds(&self, file: &std::fs::File, path: &Path) -> std::io::Result<bool> {
+        use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+        use std::os::fd::AsRawFd;
+        let up = LOOKUP | OFlags::DIRECTORY | OFlags::CLOEXEC;
+        let key = |stat: &rustix::fs::Stat| (stat.st_dev, stat.st_ino);
+        let stat = rustix::fs::fstat(file)?;
+        if self.identities.contains(&key(&stat)) {
+            return Ok(true);
+        }
+        let mut directory = if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
+            rustix::fs::openat(file, ".", up, Mode::empty())?
+        } else {
+            let real = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+                .or_else(|_| std::fs::canonicalize(path))?;
+            let (Some(parent), Some(name)) = (real.parent(), real.file_name()) else {
+                return Err(std::io::Error::other("not a file"));
+            };
+            let directory = rustix::fs::open(parent, up, Mode::empty())?;
+            let named = rustix::fs::statat(&directory, name, AtFlags::SYMLINK_NOFOLLOW)?;
+            if key(&named) != key(&stat) {
+                return Err(std::io::Error::other("moved while it was checked"));
+            }
+            directory
+        };
+        loop {
+            let here = key(&rustix::fs::fstat(&directory)?);
+            if self.identities.contains(&here) {
+                return Ok(true);
+            }
+            let parent = rustix::fs::openat(&directory, "..", up, Mode::empty())?;
+            if key(&rustix::fs::fstat(&parent)?) == here {
+                return Ok(false);
+            }
+            directory = parent;
+        }
+    }
 }
+
+/// Opens a directory to look in, needing no permission to list it where the system allows.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) const LOOKUP: rustix::fs::OFlags = rustix::fs::OFlags::PATH;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub(super) const LOOKUP: rustix::fs::OFlags = rustix::fs::OFlags::RDONLY;
 
 fn identity(path: &Path) -> Option<(u64, u64)> {
     std::fs::metadata(path)
@@ -807,6 +847,37 @@ ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
             let error = read(&path).unwrap_err();
             assert!(error.contains("hidden, as it holds credentials"), "{error}");
         }
+    }
+
+    #[test]
+    fn renaming_a_directory_above_a_store_does_not_let_a_file_in_it_through() {
+        let home = std::env::temp_dir().join(format!("scramjet-rename-up-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(home.join(".config/gh")).unwrap();
+        std::fs::write(home.join(".config/gh/hosts.yml"), "SECRET\n").unwrap();
+        let hidden = super::Hidden::under(&home, Vec::new());
+        std::os::unix::fs::symlink(home.join(".config/gh/hosts.yml"), root.join("a.txt")).unwrap();
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let mut passed = 0;
+        std::thread::scope(|scope| {
+            // As a bash call with the stores hidden can: their mount points stay, but not the
+            // directories above them.
+            scope.spawn(|| {
+                let (config, moved) = (home.join(".config"), home.join(".c"));
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::fs::rename(&config, &moved).unwrap();
+                    std::fs::rename(&moved, &config).unwrap();
+                }
+            });
+            for _ in 0..20000 {
+                let path = root.join("a.txt");
+                passed += usize::from(hidden.opened(&path, std::fs::File::open(&path)).is_ok());
+            }
+            done.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        assert_eq!(passed, 0);
     }
 
     #[test]

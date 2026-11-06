@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.53.4 — Credential stores stay hidden when the directories above them move
+
+### Fixed
+
+- With the credential stores hidden, `read`, `edit` and `write` check the file they opened by walking up from it rather than by its path, so a bash command renaming a directory above a store (`~/.config` above `.config/gh`) at the same moment cannot let a file inside the store through.
+- With the stores hidden, `write` and `edit` no longer make directories in a store before refusing a path a symlink swapped in leads there, and write into directories they may enter but not list.
+
 ## 0.53.3 — Credential stores stay hidden from a raced read
 
 ### Fixed

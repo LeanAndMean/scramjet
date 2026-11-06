@@ -591,11 +591,11 @@ type Put<'a> = dyn Fn(&Path, &str) -> Result<(), String> + 'a;
 /// is cut.
 fn put(path: &Path, content: &str, hidden: Option<&Hidden>) -> Result<(), String> {
     use std::io::Write;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
     let failed = |e: io::Error| format!("{}: {e}", path.display());
     let Some(hidden) = hidden else {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
         return std::fs::write(path, content).map_err(failed);
     };
     use rustix::{
@@ -607,7 +607,7 @@ fn put(path: &Path, content: &str, hidden: Option<&Hidden>) -> Result<(), String
     };
     // Made only in a directory checked as opened, and a symlink there followed only to a file
     // that exists, so that nothing is made in a store before the check refuses it.
-    let directory = hidden.opened(parent, std::fs::File::open(parent))?;
+    let directory = checked_directory(parent, hidden)?;
     let flags = OFlags::WRONLY | OFlags::CLOEXEC;
     let made = OFlags::CREATE | OFlags::NOFOLLOW;
     let file = match rustix::fs::openat(&directory, name, flags | made, Mode::from_raw_mode(0o666))
@@ -619,6 +619,33 @@ fn put(path: &Path, content: &str, hidden: Option<&Hidden>) -> Result<(), String
     let mut file = hidden.opened(path, file)?;
     file.set_len(0).map_err(failed)?;
     file.write_all(content.as_bytes()).map_err(failed)
+}
+
+/// The directory `path`, checked against the stores `hidden` as opened, made where missing in
+/// the directory above it, itself checked first.
+fn checked_directory(path: &Path, hidden: &Hidden) -> Result<std::fs::File, String> {
+    use rustix::{
+        fs::{Mode, OFlags},
+        io::Errno,
+    };
+    let flags = super::sandbox::LOOKUP | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let failed = |e: Errno| format!("{}: {}", path.display(), io::Error::from(e));
+    let opened = match rustix::fs::open(path, flags, Mode::empty()) {
+        Err(Errno::NOENT) => {
+            let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+                return Err(failed(Errno::NOENT));
+            };
+            let above = checked_directory(parent, hidden)?;
+            match rustix::fs::mkdirat(&above, name, Mode::from_raw_mode(0o777)) {
+                Ok(()) | Err(Errno::EXIST) => {}
+                Err(error) => return Err(failed(error)),
+            }
+            rustix::fs::openat(&above, name, flags | OFlags::NOFOLLOW, Mode::empty())
+        }
+        opened => opened,
+    };
+    let opened = opened.map(std::fs::File::from).map_err(io::Error::from);
+    hidden.opened(path, opened)
 }
 
 fn write(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
@@ -2112,6 +2139,27 @@ to see full lines]",
             std::fs::read_to_string(home.join(".netrc")).unwrap(),
             "SECRET-netrc\n"
         );
+    }
+
+    #[test]
+    fn a_write_through_a_swapped_in_symlink_makes_nothing_in_a_store() {
+        let home = std::env::temp_dir().join(format!("scramjet-put-dirs-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let hidden = Hidden::under(&home, Vec::new());
+        super::put(&root.join("new/deeper/a.txt"), "made\n", Some(&hidden)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("new/deeper/a.txt")).unwrap(),
+            "made\n"
+        );
+        // As if swapped in after the path was checked.
+        std::os::unix::fs::symlink(home.join(".ssh"), root.join("link")).unwrap();
+        let error =
+            super::put(&root.join("link/authorized_keys/x"), "key\n", Some(&hidden)).unwrap_err();
+        assert!(error.contains("hidden, as it holds credentials"), "{error}");
+        assert_eq!(std::fs::read_dir(home.join(".ssh")).unwrap().count(), 0);
     }
 
     #[test]
