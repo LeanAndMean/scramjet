@@ -27,6 +27,7 @@ import urllib.request
 import zlib
 
 BINARY = sys.argv[1]
+VERSION = subprocess.run([BINARY, '--version'], capture_output=True, text=True, check=True).stdout.strip()
 work = tempfile.mkdtemp(prefix='agent-editor-')
 atexit.register(shutil.rmtree, work, True)
 project = os.path.join(work, 'project')
@@ -364,11 +365,7 @@ for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'SS
 # Temporary files of the external editor go here, so the journeys can check they are removed.
 scratch = os.path.join(work, 'tmp')
 os.mkdir(scratch)
-# Most journeys read rows as the classic look and the plain banner show them, on the terminal's colors.
-CLASSIC = {'look': 'classic', 'banner': 'plain', 'theme': 'terminal-colors'}
 os.makedirs(os.path.join(env['XDG_CONFIG_HOME'], 'scramjet-rs'))
-with open(os.path.join(env['XDG_CONFIG_HOME'], 'scramjet-rs', 'settings.json'), 'w') as settings_file:
-    json.dump(CLASSIC, settings_file)
 # Checks its argument, the prompt file's mode and text, then writes a new text; exits 0.
 edit_script = os.path.join(work, 'edit.sh')
 with open(edit_script, 'w') as script_file:
@@ -492,16 +489,13 @@ def session_files():
 
 
 def config_home(name, settings=None):
-    """A directory for XDG_CONFIG_HOME of its own, with `settings` (text) as the settings file, over
-    the classic look's (`CLASSIC`) when it is JSON."""
+    """A directory for XDG_CONFIG_HOME of its own, with `settings` (text) as the settings file if
+    given."""
     path = os.path.join(work, 'config-' + name)
     os.makedirs(os.path.join(path, 'scramjet-rs'))
-    try:
-        settings = json.dumps(dict(CLASSIC, **json.loads(settings or '{}')))
-    except json.JSONDecodeError:
-        pass
-    with open(settings_path(path), 'w') as file:
-        file.write(settings)
+    if settings is not None:
+        with open(settings_path(path), 'w') as file:
+            file.write(settings)
     return path
 
 
@@ -510,9 +504,8 @@ def settings_path(home):
 
 
 def saved(home):
-    """The settings saved in `home`, but the classic look's that `config_home` wrote."""
-    settings = json.load(open(settings_path(home)))
-    return {key: value for key, value in settings.items() if CLASSIC.get(key) != value}
+    """The settings saved in `home`."""
+    return json.load(open(settings_path(home)))
 
 
 def saved_levels(path):
@@ -666,9 +659,12 @@ def without_rate(row, columns):
 
 
 def footer_ends(read, output, model, columns=60, rows=24):
-    """Waits until the footer's second row ends with `model`, the model and its effort."""
+    """Waits until the footer's second row ends with `model`, the model and its effort, or with a
+    match of it if it is a compiled pattern."""
     end = time.monotonic() + 10
-    while not (Screen(output, columns, rows).footer() or ['', ''])[1].endswith(model):
+    ends = (lambda row: re.search(model.pattern + '$', row)) if isinstance(model, re.Pattern) else (
+        lambda row: row.endswith(model))
+    while not ends((Screen(output, columns, rows).footer() or ['', ''])[1]):
         assert time.monotonic() < end, (model, Screen(output, columns, rows).footer())
         read(.05)
 
@@ -712,7 +708,7 @@ def first(read, until, send, output):
     # Shift+Enter, as kitty's protocol sends it, adds a line; the prompt is sent trimmed.
     send(b'\x1b[13;2uthree\x1b[13;2u\r')
     rows = on_screen('Error: provider: cannot connect')
-    assert '\n> one\n. two\n. three\n\nError: provider' in '\n'.join(rows), rows
+    assert '\n \u203a one\n   two\n   three\n\n\nError: provider' in '\n'.join(rows), rows
     send(b'\x1b[A')
     ending(read, output, ['> one', '. two', '. three'])
     send(b'\x03')
@@ -726,7 +722,7 @@ def resumed(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     # The resumed conversation comes first: its one prompt, whose request failed.
     rows = on_screen('\u2500' * 20)
-    assert '.jsonl\n\n> one\n. two\n. three' in '\n'.join(rows), rows
+    assert '\n \u203a one\n   two\n   three\n\n\nError: provider' in '\n'.join(rows), rows
     send(b'\x1b[A')
     ending(read, output, ['> one', '. two', '. three'])
     # A line ending in a backslash goes on in the next.
@@ -830,7 +826,7 @@ def approval_shows_hidden_characters(read, until, send, output):
     send(b'go\r')
     rows = on_screen('Allow? [y/N, a = allow all until exit]')
     assert b'\x1b[2Kecho hello' not in output, 'a command escape sequence reached the terminal'
-    assert '\u25cf bash rm -rf scratch\\r\\u{1b}[2Kecho hello' in rows, rows
+    assert ' bash  rm -rf scratch\\r\\u{1b}[2Kecho hello' in '\n'.join(rows), rows
     # Escape declines.
     send(b'\x1b')
     on_screen('The user denied this tool call.')
@@ -844,7 +840,7 @@ def exit_during_turn(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('bash setsid')
+    on_screen('bash  setsid')
     read(.3)
     # The first cancels the turn, the second exits as the cancellation ends.
     send(b'\x03')
@@ -903,7 +899,7 @@ def command_on_screen(command):
         shown, on_screen = full_screen()(read, output)
         on_screen('\u2500' * 20)
         send(b'go\r')
-        on_screen('bash ' + command)
+        on_screen('bash  ' + command)
         started(command)
     return script
 
@@ -970,7 +966,7 @@ def ctrl_t_hides_reasoning(read, until, send, output):
     on_screen('First thought.')
     send(b'\x14')
     rows = on_screen('Thinking blocks: hidden')
-    assert 'First thought.' not in '\n'.join(rows) and 'Thinking...' in rows, rows
+    assert 'First thought.' not in '\n'.join(rows) and ' Thinking...' in rows, rows
     thought_gate.set()
     rows = on_screen('The reply.')
     assert 'thought' not in '\n'.join(rows), rows
@@ -1065,7 +1061,7 @@ def running_counts_seconds(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    on_screen('\u25cf bash setsid sleep 5 & sleep 30')
+    on_screen(' bash  setsid sleep 5 & sleep 30')
     on_screen('Running 1s')
     on_screen('Running 2s')
     send(b'\x1b')
@@ -1077,11 +1073,11 @@ def running_shows_output(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
-    rows = on_screen('  first')
-    assert '  second' not in rows, rows
-    rows = on_screen('  second')
+    rows = on_screen('\n first')
+    assert ' second' not in rows, rows
+    rows = on_screen('\n second')
     text = '\n'.join(rows)
-    assert '\u25cf bash echo first; sleep 1.5; echo second; sleep 30\n  first\n  second' in text, text
+    assert re.search(' bash  echo first; sleep 1.5; echo second; sleep 30 +\u25cb\n\n first\n second', text), text
     send(b'\x1b')
     on_screen('(cancelled)')
     send(b'\x04')
@@ -1092,20 +1088,19 @@ def calls_running_together_show_at_once(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     # As in Scramjet, each call's rows show in its place while both run.
-    rows = on_screen('  two-1')
+    rows = on_screen('\n two-1')
     text = '\n'.join(rows)
-    both = ('\u25cf bash echo one-$((0+1)); sleep 2; echo one-$((1+1))\n  one-1\n\n'
-            '\u25cf bash echo two-$((0+1)); sleep 4; echo two-$((1+1))\n  two-1\n')
-    assert both in text, text
+    call = ' bash  echo %s-\\$\\(\\(0\\+1\\)\\); sleep \\d; echo[ \u25cb\n]+%s-\\$\\(\\(1\\+1\\)\\)[ \u25cb]*\n\n %s-1\n'
+    assert re.search(call % (('one',) * 3) + '\n+' + call % (('two',) * 3), text), text
     assert re.search(SPINNING + 'Running', text), text
     # The first ended above the second, which still runs.
-    rows = on_screen('  one-2')
+    rows = on_screen('\n one-2')
     text = '\n'.join(rows)
-    assert text.index('  one-2') < text.index('\u25cf bash echo two'), text
-    assert '  two-1\n' in text and '  two-2' not in text and re.search(SPINNING + 'Running', text), text
+    assert text.index('\n one-2') < text.index(' bash  echo two'), text
+    assert '\n two-1\n' in text and '\n two-2' not in text and re.search(SPINNING + 'Running', text), text
     rows = on_screen('Both ended.')
     text = '\n'.join(rows)
-    assert text.index('  one-2') < text.index('  two-2') < text.index('Both ended.'), text
+    assert text.index('\n one-2') < text.index('\n two-2') < text.index('Both ended.'), text
     send(b'\x04')
 
 
@@ -1115,7 +1110,7 @@ def final_texts_replace_lost_deltas(read, until, send, output):
     send(b'one\r')
     on_screen('The start of the reply.')
     rows = ended(read, output)
-    assert 'The start of the reply.' in rows, rows
+    assert ' The start of the reply.' in rows, rows
     send(b'two\r')
     on_screen('Only at the end.')
     send(b'three\r')
@@ -1571,7 +1566,7 @@ def new_session(read, until, send, output):
     on_screen('Error: provider: cannot connect')
     send(b'/clear\r')
     rows = on_screen('\u2713 New session started')
-    assert '> one' not in rows, rows
+    assert ' \u203a one' not in rows, rows
     send(b'two\r')
     on_screen('Error: provider: cannot connect')
     # Up recalls the prompts of the session before too.
@@ -1668,8 +1663,9 @@ def bang_commands(read, until, send, output):
     rows = on_screen(' (exit 3)')
     rule = '\u2500' * 20
     assert re.search(rule + '+\n \\$ echo hi; exit 3\n\n hi\n\n \\(exit 3\\)\n' + rule, '\n'.join(rows)), rows
-    # Scramjet's colors: green rules and command, dim output, the exit code red.
-    assert b'\x1b[1;32m$ echo hi; exit 3' in output and b'\x1b[31m(exit 3)' in output, output
+    # Scramjet's colors: green rules and command, dim output, the exit code red (scramjet-dark's).
+    assert b'\x1b[1;38;2;63;216;138m$ echo hi; exit 3' in output, output
+    assert b'\x1b[38;2;255;95;109m(exit 3)' in output, output
     send(b'!!echo secret\r')
     on_screen(' secret')
     send(b'!sleep 30\r')
@@ -1692,7 +1688,7 @@ def failed_after_bang(read, until, send, output):
 def resumed_bang_and_error(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     rows = '\n'.join(on_screen('Error: provider: cannot connect'))
-    assert ' $ echo secret\n\n secret\n' in rows and '> hello\n\nError: provider: cannot connect' in rows, rows
+    assert ' $ echo secret\n\n secret\n' in rows and ' \u203a hello\n\n\nError: provider: cannot connect' in rows, rows
     send(b'\x03\x04')
 
 
@@ -1763,14 +1759,14 @@ def fork_session(read, until, send, output):
     send(b'/fork\r')
     on_screen('Fork from message')
     send(b'\x1b[B')
-    on_screen('\u203a first')
+    on_screen('\n\u203a first')
     send(b'\x1b[A')
-    on_screen('\u203a second')
+    on_screen('\n\u203a second')
     send(b'\r')
     # The conversation before the second prompt is shown, then that prompt waits in the editor.
     rows = on_screen('\u2713 Forked to new session \u00b7 gpt-6-luna \u00b7 thinking medium')
     text = '\n'.join(rows)
-    assert '> first\n\nReply one.\n' in text and 'Reply two.' not in text, text
+    assert ' \u203a first\n\n\n Reply one.\n' in text and 'Reply two.' not in text, text
     ending(read, output, ['> second'])
     send(b' again\r')
     on_screen('Reply three.')
@@ -1781,7 +1777,7 @@ def fork_session(read, until, send, output):
     assert rows[at + 1] == '     \u2514\u2500 first (4 items, now) \u2713', rows
     send(b'\r')
     rows = on_screen('\u2713 Resumed session \u00b7 gpt-6-luna')
-    assert 'Reply two.' in rows, rows
+    assert ' Reply two.' in rows, rows
     send(b'/model\r')
     rows = on_screen('Select model')
     assert '\u203a   gpt-6-luna \u2713' in rows, rows
@@ -1811,7 +1807,7 @@ def clone_session(read, until, send, output):
     # The conversation is shown again as it was, in the new session.
     rows = on_screen('\u2713 Cloned to new session \u00b7 gpt-6-luna \u00b7 thinking medium')
     text = '\n'.join(rows)
-    assert '> first\n\nReply one.\n' in text and 'Session name set' not in text, text
+    assert ' \u203a first\n\n\n Reply one.\n' in text and 'Session name set' not in text, text
     ending(read, output, EMPTY)
     send(b'second\r')
     on_screen('Reply two.')
@@ -1822,7 +1818,7 @@ def clone_session(read, until, send, output):
     assert rows[at + 1] == '     \u2514\u2500 Work (4 items, now) \u2713', rows
     send(b'\r')
     rows = on_screen('\u2713 Resumed session \u00b7 gpt-6-luna')
-    assert 'Reply one.' in rows and 'Reply two.' not in rows, rows
+    assert ' Reply one.' in rows and 'Reply two.' not in '\n'.join(rows), rows
     # As Claude Code's `/branch [name]`, a name given names the new session.
     send(b'/branch Other try\r')
     on_screen('Session name set: Other try')
@@ -1877,7 +1873,7 @@ def tree_session(read, until, send, output):
     # the editor.
     rows = on_screen('\u2713 Navigated to selected point')
     text = '\n'.join(rows)
-    for expected in ['> first\n\nReply one.', 'Summary of that exploration:', 'The branch said two.']:
+    for expected in [' \u203a first\n\n\n Reply one.', 'Summary of that exploration:', 'The branch said two.']:
         assert expected in text, (expected, text)
     assert 'Reply two.' not in text, text
     ending(read, output, ['> second'])
@@ -2054,11 +2050,11 @@ def shift_tab_cycles_effort(read, until, send, output):
 
 
 def started_at(level):
-    """Checks the effort level the session starts at, in its first line."""
+    """Checks the effort level the session starts at, on the footer."""
     def check(read, until, send, output):
         shown, on_screen = full_screen()(read, output)
-        rows = on_screen('\u2500' * 20)
-        assert rows[0] == 'scramjet-rs \u00b7 gpt-6-luna \u00b7 thinking %s \u00b7' % level, rows
+        on_screen('\u2500' * 20)
+        footer_ends(read, output, 'gpt-6-luna \u2022 ' + ('thinking off' if level == 'off' else level))
         send(b'\x04')
     return check
 
@@ -2070,13 +2066,15 @@ class Footer:
 
 
 def starts_with(model, steps=(), notices=(), columns=60):
-    """Checks the model the session starts with, in its first line, and `notices` under it; then
+    """Checks the model the session starts with, on the footer (`model`, then its effort if it has
+    one), and `notices` above it; then
     sends each step's keys and waits for its text, or the footer's end (`Footer`), or a moment
     without one, before quitting."""
     def check(read, until, send, output):
         shown, on_screen = full_screen(columns)(read, output)
         rows = on_screen('\u2500' * 20)
-        assert rows[0].startswith('scramjet-rs \u00b7 %s \u00b7' % model), rows
+        footer_ends(read, output, re.compile(' %s( \u2022 .+)?' % re.escape(model)), columns)
+        rows = shown()
         for notice in notices:
             assert notice in rows, rows
         for keys, said in steps:
@@ -2094,8 +2092,8 @@ def starts_with(model, steps=(), notices=(), columns=60):
 
 def started_without_thinking(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
-    rows = on_screen('\u2500' * 20)
-    assert rows[0] == 'scramjet-rs \u00b7 gpt-6-luna \u00b7', rows
+    on_screen('\u2500' * 20)
+    footer_ends(read, output, ' gpt-6-luna')
     send(b'\x1b[Z')
     rows = on_screen('Current model does not support thinking')
     # Above the editor, until it goes by itself a few seconds later.
@@ -2108,8 +2106,8 @@ def started_without_thinking(read, until, send, output):
 
 def shift_tab_resumed(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
-    rows = on_screen('\u2500' * 20)
-    assert rows[0] == 'scramjet-rs \u00b7 gpt-6-luna \u00b7 thinking xhigh \u00b7', rows
+    on_screen('\u2500' * 20)
+    footer_ends(read, output, 'gpt-6-luna \u2022 xhigh')
     send(b'\x1b[Z')
     footer_ends(read, output, 'gpt-6-luna \u2022 max')
     send(b'\x04')
@@ -2119,7 +2117,7 @@ def ctrl_p_cycles_models(read, until, send, output):
     shown, on_screen = full_screen(columns=80)(read, output)
     rows = on_screen('\u2500' * 20)
     # A new session starts with the first model in the scope, at the effort its pattern sets.
-    assert rows[0].startswith('scramjet-rs \u00b7 gpt-6-terra \u00b7 thinking high \u00b7 /'), rows
+    footer_ends(read, output, 'gpt-6-terra \u2022 high', columns=80)
     assert 'settings: enabledModels: no models match pattern "nothing"' in '\n'.join(rows), rows
     send(b'\x10')
     footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 low', 80)], columns=80)
@@ -2163,7 +2161,7 @@ def agent_switches_the_model(read, until, send, output):
 def ctrl_p_in_a_scope_of_one(read, until, send, output):
     shown, on_screen = full_screen(columns=80)(read, output)
     rows = on_screen('\u2500' * 20)
-    assert rows[0].startswith('scramjet-rs \u00b7 gpt-6-terra \u00b7 thinking medium \u00b7'), rows
+    footer_ends(read, output, 'gpt-6-terra \u2022 medium', columns=80)
     assert '--models: no models match pattern "x"' in '\n'.join(rows), rows
     send(b'\x10')
     on_screen('Only one model in scope')
@@ -2264,8 +2262,8 @@ def settings_menu(read, until, send, output):
     send(b'/settings\r')
     rows = on_screen('Settings  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc close')
     assert '\u203a ' + setting('Thinking level', 'medium') in rows, rows
-    assert '  ' + setting('Theme', 'terminal-colors') in rows, rows
-    assert '  ' + setting('Look', 'classic') in rows, rows
+    assert '  ' + setting('Theme', 'scramjet-dark') in rows, rows
+    assert '  ' + setting('Look', 'panels') in rows, rows
     assert rows[-1] == '  start at. Shift+Tab cycles it.', rows
     # The thinking level is chosen from the model's levels; Enter takes one and goes back.
     send(b'\r')
@@ -2334,7 +2332,7 @@ def markdown_reads(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'read the guide\r')
     rows = on_screen('Read it.')
-    assert '  # Guide' in rows and '  Some **bold** text.' in rows, rows
+    assert ' # Guide' in rows and ' Some **bold** text.' in rows, rows
     # Changed in /settings, the file read shows as a document at once.
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
@@ -2346,7 +2344,7 @@ def markdown_reads(read, until, send, output):
     on_screen('\u203a ' + setting('Markdown reads', 'rendered'))
     send(b'\x1b')
     rows = on_screen('Settings  \u2191\u2193 move', gone=True)
-    assert '  Guide' in rows and '  Some bold text.' in rows and '  # Guide' not in rows, rows
+    assert ' Guide' in rows and ' Some bold text.' in rows and ' # Guide' not in rows, rows
     send(b'\x04')
 
 
@@ -2491,12 +2489,12 @@ def given_themes(given):
         rows = on_screen('Theme  \u2191\u2193 move \u00b7 Enter use \u00b7 Esc back')
         title = next(at for at, row in enumerate(rows) if row.startswith('Theme  '))
         names = [row[2:].strip() for row in rows[title + 1:title + 5]]
-        assert names == ['terminal-colors \u2713', 'scramjet-dark', 'pi-light', 'Given'], rows
+        assert names == ['terminal-colors', 'scramjet-dark \u2713', 'pi-light', 'Given'], rows
         assert 'Ocean' not in '\n'.join(rows), rows
         rows = select_row(read, shown, send, 'Given', b'\x1b[B')
         assert rows[-1] == '  From ' + given + '.', rows
         send(b'\x1b')
-        on_screen('\u203a ' + setting('Theme', 'terminal-colors'))
+        on_screen('\u203a ' + setting('Theme', 'scramjet-dark'))
         send(b'\x1b')
         on_screen('Settings  \u2191\u2193 move', gone=True)
         send(b'\x04')
@@ -2540,7 +2538,7 @@ def double_escape_forks(read, until, send, output):
 def double_escape_does_nothing(read, until, send, output):
     shown, on_screen = full_screen(200)(read, output)
     rows = on_screen('\u2500' * 20)
-    assert rows[0].startswith('scramjet-rs \u00b7 gpt-6-luna \u00b7 thinking medium \u00b7'), rows
+    footer_ends(read, output, 'gpt-6-luna \u2022 medium', columns=200)
     assert ('settings: ' + settings_path(quiet) + ': defaultThinkingLevel must be "off", "minimal", "low", "medium", '
             '"high", "xhigh", "max"; ignored') in rows, rows
     send(b'\x1b')
@@ -2630,7 +2628,7 @@ def search_selectors(read, until, send, output):
     on_screen('\u203a zebra stripes (2 items, now)')
     send(b'\r')
     rows = on_screen('\u2713 Resumed session \u00b7 gpt-6-luna')
-    assert '> zebra stripes' in rows and 'Reply one.' in rows, rows
+    assert ' \u203a zebra stripes' in rows and ' Reply one.' in rows, rows
     send(b'/model\r')
     on_screen('Select model')
     send(b'haiku')
@@ -2716,11 +2714,11 @@ def resume_at_start(read, until, send, output):
     shown, on_screen = full_screen(100)(read, output)
     # The sessions show first, the newest selected: no session is current yet.
     rows = on_screen('\u203a mango second (2 items, now)')
-    assert not any(row.startswith('scramjet-rs \u00b7') for row in rows), rows
+    assert not any(row.startswith('scramjet-rs v') for row in rows), rows
     send(b'\r')
     rows = on_screen('\u2713 Resumed session \u00b7 gpt-6-luna')
     text = '\n'.join(rows)
-    assert '> mango second\n\nMango reply.' in text and 'scramjet-rs \u00b7' not in text, rows
+    assert ' \u203a mango second\n\n\n Mango reply.' in text and 'scramjet-rs v' not in text, rows
     send(b'\x04')
 
 
@@ -2789,7 +2787,7 @@ assert saved(scoped) == {
     'enabledModels': ['gpt-6-terra:high', 'luna:low', 'nothing'], 'defaultThinkingLevel': 'low',
     'defaultProvider': 'openai', 'defaultModel': 'gpt-6-luna'}
 # The model chosen last, when the scope has it, starts the next session, at its pattern's effort.
-run([], starts_with('gpt-6-luna \u00b7 thinking low'), serve_replies([], models=scope_models),
+run([], starts_with('gpt-6-luna \u2022 low'), serve_replies([], models=scope_models),
     variables={'XDG_CONFIG_HOME': scoped})
 switch_models = [scope_models[0], model('gpt-6-terra', ['low', 'high'], 'openai', name='GPT-6 Terra')]
 known, bodies = set(session_files()), []
@@ -2824,8 +2822,8 @@ run(['--models', 'terra, x'], ctrl_p_in_a_scope_of_one,
 # As Scramjet's --model, a pattern names a model, a provider's prefix among its own, and :level sets
 # the effort, unless --thinking does.
 named = config_home('named-model')
-for arguments, started in [(['--model', 'terra:low'], 'gpt-6-terra \u00b7 thinking low'),
-                           (['--model', 'OpenAI/Terra:low', '--thinking', 'high'], 'gpt-6-terra \u00b7 thinking high')]:
+for arguments, started in [(['--model', 'terra:low'], 'gpt-6-terra \u2022 low'),
+                           (['--model', 'OpenAI/Terra:low', '--thinking', 'high'], 'gpt-6-terra \u2022 high')]:
     run(arguments, starts_with(started), serve_replies([], models=scope_models),
         variables={'XDG_CONFIG_HOME': named})
 # One naming none is refused before a session is written.
@@ -2917,7 +2915,7 @@ reads_home = config_home('reads', '{"markdown": {"toolDisplay": "source"}}')
 run([], markdown_reads, serve_items([[tool_call('call_1', 'read', {'path': guide})], [message('Read it.')]]),
     variables={'XDG_CONFIG_HOME': reads_home})
 assert saved(reads_home) == {'markdown': {'toolDisplay': 'rendered'}}
-theme_home = config_home('theme')
+theme_home = config_home('theme', '{"theme": "terminal-colors"}')
 exact = {'XDG_CONFIG_HOME': theme_home, 'COLORTERM': 'truecolor'}
 run([], theme_choice, serve_replies([(['Run `ls` now.'], 'Run `ls` now.')]), variables=exact)
 assert saved(theme_home) == {'theme': 'scramjet-dark'}
@@ -2992,9 +2990,9 @@ def command_sets(read, until, send, output):
     ending(read, output, ['> /demo:greet'])
     send(b'Ada "the reader"\r')
     rows = on_screen('Greeted.')
-    assert '> /demo:greet Ada "the reader"' in rows, rows
+    assert ' \u203a /demo:greet Ada "the reader"' in rows, rows
     # Without a report, Scramjet's status check follows, hidden; the model reports there.
-    rows = on_screen('\u25cf report_scramjet_command_status completed')
+    rows = on_screen(' report_scramjet_command_status  completed')
     assert 'Status check for' not in '\n'.join(rows), rows
     on_screen('status: completed')
     send(b'/tools:echo a  b\r')
@@ -3008,14 +3006,14 @@ def command_sets(read, until, send, output):
 
 def command_sets_resumed(read, until, send, output):
     # The resumed conversation and Up show the prompts as typed.
-    shown, on_screen = full_screen(rows=30)(read, output)
+    shown, on_screen = full_screen(rows=40)(read, output)
     rows = on_screen('Still here.')
-    assert '> /tools:echo a  b\n[command] tools:echo, sent as 1 line (Ctrl+O to expand)' in '\n'.join(rows), rows
-    assert '> /demo:greet Ada "the reader"' in rows, rows
+    assert ' \u203a /tools:echo a  b\n\n\n [command] tools:echo, sent as 1 line (Ctrl+O to expand)' in '\n'.join(rows), rows
+    assert ' \u203a /demo:greet Ada "the reader"' in rows, rows
     send(b'\x1b[A')
-    ending(read, output, ['> /tools:echo a  b'], rows=30)
+    ending(read, output, ['> /tools:echo a  b'], rows=40)
     send(b'\x1b[A')
-    ending(read, output, ['> /demo:greet Ada "the reader"'], rows=30)
+    ending(read, output, ['> /demo:greet Ada "the reader"'], rows=40)
     send(b'\x03\x04')
 
 
@@ -3031,10 +3029,10 @@ def skills(read, until, send, output):
     rows = on_screen('Filled.')
     # Shown as typed, as a command is, with what it sent behind Ctrl+O, without its tags or the
     # arguments typed.
-    assert '> /skill:pdf form.pdf\n[skill] pdf, sent as 3 lines (Ctrl+O to expand)' in '\n'.join(rows), rows
+    assert ' \u203a /skill:pdf form.pdf\n\n\n [skill] pdf, sent as 3 lines (Ctrl+O to expand)' in '\n'.join(rows), rows
     send(b'\x0f')
     rows = on_screen('Use ./fill.sh')
-    assert '[skill] pdf' in rows and 'form.pdf' not in rows, rows
+    assert ' [skill] pdf' in rows and ' form.pdf' not in rows, rows
     assert '<skill' not in '\n'.join(rows), rows
     send(b'\x04')
 
@@ -3255,10 +3253,10 @@ def questions(read, until, send, output):
 
 
 def questions_resumed(read, until, send, output):
-    shown, on_screen = full_screen()(read, output)
+    shown, on_screen = full_screen(rows=40)(read, output)
     rows = on_screen('Cancelled')
     text = '\n'.join(rows)
-    for expected in ['> pick', 'Which one?', '\u2192 Alpha \u2014 the first', '> go', 'Commit now?']:
+    for expected in [' \u203a pick', 'Which one?', '\u2192 Alpha \u2014 the first', ' \u203a go', 'Commit now?']:
         assert expected in text, (expected, text)
     send(b'\x04')
 
@@ -3268,7 +3266,7 @@ def next_steps(read, until, send, output):
     shown, on_screen = full_screen(rows=50)(read, output)
     on_screen('\u2500' * 20)
     send(b'/flow:step one\r')
-    on_screen('\u25cf report_scramjet_command_status completed')
+    on_screen(' report_scramjet_command_status  completed')
     # The steps the model offered, the recommended one selected, each reason under it.
     rows = on_screen('Select next step')
     text = '\n'.join(rows)
@@ -3286,12 +3284,12 @@ def next_steps(read, until, send, output):
     # step that the project's edge chains without asking.
     rows = on_screen('Second done.')
     text = '\n'.join(rows)
-    assert '> /flow:step two' in rows and 'New session started' in text, rows
+    assert ' \u203a /flow:step two' in rows and 'New session started' in text, rows
     assert text.index('New session started') < text.index('Next step runs with gpt-6-sol \u00b7 thinking xhigh') \
-        < text.index('> /flow:step two'), text
+        < text.index(' \u203a /flow:step two'), text
     rows = on_screen('All done.')
     text = '\n'.join(rows)
-    assert text.index('\u2192 /flow:done \u2014 Finish.') < text.index('> /flow:done') < text.index('All done.'), text
+    assert text.index('\u2192 /flow:done \u2014 Finish.') < text.index(' \u203a /flow:done') < text.index('All done.'), text
     send(b'/flow:step three\r')
     on_screen('Select next step')
     send(b'\x1b')
@@ -3304,7 +3302,7 @@ def next_steps_resumed(read, until, send, output):
     shown, on_screen = full_screen(rows=50)(read, output)
     # Each record shows where it showed when chosen, or when the list was dismissed.
     text = '\n'.join(on_screen('Cancelled'))
-    chosen, chained = text.index('\u2192 /flow:done \u2014 Finish.'), text.index('> /flow:done')
+    chosen, chained = text.index('\u2192 /flow:done \u2014 Finish.'), text.index(' \u203a /flow:done')
     assert chosen < chained < text.index('- /flow:step four \u2014 Again.'), text
     send(b'\x04')
 
@@ -3322,10 +3320,10 @@ def suggested_steps(read, until, send, output):
     assert text.index('Pick one.') < text.index('Agent suggests a next step'), text
     send(b'\r')
     # Run as if typed, after the record of the choice.
-    rows = on_screen('> /flow:step two')
+    rows = on_screen(' \u203a /flow:step two')
     text = '\n'.join(rows)
-    assert text.index('Agent-suggested next step:\n\u2192 /flow:step two \u2014 Go on.') < text.index('> /flow:step two'), text
-    on_screen('\u25cf report_scramjet_command_status completed')
+    assert text.index('Agent-suggested next step:\n\u2192 /flow:step two \u2014 Go on.') < text.index(' \u203a /flow:step two'), text
+    on_screen(' report_scramjet_command_status  completed')
     send(b'again\r')
     on_screen('Agent suggests a next step')
     # A text step goes into the editor, to send or change.
@@ -3347,7 +3345,7 @@ def dispatched_prompt_shows_escapes(read, until, send, output):
     send(b'/flow:step hostile\r')
     # The model wrote the chained step: its control characters show escaped, never raw.
     rows = on_screen('Finished hostile.')
-    assert '> /flow:done \\u{1b}]0;pwned\\u{7}' in rows, rows
+    assert ' \u203a /flow:done \\u{1b}]0;pwned\\u{7}' in rows, rows
     assert b'\x1b]0;pwned' not in output, 'a next step wrote an escape sequence to the terminal'
     send(b'\x04')
 
@@ -3369,7 +3367,7 @@ def parked_question_resumed(read, until, send, output):
     # The reply resumes the command the session saved as waiting for it: its turn gets the
     # status check, and the step the report offers is listed.
     on_screen('Used blue.')
-    on_screen('\u25cf report_scramjet_command_status completed')
+    on_screen(' report_scramjet_command_status  completed')
     rows = on_screen('Select next step')
     assert '\u2192 0: /flow:step again' in rows, rows
     send(b'\x1b')
@@ -3402,24 +3400,24 @@ def abandoned_command(read, until, send, output):
 
 def credentials_hidden_when_unattended(read, until, send, output):
     # Tall enough for the whole flow.
-    shown, on_screen = full_screen(rows=50)(read, output)
+    shown, on_screen = full_screen(rows=70)(read, output)
     on_screen('\u2500' * 20)
     send(b'/flow:step one\r')
     # Typed, and then chosen from the steps offered: the user's turns see the credential stores.
     rows = on_screen('Select next step')
-    assert '  FAKE-netrc-secret' in rows and '\u2192 0: /flow:step two' in rows, rows
+    assert ' FAKE-netrc-secret' in rows and '\u2192 0: /flow:step two' in rows, rows
     send(b'\r')
-    on_screen('> /flow:step two')
-    on_screen('  FAKE-netrc-secret')
+    on_screen(' \u203a /flow:step two')
+    on_screen(' FAKE-netrc-secret')
     # Chained by the project's edge, no one started it: they are hidden, the rest is writable.
     rows = on_screen('Finished.')
-    chained = rows.index('> /flow:done')
-    assert '  ran-42' in rows[chained:] and 'FAKE-' not in '\n'.join(rows[chained:]), rows
+    chained = rows.index(' \u203a /flow:done')
+    assert ' ran-42' in rows[chained:] and 'FAKE-' not in '\n'.join(rows[chained:]), rows
     send(b'\x04')
 
 
 def autopilot(read, until, send, output):
-    shown, on_screen = full_screen(rows=50)(read, output)
+    shown, on_screen = full_screen(rows=70)(read, output)
     on_screen('\u2500' * 20)
     send(b'/autopilot maybe\r')
     on_screen('Usage: /autopilot on|off|status')
@@ -3434,7 +3432,7 @@ def autopilot(read, until, send, output):
     on_screen('auto-selects in 2s')
     rows = on_screen('Stepped.')
     chosen = rows.index('\u2192 /flow:step two \u2014 Go on.')
-    assert '> /flow:step two' in rows[chosen:] and '  ran-42' in rows[chosen:], rows
+    assert ' \u203a /flow:step two' in rows[chosen:] and ' ran-42' in rows[chosen:], rows
     assert 'FAKE-' not in '\n'.join(rows[chosen:]), rows
     # A key stops the countdown: the list waits for the user.
     on_screen('auto-selects in 3s')
@@ -3524,7 +3522,7 @@ def next_step_settings(read, until, send, output):
     # Chained by the setting just made, unasked; then held for the user, autopilot on as it is.
     send(b'/flow:step one\r')
     rows = on_screen('Chained.')
-    assert '> /flow:step two' in rows, rows
+    assert ' \u203a /flow:step two' in rows, rows
     rows = on_screen('Select next step')
     assert 'auto-selects' not in '\n'.join(rows), rows
     send(b'\x1b')
@@ -3580,7 +3578,7 @@ known = set(session_files())
 run([], command_sets, serve_items([[message('Greeted.')], [report('call_1')], [message('Echoed.')],
                                    [message('Still here.')], [message('Still at it.')],
                                    [message('Nearly there.')]]))
-run(['--continue'], command_sets_resumed, rows=30)
+run(['--continue'], command_sets_resumed, rows=40)
 (commanded,) = set(session_files()) - known
 lines = list(map(json.loads, open(commanded)))
 checks = [line['content'] for line in lines if line.get('_scramjet_probe')]
@@ -3673,7 +3671,7 @@ asking = serve_items([
 ], question_gate)
 known = set(session_files())
 run([], questions, asking)
-run(['--continue'], questions_resumed)
+run(['--continue'], questions_resumed, rows=40)
 (asked,) = set(session_files()) - known
 outputs = [line['output'] for line in map(json.loads, open(asked)) if line.get('type') == 'function_call_output']
 assert outputs == ['{"selected":"a"}', '{"cancelled":true}'], outputs
@@ -3786,7 +3784,7 @@ run([], credentials_hidden_when_unattended, serve_items([
     [report('call_4', [('/flow:done', False, 'Finish.')], 0)],
     [peek('call_5')],
     [message('Finished.'), report('call_6')],
-]), variables=in_fake_home, rows=50)
+]), variables=in_fake_home, rows=70)
 (peeked,) = set(session_files()) - known
 outputs = [line['output'] for line in map(json.loads, open(peeked))
            if line.get('type') == 'function_call_output' and line['call_id'] in ('call_1', 'call_3', 'call_5')]
@@ -3799,7 +3797,7 @@ run([], autopilot, serve_items([
     [peek('call_2')],
     [message('Stepped.'), report('call_3', [('/flow:step three', False, 'Again.'),
                                            ('/flow:step four', False, 'Or this.')], 0)],
-]), variables=in_fake_home, rows=50)
+]), variables=in_fake_home, rows=70)
 run(['--continue'], autopilot_resumed)
 (piloted,) = set(session_files()) - known
 lines = list(map(json.loads, open(piloted)))
@@ -3873,13 +3871,13 @@ def publications(read, until, send, output):
     # Asked first: the exact payload, then the choice, Approve selected.
     rows = on_screen('\u2192 Approve publication')
     text = '\n'.join(rows)
-    for expected in ['\u25cf create_issue Fix the parser', 'Provider: github', 'Repository: o/r',
+    for expected in [' create_issue  Fix the parser', 'Provider: github', 'Repository: o/r',
                      'Consequence: publish a new issue', 'It breaks on tabs.', 'Create issue in o/r',
                      '  Cancel']:
         assert expected in text, (expected, text)
     send(b'\r')
     rows = on_screen('Filed.')
-    assert '  Create issue publication verified:\n  https://github.com/o/r/issues/5' in '\n'.join(rows), rows
+    assert ' Create issue publication verified:\n https://github.com/o/r/issues/5' in '\n'.join(rows), rows
     # /settings: each publishing command's tools under it, whether each asks and who says so.
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
@@ -3910,12 +3908,12 @@ def publications(read, until, send, output):
     rows = on_screen('Posted.')
     assert 'Approve publication' not in '\n'.join(rows), rows
     # Published without a preview, it shows what it published once Ctrl+O expands it.
-    assert 'issues/5\n  \u2026 (the issue, 7 lines, Ctrl+O to expand)\n\nPosted.' in '\n'.join(rows), rows
-    expanded = '  It breaks on tabs.\n\n  Create issue publication verified:\n  https://github.com/o/r/issues/5\n\nPosted.'
+    assert 'issues/5\n \u2026 (the issue, 7 lines, Ctrl+O to expand)\n\n\n Posted.' in '\n'.join(rows), rows
+    expanded = ' It breaks on tabs.\n\n Create issue publication verified:\n https://github.com/o/r/issues/5\n\n\n Posted.'
     send(b'\x0f')
     rows = on_screen(expanded)
-    assert '\u25cf create_issue Fix the parser\n  Title\n\n  Fix the parser\n\n  Body\n\n' + expanded \
-        in '\n'.join(rows), rows
+    assert re.search(' create_issue  Fix the parser +\u2713\n\n Title\n\n Fix the parser\n\n Body\n\n'
+                     + re.escape(expanded), '\n'.join(rows)), rows
     send(b'\x0f')
     on_screen(expanded, gone=True)
     # Escape cancels; nothing is written, and the turn goes on.
@@ -3993,7 +3991,7 @@ def fullscreen_turn(read, until, send, output):
     send(b'go\r')
     rows = on_screen('Done, it says two.')
     text = '\n'.join(rows)
-    for expected in ['> go', 'Changing the file.', '\u25cf edit a.txt', '+1 two', '\u25cf bash echo checked; exit 2',
+    for expected in ['Changing the file.', ' edit  a.txt', '+1 two', ' bash  echo checked; exit 2',
                      'Command exited with code 2']:
         assert expected in text, (expected, text)
     rows = ended(read, output)
@@ -4007,22 +4005,28 @@ def fullscreen_turn(read, until, send, output):
     on_screen('Changing the file.')
     send(b'\x1b[5~')
     rows = on_screen('more lines below')
+    assert ' \u203a go' in rows, rows
     send(b'\x1b')
     on_screen('more lines below', gone=True)
     send(b'\x04')
 
 
 def fullscreen_turn_resumed(read, until, send, output):
-    """The turn is shown as it ran: reasoning, the edit's diff, the failed command in red, the reply."""
+    """The turn is shown as it ran: reasoning, the edit's diff, the failed command on the failure's
+    background, the reply."""
     shown, on_screen = full_screen()(read, output)
     rows = on_screen('Done, it says two.')
-    send(b'\x1b[5~')
-    rows = on_screen('> go')
     text = '\n'.join(rows)
-    for expected in ['Changing the file.', '\u25cf edit a.txt', '-1 one', '+1 two', '\u25cf bash echo checked; exit 2',
-                     '  checked', 'Command exited with code 2']:
+    for expected in [' bash  echo checked; exit 2', '\n checked\n', 'Command exited with code 2']:
         assert expected in text, (expected, text)
-    assert b'\x1b[31mchecked' in output, 'the failed command is not red'
+    # scramjet-dark's toolErrorBg behind its toolOutput.
+    assert b'\x1b[48;2;38;20;26m \x1b[38;2;139;149;167mchecked' in output, \
+        'the failed command is not on the failure\'s background'
+    send(b'\x1b[5~')
+    rows = on_screen(' \u203a go')
+    text = '\n'.join(rows)
+    for expected in ['Changing the file.', ' edit  a.txt', '-1 one', '+1 two']:
+        assert expected in text, (expected, text)
     send(b'\x04')
 
 
@@ -4059,7 +4063,7 @@ def fullscreen_lists(read, until, send, output):
 
 
 def fullscreen_queue(read, until, send, output):
-    shown, on_screen = full_screen()(read, output)
+    shown, on_screen = full_screen(rows=40)(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
     on_screen('Running 1s')
@@ -4074,10 +4078,10 @@ def fullscreen_queue(read, until, send, output):
     on_screen('Followed.')
     # The command's status check, as its turn ended without a report; the model reports there.
     on_screen('Checked.')
-    rows = ended(read, output)
+    rows = ended(read, output, rows=40)
     text = '\n'.join(rows)
-    assert (text.index('> steer this') < text.index('> /demo:greet Ann\n[command] demo:greet, sent as 5 lines')
-            < text.index('Steered.') < text.index('> after that') < text.index('Followed.')
+    assert (text.index(' \u203a steer this') < text.index(' \u203a /demo:greet Ann\n\n\n [command] demo:greet, sent as 5 lines')
+            < text.index('Steered.') < text.index(' \u203a after that') < text.index('Followed.')
             < text.index('Checked.')), text
     assert 'Steering:' not in text and 'Follow-up:' not in text, text
     send(b'again\r')
@@ -4161,8 +4165,8 @@ def prompt_keys(read, until, send, output):
     assert rows[-1] == '> draft', rows
     # Ctrl+Home shows the conversation's start, Ctrl+End its end again.
     send(b'\x1b[1;5H')
-    rows = on_screen('Row 1 of the reply.')
-    assert '> go' in rows, rows
+    rows = on_screen('more lines below')
+    assert rows[0] == 'scramjet-rs v' + VERSION and ' \u203a go' in rows, rows
     send(b'\x1b[1;5F')
     rows = on_screen('Row 40 of the reply.')
     assert 'Row 1 of the reply.' not in '\n'.join(rows), rows
@@ -4223,11 +4227,11 @@ def fullscreen_mouse(read, until, send, output):
     on_screen('more lines below', gone=True)
     send(b'\x1b[<64;5;5M\x1b[<64;5;5M')
     rows = on_screen('6 more lines below')
-    row = next(index for index, text in enumerate(rows) if text.startswith('Row 20 ')) + 1
+    row = next(index for index, text in enumerate(rows) if text.startswith(' Row 20 ')) + 1
     # A drag selects from the cell pressed to before the cell the pointer is on, shown reversed;
     # Ctrl+C copies it with the clipboard tool and lets it go, the view staying where it is.
     mark = len(output)
-    send(b'\x1b[<0;5;%dM\x1b[<32;7;%dM\x1b[<32;9;%dM\x1b[<0;9;%dm' % (row, row + 1, row + 2, row + 2))
+    send(b'\x1b[<0;6;%dM\x1b[<32;8;%dM\x1b[<32;10;%dM\x1b[<0;10;%dm' % (row, row + 1, row + 2, row + 2))
     until(b'\x1b[7m20 of the reply.', mark)
     copied = len(output)
     send(b'\x03')
@@ -4259,7 +4263,7 @@ def fullscreen_mouse(read, until, send, output):
     # A press on the track puts the thumb's middle there, as far as it goes: at the top, the start.
     send(b'\x1b[<0;60;1M\x1b[<0;60;1m')
     rows = on_screen('more lines below')
-    assert rows[0].startswith('scramjet-rs \u00b7 '), rows
+    assert rows[0].startswith('scramjet-rs v'), rows
     below = int(re.search(r'(\d+) more lines below', '\n'.join(rows)).group(1))
     assert thumb == track * track // (track + below), (thumb, track, below)
     assert bar() == '\u2588' * thumb + '\u2502' * (track - thumb) + at_end[track:], bar()
@@ -4283,11 +4287,11 @@ def fullscreen_copy_unwrapped(read, until, send, output):
     send(b'go\r')
     on_screen('one line.')
     rows = ended(read, output)
-    one = next(index for index, text in enumerate(rows) if text == '  one')
+    one = next(index for index, text in enumerate(rows) if text == ' one')
     end = next(index for index, text in enumerate(rows) if text.endswith('one line.'))
-    assert rows[end - 2].startswith('The tests'), rows
+    assert rows[end - 2].startswith(' The tests'), rows
     # As Scramjet's, a code block's lines two columns in from its fence.
-    assert rows[end + 2:end + 6] == ['```sh', '  cargo test \\', '    --all', '```'], rows
+    assert rows[end + 2:end + 6] == [' ```sh', '   cargo test \\', '     --all', ' ```'], rows
     # Dragged from the tool result's gutter to past the end of the reply: the copy leaves the
     # gutter and the code's indent out and joins the reply's wrapped rows.
     send(b'\x1b[<0;1;%dM\x1b[<32;60;%dM\x1b[<0;60;%dm\x03' % (one + 1, end + 6, end + 6))
@@ -4302,9 +4306,9 @@ def fullscreen_copy_into_the_dock(read, until, send, output):
     on_screen(full_width)
     rows = ended(read, output)
     # A row as wide as the conversation, the screen but for the scrollbar's column, keeps its last.
-    assert full_width in rows, rows
-    call = rows.index('\u25cf bash for w in a b; do')
-    assert rows[call + 1:call + 3] == ['    echo $w', '  done'], rows
+    assert ' ' + full_width in rows, rows
+    call = next(at for at, row in enumerate(rows) if row.startswith(' bash  for w in a b; do'))
+    assert rows[call + 1:call + 3] == ['         echo $w', '       done'], rows
     # A command's later lines are copied as written, without the columns that put them under the first.
     send(b'\x1b[<0;8;%dM\x1b[<32;60;%dM\x1b[<0;60;%dm\x03' % (call + 1, call + 3, call + 3))
     copied('for w in a b; do\n  echo $w\ndone')
@@ -4312,7 +4316,7 @@ def fullscreen_copy_into_the_dock(read, until, send, output):
     send(draft.encode())
     rows = on_screen('alpha end')
     assert rows[-2:] == ['> ' + 'alpha ' * 8 + 'alpha', '  alpha alpha end'], rows
-    reply = rows.index(full_width) + 1
+    reply = rows.index(' ' + full_width) + 1
     # The prompt's last row, over the footer.
     bottom = len(rows)
     # At the end, a drag goes on into the dock: the blank status line, not the rule, and the
@@ -4333,7 +4337,7 @@ def fullscreen_copied_by_the_terminal(read, until, send, output):
     send(b'go\r')
     on_screen('Row 40 of the reply.')
     rows = ended(read, output)
-    row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
+    row = next(index for index, text in enumerate(rows) if text.startswith(' Row 30 ')) + 1
     # Without a clipboard tool, a right click copies with OSC 52.
     send(b'\x1b[<0;1;%dM\x1b[<32;8;%dM\x1b[<0;8;%dm\x1b[<2;1;1M' % (row, row, row))
     until(b'\x1b]52;c;%s\x07' % base64.b64encode(b'Row 30'))
@@ -4390,16 +4394,16 @@ def fullscreen_paste_and_clicks(read, until, send, output):
     send(b'\r')
     on_screen('Row 40 of the reply.')
     rows = ended(read, output)
-    row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
+    row = next(index for index, text in enumerate(rows) if text.startswith(' Row 30 ')) + 1
     # A right click on the scrollbar's column pastes nothing (the stand-in counts its reads).
     send(b'\x1b[<2;60;%dM\x1b[<2;60;%dm' % (row, row))
     # A double click selects the word under it, a triple click the line.
-    send(b'\x1b[<0;15;%dM\x1b[<0;15;%dm' % (row, row) * 2)
+    send(b'\x1b[<0;16;%dM\x1b[<0;16;%dm' % (row, row) * 2)
     until(b'\x1b[7mreply')
     send(b'\x03')
     copied('reply')
-    send(b'\x1b[<0;15;%dM\x1b[<0;15;%dm' % (row, row) * 3)
-    until(b'\x1b[7mRow 30 of the reply.')
+    send(b'\x1b[<0;16;%dM\x1b[<0;16;%dm' % (row, row) * 3)
+    until(b'\x1b[7m Row 30 of the reply.')
     send(b'\x03')
     copied('Row 30 of the reply.')
     # The selection goes once the screen sees the copy end, after the stand-in has written it;
@@ -4419,14 +4423,14 @@ def fullscreen_copy_on_select(read, until, send, output):
     send(b'go\r')
     on_screen('Row 40 of the reply.')
     rows = ended(read, output)
-    row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
+    row = next(index for index, text in enumerate(rows) if text.startswith(' Row 30 ')) + 1
     copies = clipboard + '.log'
     # With copyOnSelect, a drag's selection is copied as the button is let go.
     send(b'\x1b[<0;1;%dM\x1b[<32;8;%dM\x1b[<0;8;%dm' % (row, row, row))
     copied('Row 30')
     # A click copies nothing, a double click the word; a triple click completed while that copy
     # runs (the stand-in takes 0.4 s), the line, once it ended.
-    send(b'\x1b[<0;15;%dM\x1b[<0;15;%dm' % (row, row) * 3)
+    send(b'\x1b[<0;16;%dM\x1b[<0;16;%dm' % (row, row) * 3)
     copied('Row 30 of the reply.')
     assert open(copies).read() == 'Row 30\nreply\nRow 30 of the reply.\n', open(copies).read()
     # The selection goes once the screen sees the copy end, after the stand-in has written it;
@@ -4452,11 +4456,11 @@ def fullscreen_copy_on_select(read, until, send, output):
     on_screen('\u203a ' + setting('Copy on select', 'off'))
     send(b'\x1b')
     rows = on_screen('Settings  \u2191\u2193 move', gone=True)
-    row = next(index for index, text in enumerate(rows) if text.startswith('Row 30 ')) + 1
+    row = next(index for index, text in enumerate(rows) if text.startswith(' Row 30 ')) + 1
     # Switched off, a selection waits for Ctrl+C or a right click.
     mark = len(output)
     send(b'\x1b[<0;1;%dM\x1b[<32;8;%dM\x1b[<0;8;%dm' % (row, row, row))
-    until(b'\x1b[7mRow 30', mark)
+    until(b'\x1b[7m Row 30', mark)
     read(.8)
     assert open(copies).read().count('\n') == 3, open(copies).read()
     send(b'\x1b[<2;5;5M\x1b[<2;5;5m')
@@ -4499,10 +4503,10 @@ def fullscreen_collapsed(read, until, send, output):
     send(b'/compact\r')
     rows = on_screen('Point 1 of')
     assert 'Point 14' not in '\n'.join(rows), rows
-    assert re.search(r'\n\u2026 \(\d+ more lines, \d+ total, Ctrl\+O to expand\)\n', '\n'.join(rows)), rows
+    assert re.search(r'\n \u2026 \(\d+ more lines, \d+ total, Ctrl\+O to expand\)\n', '\n'.join(rows)), rows
     send(b'/demo:greet Ada\r')
     rows = on_screen('Greeted.')
-    assert '> /demo:greet Ada\n[command] demo:greet, sent as 5 lines (Ctrl+O to expand)' in '\n'.join(rows), rows
+    assert ' \u203a /demo:greet Ada\n\n\n [command] demo:greet, sent as 5 lines (Ctrl+O to expand)' in '\n'.join(rows), rows
     # Ctrl+O shows both whole, in place, and again cut.
     send(b'\x0f')
     rows = on_screen('Greet Ada warmly.')
@@ -4515,12 +4519,12 @@ def fullscreen_collapsed(read, until, send, output):
 
 
 def fullscreen_collapsed_resumed(read, until, send, output):
-    shown, on_screen = full_screen(rows=30)(read, output)
+    shown, on_screen = full_screen(rows=40)(read, output)
     on_screen('[command] demo:greet, sent as 5 lines (Ctrl+O to expand)')
     send(b'\x1b[5~')
     on_screen('more lines below')
     rows = on_screen('Point 1 of')
-    assert re.search(r'\n\u2026 \(\d+ more lines, \d+ total, Ctrl\+O to expand\)\n', '\n'.join(rows)), rows
+    assert re.search(r'\n \u2026 \(\d+ more lines, \d+ total, Ctrl\+O to expand\)\n', '\n'.join(rows)), rows
     send(b'\x1b')
     on_screen('more lines below', gone=True)
     send(b'\x0f')
@@ -4542,14 +4546,14 @@ def fullscreen_subagent(read, until, send, output):
     # Once the call's result is in, the session's cost counts the child's once.
     footer_spent(read, output, '$0.100')
     text = '\n'.join(rows)
-    for expected in ['\u25cf subagent scout [user]', '\u2713 scout (user) gpt-6-luna', '  \u2192 ls .\n  Found a.txt.',
-                     '  Line 3\n  \u2026 (2 more lines, Ctrl+O to expand)\n  2 turns']:
+    for expected in [' subagent  scout [user]', '\u2713 scout (user) gpt-6-luna', ' \u2192 ls .\n Found a.txt.',
+                     ' Line 3\n \u2026 (2 more lines, Ctrl+O to expand)\n 2 turns']:
         assert expected in text, (expected, text)
     assert 'Line 4' not in text, text
     # Ctrl+O shows it whole, its task and result; again, cut.
     send(b'\x0f')
     rows = on_screen('Line 5')
-    assert '\u2500\u2500\u2500 Task \u2500\u2500\u2500\n  Look around the project.' in '\n'.join(rows), rows
+    assert '\u2500\u2500\u2500 Task \u2500\u2500\u2500\n Look around the project.' in '\n'.join(rows), rows
     send(b'\x0f')
     on_screen('Line 5', gone=True)
     send(b'\x04')
@@ -4559,7 +4563,7 @@ def fullscreen_subagent_resumed(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     rows = on_screen('Scouted.')
     footer_spent(read, output, '$0.100')
-    assert '  Line 3\n  \u2026 (2 more lines, Ctrl+O to expand)' in '\n'.join(rows), rows
+    assert ' Line 3\n \u2026 (2 more lines, Ctrl+O to expand)' in '\n'.join(rows), rows
     send(b'\x0f')
     on_screen('Line 5')
     send(b'\x04')
@@ -4583,7 +4587,7 @@ run([], fullscreen_queue, serve_items([
     [message('Followed.')],
     [message('Checked.'), report('call_3')],
     [tool_call('call_2', 'bash', {'command': 'sleep 30'})],
-]))
+]), rows=40)
 (queued,) = set(session_files()) - known
 users = [line for line in map(json.loads, open(queued)) if line.get('role') == 'user' and '_scramjet_probe' not in line]
 prompts = [line.get('_scramjet_typed', line['content']) for line in users]
@@ -4651,7 +4655,7 @@ run([], fullscreen_copy_unwrapped, serve_items([
     [tool_call('call_1', 'bash', {'command': "printf 'one\\n  two\\n'"})], [message(wrapped_reply + code_reply)],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
                'CLIPBOARD': clipboard})
-full_width = 'Copied, and this reply fills all fifty-nine of its columns.'
+full_width = 'Copied, and with its pad, this reply fills all 59 columns.'
 run([], fullscreen_copy_into_the_dock, serve_items([
     [tool_call('call_1', 'bash', {'command': 'for w in a b; do\n  echo $w\ndone'})], [message(full_width)],
 ]), variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
@@ -4754,7 +4758,7 @@ run([], fullscreen_collapsed, serve_items([
     [tool_call('call_1', 'bash', {'command': long_line})], [tool_call('call_2', 'bash', {'command': long_line})],
     [message('Printed.')], [message(summary)], [message('Greeted.')], [report('call_3')],
 ]))
-run(['--continue'], fullscreen_collapsed_resumed, rows=30)
+run(['--continue'], fullscreen_collapsed_resumed, rows=40)
 os.makedirs(os.path.join(work, 'agent', 'agents'), exist_ok=True)
 with open(os.path.join(work, 'agent', 'agents', 'scout.md'), 'w') as file:
     file.write('---\nname: scout\ndescription: Looks around\ntools: ls\n---\n\nYou look around.\n')
@@ -4788,7 +4792,7 @@ def tiny_png(width, height):
             + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
 
 
-ATTACHED = '> @notes.md @shots/dot.png What are these?\n\u2026 (sent as 5 lines, Ctrl+O to expand)'
+ATTACHED = ' \u203a @notes.md @shots/dot.png What are these?\n\n\n \u2026 (sent as 5 lines, Ctrl+O to expand)'
 
 
 def attached_files(read, until, send, output):
@@ -4796,6 +4800,10 @@ def attached_files(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     rows = on_screen('A note and a dot.')
     assert ATTACHED in '\n'.join(rows), rows
+    # Ctrl+O shows what was sent in the same box.
+    send(b'\x0f')
+    rows = on_screen('first note')
+    assert ' first note' in rows, rows
     send(b'\x04')
 
 
@@ -4809,7 +4817,7 @@ def attached_files_resumed(read, until, send, output):
 def attached_alone(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     rows = on_screen('A note.')
-    assert '> @notes.md\n\u2026 (sent as 3 lines, Ctrl+O to expand)' in '\n'.join(rows), rows
+    assert ' \u203a @notes.md\n\n\n \u2026 (sent as 3 lines, Ctrl+O to expand)' in '\n'.join(rows), rows
     send(b'\x04')
 
 

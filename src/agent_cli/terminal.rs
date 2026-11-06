@@ -1157,14 +1157,20 @@ impl AgentUi for Terminal {
             return;
         }
         let body = command_body(sent);
-        if self.full {
-            let width = if self.color { self.width() } else { 0 };
-            let block = self.summary_block(body, width);
-            self.err(&format!("\n{block}\n"));
+        let shown = if self.full {
+            let width = if self.color { self.box_width() } else { 0 };
+            Some(self.summary_block(body, width))
         } else if self.expandable {
             let lines = lines(body);
-            let hint = self.dim(&format!("… (sent as {lines}{})", self.expand_hint()));
-            self.err(&format!("{hint}\n"));
+            Some(self.dim(&format!("… (sent as {lines}{})", self.expand_hint())))
+        } else {
+            None
+        };
+        match shown {
+            Some(shown) if self.boxed() => self.err(&boxed(&shown)),
+            Some(shown) if self.full => self.err(&format!("\n{shown}\n")),
+            Some(shown) => self.err(&format!("{shown}\n")),
+            None => {}
         }
         self.err("\n");
     }

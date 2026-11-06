@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.42.1 — Attached files in a box
+
+### Fixed
+
+- A prompt that sent files named with `@` shows its `… (sent as N lines)` note, and what was sent once Ctrl+O expands it, in the same box as a command's or skill's text, rather than flush at the screen's left edge.
+
 ## 0.42.0 — Padded panels, one left edge, wrapped tool output
 
 ### Changed
