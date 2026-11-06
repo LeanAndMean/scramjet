@@ -859,6 +859,12 @@ impl Agent {
         self.unsaved.is_none()
     }
 
+    /// The lines of the session's file that could not be read when it was opened (numbered
+    /// from 0, the header's), which it goes on without.
+    pub fn session_skipped(&self) -> &[usize] {
+        self.session.skipped()
+    }
+
     /// With `SessionChoice::Unsaved`, the directory every session of the run is in.
     pub fn unsaved_directory(&self) -> Option<&Path> {
         self.unsaved.as_ref().map(session::Unsaved::path)

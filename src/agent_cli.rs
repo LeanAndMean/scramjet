@@ -332,6 +332,10 @@ fn start(
         sandbox,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
+    if let Some(skipped) = interactive::skipped_lines(&agent) {
+        let path = agent.session_path().display();
+        warnings.push(format!("session {path}: {skipped}"));
+    }
     let (scoped, scope_warnings) = match patterns.is_empty() {
         true => Default::default(),
         false => scope::resolve(patterns, &agent.model_options()),

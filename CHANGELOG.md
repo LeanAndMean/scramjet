@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.56.1 — Session files survive a full disk
+
+### Fixed
+
+- A line that could not be saved whole, as when the disk is full, no longer leaves the session file unreadable: a failed write takes back what it wrote, and a line left cut short (by an older version, or a kill) is cut off before the next one is written.
+- A session file with lines that cannot be read opens without them, saying which (at start, and on `/resume`, `/fork` and `/clone`), where it was refused whole.
+
 ## 0.56.0 — Sessions linked into chains
 
 ### Added

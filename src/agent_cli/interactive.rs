@@ -821,9 +821,38 @@ pub(super) fn model_line(agent: &Agent) -> String {
 
 /// Where the session is saved, as said when it starts or another replaces it.
 pub(super) fn saved_line(agent: &Agent) -> String {
-    match agent.session_saved() {
+    let saved = match agent.session_saved() {
         true => format!("session {}", agent.session_path().display()),
         false => "session not saved (--no-session)".to_owned(),
+    };
+    match skipped_lines(agent) {
+        Some(skipped) => format!("{saved} ({skipped})"),
+        None => saved,
+    }
+}
+
+/// What to say of the session file's lines that could not be read, if any.
+pub(super) fn skipped_lines(agent: &Agent) -> Option<String> {
+    let skipped = agent.session_skipped();
+    let numbers = |lines: &[usize]| {
+        let numbers: Vec<String> = lines.iter().map(|line| (line + 1).to_string()).collect();
+        numbers.join(", ")
+    };
+    match skipped {
+        [] => None,
+        [line] => Some(format!(
+            "its line {} could not be read and is left out",
+            line + 1
+        )),
+        [..] if skipped.len() <= 5 => Some(format!(
+            "its lines {} could not be read and are left out",
+            numbers(skipped)
+        )),
+        _ => Some(format!(
+            "{} of its lines could not be read and are left out, from line {}",
+            skipped.len(),
+            skipped[0] + 1
+        )),
     }
 }
 

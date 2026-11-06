@@ -703,6 +703,52 @@ fn sessions_are_listed_and_continued_by_their_last_write() {
 }
 
 #[test]
+fn a_session_goes_on_past_unreadable_lines_and_a_cut_last_line() {
+    let directory = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-damaged-{}", std::process::id())),
+    );
+    let path = directory.0.join("1000-1.jsonl");
+    let lines = [
+        r#"{"type":"session","version":1}"#,
+        r#"{"role":"user","content":"first"}"#,
+        r#"{"role":"user","cont"#,
+        r#"{"type":"branch","parent":7}"#,
+        r#"{"role":"user","content":"second"}"#,
+    ];
+    std::fs::write(&path, format!("{}\n{{\"role\":\"us", lines.join("\n"))).unwrap();
+
+    let listed = Session::list(&directory.0).unwrap();
+    assert_eq!(listed[0].first_prompt.as_deref(), Some("first"));
+    let (mut session, conversation, _) = Session::open(&path).unwrap();
+    assert_eq!(session.skipped(), [2, 3]);
+    let prompts: Vec<_> = conversation.iter().map(|item| &item["content"]).collect();
+    assert_eq!(prompts, ["first", "second"]);
+
+    session
+        .append(&json!({"role":"user","content":"third"}))
+        .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.ends_with("\"second\"}\n{\"content\":\"third\",\"role\":\"user\"}\n"),
+        "{text}"
+    );
+    let (session, conversation, _) = Session::open(&path).unwrap();
+    assert_eq!(session.skipped(), [2, 3]);
+    assert_eq!(conversation.len(), 3);
+    assert_eq!(session.leaf(), Some(5));
+
+    // A whole last line without its newline, as an editor may leave one, is kept.
+    std::fs::write(&path, format!("{}\n{}", lines[0], lines[1])).unwrap();
+    let (mut session, conversation, _) = Session::open(&path).unwrap();
+    assert_eq!(conversation.len(), 1);
+    session
+        .append(&json!({"role":"user","content":"next"}))
+        .unwrap();
+    let (_, conversation, _) = Session::open(&path).unwrap();
+    assert_eq!(conversation.len(), 2);
+}
+
+#[test]
 fn a_session_is_found_by_the_start_of_its_id_here_before_elsewhere() {
     let sessions = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-find-{}", std::process::id())),

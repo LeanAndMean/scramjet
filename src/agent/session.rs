@@ -179,6 +179,10 @@ pub struct Session {
     /// Created by this process with no conversation entry yet: only model and effort changes,
     /// names and `/autopilot` toggles, which Scramjet would not have written yet.
     unused: bool,
+    /// The lines after the header that could not be read and were passed over.
+    skipped: Vec<usize>,
+    /// Whether the file's last line lacks its newline, which the next write starts with.
+    unterminated: bool,
 }
 
 fn invalid(path: &Path, reason: &str) -> io::Error {
@@ -222,6 +226,10 @@ struct Entries {
     parent: Option<PathBuf>,
     header: Value,
     tokens: Tokens,
+    /// The lines after the header that could not be read and were passed over.
+    skipped: Vec<usize>,
+    /// Whether the last line lacks its newline.
+    unterminated: bool,
 }
 
 /// The conversation on the path from the start to an entry.
@@ -246,12 +254,22 @@ fn read(path: &Path) -> io::Result<Entries> {
     let mut header = Value::Null;
     let mut tokens = Tokens::default();
     let mut line = String::new();
+    let mut skipped = Vec::new();
+    let mut unterminated = false;
     let mut end = 0;
     let mut lines = 0;
     loop {
         line.clear();
         let read = reader.read_line(&mut line)?;
         if read == 0 {
+            break;
+        }
+        // A last line without its newline that is not whole is one a write left cut short (a
+        // full disk, a kill), or one being written: it is not counted, and the next append cuts
+        // it off. A whole one (a file written by hand) gets its newline then.
+        unterminated = !line.ends_with('\n');
+        if unterminated && serde_json::from_str::<Value>(&line).is_err() {
+            unterminated = false;
             break;
         }
         let index = lines;
@@ -261,8 +279,14 @@ fn read(path: &Path) -> io::Result<Entries> {
         if line.trim().is_empty() {
             continue;
         }
-        let value: Value =
-            serde_json::from_str(&line).map_err(|_| invalid(path, "malformed line"))?;
+        let value: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) if index == 0 => return Err(invalid(path, "malformed line")),
+            Err(_) => {
+                skipped.push(index);
+                continue;
+            }
+        };
         if index == 0 {
             if value["type"] != "session" {
                 return Err(invalid(path, "not a scramjet-rs session"));
@@ -291,16 +315,17 @@ fn read(path: &Path) -> io::Result<Entries> {
                 };
             }
         } else if value["type"] == "branch" {
-            tail = match &value["parent"] {
-                Value::Null => None,
-                parent => Some(
-                    parent
-                        .as_u64()
-                        .and_then(|parent| usize::try_from(parent).ok())
-                        .filter(|&parent| find(&entries, parent).is_some())
-                        .ok_or_else(|| invalid(path, "invalid branch parent"))?,
-                ),
+            let parent = match &value["parent"] {
+                Value::Null => Some(None),
+                parent => (parent.as_u64())
+                    .and_then(|parent| usize::try_from(parent).ok())
+                    .filter(|&parent| find(&entries, parent).is_some())
+                    .map(Some),
             };
+            match parent {
+                Some(parent) => tail = parent,
+                None => skipped.push(index),
+            }
         } else {
             tokens.add(&value);
             entries.push(Entry {
@@ -325,6 +350,8 @@ fn read(path: &Path) -> io::Result<Entries> {
         parent,
         header,
         tokens,
+        skipped,
+        unterminated,
     })
 }
 
@@ -762,7 +789,10 @@ impl Session {
         }
         let mut header = serde_json::to_vec(&header)?;
         header.push(b'\n');
-        write_whole(&mut file, &header)?;
+        if let Err(error) = write_whole(&mut file, &header) {
+            let _ = std::fs::remove_file(&path);
+            return Err(error);
+        }
         let _ = file.lock_shared();
         Ok(Self {
             path,
@@ -781,6 +811,8 @@ impl Session {
             lines: 1,
             size: header.len() as u64,
             unused: true,
+            skipped: Vec::new(),
+            unterminated: false,
         })
     }
 
@@ -838,6 +870,8 @@ impl Session {
                 lines: entries.lines,
                 size: entries.size,
                 unused: false,
+                skipped: entries.skipped.clone(),
+                unterminated: entries.unterminated,
             },
             context.items,
             entries.prompts(),
@@ -1130,19 +1164,38 @@ impl Session {
         Ok(directory)
     }
 
-    /// Writes `lines` at the file's end; callers count them once it returns.
+    /// Writes `lines` at the file's end; callers count them once it returns. A write that fails
+    /// (a full disk) cuts off what it wrote of them, so that no line is left cut short.
     fn write(&mut self, lines: &[u8]) -> io::Result<()> {
-        write_whole(&mut self.file, lines)?;
+        let terminated;
+        let lines = match self.unterminated {
+            true => {
+                terminated = [b"\n", lines].concat();
+                &terminated[..]
+            }
+            false => lines,
+        };
+        if let Err(error) = write_whole(&mut self.file, lines) {
+            let _ = self.file.set_len(self.size);
+            return Err(error);
+        }
         self.size += lines.len() as u64;
+        self.unterminated = false;
         Ok(())
     }
 
     /// Takes in the lines another process appended to the file since this one last read or wrote
     /// it, so that line numbers and branches stay right: its line count, where a line without a
-    /// branch line continues, and the name it may have given.
+    /// branch line continues, and the name it may have given. A last line left cut short is cut
+    /// off, so that the next line starts on a line of its own; callers hold `writing`.
     fn catch_up(&mut self) -> io::Result<()> {
         if self.file.metadata()?.len() != self.size {
             let entries = read(&self.path)?;
+            if self.file.metadata()?.len() > entries.size {
+                self.file.set_len(entries.size)?;
+            }
+            self.skipped = entries.skipped;
+            self.unterminated = entries.unterminated;
             self.lines = entries.lines;
             self.tail = entries.tail;
             self.name = entries.name;
@@ -1155,6 +1208,12 @@ impl Session {
 
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    /// The lines after the header (numbered from 0, the header's) that could not be read when
+    /// the session was opened, and that it goes on without.
+    pub fn skipped(&self) -> &[usize] {
+        &self.skipped
     }
 
     /// The models that replied on the current branch, compactions aside, first ones first.
