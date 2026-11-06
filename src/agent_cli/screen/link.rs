@@ -159,8 +159,8 @@ impl Link {
         });
     }
     /// The file of the theme in use, to read again when it changes; none for a built-in one.
-    pub(in crate::agent_cli) fn watch_theme(&self, watched: Option<Watched>) {
-        self.send(ToScreen::Theme(watched));
+    pub(in crate::agent_cli) fn watch_theme(&self, watched: Option<Watched>, following: bool) {
+        self.send(ToScreen::Theme(watched, following));
     }
     pub(in crate::agent_cli) fn models(&self, models: Vec<String>) {
         self.send(ToScreen::Models(models));

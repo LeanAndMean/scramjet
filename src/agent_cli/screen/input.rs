@@ -2,7 +2,7 @@
 
 use super::draw::Activity;
 use super::{Answer, App, BUSY, Flow, Input, MODEL_NEXT, NOTHING_QUEUED, Open, Optional, Shown};
-use crate::agent_cli::background;
+use crate::agent_cli::background::{self, Asked};
 use crate::agent_cli::clipboard;
 use crate::agent_cli::editor::{Action, Note};
 use crate::agent_cli::interactive::effort_note;
@@ -11,6 +11,7 @@ use crate::agent_cli::keys::{ByteSource, Code, ESCAPE_WAIT, Key, Press};
 use crate::agent_cli::select::Picked;
 use crate::agent_cli::slash::Builtin;
 use crate::agent_cli::style;
+use crate::agent_cli::theme::{self, Theme};
 use crate::agent_cli::theme_editor::Ended;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -95,6 +96,17 @@ impl App {
     pub(super) fn key(&mut self, key: Key, pending: bool) -> Flow {
         if let Key::Answer(asked, rgb) = key {
             background::answered(asked, rgb);
+            let editing = matches!(
+                &self.dialog,
+                Some(Open {
+                    shown: Shown::Theme(_),
+                    ..
+                })
+            );
+            if asked == Asked::Background && self.following && !editing {
+                let name = theme::following(Some(rgb));
+                style::set(&Theme::built_in(name).expect("a built-in theme"));
+            }
             return Flow::Go;
         }
         if self.exiting {

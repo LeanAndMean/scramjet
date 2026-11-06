@@ -1,6 +1,6 @@
 {
   "size": "100x44",
-  "settings": {"look": "panels"},
+  "settings": {"theme": "terminal-colors", "look": "panels"},
   "files": {
     "src/lib.rs": "pub fn words(text: &str) -> Vec<&str> {\n    text.split_whitespace().collect()\n}\n"
   },

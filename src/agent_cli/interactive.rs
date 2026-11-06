@@ -147,12 +147,14 @@ impl Interactive {
     }
 
     /// Shows everything in the theme the settings name, and has the screen read its file again
-    /// when it changes.
+    /// when it changes; without one, in the theme that follows the terminal's background, which
+    /// the screen changes as the terminal answers.
     pub(super) fn use_theme(&self) {
-        let name = &self.settings.theme;
+        let name = self.settings.theme_name();
         style::set(&self.themes.theme(name));
         if let Some(screen) = &self.screen {
-            (screen.link).watch_theme(self.themes.get(name).and_then(Watched::new));
+            let watched = self.themes.get(name).and_then(Watched::new);
+            (screen.link).watch_theme(watched, self.settings.theme.is_none());
         }
     }
 
@@ -602,7 +604,7 @@ impl Interactive {
     pub(super) fn problems(&self, found: &Installed) -> Vec<Problem> {
         (self.settings.warnings.iter())
             .map(|warning| Problem::in_settings(format!("settings: {warning}")))
-            .chain(self.themes.problems(&self.settings.theme))
+            .chain(self.themes.problems(self.settings.theme_name()))
             .chain(self.keybindings.iter().cloned())
             .chain(found.problems.iter().cloned())
             .collect()

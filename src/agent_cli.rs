@@ -143,7 +143,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         no_themes: options.no_themes,
     };
     let themes = theme::Themes::discover(&root, &settings.themes, &theme_options);
-    style::set(&themes.theme(&settings.theme));
+    style::set(&themes.theme(settings.theme_name()));
     let (patterns, source) = match options.models.take() {
         Some(patterns) => (patterns, "--models"),
         None => (settings.enabled_models.clone(), "settings: enabledModels"),
@@ -168,7 +168,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     {
         ui.notice(&warning);
     }
-    for problem in themes.problems(&settings.theme) {
+    for problem in themes.problems(settings.theme_name()) {
         ui.notice(&problem.text);
     }
     for warning in &scope_warnings {

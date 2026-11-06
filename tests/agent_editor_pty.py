@@ -364,6 +364,11 @@ for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'SS
 # Temporary files of the external editor go here, so the journeys can check they are removed.
 scratch = os.path.join(work, 'tmp')
 os.mkdir(scratch)
+# Most journeys read rows as the classic look and the plain banner show them, on the terminal's colors.
+CLASSIC = {'look': 'classic', 'banner': 'plain', 'theme': 'terminal-colors'}
+os.makedirs(os.path.join(env['XDG_CONFIG_HOME'], 'scramjet-rs'))
+with open(os.path.join(env['XDG_CONFIG_HOME'], 'scramjet-rs', 'settings.json'), 'w') as settings_file:
+    json.dump(CLASSIC, settings_file)
 # Checks its argument, the prompt file's mode and text, then writes a new text; exits 0.
 edit_script = os.path.join(work, 'edit.sh')
 with open(edit_script, 'w') as script_file:
@@ -487,17 +492,27 @@ def session_files():
 
 
 def config_home(name, settings=None):
-    """A directory for XDG_CONFIG_HOME of its own, with `settings` (text) as the settings file."""
+    """A directory for XDG_CONFIG_HOME of its own, with `settings` (text) as the settings file, over
+    the classic look's (`CLASSIC`) when it is JSON."""
     path = os.path.join(work, 'config-' + name)
     os.makedirs(os.path.join(path, 'scramjet-rs'))
-    if settings is not None:
-        with open(settings_path(path), 'w') as file:
-            file.write(settings)
+    try:
+        settings = json.dumps(dict(CLASSIC, **json.loads(settings or '{}')))
+    except json.JSONDecodeError:
+        pass
+    with open(settings_path(path), 'w') as file:
+        file.write(settings)
     return path
 
 
 def settings_path(home):
     return os.path.join(home, 'scramjet-rs', 'settings.json')
+
+
+def saved(home):
+    """The settings saved in `home`, but the classic look's that `config_home` wrote."""
+    settings = json.load(open(settings_path(home)))
+    return {key: value for key, value in settings.items() if CLASSIC.get(key) != value}
 
 
 def saved_levels(path):
@@ -1157,7 +1172,7 @@ hiding = config_home('hiding')
 thought_gate = threading.Event()
 run([], ctrl_t_hides_reasoning, serve_thoughts([thought_gate]), variables={'XDG_CONFIG_HOME': hiding})
 # Ctrl+T's last choice, hidden, is saved and read by the next start.
-assert json.load(open(settings_path(hiding))) == {'hideThinkingBlock': True}
+assert saved(hiding) == {'hideThinkingBlock': True}
 run([], hidden_from_the_start, serve_quiet_reasoning(), variables={'XDG_CONFIG_HOME': hiding})
 keys_home = config_home('keys')
 with open(os.path.join(keys_home, 'scramjet-rs', 'keybindings.json'), 'w') as file:
@@ -1345,7 +1360,7 @@ def logins(read, until, send, output):
                                    '    gpt-6-luna', '    grok-4.6'], rows
     send(b'\x1b[B\r')
     on_screen('Model set to (github-copilot) gpt-6-luna')
-    settings = json.load(open(settings_path(login_home)))
+    settings = saved(login_home)
     assert (settings['defaultProvider'], settings['defaultModel']) == ('github-copilot', 'gpt-6-luna'), settings
     send(b'/model\r')
     rows = on_screen('    grok-4.6')
@@ -2304,7 +2319,7 @@ def banner_choice(read, until, send, output):
     on_screen('Settings  \u2191\u2193 move')
     rows = select_row(read, shown, send, 'Banner', b'\x1b[B')
     assert '\u203a ' + setting('Banner', 'card') in rows, rows
-    assert '  What a session shows as it starts: plain, or a variant to try (header, as' in rows, rows
+    assert "  What a session shows as it starts: header, as Scramjet's, or plain, card or" in rows, rows
     send(b'\r')
     on_screen('\u203a ' + setting('Banner', 'logo'))
     send(b'\x1b')
@@ -2744,7 +2759,7 @@ run([], shift_tab_cycles_effort, serve_replies([(['Reply.'], 'Reply.')], models=
 (effort,) = set(session_files()) - known
 # A new session starts at Scramjet's default level, medium.
 assert saved_levels(effort) == ['medium', 'high', 'xhigh'], saved_levels(effort)
-assert json.load(open(settings_path(levels))) == {'defaultThinkingLevel': 'xhigh'}
+assert saved(levels) == {'defaultThinkingLevel': 'xhigh'}
 prompts = [item['content'] for item in map(json.loads, open(effort)) if item.get('role') == 'user']
 assert prompts == ['aXb'], prompts
 run(['--continue'], shift_tab_resumed, serve_replies([], models=effort_models), variables=in_levels)
@@ -2753,7 +2768,7 @@ run(['-c', '--effort', 'low'], started_at('low'), serve_replies([], models=effor
     variables=in_levels)
 assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max', 'low'], saved_levels(effort)
 # --effort is not saved; a new session starts at the level Shift+Tab saved.
-assert json.load(open(settings_path(levels))) == {'defaultThinkingLevel': 'max'}
+assert saved(levels) == {'defaultThinkingLevel': 'max'}
 known = set(session_files())
 run([], started_at('max'), serve_replies([], models=effort_models), variables=in_levels)
 # Scramjet's `off` is requests' `none`, and is named `off`.
@@ -2770,7 +2785,7 @@ run([], ctrl_p_cycles_models, serve_items([
     variables={'XDG_CONFIG_HOME': scoped}, columns=80, forget_models=False)
 assert [(body['model'], body['reasoning']['effort']) for body in bodies] == [
     ('gpt-6-terra', 'high'), ('gpt-6-luna', 'low')], bodies
-assert json.load(open(settings_path(scoped))) == {
+assert saved(scoped) == {
     'enabledModels': ['gpt-6-terra:high', 'luna:low', 'nothing'], 'defaultThinkingLevel': 'low',
     'defaultProvider': 'openai', 'defaultModel': 'gpt-6-luna'}
 # The model chosen last, when the scope has it, starts the next session, at its pattern's effort.
@@ -2785,7 +2800,7 @@ run([], agent_switches_the_model, serve_items([
 ], gate=switch_gate, gated=1, models=switch_models, bodies=bodies),
     variables={'XDG_CONFIG_HOME': switching}, columns=80)
 # As /model, the agent's switch is remembered.
-assert json.load(open(settings_path(switching))) == {
+assert saved(switching) == {
     'defaultProvider': 'openai', 'defaultModel': 'gpt-6-terra', 'defaultThinkingLevel': 'low'}
 assert [(body['model'], body['reasoning']['effort']) for body in bodies] == [
     ('gpt-6-luna', 'medium'), ('gpt-6-terra', 'high')], bodies
@@ -2800,7 +2815,7 @@ ran = subprocess.run([*agent(serve_items([
 ], models=switch_models), printing), '-p', 'go'], cwd=project,
     env=dict(env, XDG_CONFIG_HOME=printing), capture_output=True, timeout=30)
 assert ran.returncode == 0 and b'Terra replied.' in ran.stdout + ran.stderr, ran
-assert json.load(open(settings_path(printing))) == {'defaultProvider': 'openai', 'defaultModel': 'gpt-6-terra'}
+assert saved(printing) == {'defaultProvider': 'openai', 'defaultModel': 'gpt-6-terra'}
 assert json.load(open(remembered_models)) == {os.path.realpath(project): 'openai/gpt-6-terra'}
 os.remove(remembered_models)
 run(['--models', 'terra, x'], ctrl_p_in_a_scope_of_one,
@@ -2831,7 +2846,7 @@ run([], scoped_models_list,
     serve_replies([], models=scope_models + [haiku]),
     variables={'XDG_CONFIG_HOME': listed}, columns=80)
 # Saved by reference, as Scramjet saves them.
-assert json.load(open(settings_path(listed))) == {
+assert saved(listed) == {
     'enabledModels': ['openai/gpt-6-luna', 'openai/gpt-6-terra'],
     'defaultProvider': 'openai', 'defaultModel': 'gpt-6-luna'}
 remembering = config_home('remembering')
@@ -2843,12 +2858,12 @@ both = lambda: serve_replies([], models=scope_models)
 # As in Scramjet, a model chosen during a session is remembered for its project and anywhere...
 run([], starts_with('gpt-6-luna', [(b'/model gpt-6-terra\r', '\u2713 Model set to gpt-6-terra')]), both(),
     variables=in_remembering, forget_models=False)
-assert json.load(open(settings_path(remembering))) == {'defaultProvider': 'openai', 'defaultModel': 'gpt-6-terra'}
+assert saved(remembering) == {'defaultProvider': 'openai', 'defaultModel': 'gpt-6-terra'}
 assert json.load(open(remembered_models)) == {here: 'openai/gpt-6-terra'}
 # ... and another project starts with it until one is chosen there.
 run(['--project', other], starts_with('gpt-6-terra', [(b'\x10', Footer('gpt-6-luna \u2022 medium'))]), both(),
     variables=in_remembering, forget_models=False)
-assert json.load(open(settings_path(remembering))) == {'defaultProvider': 'openai', 'defaultModel': 'gpt-6-luna'}
+assert saved(remembering) == {'defaultProvider': 'openai', 'defaultModel': 'gpt-6-luna'}
 assert json.load(open(remembered_models)) == {here: 'openai/gpt-6-terra', there: 'openai/gpt-6-luna'}
 # --model and a resumed session's model win over the project's own and teach nothing.
 run(['--model', 'gpt-6-luna'], starts_with('gpt-6-luna', [(b'hi\r', 'Luna reply.')]),
@@ -2858,7 +2873,7 @@ run([], starts_with('gpt-6-terra'), both(), variables=in_remembering, forget_mod
 # The session just quit without a prompt is not kept, so --continue takes the one before it.
 run(['--continue'], starts_with('gpt-6-luna'), both(), variables=in_remembering, forget_models=False)
 assert json.load(open(remembered_models)) == {here: 'openai/gpt-6-terra', there: 'openai/gpt-6-luna'}
-assert json.load(open(settings_path(remembering))) == {'defaultProvider': 'openai', 'defaultModel': 'gpt-6-luna'}
+assert saved(remembering) == {'defaultProvider': 'openai', 'defaultModel': 'gpt-6-luna'}
 # One the providers do not offer is passed over, saying so.
 unlisted = 'openai/gpt-6-terra, the model last chosen in this project, is not one the providers offer; not used'
 run([], starts_with('gpt-6-luna', notices=[unlisted], columns=120),
@@ -2869,7 +2884,7 @@ run([], starts_with('gpt-6-terra', [(b'/settings\r', 'Settings  \u2191\u2193 mov
                                     (b'\x1b[B\r', setting('Startup model', 'last chosen anywhere')),
                                     (b'\x1b', None)]),
     both(), variables=in_remembering, forget_models=False)
-assert json.load(open(settings_path(remembering))) == {
+assert saved(remembering) == {
     'defaultProvider': 'openai', 'defaultModel': 'gpt-6-luna', 'startupModel': 'global'}
 run([], starts_with('gpt-6-luna'), both(), variables=in_remembering)
 run(['--models', 'luna,haiku'], model_list_in_a_scope,
@@ -2888,7 +2903,7 @@ assert tools(bodies[0]) == ['read', 'bash', 'edit', 'write', 'grep'], bodies[0][
 assert '\n- grep: Search file contents' in bodies[0]['instructions'], bodies[0]['instructions']
 assert tools(bodies[1]) == ['read', 'bash', 'edit', 'write', 'grep', 'ls'], bodies[1]['tools']
 assert '\n- ls: List directory contents' in bodies[1]['instructions'], bodies[1]['instructions']
-assert json.load(open(settings_path(menu_home))) == {
+assert saved(menu_home) == {
     'quietStartup': True, 'branchSummary': {'reserveTokens': 16384}, 'defaultThinkingLevel': 'high',
     'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time', 'tools': ['read', 'bash', 'edit', 'write', 'grep', 'ls'],
 }, open(settings_path(menu_home)).read()
@@ -2897,15 +2912,15 @@ with open(guide, 'w') as file:
     file.write('# Guide\n\nSome **bold** text.\n')
 banner_home = config_home('banner', '{"banner": "card"}')
 run([], banner_choice, variables={'XDG_CONFIG_HOME': banner_home}, columns=80)
-assert json.load(open(settings_path(banner_home))) == {'banner': 'logo'}
+assert saved(banner_home) == {'banner': 'logo'}
 reads_home = config_home('reads', '{"markdown": {"toolDisplay": "source"}}')
 run([], markdown_reads, serve_items([[tool_call('call_1', 'read', {'path': guide})], [message('Read it.')]]),
     variables={'XDG_CONFIG_HOME': reads_home})
-assert json.load(open(settings_path(reads_home))) == {'markdown': {'toolDisplay': 'rendered'}}
+assert saved(reads_home) == {'markdown': {'toolDisplay': 'rendered'}}
 theme_home = config_home('theme')
 exact = {'XDG_CONFIG_HOME': theme_home, 'COLORTERM': 'truecolor'}
 run([], theme_choice, serve_replies([(['Run `ls` now.'], 'Run `ls` now.')]), variables=exact)
-assert json.load(open(settings_path(theme_home))) == {'theme': 'scramjet-dark'}
+assert saved(theme_home) == {'theme': 'scramjet-dark'}
 run([], themed_start(b'\x1b[38;2;129;139;157m'), variables=exact)
 # Where the terminal may not show 24-bit colors, the nearest of its 256.
 indexed = dict(exact, COLORTERM='', WT_SESSION='', TERM='screen-256color')
@@ -2926,7 +2941,7 @@ user_theme_home = config_home('user-theme')
 run([], user_theme(ocean), serve_replies([(['Run `ls` now.'], 'Run `ls` now.')]),
     variables={'XDG_CONFIG_HOME': user_theme_home, 'COLORTERM': 'truecolor', 'SCRAMJET_CODING_AGENT_DIR': themes_agent},
     columns=120)
-assert json.load(open(settings_path(user_theme_home))) == {'theme': 'Ocean'}
+assert saved(user_theme_home) == {'theme': 'Ocean'}
 # Themes from --theme, without those found elsewhere (--no-themes), the settings' themes included.
 given_theme = os.path.join(work, 'given.json')
 with open(given_theme, 'w') as file:
@@ -3691,7 +3706,7 @@ assert routes == [('gpt-6-luna', 'medium')] + [('gpt-6-sol', 'xhigh')] * 4, rout
 switches = lambda path: [line['model'] for line in map(json.loads, open(path)) if line.get('type') == 'model_change']
 assert 'test/gpt-6-sol' not in switches(first) and switches(second)[-1] == 'test/gpt-6-sol', (switches(first), switches(second))
 assert saved_levels(second)[-1] == 'xhigh' and 'xhigh' not in saved_levels(first), saved_levels(second)
-assert json.load(open(settings_path(routing))) == {
+assert saved(routing) == {
     'defaultThinkingLevel': 'xhigh', 'defaultProvider': 'test', 'defaultModel': 'gpt-6-sol'}
 prompts = lambda path: [line.get('_scramjet_typed') for line in map(json.loads, open(path))
                         if line.get('role') == 'user' and not line.get('_scramjet_probe')]
@@ -4597,7 +4612,7 @@ run([], fullscreen_shell_and_effort_during_turn, serve_items([
     [message('Second.')],
 ], models=effort_models, bodies=bodies), variables={'XDG_CONFIG_HOME': during})
 assert [body['reasoning']['effort'] for body in bodies] == ['medium', 'high', 'high', 'high'], bodies
-assert json.load(open(settings_path(during))) == {'defaultThinkingLevel': 'high'}
+assert saved(during) == {'defaultThinkingLevel': 'high'}
 (during_session,) = set(session_files()) - known
 items = list(map(json.loads, open(during_session)))
 assert saved_levels(during_session) == ['medium', 'high'], saved_levels(during_session)
@@ -4676,7 +4691,7 @@ selecting = config_home('copy-on-select', '{"copyOnSelect": true}')
 run([], fullscreen_copy_on_select, serve_items([[message(rows_reply)]]), variables={
     'PATH': slow_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
     'CLIPBOARD': clipboard, 'XDG_CONFIG_HOME': selecting, 'WT_SESSION': 'test'})
-assert json.load(open(settings_path(selecting))) == {'copyOnSelect': False}, open(settings_path(selecting)).read()
+assert saved(selecting) == {'copyOnSelect': False}, open(settings_path(selecting)).read()
 pastes = os.path.join(work, 'pastes')
 # Stands in for the PowerShell kept for pastes and copies: checks it reads and writes the clipboard's
 # text through Windows Forms, answers each `text` line with the text's length and bytes, and counts

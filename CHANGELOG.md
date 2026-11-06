@@ -4,6 +4,14 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.40.0 — Panels, the header and a theme for the terminal's background by default
+
+### Changed
+
+- The `panels` look and the `header` banner are the defaults; `classic`, `rails`, `margin`, `plain`, `card` and `logo` stay in `/settings`.
+- Without a `theme` setting, the theme follows the terminal's background as Scramjet's does: `pi-light` on a light background, `scramjet-dark` on a dark or unknown one. The full screen switches as the terminal answers; printed output (`-p`) goes by `COLORFGBG`. Choosing a theme in `/settings` saves it, as before. `terminal-colors` is still offered.
+- The full screen asks the terminal only for its background as it opens. Its text color and 16 colors, which only the theme editor uses, are asked when `/settings` → Theme opens.
+
 ## 0.39.0 — Every dialog's rule in the theme's border color
 
 ### Changed

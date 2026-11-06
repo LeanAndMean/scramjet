@@ -15,6 +15,7 @@ use scramjet_rs::agent::{
 use std::{
     path::{Path, PathBuf},
     sync::atomic::Ordering,
+    time::{Duration, Instant},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -42,6 +43,8 @@ const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
 const AUTOPILOT_DECIDES: &str = "With autopilot on, the recommended step runs after a 3-second \
     countdown; off, the next steps wait for you to choose.";
 const NEW_THEME: &str = "New theme…";
+/// How long the theme list waits for the terminal's colors, which the theme editor starts from.
+const COLORS_WAIT: Duration = Duration::from_millis(100);
 const NEW_THEME_NOTE: &str = "Make a theme of your own: choose how many main colors and how they \
     go together, then roll until you like it, lock the colors you like and roll again. A sample \
     session shows it as you go.";
@@ -285,6 +288,15 @@ impl Interactive {
     /// The themes; Enter shows everything in one at once and keeps the list open to try the
     /// next, and the one chosen last stays.
     fn choose_theme(&mut self) {
+        if let Some(screen) = &self.screen {
+            screen.link.to_terminal(background::color_questions());
+            // A terminal answers within a frame, or not at all (tmux); Scramjet waits 100 ms
+            // for its OSC 11 answer. The answers of an earlier opening stand meanwhile.
+            let asked = Instant::now();
+            while !background::answers().has_colors() && asked.elapsed() < COLORS_WAIT {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
         // As the files are now, the one in use read again as it changed included.
         self.discover_themes();
         let mut at = None;
@@ -293,7 +305,8 @@ impl Interactive {
                 return;
             };
             let listed = &self.themes.listed;
-            let current = (listed.iter()).position(|known| known.name == self.settings.theme);
+            let current =
+                (listed.iter()).position(|known| known.name == self.settings.theme_name());
             let editable = current.and_then(|current| editable(&listed[current]));
             let notes = (listed.iter().map(theme_note))
                 .chain([NEW_THEME_NOTE.to_owned()])
@@ -384,13 +397,13 @@ impl Interactive {
     fn new_theme_editor(&self) -> ThemeEditor {
         let terminal = background::terminal();
         let start = match (
-            self.themes.theme(&self.settings.theme).background(),
+            self.themes.theme(self.settings.theme_name()).background(),
             terminal,
         ) {
             (Color::Rgb(r, g, b), _) if palette::is_dark((r, g, b)) => Background::Dark,
             (Color::Rgb(..), _) => Background::Light,
             (_, Some(rgb)) => Background::Terminal(rgb),
-            _ if self.settings.theme == "pi-light" => Background::Light,
+            _ if self.settings.theme_name() == "pi-light" => Background::Light,
             _ => Background::Dark,
         };
         ThemeEditor::new(seed(), start, terminal)

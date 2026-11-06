@@ -99,8 +99,9 @@ enum ToScreen {
         design: Design,
         banner: Banner,
     },
-    /// The file of the theme in use, read again as it changes.
-    Theme(Option<Watched>),
+    /// The file of the theme in use, read again as it changes, and whether the theme follows
+    /// the terminal's background, as no setting names one.
+    Theme(Option<Watched>, bool),
     /// The providers' models, which complete `/model`'s argument.
     Models(Vec<String>),
     /// What the footer shows of the session now.
@@ -296,6 +297,8 @@ struct App {
     held_keys: Vec<(Key, bool)>,
     footer: Footer,
     theme: Option<Watched>,
+    /// The theme follows the terminal's background (`theme::following`).
+    following: bool,
     /// The first line shown, while the user has scrolled away from the end.
     top: Option<Place>,
     /// Tool results are shown whole (Ctrl+O).
@@ -356,6 +359,7 @@ impl App {
             dialog: None,
             held_keys: Vec::new(),
             theme: None,
+            following: false,
             top: None,
             whole: false,
             markdown_reads: MarkdownReads::Rendered,
@@ -593,7 +597,10 @@ impl App {
                 self.design = design;
                 self.banner = banner;
             }
-            ToScreen::Theme(watched) => self.theme = watched,
+            ToScreen::Theme(watched, following) => {
+                self.theme = watched;
+                self.following = following;
+            }
             ToScreen::Models(models) => self.editor.set_models(models),
             ToScreen::Footer(shown) => self.footer.show(shown),
             ToScreen::Switched(shown, efforts) => {
@@ -966,12 +973,12 @@ static SHOWN: AtomicBool = AtomicBool::new(false);
 const LEAVE: &str = "\x1b[?1002l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l";
 
 impl Screen {
-    /// Shown, and the terminal asked for its colors, which may have changed meanwhile.
+    /// Shown, and the terminal asked for its background, which may have changed meanwhile.
     fn enter() -> Self {
         SHOWN.store(true, Ordering::SeqCst);
         eprint!(
             "\x1b[?1049h\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[2J{}",
-            background::questions()
+            background::BACKGROUND_QUESTION
         );
         Self
     }

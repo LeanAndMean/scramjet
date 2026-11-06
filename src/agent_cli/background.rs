@@ -1,7 +1,7 @@
-//! The terminal's own colors, which the full screen asks it each time it is shown: its
-//! background, as it answers OSC 11, else as `COLORFGBG` or Apple's Terminal says, as Scramjet
-//! decides it; and its text color and 16 colors, as it answers OSC 10 and OSC 4, which Scramjet
-//! does not ask.
+//! The terminal's own colors: its background, which the full screen asks each time it is shown,
+//! as it answers OSC 11, else as `COLORFGBG` or Apple's Terminal says, as Scramjet decides it;
+//! and its text color and 16 colors, as it answers OSC 10 and OSC 4, which Scramjet does not
+//! ask and `/settings` asks as its themes open, for the theme editor.
 
 use super::palette::Rgb;
 use super::theme::Color;
@@ -15,12 +15,14 @@ pub(super) enum Asked {
     Palette(u8),
 }
 
-/// The questions, each on its own, as not every terminal takes several colors in one OSC 4;
-/// the answers come in with the keys (`Key::Answer`).
-pub(super) fn questions() -> String {
+/// The question for the background; the answers come in with the keys (`Key::Answer`).
+pub(super) const BACKGROUND_QUESTION: &str = "\x1b]11;?\x1b\\";
+
+/// The questions for the text color and the 16 colors, each on its own, as not every terminal
+/// takes several colors in one OSC 4.
+pub(super) fn color_questions() -> String {
     let palette = (0..16).map(|index| format!("\x1b]4;{index};?\x1b\\"));
-    ["\x1b]11;?\x1b\\".to_owned(), "\x1b]10;?\x1b\\".to_owned()]
-        .into_iter()
+    std::iter::once("\x1b]10;?\x1b\\".to_owned())
         .chain(palette)
         .collect()
 }
@@ -60,6 +62,11 @@ pub(super) fn terminal() -> Option<Rgb> {
 }
 
 impl Answers {
+    /// The terminal answered its text color and all its 16 colors.
+    pub(super) fn has_colors(&self) -> bool {
+        self.foreground.is_some() && self.palette.iter().all(Option::is_some)
+    }
+
     fn set(&mut self, asked: Asked, rgb: Rgb) {
         let slot = match asked {
             Asked::Background => &mut self.background,
@@ -227,8 +234,8 @@ mod tests {
         ] {
             assert_eq!(answer(wrong), None, "{wrong}");
         }
-        let questions = questions();
-        assert!(questions.starts_with("\x1b]11;?\x1b\\\x1b]10;?\x1b\\\x1b]4;0;?\x1b\\"));
+        let questions = color_questions();
+        assert!(questions.starts_with("\x1b]10;?\x1b\\\x1b]4;0;?\x1b\\"));
         assert!(questions.ends_with("\x1b]4;15;?\x1b\\"));
         assert_eq!(questions.matches("\x1b]4;").count(), 16);
     }
@@ -249,6 +256,11 @@ mod tests {
         answers.set(Asked::Background, (12, 12, 12));
         assert_eq!(answers.shown(Color::Faint), Some((108, 108, 108)));
         assert_eq!(answers.shown(Color::Default), None);
+        assert!(!answers.has_colors());
+        for index in 0..16 {
+            answers.set(Asked::Palette(index), (index, index, index));
+        }
+        assert!(answers.has_colors());
         // The latest answer replaces one before it.
         answers.set(Asked::Palette(1), (255, 0, 0));
         assert_eq!(answers.shown(Color::Index(1)), Some((255, 0, 0)));

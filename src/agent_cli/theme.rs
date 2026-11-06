@@ -365,6 +365,15 @@ const BACKGROUND: &str = "background";
 /// The built-in themes' names, in the order `/settings` lists them.
 pub(super) const BUILT_IN: [&str; 3] = [TERMINAL_COLORS, "scramjet-dark", "pi-light"];
 
+/// The theme shown when the settings name none, as Scramjet's `resolveThemeName` picks it:
+/// `pi-light` on a light background, `scramjet-dark` on a dark or unknown one.
+pub(super) fn following(background: Option<(u8, u8, u8)>) -> &'static str {
+    match background.map(super::palette::luminance) {
+        Some(luminance) if luminance >= 0.2 => "pi-light",
+        _ => "scramjet-dark",
+    }
+}
+
 impl Theme {
     pub(super) fn color(&self, token: Token) -> Color {
         self.colors[token as usize]
@@ -641,6 +650,15 @@ mod tests {
     use scramjet_rs::agent::ProblemFile;
 
     #[test]
+    fn without_a_setting_the_theme_follows_the_background_as_scramjets() {
+        assert_eq!(following(None), "scramjet-dark");
+        assert_eq!(following(Some((12, 12, 12))), "scramjet-dark");
+        assert_eq!(following(Some((118, 118, 118))), "scramjet-dark");
+        assert_eq!(following(Some((128, 128, 128))), "pi-light");
+        assert_eq!(following(Some((250, 244, 227))), "pi-light");
+    }
+
+    #[test]
     fn the_built_in_themes_color_every_token() {
         for name in BUILT_IN {
             assert_eq!(Theme::built_in(name).unwrap().colors.len(), KEYS.len());
@@ -898,8 +916,15 @@ mod tests {
             paths: vec![given, root.join("two.json"), root.join("missing.json")],
             no_themes: false,
         };
+        // Leaving out the user's own themes, in the agent directory.
         let names = |themes: &Themes| -> Vec<String> {
             (themes.listed.iter().skip(BUILT_IN.len()))
+                .filter(|listed| {
+                    listed
+                        .file
+                        .as_ref()
+                        .is_some_and(|file| file.starts_with(root))
+                })
                 .map(|listed| listed.name.clone())
                 .collect()
         };

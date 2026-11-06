@@ -5,8 +5,8 @@ use super::banner::Banner;
 use super::design::Design;
 use super::keymap::{self, Binding};
 use super::packages::{self, Source};
-use super::theme::TERMINAL_COLORS;
 use super::tree::Filter;
+use super::{background, theme};
 use scramjet_rs::agent::{
     CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, Set, search_program, sets_in,
     shortened, state_directory, write_replacing,
@@ -190,15 +190,15 @@ impl Row {
             }
             Self::Theme => "The colors of the conversation and of everything around it.",
             Self::Look => {
-                "How the conversation shows prompts, reasoning, tool calls and replies: classic, \
-                 or a variant to try (rails, panels, margin; panels needs a theme with \
-                 backgrounds, such as scramjet-dark)."
+                "How the conversation shows prompts, reasoning, tool calls and replies: panels, \
+                 on the theme's backgrounds (a theme with them, such as scramjet-dark), or \
+                 classic, rails or margin."
             }
             Self::Banner => {
                 let then = then(Binding::ToolsExpand, "shows every key and what was loaded.");
                 return format!(
-                    "What a session shows as it starts: plain, or a variant to try (header, as \
-                     Scramjet's; card; logo, Scramjet's logo).{then}"
+                    "What a session shows as it starts: header, as Scramjet's, or plain, card \
+                     or logo, Scramjet's logo.{then}"
                 );
             }
             Self::Steering => {
@@ -280,8 +280,9 @@ pub(super) struct Settings {
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
     pub(super) tree_filter: Filter,
     pub(super) markdown_reads: MarkdownReads,
-    /// `theme`: the name of the theme everything is shown in.
-    pub(super) theme: String,
+    /// `theme`: the name of the theme everything is shown in; `None`: one that follows the
+    /// terminal's background (`Settings::theme_name`).
+    pub(super) theme: Option<String>,
     /// `look`: how the full screen shows prompts, reasoning, calls and replies.
     pub(super) look: Design,
     /// `banner`: what the full screen shows as a session starts.
@@ -380,9 +381,9 @@ impl Settings {
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             markdown_reads: MarkdownReads::Rendered,
-            theme: TERMINAL_COLORS.to_owned(),
-            look: Design::Classic,
-            banner: Banner::Plain,
+            theme: None,
+            look: Design::Panels,
+            banner: Banner::Header,
             default_thinking_level: None,
             default_provider: None,
             default_model: None,
@@ -460,7 +461,7 @@ impl Settings {
         }
         match object.get("theme") {
             None => {}
-            Some(Value::String(name)) if !name.trim().is_empty() => self.theme = name.clone(),
+            Some(Value::String(name)) if !name.trim().is_empty() => self.theme = Some(name.clone()),
             Some(_) => wrong("theme", "a theme's name"),
         }
         match object.get("look").map(|value| value.as_str()) {
@@ -841,12 +842,18 @@ impl Settings {
         self.save("hideThinkingBlock", json!(hide))
     }
 
+    /// The name of the theme shown: the setting's, else the one that follows the terminal's
+    /// background as it answered or the environment says.
+    pub(super) fn theme_name(&self) -> &str {
+        (self.theme.as_deref()).unwrap_or_else(|| theme::following(background::terminal()))
+    }
+
     /// The theme in `/settings`, saved when it changed.
     pub(super) fn set_theme(&mut self, name: &str) -> io::Result<()> {
-        if self.theme == name {
+        if self.theme.as_deref() == Some(name) {
             return Ok(());
         }
-        self.theme = name.to_owned();
+        self.theme = Some(name.to_owned());
         self.save("theme", json!(name))
     }
 
@@ -947,7 +954,7 @@ impl Settings {
             | Row::NextSteps
             | Row::Publishing
             | Row::Installed => String::new(),
-            Row::Theme => self.theme.clone(),
+            Row::Theme => self.theme_name().to_owned(),
             Row::Look => self.look.name().into(),
             Row::Banner => self.banner.name().into(),
             Row::StartupModel => match self.startup_model {
@@ -1391,7 +1398,7 @@ mod tests {
         assert!(settings.copy_on_select);
         assert_eq!(settings.tree_filter, Filter::Labeled);
         assert_eq!(settings.markdown_reads, MarkdownReads::Source);
-        assert_eq!(settings.theme, "pi-light");
+        assert_eq!(settings.theme.as_deref(), Some("pi-light"));
         assert!(settings.hide_thinking_block);
         assert_eq!(settings.steering_mode, Delivery::OneAtATime);
         assert_eq!(settings.follow_up_mode, Delivery::All);
@@ -1534,10 +1541,10 @@ mod tests {
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
                 "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big"}"#,
         );
-        assert_eq!(settings.banner, Banner::Plain);
+        assert_eq!(settings.banner, Banner::Header);
         assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
         assert_eq!(settings.tree_filter, Filter::Default);
-        assert_eq!(settings.theme, "terminal-colors");
+        assert_eq!(settings.theme, None);
         assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
         assert!(!settings.hide_thinking_block);
         assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
@@ -1816,14 +1823,14 @@ mod tests {
         );
         assert_eq!(
             seen(Row::Look, &mut settings),
-            ["classic", "rails", "panels", "margin"]
+            ["panels", "margin", "classic", "rails"]
         );
         // Then round to the first again, and on.
         settings.cycle(Row::Look).unwrap();
         settings.cycle(Row::Look).unwrap();
         assert_eq!(
             seen(Row::Banner, &mut settings),
-            ["plain", "header", "card", "logo"]
+            ["header", "card", "logo", "plain"]
         );
         settings.cycle(Row::Banner).unwrap();
         settings.cycle(Row::Banner).unwrap();
@@ -1855,7 +1862,7 @@ mod tests {
             .set_tools(vec!["ls".into(), "read".into()])
             .unwrap();
         assert_eq!(settings.shown(Row::Tools), "read, ls");
-        assert_eq!(settings.shown(Row::Theme), "terminal-colors");
+        assert_eq!(settings.theme, None);
         settings.set_theme("scramjet-dark").unwrap();
         assert_eq!(settings.shown(Row::Theme), "scramjet-dark");
         assert_eq!(
@@ -1872,8 +1879,8 @@ mod tests {
                 "followUpMode": "all",
                 "tools": ["read", "ls"],
                 "theme": "scramjet-dark",
-                "look": "rails",
-                "banner": "header",
+                "look": "margin",
+                "banner": "card",
             })
         );
         let reread = Settings::read(Some(path.clone()));
