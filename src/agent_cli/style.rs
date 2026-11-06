@@ -238,22 +238,25 @@ pub(super) fn base() -> &'static str {
     &table[SPECS.len()]
 }
 
-/// A background across the full screen's rows that a look puts blocks on (`design`): a
-/// prompt's, and a call's while it runs, once done and when it failed. A row is on one when it
-/// holds its `mark`.
+/// A background across the full screen's rows: those a look puts blocks on (`design`), a
+/// prompt's, and a call's while it runs, once done and when it failed; and the selected row of
+/// `/resume` and `/tree`, as Scramjet's selectors paint it. A row is on one when it holds its
+/// `mark`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Band {
     Prompt,
     Running,
     Done,
     Failed,
+    Selected,
 }
 
-const BANDS: [(Band, Token, char); 4] = [
+const BANDS: [(Band, Token, char); 5] = [
     (Band::Prompt, Token::UserMessageBg, '\x11'),
     (Band::Running, Token::ToolPendingBg, '\x12'),
     (Band::Done, Token::ToolSuccessBg, '\x13'),
     (Band::Failed, Token::ToolErrorBg, '\x14'),
+    (Band::Selected, Token::SelectedBg, '\x15'),
 ];
 
 impl Band {
@@ -405,6 +408,14 @@ mod tests {
             let theme = Theme::built_in(name).unwrap();
             assert_eq!(table(&theme, Mode::TrueColor)[SPECS.len()], "");
         }
+        // A selected row on the theme's selectedBg, or on the base where it has none.
+        let selected = |name| {
+            let theme = Theme::built_in(name).unwrap();
+            table(&theme, Mode::TrueColor).swap_remove(SPECS.len() + 1 + Band::Selected as usize)
+        };
+        assert_eq!(selected("scramjet-dark"), "\x1b[48;2;31;39;54m");
+        assert_eq!(selected("pi-light"), "\x1b[48;2;212;212;224m");
+        assert_eq!(selected(TERMINAL_COLORS), "");
 
         let row = "plain \x1b[1mbold\x1b[0m end\x1b[0m";
         assert_eq!(painted(row, ""), row);

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.34.0 — The selected row in `/resume` and `/tree`
+
+### Changed
+
+- `/resume` and `/tree` show their selected row on the theme's `selectedBg`, across the width, as Scramjet's session and tree selectors do; scramjet-dark and pi-light have one, the default terminal-colors theme none. Other lists keep their bold row and `›`.
+
 ## 0.33.0 — The prompt's rules show the thinking level
 
 ### Changed

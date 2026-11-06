@@ -887,7 +887,7 @@ fn about(token: Token) -> &'static str {
         T::Dim => "Faint text: the footer, the banner's keys and lists, the tree lines in lists, models switched off.",
         T::Text => "Text: replies, and everything without a color of its own.",
         T::ThinkingText => "The reasoning a model shows.",
-        T::SelectedBg => "A selected line's background, in Scramjet; scramjet-rs does not show it.",
+        T::SelectedBg => "Behind the selected row in /resume and /tree.",
         T::UserMessageBg => "Behind your prompts, in the panels look.",
         T::UserMessageText => "Your prompts, in the looks other than the classic one.",
         T::CustomMessageBg => "Behind extensions' messages, in Scramjet; scramjet-rs does not show it.",

@@ -8,7 +8,7 @@ use super::fuzzy::{self, Haystack};
 use super::keymap::{self, Binding};
 use super::keys::Key;
 use super::settings::scramjet_level;
-use super::style::{self, Style};
+use super::style::{self, Band, Style};
 use super::text;
 use super::tree::{Filter, View};
 use scramjet_rs::agent::{Choice, Label, ModelOption};
@@ -741,7 +741,11 @@ impl Picker {
                 let search = (self.list.search.as_ref())
                     .map(|search| (search.query.as_str(), search.none.as_str()));
                 let row = |index: usize, width| text::clip(&rows[index], width);
-                let mut shown = lines(header, &self.list, search, None, *current, room, &row);
+                // As in Scramjet, of the lists with rows only the session list paints its
+                // selected row.
+                let band = self.acts.then_some(Band::Selected);
+                let marks = (*current, band);
+                let mut shown = lines(header, &self.list, search, None, marks, room, &row);
                 shown.extend(under);
                 shown
             }
@@ -761,7 +765,8 @@ impl Picker {
                 let row = |index: usize, width| text::clip(&rows[index].1, width);
                 // As in Scramjet, the position shows with the filter, every row shown or not.
                 let status = view.status();
-                lines(header, &self.list, search, Some(&status), None, size, &row)
+                let marks = (None, Some(Band::Selected));
+                lines(header, &self.list, search, Some(&status), marks, size, &row)
             }
             Shape::Question {
                 title,
@@ -1022,14 +1027,14 @@ impl List {
 
 /// The selector's lines for a terminal of `(width, height)`: the title with the hint in its
 /// style, the `query` being typed (with no row matching it, `none`), the rows around the selected
-/// one and, when some are not shown or there is a `filter` to name after it, the selected row's
-/// position.
+/// one, the `current` row marked and the selected one on the `band`, if any, and, when some are
+/// not shown or there is a `filter` to name after it, the selected row's position.
 fn lines(
     (title, hint, hint_style): (&str, &str, Style),
     list: &List,
     search: Option<(&str, &str)>,
     filter: Option<&str>,
-    current: Option<usize>,
+    (current, band): (Option<usize>, Option<Band>),
     (width, height): (usize, usize),
     row: &dyn Fn(usize, usize) -> String,
 ) -> Vec<String> {
@@ -1098,7 +1103,8 @@ fn lines(
         } else if position == list.selected {
             // A styled row's resets would end the selection's style.
             let text = text.replace(RESET, &format!("{RESET}{selected}"));
-            format!("{SELECTOR_MARK}›{RESET} {tree}{selected}{text}{RESET}{mark}")
+            let band = band.map(Band::mark).map(String::from).unwrap_or_default();
+            format!("{band}{SELECTOR_MARK}›{RESET} {tree}{selected}{text}{RESET}{mark}")
         } else {
             format!("  {tree}{text}{mark}")
         });
@@ -1291,7 +1297,7 @@ mod tests {
                 list,
                 searched(list),
                 filter,
-                None,
+                (None, None),
                 (40, 24),
                 &row,
             ))
@@ -1351,7 +1357,7 @@ mod tests {
             &List::new(2, 0, 10),
             searched(&List::new(2, 0, 10)),
             None,
-            None,
+            (None, None),
             (12, 9),
             &row,
         );
@@ -1372,7 +1378,7 @@ mod tests {
             &list(12),
             searched(&list(12)),
             None,
-            Some(9),
+            (Some(9), None),
             (50, 24),
             &row,
         ));
@@ -1398,7 +1404,7 @@ mod tests {
             &list(0),
             searched(&list(0)),
             None,
-            None,
+            (None, None),
             (50, 24),
             &row,
         ));
@@ -1409,7 +1415,7 @@ mod tests {
             &list(24),
             searched(&list(24)),
             None,
-            None,
+            (None, None),
             (50, 24),
             &row,
         ));
@@ -1421,7 +1427,7 @@ mod tests {
             &list(3),
             searched(&list(3)),
             None,
-            None,
+            (None, None),
             (12, 6),
             &row,
         ));
@@ -1436,7 +1442,7 @@ mod tests {
                 &few,
                 searched(&few),
                 None,
-                None,
+                (None, None),
                 (50, 24),
                 &row
             )),
@@ -1486,7 +1492,7 @@ mod tests {
                 &list,
                 searched(&list),
                 None,
-                None,
+                (None, None),
                 (40, 24),
                 &row
             )),
@@ -1895,6 +1901,32 @@ mod tests {
     }
 
     #[test]
+    fn the_session_list_and_the_tree_put_their_selected_row_on_its_band() {
+        let texts = ["root parser", "other"].map(String::from);
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
+        let picker = || Picker::search("Resume", 10, haystacks(&texts), 1, None, "None", row);
+        let mark = Band::Selected.mark();
+        let banded = |lines: Vec<String>| {
+            let rows = super::super::selection::rows(&lines);
+            let on = |(row, line): (usize, &super::super::selection::Line)| {
+                (line.band == Some(Band::Selected)).then_some(row)
+            };
+            rows.iter().enumerate().filter_map(on).collect::<Vec<_>>()
+        };
+        assert_eq!(banded(picker().acting().lines((60, 24))), [3]);
+        assert_eq!(banded(picker().lines((60, 24))), [] as [usize; 0]);
+        // Also while it asks to delete the row.
+        let mut list = picker().acting();
+        list.key(&key("ctrl+d"));
+        let asked = list.lines((60, 24));
+        assert!(asked[3].starts_with(mark) && asked[3].contains("other"));
+        let view = View::new(super::super::tree::sample(), false, Filter::Default);
+        let tree = Picker::tree(view, 4, Some(6)).lines((80, 24));
+        assert_eq!(banded(tree.clone()), [4]);
+        assert!(text::printable(&tree[4]).starts_with("› │     • assistant"));
+    }
+
+    #[test]
     fn the_tree_searches_filters_and_folds_and_returns_the_entry_chosen() {
         let view = View::new(super::super::tree::sample(), false, Filter::Default);
         let mut picker = Picker::tree(view, 4, Some(6));
@@ -2037,7 +2069,7 @@ mod tests {
                 list,
                 searched(list),
                 None,
-                Some(0),
+                (Some(0), None),
                 (50, 24),
                 &row,
             ))
@@ -2082,7 +2114,7 @@ mod tests {
             &list,
             searched(&list),
             None,
-            None,
+            (None, None),
             (12, 24),
             &row,
         ));
