@@ -1237,10 +1237,7 @@ mod tests {
             std::env::temp_dir().join(format!("scramjet-rs-providers-{}", std::process::id())),
         );
         let script = |name: &str, body: &str| {
-            let path = scratch.0.join(name);
-            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-            let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
-            std::fs::set_permissions(&path, mode).unwrap();
+            crate::agent::tests::script(&scratch.0.join(name), body);
         };
         let listed = json!({"version": 1, "providers": {"served": {
             "baseUrl": "http://127.0.0.1:1/v1", "api": "openai-responses",
@@ -1588,9 +1585,7 @@ mod tests {
         let write = |text: &str| std::fs::write(&file, text).unwrap();
         let program = scratch.0.join("list");
         let listed = r#"{"version": 1, "credentialFiles": ["/from/program"]}"#;
-        std::fs::write(&program, format!("#!/bin/sh\necho '{listed}'\n")).unwrap();
-        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
-        std::fs::set_permissions(&program, mode).unwrap();
+        crate::agent::tests::script(&program, &format!("echo '{listed}'"));
         write(
             r#"{"credentialFiles": ["~/.config/x", "~", " keys ", "/abs/token"],
                 "providersCommand": ["./list"]}"#,

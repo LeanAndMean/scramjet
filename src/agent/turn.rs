@@ -1,12 +1,21 @@
 //! A turn: model requests and tool calls from a prompt to the final answer, the messages
 //! queued during it, and the command it runs: its status checks and what follows it.
 use super::calls::Calls;
+use super::request::Replying;
 use super::{
     Agent, AgentError, AgentUi, AutoCompaction, CONTEXT, Completed, MAX_STEPS, PROBE, PRODUCER,
     Routing, Source, Step, Suggested, TYPED, USAGE, autonomy, message_text, status, suggest,
 };
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
+
+/// What a paused turn left running, shown in a thread of its own (`Agent::show_paused`).
+pub struct ShownPaused {
+    stop: Arc<AtomicBool>,
+    thread: JoinHandle<(Option<Calls>, Option<Replying>)>,
+}
 
 impl Agent {
     /// Runs one user prompt to completion: model requests and tool calls until a final answer.
@@ -68,6 +77,38 @@ impl Agent {
             Some(sent) => json!({"role":"user","content":sent,TYPED:prompt}),
             None => json!({"role":"user","content":prompt}),
         }
+    }
+
+    /// Shows on `ui`, from a thread of its own, what the paused turn left running (its calls or
+    /// its streaming reply) while the session does something else, until `take_paused`; `None`
+    /// when nothing runs. Their questions to the user and their ends wait for `resume_turn`.
+    pub fn show_paused(&mut self, mut ui: Box<dyn AgentUi + Send>) -> Option<ShownPaused> {
+        let (mut calls, mut replying) = (self.calls.take(), self.replying.take());
+        if calls.is_none() && replying.is_none() {
+            return None;
+        }
+        let retries = self.config.retries;
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
+        let thread = std::thread::spawn(move || {
+            if let Some(batch) = calls.as_mut().and_then(Calls::running) {
+                batch.pump(&mut *ui, &stopped);
+            }
+            if let Some(replying) = &mut replying {
+                replying.pump(&mut *ui, retries, &stopped);
+            }
+            (calls, replying)
+        });
+        Some(ShownPaused { stop, thread })
+    }
+
+    /// Takes back what `show_paused` showed, for `resume_turn`.
+    pub fn take_paused(&mut self, shown: ShownPaused) {
+        shown.stop.store(true, Ordering::Relaxed);
+        let (calls, replying) = (shown.thread.join()).unwrap_or_else(|panic| {
+            std::panic::resume_unwind(panic);
+        });
+        (self.calls, self.replying) = (calls, replying);
     }
 
     /// Goes on with the turn that `turn` or this returned `AgentError::Paused` from: with the
@@ -499,6 +540,96 @@ mod tests {
         server.join().unwrap();
         assert_eq!(ui.replies, ["streamed"]);
         assert_eq!(agent.conversation().last().unwrap()[PRODUCER], "test/m");
+        assert_eq!(agent.usage.requests, 1);
+    }
+
+    #[test]
+    fn what_a_paused_turn_left_running_shows_from_another_thread_meanwhile() {
+        let (endpoint, server) = serve(vec![
+            tool_call(
+                "call_1",
+                "bash",
+                json!({"command":"echo one; sleep 0.6; echo two"}),
+            ),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "shown-paused");
+        let mut ui = Recorder {
+            pauses: vec![false, true],
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        let paused = agent.turn("go", &mut ui, &cancel);
+        assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
+        // The pause may come while the call's request streams; then it comes again at the call.
+        let mut outputs: Vec<String> = Vec::new();
+        for _ in 0..3 {
+            let (to, seen) = std::sync::mpsc::channel();
+            let shown = agent.show_paused(Box::new(Watching(to))).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !outputs.iter().any(|seen| seen == "result bash") {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                match seen.recv_timeout(left) {
+                    Ok(seen) => outputs.push(seen),
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(timeout) => panic!("{timeout:?}: {outputs:?}"),
+                }
+            }
+            agent.take_paused(shown);
+            if outputs.iter().any(|seen| seen == "result bash") {
+                break;
+            }
+            ui.pauses = vec![true];
+            let paused = agent.resume_turn(&mut ui, &cancel);
+            assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
+        }
+        assert_eq!(outputs, ["output one\n", "result bash"]);
+        agent.resume_turn(&mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(last_output(&bodies[1]), "one\ntwo\n");
+        assert_eq!(ui.replies, ["done"]);
+    }
+
+    #[test]
+    fn a_reply_a_paused_turn_left_streaming_shows_from_another_thread_meanwhile() {
+        let response = stream(&fixture::text_events("streamed", fixture::known_usage()));
+        // Held back from the text's delta on, which then streams during the pause.
+        let text = String::from_utf8_lossy(&response);
+        let delta = text.find("response.output_text.delta").unwrap();
+        let half = text[..delta].rfind("\n\n").unwrap() + 2;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut connection, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 65536];
+            while !String::from_utf8_lossy(&request).contains("\"stream\"") {
+                let read = std::io::Read::read(&mut connection, &mut buffer).unwrap();
+                request.extend_from_slice(&buffer[..read]);
+            }
+            std::io::Write::write_all(&mut connection, &response[..half]).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            std::io::Write::write_all(&mut connection, &response[half..]).unwrap();
+        });
+        let (mut agent, _scratch) = agent(endpoint, "shown-paused-reply");
+        let mut ui = Recorder {
+            pauses: vec![false, true],
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        let paused = agent.turn("go", &mut ui, &cancel);
+        assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
+        let (to, seen) = std::sync::mpsc::channel();
+        let shown = agent.show_paused(Box::new(Watching(to))).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        agent.take_paused(shown);
+        let resumed = std::time::Instant::now();
+        agent.resume_turn(&mut ui, &cancel).unwrap();
+        assert!(resumed.elapsed() < std::time::Duration::from_millis(400));
+        server.join().unwrap();
+        let seen: Vec<_> = seen.try_iter().collect();
+        assert!(seen.contains(&"progress".to_owned()), "{seen:?}");
+        assert_eq!(ui.replies, ["streamed"]);
         assert_eq!(agent.usage.requests, 1);
     }
 

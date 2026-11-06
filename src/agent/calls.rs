@@ -29,6 +29,16 @@ pub(super) struct Calls {
     run: Run,
 }
 
+impl Calls {
+    /// Those of the calls running now.
+    pub(super) fn running(&mut self) -> Option<&mut Batch> {
+        match &mut self.run {
+            Run::Together(batch) => Some(batch),
+            Run::OneByOne { running, .. } => running.as_mut(),
+        }
+    }
+}
+
 enum Run {
     Together(Batch),
     /// One after another: the next to start, whether every call so far ends the turn, and the

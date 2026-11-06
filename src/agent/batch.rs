@@ -22,6 +22,8 @@ enum Shown {
     /// Its children as they are now, which replace those before them while it waits.
     Subagents(Children),
     Other(Show),
+    /// A question to the user, held back while another thread shows the calls (`pump`).
+    Ask(Show),
     Ended(Output, Usage),
 }
 
@@ -51,6 +53,8 @@ pub(super) struct Batch {
     shown: usize,
     /// With `together`: whose display shows now.
     of: Option<usize>,
+    /// With `together`: the questions `pump` held back, asked when `wait` next shows the calls.
+    held: VecDeque<(usize, Shown)>,
 }
 
 /// How waiting for a `Batch` ended.
@@ -99,12 +103,17 @@ impl Batch {
             queues: calls.iter().map(|_| VecDeque::new()).collect(),
             shown: 0,
             of: None,
+            held: VecDeque::new(),
         }
     }
 
     /// Shows the calls' display on `ui` until they have all ended, stopping them once `cancel`
     /// is set, or until `ui` asks for a pause.
     pub(super) fn wait(&mut self, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> Waited {
+        while let Some((index, event)) = self.held.pop_front() {
+            self.show(index, event, ui, false);
+        }
+        self.drain(ui, false);
         while self.ended.iter().any(Option::is_none) {
             if cancel.load(Ordering::Relaxed) {
                 self.cancel.store(true, Ordering::Relaxed);
@@ -116,7 +125,7 @@ impl Batch {
                 return Waited::Paused;
             }
             match self.from.recv_timeout(LOOK) {
-                Ok((index, event)) => self.show(index, event, ui),
+                Ok((index, event)) => self.show(index, event, ui, false),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -128,8 +137,30 @@ impl Batch {
         Waited::Ended(ended.map(|ended| ended.expect("every call ends")).collect())
     }
 
-    fn show(&mut self, index: usize, event: Shown, ui: &mut dyn AgentUi) {
+    /// Shows the calls' display on `ui`, which another thread than the turn's shows while the
+    /// turn is paused, until `stop` is set or the calls have ended; their questions to the user
+    /// and what follows them wait for `wait`, as do their outputs.
+    pub(super) fn pump(&mut self, ui: &mut dyn AgentUi, stop: &AtomicBool) {
+        while !stop.load(Ordering::Relaxed) && self.ended.iter().any(Option::is_none) {
+            match self.from.recv_timeout(LOOK) {
+                Ok((index, event)) => self.show(index, event, ui, true),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        if self.of.take().is_some() {
+            ui.of_call(None);
+        }
+    }
+
+    /// Shows `event` of the call `index`; `hold`: its questions to the user wait.
+    fn show(&mut self, index: usize, event: Shown, ui: &mut dyn AgentUi, hold: bool) {
         if self.together {
+            if hold && matches!(event, Shown::Ask(_)) {
+                // The call waits for the answer, so it shows nothing more meanwhile.
+                self.held.push_back((index, event));
+                return;
+            }
             if self.of != Some(index) {
                 ui.of_call(Some(index));
                 self.of = Some(index);
@@ -137,7 +168,7 @@ impl Batch {
             match event {
                 Shown::Output(output) => ui.tool_output(&output),
                 Shown::Subagents(children) => ui.subagents(&children),
-                Shown::Other(show) => show(ui),
+                Shown::Other(show) | Shown::Ask(show) => show(ui),
                 Shown::Ended(output, usage) => self.ended[index] = Some((output, usage)),
             }
             return;
@@ -148,15 +179,23 @@ impl Batch {
             (Some(Shown::Subagents(last)), Shown::Subagents(children)) => *last = children,
             (_, event) => queue.push_back(event),
         }
-        while let Some(event) = self
-            .queues
-            .get_mut(self.shown)
-            .and_then(VecDeque::pop_front)
-        {
+        self.drain(ui, hold);
+    }
+
+    /// Without `together`: shows what waits of the calls in order, up to the first that has
+    /// not ended; `hold`: up to a question to the user too.
+    fn drain(&mut self, ui: &mut dyn AgentUi, hold: bool) {
+        while let Some(queue) = self.queues.get_mut(self.shown) {
+            if hold && matches!(queue.front(), Some(Shown::Ask(_))) {
+                break;
+            }
+            let Some(event) = queue.pop_front() else {
+                break;
+            };
             match event {
                 Shown::Output(output) => ui.tool_output(&output),
                 Shown::Subagents(children) => ui.subagents(&children),
-                Shown::Other(show) => show(ui),
+                Shown::Other(show) | Shown::Ask(show) => show(ui),
                 Shown::Ended(output, usage) => {
                     self.ended[self.shown] = Some((output, usage));
                     self.shown += 1;
@@ -221,11 +260,11 @@ impl Relay {
     ) -> Option<T> {
         let (answer, answered) = mpsc::channel();
         let cancel = self.cancel.clone();
-        self.show(move |ui| {
+        self.send(Shown::Ask(Box::new(move |ui| {
             if !cancel.load(Ordering::Relaxed) {
                 let _ = answer.send(ask(ui));
             }
-        });
+        })));
         answered.recv().ok()
     }
 }
@@ -285,4 +324,62 @@ impl AgentUi for Relay {
     fn compaction_summary(&mut self, _: &str) {}
     fn branch_summary(&mut self, _: &str) {}
     fn next_step(&mut self, _: &str) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::tests::Watching;
+    use serde_json::json;
+
+    #[test]
+    fn questions_wait_while_another_thread_shows_the_calls() {
+        let call =
+            |id: &str| json!({"type":"function_call","call_id":id,"name":"bash","arguments":"{}"});
+        let run: Run = Arc::new(|_: &Call, ui: &mut dyn AgentUi, cancel: &AtomicBool| {
+            ui.tool_output("before");
+            let answer = ui.approve("go?", cancel);
+            let text = format!("{answer:?}");
+            ui.tool_output(&text);
+            (
+                Output {
+                    failed: false,
+                    ..Output::failure(text)
+                },
+                Usage::default(),
+            )
+        });
+        for together in [true, false] {
+            let mut batch = Batch::start(
+                vec![call("a"), call("b")],
+                Path::new("/"),
+                run.clone(),
+                together,
+            );
+            let (to, seen) = mpsc::channel();
+            let stop = Arc::new(AtomicBool::new(false));
+            let stopping = stop.clone();
+            let stopper = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                stopping.store(true, Ordering::Relaxed);
+            });
+            batch.pump(&mut Watching(to.clone()), &stop);
+            stopper.join().unwrap();
+            let pumped: Vec<_> = seen.try_iter().collect();
+            // Without `together`, the second call's display waits for the first's end.
+            let shown = if together { 2 } else { 1 };
+            assert_eq!(pumped, vec!["output before"; shown], "together: {together}");
+            let Waited::Ended(ended) = batch.wait(&mut Watching(to), &AtomicBool::new(false))
+            else {
+                panic!("paused");
+            };
+            let texts: Vec<_> = ended
+                .iter()
+                .map(|(output, _)| output.text.as_str())
+                .collect();
+            assert_eq!(texts, ["Allow", "Allow"]);
+            let waited: Vec<_> = seen.try_iter().collect();
+            assert!(waited.contains(&"asked go?".to_owned()), "{waited:?}");
+        }
+    }
 }

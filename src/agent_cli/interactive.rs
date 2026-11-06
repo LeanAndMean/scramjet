@@ -421,6 +421,11 @@ impl Interactive {
             return;
         };
         let (commands, steps) = (screen.take_commands(paused), screen.take_model_steps());
+        // What the turn left running goes on showing while a command's list is open.
+        let shown = match (paused, screen.link.try_clone()) {
+            (true, Ok(link)) => self.agent.show_paused(Box::new(link)),
+            _ => None,
+        };
         self.in_turn = paused;
         for command in commands {
             self.builtin(&command);
@@ -431,6 +436,9 @@ impl Interactive {
             if let (Some(screen), Some(note)) = (&self.screen, note) {
                 screen.note(note);
             }
+        }
+        if let Some(shown) = shown {
+            self.agent.take_paused(shown);
         }
         if let Some(screen) = &self.screen {
             screen.footer(footer::Shown::of(&self.agent));

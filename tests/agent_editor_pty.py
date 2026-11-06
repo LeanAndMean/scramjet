@@ -2,6 +2,7 @@
 on the full screen, and the full screen's own features."""
 import atexit
 import base64
+import codecs
 import fcntl
 import glob
 import hashlib
@@ -536,7 +537,9 @@ class Screen:
         self.grid = [[' '] * columns for _ in range(rows)]
         self.row = self.column = 0
         start = output.rfind(b'\x1b[?1049h')
-        text = bytes(output[start:] if start >= 0 else b'').decode('utf-8', 'replace')
+        # Not final: a read can end inside a character, whose rest comes with the next.
+        text = codecs.getincrementaldecoder('utf-8')('replace').decode(
+            bytes(output[start:] if start >= 0 else b''), final=False)
         for match in re.finditer(r'\x1b\[([?0-9;]*)([@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b.|([\r\n])|'
                                  r'([^\x1b\r\n])', text):
             parameters, final, control, character = match.groups()

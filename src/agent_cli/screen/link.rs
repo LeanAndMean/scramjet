@@ -65,6 +65,16 @@ pub(in crate::agent_cli) struct Link {
 }
 
 impl Link {
+    /// Another link to the same screen, sending events of none of the calls.
+    pub(in crate::agent_cli) fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            to: self.to.clone(),
+            wake: self.wake.try_clone()?,
+            queue: self.queue.clone(),
+            modes: self.modes,
+            call: None,
+        })
+    }
     fn queue(&self) -> std::sync::MutexGuard<'_, Queue> {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
     }

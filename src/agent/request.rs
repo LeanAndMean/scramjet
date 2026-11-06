@@ -8,6 +8,7 @@ use super::{
 };
 use serde_json::{Value, json};
 use std::{
+    collections::VecDeque,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -146,6 +147,7 @@ impl Agent {
             from,
             cancel,
             model: self.config.model.clone(),
+            held: VecDeque::new(),
         })
     }
 
@@ -154,7 +156,7 @@ impl Agent {
     /// `AgentError::Paused`.
     pub(super) fn wait_reply(
         &mut self,
-        replying: Replying,
+        mut replying: Replying,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<client::Reply, AgentError> {
@@ -169,7 +171,11 @@ impl Agent {
                     return Err(AgentError::Paused);
                 }
             }
-            match replying.from.recv_timeout(LOOK) {
+            let next = match replying.held.pop_front() {
+                Some(held) => Ok(held),
+                None => replying.from.recv_timeout(LOOK),
+            };
+            match next {
                 Ok(Streamed::Attempt) => ui.waiting(Purpose::Reply),
                 Ok(Streamed::Sent) => self.usage.requests += 1,
                 Ok(Streamed::Progress(update)) => ui.progress(&update),
@@ -233,6 +239,31 @@ pub(super) struct Replying {
     cancel: Arc<AtomicBool>,
     /// The model asked, which produces the reply, though the session may change it meanwhile.
     pub(super) model: String,
+    /// What `pump` left for the turn: the requests sent and how the reply ended.
+    held: VecDeque<Streamed>,
+}
+
+impl Replying {
+    /// Shows the reply's stream on `ui`, which another thread than the turn's shows while the
+    /// turn is paused, until `stop` is set or it ends; what the turn counts waits for it.
+    pub(super) fn pump(&mut self, ui: &mut dyn AgentUi, retries: u32, stop: &AtomicBool) {
+        while !stop.load(Ordering::Relaxed) {
+            match self.from.recv_timeout(LOOK) {
+                Ok(Streamed::Attempt) => ui.waiting(Purpose::Reply),
+                Ok(Streamed::Progress(update)) => ui.progress(&update),
+                Ok(Streamed::Retrying(error, attempt, delay)) => {
+                    ui.retrying(&error, attempt, retries, delay)
+                }
+                Ok(Streamed::Sent) => self.held.push_back(Streamed::Sent),
+                Ok(ended @ Streamed::Ended(_)) => {
+                    self.held.push_back(ended);
+                    return;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    }
 }
 
 impl Drop for Replying {
@@ -1053,13 +1084,7 @@ response is incomplete; retry the request."});
         };
         let program = scratch.0.join("login");
         let renewed = r#"{"credential":{"access":"renewed","expires":99999999999999}}"#;
-        std::fs::write(
-            &program,
-            format!("#!/bin/sh\nread -r r\necho '{renewed}'\n"),
-        )
-        .unwrap();
-        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
-        std::fs::set_permissions(&program, mode).unwrap();
+        script(&program, &format!("read -r r\necho '{renewed}'"));
         let file = scratch.0.join("models.json");
         let declared = r#"{"logins": {"acme": {"name": "Acme", "command": ["./login"]}}}"#;
         std::fs::write(&file, declared).unwrap();

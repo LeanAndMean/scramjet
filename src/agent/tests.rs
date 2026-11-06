@@ -190,6 +190,69 @@ impl AgentUi for Recorder {
     }
 }
 
+/// Tells what a paused turn shows from another thread (`Agent::show_paused`): `waiting`,
+/// `progress`, `output TEXT`, `asked QUESTION` (allowed) and `result NAME`.
+pub(super) struct Watching(pub(super) std::sync::mpsc::Sender<String>);
+impl Watching {
+    fn tell(&self, seen: String) {
+        let _ = self.0.send(seen);
+    }
+}
+impl AgentUi for Watching {
+    fn waiting(&mut self, _: Purpose) {
+        self.tell("waiting".into());
+    }
+    fn progress(&mut self, _: &StreamProgress) {
+        self.tell("progress".into());
+    }
+    fn retrying(&mut self, _: &str, _: u32, _: u32, _: Duration) {}
+    fn assistant(&mut self, _: &str) {}
+    fn tool_call(&mut self, _: &str, _: &str, _: Option<&CompactRead>) {}
+    fn tool_running(&mut self, _: std::time::Instant) {}
+    fn tool_output(&mut self, output: &str) {
+        self.tell(format!("output {output}"));
+    }
+    fn tool_result(&mut self, name: &str, _: &str, _: Option<&ToolDetail>, _: bool) {
+        self.tell(format!("result {name}"));
+    }
+    fn command_started(&mut self, _: &str, _: bool) {}
+    fn command_result(&mut self, _: &UserCommand) {}
+    fn stopped(&mut self, _: Option<&str>) {}
+    fn compacted(&mut self, _: &Compaction, _: Option<AutoCompaction>) {}
+    fn compaction_failed(&mut self, _: &AgentError) {}
+    fn user_prompt(&mut self, _: &str) {}
+    fn compaction_summary(&mut self, _: &str) {}
+    fn branch_summary(&mut self, _: &str) {}
+    fn approve(&mut self, question: &str, _: &AtomicBool) -> Answer {
+        self.tell(format!("asked {question}"));
+        Answer::Allow
+    }
+    fn question(&mut self, _: &str) {}
+    fn notice(&mut self, _: &str) {}
+    fn next_step(&mut self, _: &str) {}
+    fn choose(&mut self, _: &str, _: &[Choice], _: Option<usize>) -> Option<usize> {
+        None
+    }
+}
+
+/// Writes the shell script `body` to `path`, executable. A child process writes it: a file this
+/// process held open for writing would be inherited by any child another test forks meanwhile,
+/// and running the script while that child holds it fails with `ETXTBSY`.
+pub(crate) fn script(path: &Path, body: &str) {
+    let mut writer = std::process::Command::new("sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = writer.stdin.take().unwrap();
+    input
+        .write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
+        .unwrap();
+    drop(input);
+    assert!(writer.wait().unwrap().success(), "{}", path.display());
+}
+
 /// Creates a scratch directory and removes it when dropped, also when a test panics.
 pub(super) struct ScratchDir(pub(super) PathBuf);
 
@@ -967,10 +1030,8 @@ fn sessions_are_renamed_and_deleted_and_unused_new_ones_are_not_left_behind() {
 
     // `trash` moves a session away; without it, or when it fails, the file is removed.
     let script = |name: &str, text: &str| {
-        use std::os::unix::fs::PermissionsExt;
         let path = scratch.0.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{text}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script(&path, text);
         path.to_str().unwrap().to_owned()
     };
     let trash = script("trash", "mv \"$1\" \"$1.trashed\"");

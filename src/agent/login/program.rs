@@ -394,10 +394,7 @@ mod tests {
     }
 
     fn script(scratch: &ScratchDir, name: &str, body: &str) {
-        let path = scratch.0.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
-        std::fs::set_permissions(&path, mode).unwrap();
+        crate::agent::tests::script(&scratch.0.join(name), body);
     }
 
     fn program(scratch: &ScratchDir, name: &str) -> LoginProgram {

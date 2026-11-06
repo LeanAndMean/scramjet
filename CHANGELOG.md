@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.45.0 — Running tools and replies shown while a list is open
+
+### Changed
+
+- While a list or menu opened during a turn is open (`/model`, `/settings`, `/resume` and the like), the tools still running and a reply still streaming keep showing their output in place above it, rather than freezing until it closes. A question a tool asks meanwhile waits for the list to close.
+
 ## 0.44.0 — Commands at once while a reply streams
 
 ### Changed

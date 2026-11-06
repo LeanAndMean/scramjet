@@ -38,6 +38,7 @@ mod switch;
 mod tools;
 mod tree;
 mod turn;
+pub use turn::ShownPaused;
 mod ui;
 
 pub use attached::Attached;

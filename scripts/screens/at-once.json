@@ -14,6 +14,8 @@
     {"type": "/model\r"},
     {"sleep": 0.5},
     {"shot": "picker"},
+    {"until": "step 3"},
+    {"shot": "picker-later"},
     {"type": "\u001b"},
     {"until": "step 5"},
     {"shot": "running"},
