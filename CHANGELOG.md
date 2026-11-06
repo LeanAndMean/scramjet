@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.51.0 — Main colors moved up or down in the theme editor
+
+### Added
+
+- In the theme editor, Alt+Up and Alt+Down move the selected main color a place up or down, as `/scoped-models` moves models. Its lock and the roles picked to follow it go with it; the roles of each place take the color now there, and the first one tints the background. Undo and redo go through moves. The keys are `app.theme.moveUp` and `app.theme.moveDown` in `keybindings.json`.
+
 ## 0.50.0 — The theme editor's background lighter or darker
 
 ### Added

@@ -99,6 +99,8 @@ pub(super) enum Binding {
     ThemeRoles,
     ThemeExact,
     ThemeReset,
+    ThemeMoveUp,
+    ThemeMoveDown,
 }
 
 /// Where `/hotkeys` lists an action.
@@ -158,7 +160,7 @@ use Section as S;
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 82] = [
+const DEFINITIONS: [Definition; 84] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -241,6 +243,8 @@ const DEFINITIONS: [Definition; 82] = [
     define(B::ThemeRoles, "app.theme.roles", &["tab"], S::ThemeEditor, "Show every role, or the main colors again"),
     define(B::ThemeExact, "app.theme.exact", &["#"], S::ThemeEditor, "Type the role's exact color"),
     define(B::ThemeReset, "app.theme.reset", &["backspace", "delete"], S::ThemeEditor, "Make the role follow its own main color again"),
+    define(B::ThemeMoveUp, "app.theme.moveUp", &["alt+up"], S::ThemeEditor, "Move the main color up"),
+    define(B::ThemeMoveDown, "app.theme.moveDown", &["alt+down"], S::ThemeEditor, "Move the main color down"),
 ];
 
 /// The keys of every action, in `DEFINITIONS`' order.

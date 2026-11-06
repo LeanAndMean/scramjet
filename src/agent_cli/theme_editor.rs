@@ -249,11 +249,12 @@ impl ThemeEditor {
     }
 
     /// Shows the draft at `at` in the history. The locks stay on their rows, or, when it has
-    /// another number of colors, on the colors locked, which a change of the number keeps.
+    /// another number of colors or the same ones in another order, on the colors locked.
     fn show(&mut self, at: usize) {
         let before = std::mem::replace(&mut self.at, at);
         let (before, now) = (&self.history[before].mains, &self.history[at].mains);
-        if before.len() != now.len() {
+        let moved = before != now && now.iter().all(|main| before.contains(main));
+        if before.len() != now.len() || moved {
             let kept: Vec<_> = (before.iter().zip(&self.locked))
                 .filter(|(_, locked)| **locked)
                 .map(|(main, _)| main)
@@ -301,6 +302,8 @@ impl ThemeEditor {
                 true => self.show(self.at + 1),
                 false => self.say("Nothing to redo", true),
             },
+            _ if key.is(Binding::ThemeMoveUp) => self.move_main(-1),
+            _ if key.is(Binding::ThemeMoveDown) => self.move_main(1),
             _ => match self.view {
                 View::Main => self.main_key(key),
                 View::Roles => self.roles_key(key),
@@ -355,6 +358,38 @@ impl ThemeEditor {
             }
             _ => {}
         }
+    }
+
+    /// Moves the selected main color a place up (`by` -1) or down (1), with its lock and the
+    /// roles picked to follow it; the roles of each place take the colors now there.
+    fn move_main(&mut self, by: i32) {
+        let (View::Main, Row::Main(index)) = (self.view, self.rows()[self.row]) else {
+            let roles = keymap::key(Binding::ThemeRoles).unwrap_or_default();
+            let at = match self.view {
+                View::Main => "Select a main color to move it".to_owned(),
+                View::Roles => format!("Move main colors in the first view ({roles})"),
+            };
+            return self.say(&at, true);
+        };
+        let to = index as i32 + by;
+        if !(0..self.draft().mains.len() as i32).contains(&to) {
+            let end = if by < 0 { "first" } else { "last" };
+            return self.say(&format!("It is the {end} color already"), true);
+        }
+        let to = to as usize;
+        let mut draft = self.draft().clone();
+        draft.mains.swap(index, to);
+        for pick in &mut draft.picks {
+            if let Some(Pick::Follow(at)) = pick {
+                *at = match *at {
+                    at if at == index => to,
+                    at if at == to => index,
+                    at => at,
+                };
+            }
+        }
+        self.row = (self.row as i32 + by) as usize;
+        self.push(draft);
     }
 
     /// Sets the selected role's pick, as a step undo goes back from.
@@ -621,12 +656,21 @@ impl ThemeEditor {
                     false => "",
                 };
                 let lock_key = keymap::key(Binding::ThemeLock).unwrap_or_default();
+                let moves = keymap::keys(&[Binding::ThemeMoveUp, Binding::ThemeMoveDown])
+                    .map(|keys| {
+                        format!(
+                            " {keys} moves it up or down: each place lights its own roles, and \
+                             the first tints the background."
+                        )
+                    })
+                    .unwrap_or_default();
                 (
                     format!("Color {}", index + 1),
                     format!("{swatch} #{r:02x}{g:02x}{b:02x} {name}{lock}"),
                     format!(
                         "{left_right} turns its hue a little. {lock_key} locks it: a roll keeps \
-                         the locked colors and places the others in the harmony around them."
+                         the locked colors and places the others in the harmony around them.\
+                         {moves}"
                     ),
                 )
             }
@@ -1705,6 +1749,63 @@ mod tests {
         assert_eq!(editor.draft().picks[link], Some(Pick::Follow(1)));
         editor.key(&press(Code::Left));
         assert_eq!(editor.draft().picks[link], None);
+    }
+
+    #[test]
+    fn alt_up_and_down_move_a_main_color_with_its_lock_and_the_roles_picked_to_follow_it() {
+        use crate::agent_cli::keys::ALT;
+        let alt = |code| Key::Press(Press::new(code, ALT));
+        let mut editor = ThemeEditor::new(11, Background::Dark, None);
+        let heading = token_at(Token::MdHeading);
+        let mut draft = editor.draft().clone();
+        draft.picks[heading] = Some(Pick::Follow(1));
+        editor.push(draft);
+        let before = editor.draft().mains.clone();
+        // The second color, locked, moves first: the accent and the background take it.
+        editor.row = 6;
+        editor.key(&typed("l"));
+        let background = editor.built.background;
+        editor.key(&alt(Code::Up));
+        let mains = &editor.draft().mains;
+        assert_eq!(
+            (&mains[0], &mains[1], &mains[2]),
+            (&before[1], &before[0], &before[2])
+        );
+        assert_eq!(editor.locked, [true, false, false]);
+        assert_eq!(editor.rows()[editor.row], Row::Main(0));
+        assert_eq!(editor.draft().picks[heading], Some(Pick::Follow(0)));
+        let first = editor.draft().accent(0, editor.built.background);
+        assert_eq!(editor.built.color(Token::Accent), first);
+        assert_eq!(editor.built.color(Token::MdHeading), first);
+        assert_ne!(editor.built.background, background);
+        editor.key(&alt(Code::Up));
+        assert_eq!(
+            editor.status,
+            Some(("It is the first color already".into(), true))
+        );
+        // A roll keeps the locked color where it went; undo brings the order and lock back.
+        editor.key(&typed("r"));
+        assert_eq!(editor.draft().mains[0], before[1]);
+        editor.key(&typed("u"));
+        editor.key(&typed("u"));
+        assert_eq!(editor.draft().mains, before);
+        assert_eq!(editor.locked, [false, true, false]);
+        editor.key(&typed("U"));
+        assert_eq!(editor.locked, [true, false, false]);
+        // Down from the last color, and from rows that are not colors, say why not.
+        editor.row = 7;
+        editor.key(&alt(Code::Down));
+        assert_eq!(
+            editor.status,
+            Some(("It is the last color already".into(), true))
+        );
+        editor.row = 0;
+        editor.key(&alt(Code::Down));
+        assert_eq!(
+            editor.status,
+            Some(("Select a main color to move it".into(), true))
+        );
+        assert_eq!(editor.draft().mains[0], before[1]);
     }
 
     #[test]
