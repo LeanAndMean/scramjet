@@ -503,6 +503,8 @@ pub struct Agent {
     /// be read.
     prompt_files: (Vec<(PathBuf, bool)>, Vec<Problem>),
     session: Session,
+    /// The session the next step just recorded starts, which `new_session` continues in.
+    next_session: Option<Session>,
     /// With `SessionChoice::Unsaved`, where every session of the run is, removed with the agent.
     unsaved: Option<session::Unsaved>,
     executor: tokio::runtime::Runtime,
@@ -681,6 +683,7 @@ impl Agent {
             conversation,
             prompts,
             session,
+            next_session: None,
             unsaved,
             executor,
             usage: Usage {
@@ -842,6 +845,10 @@ impl Agent {
     /// Continues in `session`; the one before goes, its file too when it stayed unused
     /// (`Session::discard_if_unused`), as Scramjet would not have written it. That file is left
     /// when it cannot be removed, as all were before.
+    fn session_directory(&self) -> &Path {
+        self.session.path().parent().unwrap_or(Path::new("."))
+    }
+
     fn replace_session(&mut self, session: Session) {
         let left = std::mem::replace(&mut self.session, session);
         let _ = left.discard_if_unused();
@@ -1062,11 +1069,13 @@ impl Agent {
         Ok(())
     }
 
-    /// Continues in an empty session saved next to the current one; on failure nothing changes.
-    /// Approvals given with `a` still apply.
+    /// Continues in an empty session saved next to the current one, or in the one the next step
+    /// just recorded starts; on failure nothing changes. Approvals given with `a` still apply.
     pub fn new_session(&mut self) -> Result<(), AgentError> {
-        let directory = self.session.path().parent().unwrap_or(Path::new("."));
-        let mut session = Session::create(directory, &self.config.root, None)?;
+        let mut session = match self.next_session.take() {
+            Some(session) => session,
+            None => Session::create(self.session_directory(), &self.config.root, None)?,
+        };
         session.record_model(&self.config.model)?;
         if let Some(effort) = &self.config.effort {
             session.record_effort(effort)?;

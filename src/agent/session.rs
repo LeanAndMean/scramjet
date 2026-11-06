@@ -41,6 +41,9 @@ pub struct SessionInfo {
     pub modified: SystemTime,
     /// The session it was forked from, as its header records it.
     pub parent: Option<PathBuf>,
+    /// The session whose next step started it, as its header records it: the one before it in
+    /// a chain.
+    pub continues: Option<PathBuf>,
 }
 
 /// The conversation on a session's current branch, as `/export` shows it.
@@ -214,7 +217,8 @@ struct Entries {
     lines: usize,
     /// The file's length.
     size: u64,
-    /// The header's `parentSession`: the session this one was forked from.
+    /// The header's `parentSession`: the session this one was forked from, or, with `nextStep`,
+    /// the one whose next step started it.
     parent: Option<PathBuf>,
     header: Value,
     tokens: Tokens,
@@ -363,6 +367,11 @@ pub(super) fn prompt_text(entry: &Value) -> &str {
 }
 
 impl Entries {
+    /// Whether a next step of the session before it started this one (`nextStep`).
+    fn continues(&self) -> bool {
+        self.header["nextStep"] == true
+    }
+
     /// The entries from the start of the conversation to `leaf`, in order.
     fn path(&self, leaf: Option<usize>) -> Vec<&Entry> {
         let mut path = Vec::new();
@@ -661,7 +670,8 @@ impl Session {
                 name: entries.name.clone(),
                 item_count: context.items.len(),
                 modified,
-                parent: entries.parent.clone(),
+                parent: entries.parent.clone().filter(|_| !entries.continues()),
+                continues: entries.parent.clone().filter(|_| entries.continues()),
             });
         }
         sessions.sort_by(|a, b| {
@@ -726,10 +736,29 @@ impl Session {
     /// Starts a session for the project `root` in `directory`; a fork names the session it came
     /// from, `parent`, in its header, as Scramjet's `parentSession`.
     pub fn create(directory: &Path, root: &Path, parent: Option<&Path>) -> io::Result<Self> {
+        Self::start(directory, root, parent, false)
+    }
+
+    /// Starts a session for the project `root` in `directory` that a next step of the session
+    /// `from` starts: its header names `from` as `parentSession`, as a fork's does, and says
+    /// `nextStep`, so that a chain can be told from a fork.
+    pub fn continuing(directory: &Path, root: &Path, from: &Path) -> io::Result<Self> {
+        Self::start(directory, root, Some(from), true)
+    }
+
+    fn start(
+        directory: &Path,
+        root: &Path,
+        parent: Option<&Path>,
+        next_step: bool,
+    ) -> io::Result<Self> {
         let (path, mut file, created) = new_file(directory)?;
         let mut header = json!({"type":"session","version":1,"root":root,"created":created as u64});
         if let Some(parent) = parent {
             header["parentSession"] = json!(std::path::absolute(parent)?);
+        }
+        if next_step {
+            header["nextStep"] = json!(true);
         }
         let mut header = serde_json::to_vec(&header)?;
         header.push(b'\n');
@@ -880,6 +909,7 @@ impl Session {
         let mut header = entries.header.clone();
         if let Some(header) = header.as_object_mut() {
             header.remove("parentSession");
+            header.remove("nextStep");
         }
         let mut lines = serde_json::to_vec(&header)?;
         lines.push(b'\n');

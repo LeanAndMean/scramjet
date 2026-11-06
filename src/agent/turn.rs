@@ -218,7 +218,22 @@ finish and is not checked on. Reply to continue.",
             .unwrap_or_default()
             .as_nanos();
         let call_id = format!("harness-tool-{nanos}");
-        let arguments = status::record_arguments(source, steps, chosen).to_string();
+        let mut arguments = status::record_arguments(source, steps, chosen);
+        if let Some(stale) = self.next_session.take() {
+            let _ = stale.discard_if_unused();
+        }
+        // A fresh session's file is made now, so that the record names it.
+        if chosen.is_some_and(|at| steps[at].fresh()) {
+            let directory = self.session_directory();
+            let from = self.session.path();
+            if let Ok(next) = super::Session::continuing(directory, &self.config.root, from) {
+                arguments["nextSession"] = json!(
+                    std::path::absolute(next.path()).unwrap_or_else(|_| next.path().to_owned())
+                );
+                self.next_session = Some(next);
+            }
+        }
+        let arguments = arguments.to_string();
         self.add(
             json!({"type":"function_call","call_id":call_id,"name":status::RECORD,
             "arguments":arguments}),
@@ -1202,6 +1217,72 @@ auto-dispatches it only when its message is a slash command."
             .navigate(worked.unwrap().line, None, &mut ui, &cancel)
             .unwrap();
         assert!(agent.autopilot());
+    }
+
+    #[test]
+    fn a_fresh_session_next_step_links_the_two_sessions_as_a_chain() {
+        let (mut agent, _scratch) = agent(([127, 0, 0, 1], 9).into(), "next-step-chain");
+        agent.add(json!({"role":"user","content":"first"})).unwrap();
+        let first = agent.session_path().to_owned();
+        let step = |fresh_session, command: Option<&str>| Step {
+            index: 0,
+            message: "/rs:loop".into(),
+            reason: String::new(),
+            fresh_session,
+            command: command.map(str::to_owned),
+        };
+        let record = |agent: &Agent| -> Value {
+            let call = agent.conversation().iter().rev().nth(1).unwrap();
+            serde_json::from_str(call["arguments"].as_str().unwrap()).unwrap()
+        };
+
+        // A step in the same session, or a text step, names no other.
+        let source = Source::Completion("rs:loop");
+        agent
+            .record_next_step(source, &[step(false, Some("/rs:loop"))], Some(0))
+            .unwrap();
+        assert_eq!(record(&agent).get("nextSession"), None);
+        agent
+            .record_next_step(source, &[step(true, None)], Some(0))
+            .unwrap();
+        assert_eq!(record(&agent).get("nextSession"), None);
+
+        // A fresh session's record names the file the session continues in, and that file's
+        // header names the session before it, marked as a next step's.
+        agent
+            .record_next_step(source, &[step(true, Some("/rs:loop"))], Some(0))
+            .unwrap();
+        let named = std::path::PathBuf::from(record(&agent)["nextSession"].as_str().unwrap());
+        agent.new_session().unwrap();
+        assert_eq!(agent.session_path(), named);
+        agent
+            .add(json!({"role":"user","content":"second"}))
+            .unwrap();
+        let header: Value = serde_json::from_str(
+            std::fs::read_to_string(&named)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(header["parentSession"], json!(first));
+        assert_eq!(header["nextStep"], true);
+        let listed = Session::list(first.parent().unwrap()).unwrap();
+        let second = listed.iter().find(|info| info.path == named).unwrap();
+        assert_eq!(second.continues.as_deref(), Some(first.as_path()));
+        assert_eq!(second.parent, None);
+
+        // `/clear` starts a session of its own, and a dismissed list leaves none behind.
+        let dir_len = || std::fs::read_dir(first.parent().unwrap()).unwrap().count();
+        let before = dir_len();
+        agent
+            .record_next_step(source, &[step(true, Some("/rs:loop"))], None)
+            .unwrap();
+        assert_eq!(dir_len(), before);
+        agent.new_session().unwrap();
+        let cleared = std::fs::read_to_string(agent.session_path()).unwrap();
+        assert!(!cleared.contains("parentSession"), "{cleared}");
     }
 
     #[test]

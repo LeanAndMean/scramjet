@@ -3727,6 +3727,13 @@ chosen = [json.loads(line['arguments'])['options'][0] for line in map(json.loads
           if line.get('name') == 'scramjet_next_step_selection']
 assert chosen == [{'message': '/flow:step two', 'reason': 'Do the second.', 'freshSession': True}], chosen
 assert records(second) == [('selected', 0), ('dismissed', None)], records(second)
+# The two form a chain: the record names the new session, whose header names the one it left.
+links = [json.loads(line['arguments']).get('nextSession') for line in map(json.loads, open(first))
+         if line.get('name') == 'scramjet_next_step_selection']
+assert links == [os.path.abspath(second)], (links, second)
+header = json.loads(open(second).readline())
+assert header['parentSession'] == os.path.abspath(first) and header['nextStep'] is True, header
+assert 'parentSession' not in json.loads(open(first).readline())
 # The chained command's model sees the record before the command's prompt.
 kinds = [item.get('name') or item.get('type') or item.get('role') for item in bodies[3]['input']]
 assert kinds[-3:] == ['scramjet_next_step_selection', 'function_call_output', 'user'], kinds

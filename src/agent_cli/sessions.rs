@@ -669,6 +669,7 @@ mod tests {
             item_count: 12,
             modified: std::time::SystemTime::now() - Duration::from_secs(7200),
             parent: None,
+            continues: None,
         };
         assert_eq!(
             session_line(&session, 30, None, false),
@@ -686,6 +687,7 @@ mod tests {
             item_count: 12,
             modified: session.modified,
             parent: None,
+            continues: None,
         };
         let line = session_line(&named, 80, Some(style::SESSION_NAMED), false);
         assert_eq!(
@@ -714,6 +716,7 @@ mod tests {
             item_count: 12,
             modified: named.modified,
             parent: None,
+            continues: None,
         };
         assert_eq!(
             session_line(&filed, 100, None, true),
@@ -748,6 +751,7 @@ mod tests {
             item_count: 1,
             modified: std::time::SystemTime::now(),
             parent: parent.map(path),
+            continues: None,
         });
         let rows: Vec<String> = (threaded(sessions.into()).into_iter())
             .map(|(session, tree)| format!("{tree}{}", session.name.unwrap()))
@@ -781,6 +785,7 @@ mod tests {
             item_count: 1,
             modified: std::time::SystemTime::now(),
             parent: parent.map(path),
+            continues: None,
         });
         let rows: Vec<String> = (threaded(deep.into()).into_iter())
             .map(|(session, tree)| format!("{tree}{}", session.name.unwrap()))
@@ -799,6 +804,7 @@ mod tests {
             item_count: 1,
             modified: now - Duration::from_secs(age),
             parent: parent.map(|parent| PathBuf::from(format!("/nonexistent/{parent}.jsonl"))),
+            continues: None,
         };
         // The fork, the newest, is threaded under its parent but found before it.
         let sessions = threaded(vec![

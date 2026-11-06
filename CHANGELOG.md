@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.56.0 — Sessions linked into chains
+
+### Added
+
+- A session that a fresh-session next step starts names the session it came from in its file (`parentSession`, marked `nextStep`), and the earlier session's record of the choice names the new session's file, so a chain of sessions such as a `/rs:loop` run can be followed again. `/resume` still lists them as before; how it shows a chain is not settled yet.
+
 ## 0.55.0 — Spelling in the prompt
 
 ### Added
