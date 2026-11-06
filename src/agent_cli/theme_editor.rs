@@ -677,34 +677,57 @@ impl ThemeEditor {
         }
     }
 
-    /// The harmony's score, the faintest text's contrast, in numbers and plain words, and how
-    /// many roles were picked and kept from the theme it started from.
+    /// The harmony's score and the contrast of the text and of the faintest text, each in the
+    /// color of how good it is, then how many roles were picked by hand and kept from the theme
+    /// it started from.
     fn scores(&self) -> String {
-        let score = self.score;
+        use style::STATUS;
         let background = self.built.background;
         let ratio = |token| palette::contrast(self.built.color(token), background);
         let (text, dim) = (ratio(Token::Text), ratio(Token::Dim));
-        let picks = self.draft().picks.iter().flatten();
-        let kept = (picks.clone())
+        let mode = Mode::detect();
+        // The value on its quality's color, in the background's.
+        let chip = |value: String, quality: f64| {
+            let (r, g, b) = palette::quality_color(quality, background);
+            let on = Color::Rgb(r, g, b).background(mode).unwrap_or_default();
+            let (r, g, b) = background;
+            let ink = Color::Rgb(r, g, b).foreground(mode).unwrap_or_default();
+            format!("\x1b[{on};{ink}m {value} {RESET}{STATUS}")
+        };
+        let mut parts: Vec<String> = [
+            (
+                "Harmony",
+                format!("{:.0}%", self.score * 100.0),
+                palette::harmony_quality(self.score),
+            ),
+            (
+                "Text contrast",
+                format!("{text:.1}:1"),
+                palette::contrast_quality(text, Kind::Text),
+            ),
+            (
+                "Footer contrast",
+                format!("{dim:.1}:1"),
+                palette::contrast_quality(dim, Kind::Dim),
+            ),
+        ]
+        .into_iter()
+        .map(|(label, value, quality)| format!("{label} {}", chip(value, quality)))
+        .collect();
+        let picks: Vec<_> = self.draft().picks.iter().flatten().collect();
+        let kept = (picks.iter())
             .filter(|pick| matches!(pick, Pick::Kept(_)))
             .count();
-        let picked = match picks.count() - kept {
-            0 => String::new(),
-            1 => " · 1 role picked".to_owned(),
-            count => format!(" · {count} roles picked"),
-        };
-        let kept = match kept {
-            0 => String::new(),
-            1 => " · 1 role kept".to_owned(),
-            kept => format!(" · {kept} roles kept"),
-        };
-        format!(
-            "Harmony {:.0}% {} · text {text:.1}:1 {} · dim text {dim:.1}:1 {}{picked}{kept}",
-            score * 100.0,
-            palette::harmony_words(score),
-            palette::contrast_words(text, Kind::Text),
-            palette::contrast_words(dim, Kind::Dim),
-        )
+        match picks.len() - kept {
+            0 => {}
+            1 => parts.push("1 role picked by hand".to_owned()),
+            count => parts.push(format!("{count} roles picked by hand")),
+        }
+        if kept > 0 {
+            let roles = if kept == 1 { "role" } else { "roles" };
+            parts.push(format!("{kept} {roles} from {}", self.started_from()));
+        }
+        parts.join(" · ")
     }
 
     /// What the role at `at` takes its color from, in plain words.
@@ -1412,7 +1435,7 @@ mod tests {
         assert!(
             lines(&editor)
                 .iter()
-                .any(|line| line.contains("Harmony 100% in harmony"))
+                .any(|line| line.contains("Harmony  100% "))
         );
         for _ in 0..CONTRAST_STEPS {
             editor.key(&typed("+"));
@@ -1977,7 +2000,7 @@ mod tests {
             "{shown:?}"
         );
         assert!(
-            (shown.iter()).any(|line| line.ends_with(" · 38 roles kept")),
+            (shown.iter()).any(|line| line.ends_with(" · 38 roles from scramjet-dark")),
             "{shown:?}"
         );
         // Without the terminal's background, a light one for a theme with dark secondary text.

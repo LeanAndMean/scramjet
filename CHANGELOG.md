@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.52.0 — The theme editor's scores shown by color
+
+### Changed
+
+- The theme editor's scores line shows how good each score is by the color behind it, from red for bad through amber to green for good, in place of words after each number: `Harmony 81% · Text contrast 11.3:1 · Footer contrast 5.7:1`. The roles kept from the theme it started from now say so, as `38 roles from scramjet-dark`, and roles changed in the editor as `2 roles picked by hand`.
+
 ## 0.51.0 — Main colors moved up or down in the theme editor
 
 ### Added

@@ -914,15 +914,35 @@ pub(super) fn contrast_words(ratio: f64, kind: Kind) -> &'static str {
     }
 }
 
-/// A harmony's score in plain words.
-pub(super) fn harmony_words(score: f64) -> &'static str {
-    match score {
-        score if score >= 0.995 => "in harmony",
-        score if score >= 0.9 => "cohesive",
-        score if score >= 0.75 => "a little loose",
-        score if score >= 0.5 => "loose",
-        _ => "scattered",
+/// How good a contrast ratio is for `kind`, from 0 (unreadable) to 1: best in the middle of its
+/// band, a little less toward its ends, falling to 0 half a band below it and to 0.4 above it,
+/// as harsh text tires the eyes but stays readable.
+pub(super) fn contrast_quality(ratio: f64, kind: Kind) -> f64 {
+    let (low, high) = kind.band();
+    let place = (ratio.ln() - low.ln()) / (high.ln() - low.ln());
+    match place {
+        place if place < 0.25 => (0.7 + 1.2 * place.max(0.0) + 1.4 * place.min(0.0)).max(0.0),
+        place if place <= 0.75 => 1.0,
+        place if place <= 1.0 => 1.0 - 0.6 * (place - 0.75),
+        place => (0.85 - 0.9 * (place - 1.0)).max(0.4),
     }
+}
+
+/// How good a harmony's score is, from 0 (scattered, at half or less) to 1 (cohesive).
+pub(super) fn harmony_quality(score: f64) -> f64 {
+    ((score - 0.5) / 0.4).clamp(0.0, 1.0)
+}
+
+/// The color that shows a `quality` from 0 to 1 on `background`: red for bad through amber to
+/// green for good, each as readable as an accent.
+pub(super) fn quality_color(quality: f64, background: Rgb) -> Rgb {
+    let (low, high) = Kind::Accent.band();
+    lit(
+        25.0 + 120.0 * quality.clamp(0.0, 1.0),
+        0.16,
+        background,
+        (low * high).sqrt(),
+    )
 }
 
 #[cfg(test)]
@@ -1273,11 +1293,31 @@ mod tests {
 
     #[test]
     fn scores_are_said_in_plain_words() {
-        assert_eq!(harmony_words(1.0), "in harmony");
-        assert_eq!(harmony_words(0.82), "a little loose");
         assert_eq!(contrast_words(4.0, Kind::Dim), "a bit faint");
         assert_eq!(contrast_words(11.3, Kind::Text), "good");
         assert_eq!(contrast_words(2.5, Kind::Secondary), "too faint");
         assert_eq!(contrast_words(19.0, Kind::Text), "harsh");
+    }
+
+    #[test]
+    fn scores_go_from_red_for_bad_to_green_for_good() {
+        assert_eq!(harmony_quality(1.0), 1.0);
+        assert_eq!(harmony_quality(0.3), 0.0);
+        assert_eq!(contrast_quality(11.3, Kind::Text), 1.0);
+        assert_eq!(contrast_quality(2.0, Kind::Text), 0.0);
+        let faint = contrast_quality(7.0, Kind::Text);
+        let harsh = contrast_quality(21.0, Kind::Text);
+        assert!((0.01..0.7).contains(&faint) && (0.4..0.85).contains(&harsh));
+        for background in [(12, 12, 12), (250, 250, 250)] {
+            let hue = |quality| Oklch::of(quality_color(quality, background)).h;
+            let (bad, middling, good) = (hue(0.0), hue(0.5), hue(1.0));
+            assert!(
+                bad < 45.0 && (60.0..110.0).contains(&middling),
+                "{bad} {middling}"
+            );
+            assert!((125.0..165.0).contains(&good), "{good}");
+            let ratio = contrast(quality_color(0.5, background), background);
+            assert!(ratio > 4.5, "{ratio}");
+        }
     }
 }
