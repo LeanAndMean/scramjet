@@ -1202,6 +1202,20 @@ sed.\n- Be concise";
         cancel
     }
 
+    /// A stop set once `path` exists, or after 10 s if it never does.
+    fn stop_once_written(path: std::path::PathBuf) -> Arc<AtomicBool> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let setter = cancel.clone();
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            while !path.exists() && start.elapsed() < Duration::from_secs(10) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            setter.store(true, Ordering::Relaxed);
+        });
+        cancel
+    }
+
     #[test]
     fn a_replys_calls_run_together_and_show_one_after_another_in_their_order() {
         // Each command waits up to 5 s for the other's file, which one after the other the first
@@ -1385,10 +1399,10 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
         ]);
         let (mut agent, _scratch) = agent(endpoint, "calls-together-stopped");
         let mut ui = Recorder::default();
-        let cancel = stop_after(Duration::from_millis(300));
+        // Stopped once the write ran, which it does only beside the command, as in Pi.
+        let cancel = stop_once_written(agent.root().join("x.txt"));
         let stopped = agent.turn("go", &mut ui, &cancel);
         assert!(matches!(stopped, Err(AgentError::Cancelled)), "{stopped:?}");
-        // As in Pi, the write ran beside the command.
         assert!(agent.root().join("x.txt").exists());
         cancel.store(false, Ordering::Relaxed);
         agent.turn("again", &mut ui, &cancel).unwrap();
