@@ -2049,7 +2049,7 @@ def shift_tab_cycles_effort(read, until, send, output):
     on_screen('Reply.')
     ended(read, output)
     # The reply reported no tokens: how full the context is, is not known.
-    footer_shows(read, output, [project, stats('?', 'gpt-6-luna \u2022 xhigh')])
+    footer_shows(read, output, [project, stats('', 'gpt-6-luna \u2022 xhigh')])
     send(b'\x04')
 
 
@@ -2132,7 +2132,7 @@ def ctrl_p_cycles_models(read, until, send, output):
     on_screen('Running 1s')
     send(b'\x10')
     on_screen('The model changes before the next request')
-    footer_shows(read, output, [project, stats('?', 'gpt-6-luna \u2022 low', 80)], columns=80)
+    footer_shows(read, output, [project, stats('', 'gpt-6-luna \u2022 low', 80)], columns=80)
     on_screen('Switched.')
     ended(read, output, columns=80)
     send(b'\x04')
@@ -2149,14 +2149,14 @@ def agent_switches_the_model(read, until, send, output):
     on_screen('Switched to GPT-6 Terra (ID: gpt-6-terra, provider: openai).')
     # While its next request runs, the footer names the new model at its level nearest
     # the one set, and Shift+Tab cycles its levels.
-    footer_shows(read, output, [project, stats('?', 'gpt-6-terra \u2022 high', 80)], columns=80)
+    footer_shows(read, output, [project, stats('', 'gpt-6-terra \u2022 high', 80)], columns=80)
     send(b'\x1b[Z')
-    footer_shows(read, output, [project, stats('?', 'gpt-6-terra \u2022 low', 80)], columns=80)
+    footer_shows(read, output, [project, stats('', 'gpt-6-terra \u2022 low', 80)], columns=80)
     assert 'Terra replied.' not in '\n'.join(shown()), shown()
     switch_gate.set()
     on_screen('Terra replied.')
     ended(read, output, columns=80)
-    footer_shows(read, output, [project, stats('?', 'gpt-6-terra \u2022 low', 80)], columns=80)
+    footer_shows(read, output, [project, stats('', 'gpt-6-terra \u2022 low', 80)], columns=80)
     send(b'\x04')
 
 
@@ -4176,7 +4176,7 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     on_screen('Running 1s')
     # Shift+Tab chooses the effort of the turn's next request; the footer says so at once.
     send(b'\x1b[Z')
-    footer_shows(read, output, [project, stats('?', 'gpt-6-luna \u2022 high')])
+    footer_shows(read, output, [project, stats('', 'gpt-6-luna \u2022 high')])
     # A `!` command runs at once, under the conversation until the turn ends.
     send(b'!echo side$((0+1)); sleep 1; echo side$((1+1))\r')
     rows = on_screen('side2')

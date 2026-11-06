@@ -49,9 +49,6 @@ Order agreed at the steer of 2026-11-06 (Current focus). What is left of 4, 8, 9
     - P1. Padding as in Scramjet's tool boxes (`tool-execution.ts`: `Box(1, 1, …)`, under a `Spacer(1)`): a tinted blank row above a call's header, one under it and one at the bottom, as user messages have already.
     - P2. One left edge. Today the prompt's text starts at column 3, reasoning at 2, a call's output at 1 and replies at 0; Scramjet puts them all at 1.
     - P3. Long lines of a call's output are cut with `…` at the edge, in every look (`0 measur…` at 60 columns); Scramjet wraps them.
-    - P4. The footer shows `$? ?` when a model's price and window are unknown. Show nothing for an unknown price, and the context's tokens alone without a window.
-    - P5. Paths in `read` and `edit` headers take the accent color, as in Scramjet.
-    - P6. A failed call's output keeps its normal color on `toolErrorBg`, not red on red.
 
     Kept as they are (recorded choices): the outcome's ✓ or ✗ on the header from the start, the time on the header (bash calls of a second or more), `bash  cmd`, `›` and bold on prompts, the `Ctrl+O … total` wording. Look for other oversights the same way while at it. The PTY journeys (`tests/agent_editor_pty.py`) move to the defaults, panels, the header banner and the theme that follows the background, rather than pinning the classic look (`CLASSIC`; user, second steer of 2026-11-06, reversing b11ce00's last choice): tests run what users see. In `margin`, a reply has no label and sits under the last call's output, so it reads as part of it.
 

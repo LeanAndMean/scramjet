@@ -170,11 +170,12 @@ impl Footer {
                 (format!("{count}/{window} ({shown}%, auto)"), percent)
             }
             (Some(count), _) => (tokens(count), None),
-            (None, _) => ("?".to_owned(), None),
+            (None, _) => (String::new(), None),
         };
-        let before = match counts.is_empty() {
-            true => String::new(),
-            false => counts.join(" ") + " ",
+        let before = match (counts.is_empty(), full.is_empty()) {
+            (true, _) => String::new(),
+            (false, true) => counts.join(" "),
+            (false, false) => counts.join(" ") + " ",
         };
         let left = before.clone() + &full;
         if left.width() > room {
@@ -369,7 +370,8 @@ mod tests {
         );
         // Responses without a price, or saved before costs were, leave the total open.
         assert!(spent(0.4567, true).starts_with("↑12k ↓3.4k R104k W2.0k $0.457+? 53k/1.0M "));
-        assert!(spent(0.0, true).starts_with("↑12k ↓3.4k R104k W2.0k $? 53k/1.0M "));
+        // Nothing priced shows no cost at all.
+        assert!(spent(0.0, true).starts_with("↑12k ↓3.4k R104k W2.0k 53k/1.0M "));
         assert!(spent(0.0, false).starts_with("↑12k ↓3.4k R104k W2.0k 53k/1.0M "));
     }
 
@@ -428,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_context_shows_question_marks() {
+    fn an_unknown_context_shows_question_marks_only_with_a_window() {
         let unknown = Shown {
             context: None,
             ..opus()
@@ -442,7 +444,17 @@ mod tests {
             window: None,
             ..unknown
         };
-        assert!(plain(&footer(no_card).lines(80)[1]).starts_with("↑12k ↓3.4k R104k ? "));
+        let stats = plain(&footer(no_card).lines(80)[1]);
+        assert!(stats.starts_with("↑12k ↓3.4k R104k  "), "{stats}");
+        assert!(stats.ends_with(" claude-opus-5-5 • high"), "{stats}");
+        let nothing = Shown {
+            tokens: Tokens::default(),
+            context: None,
+            window: None,
+            ..opus()
+        };
+        let stats = plain(&footer(nothing).lines(40)[1]);
+        assert_eq!(stats.trim_start(), "claude-opus-5-5 • high");
         let count_only = Shown {
             window: None,
             ..opus()

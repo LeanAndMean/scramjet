@@ -1029,13 +1029,13 @@ fn hex(digits: &str) -> Option<Rgb> {
 fn about(token: Token) -> &'static str {
     use Token as T;
     match token {
-        T::Accent => "The main accent: the spinner, the mark of a list's selected row, the banner's name, a question's title.",
+        T::Accent => "The main accent: the spinner, the mark of a list's selected row, the banner's name, a question's title, a file tool's path.",
         T::Border => "Borders: the rule under lists and dialogs, this editor's too, and around a question the model asks.",
         T::BorderAccent => "Highlighted borders: compactions in /tree.",
         T::BorderMuted => "Quiet borders: the rails beside reasoning and calls in the looks other than the classic one, the card banner's border.",
         T::Success => "Success: calls and subagents that went well, the mark of the current session or model, models switched on.",
         T::Error => "Errors: failed calls, commands and subagents, a full context, what a list's key cannot do.",
-        T::Warning => "Warnings: retries, notices, running calls and subagents, a filling context, labels and named sessions.",
+        T::Warning => "Warnings: retries, notices, running calls and subagents, a filling context, labels and named sessions, a read's lines.",
         T::Muted => "Secondary text: the status line, notes such as Took 1.4s, hints, next steps, headings in lists.",
         T::Dim => "Faint text: the footer, the banner's keys and lists, the tree lines in lists, models switched off.",
         T::Text => "Text: replies, and everything without a color of its own.",

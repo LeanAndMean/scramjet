@@ -184,11 +184,45 @@ impl Design {
         let right_columns = right.as_deref().map_or(0, |right| columns(right) + 1);
         let room = width.saturating_sub(indent + right_columns).max(10);
         let summary = visible(summary.trim_end_matches('\n'));
+        let path = matches!(name, "read" | "edit" | "write" | "ls" | "find" | "grep");
+        let range = match name {
+            "read" => line_range(&summary),
+            _ => 0,
+        };
         let mut rows: Vec<String> = Vec::new();
         for line in summary.split('\n') {
             let mut wrap = Wrap::new(room).marking(marked);
             let wrapped = wrap.push(line) + &wrap.finish();
-            for row in wrapped.split('\n') {
+            let count = wrapped.split('\n').count();
+            for (at, row) in wrapped.split('\n').enumerate() {
+                let row = match (path, name) {
+                    (false, _) => row.to_owned(),
+                    // `grep` and `find` show a pattern before `in` and the path.
+                    (true, "grep" | "find") => match row.rfind(" in ") {
+                        Some(cut) => format!(
+                            "{} in {}{}{}",
+                            &row[..cut],
+                            style::TOOL_PATH,
+                            &row[cut + 4..],
+                            style::RESET
+                        ),
+                        None => row.to_owned(),
+                    },
+                    (true, _) => {
+                        let lines = &summary[summary.len() - range..];
+                        let cut = match at + 1 == count && row.ends_with(lines) {
+                            true => row.len() - range,
+                            false => row.len(),
+                        };
+                        let (path, lines) = row.split_at(cut);
+                        let lines = match lines.is_empty() {
+                            true => String::new(),
+                            false => format!("{}{lines}{}", style::TOOL_RANGE, style::RESET),
+                        };
+                        format!("{}{path}{}{lines}", style::TOOL_PATH, style::RESET)
+                    }
+                };
+                let row = row.as_str();
                 rows.push(match rows.is_empty() {
                     true => {
                         let used = lead_columns + columns(row);
@@ -212,6 +246,24 @@ impl Design {
             }
         }
         rows.join("\n")
+    }
+}
+
+/// The length of the line range a read's summary ends with (`:3-10`, `:3`), or 0.
+fn line_range(summary: &str) -> usize {
+    let Some(colon) = summary.rfind(':') else {
+        return 0;
+    };
+    let range = &summary[colon + 1..];
+    let mut parts = range.splitn(2, '-');
+    let digits = |part: Option<&str>| {
+        part.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let first = parts.next();
+    let ok = digits(first) && parts.next().is_none_or(|end| digits(Some(end)));
+    match ok {
+        true => summary.len() - colon,
+        false => 0,
     }
 }
 
@@ -383,6 +435,25 @@ mod tests {
         assert_eq!(plain(&heading), " agent 2 tasks");
         let heading = Design::Margin.heading("mcp_search", "q", Outcome::Done, None, 40, false);
         assert_eq!(plain(&heading), "mcp_s… mcp_search q");
+    }
+
+    #[test]
+    fn a_file_tools_path_takes_the_accent_and_a_reads_lines_the_warning_color() {
+        let (path, range, reset) = (style::TOOL_PATH, style::TOOL_RANGE, style::RESET);
+        let heading =
+            |name, summary| Design::Panels.heading(name, summary, Outcome::Done, None, 60, false);
+        assert!(
+            heading("read", "src/main.rs:3-10")
+                .contains(&format!("{path}src/main.rs{reset}{range}:3-10{reset}"))
+        );
+        assert!(heading("edit", "a:b.rs").contains(&format!("{path}a:b.rs{reset}")));
+        assert!(
+            heading("grep", "/x in y/ in src").contains(&format!("/x in y/ in {path}src{reset}"))
+        );
+        assert!(!heading("bash", "cat src/main.rs").contains(path.get()));
+        assert_eq!(line_range("a.rs:3"), 2);
+        assert_eq!(line_range("a.rs:3-"), 0);
+        assert_eq!(line_range("a.rs"), 0);
     }
 
     #[test]

@@ -83,6 +83,9 @@ styles! {
     RAIL_FAILED: [] Error;
     RAIL_RUNNING: [] Warning;
     TOOL_NAME: [BOLD] ToolTitle;
+    /// The path in a file tool's heading, and a read's line range after it, as Scramjet's.
+    TOOL_PATH: [] Accent;
+    TOOL_RANGE: [] Warning;
     OUTCOME_RUNNING: [] Warning;
     OUTCOME_DONE: [] Success;
     OUTCOME_FAILED: [] Error;

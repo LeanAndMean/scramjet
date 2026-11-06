@@ -206,13 +206,12 @@ pub(super) fn rate(rate: f64) -> String {
 }
 
 /// What was spent, as Scramjet shows it (`$0.123` with 3 `decimals`), with `+?` after it when
-/// some of it is not known (`$?` when none is); `None` when nothing was spent or nothing is known.
+/// some of it is not known; `None` when nothing priced was spent.
 pub(super) fn dollars(cost: f64, unpriced: bool, decimals: usize) -> Option<String> {
     match (cost > 0.0, unpriced) {
         (true, false) => Some(format!("${cost:.decimals$}")),
         (true, true) => Some(format!("${cost:.decimals$}+?")),
-        (false, true) => Some("$?".to_owned()),
-        (false, false) => None,
+        (false, _) => None,
     }
 }
 
@@ -388,7 +387,8 @@ impl Terminal {
         let took = (self.tool_started.take()).map(|started| at.saturating_duration_since(started));
         let style = match () {
             _ if !self.color => "",
-            _ if failed => style::TOOL_FAILED.get(),
+            // Panels say a call failed by its band; red text on it is hard to read.
+            _ if failed && self.design != Design::Panels => style::TOOL_FAILED.get(),
             _ => style::TOOL_OUTPUT.get(),
         };
         let reset = if style.is_empty() { "" } else { style::RESET };

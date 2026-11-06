@@ -4,6 +4,14 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.41.0 — Clearer call headers, failures and footer
+
+### Changed
+
+- A file tool's path shows in the accent color in its call's header (`read`, `edit`, `write`, `ls`, and after `in` for `grep` and `find`), and a read's line range in the warning color, as in Scramjet. The classic look stays dim.
+- In the panels look, a failed call's output keeps the normal output color on its red panel, rather than red text on red.
+- The footer and the usage line no longer show `$?` when nothing spent has a known price, nor `?` for a context neither counted nor bounded by a known window.
+
 ## 0.40.0 — Panels, the header and a theme for the terminal's background by default
 
 ### Changed

@@ -185,7 +185,7 @@ fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> Vec<L
 mod tests {
     use super::*;
     use crate::agent_cli::design::Outcome;
-    use crate::agent_cli::style::Band;
+    use crate::agent_cli::style::{self, Band};
     use crate::agent_cli::text::plain;
     use std::time::{Duration, Instant};
 
@@ -356,6 +356,11 @@ mod tests {
     /// prompt that leaves a call running; as each look shows it, 40 columns wide, its rows
     /// without styles and the bands they are on.
     fn shown_in(design: Design) -> Vec<(String, Option<Band>)> {
+        let styled = styled_in(design).into_iter();
+        styled.map(|(row, band)| (plain(&row), band)).collect()
+    }
+
+    fn styled_in(design: Design) -> Vec<(String, Option<Band>)> {
         let hide = Arc::new(AtomicBool::new(false));
         let mut transcript = Transcript::default();
         let started = Instant::now();
@@ -381,7 +386,7 @@ mod tests {
         };
         transcript.render(look, &hide);
         let lines = transcript.window(0, 100).into_iter();
-        lines.map(|line| (plain(&line.shown), line.band)).collect()
+        lines.map(|line| (line.shown, line.band)).collect()
     }
 
     fn rows(shown: &[(String, Option<Band>)]) -> Vec<&str> {
@@ -484,6 +489,21 @@ mod tests {
                 ("", None),
             ]
         );
+    }
+
+    #[test]
+    fn a_failed_calls_output_is_red_but_on_its_panel() {
+        let row = |design| {
+            let styled = styled_in(design);
+            let failed = styled
+                .into_iter()
+                .find(|(row, _)| plain(row).contains("1 failed"));
+            failed.expect("the failed call's output").0
+        };
+        assert!(row(Design::Rails).contains(style::TOOL_FAILED.get()));
+        let panels = row(Design::Panels);
+        assert!(panels.contains(style::TOOL_OUTPUT.get()), "{panels:?}");
+        assert!(!panels.contains(style::TOOL_FAILED.get()), "{panels:?}");
     }
 
     #[test]
