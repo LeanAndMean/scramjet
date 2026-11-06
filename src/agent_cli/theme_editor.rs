@@ -7,8 +7,8 @@
 use super::keymap::{self, Binding};
 use super::keys::Key;
 use super::palette::{
-    self, Built, CONTRAST_STEPS, Draft, HARMONIES, Kind, Meaning, Oklch, Pick, Rgb, Rng, Source,
-    harmonies,
+    self, Background, Built, CONTRAST_STEPS, Draft, HARMONIES, Kind, Meaning, Oklch, Pick, Rgb,
+    Rng, Source, harmonies,
 };
 use super::record::Event;
 use super::style::{self, RESET};
@@ -65,6 +65,8 @@ pub(super) struct ThemeEditor {
     role: usize,
     typing: Option<String>,
     rng: Rng,
+    /// The terminal's own background, when it is known: a theme can be made on it.
+    terminal: Option<Rgb>,
     /// Said in place of the keys' hint until the next key (`true`: a warning).
     status: Option<(String, bool)>,
     /// The draft's colors, and how well its main colors fit the harmony.
@@ -73,11 +75,11 @@ pub(super) struct ThemeEditor {
 }
 
 impl ThemeEditor {
-    /// Three main colors in a triadic harmony, rolled from `seed`, on a dark or `light`
-    /// background.
-    pub(super) fn new(seed: u64, light: bool) -> Self {
+    /// Three main colors in a triadic harmony, rolled from `seed`, on `background`; `terminal`
+    /// is the terminal's own, when known.
+    pub(super) fn new(seed: u64, background: Background, terminal: Option<Rgb>) -> Self {
         let mut rng = Rng::new(seed);
-        let draft = Draft::rolled(harmonies(3)[0], light, &mut rng);
+        let draft = Draft::rolled(harmonies(3)[0], background, &mut rng);
         let locked = vec![false; draft.mains.len()];
         Self {
             built: draft.build(),
@@ -90,6 +92,7 @@ impl ThemeEditor {
             role: 0,
             typing: None,
             rng,
+            terminal,
             status: None,
         }
     }
@@ -100,7 +103,7 @@ impl ThemeEditor {
 
     /// The theme as it is now.
     pub(super) fn theme(&self) -> Theme {
-        Theme::exact(&self.built.colors, self.built.background)
+        Theme::exact(&self.built.colors, self.built.own_background())
     }
 
     fn rows(&self) -> Vec<Row> {
@@ -353,7 +356,18 @@ impl ThemeEditor {
                 draft.harmony = choices[at as usize];
                 draft.roll(&self.locked, &mut self.rng);
             }
-            Row::Background => draft.light = !draft.light,
+            Row::Background => {
+                let choices: Vec<Background> = (self.terminal.map(Background::Terminal))
+                    .into_iter()
+                    .chain([Background::Dark, Background::Light])
+                    .collect();
+                let kind = std::mem::discriminant(&draft.background);
+                let at = (choices.iter())
+                    .position(|choice| std::mem::discriminant(choice) == kind)
+                    .unwrap_or(0);
+                let at = (at as i32 + by).rem_euclid(choices.len() as i32);
+                draft.background = choices[at as usize];
+            }
             Row::Contrast => {
                 let steps = draft.contrast + by;
                 if steps.abs() > CONTRAST_STEPS {
@@ -395,11 +409,25 @@ impl ThemeEditor {
             }
             Row::Background => (
                 "Background".into(),
-                if draft.light { "light" } else { "dark" }.into(),
-                format!(
-                    "Dark or light, tinted toward the first color; every color is lit to read \
-                     well on it. {left_right} switches."
-                ),
+                match draft.background {
+                    Background::Dark => "dark".to_owned(),
+                    Background::Light => "light".to_owned(),
+                    Background::Terminal((r, g, b)) => {
+                        format!("the terminal's, #{r:02x}{g:02x}{b:02x}")
+                    }
+                },
+                match self.terminal {
+                    Some(_) => format!(
+                        "The terminal's own, which the theme leaves as it is, or dark or light, \
+                         tinted toward the first color; every color is lit to read well on it. \
+                         {left_right} switches."
+                    ),
+                    None => format!(
+                        "Dark or light, tinted toward the first color; every color is lit to \
+                         read well on it. The terminal did not say what its own background is, \
+                         so no theme can be made on it. {left_right} switches."
+                    ),
+                },
             ),
             Row::Contrast => (
                 "Contrast".into(),
@@ -676,7 +704,9 @@ impl ThemeEditor {
             let color = draft.accent(index, built.background);
             add(palette::hue_name(Oklch::of(color)), color);
         }
-        add("background", built.background);
+        if let Some(background) = built.own_background() {
+            add("background", background);
+        }
         for (name, token) in [
             ("text", Token::Text),
             ("muted", Token::Muted),
@@ -685,7 +715,7 @@ impl ThemeEditor {
         ] {
             add(name, built.color(token));
         }
-        theme::file_text(name, &vars, &built.colors, built.background)
+        theme::file_text(name, &vars, &built.colors, built.own_background())
     }
 }
 
@@ -851,7 +881,7 @@ mod tests {
 
     #[test]
     fn rolls_change_the_colors_not_locked_and_undo_and_redo_go_through_them() {
-        let mut editor = ThemeEditor::new(1, false);
+        let mut editor = ThemeEditor::new(1, Background::Dark, None);
         let first = editor.draft().clone();
         let shown = lines(&editor);
         assert!(shown[0].starts_with("Theme editor  "), "{shown:?}");
@@ -873,7 +903,10 @@ mod tests {
         assert_eq!(rolled.mains[1], first.mains[1]);
         assert_ne!(rolled.mains[0], first.mains[0]);
         assert_ne!(rolled.mains[2], first.mains[2]);
-        assert_ne!(editor.theme(), ThemeEditor::new(1, false).theme());
+        assert_ne!(
+            editor.theme(),
+            ThemeEditor::new(1, Background::Dark, None).theme()
+        );
         editor.key(&typed("u"));
         assert_eq!(*editor.draft(), first);
         editor.key(&typed("U"));
@@ -892,7 +925,7 @@ mod tests {
 
     #[test]
     fn the_count_and_harmony_rows_roll_anew_and_keep_the_locked_colors() {
-        let mut editor = ThemeEditor::new(2, false);
+        let mut editor = ThemeEditor::new(2, Background::Dark, None);
         // Lock the third color, then go down to two colors: it stays, as the first.
         editor.row = 6;
         editor.key(&typed("l"));
@@ -941,7 +974,7 @@ mod tests {
 
     #[test]
     fn stepping_toward_the_harmony_ends_in_harmony_and_contrast_stops_at_its_ends() {
-        let mut editor = ThemeEditor::new(3, false);
+        let mut editor = ThemeEditor::new(3, Background::Dark, None);
         editor.row = 5;
         for _ in 0..8 {
             editor.key(&press(Code::Right));
@@ -971,7 +1004,7 @@ mod tests {
 
     #[test]
     fn a_short_dock_leaves_out_the_note_then_the_keys() {
-        let editor = ThemeEditor::new(4, true);
+        let editor = ThemeEditor::new(4, Background::Light, None);
         let tall = lines(&editor);
         assert!(
             tall.iter()
@@ -987,7 +1020,7 @@ mod tests {
 
     #[test]
     fn the_saved_file_is_the_theme_shown_in_scramjets_format() {
-        let mut editor = ThemeEditor::new(5, false);
+        let mut editor = ThemeEditor::new(5, Background::Dark, None);
         editor.key(&typed("r"));
         let text = editor.file_text("sunset \"two\"");
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -1000,13 +1033,53 @@ mod tests {
         assert_eq!(Theme::parse(&text).unwrap(), editor.theme());
     }
 
+    #[test]
+    fn a_theme_on_the_terminals_background_leaves_it_to_the_terminal() {
+        let campbell = (12, 12, 12);
+        let mut editor = ThemeEditor::new(11, Background::Terminal(campbell), Some(campbell));
+        editor.row = 2;
+        let shown = lines(&editor);
+        assert_eq!(shown[3], "› Background  ‹ the terminal's, #0c0c0c ›");
+        assert!(
+            (shown.iter()).any(|line| line.contains("The terminal's own, which the theme leaves"))
+        );
+        // Its colors are lit and scored on it, and the theme and its file leave it out.
+        assert_eq!(editor.built.background, campbell);
+        assert_eq!(editor.theme().background(), Color::Default);
+        let text = editor.file_text("on-terminal");
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(json["colors"].get("background").is_none(), "{text}");
+        assert!(json["vars"].get("background").is_none(), "{text}");
+        assert_eq!(Theme::parse(&text).unwrap(), editor.theme());
+        // Right goes to dark, light, then the terminal's again.
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.draft().background, Background::Dark);
+        assert_ne!(editor.theme().background(), Color::Default);
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.draft().background, Background::Light);
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.draft().background, Background::Terminal(campbell));
+        editor.key(&press(Code::Left));
+        assert_eq!(editor.draft().background, Background::Light);
+        // Unknown, it is not offered, and the note says why.
+        let mut editor = ThemeEditor::new(11, Background::Dark, None);
+        editor.row = 2;
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.draft().background, Background::Light);
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.draft().background, Background::Dark);
+        let shown = lines(&editor).join(" ");
+        let shown = shown.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(shown.contains("The terminal did not say"), "{shown}");
+    }
+
     fn token_at(token: Token) -> usize {
         TOKENS.iter().position(|&t| t == token).unwrap()
     }
 
     #[test]
     fn every_role_can_follow_another_main_color_and_its_own_again() {
-        let mut editor = ThemeEditor::new(6, false);
+        let mut editor = ThemeEditor::new(6, Background::Dark, None);
         editor.key(&press(Code::Tab));
         let shown = lines(&editor);
         assert!(
@@ -1072,7 +1145,7 @@ mod tests {
 
     #[test]
     fn a_color_with_a_meaning_leaves_its_hue_range_when_it_follows_a_main_color() {
-        let mut editor = ThemeEditor::new(7, false);
+        let mut editor = ThemeEditor::new(7, Background::Dark, None);
         editor.view = View::Roles;
         editor.role = token_at(Token::Error);
         assert!(
@@ -1113,7 +1186,7 @@ mod tests {
 
     #[test]
     fn a_role_set_to_an_exact_color_keeps_it_through_rolls_and_into_the_file() {
-        let mut editor = ThemeEditor::new(8, false);
+        let mut editor = ThemeEditor::new(8, Background::Dark, None);
         editor.key(&press(Code::Tab));
         editor.role = token_at(Token::SyntaxNumber);
         editor.key(&typed("#"));
@@ -1162,7 +1235,7 @@ mod tests {
 
     #[test]
     fn roles_following_a_main_color_follow_it_where_a_change_of_count_moves_it() {
-        let mut editor = ThemeEditor::new(9, false);
+        let mut editor = ThemeEditor::new(9, Background::Dark, None);
         let (heading, link) = (token_at(Token::MdHeading), token_at(Token::MdLink));
         let mut draft = editor.draft().clone();
         draft.picks[heading] = Some(Pick::Follow(2));
@@ -1185,7 +1258,7 @@ mod tests {
 
     #[test]
     fn the_roles_view_shows_a_window_around_the_selected_role() {
-        let mut editor = ThemeEditor::new(10, false);
+        let mut editor = ThemeEditor::new(10, Background::Dark, None);
         editor.view = View::Roles;
         editor.role = token_at(Token::MdCode);
         let shown = lines(&editor);

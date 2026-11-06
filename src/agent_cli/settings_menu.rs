@@ -1,12 +1,13 @@
 //! `/settings`, as Scramjet's: the settings in a list, each changed with Enter and saved at
 //! once, with the next steps of commands, publication approval and what is installed.
 use super::interactive::{Interactive, completions};
+use super::palette::Background;
 use super::screen::{Answer, Dialog, Optional};
 use super::settings::{ROWS, Row, scramjet_level};
 use super::text::clip;
 use super::theme::{Color, Listed, Mode, TERMINAL_COLORS};
 use super::theme_editor::ThemeEditor;
-use super::{editor, installed, palette, select, style};
+use super::{background, editor, installed, palette, select, style};
 use scramjet_rs::agent::{
     Approval, Approvals, CODING_TOOLS, Choice, Edge, Installed, NextStep, NextSteps, Problem,
     Publication, Scope, Setting, agent_directory, search_program, shortened, write_replacing,
@@ -281,11 +282,19 @@ impl Interactive {
         let seed = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
             .map_or(0, |since| since.as_nanos() as u64)
             ^ u64::from(std::process::id());
-        let light = match self.themes.theme(&self.settings.theme).background() {
-            Color::Rgb(r, g, b) => !palette::is_dark((r, g, b)),
-            _ => self.settings.theme == "pi-light",
+        // On a background as the theme in use: its own, dark or light, else the terminal's.
+        let terminal = background::terminal();
+        let start = match (
+            self.themes.theme(&self.settings.theme).background(),
+            terminal,
+        ) {
+            (Color::Rgb(r, g, b), _) if palette::is_dark((r, g, b)) => Background::Dark,
+            (Color::Rgb(..), _) => Background::Light,
+            (_, Some(rgb)) => Background::Terminal(rgb),
+            _ if self.settings.theme == "pi-light" => Background::Light,
+            _ => Background::Dark,
         };
-        let mut editor = Box::new(ThemeEditor::new(seed, light));
+        let mut editor = Box::new(ThemeEditor::new(seed, start, terminal));
         loop {
             let saved = self.screen.as_ref()?.edit_theme(editor);
             let Some(saved) = saved else {

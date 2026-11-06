@@ -1,8 +1,10 @@
-//! Keys read from the terminal in raw mode: escape sequences, SGR mouse reports and
-//! bracketed pastes decoded into `Key`s, the keys pressed with their modifiers; what each does is
-//! the keymap's (`keymap.rs`).
+//! Keys read from the terminal in raw mode: escape sequences, SGR mouse reports, bracketed
+//! pastes and the terminal's answers decoded into `Key`s, the keys pressed with their modifiers;
+//! what each does is the keymap's (`keymap.rs`).
 
+use super::background;
 use super::keymap::{self, Binding};
+use super::palette::Rgb;
 use rustix::termios::{self, OptionalActions, Termios};
 use std::{
     io::{self, Write},
@@ -21,6 +23,8 @@ pub(super) enum Key {
     Press(Press),
     /// A mouse report, which only the full screen asks the terminal for.
     Mouse(Mouse),
+    /// The terminal's background, as it answered the screen's OSC 11.
+    Background(Rgb),
     Idle,
     Ignored,
 }
@@ -171,6 +175,7 @@ fn escape(source: &mut impl ByteSource) -> io::Result<Key> {
     let key = match next {
         None => return Ok(Key::Press(Press::new(Code::Escape, 0))),
         Some(b'[') => csi(source)?,
+        Some(b']') => osc(source)?,
         Some(b'O') => match source.byte(Some(ESCAPE_WAIT))? {
             Some(byte) => ss3(byte).map_or(Key::Ignored, |code| Key::Press(Press::new(code, 0))),
             None => Key::Ignored,
@@ -186,6 +191,32 @@ fn escape(source: &mut impl ByteSource) -> io::Result<Key> {
         Key::Press(press) => Key::Press(Press::new(press.code, press.modifiers | alt)),
         key => key,
     })
+}
+
+/// An OSC sequence, `ESC ]` and its text to BEL or `ESC \`, as terminals answer questions about
+/// themselves; Alt+] when nothing follows `ESC ]`.
+fn osc(source: &mut impl ByteSource) -> io::Result<Key> {
+    const LONGEST: usize = 256;
+    let mut text = Vec::new();
+    let mut long = false;
+    loop {
+        match source.byte(Some(ESCAPE_WAIT))? {
+            None if text.is_empty() && !long => return Ok(Key::Press(printable(']', ALT))),
+            None => return Ok(Key::Ignored),
+            Some(0x07) => break,
+            Some(0x1b) => match source.byte(Some(ESCAPE_WAIT))? {
+                Some(b'\\') => break,
+                _ => return Ok(Key::Ignored),
+            },
+            Some(byte) if text.len() < LONGEST => text.push(byte),
+            Some(_) => long = true,
+        }
+    }
+    let text = String::from_utf8_lossy(&text);
+    let answer = (text.strip_prefix("11;")).and_then(background::parse);
+    Ok(answer
+        .filter(|_| !long)
+        .map_or(Key::Ignored, Key::Background))
 }
 
 /// The key of `ESC O` and `byte`, as terminals send some keys in application mode.
@@ -424,6 +455,31 @@ pub(super) mod tests {
 
     fn named(names: &[&str]) -> Vec<Key> {
         names.iter().map(|name| key(name)).collect()
+    }
+
+    #[test]
+    fn the_terminals_answers_are_taken_and_never_typed() {
+        let long = format!("\x1b]11;rgb:{}\x07a", "0".repeat(300));
+        assert_eq!(
+            keys(
+                format!(
+                    "\x1b]11;rgb:0c0c/0c0c/0c0c\x1b\\\x1b]11;#fafafa\x07\x1b]10;rgb:0/0/0\x07\
+                     \x1b]11;?\x07{long}\x1b]"
+                )
+                .as_bytes()
+            ),
+            [
+                Key::Background((12, 12, 12)),
+                Key::Background((250, 250, 250)),
+                Key::Ignored,
+                Key::Ignored,
+                Key::Ignored,
+                Key::Text("a".into()),
+                key("alt+]"),
+            ]
+        );
+        // Cut short, an answer types nothing of itself.
+        assert_eq!(keys(b"\x1b]11;rgb:0c"), [Key::Ignored]);
     }
 
     #[test]

@@ -353,16 +353,25 @@ pub(super) enum Pick {
     Exact(Rgb),
 }
 
-/// What the theme editor makes a theme from: its main colors in a harmony, a dark or light
-/// main background, how much contrast, and what the user picked for single roles.
+/// The main background a theme is lit on: dark or light, tinted toward the first main color, or
+/// the terminal's own, which the theme leaves to the terminal.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Background {
+    Dark,
+    Light,
+    Terminal(Rgb),
+}
+
+/// What the theme editor makes a theme from: its main colors in a harmony, its main
+/// background, how much contrast, and what the user picked for single roles.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Draft {
     /// An index into `HARMONIES`, with as many hues as there are main colors.
     pub(super) harmony: usize,
     pub(super) mains: Vec<Main>,
-    pub(super) light: bool,
-    /// The main background's place in its range of lightness, from 0 (the darkest), and how
-    /// much of the first main color's hue it has, from 0 (gray) to 1.
+    pub(super) background: Background,
+    /// A dark or light background's place in its range of lightness, from 0 (the darkest), and
+    /// how much of the first main color's hue it has, from 0 (gray) to 1.
     pub(super) depth: f64,
     pub(super) tint: f64,
     /// Steps of contrast above or below each band's middle.
@@ -547,26 +556,33 @@ fn folded(place: f64) -> f64 {
     if place > 1.0 { 2.0 - place } else { place }
 }
 
-/// A theme's colors: each token's, in `TOKENS`' order, and the main background.
+/// A theme's colors: each token's, in `TOKENS`' order, and the main background they are lit
+/// on, which the theme sets unless it is the terminal's own.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Built {
     pub(super) colors: Vec<Rgb>,
     pub(super) background: Rgb,
+    pub(super) terminal: bool,
 }
 
 impl Built {
     pub(super) fn color(&self, token: Token) -> Rgb {
         self.colors[token as usize]
     }
+
+    /// The main background the theme sets: none on the terminal's own.
+    pub(super) fn own_background(&self) -> Option<Rgb> {
+        (!self.terminal).then_some(self.background)
+    }
 }
 
 impl Draft {
     /// A draft in `harmony`, its main colors and background rolled.
-    pub(super) fn rolled(harmony: usize, light: bool, rng: &mut Rng) -> Self {
+    pub(super) fn rolled(harmony: usize, background: Background, rng: &mut Rng) -> Self {
         let mut draft = Self {
             harmony,
             mains: Vec::new(),
-            light,
+            background,
             depth: 0.5,
             tint: 0.5,
             contrast: 0,
@@ -664,9 +680,10 @@ impl Draft {
     /// The main background, then each token's color.
     pub(super) fn build(&self) -> Built {
         let first = &self.mains[0];
-        let ((low, high), tint) = match self.light {
-            true => ((0.955, 0.995), 0.02),
-            false => ((0.14, 0.23), 0.035),
+        let ((low, high), tint) = match self.background {
+            Background::Light => ((0.955, 0.995), 0.02),
+            Background::Dark => ((0.14, 0.23), 0.035),
+            Background::Terminal(background) => return self.built(background, true),
         };
         let background = Oklch {
             l: low + (high - low) * self.depth,
@@ -674,10 +691,18 @@ impl Draft {
             h: first.hue,
         }
         .rgb();
+        self.built(background, false)
+    }
+
+    fn built(&self, background: Rgb, terminal: bool) -> Built {
         let colors = (TOKENS.iter())
             .map(|&token| self.color(token, background))
             .collect();
-        Built { colors, background }
+        Built {
+            colors,
+            background,
+            terminal,
+        }
     }
 
     /// The color of `slot` as an accent: what the editor shows for a main color.
@@ -917,7 +942,7 @@ mod tests {
     fn a_roll_keeps_the_locked_colors_and_places_the_others_around_them() {
         let mut rng = Rng::new(7);
         for (index, harmony) in HARMONIES.iter().enumerate() {
-            let mut draft = Draft::rolled(index, false, &mut rng);
+            let mut draft = Draft::rolled(index, Background::Dark, &mut rng);
             let count = harmony.count();
             assert_eq!(draft.mains.len(), count);
             let locked: Vec<bool> = (0..count).map(|index| index == 0).collect();
@@ -934,7 +959,7 @@ mod tests {
 
     #[test]
     fn steps_toward_the_harmony_end_in_a_perfect_score_and_leave_locked_colors() {
-        let mut draft = Draft::rolled(4, false, &mut Rng::new(3));
+        let mut draft = Draft::rolled(4, Background::Dark, &mut Rng::new(3));
         draft.mains[1].hue = (draft.mains[0].hue + 100.0).rem_euclid(360.0);
         draft.mains[2].hue = (draft.mains[0].hue + 250.0).rem_euclid(360.0);
         let locked = [true, false, false];
@@ -969,14 +994,38 @@ mod tests {
     #[test]
     fn every_role_of_a_rolled_theme_keeps_its_contrast_within_its_band() {
         let mut rng = Rng::new(11);
-        for light in [false, true] {
+        // Terminals' own: Windows Terminal's Campbell, Solarized's, Catppuccin Mocha's, One Half
+        // Light's, black and white.
+        let terminals = [
+            (12, 12, 12),
+            (0, 43, 54),
+            (30, 30, 46),
+            (0, 0, 0),
+            (250, 250, 250),
+            (253, 246, 227),
+            (255, 255, 255),
+        ];
+        let backgrounds = [Background::Dark, Background::Light]
+            .into_iter()
+            .chain(terminals.map(Background::Terminal));
+        for background in backgrounds {
+            let rolls = match background {
+                Background::Terminal(_) => 3,
+                _ => 8,
+            };
             for harmony in 0..HARMONIES.len() {
-                for _ in 0..8 {
-                    let mut draft = Draft::rolled(harmony, light, &mut rng);
+                for _ in 0..rolls {
+                    let mut draft = Draft::rolled(harmony, background, &mut rng);
                     for steps in [-CONTRAST_STEPS, 0, CONTRAST_STEPS] {
                         draft.contrast = steps;
                         let built = draft.build();
-                        assert_eq!(is_dark(built.background), !light);
+                        match background {
+                            Background::Dark => assert!(is_dark(built.background)),
+                            Background::Light => assert!(!is_dark(built.background)),
+                            Background::Terminal(rgb) => {
+                                assert_eq!((built.background, built.own_background()), (rgb, None))
+                            }
+                        }
                         for (token, ratio, (low, high)) in contrasts(&built) {
                             assert!(
                                 ratio >= low * 0.98 && ratio <= high * 1.02,
@@ -991,7 +1040,7 @@ mod tests {
 
     #[test]
     fn contrast_steps_change_only_lightness_and_meanings_keep_their_hues() {
-        let mut draft = Draft::rolled(3, false, &mut Rng::new(5));
+        let mut draft = Draft::rolled(3, Background::Dark, &mut Rng::new(5));
         let middle = draft.build();
         draft.contrast = 2;
         let higher = draft.build();

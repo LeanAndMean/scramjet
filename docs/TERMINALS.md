@@ -1,6 +1,6 @@
 # Terminals
 
-What each terminal does with copying, pasting and the keys scramjet-rs uses. The full screen reports the mouse to scramjet-rs (SGR mouse reporting) and takes pastes as bracketed pastes, so a terminal's own paste key always works, and its own right click and selection usually stop working while scramjet-rs runs. When scramjet-rs cannot read the clipboard, the first failed right-click paste names the terminal's paste key. When a terminal keeps a key for itself, the program never sees it: give the action another key in `~/.config/scramjet-rs/keybindings.json` (`/hotkeys` names the actions' keys; the README, their ids), for example `{"app.message.followUp": "ctrl+q", "tui.editor.undo": "ctrl+z", "app.suspend": []}`.
+What each terminal does with copying, pasting, the keys scramjet-rs uses and its question about the terminal's background. The full screen reports the mouse to scramjet-rs (SGR mouse reporting) and takes pastes as bracketed pastes, so a terminal's own paste key always works, and its own right click and selection usually stop working while scramjet-rs runs. When scramjet-rs cannot read the clipboard, the first failed right-click paste names the terminal's paste key. When a terminal keeps a key for itself, the program never sees it: give the action another key in `~/.config/scramjet-rs/keybindings.json` (`/hotkeys` names the actions' keys; the README, their ids), for example `{"app.message.followUp": "ctrl+q", "tui.editor.undo": "ctrl+z", "app.suspend": []}`.
 
 Each entry gives the version and source it was checked against, and says what was not checked.
 
@@ -12,6 +12,7 @@ Checked against version 1.24.12741: its `defaults.json` and the settings file it
 - **Copy:** Ctrl+Shift+C, Ctrl+Insert, and Enter while Windows Terminal itself has a selection. The settings file for new users adds Ctrl+C, which copies only when there is a selection and otherwise reaches the program.
 - **Keys its defaults keep from scramjet-rs:** Alt+Enter (full screen; scramjet-rs: queue a follow-up), Ctrl+- (smaller font; undo), Ctrl+Shift+P (command palette; previous model), and Alt+Up, Alt+Left and Alt+Right (move to another pane; restore queued messages, and move by word, which Ctrl+Left/Right and Alt+B/F also do). Whether the Alt+arrow keys reach the program when there is no pane to move to was not checked.
 - **Clipboard:** under WSL, scramjet-rs reads and writes Windows' clipboard through a PowerShell process it keeps running, not through the terminal. In a remote session it copies with OSC 52.
+- **Background:** the full screen asks for it with OSC 11 (for the theme editor). `Microsoft.Terminal.Control.dll` holds the answer's format, `{};rgb:{:04x}/{:04x}/{:04x}` (read 2026-11-06), so it answers with its scheme's background; the answer itself was checked only from a scripted terminal sending that format, not from Windows Terminal.
 
 ## tmux
 
@@ -19,6 +20,7 @@ Checked against tmux 3.0a and its manual page, 2026-11-04.
 
 - Its default `set-clipboard external` ignores the OSC 52 sequence a program sends, so a copy through the terminal does not arrive. scramjet-rs copies through the desktop where it can (PowerShell under WSL, the X server, `wl-copy`), and only a remote session inside tmux relies on OSC 52: there, `set -s set-clipboard on` lets it through.
 - The outer terminal's paste key still works: a bracketed paste sent to tmux 3.0a reached the program inside it unchanged (checked 2026-11-04).
+- It leaves OSC 11, the question about the background, unanswered: a program in a tmux 3.0a pane got nothing back in 0.5 s (checked 2026-11-06). scramjet-rs then goes by `COLORFGBG`, which tmux does not set, else takes the background as unknown, and the theme editor offers only its own dark and light ones.
 
 ## xterm
 

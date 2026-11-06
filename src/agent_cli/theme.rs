@@ -375,12 +375,13 @@ impl Theme {
         self.background
     }
 
-    /// A theme of exact colors: each token's, in `TOKENS`' order, on the main `background`.
-    pub(super) fn exact(colors: &[(u8, u8, u8)], background: (u8, u8, u8)) -> Self {
+    /// A theme of exact colors: each token's, in `TOKENS`' order, on the main `background`, or
+    /// on the terminal's own without one.
+    pub(super) fn exact(colors: &[(u8, u8, u8)], background: Option<(u8, u8, u8)>) -> Self {
         let exact = |(r, g, b)| Color::Rgb(r, g, b);
         Self {
             colors: colors.iter().copied().map(exact).collect(),
-            background: exact(background),
+            background: background.map_or(Color::Default, exact),
         }
     }
 
@@ -440,13 +441,13 @@ impl Theme {
 }
 
 /// The text of a theme file in Scramjet's format, named `name`, of exact colors: `vars` names
-/// some, and each token (in `TOKENS`' order) and the main `background` take the first of those
-/// that is theirs by its name, or else their own.
+/// some, and each token (in `TOKENS`' order) and the main `background`, if the theme sets one,
+/// take the first of those that is theirs by its name, or else their own.
 pub(super) fn file_text(
     name: &str,
     vars: &[(String, (u8, u8, u8))],
     colors: &[(u8, u8, u8)],
-    background: (u8, u8, u8),
+    background: Option<(u8, u8, u8)>,
 ) -> String {
     let hex = |(r, g, b): (u8, u8, u8)| format!("#{r:02x}{g:02x}{b:02x}");
     let quoted = |text: &str| Value::String(text.to_owned()).to_string();
@@ -458,7 +459,7 @@ pub(super) fn file_text(
         .map(|(name, color)| format!("    {}: {}", quoted(name), quoted(&hex(*color))))
         .collect();
     let keys = KEYS.iter().copied().chain([BACKGROUND]);
-    let colors: Vec<String> = (keys.zip(colors.iter().copied().chain([background])))
+    let colors: Vec<String> = (keys.zip(colors.iter().copied().chain(background)))
         .map(|(key, color)| format!("    {}: {}", quoted(key), value(color)))
         .collect();
     format!(

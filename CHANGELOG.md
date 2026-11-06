@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.31.0 — Themes on the terminal's own background
+
+### Added
+
+- The theme editor can make a theme on the terminal's own background: its Background row offers the terminal's (shown with its color) beside its own dark and light ones, every color is lit and its contrast scored against the terminal's background, and the saved theme leaves the background to the terminal, as Scramjet's themes do. The editor starts there when the theme in use has no background of its own, so it starts light on a light terminal. The full screen asks the terminal for its background (OSC 11), as Scramjet does; a terminal that does not answer, such as tmux 3.0a, is taken as `COLORFGBG` or Apple's Terminal say, else the row says the background is unknown.
+
 ## 0.30.0 — Every role in the theme editor
 
 ### Added

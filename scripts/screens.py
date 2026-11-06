@@ -10,6 +10,10 @@ default colors.
 
     uv run scripts/screens.py SCENARIO.json OUTDIR [--size 100x50] [--set KEY=VALUE]...
                               [--binary target/release/scramjet-rs] [--name PREFIX]
+                              [--background RRGGBB] [--foreground RRGGBB] [--silent]
+
+The terminal answers OSC 11 with its background, as Windows Terminal does, unless --silent (as
+tmux 3.0a); --background and --foreground give its own colors (Campbell's by default).
 
 A scenario (scripts/screens/*.json) holds:
 
@@ -287,6 +291,7 @@ def rooted(value):
 
 
 def main():
+    global BACKGROUND, FOREGROUND
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('scenario')
     parser.add_argument('outdir')
@@ -295,7 +300,12 @@ def main():
     parser.add_argument('--binary', default=os.path.join(ROOT, 'target/release/scramjet-rs'))
     parser.add_argument('--name', default='', help='put before each shot\'s name')
     parser.add_argument('--timeout', type=float, default=30)
+    parser.add_argument('--background', default=BACKGROUND, help='the terminal\'s own background')
+    parser.add_argument('--foreground', default=FOREGROUND, help='the terminal\'s own text color')
+    parser.add_argument('--silent', action='store_true', help='leave OSC 11 unanswered')
     options = parser.parse_args()
+    BACKGROUND, FOREGROUND = options.background.lstrip('#').lower(), options.foreground.lstrip('#').lower()
+    answer = b'\x1b]11;rgb:%s\x1b\\' % '/'.join(BACKGROUND[i:i + 2] * 2 for i in (0, 2, 4)).encode()
     scenario = json.load(open(options.scenario))
     columns, rows = map(int, (options.size or scenario.get('size', '100x50')).split('x'))
     os.makedirs(options.outdir, exist_ok=True)
@@ -382,6 +392,8 @@ def main():
                     return
                 if not data:
                     return
+                if b'\x1b]11;?' in data and not options.silent:
+                    os.write(master, answer)
                 with lock:
                     # The full screen starts on the alternate screen, which pyte does not keep apart.
                     start = data.rfind(b'\x1b[?1049h')
