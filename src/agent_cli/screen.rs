@@ -394,6 +394,7 @@ impl App {
         messages: &mpsc::Receiver<ToScreen>,
         woken: PipeReader,
     ) -> io::Result<()> {
+        super::spelling::load();
         // Dropped before `raw`, which gives the terminal its mode back.
         let mut screen = Screen::enter();
         let mut source = Source::new(woken);

@@ -34,6 +34,7 @@ mod sessions;
 mod settings;
 mod settings_menu;
 mod slash;
+mod spelling;
 mod style;
 mod terminal;
 mod text;

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.55.0 — Spelling in the prompt
+
+### Added
+
+- Misspelled words in the prompt are underlined in the theme's `spellcheckError` color (curly where the terminal draws it), checked against the American English dictionary Scramjet uses. Paths, URLs, identifiers in camelCase or snake_case, words with digits, short words in capitals such as `JSON` and `!` shell commands are left alone, and typing never waits for it.
+
 ## 0.54.3 — Sandbox protections stay inside the project
 
 ### Fixed

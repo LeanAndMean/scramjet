@@ -207,6 +207,8 @@ styles! {
     SEARCH_CURSOR: [REVERSE];
     /// The selected row of the completion list under the prompt.
     COMPLETION_SELECTED: [] Accent;
+    /// A misspelled word in the prompt, under the underline the editor gives it.
+    SPELLING: [] SpellcheckError;
     /// The mark after the current session or model in a selector.
     CURRENT: [] Success;
     /// In `/resume`, the current session's prompt or name, and other sessions' names, in the

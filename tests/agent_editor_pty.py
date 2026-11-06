@@ -540,7 +540,7 @@ class Screen:
         # Not final: a read can end inside a character, whose rest comes with the next.
         text = codecs.getincrementaldecoder('utf-8')('replace').decode(
             bytes(output[start:] if start >= 0 else b''), final=False)
-        for match in re.finditer(r'\x1b\[([?0-9;]*)([@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b.|([\r\n])|'
+        for match in re.finditer(r'\x1b\[([?0-9;:]*)([@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b.|([\r\n])|'
                                  r'([^\x1b\r\n])', text):
             parameters, final, control, character = match.groups()
             if final == 'H':

@@ -418,7 +418,8 @@ def main():
                     if start >= 0:
                         screen.reset()
                         data = data[start + 8:]
-                    feed.feed(data)
+                    # pyte takes no `:` subparameters; a curly underline is drawn straight.
+                    feed.feed(data.replace(b'\x1b[4:3m', b'\x1b[4m'))
 
         threading.Thread(target=read, daemon=True).start()
 

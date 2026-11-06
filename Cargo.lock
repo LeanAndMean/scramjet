@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "scramjet-rs"
-version = "0.54.3"
+version = "0.55.0"
 dependencies = [
  "bytes",
  "futures-util",
@@ -920,6 +920,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "signal-hook",
+ "spellbook",
  "sse-stream",
  "syntect",
  "tokio",
@@ -1071,6 +1072,16 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "spellbook"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a"
+dependencies = [
+ "foldhash",
+ "hashbrown",
 ]
 
 [[package]]

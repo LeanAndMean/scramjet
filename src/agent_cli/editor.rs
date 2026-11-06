@@ -6,9 +6,11 @@ use super::file_search;
 use super::keymap::{self, Binding};
 use super::keys::Key;
 use super::text::{FROM, JOINED, SPACE};
+use super::{spelling, style};
 use rustix::termios;
 use std::{
     io,
+    ops::Range,
     path::PathBuf,
     sync::{
         Arc,
@@ -195,13 +197,16 @@ struct WordStart {
 
 impl Layout {
     fn new(text: &str, width: usize) -> Self {
-        Self::marked(text, width, false)
+        Self::marked(text, width, false, &[])
     }
 
     /// Wraps lines between words where it can. As in Scramjet's editor the last column stays
     /// free for the cursor; spaces that reach it hang there instead of starting a row. With
-    /// `marked`, the rows are marked for a copy (`text::FROM`).
-    fn marked(text: &str, width: usize, marked: bool) -> Self {
+    /// `marked`, the rows are marked for a copy (`text::FROM`). The `misspelled` byte ranges,
+    /// in order, are underlined.
+    fn marked(text: &str, width: usize, marked: bool, misspelled: &[Range<usize>]) -> Self {
+        let mut misspelled = misspelled.iter().peekable();
+        let (underline, end) = (spelling_style(), style::RESET);
         let gutter = |first: &str| match marked {
             true => format!("{first}{FROM}"),
             false => first.to_owned(),
@@ -298,7 +303,22 @@ impl Layout {
                     row: rows.len() - 1,
                     column,
                 });
-                rows.last_mut().unwrap().push_str(shown);
+                let at = offset + index;
+                while misspelled.next_if(|range| range.end <= at).is_some() {}
+                let last = rows.last_mut().unwrap();
+                match misspelled.peek().is_some_and(|range| range.start <= at) {
+                    // Each grapheme closes its underline, so that a word moved to the next row
+                    // or broken across rows carries its own; neighbors join again.
+                    true => {
+                        match last.ends_with(end) {
+                            true => last.truncate(last.len() - end.len()),
+                            false => last.push_str(&underline),
+                        }
+                        last.push_str(shown);
+                        last.push_str(end);
+                    }
+                    false => last.push_str(shown),
+                }
                 column += cells;
                 row_has_text = true;
             }
@@ -345,7 +365,31 @@ impl Layout {
 /// The rows a prompt takes on screen as the editor shows it, wrapped to `width`, `marked` for
 /// a copy (`text::FROM`) if asked.
 pub(super) fn prompt_rows(text: &str, width: usize, marked: bool) -> Vec<String> {
-    Layout::marked(text, width, marked).rows
+    Layout::marked(text, width, marked, &[]).rows
+}
+
+/// The curly underline Scramjet marks a misspelled word with, in the theme's color for it; a
+/// straight one in Apple's Terminal and XTerm, which draw the curly one wrongly, unless tmux or
+/// screen is between.
+fn spelling_style() -> String {
+    static STRAIGHT: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        let var = |name| std::env::var(name).unwrap_or_default();
+        let term = var("TERM");
+        let mediated = !var("TMUX").is_empty()
+            || !var("STY").is_empty()
+            || term.starts_with("tmux")
+            || term.starts_with("screen");
+        let xterm = var("XTERM_VERSION");
+        let digits = xterm
+            .strip_prefix("XTerm(")
+            .and_then(|v| v.strip_suffix(')'));
+        let xterm = var("TERM_PROGRAM").is_empty()
+            && digits.is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+            && (term == "xterm" || term == "xterm-256color");
+        !mediated && (var("TERM_PROGRAM") == "Apple_Terminal" || xterm)
+    });
+    let underline = if *STRAIGHT { "\x1b[4m" } else { "\x1b[4:3m" };
+    format!("{underline}{}", style::SPELLING)
 }
 
 pub(super) fn terminal_size() -> (usize, usize) {
@@ -917,8 +961,14 @@ impl Draft {
 
     /// The prompt's rows at `width`, marked for a copy (`text::FROM`), and the row and column of
     /// the cursor in them.
-    pub(super) fn rows(&self, width: usize) -> (Vec<String>, usize, usize) {
-        let layout = Layout::marked(&self.buffer.text, width, true);
+    /// With `spelled`, misspelled words are underlined, except in a shell command (`!`).
+    pub(super) fn rows(&self, width: usize, spelled: bool) -> (Vec<String>, usize, usize) {
+        let text = &self.buffer.text;
+        let misspelled = match spelled && !text.trim_start().starts_with('!') {
+            true => spelling::misspelled(text),
+            false => Vec::new(),
+        };
+        let layout = Layout::marked(text, width, true, &misspelled);
         let cursor = layout.at(self.buffer.cursor);
         (layout.rows, cursor.row, cursor.column)
     }
@@ -1045,6 +1095,42 @@ mod tests {
         assert_eq!((after.row, after.column), (0, 9));
         let end = layout.at("a\x1b]52;c;eA==\x07b\r".len());
         assert_eq!(end.column, layout.rows[0].len());
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn misspelled_words_are_underlined_on_every_row_they_reach() {
+        let (on, off) = (spelling_style(), style::RESET);
+        let marked =
+            |text, width, ranges: &[Range<usize>]| Layout::marked(text, width, false, ranges).rows;
+        assert_eq!(
+            marked("teh cat", 80, &[0..3]),
+            [format!("> {on}teh{off} cat")]
+        );
+        // A word moved to the next row takes its underline along; the stops are unchanged.
+        assert_eq!(
+            marked("hello wrld", 10, &[6..10]),
+            ["> hello ".to_owned(), format!("  {on}wrld{off}")]
+        );
+        assert_eq!(
+            Layout::marked("hello wrld", 10, false, &[6..10])
+                .at(8)
+                .column,
+            Layout::new("hello wrld", 10).at(8).column
+        );
+        // One broken across rows is underlined on each, not the gutter between.
+        assert_eq!(
+            marked("a bcdefghij", 8, &[2..11]),
+            [
+                "> a ".to_owned(),
+                format!("  {on}bcdef{off}"),
+                format!("  {on}ghij{off}")
+            ]
+        );
+        assert_eq!(
+            marked("ab\ncd", 80, &[3..5]),
+            ["> ab".to_owned(), format!(". {on}cd{off}")]
+        );
     }
 
     #[test]

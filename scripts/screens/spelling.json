@@ -1,0 +1,15 @@
+{
+  "size": "80x16",
+  "settings": {
+    "theme": "scramjet-dark"
+  },
+  "steps": [
+    {"until": "Ctrl+O more"},
+    {"type": "Teh agent shuold read src/agnt.rs, call fooBarr and run `cargo tset` with JSON; a wrod brokenacrossthewholerowbecauseitislongerthananyrowcanholdatallreally"},
+    {"sleep": 0.5},
+    {"shot": "typed"},
+    {"type": "\u0015!echo teh"},
+    {"sleep": 0.3},
+    {"shot": "command"}
+  ]
+}

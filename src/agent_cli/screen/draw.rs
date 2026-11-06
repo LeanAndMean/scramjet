@@ -121,14 +121,15 @@ impl Activity {
 }
 
 /// Adds the prompt's rows to `rows`, at most a share of `room` around the cursor, then its
-/// completion list; returns where the cursor is.
+/// completion list; returns where the cursor is. With `spelled`, misspelled words are marked.
 fn prompt_rows(
     draft: &Draft,
     rows: &mut Vec<Line>,
     width: usize,
     room: usize,
+    spelled: bool,
 ) -> Option<(usize, usize)> {
-    let (text, row, column) = draft.rows(width);
+    let (text, row, column) = draft.rows(width, spelled);
     let shown = (room * EDITOR_SHARE / 100).max(1).min(text.len());
     let top = (row + 1).saturating_sub(shown).min(text.len() - shown);
     let start = rows.len();
@@ -357,7 +358,7 @@ impl App {
                     style::RESET
                 );
                 rows.push(selection::row(&clip(&title, width.saturating_sub(1))));
-                prompt_rows(&text.draft, &mut rows, width, room)
+                prompt_rows(&text.draft, &mut rows, width, room, false)
             }
             Some(Open {
                 shown: Shown::Press(title, note) | Shown::Wait(title, note),
@@ -395,7 +396,7 @@ impl App {
                     style::RESET
                 ));
                 rows.push(rule.clone());
-                let cursor = prompt_rows(&self.draft, &mut rows, width, room);
+                let cursor = prompt_rows(&self.draft, &mut rows, width, room, true);
                 rows.push(rule);
                 cursor
             }
