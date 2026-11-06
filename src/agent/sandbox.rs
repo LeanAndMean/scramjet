@@ -99,8 +99,13 @@ impl Sandbox {
 
     /// Refuses a `write` or `edit` of `path` that the sandbox does not allow: any in
     /// `read-only`; outside `root`, or in what stays protected in it, in `workspace-write`. A
-    /// path is taken by its real place, through the symlinks of the part that exists.
-    pub(super) fn check_write(self, root: &Path, path: &Path) -> Result<(), String> {
+    /// path is taken by its real place, through the symlinks of the part that exists, which it
+    /// returns with the real `root`.
+    pub(super) fn check_write(
+        self,
+        root: &Path,
+        path: &Path,
+    ) -> Result<(PathBuf, PathBuf), String> {
         let refused = |why: &str| {
             Err(format!(
                 "{}: {why} (--sandbox {})",
@@ -120,9 +125,71 @@ impl Sandbox {
         }
         match protected(&root).iter().any(|kept| real.starts_with(kept)) {
             true => refused("kept read-only in the sandbox"),
-            false => Ok(()),
+            false => Ok((real, root)),
         }
     }
+
+    /// Writes `content` to `path` where `check_write` allows it, making the directories missing.
+    /// Each directory below the project's is opened from the one above it without following a
+    /// symlink, and so is the file, so that a symlink swapped in after the check (by a bash call
+    /// running alongside) fails the write rather than leading it out of what was checked.
+    pub(super) fn write(self, root: &Path, path: &Path, content: &[u8]) -> Result<(), String> {
+        let (real, root) = self.check_write(root, path)?;
+        write_beneath(&root, &real, content).map_err(|error| format!("{}: {error}", path.display()))
+    }
+}
+
+/// Writes `content` to `real`, a path in the real directory `root`, opening each directory
+/// below `root` from the one above it and the file without following a symlink.
+fn write_beneath(root: &Path, real: &Path, content: &[u8]) -> Result<(), String> {
+    use rustix::{
+        fs::{Mode, OFlags},
+        io::Errno,
+    };
+    use std::{io::Write, path::Component};
+    let failed = |error: Errno| match error {
+        Errno::LOOP | Errno::NOTDIR => {
+            "a symlink or file appeared on the way after the sandbox checked it".to_owned()
+        }
+        error => std::io::Error::from(error).to_string(),
+    };
+    let names: Vec<_> = real
+        .strip_prefix(root)
+        .unwrap_or(real)
+        .components()
+        .collect();
+    let Some((Component::Normal(file), parents)) = names.split_last() else {
+        return Err("not a file".to_owned());
+    };
+    let below = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut directory = rustix::fs::open(
+        root,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(failed)?;
+    for name in parents {
+        let Component::Normal(name) = name else {
+            return Err("not a plain path".to_owned());
+        };
+        match rustix::fs::mkdirat(&directory, *name, Mode::from_raw_mode(0o777)) {
+            Ok(()) | Err(Errno::EXIST) => {}
+            Err(error) => return Err(failed(error)),
+        }
+        directory = rustix::fs::openat(&directory, *name, below, Mode::empty()).map_err(failed)?;
+    }
+    // Non-blocking, so that a FIFO put there fails the write rather than hanging it.
+    let flags = OFlags::WRONLY
+        | OFlags::CREATE
+        | OFlags::TRUNC
+        | OFlags::NOFOLLOW
+        | OFlags::NONBLOCK
+        | OFlags::CLOEXEC;
+    let opened =
+        rustix::fs::openat(&directory, *file, flags, Mode::from_raw_mode(0o666)).map_err(failed)?;
+    std::fs::File::from(opened)
+        .write_all(content)
+        .map_err(|error| error.to_string())
 }
 
 /// `path` with its longest existing part resolved, the rest as given; `None` when a part exists
@@ -632,6 +699,55 @@ ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
         for path in ["hook", "away", "away/a.rs", "loop"] {
             assert!(refused(write, path).contains("points nowhere"), "{path}");
         }
+    }
+
+    #[test]
+    fn a_sandboxed_write_does_not_follow_a_symlink_swapped_in_after_the_check() {
+        use super::{Sandbox, SandboxMode};
+        let home = std::env::temp_dir().join(format!("scramjet-swap-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(home.join("elsewhere")).unwrap();
+        let write = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: true,
+        };
+        write
+            .write(&root, &root.join("src/new/deeper/a.rs"), b"made")
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/new/deeper/a.rs")).unwrap(),
+            "made"
+        );
+
+        let (real, real_root) = write.check_write(&root, &root.join("src/a.rs")).unwrap();
+        std::fs::remove_dir_all(root.join("src")).unwrap();
+        for target in [root.join(".git/hooks"), home.join("elsewhere")] {
+            std::os::unix::fs::symlink(&target, root.join("src")).unwrap();
+            let error = super::write_beneath(&real_root, &real, b"x").unwrap_err();
+            assert!(error.contains("appeared on the way"), "{error}");
+            assert!(!target.join("a.rs").exists());
+            std::fs::remove_file(root.join("src")).unwrap();
+        }
+
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::os::unix::fs::symlink(home.join("elsewhere/a.rs"), root.join("src/a.rs")).unwrap();
+        let error = super::write_beneath(&real_root, &real, b"x").unwrap_err();
+        assert!(error.contains("appeared on the way"), "{error}");
+        assert!(!home.join("elsewhere/a.rs").exists());
+        std::fs::remove_file(root.join("src/a.rs")).unwrap();
+
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            root.join("src/a.rs"),
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap();
+        assert!(super::write_beneath(&real_root, &real, b"x").is_err());
     }
 
     #[test]

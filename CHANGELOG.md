@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.53.2 — Sandboxed writes stay where they were checked
+
+### Fixed
+
+- In `--sandbox workspace-write`, `write` and `edit` open each directory below the project and the file itself without following a symlink, so a bash command running at the same moment cannot swap in a symlink after the check and lead the write outside the project or into its `.git`. A FIFO put where the file goes fails the write rather than hanging it.
+
 ## 0.53.1 — No write through a dangling symlink in the sandbox
 
 ### Fixed

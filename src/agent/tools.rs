@@ -291,8 +291,8 @@ impl<'a> Call<'a> {
             "ls" => ls(root, self)?,
             "grep" => grep(root, self, hidden, cancel)?,
             "find" => find(root, self, hidden, cancel)?,
-            "write" => return write(root, self),
-            "edit" => return edit(root, self),
+            "write" => return write(root, self, &put),
+            "edit" => return edit(root, self, &put),
             "bash" => return bash(root, self, hidden, cancel, progress),
             other => return Err(format!("Tool {other} not found")),
         };
@@ -318,7 +318,13 @@ impl<'a> Call<'a> {
             "write" | "edit" => {
                 let path = resolve(root, self.arguments["path"].as_str().unwrap_or(""));
                 sandbox.check_write(root, &path)?;
-                self.run(root, Some(hidden), cancel, progress)
+                self.check_path(root, hidden)?;
+                let put =
+                    |path: &Path, content: &str| sandbox.write(root, path, content.as_bytes());
+                match self.name {
+                    "write" => write(root, self, &put),
+                    _ => edit(root, self, &put),
+                }
             }
             "bash" => {
                 let process = sandbox::sandboxed(root, self.str("command")?, hidden, sandbox);
@@ -561,14 +567,21 @@ fn read_text(bytes: Vec<u8>, call: &Call, path: &Path) -> Result<String, String>
     Ok(output)
 }
 
-fn write(root: &Path, call: &Call) -> Result<Output, String> {
-    let given = call.str("path")?;
-    let path = resolve(root, given);
-    let content = call.str("content")?;
+/// Writes a file, making the directories missing.
+type Put<'a> = dyn Fn(&Path, &str) -> Result<(), String> + 'a;
+
+fn put(path: &Path, content: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))?;
+    std::fs::write(path, content).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn write(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
+    let given = call.str("path")?;
+    let path = resolve(root, given);
+    let content = call.str("content")?;
+    put(&path, content)?;
     Ok(Output {
         text: format!("Wrote {} bytes to {}", content.len(), path.display()),
         detail: Some(ToolDetail::Written {
@@ -580,7 +593,7 @@ fn write(root: &Path, call: &Call) -> Result<Output, String> {
     })
 }
 
-fn edit(root: &Path, call: &Call) -> Result<Output, String> {
+fn edit(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
     let path = resolve(root, call.str("path")?);
     let original =
         std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -684,7 +697,7 @@ might indicate an issue with special characters or the text not existing as expe
             }
         });
     }
-    std::fs::write(&path, &updated).map_err(|e| format!("{}: {e}", path.display()))?;
+    put(&path, &updated)?;
     // Matches never cover a byte order mark; as in Scramjet, the diff leaves it out.
     let text = original.strip_prefix('\u{feff}').unwrap_or(&original);
     let skipped = original.len() - text.len();
