@@ -7,7 +7,8 @@ handshake of 2025-11-25 with a session, and refuses `server/discover` outside on
 as the TypeScript SDK's servers do. It answers `tools/list` in JSON and `tools/call` as events.
 Each request is appended to the file `MCP_TEST_LOG` names: its method, path, JSON-RPC method,
 session and protocol version. `MCP_TEST_TOKEN` is the bearer token it asks for (HTTP 401
-without it)."""
+without it). `/old` redirects to `/mcp` with a 307 and its URL, `/moved` with a 308 and its
+path, `/away` with a 307 to localhost, `/gone` with a 301, each keeping the query."""
 import http.server
 import json
 import os
@@ -24,6 +25,13 @@ TOOLS = [
     {"name": "slow", "description": "Waits a minute unless cancelled.",
      "inputSchema": {"type": "object"}},
 ]
+
+REDIRECTS = {
+    "/old": (307, "http://127.0.0.1:{port}/mcp"),
+    "/moved": (308, "/mcp"),
+    "/away": (307, "http://localhost:{port}/mcp"),
+    "/gone": (301, "/mcp"),
+}
 
 lock = threading.Lock()
 sessions = set()
@@ -78,6 +86,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def redirected(self):
+        path, _, query = self.path.partition("?")
+        if path not in REDIRECTS:
+            return False
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.logged("redirect")
+        status, to = REDIRECTS[path]
+        to = to.format(port=self.server.server_address[1]) + ("?" + query if query else "")
+        self.reply(status, None, [("Location", to)])
+        return True
+
     def events(self, messages):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -91,15 +110,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def do_GET(self):
+        if self.redirected():
+            return
         self.logged("stream")
         self.reply(405)
 
     def do_DELETE(self):
+        if self.redirected():
+            return
         self.logged("end")
         sessions.discard(self.headers.get("Mcp-Session-Id"))
         self.reply(200)
 
     def do_POST(self):
+        if self.redirected():
+            return
         message = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         method = message.get("method", "reply")
         self.logged(method)

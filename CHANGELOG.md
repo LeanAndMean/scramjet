@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.27.1 — MCP servers that redirect
+
+### Fixed
+
+- An MCP server over HTTP that redirects its address (a 307 or 308, as Python servers mounted at `/mcp` send to `/mcp/`) failed to start; a redirect on the same host is now followed, as Claude Code and rmcp follow it, and one elsewhere says where it points.
+
 ## 0.27.0 — MCP servers over HTTP
 
 ### Added

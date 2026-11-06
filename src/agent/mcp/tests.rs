@@ -802,3 +802,67 @@ fn a_session_the_server_forgot_is_started_again() {
         "{logged}"
     );
 }
+
+#[test]
+fn redirects_on_the_same_host_are_followed_and_the_others_say_where() {
+    let scratch = scratch("http-redirect");
+    let log = scratch.0.join("log");
+    let remote = Remote::start(&[
+        ("MCP_TEST_LOG", log.display().to_string()),
+        ("MCP_TEST_TOKEN", "secret".to_owned()),
+    ]);
+    let token = || vec![("Authorization".to_owned(), "Bearer secret".to_owned())];
+    let at = |path: &str| format!("http://127.0.0.1:{}{path}", remote.1);
+    let configs = [
+        Server::http("old", &at("/old?team=a"), token()).unwrap(),
+        Server::http("moved", &at("/moved"), token()).unwrap(),
+        Server::http("away", &at("/away?key=k"), token()).unwrap(),
+        Server::http("gone", &at("/gone"), token()).unwrap(),
+    ];
+    let servers = started(&configs, &scratch.0);
+    for name in ["old", "moved"] {
+        let arguments = json!({"server": name, "tool": "echo", "arguments": {"text": name}});
+        let echoed = servers.call(&arguments, &AtomicBool::new(false)).unwrap();
+        assert_eq!(echoed.text, format!("echo: {name}"));
+    }
+    let failures = servers.unreported_failures();
+    let [(away, why_away), (gone, why_gone)] = &failures[..] else {
+        panic!("{failures:?}");
+    };
+    assert_eq!((away.as_str(), gone.as_str()), ("away", "gone"));
+    let port = remote.1;
+    assert!(
+        why_away.contains(&format!(
+            "HTTP 307 Temporary Redirect to http://localhost:{port}/mcp?…"
+        )),
+        "{why_away}"
+    );
+    assert!(
+        why_gone.contains("HTTP 301 Moved Permanently to /mcp"),
+        "{why_gone}"
+    );
+    drop(servers);
+    let logged = std::fs::read_to_string(&log).unwrap();
+    let old: Vec<&str> = (logged.lines())
+        .filter(|line| line.contains("?team=a"))
+        .take(4)
+        .collect();
+    // Each request starts at the address given, and keeps its query and token.
+    assert_eq!(
+        old,
+        [
+            "POST /old?team=a redirect session=- version=2026-07-28",
+            "POST /mcp?team=a server/discover session=- version=2026-07-28",
+            "POST /old?team=a redirect session=- version=-",
+            "POST /mcp?team=a initialize session=- version=-",
+        ],
+        "{logged}"
+    );
+    // localhost is this server too: nothing was sent there.
+    assert!(
+        (logged.lines())
+            .filter(|line| line.contains("?key=k"))
+            .all(|line| line.starts_with("POST /away?key=k redirect")),
+        "{logged}"
+    );
+}

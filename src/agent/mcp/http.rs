@@ -28,6 +28,8 @@ const JSON_BYTES: usize = 16 << 20;
 const FAILURE_BYTES: usize = 64 << 10;
 /// What a failure's message shows of its body.
 const SHOWN_CHARS: usize = 300;
+/// Redirects followed for one request, as rmcp's own client follows.
+const REDIRECTS: usize = 10;
 
 /// The harness's HTTP client for MCP servers.
 #[derive(Clone)]
@@ -81,7 +83,10 @@ pub(super) fn target(url: &str) -> Result<(providers::Route, String), String> {
     Ok((route, target))
 }
 
-/// Sends a request to `url` with `headers`, the server's and the transport's, then `own`.
+/// Sends a request to `url` with `headers`, the server's and the transport's, then `own`. A 307
+/// or 308 to the same scheme, host and port is followed, as rmcp's own client follows them: they
+/// keep the method and body. Other redirects are answers: the headers and session must not reach
+/// another host.
 async fn send(
     method: Method,
     url: &str,
@@ -89,10 +94,38 @@ async fn send(
     own: Vec<(HeaderName, String)>,
     body: Vec<u8>,
 ) -> Result<Response<Incoming>, Error> {
-    let (route, target) = target(url).map_err(failed)?;
+    let (route, mut target) = target(url).map_err(failed)?;
+    let body = Bytes::from(body);
+    for _ in 0..=REDIRECTS {
+        let response = send_to(&route, &target, &method, &headers, &own, body.clone()).await?;
+        if !matches!(
+            response.status(),
+            StatusCode::TEMPORARY_REDIRECT | StatusCode::PERMANENT_REDIRECT
+        ) {
+            return Ok(response);
+        }
+        match (response.headers().get(header::LOCATION)).and_then(|to| same_origin(&route, to)) {
+            Some(next) => target = next,
+            None => return Ok(response),
+        }
+    }
+    Err(failed(format!(
+        "{} redirected it more than {REDIRECTS} times",
+        route.authority
+    )))
+}
+
+async fn send_to(
+    route: &providers::Route,
+    target: &str,
+    method: &Method,
+    headers: &HashMap<HeaderName, HeaderValue>,
+    own: &[(HeaderName, String)],
+    body: Bytes,
+) -> Result<Response<Incoming>, Error> {
     // The connection's task ends with it, once the answer was read or dropped.
     let (mut sender, _driver) =
-        (client::connect_for(&route, "").await).map_err(|failure| failed(failure.message))?;
+        (client::connect_for(route, "").await).map_err(|failure| failed(failure.message))?;
     let mut request = Request::builder()
         .method(method)
         .uri(target)
@@ -103,10 +136,37 @@ async fn send(
     for (name, value) in own {
         request = request.header(name, value);
     }
-    let request =
-        (request.body(Full::new(Bytes::from(body)))).map_err(|e| failed(e.to_string()))?;
+    let request = (request.body(Full::new(body))).map_err(|e| failed(e.to_string()))?;
     (sender.send_request(request).await)
         .map_err(|e| failed(format!("request to {} failed: {e}", route.authority)))
+}
+
+/// The request target a redirect's `location` names, when it is a path or a URL on `route`'s
+/// scheme, host and port.
+fn same_origin(route: &providers::Route, location: &HeaderValue) -> Option<String> {
+    let location = location.to_str().ok()?;
+    if location.starts_with('/') && !location.starts_with("//") {
+        let path = location.split('#').next().unwrap_or(location);
+        return Some(path.to_owned());
+    }
+    let (to, target) = target(location).ok()?;
+    let same =
+        to.tls == route.tls && to.port == route.port && to.host.eq_ignore_ascii_case(&route.host);
+    same.then_some(target)
+}
+
+/// Where a refused redirect points, after ` to `, without its query.
+fn redirected_to(response: &Response<Incoming>) -> String {
+    if !response.status().is_redirection() {
+        return String::new();
+    }
+    match (response.headers().get(header::LOCATION)).and_then(|to| to.to_str().ok()) {
+        Some(to) => match to.split_once('?') {
+            Some((to, _)) => format!(" to {to}?…"),
+            None => format!(" to {to}"),
+        },
+        None => String::new(),
+    }
 }
 
 /// The headers a request carries besides the server's: its session's, its token and `more`.
@@ -318,6 +378,7 @@ impl StreamableHttpClient for Https {
             .map(str::to_owned);
         if !status.is_success() {
             let json = has_type(&response, JSON);
+            let to = redirected_to(&response);
             let body = read(response, FAILURE_BYTES).await.unwrap_or_default();
             if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
                 return Err(unauthorized(status, &body));
@@ -336,7 +397,7 @@ impl StreamableHttpClient for Https {
                 said => format!(": {said}"),
             };
             return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
-                format!("HTTP {status}{said}"),
+                format!("HTTP {status}{to}{said}"),
             )));
         }
         if length(&response) == Some(0) && expects_no_answer(&message) {
