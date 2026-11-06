@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.36.0 — A new theme from another theme's colors
+
+### Added
+
+- `/settings` → Theme offers New theme from NAME… for the theme in use when the theme editor did not make it and it has exact colors (`scramjet-dark`, `pi-light`, a hand-written file). The editor starts from that theme as it looks: its accent, border, heading, variable and string colors become the main colors (each distinct one in turn, in the harmony they fit best), on its own background, else the terminal's. Each role keeps that theme's color until what it follows changes: a roll keeps the roles of locked colors as they were and lights the others anew, a contrast step or another background lights them all, and undo brings them back. The roles' view names the colors kept, and the theme is saved as a new one.
+- A background of a theme's own is offered in the editor's Background row beside the terminal's, dark and light ("its own, #14213d"), also for a theme the editor made whose background was changed in its file, which opened on the editor's own dark or light one before.
+
 ## 0.35.0 — Summaries and commands in Scramjet's message box
 
 ### Changed

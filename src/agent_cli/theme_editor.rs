@@ -2,8 +2,8 @@
 //! until it is close, its liked colors locked, stepped toward the harmony or toward more or less
 //! contrast, and each of its roles, one view away, set to follow another main color or to an
 //! exact color, with undo and redo, while a sample session shows it in the conversation's place.
-//! It is saved as a theme file in Scramjet's format, which keeps what the editor made it from, so
-//! that it opens in the editor again.
+//! It can start from another theme's colors. It is saved as a theme file in Scramjet's format,
+//! which keeps what the editor made it from, so that it opens in the editor again.
 
 use super::keymap::{self, Binding};
 use super::keys::Key;
@@ -30,6 +30,8 @@ const NOTE_ROWS: usize = 3;
 const ROLE_ROWS: usize = 10;
 /// The key of a theme file under which it keeps what the editor made it from.
 const STATE: &str = "themeEditor";
+/// Colors nearer each other than this in OKLab are taken as one main color.
+const SAME: f64 = 0.02;
 
 /// What the editor shows: the main colors and what makes the theme of them, or every role.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,6 +73,10 @@ pub(super) struct ThemeEditor {
     rng: Rng,
     /// The terminal's own background, when it is known: a theme can be made on it.
     terminal: Option<Rgb>,
+    /// A background of the theme's own, which it started on, offered beside the others.
+    own: Option<Rgb>,
+    /// The theme it started from, whose colors roles keep until they are lit anew.
+    from: Option<String>,
     /// Said in place of the keys' hint until the next key (`true`: a warning).
     status: Option<(String, bool)>,
     /// The draft's colors, and how well its main colors fit the harmony.
@@ -95,28 +101,92 @@ impl ThemeEditor {
     pub(super) fn open(text: &str, seed: u64, terminal: Option<Rgb>) -> Option<Self> {
         let file = Theme::parse(text).ok()?;
         let json: Value = serde_json::from_str(text).ok()?;
-        let (mut draft, locked) = saved_draft(json.get(STATE)?)?;
+        let state = json.get(STATE)?;
+        let (mut draft, locked) = saved_draft(state)?;
         let built = draft.build();
         for (at, &token) in TOKENS.iter().enumerate() {
-            if let Color::Rgb(r, g, b) = file.color(token)
-                && built.colors[at] != (r, g, b)
+            if let Some(rgb) = rgb(file.color(token))
+                && built.colors[at] != rgb
             {
-                draft.picks[at] = Some(Pick::Exact((r, g, b)));
+                draft.picks[at] = Some(Pick::Exact(rgb));
             }
         }
-        let terminal = match draft.background {
-            Background::Terminal(saved) => {
+        // A background changed in the file is kept, the roles not changed there lit on it.
+        let terminal = match (draft.background, rgb(file.background())) {
+            (_, Some(own)) if built.own_background() != Some(own) => {
+                draft.background = Background::Own(own);
+                terminal
+            }
+            (Background::Terminal(saved), _) => {
                 let now = terminal.unwrap_or(saved);
                 draft.background = Background::Terminal(now);
                 Some(now)
             }
             _ => terminal,
         };
-        Some(Self::on(draft, locked, Rng::new(seed), terminal))
+        let mut editor = Self::on(draft, locked, Rng::new(seed), terminal);
+        editor.from = state.get("from").and_then(Value::as_str).map(str::to_owned);
+        Some(editor)
+    }
+
+    /// The editor on a new theme starting from `theme`, named `name`: its main colors those of
+    /// its accent, border, headings, variables and strings, the distinct ones in turn, on its
+    /// background, else the terminal's, else dark or light as its secondary text suits; each
+    /// role keeps `theme`'s color until the color it would follow changes. `None` when it has
+    /// none of those colors exactly, as the terminal's 16 colors.
+    pub(super) fn from_theme(
+        name: &str,
+        theme: &Theme,
+        seed: u64,
+        terminal: Option<Rgb>,
+    ) -> Option<Self> {
+        let of = |token| rgb(theme.color(token));
+        let mut accents: Vec<Rgb> = Vec::new();
+        for token in [
+            Token::Accent,
+            Token::Border,
+            Token::MdHeading,
+            Token::SyntaxVariable,
+            Token::SyntaxString,
+        ] {
+            if let Some(color) = of(token)
+                && (accents.iter()).all(|&known| palette::distance(known, color) > SAME)
+            {
+                accents.push(color);
+            }
+        }
+        if accents.is_empty() {
+            return None;
+        }
+        let background = match (rgb(theme.background()), terminal) {
+            (Some(own), _) => Background::Own(own),
+            (None, Some(terminal)) => Background::Terminal(terminal),
+            _ if of(Token::Muted).is_some_and(palette::is_dark) => Background::Light,
+            _ => Background::Dark,
+        };
+        let mut draft = Draft::of_accents(&accents, background);
+        let built = draft.build();
+        for (at, &token) in TOKENS.iter().enumerate() {
+            draft.picks[at] =
+                (of(token).filter(|&color| color != built.colors[at])).map(Pick::Kept);
+        }
+        let locked = vec![false; accents.len()];
+        let mut editor = Self::on(draft, locked, Rng::new(seed), terminal);
+        editor.from = Some(name.to_owned());
+        editor.say(
+            &format!("From {name}: each role keeps its color until what it follows changes"),
+            false,
+        );
+        Some(editor)
     }
 
     fn on(draft: Draft, locked: Vec<bool>, rng: Rng, terminal: Option<Rgb>) -> Self {
         Self {
+            own: match draft.background {
+                Background::Own(own) => Some(own),
+                _ => None,
+            },
+            from: None,
             built: draft.build(),
             score: draft.fit(&locked).score,
             locked,
@@ -150,10 +220,23 @@ impl ThemeEditor {
     }
 
     /// Shows `draft` from now on, after the one shown, which undo goes back to.
-    fn push(&mut self, draft: Draft) {
+    fn push(&mut self, mut draft: Draft) {
+        let released = draft.release(self.draft());
         self.history.truncate(self.at + 1);
         self.history.push(draft);
         self.show(self.at + 1);
+        if released > 0 && self.status.is_none() {
+            let from = self.started_from();
+            let roles = match released {
+                1 => "1 role follows".to_owned(),
+                count => format!("{count} roles follow"),
+            };
+            self.say(&format!("{roles} the main colors now, not {from}'s"), false);
+        }
+    }
+
+    fn started_from(&self) -> &str {
+        self.from.as_deref().unwrap_or("the theme it started from")
     }
 
     /// Shows the draft at `at` in the history. The locks stay on their rows, or, when it has
@@ -395,6 +478,7 @@ impl ThemeEditor {
                 let choices: Vec<Background> = (self.terminal.map(Background::Terminal))
                     .into_iter()
                     .chain([Background::Dark, Background::Light])
+                    .chain(self.own.map(Background::Own))
                     .collect();
                 let kind = std::mem::discriminant(&draft.background);
                 let at = (choices.iter())
@@ -447,21 +531,27 @@ impl ThemeEditor {
                 match draft.background {
                     Background::Dark => "dark".to_owned(),
                     Background::Light => "light".to_owned(),
-                    Background::Terminal((r, g, b)) => {
-                        format!("the terminal's, #{r:02x}{g:02x}{b:02x}")
-                    }
+                    Background::Terminal(rgb) => format!("the terminal's, {}", hex_text(rgb)),
+                    Background::Own(rgb) => format!("its own, {}", hex_text(rgb)),
                 },
-                match self.terminal {
-                    Some(_) => format!(
-                        "The terminal's own, which the theme leaves as it is, or dark or light, \
-                         tinted toward the first color; every color is lit to read well on it. \
-                         {left_right} switches."
-                    ),
-                    None => format!(
-                        "Dark or light, tinted toward the first color; every color is lit to \
-                         read well on it. The terminal did not say what its own background is, \
-                         so no theme can be made on it. {left_right} switches."
-                    ),
+                {
+                    let own = match self.own {
+                        Some(_) => ", or its own, which it started on",
+                        None => "",
+                    };
+                    match self.terminal {
+                        Some(_) => format!(
+                            "The terminal's own, which the theme leaves as it is, or dark or \
+                             light, tinted toward the first color{own}; every color is lit to \
+                             read well on it. {left_right} switches."
+                        ),
+                        None => format!(
+                            "Dark or light, tinted toward the first color{own}; every color is \
+                             lit to read well on it. The terminal did not say what its own \
+                             background is, so no theme can be made on it. {left_right} \
+                             switches."
+                        ),
+                    }
                 },
             ),
             Row::Contrast => (
@@ -501,19 +591,28 @@ impl ThemeEditor {
     }
 
     /// The harmony's score, the faintest text's contrast, in numbers and plain words, and how
-    /// many roles were picked.
+    /// many roles were picked and kept from the theme it started from.
     fn scores(&self) -> String {
         let score = self.score;
         let background = self.built.background;
         let ratio = |token| palette::contrast(self.built.color(token), background);
         let (text, dim) = (ratio(Token::Text), ratio(Token::Dim));
-        let picked = match self.draft().picks.iter().flatten().count() {
+        let picks = self.draft().picks.iter().flatten();
+        let kept = (picks.clone())
+            .filter(|pick| matches!(pick, Pick::Kept(_)))
+            .count();
+        let picked = match picks.count() - kept {
             0 => String::new(),
             1 => " · 1 role picked".to_owned(),
             count => format!(" · {count} roles picked"),
         };
+        let kept = match kept {
+            0 => String::new(),
+            1 => " · 1 role kept".to_owned(),
+            kept => format!(" · {kept} roles kept"),
+        };
         format!(
-            "Harmony {:.0}% {} · text {text:.1}:1 {} · dim text {dim:.1}:1 {}{picked}",
+            "Harmony {:.0}% {} · text {text:.1}:1 {} · dim text {dim:.1}:1 {}{picked}{kept}",
             score * 100.0,
             palette::harmony_words(score),
             palette::contrast_words(text, Kind::Text),
@@ -523,10 +622,20 @@ impl ThemeEditor {
 
     /// What the role at `at` takes its color from, in plain words.
     fn follows(&self, at: usize) -> String {
-        let draft = self.draft();
-        let (kind, own) = palette::own(TOKENS[at]);
-        let count = draft.mains.len();
-        let named = |source| match source {
+        let named = |source| self.source_words(at, source);
+        match self.draft().picks[at] {
+            None => named(palette::own(TOKENS[at]).1),
+            Some(Pick::Follow(index)) => named(Source::Main(index)) + ", picked",
+            Some(Pick::Exact(_)) => "set by hand".to_owned(),
+            Some(Pick::Kept(_)) => format!("{}'s", self.started_from()),
+        }
+    }
+
+    /// `source` in plain words, as the role at `at` takes its color from it.
+    fn source_words(&self, at: usize, source: Source) -> String {
+        let (kind, _) = palette::own(TOKENS[at]);
+        let count = self.draft().mains.len();
+        match source {
             Source::Main(slot) => {
                 let main = slot % count + 1;
                 match (kind, slot < count) {
@@ -536,11 +645,6 @@ impl ThemeEditor {
                 }
             }
             Source::Meaning(meaning) => meaning.words().to_owned(),
-        };
-        match draft.picks[at] {
-            None => named(own),
-            Some(Pick::Follow(index)) => named(Source::Main(index)) + ", picked",
-            Some(Pick::Exact(_)) => "set by hand".to_owned(),
         }
     }
 
@@ -589,13 +693,21 @@ impl ThemeEditor {
             }
             Source::Main(_) => String::new(),
         };
+        let kept = match self.draft().picks[self.role] {
+            Some(Pick::Kept(_)) => format!(
+                " It has {}'s color until {}, the background or the contrast changes.",
+                self.started_from(),
+                self.source_words(self.role, palette::own(token).1),
+            ),
+            _ => String::new(),
+        };
         let left_right = keymap::keys(&[Binding::CursorLeft, Binding::CursorRight]);
         let left_right = left_right.as_deref().unwrap_or("Left and Right");
         let exact = keymap::key(Binding::ThemeExact).unwrap_or_default();
         let reset = keymap::key(Binding::ThemeReset).unwrap_or_default();
         format!(
-            "{}{range} {left_right} picks the main color it follows, {exact} an exact color, \
-             {reset} its own again.",
+            "{}{range}{kept} {left_right} picks the main color it follows, {exact} an exact \
+             color, {reset} its own again.",
             about(token)
         )
     }
@@ -769,6 +881,7 @@ impl ThemeEditor {
                 let pick = match (*pick)? {
                     Pick::Follow(index) => json!({"follow": index + 1}),
                     Pick::Exact(rgb) => json!(hex_text(rgb)),
+                    Pick::Kept(rgb) => json!({"kept": hex_text(rgb)}),
                 };
                 Some(((*key).to_owned(), pick))
             })
@@ -779,6 +892,7 @@ impl ThemeEditor {
                 Background::Dark => "dark",
                 Background::Light => "light",
                 Background::Terminal(_) => "terminal",
+                Background::Own(_) => "own",
             },
             "depth": draft.depth,
             "tint": draft.tint,
@@ -786,8 +900,13 @@ impl ThemeEditor {
             "mains": mains,
             "picks": picks,
         });
-        if let Background::Terminal(rgb) = draft.background {
-            state["terminal"] = json!(hex_text(rgb));
+        match draft.background {
+            Background::Terminal(rgb) => state["terminal"] = json!(hex_text(rgb)),
+            Background::Own(rgb) => state["own"] = json!(hex_text(rgb)),
+            _ => {}
+        }
+        if let Some(from) = &self.from {
+            state["from"] = json!(from);
         }
         state
     }
@@ -820,9 +939,8 @@ fn saved_draft(state: &Value) -> Option<(Draft, Vec<bool>)> {
     let background = match state.get("background")?.as_str()? {
         "dark" => Background::Dark,
         "light" => Background::Light,
-        "terminal" => {
-            Background::Terminal(hex(state.get("terminal")?.as_str()?.strip_prefix('#')?)?)
-        }
+        "terminal" => Background::Terminal(hex_value(state.get("terminal")?)?),
+        "own" => Background::Own(hex_value(state.get("own")?)?),
         _ => return None,
     };
     let contrast = state.get("contrast")?.as_i64()?;
@@ -833,7 +951,8 @@ fn saved_draft(state: &Value) -> Option<(Draft, Vec<bool>)> {
     for (key, pick) in state.get("picks")?.as_object()? {
         let at = KEYS.iter().position(|known| known == key)?;
         picks[at] = Some(match pick {
-            Value::String(text) => Pick::Exact(hex(text.strip_prefix('#')?)?),
+            Value::String(_) => Pick::Exact(hex_value(pick)?),
+            pick if pick.get("kept").is_some() => Pick::Kept(hex_value(&pick["kept"])?),
             pick => {
                 let main = pick.get("follow")?.as_u64()? as usize;
                 (1..=mains.len()).contains(&main).then_some(())?;
@@ -855,6 +974,19 @@ fn saved_draft(state: &Value) -> Option<(Draft, Vec<bool>)> {
 
 fn hex_text((r, g, b): Rgb) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// The color of a text such as `"#ff8800"`.
+fn hex_value(value: &Value) -> Option<Rgb> {
+    hex(value.as_str()?.strip_prefix('#')?)
+}
+
+/// The exact color `color` is, if it is one.
+fn rgb(color: Color) -> Option<Rgb> {
+    match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        _ => None,
+    }
 }
 
 /// The color of hex digits typed: six, or three, each doubled.
@@ -1489,6 +1621,189 @@ mod tests {
             let broken = text.replacen(from, to, 1);
             assert!(ThemeEditor::open(&broken, 1, None).is_none(), "{to}");
         }
+    }
+
+    fn kept(editor: &ThemeEditor, token: Token) -> bool {
+        matches!(editor.draft().picks[token_at(token)], Some(Pick::Kept(_)))
+    }
+
+    #[test]
+    fn a_theme_the_editor_did_not_make_starts_a_new_one_showing_its_colors() {
+        let campbell = (12, 12, 12);
+        let dark = Theme::built_in("scramjet-dark").unwrap();
+        let editor = ThemeEditor::from_theme("scramjet-dark", &dark, 1, Some(campbell)).unwrap();
+        // Its accent, border, heading, variable and string colors are the main colors, each
+        // lit as it is, on the terminal's background, which it leaves to the terminal.
+        assert_eq!(editor.draft().mains.len(), 5);
+        assert_eq!(editor.draft().background, Background::Terminal(campbell));
+        let slots = [
+            Token::Accent,
+            Token::Border,
+            Token::MdHeading,
+            Token::SyntaxVariable,
+            Token::SyntaxString,
+        ];
+        // Each is lit as it is where its contrast is within the accents' band; the cyan, above
+        // it, keeps its hue and chroma.
+        for (index, token) in slots.into_iter().enumerate() {
+            let theirs = rgb(dark.color(token)).unwrap();
+            let lit = editor.draft().accent(index, campbell);
+            match token {
+                Token::Accent => {
+                    let (lit, theirs) = (Oklch::of(lit), Oklch::of(theirs));
+                    assert!((lit.h - theirs.h).abs() < 1.0 && (lit.c - theirs.c).abs() < 0.005);
+                    assert!(lit.l < theirs.l);
+                }
+                _ => assert_eq!(lit, theirs, "{}", KEYS[token as usize]),
+            }
+        }
+        // It shows scramjet-dark, but for the colors that theme leaves to the terminal.
+        let shown = editor.theme();
+        assert_eq!(shown.background(), Color::Default);
+        for (at, &token) in TOKENS.iter().enumerate() {
+            match dark.color(token) {
+                Color::Rgb(..) => assert_eq!(shown.color(token), dark.color(token), "{}", KEYS[at]),
+                _ => assert_eq!(editor.draft().picks[at], None, "{}", KEYS[at]),
+            }
+        }
+        let shown = lines(&editor);
+        assert!(
+            shown[0].contains("From scramjet-dark: each role keeps its color"),
+            "{shown:?}"
+        );
+        assert!(
+            (shown.iter()).any(|line| line.ends_with(" · 38 roles kept")),
+            "{shown:?}"
+        );
+        // Without the terminal's background, a light one for a theme with dark secondary text.
+        let light = Theme::built_in("pi-light").unwrap();
+        let editor = ThemeEditor::from_theme("pi-light", &light, 1, None).unwrap();
+        assert_eq!(editor.draft().background, Background::Light);
+        assert_eq!(
+            editor.theme().color(Token::Muted),
+            light.color(Token::Muted)
+        );
+        let editor = ThemeEditor::from_theme("scramjet-dark", &dark, 1, None).unwrap();
+        assert_eq!(editor.draft().background, Background::Dark);
+        // The terminal's 16 colors have nothing exact to start from.
+        let terminal = Theme::built_in(theme::TERMINAL_COLORS).unwrap();
+        assert!(ThemeEditor::from_theme("terminal-colors", &terminal, 1, None).is_none());
+        // A color used again is one main color.
+        let text = include_str!("themes/scramjet-dark.json")
+            .replace(r#""border": "shockBlue""#, r#""border": "plasmaCyan""#);
+        let twice = Theme::parse(&text).unwrap();
+        let editor = ThemeEditor::from_theme("twice", &twice, 1, Some(campbell)).unwrap();
+        assert_eq!(editor.draft().mains.len(), 4);
+        assert_eq!(
+            editor.theme().color(Token::Border),
+            dark.color(Token::Accent)
+        );
+    }
+
+    #[test]
+    fn kept_colors_follow_the_main_colors_once_what_they_follow_changes() {
+        let campbell = (12, 12, 12);
+        let dark = Theme::built_in("scramjet-dark").unwrap();
+        let mut editor =
+            ThemeEditor::from_theme("scramjet-dark", &dark, 2, Some(campbell)).unwrap();
+        let start = editor.draft().clone();
+        // Color 1 locked, a roll leaves its roles as they were and lights the others anew.
+        editor.row = 4;
+        editor.key(&typed("l"));
+        editor.key(&typed("r"));
+        assert!(kept(&editor, Token::Accent) || start.picks[token_at(Token::Accent)].is_none());
+        assert!(kept(&editor, Token::Muted) && kept(&editor, Token::MdCodeBlockBorder));
+        assert!(!kept(&editor, Token::Border) && !kept(&editor, Token::MdHeading));
+        assert_eq!(editor.theme().color(Token::Muted), dark.color(Token::Muted));
+        assert_ne!(
+            editor.theme().color(Token::Border),
+            dark.color(Token::Border)
+        );
+        let status = editor.status.clone().unwrap().0;
+        assert!(
+            status.ends_with(" roles follow the main colors now, not scramjet-dark's"),
+            "{status}"
+        );
+        // In the roles' view, Backspace lets one follow its own; the others stay.
+        editor.key(&press(Code::Tab));
+        editor.role = token_at(Token::Muted);
+        let shown = lines(&editor).join(" ");
+        let shown = shown.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(shown.contains("‹ scramjet-dark's ›"), "{shown}");
+        assert!(
+            shown.contains("It has scramjet-dark's color until a tint of color 1, the background"),
+            "{shown}"
+        );
+        editor.key(&press(Code::Backspace));
+        assert!(!kept(&editor, Token::Muted) && kept(&editor, Token::MdCodeBlockBorder));
+        // A step of contrast lights them anew, but for color 1's accents, already at the top
+        // of their band; undo brings them back.
+        editor.key(&typed("+"));
+        assert!(!kept(&editor, Token::MdCodeBlockBorder));
+        for (at, &token) in TOKENS.iter().enumerate() {
+            let accent = palette::own(token) == (Kind::Accent, Source::Main(0));
+            assert_eq!(kept(&editor, token), accent, "{}", KEYS[at]);
+        }
+        for _ in 0..3 {
+            editor.key(&typed("u"));
+        }
+        assert_eq!(*editor.draft(), start);
+        assert_eq!(
+            editor.theme().color(Token::Border),
+            dark.color(Token::Border)
+        );
+        // Saved, it opens again with the colors kept and where they came from.
+        let text = editor.file_text("mine");
+        let json: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json[STATE]["from"], "scramjet-dark");
+        assert_eq!(json[STATE]["picks"]["muted"]["kept"], "#8b95a7");
+        let opened = ThemeEditor::open(&text, 1, Some(campbell)).unwrap();
+        assert_eq!(opened.draft(), editor.draft());
+        assert_eq!(opened.from.as_deref(), Some("scramjet-dark"));
+        assert_eq!(opened.theme(), editor.theme());
+    }
+
+    #[test]
+    fn a_background_of_a_themes_own_is_kept_and_offered_beside_the_others() {
+        let campbell = (12, 12, 12);
+        let text = include_str!("themes/scramjet-dark.json").replace(
+            r#""text": "","#,
+            r##""text": "", "background": "#10141c","##,
+        );
+        let own = Theme::parse(&text).unwrap();
+        let mut editor = ThemeEditor::from_theme("own", &own, 1, Some(campbell)).unwrap();
+        assert_eq!(editor.draft().background, Background::Own((16, 20, 28)));
+        assert_eq!(editor.theme().background(), Color::Rgb(16, 20, 28));
+        editor.row = 2;
+        let shown = lines(&editor);
+        assert_eq!(shown[3], "› Background  ‹ its own, #10141c ›");
+        // After the terminal's, dark and light; saved and opened again, it is still there.
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.draft().background, Background::Terminal(campbell));
+        editor.key(&press(Code::Left));
+        assert_eq!(editor.draft().background, Background::Own((16, 20, 28)));
+        let file = editor.file_text("mine");
+        let opened = ThemeEditor::open(&file, 1, Some(campbell)).unwrap();
+        assert_eq!(opened.draft().background, Background::Own((16, 20, 28)));
+        assert_eq!(opened.own, Some((16, 20, 28)));
+        assert_eq!(opened.theme(), editor.theme());
+        // A theme the editor made whose background was changed in its file opens on that one,
+        // its roles still following their main colors, lit on it.
+        let made = ThemeEditor::new(3, Background::Dark, None);
+        let file = made.file_text("made");
+        let json: Value = serde_json::from_str(&file).unwrap();
+        let was = json["vars"]["background"].as_str().unwrap().to_owned();
+        let changed = file.replace(
+            &format!(r#""background": "{was}""#),
+            r##""background": "#203040""##,
+        );
+        let opened = ThemeEditor::open(&changed, 1, None).unwrap();
+        assert_eq!(
+            opened.draft().background,
+            Background::Own((0x20, 0x30, 0x40))
+        );
+        assert!(opened.draft().picks.iter().all(Option::is_none));
+        assert_eq!(opened.theme().background(), Color::Rgb(0x20, 0x30, 0x40));
     }
 
     #[test]

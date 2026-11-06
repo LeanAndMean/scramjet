@@ -76,6 +76,48 @@ fn theme_note(listed: &Listed) -> String {
     }
 }
 
+/// The theme in use opened in the theme editor, as the row after New theme… offers it.
+struct Editable {
+    row: String,
+    note: String,
+    /// Its name and file, which saving under its name replaces.
+    own: Option<(String, PathBuf)>,
+    editor: Box<ThemeEditor>,
+}
+
+/// `listed` in the theme editor: as it was saved when the editor made it, else as a new theme
+/// starting from its colors; `None` when it has no exact colors to start from.
+fn editable(listed: &Listed) -> Option<Editable> {
+    let name = &listed.name;
+    let terminal = background::terminal();
+    let text = (listed.file.as_ref()).and_then(|file| std::fs::read_to_string(file).ok());
+    if let Some(editor) = text.and_then(|text| ThemeEditor::open(&text, seed(), terminal)) {
+        let file = listed.file.clone()?;
+        let shown = shortened(&file.display().to_string());
+        return Some(Editable {
+            row: format!("Edit {name}…"),
+            note: format!(
+                "Open {name} in the theme editor as it was saved: its main colors and locks, \
+                 harmony, background, contrast and picked roles. Saved as {name} again, it \
+                 replaces {shown}."
+            ),
+            own: Some((name.clone(), file)),
+            editor: Box::new(editor),
+        });
+    }
+    let editor = ThemeEditor::from_theme(name, &listed.theme, seed(), terminal)?;
+    Some(Editable {
+        row: format!("New theme from {name}…"),
+        note: format!(
+            "Start the theme editor from {name}: its main colors read from its accent, \
+             borders, headings and code, each role keeping {name}'s color until a roll or a step \
+             changes what it follows. It is saved as a new theme; {name} stays as it is."
+        ),
+        own: None,
+        editor: Box::new(editor),
+    })
+}
+
 /// What a coding tool does, as `/settings` says under its row, in the instructions' words.
 fn tool_note(tool: &str) -> &'static str {
     match tool {
@@ -245,38 +287,21 @@ impl Interactive {
             };
             let listed = &self.themes.listed;
             let current = (listed.iter()).position(|known| known.name == self.settings.theme);
-            // The theme in use, when the editor made it.
-            let editable = current.and_then(|current| {
-                let file = listed[current].file.clone()?;
-                let text = std::fs::read_to_string(&file).ok()?;
-                let editor = ThemeEditor::open(&text, seed(), background::terminal())?;
-                Some((listed[current].name.clone(), file, Box::new(editor)))
-            });
-            let edit = (editable.as_ref()).map(|(name, file, _)| {
-                let file = shortened(&file.display().to_string());
-                (
-                    format!("Edit {name}…"),
-                    format!(
-                        "Open {name} in the theme editor as it was saved: its main colors and \
-                         locks, harmony, background, contrast and picked roles. Saved as {name} \
-                         again, it replaces {file}."
-                    ),
-                )
-            });
+            let editable = current.and_then(|current| editable(&listed[current]));
             let notes = (listed.iter().map(theme_note))
                 .chain([NEW_THEME_NOTE.to_owned()])
-                .chain(edit.iter().map(|(_, note)| note.clone()))
+                .chain(editable.iter().map(|editable| editable.note.clone()))
                 .collect();
             let picker = select::Picker::select(
                 "Theme",
                 select::VISIBLE,
-                listed.len() + 1 + usize::from(edit.is_some()),
+                listed.len() + 1 + usize::from(editable.is_some()),
                 at.or(current).unwrap_or(0),
                 current,
                 |index, width| match listed.get(index) {
                     Some(listed) => clip(&listed.name, width),
                     None if index == listed.len() => clip(NEW_THEME, width),
-                    None => clip(edit.as_ref().map_or("", |(row, _)| row), width),
+                    None => clip(editable.as_ref().map_or("", |e| e.row.as_str()), width),
                 },
             );
             let Some(index) = screen.pick(picker.noting(back_keys("use"), notes).held()) else {
@@ -284,8 +309,11 @@ impl Interactive {
             };
             at = Some(index);
             if index >= listed.len() {
-                let editing = editable.filter(|_| index > listed.len());
-                if let Some(name) = self.make_theme(editing) {
+                let made = match editable.filter(|_| index > listed.len()) {
+                    Some(editable) => self.make_theme(editable.own, editable.editor),
+                    None => self.make_theme(None, Box::new(self.new_theme_editor())),
+                };
+                if let Some(name) = made {
                     at = (self.themes.listed.iter()).position(|known| known.name == name);
                 }
                 continue;
@@ -299,22 +327,19 @@ impl Interactive {
         }
     }
 
-    /// The theme editor, on a new theme or on `editing`, a theme it made, with its name and
-    /// file; a theme saved from it is named, written to the `themes` directory of Scramjet's
-    /// agent directory, where Scramjet finds it too, or over the file of the theme edited when
-    /// saved under its name, and used. Escape on the name goes back to the editor as it was;
-    /// Escape in the editor goes back to the theme in use.
+    /// The theme editor `editor`, on a new theme or on `own`, the name and file of a theme it
+    /// made; a theme saved from it is named, written to the `themes` directory of Scramjet's
+    /// agent directory, where Scramjet finds it too, or over `own`'s file when saved under its
+    /// name, and used. Escape on the name goes back to the editor as it was; Escape in the
+    /// editor goes back to the theme in use.
     fn make_theme(
         &mut self,
-        editing: Option<(String, PathBuf, Box<ThemeEditor>)>,
+        own: Option<(String, PathBuf)>,
+        mut editor: Box<ThemeEditor>,
     ) -> Option<String> {
         let Some(directory) = agent_directory().map(|directory| directory.join("themes")) else {
             self.say("Error: a theme cannot be saved: HOME is not set");
             return None;
-        };
-        let (own, mut editor) = match editing {
-            Some((name, file, editor)) => (Some((name, file)), editor),
-            None => (None, Box::new(self.new_theme_editor())),
         };
         loop {
             let saved = self.screen.as_ref()?.edit_theme(editor);

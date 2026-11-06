@@ -100,6 +100,16 @@ pub(super) fn contrast(a: Rgb, b: Rgb) -> f64 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
+/// How far apart two colors look: their distance in OKLab, where about 0.02 is just noticeable.
+pub(super) fn distance(a: Rgb, b: Rgb) -> f64 {
+    let lab = |color: Oklch| {
+        let h = color.h.to_radians();
+        [color.l, color.c * h.cos(), color.c * h.sin()]
+    };
+    let (a, b) = (lab(Oklch::of(a)), lab(Oklch::of(b)));
+    (a.iter().zip(b).map(|(a, b)| (a - b).powi(2)).sum::<f64>()).sqrt()
+}
+
 /// The turn from hue `from` to hue `to`, the shorter way round: from -180 to 180 degrees.
 fn turn(from: f64, to: f64) -> f64 {
     let turn = (to - from).rem_euclid(360.0);
@@ -346,20 +356,23 @@ pub(super) struct Main {
 }
 
 /// What the user made of a role: lit as its kind is from another main color than its own, out
-/// of any meaning's hue range, or an exact color.
+/// of any meaning's hue range, or an exact color; or the color the theme the draft started
+/// from had, kept until the color it would follow changes (`Draft::release`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Pick {
     Follow(usize),
     Exact(Rgb),
+    Kept(Rgb),
 }
 
-/// The main background a theme is lit on: dark or light, tinted toward the first main color, or
-/// the terminal's own, which the theme leaves to the terminal.
+/// The main background a theme is lit on: dark or light, tinted toward the first main color,
+/// the terminal's own, which the theme leaves to the terminal, or an exact one of its own.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Background {
     Dark,
     Light,
     Terminal(Rgb),
+    Own(Rgb),
 }
 
 /// What the theme editor makes a theme from: its main colors in a harmony, its main
@@ -592,6 +605,71 @@ impl Draft {
         draft
     }
 
+    /// A draft whose main colors are `accents` (1 to 5) as they are on `background`: each its
+    /// hue and chroma, and its contrast's place in the accents' band, in the harmony of their
+    /// count that they fit best.
+    pub(super) fn of_accents(accents: &[Rgb], background: Background) -> Self {
+        let choices = harmonies(accents.len());
+        let mains = (accents.iter())
+            .map(|&rgb| {
+                let color = Oklch::of(rgb);
+                Main {
+                    hue: color.h,
+                    chroma: color.c,
+                    lift: 0.5,
+                }
+            })
+            .collect();
+        let mut draft = Self {
+            harmony: choices[0],
+            mains,
+            background,
+            depth: 0.5,
+            tint: 0.5,
+            contrast: 0,
+            picks: vec![None; TOKENS.len()],
+        };
+        let on = draft.build().background;
+        let (low, high) = Kind::Accent.band();
+        for (main, &rgb) in draft.mains.iter_mut().zip(accents) {
+            let place = (contrast(rgb, on).ln() - low.ln()) / (high.ln() - low.ln());
+            main.lift = place.clamp(0.0, 1.0);
+        }
+        let mut best = (f64::NEG_INFINITY, choices[0]);
+        for harmony in choices {
+            draft.harmony = harmony;
+            let score = draft.fit(&[]).score;
+            if score > best.0 {
+                best = (score, harmony);
+            }
+        }
+        draft.harmony = best.1;
+        draft
+    }
+
+    /// Lets each role kept from the theme the draft started from follow its own color again
+    /// once that color is not what it was in `before`; how many did.
+    pub(super) fn release(&mut self, before: &Draft) -> usize {
+        let unkept = |draft: &Draft| {
+            let mut draft = draft.clone();
+            for pick in &mut draft.picks {
+                if matches!(pick, Some(Pick::Kept(_))) {
+                    *pick = None;
+                }
+            }
+            draft.build().colors
+        };
+        let (was, now) = (unkept(before), unkept(self));
+        let mut released = 0;
+        for (at, pick) in self.picks.iter_mut().enumerate() {
+            if matches!(pick, Some(Pick::Kept(_))) && was[at] != now[at] {
+                *pick = None;
+                released += 1;
+            }
+        }
+        released
+    }
+
     /// The main colors' hues, each with its chroma as its weight, so that grays barely count.
     fn hues(&self) -> Vec<(f64, f64)> {
         (self.mains.iter())
@@ -684,6 +762,7 @@ impl Draft {
             Background::Light => ((0.955, 0.995), 0.02),
             Background::Dark => ((0.14, 0.23), 0.035),
             Background::Terminal(background) => return self.built(background, true),
+            Background::Own(background) => return self.built(background, false),
         };
         let background = Oklch {
             l: low + (high - low) * self.depth,
@@ -715,7 +794,7 @@ impl Draft {
         match self.picks[token as usize] {
             None => self.lit(kind, source, place, background),
             Some(Pick::Follow(index)) => self.lit(kind, Source::Main(index), place, background),
-            Some(Pick::Exact(rgb)) => rgb,
+            Some(Pick::Exact(rgb) | Pick::Kept(rgb)) => rgb,
         }
     }
 
@@ -1005,12 +1084,15 @@ mod tests {
             (253, 246, 227),
             (255, 255, 255),
         ];
+        // And a theme's own: scramjet-dark's panels' and a parchment.
+        let own = [(16, 20, 28), (240, 228, 200)];
         let backgrounds = [Background::Dark, Background::Light]
             .into_iter()
-            .chain(terminals.map(Background::Terminal));
+            .chain(terminals.map(Background::Terminal))
+            .chain(own.map(Background::Own));
         for background in backgrounds {
             let rolls = match background {
-                Background::Terminal(_) => 3,
+                Background::Terminal(_) | Background::Own(_) => 3,
                 _ => 8,
             };
             for harmony in 0..HARMONIES.len() {
@@ -1024,6 +1106,9 @@ mod tests {
                             Background::Light => assert!(!is_dark(built.background)),
                             Background::Terminal(rgb) => {
                                 assert_eq!((built.background, built.own_background()), (rgb, None))
+                            }
+                            Background::Own(rgb) => {
+                                assert_eq!(built.own_background(), Some(rgb))
                             }
                         }
                         for (token, ratio, (low, high)) in contrasts(&built) {
