@@ -45,7 +45,7 @@ use args::{Options, Start, USAGE};
 use rustix::termios::{self, QueueSelector};
 use scramjet_rs::agent::{
     self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
-    Next, Providers, Session, SessionChoice, SkillOptions,
+    Next, Providers, Sandbox, Session, SessionChoice, SkillOptions,
 };
 use settings::Settings;
 use std::{
@@ -322,7 +322,15 @@ fn start(
         prompt: options.prompt,
         mcp_servers: settings.mcp_servers.clone(),
     };
+    let sandbox = (options.sandbox.unwrap_or(settings.sandbox)).map(|mode| Sandbox {
+        mode,
+        network: settings.sandbox_network,
+    });
+    if sandbox.is_some() {
+        Sandbox::check()?;
+    }
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
+    agent.set_sandbox(sandbox);
     let (scoped, scope_warnings) = match patterns.is_empty() {
         true => Default::default(),
         false => scope::resolve(patterns, &agent.model_options()),

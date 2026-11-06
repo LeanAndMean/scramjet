@@ -1,5 +1,5 @@
 //! The two lines under the prompt, as Scramjet's footer: the project's directory with its Git
-//! branch and the session's name, then the session's tokens with the model's output rate, the
+//! branch, the session's name and the sandbox's mode, then the session's tokens with the model's output rate, the
 //! cost, how full the context is, and the model with its provider and effort.
 
 use super::settings::scramjet_level;
@@ -33,6 +33,8 @@ pub(super) struct Shown {
     pub(super) provider: Option<String>,
     /// The effort level, for a model that reasons.
     pub(super) effort: Option<String>,
+    /// The sandbox's mode, while the agent's tools run in one.
+    pub(super) sandbox: Option<&'static str>,
 }
 
 impl Shown {
@@ -48,6 +50,7 @@ impl Shown {
             effort: (agent.effort())
                 .filter(|_| agent.reasons())
                 .map(str::to_owned),
+            sandbox: agent.sandbox().map(|sandbox| sandbox.mode.name()),
         }
     }
 }
@@ -134,6 +137,9 @@ impl Footer {
         }
         if let Some(name) = &self.shown.name {
             place += &format!(" • {name}");
+        }
+        if let Some(mode) = self.shown.sandbox {
+            place += &format!(" • sandbox {mode}");
         }
         let place = clip(&visible(&one_line(&place)), room);
         [format!("{FOOTER}{place}{RESET}"), self.stats(room)]
@@ -317,6 +323,7 @@ mod tests {
             model: "claude-opus-5-5".into(),
             provider: None,
             effort: Some("high".into()),
+            sandbox: None,
         }
     }
 
@@ -324,6 +331,15 @@ mod tests {
     fn the_lines_say_where_what_was_spent_and_the_model_as_scramjets() {
         let [place, stats] = footer(opus()).lines(67).map(|line| plain(&line));
         assert_eq!(place, "~/repos/project (main) • Refactor");
+        let sandboxed = Shown {
+            sandbox: Some("read-only"),
+            ..opus()
+        };
+        let [place, _] = footer(sandboxed).lines(67).map(|line| plain(&line));
+        assert_eq!(
+            place,
+            "~/repos/project (main) • Refactor • sandbox read-only"
+        );
         assert_eq!(
             stats,
             "↑12k ↓3.4k R104k 53k/1.0M (5.3%, auto)      claude-opus-5-5 • high"

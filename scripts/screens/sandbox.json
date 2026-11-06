@@ -1,0 +1,72 @@
+{
+  "size": "100x48",
+  "settings": {
+    "sandbox": "workspace-write"
+  },
+  "files": {
+    "README.md": "Project\n"
+  },
+  "prompt": "Clean up",
+  "replies": [
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo notes > notes.txt && cat notes.txt; rm -rf .git; git log --oneline | wc -l; touch ~/.scramjet-screens-probe; cmd.exe /c echo windows; echo private > /tmp/x && cat /tmp/x"
+        }
+      }
+    ],
+    [
+      {
+        "call": "write",
+        "arguments": {
+          "path": "../elsewhere.txt",
+          "content": "x\n"
+        }
+      }
+    ],
+    [
+      {
+        "text": "The sandbox kept the history and the home directory."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "kept the history"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "turn"
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "expanded"
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "type": "/status\r"
+    },
+    {
+      "until": "Sandbox:"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "status"
+    },
+    {
+      "type": "\u0004"
+    }
+  ]
+}

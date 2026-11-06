@@ -1,6 +1,6 @@
 //! The command line: its options and the usage text.
 use super::settings::{LEVELS, card_level};
-use scramjet_rs::agent::{HARNESS_TOOLS, SystemPrompt};
+use scramjet_rs::agent::{HARNESS_TOOLS, SandboxMode, SystemPrompt};
 use std::{ffi::OsString, path::PathBuf};
 
 pub(super) const USAGE: &str =
@@ -8,7 +8,7 @@ pub(super) const USAGE: &str =
 [--thinking LEVEL] [--max-output-tokens N] [--retries N]
 [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--system-prompt TEXT]
 [--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
-[--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask] [-p]
+[--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask] [-s MODE] [-p]
 [@FILE...] [MESSAGE...]
        scramjet-rs --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet-rs --version
@@ -83,7 +83,16 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
                          no coding tools, unless --tools names some; scramjet-rs's own stay
   --ask                  ask before each bash command and each write or edit outside the
                          project (answer `a` to stop asking until exit); by default tool
-                         calls run without asking, as in Scramjet. Bash is not sandboxed.
+                         calls run without asking, as in Scramjet. Bash is not sandboxed
+                         unless --sandbox says so.
+  -s, --sandbox MODE     confine the agent's tools, as Codex's modes do (default: the
+                         settings' sandbox, else danger-full-access): read-only runs bash with
+                         every file read-only, a private /tmp, its own processes and the
+                         credential stores hidden, and refuses write and edit;
+                         workspace-write lets both change the project but its .git,
+                         .scramjet and .agents. Commands reach the network unless the
+                         setting sandboxNetwork is false. It needs bubblewrap (bwrap) and
+                         refuses to start without it. `!` commands you type stay outside
   -p, --print            run the messages and exit; a message `-` is read from stdin
   @FILE                  send FILE with the first message (or alone), as Scramjet does: a
                          text file's contents, or a PNG, JPEG, GIF or WebP image, scaled down
@@ -224,6 +233,8 @@ pub(super) struct Options {
     /// `--tools`, `--no-tools` or `--no-builtin-tools`: the only tools of the run.
     pub(super) only_tools: Option<Vec<String>>,
     pub(super) ask: bool,
+    /// `--sandbox`: `Some(None)` for `danger-full-access`.
+    pub(super) sandbox: Option<Option<SandboxMode>>,
     pub(super) retries: u32,
     /// `-p`: run the messages and exit.
     pub(super) print: bool,
@@ -256,6 +267,7 @@ impl Options {
             no_themes: false,
             only_tools: None,
             ask: false,
+            sandbox: None,
             retries: 3,
             print: false,
             files: Vec::new(),
@@ -349,6 +361,13 @@ impl Options {
                 Some("--list-credential-stores") => options.list_credential_stores = true,
                 Some("-v" | "--version") => options.version = true,
                 Some("--ask") => options.ask = true,
+                Some("-s" | "--sandbox") => {
+                    let mode = value()?;
+                    options.sandbox = Some(SandboxMode::parse(&mode).ok_or(format!(
+                        "invalid --sandbox {mode:?}: valid modes are read-only, \
+workspace-write and danger-full-access"
+                    ))?)
+                }
                 Some("-p" | "--print") => options.print = true,
                 Some("-h" | "--help") => return Ok(None),
                 Some(file) if file.starts_with('@') => options.files.push(file[1..].to_owned()),
@@ -408,6 +427,27 @@ mod tests {
     fn only_tools(arguments: &[&str]) -> Option<Vec<String>> {
         let arguments = arguments.iter().map(OsString::from);
         Options::parse(arguments).unwrap().unwrap().only_tools
+    }
+
+    #[test]
+    fn sandbox_takes_codexs_modes() {
+        let sandbox = |arguments: &[&str]| {
+            let arguments = arguments.iter().map(OsString::from);
+            Options::parse(arguments).map(|options| options.unwrap().sandbox)
+        };
+        assert_eq!(sandbox(&[]), Ok(None));
+        assert_eq!(
+            sandbox(&["-s", "read-only"]),
+            Ok(Some(Some(SandboxMode::ReadOnly)))
+        );
+        let write = Ok(Some(Some(SandboxMode::WorkspaceWrite)));
+        assert_eq!(sandbox(&["--sandbox", "workspace-write"]), write);
+        assert_eq!(sandbox(&["-s", "danger-full-access"]), Ok(Some(None)));
+        let refused = sandbox(&["-s", "full"]).unwrap_err();
+        assert!(
+            refused.starts_with("invalid --sandbox \"full\""),
+            "{refused}"
+        );
     }
 
     #[test]

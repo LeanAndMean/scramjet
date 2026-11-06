@@ -8,8 +8,8 @@ use super::packages::{self, Source};
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet_rs::agent::{
-    CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, Set, search_program, sets_in,
-    shortened, state_directory, write_replacing,
+    CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, SandboxMode, Set, search_program,
+    sets_in, shortened, state_directory, write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -300,6 +300,10 @@ pub(super) struct Settings {
     /// `tools`: the agent's coding tools, Scramjet's by default.
     pub(super) tools: Vec<String>,
     pub(super) hide_credentials: HideCredentials,
+    /// `sandbox`: how the agent's tools are confined; `None`: not at all.
+    pub(super) sandbox: Option<SandboxMode>,
+    /// `sandboxNetwork`: whether commands in the sandbox reach the network.
+    pub(super) sandbox_network: bool,
     pub(super) steering_mode: Delivery,
     pub(super) follow_up_mode: Delivery,
     /// The directories of the installed command sets: `commandSets`' (a relative one is
@@ -391,6 +395,8 @@ impl Settings {
             recall: None,
             tools: DEFAULT_TOOLS.map(str::to_owned).to_vec(),
             hide_credentials: HideCredentials::Unattended,
+            sandbox: None,
+            sandbox_network: true,
             steering_mode: Delivery::All,
             follow_up_mode: Delivery::OneAtATime,
             command_sets: Vec::new(),
@@ -520,6 +526,19 @@ impl Settings {
             Some(Some("always")) => self.hide_credentials = HideCredentials::Always,
             Some(Some("never")) => self.hide_credentials = HideCredentials::Never,
             Some(_) => wrong("hideCredentials", r#""unattended", "always" or "never""#),
+        }
+        match object.get("sandbox").map(|value| value.as_str()) {
+            None => {}
+            Some(Some(name)) if let Some(mode) = SandboxMode::parse(name) => self.sandbox = mode,
+            Some(_) => wrong(
+                "sandbox",
+                r#""read-only", "workspace-write" or "danger-full-access""#,
+            ),
+        }
+        match object.get("sandboxNetwork") {
+            None => {}
+            Some(Value::Bool(network)) => self.sandbox_network = *network,
+            Some(_) => wrong("sandboxNetwork", "true or false"),
         }
         for (key, mode) in [
             ("steeringMode", &mut self.steering_mode),
@@ -1329,6 +1348,26 @@ mod tests {
         assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
         assert!(settings.skills.is_empty());
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+    }
+
+    #[test]
+    fn the_sandbox_settings_take_codexs_modes_and_a_network_switch() {
+        let scratch = Scratch::new("sandbox");
+        let default = settings_with(&scratch, "{}");
+        assert_eq!((default.sandbox, default.sandbox_network), (None, true));
+        for (value, mode) in [
+            ("read-only", Some(SandboxMode::ReadOnly)),
+            ("workspace-write", Some(SandboxMode::WorkspaceWrite)),
+            ("danger-full-access", None),
+        ] {
+            let text = format!(r#"{{"sandbox": "{value}", "sandboxNetwork": false}}"#);
+            let settings = settings_with(&scratch, &text);
+            assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+            assert_eq!((settings.sandbox, settings.sandbox_network), (mode, false));
+        }
+        let wrong = settings_with(&scratch, r#"{"sandbox": true, "sandboxNetwork": "no"}"#);
+        assert_eq!((wrong.sandbox, wrong.sandbox_network), (None, true));
+        assert_eq!(wrong.warnings.len(), 2, "{:?}", wrong.warnings);
     }
 
     #[test]

@@ -421,6 +421,13 @@ fn session_info(agent: &Agent, ui: &Terminal) -> String {
     };
     info += &row("File:", file);
     info += &row("ID:", agent.session_id());
+    if let Some(sandbox) = agent.sandbox() {
+        let network = match sandbox.network {
+            true => "network on",
+            false => "no network",
+        };
+        info += &row("Sandbox:", format!("{}, {network}", sandbox.mode.name()));
+    }
     info += "\n";
     info += &heading("Messages");
     info += &row("User:", stats.user.to_string());

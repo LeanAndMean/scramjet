@@ -1,6 +1,8 @@
 //! The read-only sandbox that subagents' commands run in: bubblewrap with the whole
 //! filesystem mounted read-only, a private `/tmp` discarded after each command, no network, and
-//! the user's credential stores hidden; and the main agent's commands with only those hidden.
+//! the user's credential stores hidden; the main agent's commands in it too under `--sandbox`,
+//! with the project writable in `workspace-write` and the network as `sandboxNetwork` says; and
+//! otherwise the main agent's commands with only the credential stores hidden.
 
 use std::{
     os::unix::fs::MetadataExt,
@@ -48,6 +50,114 @@ const CREDENTIAL_WORDS: [&str; 6] = [
     "CREDENTIALS",
     "KEY",
 ];
+
+/// What stays read-only inside a writable project, as in Codex's `workspace-write`
+/// (`default_read_only_subpaths_for_writable_root`): Git's history and hooks, and the agents'
+/// own settings and commands, through which a command would act beyond the sandbox's next turn.
+const PROTECTED: [&str; 3] = [".git", ".scramjet", ".agents"];
+
+/// How the main agent's tools are confined (`--sandbox`, settings `sandbox` and
+/// `sandboxNetwork`), with Codex's names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SandboxMode {
+    /// Every file read-only to bash, and `write` and `edit` refused.
+    ReadOnly,
+    /// The same, with the project writable but `PROTECTED`.
+    WorkspaceWrite,
+}
+
+impl SandboxMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::WorkspaceWrite => "workspace-write",
+        }
+    }
+
+    /// A mode by its name; `Some(None)` for none (Codex's `danger-full-access`, or `off`).
+    pub fn parse(name: &str) -> Option<Option<Self>> {
+        match name {
+            "read-only" => Some(Some(Self::ReadOnly)),
+            "workspace-write" => Some(Some(Self::WorkspaceWrite)),
+            "danger-full-access" | "off" => Some(None),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sandbox {
+    pub mode: SandboxMode,
+    pub network: bool,
+}
+
+impl Sandbox {
+    /// Whether bubblewrap can confine commands here; otherwise why not.
+    pub fn check() -> Result<(), String> {
+        available().map_err(|error| format!("the sandbox cannot start: {error}"))
+    }
+
+    /// Refuses a `write` or `edit` of `path` that the sandbox does not allow: any in
+    /// `read-only`; outside `root`, or in what stays protected in it, in `workspace-write`. A
+    /// path is taken by its real place, through the symlinks of the part that exists.
+    pub(super) fn check_write(self, root: &Path, path: &Path) -> Result<(), String> {
+        let refused = |why: &str| {
+            Err(format!(
+                "{}: {why} (--sandbox {})",
+                path.display(),
+                self.mode.name()
+            ))
+        };
+        if self.mode == SandboxMode::ReadOnly {
+            return refused("the sandbox is read-only");
+        }
+        let real = real_path(path);
+        let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+        if !real.starts_with(&root) {
+            return refused("outside the project, which the sandbox leaves read-only");
+        }
+        match protected(&root).iter().any(|kept| real.starts_with(kept)) {
+            true => refused("kept read-only in the sandbox"),
+            false => Ok(()),
+        }
+    }
+}
+
+/// `path` with its longest existing part resolved, the rest as given.
+fn real_path(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut existing = path;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            return rest.iter().rev().fold(real, |path, name| path.join(name));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                existing = parent;
+            }
+            _ => return path.to_owned(),
+        }
+    }
+}
+
+/// What exists of `PROTECTED` in the real directory `root`, and the Git directory a `.git` file
+/// points to (a worktree's or a submodule's).
+fn protected(root: &Path) -> Vec<PathBuf> {
+    let mut kept: Vec<PathBuf> = PROTECTED
+        .iter()
+        .map(|name| root.join(name))
+        .filter(|path| path.exists())
+        .collect();
+    let pointer = std::fs::read_to_string(root.join(".git")).ok();
+    if let Some(gitdir) = pointer
+        .as_deref()
+        .and_then(|text| text.trim().strip_prefix("gitdir:"))
+    {
+        kept.extend(std::fs::canonicalize(root.join(gitdir.trim())).ok());
+    }
+    kept
+}
 
 /// WSL2 mounts the root filesystem again here (`distro`), next to WSLg's X11 and audio sockets.
 const WSLG: &str = "/mnt/wslg";
@@ -189,7 +299,14 @@ fn identity(path: &Path) -> Option<(u64, u64)> {
 
 /// `bash -c command` in `root`, confined.
 pub(super) fn command(root: &Path, command: &str, hidden: &Hidden) -> Command {
-    let mut process = confined(root, None, hidden);
+    let mut process = confined(root, None, hidden, None);
+    process.args(["bash", "-c"]).arg(command);
+    process
+}
+
+/// `bash -c command` in `root`, confined as `sandbox` says.
+pub(super) fn sandboxed(root: &Path, command: &str, hidden: &Hidden, sandbox: Sandbox) -> Command {
+    let mut process = confined(root, None, hidden, Some(sandbox));
     process.args(["bash", "-c"]).arg(command);
     process
 }
@@ -216,7 +333,7 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Command {
 /// `program` (its arguments to follow) confined as `command` is, with `path`, which it reads,
 /// mounted again too.
 pub(super) fn program(root: &Path, path: &Path, program: &Path, hidden: &Hidden) -> Command {
-    let mut process = confined(root, Some(path), hidden);
+    let mut process = confined(root, Some(path), hidden, None);
     process.arg(program);
     process
 }
@@ -227,8 +344,17 @@ pub(super) fn program(root: &Path, path: &Path, program: &Path, hidden: &Hidden)
 /// WSLg) through which a command could act outside, and WSL's second mount of `/`. `root` and
 /// `also` are mounted again by their real paths (bubblewrap cannot mount over an absolute
 /// symlink) in case they are under `/tmp` or `/run`, before what is hidden, so that it stays
-/// hidden in them.
-fn confined(root: &Path, also: Option<&Path>, hidden: &Hidden) -> Command {
+/// hidden in them. A `sandbox` makes `root` writable in `workspace-write`, but what stays
+/// protected in it, and shares the network as it says, with the name servers that
+/// `/etc/resolv.conf` leads to under `/run` or `/tmp` (systemd-resolved's).
+fn confined(
+    root: &Path,
+    also: Option<&Path>,
+    hidden: &Hidden,
+    sandbox: Option<Sandbox>,
+) -> Command {
+    let writable = sandbox.is_some_and(|sandbox| sandbox.mode == SandboxMode::WorkspaceWrite);
+    let network = sandbox.is_some_and(|sandbox| sandbox.network);
     let mut process = Command::new(PROGRAM);
     process.args([
         "--unshare-all",
@@ -246,7 +372,19 @@ fn confined(root: &Path, also: Option<&Path>, hidden: &Hidden) -> Command {
         "--tmpfs",
         "/run",
     ]);
-    for path in std::iter::once(root).chain(also) {
+    if network {
+        process.arg("--share-net");
+        let resolver = std::fs::canonicalize("/etc/resolv.conf").ok();
+        if let Some(real) =
+            resolver.filter(|real| real.starts_with("/run") || real.starts_with("/tmp"))
+        {
+            process.arg("--ro-bind").arg(&real).arg(&real);
+        }
+    }
+    let real_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    process.arg(if writable { "--bind" } else { "--ro-bind" });
+    process.arg(&real_root).arg(&real_root);
+    if let Some(path) = also {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         process.arg("--ro-bind").arg(&real).arg(&real);
     }
@@ -254,6 +392,11 @@ fn confined(root: &Path, also: Option<&Path>, hidden: &Hidden) -> Command {
         process.args(["--tmpfs", WSLG]);
     }
     hide(&mut process, hidden);
+    if writable {
+        for kept in protected(&real_root) {
+            process.arg("--ro-bind").arg(&kept).arg(&kept);
+        }
+    }
     // Servers that commands with the stores hidden started run what a client asks writable and
     // on the network.
     if let Some(own) = &hidden.tmux {
@@ -389,6 +532,94 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         assert!(!root.join("new.txt").exists());
         let home = std::env::home_dir().unwrap();
         assert!(!home.join(".scramjet-sandbox-probe").exists());
+    }
+
+    #[test]
+    fn the_main_agents_sandbox_writes_only_the_project_but_its_history() {
+        use super::{Sandbox, SandboxMode};
+        let home = std::env::temp_dir().join(format!("scramjet-workspace-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        for directory in [".git/hooks", ".scramjet", "src"] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(home.join(".netrc"), "SECRET-netrc\n").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let windows = std::path::Path::new("/mnt/c/Users/Public");
+        let probe = windows.join(format!("scramjet-sandbox-{}", std::process::id()));
+        let script = format!(
+            "echo made > src/made.txt && echo wrote; rm -rf .git && echo removed; \
+rm .git/HEAD; touch .git/hooks/pre-commit .scramjet/autonomy.yaml ../outside {probe}; \
+cat ../.netrc; echo private > /tmp/x && cat /tmp/x; \
+(exec 3<>/dev/tcp/127.0.0.1/{port}) 2>/dev/null && echo connected || echo no network; \
+ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
+            probe = probe.display()
+        );
+        let hidden = super::Hidden::under(&home, Vec::new());
+        for (mode, network, wrote, net) in [
+            (SandboxMode::WorkspaceWrite, true, "wrote\n", "connected"),
+            (SandboxMode::ReadOnly, false, "", "no network"),
+        ] {
+            let sandbox = Sandbox { mode, network };
+            let output = super::sandboxed(&root, &script, &hidden, sandbox)
+                .output()
+                .unwrap();
+            let _ = std::fs::remove_file(&probe);
+            let errors = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("{wrote}private\n{net}\n0\n"),
+                "{mode:?}: {errors}"
+            );
+            assert!(!errors.contains("SECRET"), "{errors}");
+            assert_eq!(
+                std::fs::read_to_string(root.join(".git/HEAD")).unwrap(),
+                "ref: refs/heads/main\n"
+            );
+            for left in [
+                ".git/hooks/pre-commit",
+                ".scramjet/autonomy.yaml",
+                "../outside",
+            ] {
+                assert!(!root.join(left).exists(), "{mode:?}: {left}");
+            }
+        }
+        assert!(root.join("src/made.txt").exists());
+    }
+
+    #[test]
+    fn the_main_agents_sandbox_refuses_writes_it_does_not_allow() {
+        use super::{Sandbox, SandboxMode};
+        let home = std::env::temp_dir().join(format!("scramjet-writes-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(home.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(home.join("elsewhere"), root.join("out")).unwrap();
+        let write = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: true,
+        };
+        let read = Sandbox {
+            mode: SandboxMode::ReadOnly,
+            ..write
+        };
+        assert!(write.check_write(&root, &root.join("src/new/a.rs")).is_ok());
+        let refused = |sandbox: Sandbox, path: &str| {
+            sandbox
+                .check_write(&root, &root.join(path))
+                .expect_err(path)
+        };
+        assert!(refused(read, "a.rs").ends_with("the sandbox is read-only (--sandbox read-only)"));
+        for path in ["../a.rs", "out/a.rs", "out/new/a.rs"] {
+            assert!(
+                refused(write, path).contains("outside the project"),
+                "{path}"
+            );
+        }
+        assert!(refused(write, ".git/config").contains("kept read-only"));
     }
 
     #[test]

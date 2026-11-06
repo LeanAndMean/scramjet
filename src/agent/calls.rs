@@ -4,6 +4,7 @@
 use super::batch::{self, Batch, Waited};
 use super::commands::Sets;
 use super::providers::{ModelInfo, Providers};
+use super::sandbox::Sandbox;
 use super::skills::Skills;
 use super::tools::{self, Approval, Call, Output};
 use super::{
@@ -89,6 +90,7 @@ impl Agent {
             approvals: self.approvals.clone(),
             rates: self.rates.clone(),
             hide_credentials: self.hide_credentials,
+            sandbox: self.sandbox,
             mcp: self.mcp.clone(),
         }
     }
@@ -420,6 +422,7 @@ struct Kit {
     approvals: Option<PathBuf>,
     rates: Option<PathBuf>,
     hide_credentials: bool,
+    sandbox: Option<Sandbox>,
     mcp: Option<Arc<mcp::Servers>>,
 }
 
@@ -445,6 +448,7 @@ impl Kit {
                 rates: self.rates.as_deref(),
             },
             hide_credentials: self.hide_credentials,
+            sandbox: self.sandbox,
             mcp: self.mcp.as_deref(),
         }
     }
@@ -454,6 +458,7 @@ impl Kit {
 pub(super) struct Tools<'a> {
     parent: subagent::Parent<'a>,
     hide_credentials: bool,
+    sandbox: Option<Sandbox>,
     mcp: Option<&'a mcp::Servers>,
 }
 
@@ -493,13 +498,17 @@ impl Tools<'_> {
             _ => {
                 ui.tool_running(std::time::Instant::now());
                 let named = self.parent.providers.credential_files();
-                let hidden = (self.hide_credentials).then(|| sandbox::Hidden::current(named));
+                let hide = self.hide_credentials || self.sandbox.is_some();
+                let hidden = hide.then(|| sandbox::Hidden::current(named));
                 let root = self.parent.root;
-                let output = call
-                    .run(root, hidden.as_ref(), cancel, &mut |output| {
-                        ui.tool_output(output)
-                    })
-                    .unwrap_or_else(failure);
+                let progress = &mut |output: &str| ui.tool_output(output);
+                let output = match (self.sandbox, &hidden) {
+                    (Some(sandbox), Some(hidden)) => {
+                        call.run_in_sandbox(root, sandbox, hidden, cancel, progress)
+                    }
+                    _ => call.run(root, hidden.as_ref(), cancel, progress),
+                };
+                let output = output.unwrap_or_else(failure);
                 (output, Usage::default())
             }
         };
@@ -570,8 +579,8 @@ mod tests {
     use super::*;
     use crate::agent::tests::*;
     use crate::agent::{
-        ChildItem, ChildState, Delegation, PRODUCER, Providers, Session, approvals, instructions,
-        show_items,
+        ChildItem, ChildState, Delegation, PRODUCER, Providers, SandboxMode, Session, approvals,
+        instructions, show_items,
     };
     use crate::provider_fixture as fixture;
     use std::{sync::Arc, time::Duration};
@@ -836,6 +845,68 @@ here\n\nkept.txt says original";
             last_output(&bodies[4]).contains(&refused),
             "{}",
             last_output(&bodies[4])
+        );
+    }
+
+    #[test]
+    fn the_sandbox_confines_the_agents_bash_writes_and_edits() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let (endpoint, server) = serve(vec![
+            tool_call(
+                "call_1",
+                "bash",
+                json!({"command":"echo bash > made.txt; touch ~/.scramjet-sandbox-probe"}),
+            ),
+            tool_call(
+                "call_2",
+                "write",
+                json!({"path":"written.txt","content":"w\n"}),
+            ),
+            tool_call(
+                "call_3",
+                "write",
+                json!({"path":"../outside","content":"w\n"}),
+            ),
+            tool_call(
+                "call_4",
+                "edit",
+                json!({"path":".git/config","edits":[{"oldText":"a","newText":"b"}]}),
+            ),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "sandboxed");
+        let root = agent.root().to_owned();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join(".git/config"), "a\n").unwrap();
+        agent.set_sandbox(Some(Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+        }));
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("write", &mut Recorder::default(), &cancel)
+            .unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 5);
+        let bash = last_output(&bodies[1]);
+        assert!(bash.contains("Read-only file system"), "{bash}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("made.txt")).unwrap(),
+            "bash\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("written.txt")).unwrap(),
+            "w\n"
+        );
+        let home = std::env::home_dir().unwrap();
+        assert!(!home.join(".scramjet-sandbox-probe").exists());
+        let outside = last_output(&bodies[3]);
+        assert!(outside.contains("outside the project"), "{outside}");
+        let kept = last_output(&bodies[4]);
+        assert!(kept.contains("kept read-only in the sandbox"), "{kept}");
+        assert_eq!(
+            std::fs::read_to_string(root.join(".git/config")).unwrap(),
+            "a\n"
         );
     }
 

@@ -2,7 +2,7 @@ use super::{
     CompactRead, ToolDetail,
     image::{self, Image},
     instructions,
-    sandbox::{self, Hidden},
+    sandbox::{self, Hidden, Sandbox},
 };
 use serde_json::{Value, json};
 use std::{
@@ -302,6 +302,34 @@ impl<'a> Call<'a> {
             failed: false,
             image: None,
         })
+    }
+
+    /// As `run` in the main agent's `sandbox`, with the credential stores `hidden`: bash runs
+    /// confined as it says, and `write` and `edit` only where it lets them.
+    pub fn run_in_sandbox(
+        &self,
+        root: &Path,
+        sandbox: Sandbox,
+        hidden: &Hidden,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(&str),
+    ) -> Result<Output, String> {
+        match self.name {
+            "write" | "edit" => {
+                let path = resolve(root, self.arguments["path"].as_str().unwrap_or(""));
+                sandbox.check_write(root, &path)?;
+                self.run(root, Some(hidden), cancel, progress)
+            }
+            "bash" => {
+                let process = sandbox::sandboxed(root, self.str("command")?, hidden, sandbox);
+                let timeout = Some(timeout(self));
+                Ok(
+                    run_process(process, sandbox::PROGRAM, timeout, cancel, progress)?
+                        .tool_output(),
+                )
+            }
+            _ => self.run(root, Some(hidden), cancel, progress),
+        }
     }
 
     /// As `run` for a subagent's tools, none of which changes a file or shows the credential

@@ -58,6 +58,7 @@ pub use problem::{Problem, ProblemFile};
 pub use providers::{KeyFrom, Providers};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
+pub use sandbox::{Sandbox, SandboxMode};
 pub use session::{
     Branch, Found, Label, Removal, Session, SessionInfo, directory as session_directory,
     read_branch, state_directory,
@@ -514,6 +515,8 @@ pub struct Agent {
     model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
+    /// How the coding tools are confined; `None`: as `hide_credentials` says.
+    sandbox: Option<Sandbox>,
     /// Whether a completed command's recommended next step runs without the user choosing it.
     autopilot: bool,
     /// The MCP servers, while the model is offered their tools.
@@ -669,6 +672,7 @@ impl Agent {
             identities: HashMap::new(),
             model_scope: Vec::new(),
             hide_credentials: false,
+            sandbox: None,
             autopilot,
             mcp: None,
             calls: None,
@@ -1324,6 +1328,17 @@ impl Agent {
     /// always do. A `!` command, which the user runs, never does.
     pub fn set_hide_credentials(&mut self, hide: bool) {
         self.hide_credentials = hide;
+    }
+
+    /// Confines the coding tools as `sandbox` says, the credential stores hidden too, or, with
+    /// `None`, no more than `set_hide_credentials` says. Where bubblewrap cannot run, their
+    /// commands fail (`Sandbox::check` says so first). A `!` command stays outside.
+    pub fn set_sandbox(&mut self, sandbox: Option<Sandbox>) {
+        self.sandbox = sandbox;
+    }
+
+    pub fn sandbox(&self) -> Option<Sandbox> {
+        self.sandbox
     }
 
     /// The window automatic compaction checks; `None` skips the check.

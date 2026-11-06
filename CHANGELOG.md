@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.53.0 — A sandbox for the main agent
+
+### Added
+
+- `--sandbox read-only` or `--sandbox workspace-write` (`-s`), and a `sandbox` setting, with Codex's names: the agent's shell runs under Bubblewrap with every file read-only, a private `/tmp`, its own processes and the credential stores hidden, and its writes and edits are refused; `workspace-write` lets both change the project, but not its `.git`, `.scramjet` or `.agents`. Commands reach the network unless the setting `sandboxNetwork` is `false`. It refuses to start without Bubblewrap; the footer and `/status` say when it is on. `!` commands you type stay outside, and MCP servers do not run inside it yet.
+
 ## 0.52.0 — The theme editor's scores shown by color
 
 ### Changed
