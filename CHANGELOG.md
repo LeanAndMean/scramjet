@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.33.0 — The prompt's rules show the thinking level
+
+### Changed
+
+- The rules above and below the prompt take the theme's color for the thinking level (`thinkingOff` to `thinkingXhigh`, `max` taking `xhigh`'s), and its bash-mode color while the prompt starts with `!`, as Scramjet's editor border does; they were always muted. Shift+Tab changes them at once.
+
 ## 0.32.0 — Editing a theme again
 
 ### Added

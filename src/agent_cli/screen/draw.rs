@@ -8,6 +8,7 @@ use crate::agent_cli::editor::{Draft, Note, terminal_size};
 use crate::agent_cli::keymap::{self, Binding};
 use crate::agent_cli::record::{self, Event};
 use crate::agent_cli::selection::{self, Line};
+use crate::agent_cli::settings::scramjet_level;
 use crate::agent_cli::style::{self, Band};
 use crate::agent_cli::terminal::{
     COMMAND_LINES, Terminal, elapsed, retrying, spinner, waiting_for,
@@ -131,6 +132,23 @@ fn prompt_rows(
     rows.extend(selection::rows(&text[top..top + shown]));
     rows.extend(selection::rows(&draft.completion_rows(width)));
     Some((start + row - top, column))
+}
+
+/// The style of the prompt's rules, as Scramjet's editor border: the bash-mode color while
+/// `draft` is a command, else the color of the thinking level `effort`, off for a model that
+/// does not reason or a level Scramjet does not know.
+fn prompt_border(effort: Option<&str>, draft: &Draft) -> style::Style {
+    if draft.text().trim_start().starts_with('!') {
+        return style::PROMPT_COMMAND;
+    }
+    match effort.map(scramjet_level) {
+        Some("minimal") => style::PROMPT_MINIMAL,
+        Some("low") => style::PROMPT_LOW,
+        Some("medium") => style::PROMPT_MEDIUM,
+        Some("high") => style::PROMPT_HIGH,
+        Some("xhigh" | "max") => style::PROMPT_XHIGH,
+        _ => style::PROMPT_OFF,
+    }
 }
 
 /// The status line's rows, `width` columns wide: `activity`, then `note`, and at the right, as
@@ -367,13 +385,16 @@ impl App {
                 None
             }
             None => {
-                rows.push(Line::rule(&format!(
-                    "{}{}{}",
-                    style::MUTED,
+                let border = prompt_border(self.footer.shown.effort.as_deref(), &self.draft);
+                let rule = Line::rule(&format!(
+                    "{border}{}{}",
                     "─".repeat(width.saturating_sub(1)),
                     style::RESET
-                )));
-                prompt_rows(&self.draft, &mut rows, width, room)
+                ));
+                rows.push(rule.clone());
+                let cursor = prompt_rows(&self.draft, &mut rows, width, room);
+                rows.push(rule);
+                cursor
             }
         };
         // As Scramjet's editor and its lists end with a rule over the footer.
@@ -540,6 +561,35 @@ mod tests {
         let retry = Event::Retrying("busy".into(), 2, 3, Duration::from_secs(2));
         assert_eq!(said(retry, true), "Retrying (2/3) in 2s (Esc to cancel)");
         assert_eq!(Activity::asking().line(true), "Waiting for you");
+    }
+
+    #[test]
+    fn the_prompts_rules_take_the_thinking_levels_color_and_a_commands() {
+        use crate::agent_cli::editor::Editor;
+        use std::sync::{Arc, atomic::AtomicBool};
+        let editor = Editor::dialog(Arc::new(AtomicBool::new(false)));
+        let prompt = editor.draft("Fix the test".into());
+        let levels = [
+            (None, style::PROMPT_OFF),
+            (Some("none"), style::PROMPT_OFF),
+            (Some("off"), style::PROMPT_OFF),
+            (Some("minimal"), style::PROMPT_MINIMAL),
+            (Some("low"), style::PROMPT_LOW),
+            (Some("medium"), style::PROMPT_MEDIUM),
+            (Some("high"), style::PROMPT_HIGH),
+            (Some("xhigh"), style::PROMPT_XHIGH),
+            (Some("max"), style::PROMPT_XHIGH),
+            (Some("ultra"), style::PROMPT_OFF),
+        ];
+        for (effort, border) in levels {
+            assert_eq!(prompt_border(effort, &prompt), border, "{effort:?}");
+        }
+        for text in ["!cargo test", "  !!git status"] {
+            let command = editor.draft(text.into());
+            assert_eq!(prompt_border(Some("high"), &command), style::PROMPT_COMMAND);
+        }
+        let mentioned = editor.draft("Why did !cargo test fail?".into());
+        assert_eq!(prompt_border(Some("high"), &mentioned), style::PROMPT_HIGH);
     }
 
     #[test]

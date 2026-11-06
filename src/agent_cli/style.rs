@@ -101,6 +101,16 @@ styles! {
     BANNER_LIST: [] Dim;
     BANNER_BORDER: [] BorderMuted;
     BANNER_LABEL: [] Dim;
+    /// The rules above and below the prompt, as Scramjet's editor border: in the color of the
+    /// thinking level, `max` taking `xhigh`'s, and while the prompt is a command (`!`), in the
+    /// bash-mode color.
+    PROMPT_OFF: [] ThinkingOff;
+    PROMPT_MINIMAL: [] ThinkingMinimal;
+    PROMPT_LOW: [] ThinkingLow;
+    PROMPT_MEDIUM: [] ThinkingMedium;
+    PROMPT_HIGH: [] ThinkingHigh;
+    PROMPT_XHIGH: [] ThinkingXhigh;
+    PROMPT_COMMAND: [] BashMode;
     /// A compaction summary.
     SUMMARY: [] CustomMessageText;
     /// A section heading in an information block such as `/session`'s.
