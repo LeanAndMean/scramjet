@@ -78,7 +78,7 @@ impl Design {
                 let rail = format!("{}┊{} ", style::RAIL, style::RESET);
                 Some(Gutter::same(&rail, 2, None, marked))
             }
-            Self::Panels => Some(Gutter::same("  ", 2, None, marked)),
+            Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
             Self::Margin => Some(Gutter::new(
                 &label("think", style::THOUGHT_LABEL),
                 MARGIN_BLANK,
@@ -99,7 +99,11 @@ impl Design {
 
     /// What goes before each row of a reply; `None`: nothing.
     pub(super) fn reply(self, marked: bool) -> Option<Gutter> {
-        (self == Self::Margin).then(|| Gutter::same(MARGIN_BLANK, MARGIN, None, marked))
+        match self {
+            Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
+            Self::Margin => Some(Gutter::same(MARGIN_BLANK, MARGIN, None, marked)),
+            Self::Classic | Self::Rails => None,
+        }
     }
 
     /// What goes before each row of a call's result, or of its output while it runs.
@@ -297,7 +301,7 @@ impl Outcome {
             Self::Failed => style::LABEL_FAILED,
         }
     }
-    fn band(self) -> Band {
+    pub(super) fn band(self) -> Band {
         match self {
             Self::Running => Band::Running,
             Self::Done => Band::Done,

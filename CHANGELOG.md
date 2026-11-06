@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.42.0 — Padded panels, one left edge, wrapped tool output
+
+### Changed
+
+- In the panels look, each call's panel has a padded row above its header, under it and at its bottom, as Scramjet's tool boxes; reasoning and replies start one column in, at the same edge as calls' output and the prompt's `›`.
+- Long lines of a call's output wrap rather than being cut with `…`, in every look; a command's last lines are counted in screen rows, as in Scramjet. Blank lines at the start and end of a command's output are no longer shown.
+
 ## 0.41.0 — Clearer call headers, failures and footer
 
 ### Changed

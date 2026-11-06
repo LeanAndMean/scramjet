@@ -157,7 +157,9 @@ pub(super) fn ended(events: &[Event]) -> bool {
 pub(super) fn running(last: Option<&Event>, ui: &mut Terminal) {
     match last {
         Some(Event::ToolOutput(output)) => ui.running_output(output),
-        Some(Event::CommandStarted(..)) => ui.running_output(""),
+        Some(Event::CommandStarted(..) | Event::ToolCall(..) | Event::ToolRunning(_)) => {
+            ui.running_output("")
+        }
         Some(Event::Subagents(shown)) => ui.running_subagents(shown),
         _ => {}
     }

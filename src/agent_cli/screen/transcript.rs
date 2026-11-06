@@ -341,15 +341,20 @@ mod tests {
                 - every failing test with its output\n\n● bash {command}\n{output}"
             )
         );
-        // Cut previews are copied as shown.
+        // Previews wrap long lines too, and a copy joins them again.
         transcript.render(look(24, false), &hide);
         let lines = transcript.window(0, 100);
-        let failed = lines.iter().position(|line| line.shown.contains("agent::"));
-        let failed = failed.expect("the failed test's line");
-        assert_eq!(
-            selection::text(&lines[failed..=failed], 0, usize::MAX),
-            "test agent::tests::co…"
-        );
+        let first = lines
+            .iter()
+            .position(|line| plain(&line.shown) == "  test a ... ok");
+        let first = first.unwrap_or_else(|| panic!("{lines:?}"));
+        let end = lines
+            .iter()
+            .rposition(|line| !line.shown.is_empty())
+            .unwrap();
+        let rows = &lines[first..=end];
+        assert!(rows.len() > 2, "{rows:?}");
+        assert_eq!(selection::text(rows, 0, usize::MAX), output);
     }
 
     /// A turn that thinks, runs a command that fails after two seconds, and replies, then a
@@ -472,20 +477,26 @@ mod tests {
                 (" › fix the test", prompt),
                 ("", prompt),
                 ("", None),
-                ("  Looking at it.", None),
+                (" Looking at it.", None),
                 ("", None),
+                ("", failed),
                 (" bash  cargo test                2.0s ✗", failed),
+                ("", failed),
                 (" 1 failed", failed),
                 (" Command exited with code 101", failed),
+                ("", failed),
                 ("", None),
-                ("It fails.", None),
+                (" It fails.", None),
                 ("", None),
                 ("", prompt),
                 (" › again", prompt),
                 ("", prompt),
                 ("", None),
+                ("", running),
                 (" bash  make                           ○", running),
+                ("", running),
                 (" building", running),
+                ("", running),
                 ("", None),
             ]
         );

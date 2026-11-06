@@ -552,10 +552,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                 styled(preview(output, shown(Shown::First(lines)), width))
             }
         };
-        for (index, row) in rows.iter().enumerate() {
-            let row = gutter.row(index == 0, row);
-            self.err(&format!("{row}\n"));
-        }
+        self.padded(outcome, &gutter, &rows);
         // The other looks say it in the call's heading.
         let took = took.filter(|_| self.design == Design::Classic);
         if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
@@ -619,6 +616,34 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         }
     }
     /// Whether replies are styled and wrapped: on a terminal, or when captured.
+    /// In panels, a row of a call's band alone, as Scramjet's boxes are padded; a copy leaves
+    /// it out.
+    fn pad(&self, outcome: Outcome) -> String {
+        if self.design != Design::Panels {
+            return String::new();
+        }
+        let rule = if self.marked {
+            RULE.to_string()
+        } else {
+            String::new()
+        };
+        format!("{}{rule}\n", outcome.band().mark())
+    }
+    /// A call's `rows` under its heading, then its bottom pad: in panels, a pad between the
+    /// heading and any rows.
+    fn padded(&mut self, outcome: Outcome, gutter: &Gutter, rows: &[String]) {
+        let pad = self.pad(outcome);
+        let mut block = match rows.is_empty() {
+            true => String::new(),
+            false => pad.clone(),
+        };
+        for (index, row) in rows.iter().enumerate() {
+            block += &gutter.row(index == 0, row);
+            block.push('\n');
+        }
+        block += &pad;
+        self.err(&block);
+    }
     fn styled_replies(&self) -> bool {
         self.capture.is_some() || std::io::stdout().is_terminal()
     }
@@ -1026,7 +1051,8 @@ impl AgentUi for Terminal {
                 design.heading(name, &summary, outcome, took.as_deref(), width, self.marked)
             }
         };
-        self.err(&format!("{line}\n"));
+        let pad = self.pad(outcome);
+        self.err(&format!("{pad}{line}\n"));
     }
     fn tool_running(&mut self, since: Instant) {
         self.tool_started = Some(since);
@@ -1302,10 +1328,8 @@ impl Terminal {
     pub(super) fn running_subagents(&mut self, shown: &Children) {
         let gutter = self.design.output(self.outcome, self.marked);
         let width = self.width().saturating_sub(gutter.columns).max(20);
-        for row in children::rows(shown, &self.look(width)) {
-            let row = gutter.row(false, &row);
-            self.err(&format!("{row}\n"));
-        }
+        let rows = children::rows(shown, &self.look(width));
+        self.padded(self.outcome, &gutter, &rows);
     }
     /// Ends the note about the lines a preview leaves out, as Scramjet's does: `, Ctrl+O to
     /// expand`, when the key shows everything.
@@ -1335,10 +1359,11 @@ impl Terminal {
             true => Shown::All,
             false => Shown::Last(BASH_LINES),
         };
-        for row in preview(output.trim_end_matches('\n'), shown, width, "", self.marked) {
-            let row = gutter.row(false, &self.styled(style::STATUS, &row));
-            self.err(&format!("{row}\n"));
-        }
+        let rows: Vec<String> = preview(blank_trimmed(output), shown, width, "", self.marked)
+            .iter()
+            .map(|row| self.styled(style::STATUS, row))
+            .collect();
+        self.padded(self.outcome, &gutter, &rows);
     }
     /// A command the user ran, in Scramjet's block: between rules colored as it was run with `!`
     /// (`include`) or `!!`, `$ command`, the last lines of its output (all of them when tool
@@ -1699,13 +1724,22 @@ fn lines(text: &str) -> String {
 /// A failed command's ending follows its output after a blank line, which is not worth one of
 /// the few lines shown.
 fn bash_shown(output: &str, failed: bool) -> String {
+    let output = blank_trimmed(output);
     match output.rsplit_once("\n\n") {
         Some((body, ending)) if failed => format!("{body}\n{ending}"),
         _ => output.to_owned(),
     }
 }
 
-/// The lines of a tool result to show, made safe for the terminal and cut to `width` cells,
+/// `text` without its blank lines at the start and the end, as Scramjet shows a command's output.
+fn blank_trimmed(text: &str) -> &str {
+    let text = text.trim_end();
+    let start = text.len() - text.trim_start().len();
+    let start = text[..start].rfind('\n').map_or(0, |at| at + 1);
+    &text[start..]
+}
+
+/// The lines of a tool result to show, made safe for the terminal and wrapped to `width` cells,
 /// with a note for lines left out that ends with `hint`; lines wrapped are `marked` for a copy.
 fn preview(text: &str, shown: Shown, width: usize, hint: &str, marked: bool) -> Vec<String> {
     preview_shown(text, shown, width, hint, marked, &mut |line| {
@@ -1713,7 +1747,8 @@ fn preview(text: &str, shown: Shown, width: usize, hint: &str, marked: bool) -> 
     })
 }
 
-/// As `preview`, each line it keeps shown by `show`, in order.
+/// As `preview`, each line it keeps shown by `show`, in order. `Shown::Last` keeps the last
+/// rows, as Scramjet's: the whole lines that fit in them, or the last rows of one that does not.
 fn preview_shown(
     text: &str,
     shown: Shown,
@@ -1723,10 +1758,14 @@ fn preview_shown(
     show: &mut dyn FnMut(&str) -> String,
 ) -> Vec<String> {
     let lines: Vec<&str> = text.lines().collect();
-    let fit = |line: &&str| clip(&show(line), width);
+    let mut wrapped = |line: &str| -> Vec<String> {
+        let mut wrap = Wrap::new(width).marking(marked);
+        let rows = wrap.push(&show(line)) + &wrap.finish();
+        rows.split('\n').map(str::to_owned).collect()
+    };
     match shown {
         Shown::First(n) if lines.len() > n => {
-            let mut kept: Vec<String> = lines[..n].iter().map(fit).collect();
+            let mut kept: Vec<String> = lines[..n].iter().flat_map(|line| wrapped(line)).collect();
             kept.push(format!(
                 "… ({} more lines, {} total{hint})",
                 lines.len() - n,
@@ -1734,20 +1773,28 @@ fn preview_shown(
             ));
             kept
         }
-        Shown::Last(n) if lines.len() > n => {
-            let mut kept = vec![format!("… ({} earlier lines{hint})", lines.len() - n)];
-            kept.extend(lines[lines.len() - n..].iter().map(fit));
+        Shown::Last(n) => {
+            let mut kept: Vec<String> = Vec::new();
+            let mut from = lines.len();
+            // Only the last `n` lines can show, each taking a row at least.
+            for line in lines[lines.len().saturating_sub(n)..].iter().rev() {
+                let rows = wrapped(line);
+                if kept.len() + rows.len() > n {
+                    if kept.is_empty() {
+                        kept = rows[rows.len() - n..].to_vec();
+                        from -= 1;
+                    }
+                    break;
+                }
+                kept.splice(0..0, rows);
+                from -= 1;
+            }
+            if from > 0 {
+                kept.insert(0, format!("… ({from} earlier lines{hint})"));
+            }
             kept
         }
-        Shown::All => lines
-            .iter()
-            .flat_map(|line| {
-                let mut wrap = Wrap::new(width).marking(marked);
-                let rows = wrap.push(&show(line)) + &wrap.finish();
-                rows.split('\n').map(str::to_owned).collect::<Vec<_>>()
-            })
-            .collect(),
-        _ => lines.iter().map(fit).collect(),
+        _ => lines.iter().flat_map(|line| wrapped(line)).collect(),
     }
 }
 
@@ -1787,6 +1834,21 @@ mod tests {
             "Command exited with code 1"
         );
         assert_eq!(bash_shown("a\n\nb", false), "a\n\nb");
+        assert_eq!(bash_shown("\n \n  a\n\n", false), "  a");
+        // Long lines wrap; the last rows hold the whole lines that fit, else one line's end.
+        let long = "a\nbbbb bbbb bbbb\ncc";
+        assert_eq!(
+            preview(long, Shown::Last(3), 10, "", false),
+            ["… (1 earlier lines)", "bbbb bbbb", "bbbb", "cc"]
+        );
+        assert_eq!(
+            preview("x\none two three four five", Shown::Last(2), 10, "", false),
+            ["… (1 earlier lines)", "three four", "five"]
+        );
+        assert_eq!(
+            preview(long, Shown::First(2), 10, "", false),
+            ["a", "bbbb bbbb", "bbbb", "… (1 more lines, 3 total)"]
+        );
         let head = preview(&output, Shown::First(2), 80, "", false);
         assert_eq!(head, ["line 1", "line 2", "… (18 more lines, 20 total)"]);
         assert_eq!(
