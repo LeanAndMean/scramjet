@@ -4,6 +4,10 @@
 //! however many servers and tools there are.
 use super::image;
 use super::sandbox::{self, Hidden, Sandbox};
+
+/// The sandbox the servers that run as programs start in, with the credential files named
+/// besides the common stores; what it hides is looked up again at each start.
+pub(super) type Confined = (Sandbox, Vec<PathBuf>);
 use super::tools::{Group, MAX_BYTES, MAX_LINES, Output};
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, RoleClient,
@@ -177,8 +181,8 @@ pub(super) struct Servers {
     within: Duration,
     /// The instructions' list of the servers, made once none is starting.
     section: Mutex<Option<String>>,
-    /// The sandbox the servers that run as programs start in, with the stores it hides.
-    confined: Option<Arc<(Sandbox, Hidden)>>,
+    /// The sandbox the servers that run as programs start in.
+    confined: Option<Arc<Confined>>,
 }
 
 struct Running {
@@ -220,7 +224,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Servers {
     /// Starts each of `configs` in `root`, in the background, those that run as programs in
     /// `confined`'s sandbox.
-    pub fn start(configs: &[Server], root: &Path, confined: Option<(Sandbox, Hidden)>) -> Self {
+    pub fn start(configs: &[Server], root: &Path, confined: Option<Confined>) -> Self {
         Self::start_within(configs, root, START, confined.map(Arc::new))
     }
 
@@ -229,7 +233,7 @@ impl Servers {
         configs: &[Server],
         root: &Path,
         within: Duration,
-        confined: Option<Arc<(Sandbox, Hidden)>>,
+        confined: Option<Arc<Confined>>,
     ) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
@@ -262,7 +266,8 @@ impl Servers {
 
     /// `/reload`: keeps the servers running as `configs` lists them, starts the others, also those
     /// that ended, and kills those it no longer lists.
-    pub fn update(&mut self, configs: &[Server], root: &Path) {
+    pub fn update(&mut self, configs: &[Server], root: &Path, confined: Option<Confined>) {
+        self.confined = confined.map(Arc::new);
         if self.runtime.is_none() {
             *self = Self::start_within(configs, root, self.within, self.confined.clone());
             return;
@@ -636,7 +641,7 @@ impl Running {
 async fn start(
     server: &Arc<Running>,
     root: PathBuf,
-    confined: Option<&(Sandbox, Hidden)>,
+    confined: Option<&Confined>,
 ) -> Result<Ready, String> {
     let client = ClientConfig::new(
         ClientCapabilities::default(),
@@ -704,12 +709,14 @@ async fn run(
     server: &Arc<Running>,
     (program, args, env): (&str, &[String], &[(String, String)]),
     root: PathBuf,
-    confined: Option<&(Sandbox, Hidden)>,
+    confined: Option<&Confined>,
     client: ClientConfig,
     lifecycle: ClientLifecycleMode,
 ) -> Result<RunningService<RoleClient, ClientConfig>, String> {
     let mut command = match confined {
-        Some((sandbox, hidden)) => sandbox::server(&root, program, hidden, *sandbox).into(),
+        Some((sandbox, named)) => {
+            sandbox::server(&root, program, &Hidden::current(named), *sandbox).into()
+        }
         None => tokio::process::Command::new(program),
     };
     command

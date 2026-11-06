@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.54.1 — Sandboxed MCP servers see new credential stores hidden
+
+### Fixed
+
+- An MCP server started again in the sandbox (by `/reload`, or after it ended) now has the credential stores hidden as they are at that start, as bash does at each command; it could read a store created since the servers first started, such as one from a login during the session.
+
 ## 0.54.0 — MCP servers inside the sandbox
 
 ### Changed

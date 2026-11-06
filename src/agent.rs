@@ -725,15 +725,11 @@ impl Agent {
             return;
         }
         // Calls still running keep the servers they had.
+        let confined = (self.config.sandbox)
+            .map(|sandbox| (sandbox, self.config.providers.credential_files().to_vec()));
         match self.mcp.as_mut().and_then(Arc::get_mut) {
-            Some(running) => running.update(wanted, root),
-            None => {
-                let confined = self.config.sandbox.map(|sandbox| {
-                    let hidden = sandbox::Hidden::current(self.config.providers.credential_files());
-                    (sandbox, hidden)
-                });
-                self.mcp = Some(Arc::new(mcp::Servers::start(wanted, root, confined)));
-            }
+            Some(running) => running.update(wanted, root, confined),
+            None => self.mcp = Some(Arc::new(mcp::Servers::start(wanted, root, confined))),
         }
     }
 

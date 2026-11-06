@@ -35,7 +35,7 @@ fn started(configs: &[Server], root: &Path) -> Servers {
 
 /// As `started`, those that run as programs in `sandbox`.
 fn confined(configs: &[Server], root: &Path, sandbox: Option<Sandbox>) -> Servers {
-    let confined = sandbox.map(|sandbox| Arc::new((sandbox, Hidden::current(&[]))));
+    let confined = sandbox.map(|sandbox| Arc::new((sandbox, Vec::new())));
     let servers = Servers::start_within(configs, root, Duration::from_secs(10), confined);
     servers.settle(&AtomicBool::new(false));
     servers
@@ -291,6 +291,44 @@ fn in_the_sandbox_a_server_runs_on_its_own_and_writes_only_where_it_allows() {
             assert!(!path.exists());
         }
     }
+}
+
+#[test]
+fn a_server_started_again_in_the_sandbox_cannot_read_a_store_made_since() {
+    use crate::agent::SandboxMode;
+    if sandbox::available().is_err() {
+        return;
+    }
+    let scratch = scratch("store-since");
+    // Outside `/tmp`, which is the sandbox's own.
+    let store = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(format!("sjrs-mcp-store-{}", std::process::id()));
+    let _ = std::fs::remove_file(&store);
+    let script = format!("cat '{}' >&2; exit 1", store.display());
+    let server = program("cat", "bash", vec!["-c".to_owned(), script], &[]);
+    let sandbox = Sandbox {
+        mode: SandboxMode::WorkspaceWrite,
+        network: false,
+    };
+    let confined = || Some((sandbox, vec![store.clone()]));
+    let configs = std::slice::from_ref(&server);
+    let mut servers = Servers::start_within(
+        configs,
+        &scratch.0,
+        Duration::from_secs(10),
+        confined().map(Arc::new),
+    );
+    servers.settle(&AtomicBool::new(false));
+    std::fs::write(&store, "secret-token").unwrap();
+    servers.update(configs, &scratch.0, confined());
+    servers.settle(&AtomicBool::new(false));
+    let states = servers.states();
+    let _ = std::fs::remove_file(&store);
+    let [(_, State::Failed(why))] = &states[..] else {
+        panic!("{states:?}");
+    };
+    assert!(!why.contains("secret-token"), "{why}");
 }
 
 #[test]
