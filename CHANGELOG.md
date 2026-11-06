@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.39.0 — Every dialog's rule in the theme's border color
+
+### Changed
+
+- The rule under a list or another dialog, over the footer, is in the theme's `border` color, as Scramjet's selectors' rules are, where it was in the muted text color. In the theme editor it shows the `border` being edited.
+- In the theme editor's roles view, a role the sample session cannot show shows on the editor while it is selected: a thinking level's color, or bash mode's, on the rule under it, as on the prompt's rules, and `selectedBg` behind the selected row, as in `/resume` and `/tree`.
+
 ## 0.38.0 — More of a theme in the theme editor's sample
 
 ### Changed

@@ -12,7 +12,7 @@ use super::palette::{
     Rng, Source, harmonies,
 };
 use super::record::Event;
-use super::style::{self, RESET};
+use super::style::{self, Band, RESET};
 use super::text::{self, Wrap};
 use super::theme::{self, Color, KEYS, Mode, TOKENS, Theme, Token};
 use scramjet_rs::agent::{Compaction, Ending, StreamProgress, ToolDetail, UserCommand};
@@ -706,11 +706,25 @@ impl ThemeEditor {
         let left_right = left_right.as_deref().unwrap_or("Left and Right");
         let exact = keymap::key(Binding::ThemeExact).unwrap_or_default();
         let reset = keymap::key(Binding::ThemeReset).unwrap_or_default();
+        let shown = match (prompt_rule(token), token) {
+            (Some(_), _) => " Shown on the rule under the editor while selected.",
+            (None, Token::SelectedBg) => " Shown behind the selected row while selected.",
+            _ => "",
+        };
         format!(
-            "{}{range}{kept} {left_right} picks the main color it follows, {exact} an exact \
-             color, {reset} its own again.",
+            "{}{range}{kept}{shown} {left_right} picks the main color it follows, {exact} an \
+             exact color, {reset} its own again.",
             about(token)
         )
+    }
+
+    /// The style of the rule under the editor: a dialog's, or, while a role of the prompt's
+    /// rules is selected, that role's, which the sample does not show.
+    pub(super) fn rule(&self) -> style::Style {
+        (self.view == View::Roles)
+            .then(|| prompt_rule(TOKENS[self.role]))
+            .flatten()
+            .unwrap_or(style::DIALOG_RULE)
     }
 
     /// The editor's rows for a dock of `(width, height)`: the title and keys, the main colors'
@@ -796,8 +810,14 @@ impl ThemeEditor {
                 };
                 let room = room.clamp(1, ROLE_ROWS);
                 let first = (self.role.saturating_sub(room / 2)).min(TOKENS.len() - room);
+                // As `/resume` and `/tree` paint theirs, which the sample does not show.
+                let painted = TOKENS[self.role] == Token::SelectedBg;
                 for at in first..first + room {
-                    lines.push(row(&self.role_row(at, at == self.role), at == self.role));
+                    let line = row(&self.role_row(at, at == self.role), at == self.role);
+                    lines.push(match at == self.role && painted {
+                        true => format!("{}{line}", Band::Selected.mark()),
+                        false => line,
+                    });
                 }
                 note
             }
@@ -1010,7 +1030,7 @@ fn about(token: Token) -> &'static str {
     use Token as T;
     match token {
         T::Accent => "The main accent: the spinner, the mark of a list's selected row, the banner's name, a question's title.",
-        T::Border => "Borders: the rules around a question the model asks.",
+        T::Border => "Borders: the rule under lists and dialogs, this editor's too, and around a question the model asks.",
         T::BorderAccent => "Highlighted borders: compactions in /tree.",
         T::BorderMuted => "Quiet borders: the rails beside reasoning and calls in the looks other than the classic one, the card banner's border.",
         T::Success => "Success: calls and subagents that went well, the mark of the current session or model, models switched on.",
@@ -1062,6 +1082,21 @@ fn about(token: Token) -> &'static str {
         T::BashMode => "Commands you run with !: the prompt's rules while it starts with !, the rules around their output and the command's line.",
         T::SpellcheckError => "Misspelled words in the prompt, in Scramjet; scramjet-rs does not check spelling yet.",
     }
+}
+
+/// The style of the prompt's rules that `token` colors, if it colors them.
+fn prompt_rule(token: Token) -> Option<style::Style> {
+    use Token as T;
+    Some(match token {
+        T::ThinkingOff => style::PROMPT_OFF,
+        T::ThinkingMinimal => style::PROMPT_MINIMAL,
+        T::ThinkingLow => style::PROMPT_LOW,
+        T::ThinkingMedium => style::PROMPT_MEDIUM,
+        T::ThinkingHigh => style::PROMPT_HIGH,
+        T::ThinkingXhigh => style::PROMPT_XHIGH,
+        T::BashMode => style::PROMPT_COMMAND,
+        _ => return None,
+    })
 }
 
 /// A block of `color`, as the terminal shows it.
@@ -1581,6 +1616,40 @@ mod tests {
             let note = about(token);
             assert!(note.ends_with('.') && note.len() < 130, "{}", KEYS[at]);
         }
+    }
+
+    #[test]
+    fn roles_the_sample_does_not_show_show_on_the_dock_while_selected() {
+        let mut editor = ThemeEditor::new(10, Background::Dark, None);
+        editor.role = token_at(Token::ThinkingHigh);
+        assert_eq!(editor.rule(), style::DIALOG_RULE);
+        editor.view = View::Roles;
+        assert_eq!(editor.rule(), style::PROMPT_HIGH);
+        let note = lines(&editor).join(" ");
+        assert!(
+            note.contains("Shown on the rule under the editor"),
+            "{note}"
+        );
+        editor.role = token_at(Token::BashMode);
+        assert_eq!(editor.rule(), style::PROMPT_COMMAND);
+        editor.role = token_at(Token::Border);
+        assert_eq!(editor.rule(), style::DIALOG_RULE);
+        let painted = |editor: &ThemeEditor| {
+            let rows = editor.lines((100, 40));
+            (crate::agent_cli::selection::rows(&rows).into_iter())
+                .filter(|line| line.band == Some(Band::Selected))
+                .map(|line| plain(&line.shown))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(painted(&editor), Vec::<String>::new());
+        editor.role = token_at(Token::SelectedBg);
+        let rows = painted(&editor);
+        assert!(
+            rows.len() == 1 && rows[0].starts_with("› selectedBg "),
+            "{rows:?}"
+        );
+        editor.view = View::Main;
+        assert_eq!(painted(&editor), Vec::<String>::new());
     }
 
     #[test]

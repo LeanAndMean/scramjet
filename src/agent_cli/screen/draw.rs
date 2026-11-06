@@ -403,9 +403,16 @@ impl App {
             !text.is_empty() && text.chars().all(|c| c == '─')
         });
         if !ruled {
+            let color = match &self.dialog {
+                Some(Open {
+                    shown: Shown::Theme(editor),
+                    ..
+                }) => editor.rule(),
+                _ => style::DIALOG_RULE,
+            };
             rows.push(Line::rule(&format!(
                 "{}{}{}",
-                style::MUTED,
+                color,
                 "─".repeat(width.saturating_sub(1)),
                 style::RESET
             )));

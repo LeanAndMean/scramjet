@@ -214,6 +214,8 @@ styles! {
     /// The rules above and below the list of a question the model asks, its title, and the
     /// rows of the selected option, in the border and accent colors.
     QUESTION_BORDER: [] Border;
+    /// The rule under a list or another dialog, over the footer, as Scramjet's selectors' borders.
+    DIALOG_RULE: [] Border;
     QUESTION_TITLE: [BOLD] Accent;
     QUESTION_SELECTED: [] Accent;
     /// No style.
