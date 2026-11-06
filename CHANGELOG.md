@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.49.0 — A theme started from another stays itself
+
+### Changed
+
+- In a theme the editor started from another theme's colors, a step of contrast or another background now keeps each role's color, only lighter or darker by as much as the step moves it, with its hue and chroma. It used to replace nearly every role with the editor's own color. A role still takes the editor's color once the main color it follows changes hue, as a roll does.
+
 ## 0.48.0 — Another harmony keeps the colors
 
 ### Changed

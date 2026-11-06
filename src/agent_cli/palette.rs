@@ -357,7 +357,8 @@ pub(super) struct Main {
 
 /// What the user made of a role: lit as its kind is from another main color than its own, out
 /// of any meaning's hue range, or an exact color; or the color the theme the draft started
-/// from had, kept until the color it would follow changes (`Draft::release`).
+/// from had, made lighter or darker with the contrast and the background, until the color it
+/// would follow changes in hue or chroma (`Draft::carry`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Pick {
     Follow(usize),
@@ -647,24 +648,27 @@ impl Draft {
         draft
     }
 
-    /// Lets each role kept from the theme the draft started from follow its own color again
-    /// once that color is not what it was in `before`; how many did.
-    pub(super) fn release(&mut self, before: &Draft) -> usize {
-        let unkept = |draft: &Draft| {
-            let mut draft = draft.clone();
-            for pick in &mut draft.picks {
-                if matches!(pick, Some(Pick::Kept(_))) {
-                    *pick = None;
-                }
-            }
-            draft.build().colors
-        };
-        let (was, now) = (unkept(before), unkept(self));
+    /// Carries each role kept from the theme the draft started from through the change from
+    /// `before`. Where the color it would follow changed only in contrast or background, its own
+    /// is relit to a contrast changed by as much, with its hue and chroma; where that color
+    /// changed in hue or chroma, the role follows it from now on. How many did.
+    pub(super) fn carry(&mut self, before: &Draft) -> usize {
+        let (was_on, now_on) = (before.build().background, self.build().background);
         let mut released = 0;
-        for (at, pick) in self.picks.iter_mut().enumerate() {
-            if matches!(pick, Some(Pick::Kept(_))) && was[at] != now[at] {
-                *pick = None;
+        for (at, &token) in TOKENS.iter().enumerate() {
+            let Some(Pick::Kept(rgb)) = self.picks[at] else {
+                continue;
+            };
+            let (kind, source, place) = role(token);
+            let (hue, chroma, was) = before.aim(kind, source, place);
+            let (now_hue, now_chroma, now) = self.aim(kind, source, place);
+            if (hue, chroma) != (now_hue, now_chroma) {
+                self.picks[at] = None;
                 released += 1;
+            } else if was != now || was_on != now_on {
+                let color = Oklch::of(rgb);
+                let wanted = contrast(rgb, was_on) * now / was;
+                self.picks[at] = Some(Pick::Kept(lit(color.h, color.c, now_on, wanted)));
             }
         }
         released
@@ -799,6 +803,12 @@ impl Draft {
     }
 
     fn lit(&self, kind: Kind, source: Source, place: f64, background: Rgb) -> Rgb {
+        let (hue, chroma, target) = self.aim(kind, source, place);
+        lit(hue, chroma, background, target)
+    }
+
+    /// The hue, chroma and contrast with the main background a role is lit to.
+    fn aim(&self, kind: Kind, source: Source, place: f64) -> (f64, f64, f64) {
         let count = self.mains.len();
         let mean = self.mains.iter().map(|main| main.chroma).sum::<f64>() / count as f64;
         let (hue, chroma, place) = match source {
@@ -821,7 +831,7 @@ impl Draft {
         let place = (place + 0.15 * f64::from(self.contrast)).clamp(0.0, 1.0);
         let (low, high) = kind.band();
         let target = (low.ln() + (high.ln() - low.ln()) * place).exp();
-        lit(hue, chroma, background, target)
+        (hue, chroma, target)
     }
 }
 

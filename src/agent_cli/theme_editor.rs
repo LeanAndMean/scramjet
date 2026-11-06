@@ -175,7 +175,7 @@ impl ThemeEditor {
         let mut editor = Self::on(draft, locked, Rng::new(seed), terminal);
         editor.from = Some(name.to_owned());
         editor.say(
-            &format!("From {name}: each role keeps its color until what it follows changes"),
+            &format!("From {name}: its colors stay until what they follow changes hue"),
             false,
         );
         Some(editor)
@@ -222,7 +222,7 @@ impl ThemeEditor {
 
     /// Shows `draft` from now on, after the one shown, which undo goes back to.
     fn push(&mut self, mut draft: Draft) {
-        let released = draft.release(self.draft());
+        let released = draft.carry(self.draft());
         self.history.truncate(self.at + 1);
         self.history.push(draft);
         self.show(self.at + 1);
@@ -699,7 +699,8 @@ impl ThemeEditor {
         };
         let kept = match self.draft().picks[self.role] {
             Some(Pick::Kept(_)) => format!(
-                " It has {}'s color until {}, the background or the contrast changes.",
+                " It has {}'s color, lighter or darker as the contrast and the background \
+                 change, until {} changes.",
                 self.started_from(),
                 self.source_words(self.role, palette::own(token).1),
             ),
@@ -1753,7 +1754,7 @@ mod tests {
         }
         let shown = lines(&editor);
         assert!(
-            shown[0].contains("From scramjet-dark: each role keeps its color"),
+            shown[0].contains("From scramjet-dark: its colors stay until"),
             "{shown:?}"
         );
         assert!(
@@ -1862,19 +1863,43 @@ mod tests {
         let shown = shown.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(shown.contains("‹ scramjet-dark's ›"), "{shown}");
         assert!(
-            shown.contains("It has scramjet-dark's color until a tint of color 1, the background"),
+            shown.contains("It has scramjet-dark's color, lighter or darker as the contrast and the background \
+             change, until a tint of color 1 changes."),
             "{shown}"
         );
         editor.key(&press(Code::Backspace));
         assert!(!kept(&editor, Token::Muted) && kept(&editor, Token::MdCodeBlockBorder));
-        // A step of contrast lights them anew, but for color 1's accents, already at the top
-        // of their band; undo brings them back.
+        // A step of contrast keeps them, each lighter on this dark background, with its hue;
+        // undo brings them back.
+        let was: Vec<_> = (TOKENS.iter())
+            .filter(|&&token| kept(&editor, token))
+            .map(|&token| (token, editor.built.color(token)))
+            .collect();
         editor.key(&typed("+"));
-        assert!(!kept(&editor, Token::MdCodeBlockBorder));
-        for (at, &token) in TOKENS.iter().enumerate() {
-            let accent = palette::own(token) == (Kind::Accent, Source::Main(0));
-            assert_eq!(kept(&editor, token), accent, "{}", KEYS[at]);
+        assert!(editor.status.is_none(), "{:?}", editor.status);
+        let on = editor.built.background;
+        let mut changed = 0;
+        for &(token, before) in &was {
+            assert!(kept(&editor, token), "{token:?}");
+            let now = editor.built.color(token);
+            assert!(palette::contrast(now, on) >= palette::contrast(before, on) - 0.05);
+            if now != before {
+                changed += 1;
+                let (before, now) = (Oklch::of(before), Oklch::of(now));
+                assert!(now.l > before.l, "{token:?}");
+                if before.c > 0.02 {
+                    assert!(
+                        (now.h - before.h).abs() < 3.0,
+                        "{token:?} {before:?} {now:?}"
+                    );
+                }
+            }
         }
+        assert!(changed > 10, "{changed} of {}", was.len());
+        assert_ne!(
+            editor.theme().color(Token::MdCodeBlockBorder),
+            dark.color(Token::MdCodeBlockBorder)
+        );
         for _ in 0..3 {
             editor.key(&typed("u"));
         }
