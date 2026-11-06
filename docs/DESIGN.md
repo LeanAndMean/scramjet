@@ -152,6 +152,8 @@ Presentation stays easy to change (user decision, 2026-11-02). The look (glyphs,
 
 Preserve focus/input precedence, multiline paste without submission, Unicode editing, current approval presentation, and safe external-editor/suspend/exit restoration. Libraries do not guarantee those behaviors. Native clipboard/input journeys are required for supported platform claims; headless cells and successful clipboard API calls are insufficient.
 
+The editor checks spelling as Scramjet's does (user request, 2026-11-06): misspelled words are marked in the theme's `spellcheckError` color with a curly underline where the terminal supports it. Code-like tokens are left alone: identifiers in camelCase or snake_case, paths, URLs, slash commands and short abbreviations. Checking never delays typing; the editor works normally until the dictionary has loaded. Scramjet uses nspell with `dictionary-en` (`packages/coding-agent/src/modes/interactive/spellcheck.ts`, its marks in `packages/tui/src/components/editor.ts`). scramjet-rs has no spellcheck yet.
+
 ## Proposed starting architecture
 
 One Rust process per project tab, with lightweight async agent contexts sharing immutable resources and compatible HTTP infrastructure. One headless-capable runtime; a separately scheduled TUI consumes bounded state projections. Blocking work runs outside async workers with its own limits.

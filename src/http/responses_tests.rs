@@ -57,7 +57,6 @@ fn rejects_identity_order_terminal_and_strict_argument_mutations() {
             "response",
             json!({"id":"","status":"in_progress","output":[]}),
         ),
-        (3, "arguments", json!("{\"x\":1}")),
         (
             4,
             "item",
@@ -94,23 +93,29 @@ fn rejects_identity_order_terminal_and_strict_argument_mutations() {
             "{arguments}"
         );
     }
+    // Without its `response.created`, its done copy or its terminal event, a call does not run;
+    // as in Scramjet's package, the done copy is what runs, whatever came before it.
+    let arguments = |events: &[Value]| {
+        parse(&fixture::wire(events, false))
+            .map(|parsed| parsed.envelope.unwrap().items[0].raw()["arguments"].clone())
+    };
     for i in 0..good.len() {
         let mut events = good.clone();
         events.remove(i);
-        assert!(
-            parse(&fixture::wire(&events, false)).is_err(),
-            "missing event {i}"
-        );
+        match i {
+            0 | 4 | 5 => assert!(arguments(&events).is_err(), "missing event {i}"),
+            _ => assert_eq!(arguments(&events), Ok(json!("{}")), "missing event {i}"),
+        }
         if i == 0 || i == good.len() - 1 {
             continue;
         }
         let mut events = good.clone();
         events.insert(i, events[i].clone());
-        assert!(
-            parse(&fixture::wire(&events, false)).is_err(),
-            "duplicate event {i}"
-        );
+        assert_eq!(arguments(&events), Ok(json!("{}")), "duplicate event {i}");
     }
+    let mut events = good.clone();
+    events[3]["arguments"] = json!("{\"x\":1}");
+    assert_eq!(arguments(&events), Ok(json!("{}")));
     let bytes = fixture::wire(&good, false);
     for end in 0..bytes.len() {
         assert!(parse(&bytes[..end]).is_err());
@@ -190,7 +195,7 @@ fn bounded_opaque_ids_are_correlated_and_replayed_without_character_normalizatio
     }
 }
 #[test]
-fn final_function_calls_keep_optional_status_and_initial_argument_evidence() {
+fn final_function_calls_keep_optional_status_and_run_their_done_copys_arguments() {
     let arguments = "{\"message\":\"synthetic\"}";
     let mut events = fixture::call_events(arguments, fixture::known_usage());
     for i in [1, 4] {
@@ -207,8 +212,17 @@ fn final_function_calls_keep_optional_status_and_initial_argument_evidence() {
         parsed.envelope.unwrap().items[0].raw()["arguments"],
         arguments
     );
+    // The done copy's arguments run, whatever the added item began with.
     events[1]["item"]["arguments"] = json!("{\"message\":\"different\"}");
-    assert!(parse(&fixture::wire(&events, false)).is_err());
+    assert_eq!(
+        parse(&fixture::wire(&events, false))
+            .unwrap()
+            .envelope
+            .unwrap()
+            .items[0]
+            .raw()["arguments"],
+        arguments
+    );
 }
 #[test]
 fn opaque_ids_and_reported_models_use_aggregate_budgets_not_guessed_field_caps() {
@@ -506,26 +520,25 @@ fn opaque_reasoning_and_complete_mixed_output_survive_replay() {
     assert_eq!(items[2].raw()["id"], "msg_1");
 }
 #[test]
-fn unsupported_namespace_and_part_or_item_repetition_are_non_executable() {
+fn a_namespaced_call_is_unsupported_and_repeated_events_change_nothing() {
     let mut events = fixture::call_events("{}", Value::Null);
     events[1]["item"]["namespace"] = json!("foreign");
     events[4]["item"]["namespace"] = json!("foreign");
     events[5]["response"]["output"][0]["namespace"] = json!("foreign");
     assert!(parse(&fixture::wire(&events, false)).is_err());
     let text = fixture::text_events("x", Value::Null);
-    // A repeated `response.created` is ignored like any other unknown event, and nothing
-    // after the terminal event is read.
+    // A repeated event changes nothing, as in Scramjet's package: deltas are only shown while
+    // streaming, and the final text is the done copy's. Nothing after the terminal event is read.
     for i in 1..text.len() - 1 {
         let mut events = text.clone();
         events.insert(i, events[i].clone());
-        let parsed = parse(&fixture::wire(&events, false));
-        if text[i]["type"] == "response.output_text.delta" {
-            // Deltas are only shown while streaming; the final text is the done event's.
-            let items = parsed.unwrap().envelope.unwrap().items;
-            assert_eq!(message_text(&items[0]).as_deref(), Some("x"));
-        } else {
-            assert!(parsed.is_err(), "repeated text event {i}");
-        }
+        let items = parse(&fixture::wire(&events, false))
+            .unwrap()
+            .envelope
+            .unwrap()
+            .items;
+        assert_eq!(items.len(), 1, "repeated text event {i}");
+        assert_eq!(message_text(&items[0]).as_deref(), Some("x"));
     }
     // Other events are ignored; an `error` event ends the stream.
     for kind in [
@@ -570,9 +583,15 @@ fn items_are_found_by_id_and_a_text_may_arrive_only_in_its_done_event() {
     let kinds: Vec<_> = items.iter().map(|item| &item.raw()["type"]).collect();
     assert_eq!(kinds, ["message", "reasoning"]);
     assert_eq!(message_text(&items[0]).as_deref(), Some("2"));
+    // A repeated `output_item.added` changes nothing, as in Scramjet's package.
     let mut repeated = events.to_vec();
     repeated.insert(4, events[3].clone());
-    assert!(parse(&fixture::wire(&repeated, false)).is_err());
+    let again = parse(&fixture::wire(&repeated, false))
+        .unwrap()
+        .envelope
+        .unwrap()
+        .items;
+    assert_eq!(again, items);
 }
 #[test]
 fn a_response_may_make_several_function_calls() {
@@ -598,16 +617,22 @@ fn a_response_may_make_several_function_calls() {
 #[test]
 fn compatibility_resource_and_malformed_failures_are_distinct() {
     let mut events = fixture::call_events("{}", Value::Null);
-    events[1]["item"]["namespace"] = json!("foreign");
+    events[4]["item"]["namespace"] = json!("foreign");
     assert!(matches!(
         parse(&fixture::wire(&events, false)),
         Err(Outcome::Unsupported)
     ));
-    events[1]["item"]["namespace"] = json!(42);
-    assert!(matches!(
-        parse(&fixture::wire(&events, false)),
-        Err(Outcome::Framing)
-    ));
+    // A namespace that is not a text is dropped, as Proxy's normalizer drops Foundry's.
+    for namespace in [json!(42), Value::Null, json!({"name":"tools"})] {
+        events[1]["item"]["namespace"] = namespace.clone();
+        events[4]["item"]["namespace"] = namespace;
+        let items = parse(&fixture::wire(&events, false))
+            .unwrap()
+            .envelope
+            .unwrap()
+            .items;
+        assert!(items[0].raw().get("namespace").is_none());
+    }
     let mut events = vec![fixture::text_events("x", Value::Null)[0].clone()];
     for index in 0..=PROVIDER_OUTPUT_ITEMS {
         let item = json!({"id":format!("rs_{index}"),"type":"reasoning","summary":[]});
@@ -800,4 +825,390 @@ fn progress_reports_deltas_and_started_calls_only_when_enabled() {
         quiet.byte(*byte).unwrap();
     }
     assert!(quiet.progress.is_none());
+}
+
+/// A response's events between its `response.created` and its `response.completed`.
+fn stream(middle: &[Value], output: Value) -> Vec<Value> {
+    let mut events = vec![
+        json!({"type":"response.created","response":{"id":"resp_1","status":"in_progress","output":[]}}),
+    ];
+    events.extend_from_slice(middle);
+    events.push(
+        json!({"type":"response.completed","response":{"id":"resp_1","status":"completed",
+        "output":output,"usage":fixture::known_usage()}}),
+    );
+    events
+}
+fn with_progress(events: &[Value]) -> (Result<ParsedResponse, Outcome>, String, String) {
+    let mut parser = ResponsesParser::new();
+    parser.progress = Some(Vec::new());
+    let read = fixture::wire(events, false)
+        .into_iter()
+        .try_for_each(|byte| parser.byte(byte));
+    let (mut text, mut reasoning) = (String::new(), String::new());
+    for update in parser.progress.take().unwrap() {
+        match update {
+            StreamProgress::Text(t) => text.push_str(&t),
+            StreamProgress::Reasoning(t) => reasoning.push_str(&t),
+            StreamProgress::Call(_) => {}
+        }
+    }
+    (read.and_then(|()| parser.complete()), text, reasoning)
+}
+fn summary(item: &ProviderItem) -> String {
+    (item.raw()["summary"].as_array().unwrap().iter())
+        .map(|part| part["text"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn foundry_reasoning_summaries_parse_without_their_added_events_or_ids() {
+    // The shapes Proxy's normalizer (`src/openai-responses-normalizer.ts`) repairs in GPT-5.6's
+    // raw streams from Foundry, here around a reasoning item and a message as they end.
+    let reasoning = json!({"type":"reasoning","id":"rs_1","status":"completed",
+        "summary":[{"type":"summary_text","text":"Plan it."}],"encrypted_content":"opaque"});
+    let added = json!({"type":"response.output_item.added","output_index":0,
+        "item":{"type":"reasoning","id":"rs_1","status":"in_progress","summary":[]}});
+    let event = |kind: &str, fields: Value| {
+        let mut event = json!({"type":format!("response.reasoning_summary_{kind}")});
+        event
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        event
+    };
+    let ids = json!({"item_id":"rs_1","output_index":0,"summary_index":0});
+    let with = |fields: Value| {
+        let mut all = ids.clone();
+        all.as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        all
+    };
+    let part = json!({"type":"summary_text","text":""});
+    let done_part = json!({"type":"summary_text","text":"Plan it."});
+    let part_added = event("part.added", with(json!({"part":part})));
+    let delta = |text: &str| event("text.delta", with(json!({"delta":text})));
+    let text_done = event("text.done", with(json!({"text":"Plan it."})));
+    let part_done = event("part.done", with(json!({"part":done_part})));
+    let item_done = json!({"type":"response.output_item.done","output_index":0,"item":reasoning});
+    let message: Vec<Value> = fixture::text_events("ok", Value::Null)[2..8]
+        .iter()
+        .map(|event| {
+            let mut event = event.clone();
+            event["output_index"] = json!(1);
+            event
+        })
+        .collect();
+    let output = json!([
+        reasoning,
+        fixture::text_events("ok", Value::Null)[7]["item"]
+    ]);
+    let bare = |kind: &str| json!({"type":format!("response.reasoning_summary_{kind}")});
+    let cases: Vec<(&str, Vec<Value>)> = vec![
+        (
+            "compliant",
+            vec![
+                added.clone(),
+                part_added.clone(),
+                delta("Plan"),
+                delta(" it."),
+                text_done.clone(),
+                part_done.clone(),
+                item_done.clone(),
+            ],
+        ),
+        (
+            "summary before its item is added, without its part added",
+            vec![
+                delta("Plan"),
+                delta(" it."),
+                text_done.clone(),
+                part_done.clone(),
+                item_done.clone(),
+            ],
+        ),
+        (
+            "a summary's final text without its part added",
+            vec![
+                added.clone(),
+                text_done.clone(),
+                part_done.clone(),
+                item_done.clone(),
+            ],
+        ),
+        (
+            "a summary part added without its item id",
+            vec![
+                added.clone(),
+                event(
+                    "part.added",
+                    json!({"output_index":0,"summary_index":0,"part":part}),
+                ),
+                delta("Plan it."),
+                text_done.clone(),
+                part_done.clone(),
+                item_done.clone(),
+            ],
+        ),
+        (
+            "a summary's final text without its item id",
+            vec![
+                added.clone(),
+                part_added.clone(),
+                delta("Plan it."),
+                event(
+                    "text.done",
+                    json!({"output_index":0,"summary_index":0,"text":"Plan it."}),
+                ),
+                part_done.clone(),
+                item_done.clone(),
+            ],
+        ),
+        (
+            "bare done events",
+            vec![
+                added.clone(),
+                part_added.clone(),
+                delta("Plan"),
+                delta(" it."),
+                bare("text.done"),
+                bare("part.done"),
+                item_done.clone(),
+            ],
+        ),
+        (
+            "a summary part added before its item, whose id comes later",
+            vec![
+                event(
+                    "part.added",
+                    json!({"output_index":0,"summary_index":0,"part":part}),
+                ),
+                added.clone(),
+                delta("Plan it."),
+                bare("text.done"),
+                bare("part.done"),
+                item_done.clone(),
+            ],
+        ),
+        (
+            "a done reasoning item never added",
+            vec![delta("Plan it."), item_done.clone()],
+        ),
+        (
+            "no done event: the terminal copy",
+            vec![
+                added.clone(),
+                part_added.clone(),
+                delta("Plan it."),
+                text_done.clone(),
+                part_done.clone(),
+            ],
+        ),
+    ];
+    for (name, middle) in cases {
+        let events = stream(&[&middle[..], &message[..]].concat(), output.clone());
+        let (parsed, text, shown) = with_progress(&events);
+        let items = parsed
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"))
+            .envelope
+            .unwrap()
+            .items;
+        assert_eq!(items.len(), 2, "{name}");
+        assert_eq!(items[0].raw(), &reasoning, "{name}");
+        assert_eq!(message_text(&items[1]).as_deref(), Some("ok"), "{name}");
+        assert_eq!(text, "ok", "{name}");
+        assert!(shown.starts_with("Plan it."), "{name}: {shown:?}");
+    }
+
+    // A bare done event with two summaries open goes to the last one, as Proxy's normalizer
+    // cannot tell; only what is shown can differ, as each done copy is kept.
+    let second = json!({"type":"reasoning","id":"rs_2","status":"completed",
+        "summary":[{"type":"summary_text","text":"Then this."}],"encrypted_content":"opaque-2"});
+    let mut added_second = added.clone();
+    added_second["output_index"] = json!(1);
+    added_second["item"]["id"] = json!("rs_2");
+    let mut second_delta = delta("Then this.");
+    second_delta["item_id"] = json!("rs_2");
+    second_delta["output_index"] = json!(1);
+    let mut second_done = item_done.clone();
+    second_done["output_index"] = json!(1);
+    second_done["item"] = second.clone();
+    let events = stream(
+        &[
+            added.clone(),
+            delta("Plan it."),
+            added_second,
+            second_delta,
+            bare("text.done"),
+            bare("part.done"),
+            item_done.clone(),
+            second_done,
+        ],
+        json!([reasoning, second]),
+    );
+    let items = parse(&fixture::wire(&events, false))
+        .unwrap()
+        .envelope
+        .unwrap()
+        .items;
+    assert_eq!(summary(&items[0]), "Plan it.");
+    assert_eq!(summary(&items[1]), "Then this.");
+
+    // Reasoning with neither a done event nor a terminal copy is left out: a replay needs its
+    // encrypted content. A message that streamed text without either fails, as does a call.
+    let events = stream(
+        &[
+            &[added.clone(), part_added.clone(), delta("Plan it.")][..],
+            &message[..],
+        ]
+        .concat(),
+        json!([]),
+    );
+    let items = parse(&fixture::wire(&events, false))
+        .unwrap()
+        .envelope
+        .unwrap()
+        .items;
+    assert_eq!(items.len(), 1);
+    assert_eq!(message_text(&items[0]).as_deref(), Some("ok"));
+    let events = stream(&message[..5], json!([]));
+    assert_eq!(
+        parse(&fixture::wire(&events, false)).err(),
+        Some(Outcome::Incomplete)
+    );
+    // Nothing at all is an empty reply, as Scramjet's client takes it.
+    let items = parse(&fixture::wire(&stream(&[], json!([])), false))
+        .unwrap()
+        .envelope
+        .unwrap()
+        .items;
+    assert!(items.is_empty());
+}
+
+#[test]
+fn calls_run_their_done_copy_without_an_arguments_done_event() {
+    // Scramjet's package's live-shaped call: argument deltas, then the done copy.
+    let call = json!({"type":"function_call","id":"fc_live","call_id":"call_live","name":"bash",
+        "arguments":"{\"command\":\"ls\"}","status":"completed"});
+    let mut added = call.clone();
+    added["arguments"] = json!("");
+    added["status"] = json!("in_progress");
+    let added = json!({"type":"response.output_item.added","output_index":0,"item":added});
+    let delta = |text: &str| {
+        json!({"type":"response.function_call_arguments.delta","output_index":0,
+            "item_id":"fc_live","delta":text})
+    };
+    let done =
+        |item: &Value| json!({"type":"response.output_item.done","output_index":0,"item":item});
+    let run = |middle: &[Value]| {
+        parse(&fixture::wire(&stream(middle, json!([call])), false))
+            .map(|parsed| parsed.envelope.unwrap().items[0].raw()["arguments"].clone())
+    };
+    let ls = json!("{\"command\":\"ls\"}");
+    assert_eq!(
+        run(&[
+            added.clone(),
+            delta("{\"command\":"),
+            delta("\"ls\"}"),
+            done(&call)
+        ]),
+        Ok(ls.clone())
+    );
+    // A done copy without arguments keeps the streamed ones; a done-only call without them
+    // takes none, as in Scramjet's package.
+    let mut empty = call.clone();
+    empty["arguments"] = json!("");
+    assert_eq!(
+        run(&[added.clone(), delta("{\"command\":\"ls\"}"), done(&empty)]),
+        Ok(ls.clone())
+    );
+    assert_eq!(run(&[done(&empty)]), Ok(json!("{}")));
+    assert!(run(&[added.clone(), delta("{\"command\":"), done(&empty)]).is_err());
+    // A call completed again runs once, unless it differs; two calls may not share a call id.
+    assert_eq!(
+        run(&[added.clone(), done(&call), done(&call)]),
+        Ok(ls.clone())
+    );
+    let mut other = call.clone();
+    other["arguments"] = json!("{\"command\":\"rm\"}");
+    assert!(run(&[added.clone(), done(&call), done(&other)]).is_err());
+    let mut twin = call.clone();
+    twin["id"] = json!("fc_twin");
+    let mut twin_done = done(&twin);
+    twin_done["output_index"] = json!(1);
+    assert!(run(&[done(&call), twin_done]).is_err());
+    // A call whose arguments are cut short does not run.
+    let events = stream(&[added, delta("{\"command\":")], json!([call]));
+    assert_eq!(
+        parse(&fixture::wire(&events, false)).err(),
+        Some(Outcome::Incomplete)
+    );
+}
+
+#[test]
+fn benign_variations_scramjets_package_reads_are_read() {
+    // From Scramjet's package's "tolerates benign ordering, duplicate, unknown and terminal
+    // variations" test.
+    let text = fixture::text_events("pong", fixture::known_usage());
+    let reply = |events: &[Value]| {
+        let (parsed, shown, _) = with_progress(events);
+        let items = parsed
+            .map_err(|e| format!("{e:?}"))?
+            .envelope
+            .unwrap()
+            .items;
+        Ok::<_, String>((
+            items.iter().filter_map(message_text).collect::<String>(),
+            shown,
+        ))
+    };
+    let pong = Ok(("pong".to_owned(), "pong".to_owned()));
+    let queued = json!({"type":"response.queued","response":{"id":"resp_1","status":"queued"}});
+    assert_eq!(reply(&[&[queued][..], &text].concat()), pong);
+    let search = json!({"type":"response.output_item.added","output_index":1,
+        "item":{"type":"web_search_call","id":"ws_1","status":"in_progress"}});
+    let search_done = json!({"type":"response.output_item.done","output_index":1,
+        "item":{"type":"web_search_call","id":"ws_1","status":"completed"}});
+    let mut events = text.clone();
+    events.insert(2, search);
+    events.insert(3, search_done);
+    assert_eq!(reply(&events), pong);
+    let mut events = text.clone();
+    events.insert(
+        4,
+        json!({"type":"response.output_text.delta","output_index":0,
+        "item_id":"msg_1","content_index":0,"delta":42}),
+    );
+    assert_eq!(reply(&events), pong);
+    for fields in [
+        &["content_index"][..],
+        &["item_id", "output_index", "content_index"],
+    ] {
+        let mut events = text.clone();
+        for event in &mut events[3..7] {
+            for field in fields {
+                event.as_object_mut().unwrap().remove(*field);
+            }
+        }
+        assert_eq!(reply(&events), pong, "without {fields:?}");
+    }
+    let mut events = text.clone();
+    events[7]["item"]["phase"] = json!("analysis");
+    events[8]["response"]["output"][0]["phase"] = json!("analysis");
+    let items = parse(&fixture::wire(&events, false))
+        .unwrap()
+        .envelope
+        .unwrap()
+        .items;
+    assert_eq!(items[0].raw()["phase"], "analysis");
+    // A message with no done event takes the terminal copy at its index, whatever its id.
+    let mut events = text.clone();
+    events.remove(7);
+    events[7]["response"]["output"][0]["id"] = json!("msg_rewritten");
+    assert_eq!(reply(&events), pong);
+    // A text sent only in its done event is shown from there.
+    let mut events = text.clone();
+    events.remove(4);
+    assert_eq!(reply(&events), pong);
 }

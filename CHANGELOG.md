@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.28.2 — Responses streams as providers send them
+
+### Fixed
+
+- Replies over the Responses API failed as an "unexpected response stream" when a provider sent a reasoning summary before its item, without its part's start, or with its ending events missing their ids, as the company's GPT models do without Proxy in between. Such streams are now read, as Scramjet's provider package reads them: an item's events find it by id, by position, or as the one still open, and an item, part or call missing its start is made when its events come. A function call runs with its final copy's arguments, also when the separate end of its arguments never came, and a call repeated with other arguments or another's call id stops the reply.
+- Repeated events, items of other kinds (a web search), unknown message phases, non-text deltas, a namespace that is not a text and a queued response no longer fail a reply; a completed response with nothing in it is an empty reply.
+
 ## 0.28.1 — What a login program says when it fails
 
 ### Fixed
