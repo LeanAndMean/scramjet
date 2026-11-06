@@ -345,8 +345,16 @@ pub(super) struct Main {
     pub(super) lift: f64,
 }
 
+/// What the user made of a role: lit as its kind is from another main color than its own, out
+/// of any meaning's hue range, or an exact color.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Pick {
+    Follow(usize),
+    Exact(Rgb),
+}
+
 /// What the theme editor makes a theme from: its main colors in a harmony, a dark or light
-/// main background, and how much contrast.
+/// main background, how much contrast, and what the user picked for single roles.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Draft {
     /// An index into `HARMONIES`, with as many hues as there are main colors.
@@ -359,6 +367,8 @@ pub(super) struct Draft {
     pub(super) tint: f64,
     /// Steps of contrast above or below each band's middle.
     pub(super) contrast: i32,
+    /// Each token's pick, in `TOKENS`' order; `None` follows its own source.
+    pub(super) picks: Vec<Option<Pick>>,
 }
 
 /// The highest step of contrast either way, at which every role is at its band's edge.
@@ -423,6 +433,15 @@ impl Meaning {
         }
     }
 
+    /// Its hues and what they mean, in plain words.
+    pub(super) fn words(self) -> &'static str {
+        match self {
+            Self::Error => "red, for errors",
+            Self::Warning => "amber, for warnings",
+            Self::Success => "green, for success",
+        }
+    }
+
     /// Its hue: of the hues in its range, the one nearest a main color's, which is that main
     /// color's own when one is in the range.
     fn hue(self, mains: &[Main]) -> f64 {
@@ -448,7 +467,7 @@ impl Meaning {
 /// Where a role takes its hue and chroma from: a slot of the main colors, the first ones each
 /// a main color in turn and the later ones each a shade of one, or a meaning.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Source {
+pub(super) enum Source {
     Main(usize),
     Meaning(Meaning),
 }
@@ -516,6 +535,12 @@ fn role(token: Token) -> (Kind, Source, f64) {
     }
 }
 
+/// What `token` is drawn as, and where it takes its color from unless a pick says otherwise.
+pub(super) fn own(token: Token) -> (Kind, Source) {
+    let (kind, source, _) = role(token);
+    (kind, source)
+}
+
 /// `place` folded back into 0 to 1 at its ends.
 fn folded(place: f64) -> f64 {
     let place = place.rem_euclid(2.0);
@@ -545,6 +570,7 @@ impl Draft {
             depth: 0.5,
             tint: 0.5,
             contrast: 0,
+            picks: vec![None; TOKENS.len()],
         };
         draft.roll(&[], rng);
         draft
@@ -661,7 +687,11 @@ impl Draft {
 
     fn color(&self, token: Token, background: Rgb) -> Rgb {
         let (kind, source, place) = role(token);
-        self.lit(kind, source, place, background)
+        match self.picks[token as usize] {
+            None => self.lit(kind, source, place, background),
+            Some(Pick::Follow(index)) => self.lit(kind, Source::Main(index), place, background),
+            Some(Pick::Exact(rgb)) => rgb,
+        }
     }
 
     fn lit(&self, kind: Kind, source: Source, place: f64, background: Rgb) -> Rgb {

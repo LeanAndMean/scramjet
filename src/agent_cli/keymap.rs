@@ -95,6 +95,9 @@ pub(super) enum Binding {
     ThemeContrastDown,
     ThemeUndo,
     ThemeRedo,
+    ThemeRoles,
+    ThemeExact,
+    ThemeReset,
 }
 
 /// Where `/hotkeys` lists an action.
@@ -152,7 +155,7 @@ use Section as S;
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 78] = [
+const DEFINITIONS: [Definition; 81] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -231,6 +234,9 @@ const DEFINITIONS: [Definition; 78] = [
     define(B::ThemeContrastDown, "app.theme.contrastDown", &["-"], S::ThemeEditor, "Less contrast"),
     define(B::ThemeUndo, "app.theme.undo", &["u"], S::ThemeEditor, "Undo a roll or step"),
     define(B::ThemeRedo, "app.theme.redo", &["shift+u"], S::ThemeEditor, "Redo a roll or step"),
+    define(B::ThemeRoles, "app.theme.roles", &["tab"], S::ThemeEditor, "Show every role, or the main colors again"),
+    define(B::ThemeExact, "app.theme.exact", &["#"], S::ThemeEditor, "Type the role's exact color"),
+    define(B::ThemeReset, "app.theme.reset", &["backspace", "delete"], S::ThemeEditor, "Make the role follow its own main color again"),
 ];
 
 /// The keys of every action, in `DEFINITIONS`' order.

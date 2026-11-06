@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.30.0 — Every role in the theme editor
+
+### Added
+
+- The theme editor lists every role of the theme with Tab: all 52, each with its color, its contrast with the background in numbers and words, what it follows and a line on what it colors. Left and Right make a role follow another of the main colors than its own (a color with a meaning, such as the errors' red, then leaves its range of hues), `#` sets it to an exact color typed as hex (`ff8800` or `f80`, pasted too), and Backspace makes it follow its own again. Rolls and contrast steps keep these picks, undo and redo go through them, and the saved theme holds them.
+- Its keys are in `/hotkeys` and `keybindings.json`: `app.theme.roles`, `app.theme.exact` and `app.theme.reset`.
+
 ## 0.29.0 — A theme editor
 
 ### Added

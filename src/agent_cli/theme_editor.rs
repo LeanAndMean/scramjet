@@ -1,17 +1,19 @@
 //! The theme editor in `/settings`: a theme made from a few main colors in a harmony, rolled
 //! until it is close, its liked colors locked, stepped toward the harmony or toward more or less
-//! contrast, with undo and redo, while a sample session shows it in the conversation's place.
+//! contrast, and each of its roles, one view away, set to follow another main color or to an
+//! exact color, with undo and redo, while a sample session shows it in the conversation's place.
 //! It is saved as a theme file in Scramjet's format.
 
 use super::keymap::{self, Binding};
 use super::keys::Key;
 use super::palette::{
-    self, Built, CONTRAST_STEPS, Draft, HARMONIES, Kind, Oklch, Rgb, Rng, harmonies,
+    self, Built, CONTRAST_STEPS, Draft, HARMONIES, Kind, Meaning, Oklch, Pick, Rgb, Rng, Source,
+    harmonies,
 };
 use super::record::Event;
 use super::style::{self, RESET};
 use super::text::{self, Wrap};
-use super::theme::{self, Color, Mode, Theme, Token};
+use super::theme::{self, Color, KEYS, Mode, TOKENS, Theme, Token};
 use scramjet_rs::agent::{Ending, StreamProgress, ToolDetail, UserCommand};
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
@@ -22,6 +24,15 @@ const MOST: usize = 5;
 const HUE_STEP: f64 = 5.0;
 /// The note under the rows takes at most as many.
 const NOTE_ROWS: usize = 3;
+/// The roles' view shows at most as many at a time.
+const ROLE_ROWS: usize = 10;
+
+/// What the editor shows: the main colors and what makes the theme of them, or every role.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum View {
+    Main,
+    Roles,
+}
 
 /// A row of the editor.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -48,6 +59,11 @@ pub(super) struct ThemeEditor {
     /// The main colors a roll keeps, which anchor the harmony.
     locked: Vec<bool>,
     row: usize,
+    view: View,
+    /// The role selected in the roles' view, an index into `TOKENS`, and the hex digits of an
+    /// exact color being typed for it.
+    role: usize,
+    typing: Option<String>,
     rng: Rng,
     /// Said in place of the keys' hint until the next key (`true`: a warning).
     status: Option<(String, bool)>,
@@ -70,6 +86,9 @@ impl ThemeEditor {
             history: vec![draft],
             at: 0,
             row: 0,
+            view: View::Main,
+            role: 0,
+            typing: None,
             rng,
             status: None,
         }
@@ -127,23 +146,20 @@ impl ThemeEditor {
     /// Changes the theme as `key` asks, or returns how it ended the editor.
     pub(super) fn key(&mut self, key: &Key) -> Option<Ended> {
         self.status = None;
-        let rows = self.rows();
-        let row = rows[self.row];
+        if self.typing.is_some() {
+            self.type_color(key);
+            return None;
+        }
         match key {
             _ if key.is(Binding::SelectConfirm) => return Some(Ended::Save),
             _ if key.is(Binding::SelectCancel) => return Some(Ended::Cancel),
-            _ if key.is(Binding::SelectUp) => self.row = (self.row + rows.len() - 1) % rows.len(),
-            _ if key.is(Binding::SelectDown) => self.row = (self.row + 1) % rows.len(),
-            _ if key.is(Binding::CursorLeft) => self.change(row, -1),
-            _ if key.is(Binding::CursorRight) => self.change(row, 1),
-            _ if key.is(Binding::ThemeRoll) => self.roll(),
-            _ if key.is(Binding::ThemeLock) => match row {
-                Row::Main(index) => {
-                    self.locked[index] = !self.locked[index];
-                    self.rescore();
+            _ if key.is(Binding::ThemeRoles) => {
+                self.view = match self.view {
+                    View::Main => View::Roles,
+                    View::Roles => View::Main,
                 }
-                _ => self.say("Select a main color to lock it", true),
-            },
+            }
+            _ if key.is(Binding::ThemeRoll) => self.roll(),
             _ if key.is(Binding::ThemeHarmonize) => self.harmonize(),
             _ if key.is(Binding::ThemeContrastUp) => self.change(Row::Contrast, 1),
             _ if key.is(Binding::ThemeContrastDown) => self.change(Row::Contrast, -1),
@@ -155,9 +171,117 @@ impl ThemeEditor {
                 true => self.show(self.at + 1),
                 false => self.say("Nothing to redo", true),
             },
-            _ => {}
+            _ => match self.view {
+                View::Main => self.main_key(key),
+                View::Roles => self.roles_key(key),
+            },
         }
         None
+    }
+
+    fn main_key(&mut self, key: &Key) {
+        let rows = self.rows();
+        let row = rows[self.row];
+        match key {
+            _ if key.is(Binding::SelectUp) => self.row = (self.row + rows.len() - 1) % rows.len(),
+            _ if key.is(Binding::SelectDown) => self.row = (self.row + 1) % rows.len(),
+            _ if key.is(Binding::CursorLeft) => self.change(row, -1),
+            _ if key.is(Binding::CursorRight) => self.change(row, 1),
+            _ if key.is(Binding::ThemeLock) => match row {
+                Row::Main(index) => {
+                    self.locked[index] = !self.locked[index];
+                    self.rescore();
+                }
+                _ => self.say("Select a main color to lock it", true),
+            },
+            _ => {}
+        }
+    }
+
+    fn roles_key(&mut self, key: &Key) {
+        let count = TOKENS.len();
+        match key {
+            _ if key.is(Binding::SelectUp) => self.role = (self.role + count - 1) % count,
+            _ if key.is(Binding::SelectDown) => self.role = (self.role + 1) % count,
+            _ if key.is(Binding::SelectFirst) => self.role = 0,
+            _ if key.is(Binding::SelectLast) => self.role = count - 1,
+            _ if key.is(Binding::CursorLeft) => self.follow(-1),
+            _ if key.is(Binding::CursorRight) => self.follow(1),
+            _ if key.is(Binding::ThemeExact) => self.typing = Some(String::new()),
+            Key::Paste(_) => {
+                self.typing = Some(String::new());
+                self.type_color(key);
+            }
+            _ if key.is(Binding::ThemeReset) => match self.draft().picks[self.role] {
+                None => self.say("It follows its own color already", false),
+                Some(_) => self.pick(None),
+            },
+            _ if key.is(Binding::ThemeLock) => {
+                let roles = keymap::key(Binding::ThemeRoles).unwrap_or_default();
+                self.say(
+                    &format!("Lock main colors in the first view ({roles})"),
+                    true,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Sets the selected role's pick, as a step undo goes back from.
+    fn pick(&mut self, pick: Option<Pick>) {
+        let mut draft = self.draft().clone();
+        draft.picks[self.role] = pick;
+        self.push(draft);
+    }
+
+    /// Makes the selected role follow the next main color, `by` -1 or 1, or its own again: the
+    /// main colors other than its own, in turn, after its own.
+    fn follow(&mut self, by: i32) {
+        let (_, own) = palette::own(TOKENS[self.role]);
+        let mut choices = vec![None];
+        let others = (0..self.draft().mains.len()).filter(|&index| own != Source::Main(index));
+        choices.extend(others.map(|index| Some(Pick::Follow(index))));
+        if choices.len() == 1 {
+            return self.say("With one main color, it can follow only that one", true);
+        }
+        let count = choices.len() as i32;
+        let at = match choices
+            .iter()
+            .position(|&choice| choice == self.draft().picks[self.role])
+        {
+            Some(at) => (at as i32 + by).rem_euclid(count),
+            None if by > 0 => 0,
+            None => count - 1,
+        };
+        self.pick(choices[at as usize]);
+    }
+
+    /// Takes `key` toward the exact color being typed: its hex digits, Backspace, Enter to set
+    /// it, Escape to leave it.
+    fn type_color(&mut self, key: &Key) {
+        let mut typed = self.typing.take().unwrap_or_default();
+        match key {
+            Key::Text(text) | Key::Paste(text) => {
+                let text = text.trim();
+                let text = text.strip_prefix('#').unwrap_or(text);
+                let fits = text.chars().all(|c| c.is_ascii_hexdigit());
+                if fits && typed.len() + text.len() <= 6 {
+                    typed.push_str(&text.to_ascii_lowercase());
+                } else {
+                    self.say("A color is six hex digits, such as ff8800", true);
+                }
+            }
+            _ if key.is(Binding::DeleteCharBackward) => {
+                typed.pop();
+            }
+            _ if key.is(Binding::SelectConfirm) => match hex(&typed) {
+                Some(rgb) => return self.pick(Some(Pick::Exact(rgb))),
+                None => self.say("Type six hex digits, or three", true),
+            },
+            _ if key.is(Binding::SelectCancel) => return,
+            _ => {}
+        }
+        self.typing = Some(typed);
     }
 
     /// Rolls the colors not locked, and the background.
@@ -205,6 +329,13 @@ impl ThemeEditor {
                 let mut locked: Vec<bool> = order.iter().map(|&index| self.locked[index]).collect();
                 draft.mains.truncate(count as usize);
                 locked.resize(count as usize, false);
+                // Roles following a main color follow it where it went, or their own if it went.
+                for pick in &mut draft.picks {
+                    if let Some(Pick::Follow(index)) = *pick {
+                        let to = order.iter().position(|&from| from == index);
+                        *pick = (to.filter(|&to| to < count as usize)).map(Pick::Follow);
+                    }
+                }
                 draft.harmony = harmonies(count as usize)[0];
                 draft.roll(&locked, &mut self.rng);
             }
@@ -306,14 +437,20 @@ impl ThemeEditor {
         }
     }
 
-    /// The harmony's score and the faintest text's contrast, in numbers and plain words.
+    /// The harmony's score, the faintest text's contrast, in numbers and plain words, and how
+    /// many roles were picked.
     fn scores(&self) -> String {
         let score = self.score;
         let background = self.built.background;
         let ratio = |token| palette::contrast(self.built.color(token), background);
         let (text, dim) = (ratio(Token::Text), ratio(Token::Dim));
+        let picked = match self.draft().picks.iter().flatten().count() {
+            0 => String::new(),
+            1 => " · 1 role picked".to_owned(),
+            count => format!(" · {count} roles picked"),
+        };
         format!(
-            "Harmony {:.0}% {} · text {text:.1}:1 {} · dim text {dim:.1}:1 {}",
+            "Harmony {:.0}% {} · text {text:.1}:1 {} · dim text {dim:.1}:1 {}{picked}",
             score * 100.0,
             palette::harmony_words(score),
             palette::contrast_words(text, Kind::Text),
@@ -321,71 +458,196 @@ impl ThemeEditor {
         )
     }
 
-    /// The editor's rows for a dock of `(width, height)`: the title and keys, each row with
-    /// its value, the scores, the keys that change the theme and the selected row's note, the
-    /// note left out first when there is no room, then the keys.
+    /// What the role at `at` takes its color from, in plain words.
+    fn follows(&self, at: usize) -> String {
+        let draft = self.draft();
+        let (kind, own) = palette::own(TOKENS[at]);
+        let count = draft.mains.len();
+        let named = |source| match source {
+            Source::Main(slot) => {
+                let main = slot % count + 1;
+                match (kind, slot < count) {
+                    (Kind::Accent, true) => format!("color {main}"),
+                    (Kind::Accent, false) => format!("a shade of color {main}"),
+                    _ => format!("a tint of color {main}"),
+                }
+            }
+            Source::Meaning(meaning) => meaning.words().to_owned(),
+        };
+        match draft.picks[at] {
+            None => named(own),
+            Some(Pick::Follow(index)) => named(Source::Main(index)) + ", picked",
+            Some(Pick::Exact(_)) => "set by hand".to_owned(),
+        }
+    }
+
+    /// The row of the role at `at`: its name, its color, its contrast with the background in
+    /// its kind's words and what it follows, which the keys change, or the color being typed.
+    fn role_row(&self, at: usize, selected: bool) -> String {
+        let name = KEYS.iter().map(|key| key.len()).max().unwrap_or(0);
+        let rgb = self.built.colors[at];
+        let (r, g, b) = rgb;
+        let (kind, _) = palette::own(TOKENS[at]);
+        let ratio = palette::contrast(rgb, self.built.background);
+        let words = palette::contrast_words(ratio, kind);
+        let source = match (&self.typing, selected) {
+            (Some(typed), true) => {
+                let cursor = style::SEARCH_CURSOR;
+                let typed_swatch =
+                    hex(typed).map_or(String::new(), |rgb| format!(" {}", swatch(rgb)));
+                format!("‹ #{typed}{cursor} {RESET}{typed_swatch} ›")
+            }
+            (None, true) => format!("‹ {} ›", self.follows(at)),
+            _ => self.follows(at),
+        };
+        format!(
+            "{:name$}  {} #{r:02x}{g:02x}{b:02x}  {ratio:>4.1}:1 {words:11}  {source}",
+            KEYS[at],
+            swatch(rgb),
+        )
+    }
+
+    /// The note under the roles: what the selected one colors and what the keys do with it.
+    fn role_note(&self) -> String {
+        if self.typing.is_some() {
+            return "Type the color as six hex digits, such as ff8800, or three, such as f80. \
+                    Its contrast shows once it is set; undo takes it back."
+                .to_owned();
+        }
+        let token = TOKENS[self.role];
+        let range = match palette::own(token).1 {
+            Source::Meaning(meaning) => {
+                let hues = match meaning {
+                    Meaning::Error => "errors' reds",
+                    Meaning::Warning => "warnings' ambers",
+                    Meaning::Success => "success's greens",
+                };
+                format!(" Its hue stays within {hues} unless it follows a main color.")
+            }
+            Source::Main(_) => String::new(),
+        };
+        let left_right = keymap::keys(&[Binding::CursorLeft, Binding::CursorRight]);
+        let left_right = left_right.as_deref().unwrap_or("Left and Right");
+        let exact = keymap::key(Binding::ThemeExact).unwrap_or_default();
+        let reset = keymap::key(Binding::ThemeReset).unwrap_or_default();
+        format!(
+            "{}{range} {left_right} picks the main color it follows, {exact} an exact color, \
+             {reset} its own again.",
+            about(token)
+        )
+    }
+
+    /// The editor's rows for a dock of `(width, height)`: the title and keys, the main colors'
+    /// rows each with its value or a window of the roles' rows, the scores, the keys that change
+    /// the theme and the selected row's note, the note left out first when there is no room,
+    /// then the keys.
     pub(super) fn lines(&self, (width, height): (usize, usize)) -> Vec<String> {
         use style::{MUTED, SELECTED, SELECTOR_DONE, SELECTOR_MARK, SELECTOR_TITLE};
         use style::{SELECTOR_WARNING, STATUS};
         let width = width.saturating_sub(1).max(8);
-        let hint = keymap::hint([
-            keymap::part(&[Binding::SelectUp, Binding::SelectDown], "move"),
-            keymap::part(&[Binding::CursorLeft, Binding::CursorRight], "change"),
-            keymap::part(&[Binding::SelectConfirm], "save"),
-            keymap::part(&[Binding::SelectCancel], "cancel"),
-        ]);
+        let part = keymap::part;
+        let hint = match (self.view, &self.typing) {
+            (View::Main, _) => keymap::hint([
+                part(&[Binding::SelectUp, Binding::SelectDown], "move"),
+                part(&[Binding::CursorLeft, Binding::CursorRight], "change"),
+                part(&[Binding::ThemeRoles], "every role"),
+                part(&[Binding::SelectConfirm], "save"),
+                part(&[Binding::SelectCancel], "cancel"),
+            ]),
+            (View::Roles, None) => keymap::hint([
+                part(&[Binding::SelectUp, Binding::SelectDown], "move"),
+                part(&[Binding::CursorLeft, Binding::CursorRight], "follow"),
+                part(&[Binding::ThemeExact], "exact"),
+                part(&[Binding::ThemeRoles], "back"),
+                part(&[Binding::SelectConfirm], "save"),
+                part(&[Binding::SelectCancel], "cancel"),
+            ]),
+            (View::Roles, Some(_)) => keymap::hint([
+                part(&[Binding::SelectConfirm], "set the color"),
+                part(&[Binding::SelectCancel], "leave it"),
+            ]),
+        };
         let (status, status_style) = match &self.status {
             Some((status, true)) => (status.as_str(), SELECTOR_WARNING),
             Some((status, false)) => (status.as_str(), SELECTOR_DONE),
             None => (hint.as_str(), MUTED),
         };
-        let title = "Theme editor";
+        let title = match self.view {
+            View::Main => "Theme editor".to_owned(),
+            View::Roles => format!("Theme editor · role {} of {}", self.role + 1, TOKENS.len()),
+        };
         let status = text::clip(status, width.saturating_sub(title.width() + 2));
         let mut lines = vec![format!(
             "{SELECTOR_TITLE}{title}{RESET}  {status_style}{status}{RESET}"
         )];
-        let rows = self.rows();
-        let shown: Vec<_> = rows.iter().map(|&row| self.row(row)).collect();
-        let label = shown
-            .iter()
-            .map(|(label, ..)| label.width())
-            .max()
-            .unwrap_or(0);
-        for (at, (name, value, _)) in shown.iter().enumerate() {
-            let text = match at == self.row {
-                true => format!("{name:label$}  ‹ {value} ›"),
-                false => format!("{name:label$}  {value}"),
-            };
-            let text = text::clip(&text, width - 2);
-            lines.push(match at == self.row {
+        let row = |text: &str, selected: bool| {
+            let text = text::clip(text, width - 2);
+            match selected {
                 true => {
                     let text = text.replace(RESET, &format!("{RESET}{SELECTED}"));
                     format!("{SELECTOR_MARK}›{RESET} {SELECTED}{text}{RESET}")
                 }
                 false => format!("  {text}"),
-            });
-        }
+            }
+        };
+        let mut wrap = Wrap::new(width - 2);
+        let note = match self.view {
+            View::Main => {
+                let rows = self.rows();
+                let shown: Vec<_> = rows.iter().map(|&row| self.row(row)).collect();
+                let label = (shown.iter())
+                    .map(|(label, ..)| label.width())
+                    .max()
+                    .unwrap_or(0);
+                for (at, (name, value, _)) in shown.iter().enumerate() {
+                    let text = match at == self.row {
+                        true => format!("{name:label$}  ‹ {value} ›"),
+                        false => format!("{name:label$}  {value}"),
+                    };
+                    lines.push(row(&text, at == self.row));
+                }
+                wrap.push(&shown[self.row].2) + &wrap.finish()
+            }
+            View::Roles => {
+                let note = wrap.push(&self.role_note()) + &wrap.finish();
+                // The title and the scores, then the keys, then the blank row and the note,
+                // each once the rows above them have room enough.
+                let full = 4 + note.split('\n').take(NOTE_ROWS).count();
+                let room = match height {
+                    height if height >= full + 5 => height - full,
+                    height if height >= 6 => height - 3,
+                    height => height.saturating_sub(2),
+                };
+                let room = room.clamp(1, ROLE_ROWS);
+                let first = (self.role.saturating_sub(room / 2)).min(TOKENS.len() - room);
+                for at in first..first + room {
+                    lines.push(row(&self.role_row(at, at == self.role), at == self.role));
+                }
+                note
+            }
+        };
+        let note: Vec<&str> = note.split('\n').take(NOTE_ROWS).collect();
         let scores = text::clip(&self.scores(), width - 2);
         let keys = keymap::hint([
-            keymap::part(&[Binding::ThemeRoll], "roll"),
-            keymap::part(&[Binding::ThemeLock], "lock"),
-            keymap::part(&[Binding::ThemeHarmonize], "toward the harmony"),
-            keymap::part(
+            part(&[Binding::ThemeRoll], "roll"),
+            match self.view {
+                View::Main => part(&[Binding::ThemeLock], "lock"),
+                View::Roles => None,
+            },
+            part(&[Binding::ThemeHarmonize], "toward the harmony"),
+            part(
                 &[Binding::ThemeContrastUp, Binding::ThemeContrastDown],
                 "contrast",
             ),
-            keymap::part(&[Binding::ThemeUndo], "undo"),
-            keymap::part(&[Binding::ThemeRedo], "redo"),
+            part(&[Binding::ThemeUndo], "undo"),
+            part(&[Binding::ThemeRedo], "redo"),
         ]);
         let keys = text::clip(&keys, width - 2);
-        let mut wrap = Wrap::new(width - 2);
-        let note = wrap.push(&shown[self.row].2) + &wrap.finish();
-        let note: Vec<&str> = note.split('\n').take(NOTE_ROWS).collect();
         let mut under = vec![format!("  {STATUS}{scores}{RESET}")];
-        if height > lines.len() + 2 + note.len() + 1 {
+        if height >= lines.len() + 2 {
             under.push(format!("  {MUTED}{keys}{RESET}"));
         }
-        if height >= lines.len() + under.len() + 1 + note.len() {
+        if height >= lines.len() + 3 + note.len() {
             under.insert(0, String::new());
             under.extend(note.iter().map(|row| format!("  {MUTED}{row}{RESET}")));
         }
@@ -424,6 +686,77 @@ impl ThemeEditor {
             add(name, built.color(token));
         }
         theme::file_text(name, &vars, &built.colors, built.background)
+    }
+}
+
+/// The color of hex digits typed: six, or three, each doubled.
+fn hex(digits: &str) -> Option<Rgb> {
+    let digits = match digits.len() {
+        3 => digits.chars().flat_map(|c| [c, c]).collect(),
+        6 => digits.to_owned(),
+        _ => return None,
+    };
+    let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
+    Some((channel(0)?, channel(2)?, channel(4)?))
+}
+
+/// What `token` colors here, in a line, Scramjet's meaning where scramjet-rs does not show it.
+#[rustfmt::skip]
+fn about(token: Token) -> &'static str {
+    use Token as T;
+    match token {
+        T::Accent => "The main accent: the spinner, the mark of a list's selected row, the banner's name, a question's title.",
+        T::Border => "Borders: the rules around a question the model asks.",
+        T::BorderAccent => "Highlighted borders: compactions in /tree.",
+        T::BorderMuted => "Quiet borders: the rails beside reasoning and calls in the looks other than the classic one, the card banner's border.",
+        T::Success => "Success: calls and subagents that went well, the mark of the current session or model, models switched on.",
+        T::Error => "Errors: failed calls, commands and subagents, a full context, what a list's key cannot do.",
+        T::Warning => "Warnings: retries, notices, running calls and subagents, a filling context, labels and named sessions.",
+        T::Muted => "Secondary text: the status line, notes such as Took 1.4s, hints, next steps, headings in lists.",
+        T::Dim => "Faint text: the footer, the banner's keys and lists, the tree lines in lists, models switched off.",
+        T::Text => "Text: replies, and everything without a color of its own.",
+        T::ThinkingText => "The reasoning a model shows.",
+        T::SelectedBg => "A selected line's background, in Scramjet; scramjet-rs does not show it.",
+        T::UserMessageBg => "Behind your prompts, in the panels look.",
+        T::UserMessageText => "Your prompts, in the looks other than the classic one.",
+        T::CustomMessageBg => "Behind extensions' messages, in Scramjet; scramjet-rs does not show it.",
+        T::CustomMessageText => "Compaction summaries.",
+        T::CustomMessageLabel => "Extensions' message labels, in Scramjet; scramjet-rs does not show it.",
+        T::ToolPendingBg => "Behind a call while it runs, in the panels look.",
+        T::ToolSuccessBg => "Behind a call that went well, in the panels look.",
+        T::ToolErrorBg => "Behind a call that failed, in the panels look.",
+        T::ToolTitle => "A subagent's name, and a call's tool in the looks other than the classic one.",
+        T::ToolOutput => "What a call returned, under it.",
+        T::MdHeading => "Headings in replies, and the banner's.",
+        T::MdLink => "A link's text in replies.",
+        T::MdLinkUrl => "A link's address, after its text.",
+        T::MdCode => "Code in a line of text.",
+        T::MdCodeBlock => "A code block where it is not highlighted.",
+        T::MdCodeBlockBorder => "The fence lines around a code block.",
+        T::MdQuote => "Quoted text in replies.",
+        T::MdQuoteBorder => "The bar before quoted text.",
+        T::MdHr => "Horizontal rules in replies.",
+        T::MdListBullet => "List bullets and numbers.",
+        T::ToolDiffAdded => "Added lines in a diff.",
+        T::ToolDiffRemoved => "Removed lines in a diff.",
+        T::ToolDiffContext => "The unchanged lines around a diff's changes.",
+        T::SyntaxComment => "Comments in highlighted code, and a diff's headers.",
+        T::SyntaxKeyword => "Keywords in highlighted code.",
+        T::SyntaxFunction => "Function names in highlighted code.",
+        T::SyntaxVariable => "Variables, parameters and keys in highlighted code.",
+        T::SyntaxString => "Strings in highlighted code.",
+        T::SyntaxNumber => "Numbers, and values such as true, in highlighted code.",
+        T::SyntaxType => "Types and built-ins in highlighted code.",
+        T::SyntaxOperator => "Operators in Scramjet's highlighted code; scramjet-rs leaves them plain.",
+        T::SyntaxPunctuation => "Punctuation in Scramjet's highlighted code; scramjet-rs leaves it plain.",
+        T::ThinkingOff => "The prompt's border with thinking off, in Scramjet; scramjet-rs does not show it.",
+        T::ThinkingMinimal => "The prompt's border at minimal thinking, in Scramjet; scramjet-rs does not show it.",
+        T::ThinkingLow => "The prompt's border at low thinking, in Scramjet; scramjet-rs does not show it.",
+        T::ThinkingMedium => "The prompt's border at medium thinking, in Scramjet; scramjet-rs does not show it.",
+        T::ThinkingHigh => "The prompt's border at high thinking, in Scramjet; scramjet-rs does not show it.",
+        T::ThinkingXhigh => "The prompt's border at extra high thinking, in Scramjet; scramjet-rs does not show it.",
+        T::BashMode => "Commands you run with !: the rules around their output and the command's line.",
+        T::SpellcheckError => "Misspelled words in the prompt, in Scramjet; scramjet-rs does not check spelling yet.",
     }
 }
 
@@ -665,6 +998,224 @@ mod tests {
         let vars = json["vars"].as_object().unwrap();
         assert_eq!(vars.len(), 3 + 5);
         assert_eq!(Theme::parse(&text).unwrap(), editor.theme());
+    }
+
+    fn token_at(token: Token) -> usize {
+        TOKENS.iter().position(|&t| t == token).unwrap()
+    }
+
+    #[test]
+    fn every_role_can_follow_another_main_color_and_its_own_again() {
+        let mut editor = ThemeEditor::new(6, false);
+        editor.key(&press(Code::Tab));
+        let shown = lines(&editor);
+        assert!(
+            shown[0].starts_with("Theme editor · role 1 of 52  "),
+            "{shown:?}"
+        );
+        assert!(shown[1].starts_with("› accent  "), "{shown:?}");
+        assert!(shown[1].ends_with("‹ color 1 ›"), "{shown:?}");
+        assert!(shown.iter().any(|line| line.contains("The main accent")));
+        // The heading follows color 3; Right makes it follow color 1, then color 2, then its own.
+        editor.role = token_at(Token::MdHeading);
+        let accent =
+            |editor: &ThemeEditor, index| editor.draft().accent(index, editor.built.background);
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.draft().picks[editor.role], Some(Pick::Follow(0)));
+        assert_eq!(editor.built.color(Token::MdHeading), accent(&editor, 0));
+        assert!(
+            lines(&editor)
+                .iter()
+                .any(|line| line.contains("‹ color 1, picked ›"))
+        );
+        assert!(
+            lines(&editor)
+                .iter()
+                .any(|line| line.contains("1 role picked"))
+        );
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.built.color(Token::MdHeading), accent(&editor, 1));
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.draft().picks[editor.role], None);
+        assert_eq!(editor.built.color(Token::MdHeading), accent(&editor, 2));
+        editor.key(&press(Code::Left));
+        assert_eq!(editor.draft().picks[editor.role], Some(Pick::Follow(1)));
+        // A roll gives the colors anew; the role follows color 2 as it is now.
+        editor.key(&typed("r"));
+        assert_eq!(editor.built.color(Token::MdHeading), accent(&editor, 1));
+        editor.key(&press(Code::Backspace));
+        assert_eq!(editor.draft().picks[editor.role], None);
+        editor.key(&press(Code::Backspace));
+        assert_eq!(
+            editor.status,
+            Some(("It follows its own color already".into(), false))
+        );
+        editor.key(&typed("u"));
+        assert_eq!(editor.draft().picks[editor.role], Some(Pick::Follow(1)));
+        // Locks are for the main colors' view.
+        editor.key(&typed("l"));
+        assert!(
+            editor
+                .status
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("first view (Tab)")
+        );
+        // Up from the first role goes round to the last; End and Home go there too.
+        editor.key(&press(Code::Home));
+        editor.key(&press(Code::Up));
+        assert_eq!(TOKENS[editor.role], Token::SpellcheckError);
+        editor.key(&press(Code::Tab));
+        assert!(lines(&editor)[0].starts_with("Theme editor  "));
+    }
+
+    #[test]
+    fn a_color_with_a_meaning_leaves_its_hue_range_when_it_follows_a_main_color() {
+        let mut editor = ThemeEditor::new(7, false);
+        editor.view = View::Roles;
+        editor.role = token_at(Token::Error);
+        assert!(
+            lines(&editor)
+                .iter()
+                .any(|line| line.contains("‹ red, for errors ›"))
+        );
+        assert!(
+            editor
+                .role_note()
+                .contains("Its hue stays within errors' reds unless")
+        );
+        // A main color far from red: the error color goes with it.
+        let mut draft = editor.draft().clone();
+        draft.mains[0].hue = 250.0;
+        draft.picks[editor.role] = Some(Pick::Follow(0));
+        editor.push(draft);
+        let hue = Oklch::of(editor.built.color(Token::Error)).h;
+        assert!((hue - 250.0).abs() < 5.0, "{hue}");
+        // With one main color, the diff's added lines follow it or their own.
+        editor.view = View::Main;
+        editor.row = 0;
+        editor.key(&press(Code::Left));
+        editor.key(&press(Code::Left));
+        assert_eq!(editor.draft().mains.len(), 1);
+        editor.view = View::Roles;
+        editor.role = token_at(Token::ToolDiffAdded);
+        editor.key(&press(Code::Right));
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.draft().picks[editor.role], None);
+        editor.role = token_at(Token::Accent);
+        editor.key(&press(Code::Right));
+        assert_eq!(
+            editor.status.as_ref().unwrap().0,
+            "With one main color, it can follow only that one"
+        );
+    }
+
+    #[test]
+    fn a_role_set_to_an_exact_color_keeps_it_through_rolls_and_into_the_file() {
+        let mut editor = ThemeEditor::new(8, false);
+        editor.key(&press(Code::Tab));
+        editor.role = token_at(Token::SyntaxNumber);
+        editor.key(&typed("#"));
+        editor.key(&typed("F8"));
+        assert!(
+            lines(&editor).iter().any(|line| line.contains("‹ #f8  ›")),
+            "{:?}",
+            lines(&editor)
+        );
+        // Not a hex digit, or a seventh: refused, and what was typed stays.
+        editor.key(&typed("g"));
+        assert!(editor.status.as_ref().unwrap().0.contains("six hex digits"));
+        editor.key(&press(Code::Enter));
+        assert_eq!(
+            editor.status,
+            Some(("Type six hex digits, or three".into(), true))
+        );
+        editor.key(&typed("0"));
+        // Keys that change the theme are typed text meanwhile.
+        editor.key(&typed("r"));
+        assert_eq!(editor.typing.as_deref(), Some("f80"));
+        editor.key(&press(Code::Enter));
+        assert_eq!(editor.typing, None);
+        let orange = (0xff, 0x88, 0x00);
+        assert_eq!(editor.built.color(Token::SyntaxNumber), orange);
+        assert!(
+            lines(&editor)
+                .iter()
+                .any(|line| line.contains("‹ set by hand ›"))
+        );
+        editor.key(&typed("r"));
+        assert_eq!(editor.built.color(Token::SyntaxNumber), orange);
+        // A pasted color, `#` and all; Escape leaves one being typed, and the editor stays.
+        editor.role = token_at(Token::SyntaxString);
+        editor.key(&Key::Paste("#1E90FF\n".into()));
+        assert_eq!(editor.typing.as_deref(), Some("1e90ff"));
+        editor.key(&press(Code::Backspace));
+        assert_eq!(editor.key(&press(Code::Escape)), None);
+        assert_eq!(editor.typing, None);
+        assert_eq!(editor.draft().picks[editor.role], None);
+        let text = editor.file_text("exact");
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["colors"]["syntaxNumber"], "#ff8800");
+        assert_eq!(Theme::parse(&text).unwrap(), editor.theme());
+    }
+
+    #[test]
+    fn roles_following_a_main_color_follow_it_where_a_change_of_count_moves_it() {
+        let mut editor = ThemeEditor::new(9, false);
+        let (heading, link) = (token_at(Token::MdHeading), token_at(Token::MdLink));
+        let mut draft = editor.draft().clone();
+        draft.picks[heading] = Some(Pick::Follow(2));
+        draft.picks[link] = Some(Pick::Follow(0));
+        editor.push(draft);
+        // The third color locked goes first when there are two; the first is dropped.
+        editor.row = 6;
+        editor.key(&typed("l"));
+        let kept = editor.draft().mains[2].clone();
+        editor.row = 0;
+        editor.key(&press(Code::Left));
+        assert_eq!(editor.draft().mains[0], kept);
+        assert_eq!(editor.draft().picks[heading], Some(Pick::Follow(0)));
+        let first = editor.draft().accent(0, editor.built.background);
+        assert_eq!(editor.built.color(Token::MdHeading), first);
+        assert_eq!(editor.draft().picks[link], Some(Pick::Follow(1)));
+        editor.key(&press(Code::Left));
+        assert_eq!(editor.draft().picks[link], None);
+    }
+
+    #[test]
+    fn the_roles_view_shows_a_window_around_the_selected_role() {
+        let mut editor = ThemeEditor::new(10, false);
+        editor.view = View::Roles;
+        editor.role = token_at(Token::MdCode);
+        let shown = lines(&editor);
+        let roles: Vec<&String> = (shown.iter())
+            .filter(|line| line.contains("████ #"))
+            .collect();
+        assert_eq!(roles.len(), ROLE_ROWS, "{shown:?}");
+        assert!(roles[ROLE_ROWS / 2].starts_with("› mdCode "), "{roles:?}");
+        assert!(
+            shown
+                .iter()
+                .any(|line| line.contains("Code in a line of text."))
+        );
+        editor.role = TOKENS.len() - 1;
+        let shown = lines(&editor);
+        let last = (shown.iter())
+            .rfind(|line| line.contains("████ #"))
+            .unwrap();
+        assert!(last.starts_with("› spellcheckError "), "{shown:?}");
+        let short: Vec<String> = editor.lines((100, 8)).iter().map(|l| plain(l)).collect();
+        assert_eq!(short.len(), 8);
+        assert!(
+            short[1..6].iter().all(|line| line.contains("████ #")),
+            "{short:?}"
+        );
+        assert!(short[7].contains("R roll"), "{short:?}");
+        for (at, &token) in TOKENS.iter().enumerate() {
+            let note = about(token);
+            assert!(note.ends_with('.') && note.len() < 130, "{}", KEYS[at]);
+        }
     }
 
     #[test]
