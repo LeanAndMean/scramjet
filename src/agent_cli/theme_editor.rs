@@ -2,7 +2,8 @@
 //! until it is close, its liked colors locked, stepped toward the harmony or toward more or less
 //! contrast, and each of its roles, one view away, set to follow another main color or to an
 //! exact color, with undo and redo, while a sample session shows it in the conversation's place.
-//! It is saved as a theme file in Scramjet's format.
+//! It is saved as a theme file in Scramjet's format, which keeps what the editor made it from, so
+//! that it opens in the editor again.
 
 use super::keymap::{self, Binding};
 use super::keys::Key;
@@ -15,6 +16,7 @@ use super::style::{self, RESET};
 use super::text::{self, Wrap};
 use super::theme::{self, Color, KEYS, Mode, TOKENS, Theme, Token};
 use scramjet_rs::agent::{Ending, StreamProgress, ToolDetail, UserCommand};
+use serde_json::{Map, Value, json};
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
@@ -26,6 +28,8 @@ const HUE_STEP: f64 = 5.0;
 const NOTE_ROWS: usize = 3;
 /// The roles' view shows at most as many at a time.
 const ROLE_ROWS: usize = 10;
+/// The key of a theme file under which it keeps what the editor made it from.
+const STATE: &str = "themeEditor";
 
 /// What the editor shows: the main colors and what makes the theme of them, or every role.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -81,6 +85,37 @@ impl ThemeEditor {
         let mut rng = Rng::new(seed);
         let draft = Draft::rolled(harmonies(3)[0], background, &mut rng);
         let locked = vec![false; draft.mains.len()];
+        Self::on(draft, locked, rng, terminal)
+    }
+
+    /// The editor on the theme file `text` as it was saved from the editor: its main colors and
+    /// locks, harmony, background, contrast and picked roles, the roles changed in the file
+    /// since then set to their colors there. On the terminal's background, it is `terminal`'s
+    /// when known, else the one it was saved on. `None` when the editor did not make the file.
+    pub(super) fn open(text: &str, seed: u64, terminal: Option<Rgb>) -> Option<Self> {
+        let file = Theme::parse(text).ok()?;
+        let json: Value = serde_json::from_str(text).ok()?;
+        let (mut draft, locked) = saved_draft(json.get(STATE)?)?;
+        let built = draft.build();
+        for (at, &token) in TOKENS.iter().enumerate() {
+            if let Color::Rgb(r, g, b) = file.color(token)
+                && built.colors[at] != (r, g, b)
+            {
+                draft.picks[at] = Some(Pick::Exact((r, g, b)));
+            }
+        }
+        let terminal = match draft.background {
+            Background::Terminal(saved) => {
+                let now = terminal.unwrap_or(saved);
+                draft.background = Background::Terminal(now);
+                Some(now)
+            }
+            _ => terminal,
+        };
+        Some(Self::on(draft, locked, Rng::new(seed), terminal))
+    }
+
+    fn on(draft: Draft, locked: Vec<bool>, rng: Rng, terminal: Option<Rgb>) -> Self {
         Self {
             built: draft.build(),
             score: draft.fit(&locked).score,
@@ -715,12 +750,118 @@ impl ThemeEditor {
         ] {
             add(name, built.color(token));
         }
-        theme::file_text(name, &vars, &built.colors, built.own_background())
+        let state = self.state();
+        let extra = Some((STATE, &state));
+        theme::file_text(name, &vars, &built.colors, built.own_background(), extra)
     }
+
+    /// What the theme is made from, as its file keeps it: the main colors with their locks,
+    /// numbered from 1 where a role follows one, and the roles picked by their keys.
+    fn state(&self) -> Value {
+        let draft = self.draft();
+        let mains: Vec<Value> = (draft.mains.iter().zip(&self.locked))
+            .map(|(main, locked)| {
+                json!({"hue": main.hue, "chroma": main.chroma, "lift": main.lift, "locked": locked})
+            })
+            .collect();
+        let picks: Map<String, Value> = (KEYS.iter().zip(&draft.picks))
+            .filter_map(|(key, pick)| {
+                let pick = match (*pick)? {
+                    Pick::Follow(index) => json!({"follow": index + 1}),
+                    Pick::Exact(rgb) => json!(hex_text(rgb)),
+                };
+                Some(((*key).to_owned(), pick))
+            })
+            .collect();
+        let mut state = json!({
+            "harmony": HARMONIES[draft.harmony].name,
+            "background": match draft.background {
+                Background::Dark => "dark",
+                Background::Light => "light",
+                Background::Terminal(_) => "terminal",
+            },
+            "depth": draft.depth,
+            "tint": draft.tint,
+            "contrast": draft.contrast,
+            "mains": mains,
+            "picks": picks,
+        });
+        if let Background::Terminal(rgb) = draft.background {
+            state["terminal"] = json!(hex_text(rgb));
+        }
+        state
+    }
+}
+
+/// The draft and locks a theme file keeps (`ThemeEditor::state`); `None` unless every part of
+/// it is one the editor makes.
+fn saved_draft(state: &Value) -> Option<(Draft, Vec<bool>)> {
+    let unit = |value: &Value| value.as_f64().filter(|value| (0.0..=1.0).contains(value));
+    let name = state.get("harmony")?.as_str()?;
+    let harmony = HARMONIES.iter().position(|harmony| harmony.name == name)?;
+    let mut mains = Vec::new();
+    let mut locked = Vec::new();
+    for main in state.get("mains")?.as_array()? {
+        let hue = main.get("hue")?.as_f64().filter(|hue| hue.is_finite())?;
+        let chroma = main
+            .get("chroma")?
+            .as_f64()
+            .filter(|c| (0.0..=0.4).contains(c))?;
+        mains.push(palette::Main {
+            hue: hue.rem_euclid(360.0),
+            chroma,
+            lift: unit(main.get("lift")?)?,
+        });
+        locked.push(main.get("locked").and_then(Value::as_bool).unwrap_or(false));
+    }
+    if mains.len() != HARMONIES[harmony].count() {
+        return None;
+    }
+    let background = match state.get("background")?.as_str()? {
+        "dark" => Background::Dark,
+        "light" => Background::Light,
+        "terminal" => {
+            Background::Terminal(hex(state.get("terminal")?.as_str()?.strip_prefix('#')?)?)
+        }
+        _ => return None,
+    };
+    let contrast = state.get("contrast")?.as_i64()?;
+    if contrast.abs() > i64::from(CONTRAST_STEPS) {
+        return None;
+    }
+    let mut picks = vec![None; TOKENS.len()];
+    for (key, pick) in state.get("picks")?.as_object()? {
+        let at = KEYS.iter().position(|known| known == key)?;
+        picks[at] = Some(match pick {
+            Value::String(text) => Pick::Exact(hex(text.strip_prefix('#')?)?),
+            pick => {
+                let main = pick.get("follow")?.as_u64()? as usize;
+                (1..=mains.len()).contains(&main).then_some(())?;
+                Pick::Follow(main - 1)
+            }
+        });
+    }
+    let draft = Draft {
+        harmony,
+        background,
+        depth: unit(state.get("depth")?)?,
+        tint: unit(state.get("tint")?)?,
+        contrast: contrast as i32,
+        picks,
+        mains,
+    };
+    Some((draft, locked))
+}
+
+fn hex_text((r, g, b): Rgb) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 /// The color of hex digits typed: six, or three, each doubled.
 fn hex(digits: &str) -> Option<Rgb> {
+    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
     let digits = match digits.len() {
         3 => digits.chars().flat_map(|c| [c, c]).collect(),
         6 => digits.to_owned(),
@@ -1289,6 +1430,76 @@ mod tests {
             let note = about(token);
             assert!(note.ends_with('.') && note.len() < 130, "{}", KEYS[at]);
         }
+    }
+
+    #[test]
+    fn a_saved_theme_opens_as_it_was_saved_with_the_roles_changed_in_its_file() {
+        let mut editor = ThemeEditor::new(12, Background::Dark, None);
+        editor.row = 0;
+        editor.key(&press(Code::Right));
+        editor.row = 5;
+        editor.key(&typed("l"));
+        editor.key(&typed("r"));
+        editor.key(&typed("+"));
+        let mut draft = editor.draft().clone();
+        draft.picks[token_at(Token::MdHeading)] = Some(Pick::Follow(3));
+        draft.picks[token_at(Token::Error)] = Some(Pick::Exact((0xff, 0x22, 0x11)));
+        editor.push(draft);
+        let text = editor.file_text("mine");
+        let json: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json[STATE]["mains"][1]["locked"], true);
+        assert_eq!(json[STATE]["picks"]["mdHeading"]["follow"], 4);
+        assert_eq!(json[STATE]["picks"]["error"], "#ff2211");
+        let opened = ThemeEditor::open(&text, 1, None).unwrap();
+        assert_eq!(opened.draft(), editor.draft());
+        assert_eq!(opened.locked, editor.locked);
+        assert_eq!(opened.theme(), editor.theme());
+        assert_eq!(opened.at, 0);
+        assert_eq!(opened.file_text("mine"), text);
+        // A role changed by hand in the file is set to its color there; the others still follow.
+        let changed = text.replace("\"mdLink\": ", "\"mdLink\": \"#123456\", \"_was\": ");
+        let opened = ThemeEditor::open(&changed, 1, None).unwrap();
+        let link = token_at(Token::MdLink);
+        assert_eq!(
+            opened.draft().picks[link],
+            Some(Pick::Exact((0x12, 0x34, 0x56)))
+        );
+        let mut expected = editor.draft().clone();
+        expected.picks[link] = Some(Pick::Exact((0x12, 0x34, 0x56)));
+        assert_eq!(*opened.draft(), expected);
+        // Themes the editor did not make, or whose state it would not make, do not open.
+        let built_in = include_str!("themes/scramjet-dark.json");
+        assert!(ThemeEditor::open(built_in, 1, None).is_none());
+        for (from, to) in [
+            ("\"harmony\": \"", "\"harmony\": \"no "),
+            ("\"contrast\": 1", "\"contrast\": 4"),
+            ("\"follow\": 4", "\"follow\": 5"),
+            ("\"#ff2211\"", "\"#ff22é\""),
+            ("\"mdHeading\": {", "\"mdHeadline\": {"),
+        ] {
+            assert!(text.contains(from), "{from}");
+            let broken = text.replacen(from, to, 1);
+            assert!(ThemeEditor::open(&broken, 1, None).is_none(), "{to}");
+        }
+    }
+
+    #[test]
+    fn a_theme_on_the_terminals_background_opens_on_the_terminals_as_it_is_now() {
+        let (campbell, solarized) = ((12, 12, 12), (0, 43, 54));
+        let editor = ThemeEditor::new(13, Background::Terminal(campbell), Some(campbell));
+        let text = editor.file_text("on-terminal");
+        let json: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json[STATE]["terminal"], "#0c0c0c");
+        // Its colors are lit for the terminal's background now, none taken as changed by hand.
+        let opened = ThemeEditor::open(&text, 1, Some(solarized)).unwrap();
+        assert_eq!(opened.draft().background, Background::Terminal(solarized));
+        assert_eq!(opened.terminal, Some(solarized));
+        assert!(opened.draft().picks.iter().all(Option::is_none));
+        assert_ne!(opened.theme(), editor.theme());
+        // A terminal that does not say: the one it was saved on.
+        let opened = ThemeEditor::open(&text, 1, None).unwrap();
+        assert_eq!(opened.terminal, Some(campbell));
+        assert_eq!(opened.theme(), editor.theme());
     }
 
     #[test]

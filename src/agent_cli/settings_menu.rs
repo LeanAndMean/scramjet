@@ -46,12 +46,19 @@ const NEW_THEME_NOTE: &str = "Make a theme of your own: choose how many main col
     go together, then roll until you like it, lock the colors you like and roll again. A sample \
     session shows it as you go.";
 
-/// What a theme is, as `/settings` says under its row.
+/// What the theme editor's rolls start from: a new one each time.
+fn seed() -> u64 {
+    (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
+        .map_or(0, |since| since.as_nanos() as u64)
+        ^ u64::from(std::process::id())
+}
+
 /// The hint of a list under `/settings`' own.
 fn back_keys(confirm: &str) -> String {
     select::hint(confirm, &[], "back")
 }
 
+/// What a theme is, as `/settings` says under its row.
 fn theme_note(listed: &Listed) -> String {
     let note = match (listed.name.as_str(), &listed.file) {
         (_, Some(file)) => format!("From {}.", shortened(&file.display().to_string())),
@@ -238,26 +245,47 @@ impl Interactive {
             };
             let listed = &self.themes.listed;
             let current = (listed.iter()).position(|known| known.name == self.settings.theme);
+            // The theme in use, when the editor made it.
+            let editable = current.and_then(|current| {
+                let file = listed[current].file.clone()?;
+                let text = std::fs::read_to_string(&file).ok()?;
+                let editor = ThemeEditor::open(&text, seed(), background::terminal())?;
+                Some((listed[current].name.clone(), file, Box::new(editor)))
+            });
+            let edit = (editable.as_ref()).map(|(name, file, _)| {
+                let file = shortened(&file.display().to_string());
+                (
+                    format!("Edit {name}…"),
+                    format!(
+                        "Open {name} in the theme editor as it was saved: its main colors and \
+                         locks, harmony, background, contrast and picked roles. Saved as {name} \
+                         again, it replaces {file}."
+                    ),
+                )
+            });
             let notes = (listed.iter().map(theme_note))
                 .chain([NEW_THEME_NOTE.to_owned()])
+                .chain(edit.iter().map(|(_, note)| note.clone()))
                 .collect();
             let picker = select::Picker::select(
                 "Theme",
                 select::VISIBLE,
-                listed.len() + 1,
+                listed.len() + 1 + usize::from(edit.is_some()),
                 at.or(current).unwrap_or(0),
                 current,
                 |index, width| match listed.get(index) {
                     Some(listed) => clip(&listed.name, width),
-                    None => clip(NEW_THEME, width),
+                    None if index == listed.len() => clip(NEW_THEME, width),
+                    None => clip(edit.as_ref().map_or("", |(row, _)| row), width),
                 },
             );
             let Some(index) = screen.pick(picker.noting(back_keys("use"), notes).held()) else {
                 return;
             };
             at = Some(index);
-            if index == listed.len() {
-                if let Some(name) = self.make_theme() {
+            if index >= listed.len() {
+                let editing = editable.filter(|_| index > listed.len());
+                if let Some(name) = self.make_theme(editing) {
                     at = (self.themes.listed.iter()).position(|known| known.name == name);
                 }
                 continue;
@@ -271,18 +299,57 @@ impl Interactive {
         }
     }
 
-    /// The theme editor; a theme saved from it is named, written to the `themes` directory of
-    /// Scramjet's agent directory, where Scramjet finds it too, and used. Escape on the name goes
-    /// back to the editor as it was; Escape in the editor goes back to the theme in use.
-    fn make_theme(&mut self) -> Option<String> {
+    /// The theme editor, on a new theme or on `editing`, a theme it made, with its name and
+    /// file; a theme saved from it is named, written to the `themes` directory of Scramjet's
+    /// agent directory, where Scramjet finds it too, or over the file of the theme edited when
+    /// saved under its name, and used. Escape on the name goes back to the editor as it was;
+    /// Escape in the editor goes back to the theme in use.
+    fn make_theme(
+        &mut self,
+        editing: Option<(String, PathBuf, Box<ThemeEditor>)>,
+    ) -> Option<String> {
         let Some(directory) = agent_directory().map(|directory| directory.join("themes")) else {
             self.say("Error: a theme cannot be saved: HOME is not set");
             return None;
         };
-        let seed = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
-            .map_or(0, |since| since.as_nanos() as u64)
-            ^ u64::from(std::process::id());
-        // On a background as the theme in use: its own, dark or light, else the terminal's.
+        let (own, mut editor) = match editing {
+            Some((name, file, editor)) => (Some((name, file)), editor),
+            None => (None, Box::new(self.new_theme_editor())),
+        };
+        loop {
+            let saved = self.screen.as_ref()?.edit_theme(editor);
+            let Some(saved) = saved else {
+                self.use_theme();
+                return None;
+            };
+            editor = saved;
+            let own_name = own.as_ref().map(|(name, _)| name.as_str());
+            let Some(name) = self.theme_name(&directory, own_name) else {
+                continue;
+            };
+            let (file, saved) = match &own {
+                Some((own, file)) if *own == name => (file.clone(), "Replaced"),
+                _ => (directory.join(format!("{name}.json")), "Saved"),
+            };
+            let shown = shortened(&file.display().to_string());
+            if let Err(error) = write_replacing(&file, &editor.file_text(&name)) {
+                self.say(&format!("Error: theme not saved in {shown}: {error}"));
+                continue;
+            }
+            self.discover_themes();
+            let set = self.settings.set_theme(&name);
+            self.use_theme();
+            self.say_styled(style::MUTED, &format!("{saved} theme {name} in {shown}"));
+            if let Err(error) = set {
+                self.say(&format!("Error: settings not saved: {error}"));
+            }
+            return Some(name);
+        }
+    }
+
+    /// A theme editor on a new theme, on a background as the theme in use: its own, dark or
+    /// light, else the terminal's.
+    fn new_theme_editor(&self) -> ThemeEditor {
         let terminal = background::terminal();
         let start = match (
             self.themes.theme(&self.settings.theme).background(),
@@ -294,39 +361,17 @@ impl Interactive {
             _ if self.settings.theme == "pi-light" => Background::Light,
             _ => Background::Dark,
         };
-        let mut editor = Box::new(ThemeEditor::new(seed, start, terminal));
-        loop {
-            let saved = self.screen.as_ref()?.edit_theme(editor);
-            let Some(saved) = saved else {
-                self.use_theme();
-                return None;
-            };
-            editor = saved;
-            let Some(name) = self.theme_name(&directory) else {
-                continue;
-            };
-            let file = directory.join(format!("{name}.json"));
-            let shown = shortened(&file.display().to_string());
-            if let Err(error) = write_replacing(&file, &editor.file_text(&name)) {
-                self.say(&format!("Error: theme not saved in {shown}: {error}"));
-                continue;
-            }
-            self.discover_themes();
-            let set = self.settings.set_theme(&name);
-            self.use_theme();
-            self.say_styled(style::MUTED, &format!("Saved theme {name} in {shown}"));
-            if let Err(error) = set {
-                self.say(&format!("Error: settings not saved: {error}"));
-            }
-            return Some(name);
-        }
+        ThemeEditor::new(seed(), start, terminal)
     }
 
-    /// A name for a new theme in `directory`, typed: one no other theme has, which is also its
-    /// file's name; `None` when cancelled.
-    fn theme_name(&self, directory: &Path) -> Option<String> {
+    /// A name for a theme saved in `directory`, typed: one no other theme has, which is also its
+    /// file's name, or `own`, the name of the theme edited, suggested first; `None` when
+    /// cancelled.
+    fn theme_name(&self, directory: &Path, own: Option<&str>) -> Option<String> {
         let taken = |name: &str| {
-            self.themes.get(name).is_some() || directory.join(format!("{name}.json")).exists()
+            own != Some(name)
+                && (self.themes.get(name).is_some()
+                    || directory.join(format!("{name}.json")).exists())
         };
         let suggested = (1..)
             .map(|number| match number {
@@ -335,8 +380,11 @@ impl Interactive {
             })
             .find(|name| !taken(name))
             .unwrap_or_default();
-        let mut title = "Name the theme".to_owned();
-        let mut typed = suggested;
+        let mut title = match own {
+            Some(own) => format!("Name the theme: {own} replaces it, another name makes a copy"),
+            None => "Name the theme".to_owned(),
+        };
+        let mut typed = own.map_or(suggested, str::to_owned);
         loop {
             let dialog = Dialog::Text(title.clone(), typed.clone(), Optional::No);
             let Some(Answer::Text(Some(text))) = self.screen.as_ref()?.ask(dialog, None) else {

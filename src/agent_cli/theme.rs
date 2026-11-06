@@ -442,12 +442,14 @@ impl Theme {
 
 /// The text of a theme file in Scramjet's format, named `name`, of exact colors: `vars` names
 /// some, and each token (in `TOKENS`' order) and the main `background`, if the theme sets one,
-/// take the first of those that is theirs by its name, or else their own.
+/// take the first of those that is theirs by its name, or else their own; `extra` is one more
+/// key at the top, which Scramjet's loader passes over.
 pub(super) fn file_text(
     name: &str,
     vars: &[(String, (u8, u8, u8))],
     colors: &[(u8, u8, u8)],
     background: Option<(u8, u8, u8)>,
+    extra: Option<(&str, &Value)>,
 ) -> String {
     let hex = |(r, g, b): (u8, u8, u8)| format!("#{r:02x}{g:02x}{b:02x}");
     let quoted = |text: &str| Value::String(text.to_owned()).to_string();
@@ -462,8 +464,12 @@ pub(super) fn file_text(
     let colors: Vec<String> = (keys.zip(colors.iter().copied().chain(background)))
         .map(|(key, color)| format!("    {}: {}", quoted(key), value(color)))
         .collect();
+    let extra = extra.map_or_else(String::new, |(key, value)| {
+        let value = serde_json::to_string_pretty(value).unwrap_or_default();
+        format!(",\n  {}: {}", quoted(key), value.replace('\n', "\n  "))
+    });
     format!(
-        "{{\n  \"name\": {},\n  \"vars\": {{\n{}\n  }},\n  \"colors\": {{\n{}\n  }}\n}}\n",
+        "{{\n  \"name\": {},\n  \"vars\": {{\n{}\n  }},\n  \"colors\": {{\n{}\n  }}{extra}\n}}\n",
         quoted(name),
         vars.join(",\n"),
         colors.join(",\n")

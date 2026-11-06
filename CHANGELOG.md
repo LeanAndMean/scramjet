@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.32.0 — Editing a theme again
+
+### Added
+
+- A theme made in the theme editor opens in it again: once it is the theme in use, `/settings` → Theme lists "Edit NAME…", which opens it as it was saved, with its main colors and locks, harmony, background, contrast and picked roles; a role changed by hand in the file since then keeps its color there. Its file keeps them under a `themeEditor` key, which Scramjet's loader passes over.
+- Saved under its own name, the theme edited replaces its file; another name saves a copy.
+
 ## 0.31.0 — Themes on the terminal's own background
 
 ### Added
