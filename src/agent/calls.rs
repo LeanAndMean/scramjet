@@ -1,13 +1,44 @@
 //! A reply's tool calls: which run together, the approval question, the harness's own tools
 //! (questions, reports, suggestions, model switches, delegations, publications), and the
 //! coding tools and subagents.
+use super::batch::{self, Batch, Waited};
+use super::commands::Sets;
+use super::providers::{ModelInfo, Providers};
+use super::skills::Skills;
 use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, delegate,
     forge, mcp, publish, question, sandbox, status, subagent, suggest, switch,
 };
 use serde_json::{Value, json};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// What a call does next.
+pub(super) enum Called {
+    /// Its output, and whether the turn ends after it.
+    Done(Output, bool),
+    /// It runs in the background.
+    Running(Batch),
+}
+
+/// A reply's calls as the turn runs them, kept while it pauses (`AgentUi::pause`).
+pub(super) struct Calls {
+    items: Vec<Value>,
+    run: Run,
+}
+
+enum Run {
+    Together(Batch),
+    /// One after another: the next to start, whether every call so far ends the turn, and the
+    /// one running in the background.
+    OneByOne {
+        next: usize,
+        ends: bool,
+        running: Option<Batch>,
+    },
+}
 
 impl Agent {
     /// The calls of a reply that run at the same time, as Pi runs them: when there are several
@@ -30,29 +61,137 @@ impl Agent {
         (parsed.len() > 1 && parsed.iter().all(runs)).then_some(parsed)
     }
 
-    /// The `Tools` that run the agent's calls now.
-    pub(super) fn tools(&self) -> Tools<'_> {
-        Tools {
-            parent: subagent::Parent {
-                providers: &self.config.providers,
-                retries: self.config.retries,
-                model: &self.config.model,
-                info: &self.info,
-                effort: self.effort(),
-                max_output_tokens: self.config.max_output_tokens,
-                root: &self.config.root,
-                cache_key: self.session.id(),
-                sources: subagent::Sources {
-                    user: self.agents_directory.as_deref(),
-                    sets: &self.sets,
-                },
-                skills: &self.skills,
-                agent_directory: self.agent_directory.as_deref(),
-                approvals: self.approvals.as_deref(),
-                rates: self.rates.as_deref(),
-            },
+    /// What the agent's coding tools and subagents take from it now, theirs while they run.
+    fn kit(&self) -> Kit {
+        Kit {
+            providers: self.config.providers.clone(),
+            retries: self.config.retries,
+            model: self.config.model.clone(),
+            info: self.info.clone(),
+            effort: self.effort().map(str::to_owned),
+            max_output_tokens: self.config.max_output_tokens,
+            root: self.config.root.clone(),
+            cache_key: self.session.id(),
+            user_agents: self.agents_directory.clone(),
+            sets: self.sets.clone(),
+            skills: self.skills.clone(),
+            agent_directory: self.agent_directory.clone(),
+            approvals: self.approvals.clone(),
+            rates: self.rates.clone(),
             hide_credentials: self.hide_credentials,
-            mcp: self.mcp.as_ref(),
+            mcp: self.mcp.clone(),
+        }
+    }
+
+    /// Runs a call as `Tools::run` does, shown first when `announce`.
+    fn runner(&self, announce: bool) -> batch::Run {
+        let kit = self.kit();
+        Arc::new(
+            move |call: &Call, ui: &mut dyn AgentUi, cancel: &AtomicBool| {
+                if announce {
+                    ui.tool_call(call.name, &call.summary(), call.compact(&kit.root).as_ref());
+                }
+                kit.tools().run(call, ui, cancel)
+            },
+        )
+    }
+
+    /// Starts running a reply's `calls`: together when they can (`together`), else one after
+    /// another.
+    pub(super) fn start_calls(&self, calls: Vec<Value>, ui: &mut dyn AgentUi) -> Calls {
+        let run = match self.together(&calls) {
+            Some(_) => {
+                let together = ui.running_calls(calls.len());
+                let batch = Batch::start(
+                    calls.clone(),
+                    &self.config.root,
+                    self.runner(true),
+                    together,
+                );
+                Run::Together(batch)
+            }
+            None => Run::OneByOne {
+                next: 0,
+                ends: true,
+                running: None,
+            },
+        };
+        Calls { items: calls, run }
+    }
+
+    /// Runs `calls` on to their end, adding their results; returns whether the turn ends after
+    /// them, as it does when every call ends it (as in Pi). When `ui` asks for a pause, the
+    /// calls are kept in `self.calls` and the turn returns `AgentError::Paused`, those running
+    /// going on meanwhile.
+    pub(super) fn run_calls(
+        &mut self,
+        calls: Calls,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<bool, AgentError> {
+        let Calls { items, run } = calls;
+        match run {
+            Run::Together(mut batch) => {
+                let ran = match batch.wait(ui, cancel) {
+                    Waited::Ended(ran) => ran,
+                    Waited::Paused => {
+                        let run = Run::Together(batch);
+                        self.calls = Some(Calls { items, run });
+                        return Err(AgentError::Paused);
+                    }
+                };
+                for (item, (output, usage)) in items.iter().zip(ran) {
+                    self.usage.add(&usage);
+                    self.add_result(item, &output, ui)?;
+                }
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(AgentError::Cancelled);
+                }
+                Ok(false)
+            }
+            Run::OneByOne {
+                mut next,
+                mut ends,
+                mut running,
+            } => {
+                while let Some(item) = items.get(next) {
+                    let called = match running.take() {
+                        Some(batch) => Called::Running(batch),
+                        None => self.call(item, ui, cancel),
+                    };
+                    let (output, ends_turn) = match called {
+                        Called::Done(output, ends_turn) => (output, ends_turn),
+                        Called::Running(mut batch) => match batch.wait(ui, cancel) {
+                            Waited::Ended(mut ran) => {
+                                let (output, usage) = ran.pop().expect("one call");
+                                self.usage.add(&usage);
+                                (output, false)
+                            }
+                            Waited::Paused => {
+                                let running = Some(batch);
+                                let run = Run::OneByOne {
+                                    next,
+                                    ends,
+                                    running,
+                                };
+                                self.calls = Some(Calls { items, run });
+                                return Err(AgentError::Paused);
+                            }
+                        },
+                    };
+                    ends &= ends_turn;
+                    self.add_result(item, &output, ui)?;
+                    next += 1;
+                    if cancel.load(Ordering::Relaxed) {
+                        // Every call gets a result, as in Pi, or the next request is refused.
+                        for item in &items[next..] {
+                            self.not_run(item, ui)?;
+                        }
+                        return Err(AgentError::Cancelled);
+                    }
+                }
+                Ok(ends)
+            }
         }
     }
 
@@ -109,7 +248,7 @@ impl Agent {
         item: &Value,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
-    ) -> (Output, bool) {
+    ) -> Called {
         let failure = |text: String| Output {
             text,
             detail: None,
@@ -121,15 +260,24 @@ impl Agent {
             Err(error) => {
                 let output = format!("Error: {error}");
                 ui.tool_result(item["name"].as_str().unwrap_or(""), &output, None, true);
-                return (failure(output), false);
+                return Called::Done(failure(output), false);
             }
         };
         let compact = call.compact(&self.config.root);
+        let runs = call.name == subagent::NAME
+            || tools::CODING_TOOLS.contains(&call.name)
+            || [mcp::SEARCH, mcp::CALL].contains(&call.name);
+        // A call that runs in the background shows in its place, under what the session shows
+        // while the turn pauses for the user's commands.
+        let together = runs && self.offers(call.name) && ui.running_calls(1);
+        if together {
+            ui.of_call(Some(0));
+        }
         ui.tool_call(call.name, &call.summary(), compact.as_ref());
         if !self.offers(call.name) {
             let output = format!("Tool {} not found", call.name);
             ui.tool_result(call.name, &output, None, true);
-            return (failure(output), false);
+            return Called::Done(failure(output), false);
         }
         if call.name == question::NAME {
             let (output, ends) = ask(&call.arguments, &mut self.lifecycle, ui);
@@ -138,7 +286,7 @@ impl Agent {
             if freetext {
                 self.suggestion = suggest::Pending::Reply;
             }
-            return (output, ends);
+            return Called::Done(output, ends);
         }
         if call.name == suggest::NAME {
             let (active, shows) = (self.lifecycle.active(), ui.offers_suggestions());
@@ -158,7 +306,7 @@ impl Agent {
                 failed,
                 image: None,
             };
-            return (output, false);
+            return Called::Done(output, false);
         }
         if call.name == switch::NAME {
             let (text, failed) = match self.switch_model(&call.arguments) {
@@ -175,14 +323,14 @@ impl Agent {
                 failed,
                 image: None,
             };
-            return (output, false);
+            return Called::Done(output, false);
         }
         if call.name == delegate::NAME {
             let active = self.lifecycle.active();
             let output =
                 delegate::run(&call.arguments, &self.commands, active, &mut self.delegated);
             ui.tool_result(call.name, &output.text, None, output.failed);
-            return (output, false);
+            return Called::Done(output, false);
         }
         if publish::TOOLS.contains(&call.name) {
             let policy = publish::Policy {
@@ -197,7 +345,7 @@ impl Agent {
             let output = publish::run(call.name, &call.arguments, &policy, ui, &mut forge, cancel);
             let detail = output.detail.as_ref();
             ui.tool_result(call.name, &output.text, detail, output.failed);
-            return (output, false);
+            return Called::Done(output, false);
         }
         if call.name == status::NAME {
             let (text, failed, ends) = match self.lifecycle.report(&call.arguments) {
@@ -216,7 +364,7 @@ impl Agent {
                 failed,
                 image: None,
             };
-            return (output, ends);
+            return Called::Done(output, ends);
         }
         let answer = match call.approval(&self.config.root) {
             Approval::Ask(question) if self.config.ask => ui.approve(&question, cancel),
@@ -232,16 +380,67 @@ impl Agent {
                 "The user denied this tool call."
             };
             ui.tool_result(call.name, output, None, true);
-            return (failure(output.to_owned()), false);
+            if together {
+                ui.of_call(None);
+            }
+            return Called::Done(failure(output.to_owned()), false);
         }
-        let (output, usage) = self.tools().run(&call, ui, cancel);
-        self.usage.add(&usage);
-        (output, false)
+        if together {
+            ui.of_call(None);
+        }
+        let (root, run) = (&self.config.root, self.runner(false));
+        Called::Running(Batch::start(vec![item.clone()], root, run, together))
     }
 }
 
-/// What running coding tools and `subagent` calls takes from the agent, shared by the calls
-/// that run at the same time.
+/// What the agent's coding tools and subagents take from it, theirs while they run.
+struct Kit {
+    providers: Providers,
+    retries: u32,
+    model: String,
+    info: ModelInfo,
+    effort: Option<String>,
+    max_output_tokens: Option<u64>,
+    root: PathBuf,
+    cache_key: String,
+    user_agents: Option<PathBuf>,
+    sets: Sets,
+    skills: Skills,
+    agent_directory: Option<PathBuf>,
+    approvals: Option<PathBuf>,
+    rates: Option<PathBuf>,
+    hide_credentials: bool,
+    mcp: Option<Arc<mcp::Servers>>,
+}
+
+impl Kit {
+    fn tools(&self) -> Tools<'_> {
+        Tools {
+            parent: subagent::Parent {
+                providers: &self.providers,
+                retries: self.retries,
+                model: &self.model,
+                info: &self.info,
+                effort: self.effort.as_deref(),
+                max_output_tokens: self.max_output_tokens,
+                root: &self.root,
+                cache_key: self.cache_key.clone(),
+                sources: subagent::Sources {
+                    user: self.user_agents.as_deref(),
+                    sets: &self.sets,
+                },
+                skills: &self.skills,
+                agent_directory: self.agent_directory.as_deref(),
+                approvals: self.approvals.as_deref(),
+                rates: self.rates.as_deref(),
+            },
+            hide_credentials: self.hide_credentials,
+            mcp: self.mcp.as_deref(),
+        }
+    }
+}
+
+/// What running coding tools and `subagent` calls takes from the agent.
 pub(super) struct Tools<'a> {
     parent: subagent::Parent<'a>,
     hide_credentials: bool,

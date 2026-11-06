@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.43.0 — Commands at once while tools run
+
+### Changed
+
+- Built-in commands that act on the harness (`/settings`, `/model`, `/autopilot`, `/status`, `/copy`, `/hotkeys`, `/mcp`, `/login` and the like), and Ctrl+P, run as soon as they are typed while the agent's tools or subagents run, rather than waiting for the turn's next request. The tools go on meanwhile, their output staying in place above what the command says; what a command changes for the agent takes effect from its next request. Typed while a reply streams, they still wait for that reply to end.
+- After a list or question opened during a turn closes, the status line says again what the agent was doing (`Running 12s`), rather than `Working`.
+
 ## 0.42.2 — Labeled replies in the margin look, padded questions
 
 ### Fixed

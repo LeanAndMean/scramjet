@@ -1,6 +1,5 @@
 //! The keys the screen takes, from the terminal's input and the session's wake-ups.
 
-use super::draw::Activity;
 use super::{Answer, App, BUSY, Flow, Input, MODEL_NEXT, NOTHING_QUEUED, Open, Optional, Shown};
 use crate::agent_cli::background::{self, Asked};
 use crate::agent_cli::clipboard;
@@ -317,9 +316,7 @@ impl App {
             // the session shows no answer to it.
             self.cancel.store(true, Ordering::Relaxed);
             self.dialog = None;
-            if let Some(activity) = &mut self.activity {
-                *activity = Activity::new("Working");
-            }
+            self.after_dialog();
             return Flow::Go;
         }
         if let Some(Open {
@@ -342,9 +339,7 @@ impl App {
                         _ => None,
                     };
                     let _ = reply.send(Answer::Theme(saved));
-                    if let Some(activity) = &mut self.activity {
-                        *activity = Activity::new("Working");
-                    }
+                    self.after_dialog();
                 }
             }
             return Flow::Go;

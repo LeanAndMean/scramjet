@@ -1,0 +1,25 @@
+{
+  "size": "90x40",
+  "settings": {"theme": "scramjet-dark"},
+  "prompt": "Build it",
+  "replies": [
+    [{"call": "bash", "arguments": {"command": "for i in 1 2 3 4 5 6; do echo step $i; sleep 1; done"}}],
+    [{"text": "Built in six steps."}]
+  ],
+  "steps": [
+    {"until": "step 1"},
+    {"type": "/autopilot on\r"},
+    {"until": "Autopilot is on"},
+    {"shot": "command"},
+    {"type": "/model\r"},
+    {"sleep": 0.5},
+    {"shot": "picker"},
+    {"type": "\u001b"},
+    {"until": "step 5"},
+    {"shot": "running"},
+    {"until": "Built in six steps"},
+    {"sleep": 0.3},
+    {"shot": "ended"},
+    {"type": "\u0004"}
+  ]
+}

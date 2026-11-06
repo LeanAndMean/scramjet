@@ -116,8 +116,8 @@ pub trait AgentUi {
         false
     }
     /// Whether the user gave the session something to do with the agent while the turn runs,
-    /// such as a command: the turn then returns `AgentError::Paused` before its next request,
-    /// and `Agent::resume_turn` goes on with it.
+    /// such as a command: the turn then returns `AgentError::Paused` before its next request or
+    /// while tool calls run, which go on meanwhile, and `Agent::resume_turn` goes on with it.
     fn pause(&mut self) -> bool {
         false
     }

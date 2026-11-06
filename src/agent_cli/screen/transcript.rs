@@ -41,6 +41,9 @@ impl Place {
 #[derive(Default)]
 pub(super) struct Transcript {
     parts: Vec<Part>,
+    /// Where the calls running at the same time are, by part and event: what the session says
+    /// while they run, such as a command's result, shows under them.
+    calls: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
@@ -56,9 +59,14 @@ impl Transcript {
         if self.parts.is_empty() {
             self.parts.push(Part::default());
         }
-        let part = self.parts.last_mut().expect("pushed above");
+        let calls = matches!(event, Event::Calls(_));
+        let index = self.parts.len() - 1;
+        let part = &mut self.parts[index];
         part.version += 1;
         add(&mut part.events, event);
+        if calls {
+            self.calls = Some((index, part.events.len() - 1));
+        }
     }
 
     /// Adds `event` to call `index` of the calls running at the same time, shown last.
@@ -67,19 +75,22 @@ impl Transcript {
             Some(events) => add(events, event),
             None => return self.push(event),
         }
-        self.parts.last_mut().expect("has the calls").version += 1;
+        let (part, _) = self.calls.expect("has the calls");
+        self.parts[part].version += 1;
     }
 
-    /// The calls running at the same time, when they are what was shown last.
+    /// The calls running at the same time last.
     pub(super) fn calls(&self) -> Option<&[Vec<Event>]> {
-        match self.parts.last()?.events.last()? {
+        let (part, event) = self.calls?;
+        match self.parts.get(part)?.events.get(event)? {
             Event::Calls(calls) => Some(calls),
             _ => None,
         }
     }
 
     fn calls_mut(&mut self) -> Option<&mut Vec<Vec<Event>>> {
-        match self.parts.last_mut()?.events.last_mut()? {
+        let (part, event) = self.calls?;
+        match self.parts.get_mut(part)?.events.get_mut(event)? {
             Event::Calls(calls) => Some(calls),
             _ => None,
         }
@@ -169,8 +180,16 @@ fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> Vec<L
     ui.design = look.design;
     ui.banner = look.banner;
     ui.outcomes = record::outcomes(events).into();
-    for event in events {
+    for (index, event) in events.iter().enumerate() {
         record::replay(event, &mut ui);
+        // Calls still running end their block before what was said under them.
+        if let Event::Calls(calls) = event
+            && index + 1 < events.len()
+            && (calls.iter().rfind(|events| !events.is_empty()))
+                .is_some_and(|events| !record::ended(events))
+        {
+            ui.blank_line();
+        }
     }
     record::running(events.last(), &mut ui);
     let mut lines = selection::lines(&ui.captured());
@@ -229,6 +248,35 @@ mod tests {
     }
 
     #[test]
+    fn running_calls_go_on_in_their_place_under_what_is_said_meanwhile() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::default();
+        transcript.push(Event::Calls(vec![Vec::new()]));
+        transcript.push_call(0, Event::ToolCall("bash".into(), "make".into(), None));
+        transcript.push_call(0, Event::ToolOutput("building".into()));
+        transcript.push(Event::Text("Autopilot is on".into()));
+        transcript.split();
+        transcript.push_call(0, Event::ToolOutput("building\nbuilt".into()));
+        transcript.render(look(40, false), &hide);
+        let lines = transcript.window(0, 100).into_iter();
+        let shown: Vec<_> = lines
+            .map(|line| plain(&line.shown).trim().to_owned())
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "● bash make",
+                "building",
+                "built",
+                "",
+                "Autopilot is on",
+                ""
+            ]
+        );
+        assert!(transcript.calls().is_some());
+    }
+
+    #[test]
     fn calls_running_together_each_show_in_their_place_as_they_run() {
         let hide = Arc::new(AtomicBool::new(false));
         let mut transcript = Transcript::default();
@@ -262,9 +310,9 @@ mod tests {
         // It took what it took when it ended, however late it renders.
         assert_eq!(ended[2..6], ["● bash seq 1 2", "1", "2", "Took 2.0s"]);
         assert_eq!(ended[ended.len() - 4..], ["", "● bash seq 3 4", "3", ""]);
-        // What follows the calls comes after them all.
+        // What follows the calls comes after them all, a running one's block ended first.
         transcript.push(Event::Assistant("Done.".into()));
-        assert_eq!(shown(&mut transcript)[ended.len() - 1..], ["Done.", ""]);
+        assert_eq!(shown(&mut transcript)[ended.len() - 1..], ["", "Done.", ""]);
     }
 
     #[test]

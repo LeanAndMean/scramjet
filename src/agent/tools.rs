@@ -362,6 +362,14 @@ pub(super) struct Output {
 }
 
 impl Output {
+    pub fn failure(text: String) -> Self {
+        Self {
+            text,
+            detail: None,
+            failed: true,
+            image: None,
+        }
+    }
     /// The result's `output` as the conversation keeps it: the text, or with an image the
     /// Responses content parts.
     pub fn sent(&self) -> Value {

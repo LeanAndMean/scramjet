@@ -2286,12 +2286,13 @@ def settings_menu(read, until, send, output):
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep'))
     send(b'\x1b')
     ending(read, output, EMPTY)
-    # Typed during a turn, it opens at the turn's next request, which then has what it changed.
+    # Typed during a turn, it opens at once while the call runs; the turn's next request has what
+    # it changed.
     send(b'go\r')
     on_screen('Running 1s')
     send(b'/settings\r')
-    on_screen('Command: /settings')
-    on_screen('Settings  \u2191\u2193 move')
+    rows = on_screen('Settings  \u2191\u2193 move')
+    assert 'Command: ' not in '\n'.join(rows), rows
     send(b'\x1b[B' * 13 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
@@ -4101,14 +4102,12 @@ def fullscreen_commands_during_turn(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     on_screen('Running 1s')
-    # `/status`, typed as Scramjet's `/session`, and `/model` run before the turn's next
-    # request, which goes to the model chosen.
+    # `/status`, typed as Scramjet's `/session`, and `/model` run at once while the call runs;
+    # the turn's next request goes to the model chosen.
     send(b'/session\r/model\r')
-    rows = on_screen('Command: /model')
-    assert 'Command: /status' in '\n'.join(rows), rows
     rows = on_screen('Select model')
     text = '\n'.join(rows)
-    assert 'Tool Results: 1' in text and 'Switched.' not in text, text
+    assert 'Tool Calls: 1' in text and 'Tool Results: 0' in text and 'Switched.' not in text, text
     assert 'Command: ' not in text, text
     send(b'\x1b[B\r')
     on_screen('Switched.')
@@ -4152,13 +4151,12 @@ def prompt_keys(read, until, send, output):
     on_screen('Select model')
     send(b'\x1b')
     ending(read, output, ['> alXpha'])
-    # During a turn, it waits for the turn's next request, as /model typed then does.
+    # During a turn, it opens at once, as /model typed then does.
     send(b'\x05\x15go\r')
     on_screen('Running 1s')
     send(b'draft\x0c')
-    rows = on_screen('Command: /model')
-    assert rows[-1] == '> draft', rows
-    on_screen('Select model')
+    rows = on_screen('Select model')
+    assert 'Command: ' not in '\n'.join(rows), rows
     send(b'\x1b[B\r')
     rows = on_screen('Row 40 of the reply.')
     assert 'Row 1 of the reply.' not in '\n'.join(rows), rows
@@ -4359,11 +4357,10 @@ def copy_command(read, until, send, output):
     send(b'/copy\r')
     on_screen('Copied last agent message to clipboard')
     copied(markdown_reply)
-    # Typed during a turn, it copies the latest reply before the turn's next request.
+    # Typed during a turn, it copies the latest reply at once, while the call runs.
     send(b'again\r')
     on_screen('Running 1s')
     send(b'/copy\r')
-    on_screen('Command: /copy')
     copied('Checking.')
     rows = on_screen('Checked.')
     text = '\n'.join(rows)

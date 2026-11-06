@@ -81,7 +81,10 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// Guards against a model that never stops calling tools.
@@ -509,7 +512,9 @@ pub struct Agent {
     /// Whether a completed command's recommended next step runs without the user choosing it.
     autopilot: bool,
     /// The MCP servers, while the model is offered their tools.
-    mcp: Option<mcp::Servers>,
+    mcp: Option<Arc<mcp::Servers>>,
+    /// A reply's calls that a pause of the turn left running (`AgentError::Paused`).
+    calls: Option<calls::Calls>,
     pub usage: Usage,
 }
 
@@ -659,6 +664,7 @@ impl Agent {
             hide_credentials: false,
             autopilot,
             mcp: None,
+            calls: None,
             config,
             conversation,
             prompts,
@@ -706,9 +712,10 @@ impl Agent {
             self.mcp = None;
             return;
         }
-        match &mut self.mcp {
+        // Calls still running keep the servers they had.
+        match self.mcp.as_mut().and_then(Arc::get_mut) {
             Some(running) => running.update(wanted, root),
-            None => self.mcp = Some(mcp::Servers::start(wanted, root)),
+            None => self.mcp = Some(Arc::new(mcp::Servers::start(wanted, root))),
         }
     }
 
@@ -716,7 +723,7 @@ impl Agent {
     pub fn mcp_servers(&self) -> Vec<(McpServer, McpState)> {
         let states = self
             .mcp
-            .as_ref()
+            .as_deref()
             .map(mcp::Servers::states)
             .unwrap_or_default();
         (states.into_iter())
@@ -981,7 +988,7 @@ impl Agent {
             }
         }
         let model = &self.config.model;
-        let servers = self.mcp.as_ref().map(mcp::Servers::section);
+        let servers = self.mcp.as_deref().map(mcp::Servers::section);
         self.instructions.clone()
             + &servers.unwrap_or_default()
             + &instructions::identity(model, &contributors, &self.identities)

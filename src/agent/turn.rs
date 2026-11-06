@@ -1,9 +1,9 @@
 //! A turn: model requests and tool calls from a prompt to the final answer, the messages
 //! queued during it, and the command it runs: its status checks and what follows it.
-use super::tools::Call;
+use super::calls::Calls;
 use super::{
     Agent, AgentError, AgentUi, AutoCompaction, CONTEXT, Completed, MAX_STEPS, PROBE, PRODUCER,
-    Purpose, Routing, Source, Step, Suggested, TYPED, USAGE, autonomy, batch, message_text, status,
+    Purpose, Routing, Source, Step, Suggested, TYPED, USAGE, autonomy, message_text, status,
     suggest,
 };
 use serde_json::{Value, json};
@@ -71,8 +71,8 @@ impl Agent {
         }
     }
 
-    /// Goes on with the turn that `turn` or this returned `AgentError::Paused` from, before its
-    /// next request.
+    /// Goes on with the turn that `turn` or this returned `AgentError::Paused` from: with the
+    /// calls the pause left running, else from its next request.
     pub fn resume_turn(
         &mut self,
         ui: &mut dyn AgentUi,
@@ -192,6 +192,12 @@ finish and is not checked on. Reply to continue.",
     fn run(&mut self, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> Result<(), AgentError> {
         let mut overflow_recovered = false;
         for _ in 0..MAX_STEPS {
+            // The calls a pause left running come first.
+            if let Some(calls) = self.calls.take()
+                && self.after_calls(calls, ui, cancel)?
+            {
+                return Ok(());
+            }
             if cancel.load(Ordering::Relaxed) {
                 return Err(AgentError::Cancelled);
             }
@@ -260,54 +266,29 @@ to a larger-context model)"
                 }
                 return Ok(());
             }
-            // As in Pi, the turn ends without another request when every call ends it.
-            let ends = match self.together(&calls) {
-                Some(together) => {
-                    let tools = self.tools();
-                    let root = &self.config.root;
-                    let run = |call: &Call, ui: &mut dyn AgentUi| {
-                        ui.tool_call(call.name, &call.summary(), call.compact(root).as_ref());
-                        tools.run(call, ui, cancel)
-                    };
-                    let ran = batch::run(&together, &self.config.root, &run, ui, cancel);
-                    for (item, (output, usage)) in calls.iter().zip(ran) {
-                        self.usage.add(&usage);
-                        self.add_result(item, &output, ui)?;
-                    }
-                    if cancel.load(Ordering::Relaxed) {
-                        return Err(AgentError::Cancelled);
-                    }
-                    false
-                }
-                None => {
-                    let mut ends = true;
-                    let mut calls = calls.iter();
-                    while let Some(item) = calls.next() {
-                        let (output, ends_turn) = self.call(item, ui, cancel);
-                        ends &= ends_turn;
-                        self.add_result(item, &output, ui)?;
-                        if cancel.load(Ordering::Relaxed) {
-                            // Every call gets a result, as in Pi, or the next request is refused.
-                            for item in calls {
-                                self.not_run(item, ui)?;
-                            }
-                            return Err(AgentError::Cancelled);
-                        }
-                    }
-                    ends
-                }
-            };
-            // After the results, so one reply's results stay a chain (see `destination`).
-            self.save_command()?;
-            if ends {
-                self.compact_when_full(ui, cancel)?;
-                if self.continue_queued(ui)? {
-                    continue;
-                }
+            let calls = self.start_calls(calls, ui);
+            if self.after_calls(calls, ui, cancel)? {
                 return Ok(());
             }
         }
         Err(AgentError::TooManySteps)
+    }
+
+    /// Runs a reply's `calls` on, then returns whether the turn ends.
+    fn after_calls(
+        &mut self,
+        calls: Calls,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<bool, AgentError> {
+        let ends = self.run_calls(calls, ui, cancel)?;
+        // After the results, so one reply's results stay a chain (see `destination`).
+        self.save_command()?;
+        if ends {
+            self.compact_when_full(ui, cancel)?;
+            return Ok(!self.continue_queued(ui)?);
+        }
+        Ok(false)
     }
 
     /// Where the turn would end: adds the steering messages queued, else the follow-ups; returns
@@ -417,7 +398,7 @@ mod tests {
         std::fs::write(commands.join("rs:work.md"), "Work on $1.\n").unwrap();
         project_sets(&mut agent);
         agent.autonomy = None;
-        // Before the second request, and before the status check's.
+        // While the call runs, and before the status check's request.
         let mut ui = Recorder {
             pauses: vec![false, true, false, true],
             ..Recorder::default()
@@ -443,6 +424,34 @@ mod tests {
         assert!((check["content"].as_str().unwrap()).starts_with("Status check for `/rs:work`: "));
         assert_eq!(ui.replies, ["worked"]);
         assert_eq!(agent.prompts(), ["/rs:work go"]);
+    }
+
+    #[test]
+    fn a_turn_pauses_while_a_call_runs_which_goes_on_meanwhile() {
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", "bash", json!({"command":"sleep 1; echo slept"})),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "paused-call");
+        let mut ui = Recorder {
+            pauses: vec![false, true],
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let paused = agent.turn("go", &mut ui, &cancel);
+        assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
+        assert!(started.elapsed() < std::time::Duration::from_millis(800));
+        let last = agent.conversation().last().unwrap().clone();
+        assert_eq!(last["type"], "function_call");
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        let resumed = std::time::Instant::now();
+        agent.resume_turn(&mut ui, &cancel).unwrap();
+        // It ran on during the pause.
+        assert!(resumed.elapsed() < std::time::Duration::from_millis(800));
+        let bodies = server.join().unwrap();
+        assert_eq!(last_output(&bodies[1]), "slept\n");
+        assert_eq!(ui.replies, ["done"]);
     }
 
     #[test]

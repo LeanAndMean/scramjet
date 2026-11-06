@@ -57,6 +57,9 @@ impl Activity {
             ..Self::new("Waiting for you")
         }
     }
+    pub(super) fn asks(&self) -> bool {
+        self.escape.is_none()
+    }
     /// What the status line says once `event` happened, if that changes it.
     pub(super) fn after(event: &Event) -> Option<Self> {
         Some(match event {

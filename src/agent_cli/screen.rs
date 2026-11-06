@@ -280,6 +280,8 @@ struct App {
     /// The conversation and where it was scrolled to, while the theme editor's sample session
     /// is shown in its place.
     conversation: Option<(Transcript, Option<Place>)>,
+    /// What the status line said before the open dialog asked the user.
+    before_dialog: Option<Activity>,
     hide_thinking: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     inputs: mpsc::Sender<Input>,
@@ -347,6 +349,7 @@ impl App {
             draft: editor.draft(String::new()),
             editor,
             transcript: Transcript::default(),
+            before_dialog: None,
             conversation: None,
             hide_thinking,
             cancel,
@@ -564,7 +567,9 @@ impl App {
             ToScreen::Turn(efforts) => {
                 let running = efforts.is_some();
                 self.conversation_mut().split();
-                self.activity = running.then(|| Activity::new("Working"));
+                // A turn going on after a pause still does what it did.
+                let doing = self.activity.take();
+                self.activity = running.then(|| doing.unwrap_or_else(|| Activity::new("Working")));
                 if let Some(efforts) = efforts {
                     self.efforts = efforts;
                 }
@@ -640,7 +645,10 @@ impl App {
                 });
                 self.top = None;
                 if let Some(activity) = &mut self.activity {
-                    *activity = Activity::asking();
+                    let doing = std::mem::replace(activity, Activity::asking());
+                    if !doing.asks() {
+                        self.before_dialog = Some(doing);
+                    }
                 }
                 self.replay();
             }
@@ -793,8 +801,15 @@ impl App {
                 ..open
             });
         }
+        self.after_dialog();
+    }
+
+    /// The status line says again what the turn did before a dialog opened, as a command run
+    /// while a tool runs leaves it running.
+    fn after_dialog(&mut self) {
+        let doing = self.before_dialog.take();
         if let Some(activity) = &mut self.activity {
-            *activity = Activity::new("Working");
+            *activity = doing.unwrap_or_else(|| Activity::new("Working"));
         }
     }
 
