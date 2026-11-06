@@ -133,7 +133,8 @@ impl ThemeEditor {
     /// its accent, border, headings, variables and strings, the distinct ones in turn, on its
     /// background, else the terminal's, else dark or light as its secondary text suits; each
     /// role keeps `theme`'s color until the color it would follow changes. `None` when it has
-    /// none of those colors exactly, as the terminal's 16 colors.
+    /// none of those colors exactly, as the terminal's 16 colors until the terminal says what
+    /// they are (`Theme::exactly`).
     pub(super) fn from_theme(
         name: &str,
         theme: &Theme,
@@ -1688,6 +1689,52 @@ mod tests {
         // The terminal's 16 colors have nothing exact to start from.
         let terminal = Theme::built_in(theme::TERMINAL_COLORS).unwrap();
         assert!(ThemeEditor::from_theme("terminal-colors", &terminal, 1, None).is_none());
+        // In the colors a terminal answered it shows them in, they do: Campbell's here, its
+        // faint text halfway to the background, its own text color left to the editor.
+        let campbell_colors: [Rgb; 16] = [
+            (12, 12, 12),
+            (197, 15, 31),
+            (19, 161, 14),
+            (193, 156, 0),
+            (0, 55, 218),
+            (136, 23, 152),
+            (58, 150, 221),
+            (204, 204, 204),
+            (118, 118, 118),
+            (231, 72, 86),
+            (22, 198, 12),
+            (249, 241, 165),
+            (59, 120, 255),
+            (180, 0, 158),
+            (97, 214, 214),
+            (242, 242, 242),
+        ];
+        let shown = terminal.exactly(|color| match color {
+            Color::Index(index) => Some(campbell_colors[usize::from(index)]),
+            Color::Faint => Some((108, 108, 108)),
+            _ => None,
+        });
+        let editor = ThemeEditor::from_theme("terminal-colors", &shown, 1, Some(campbell)).unwrap();
+        assert_eq!(editor.draft().mains.len(), 5);
+        assert_eq!(editor.draft().background, Background::Terminal(campbell));
+        assert_eq!(editor.theme().background(), Color::Default);
+        for (token, color) in [
+            (Token::Accent, (58, 150, 221)),
+            (Token::Border, (0, 55, 218)),
+            (Token::Error, (197, 15, 31)),
+            (Token::MdHeading, (193, 156, 0)),
+            (Token::Muted, (108, 108, 108)),
+        ] {
+            assert_eq!(
+                editor.theme().color(token),
+                Color::Rgb(color.0, color.1, color.2),
+                "{}",
+                KEYS[token as usize]
+            );
+        }
+        for token in [Token::Text, Token::SelectedBg, Token::UserMessageBg] {
+            assert_eq!(editor.draft().picks[token as usize], None);
+        }
         // A color used again is one main color.
         let text = include_str!("themes/scramjet-dark.json")
             .replace(r#""border": "shockBlue""#, r#""border": "plasmaCyan""#);

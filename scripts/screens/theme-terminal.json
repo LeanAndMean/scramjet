@@ -1,0 +1,35 @@
+{
+  "size": "100x44",
+  "settings": {"look": "panels"},
+  "files": {
+    "src/lib.rs": "pub fn words(text: &str) -> Vec<&str> {\n    text.split_whitespace().collect()\n}\n"
+  },
+  "prompt": "What does src/lib.rs do?",
+  "replies": [
+    [{"text": "It splits text into **words** on any run of whitespace, with `split_whitespace`."}]
+  ],
+  "steps": [
+    {"until": "split_whitespace"},
+    {"sleep": 0.3},
+    {"shot": "terminal-start"},
+    {"type": "/settings\r"},
+    {"until": "Thinking level"},
+    {"type": "\u001b[B\u001b[B\u001b[B\u001b[B\r"},
+    {"until": "New theme"},
+    {"type": "\u001b[F"},
+    {"sleep": 0.3},
+    {"shot": "terminal-row"},
+    {"type": "\r"},
+    {"until": "Theme editor"},
+    {"sleep": 0.3},
+    {"shot": "terminal-editor"},
+    {"type": "\t"},
+    {"sleep": 0.3},
+    {"shot": "terminal-roles"},
+    {"type": "\t"},
+    {"sleep": 0.2},
+    {"type": "r"},
+    {"sleep": 0.3},
+    {"shot": "terminal-rolled"}
+  ]
+}

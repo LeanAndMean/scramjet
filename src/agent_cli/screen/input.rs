@@ -93,8 +93,8 @@ impl ByteSource for Source {
 
 impl App {
     pub(super) fn key(&mut self, key: Key, pending: bool) -> Flow {
-        if let Key::Background(rgb) = key {
-            background::answered(rgb);
+        if let Key::Answer(asked, rgb) = key {
+            background::answered(asked, rgb);
             return Flow::Go;
         }
         if self.exiting {

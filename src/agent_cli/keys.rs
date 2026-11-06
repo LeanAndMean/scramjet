@@ -23,8 +23,8 @@ pub(super) enum Key {
     Press(Press),
     /// A mouse report, which only the full screen asks the terminal for.
     Mouse(Mouse),
-    /// The terminal's background, as it answered the screen's OSC 11.
-    Background(Rgb),
+    /// One of the terminal's colors, as it answered the screen's question about it.
+    Answer(background::Asked, Rgb),
     Idle,
     Ignored,
 }
@@ -213,10 +213,8 @@ fn osc(source: &mut impl ByteSource) -> io::Result<Key> {
         }
     }
     let text = String::from_utf8_lossy(&text);
-    let answer = (text.strip_prefix("11;")).and_then(background::parse);
-    Ok(answer
-        .filter(|_| !long)
-        .map_or(Key::Ignored, Key::Background))
+    let answer = background::answer(&text).filter(|_| !long);
+    Ok(answer.map_or(Key::Ignored, |(asked, rgb)| Key::Answer(asked, rgb)))
 }
 
 /// The key of `ESC O` and `byte`, as terminals send some keys in application mode.
@@ -429,6 +427,7 @@ impl Drop for RawMode {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::agent_cli::background::Asked;
     use std::collections::VecDeque;
 
     impl ByteSource for VecDeque<u8> {
@@ -464,13 +463,15 @@ pub(super) mod tests {
             keys(
                 format!(
                     "\x1b]11;rgb:0c0c/0c0c/0c0c\x1b\\\x1b]11;#fafafa\x07\x1b]10;rgb:0/0/0\x07\
-                     \x1b]11;?\x07{long}\x1b]"
+                     \x1b]4;3;rgb:c1c1/9c9c/0000\x1b\\\x1b]12;rgb:0/0/0\x07\x1b]11;?\x07{long}\x1b]"
                 )
                 .as_bytes()
             ),
             [
-                Key::Background((12, 12, 12)),
-                Key::Background((250, 250, 250)),
+                Key::Answer(Asked::Background, (12, 12, 12)),
+                Key::Answer(Asked::Background, (250, 250, 250)),
+                Key::Answer(Asked::Foreground, (0, 0, 0)),
+                Key::Answer(Asked::Palette(3), (193, 156, 0)),
                 Key::Ignored,
                 Key::Ignored,
                 Key::Ignored,

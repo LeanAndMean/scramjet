@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.37.0 — A new theme from the terminal's own colors
+
+### Added
+
+- `/settings` → Theme offers New theme from terminal-colors… in a terminal that says what its colors are, as Windows Terminal does: the theme editor starts from the default theme as this terminal shows it, its cyan, blue, yellow, magenta and green as the main colors, on the terminal's background, each role keeping the terminal's color (faint text halfway to the background) until a roll or a step changes what it follows. The full screen asks the terminal for its text color and 16 colors (OSC 10 and OSC 4) when it asks for its background. A theme file using the terminal's colors by number starts from them too.
+
 ## 0.36.0 — A new theme from another theme's colors
 
 ### Added

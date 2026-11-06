@@ -12,8 +12,9 @@ default colors.
                               [--binary target/release/scramjet-rs] [--name PREFIX]
                               [--background RRGGBB] [--foreground RRGGBB] [--silent]
 
-The terminal answers OSC 11 with its background, as Windows Terminal does, unless --silent (as
-tmux 3.0a); --background and --foreground give its own colors (Campbell's by default).
+The terminal answers OSC 11, 10 and 4 with its background, text color and 16 colors, as Windows
+Terminal does, unless --silent (as tmux 3.0a); --background and --foreground give its own colors,
+Campbell's by default, as are its 16.
 
 A scenario (scripts/screens/*.json) holds:
 
@@ -302,10 +303,15 @@ def main():
     parser.add_argument('--timeout', type=float, default=30)
     parser.add_argument('--background', default=BACKGROUND, help='the terminal\'s own background')
     parser.add_argument('--foreground', default=FOREGROUND, help='the terminal\'s own text color')
-    parser.add_argument('--silent', action='store_true', help='leave OSC 11 unanswered')
+    parser.add_argument('--silent', action='store_true', help='leave OSC 11, 10 and 4 unanswered')
     options = parser.parse_args()
     BACKGROUND, FOREGROUND = options.background.lstrip('#').lower(), options.foreground.lstrip('#').lower()
-    answer = b'\x1b]11;rgb:%s\x1b\\' % '/'.join(BACKGROUND[i:i + 2] * 2 for i in (0, 2, 4)).encode()
+
+    def answer(question, color):
+        return b'\x1b]%s;rgb:%s\x1b\\' % (question, '/'.join(color[i:i + 2] * 2 for i in (0, 2, 4)).encode())
+
+    answers = {b'11': answer(b'11', BACKGROUND), b'10': answer(b'10', FOREGROUND)}
+    answers.update({b'4;%d' % index: answer(b'4;%d' % index, color) for index, color in enumerate(CAMPBELL)})
     scenario = json.load(open(options.scenario))
     columns, rows = map(int, (options.size or scenario.get('size', '100x50')).split('x'))
     os.makedirs(options.outdir, exist_ok=True)
@@ -392,8 +398,10 @@ def main():
                     return
                 if not data:
                     return
-                if b'\x1b]11;?' in data and not options.silent:
-                    os.write(master, answer)
+                if not options.silent:
+                    for question in re.findall(rb'\x1b\](11|10|4;\d+);\?', data):
+                        if question in answers:
+                            os.write(master, answers[question])
                 with lock:
                     # The full screen starts on the alternate screen, which pyte does not keep apart.
                     start = data.rfind(b'\x1b[?1049h')

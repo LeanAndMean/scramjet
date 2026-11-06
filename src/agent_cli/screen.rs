@@ -966,12 +966,12 @@ static SHOWN: AtomicBool = AtomicBool::new(false);
 const LEAVE: &str = "\x1b[?1002l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l";
 
 impl Screen {
-    /// Shown, and the terminal asked for its background, which may have changed meanwhile.
+    /// Shown, and the terminal asked for its colors, which may have changed meanwhile.
     fn enter() -> Self {
         SHOWN.store(true, Ordering::SeqCst);
         eprint!(
             "\x1b[?1049h\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[2J{}",
-            background::QUERY
+            background::questions()
         );
         Self
     }

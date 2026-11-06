@@ -385,6 +385,16 @@ impl Theme {
         }
     }
 
+    /// The theme with each color `shown` gives an exact color for in that color, its other
+    /// colors as they are.
+    pub(super) fn exactly(&self, shown: impl Fn(Color) -> Option<(u8, u8, u8)>) -> Self {
+        let exact = |color| shown(color).map_or(color, |(r, g, b)| Color::Rgb(r, g, b));
+        Self {
+            colors: self.colors.iter().copied().map(exact).collect(),
+            background: exact(self.background),
+        }
+    }
+
     /// The built-in theme `name`.
     pub(super) fn built_in(name: &str) -> Option<Self> {
         let text = match name {

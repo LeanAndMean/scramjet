@@ -86,7 +86,8 @@ struct Editable {
 }
 
 /// `listed` in the theme editor: as it was saved when the editor made it, else as a new theme
-/// starting from its colors; `None` when it has no exact colors to start from.
+/// starting from its colors, those of the terminal's in the colors it answered it shows them in;
+/// `None` when it has no exact colors to start from.
 fn editable(listed: &Listed) -> Option<Editable> {
     let name = &listed.name;
     let terminal = background::terminal();
@@ -105,11 +106,17 @@ fn editable(listed: &Listed) -> Option<Editable> {
             editor: Box::new(editor),
         });
     }
-    let editor = ThemeEditor::from_theme(name, &listed.theme, seed(), terminal)?;
+    let answers = background::answers();
+    let shown = listed.theme.exactly(|color| answers.shown(color));
+    let editor = ThemeEditor::from_theme(name, &shown, seed(), terminal)?;
+    let how = match shown != listed.theme {
+        true => " in the colors this terminal shows it in",
+        false => "",
+    };
     Some(Editable {
         row: format!("New theme from {name}…"),
         note: format!(
-            "Start the theme editor from {name}: its main colors read from its accent, \
+            "Start the theme editor from {name}{how}: its main colors read from its accent, \
              borders, headings and code, each role keeping {name}'s color until a roll or a step \
              changes what it follows. It is saved as a new theme; {name} stays as it is."
         ),
