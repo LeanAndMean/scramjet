@@ -473,7 +473,6 @@ impl ThemeEditor {
                 let at = choices.iter().position(|&harmony| harmony == draft.harmony);
                 let at = (at.unwrap_or(0) as i32 + by).rem_euclid(choices.len() as i32);
                 draft.harmony = choices[at as usize];
-                draft.roll(&self.locked, &mut self.rng);
             }
             Row::Background => {
                 let choices: Vec<Background> = (self.terminal.map(Background::Terminal))
@@ -521,10 +520,14 @@ impl ThemeEditor {
             Row::Harmony => {
                 let harmony = &HARMONIES[draft.harmony];
                 let about = harmony.about;
+                let toward = keymap::key(Binding::ThemeHarmonize).unwrap_or_default();
                 (
                     "Harmony".into(),
                     harmony.name.into(),
-                    format!("{about} {left_right} chooses another, rolled anew."),
+                    format!(
+                        "{about} {left_right} chooses another and keeps the colors; {toward} \
+                         steps them toward it."
+                    ),
                 )
             }
             Row::Background => (
@@ -1251,7 +1254,7 @@ mod tests {
     }
 
     #[test]
-    fn the_count_and_harmony_rows_roll_anew_and_keep_the_locked_colors() {
+    fn the_count_row_rolls_anew_and_keeps_the_locked_colors_and_the_harmony_row_keeps_all() {
         let mut editor = ThemeEditor::new(2, Background::Dark, None);
         // Lock the third color, then go down to two colors: it stays, as the first.
         editor.row = 6;
@@ -1286,10 +1289,12 @@ mod tests {
         }
         assert_eq!(editor.draft().mains.len(), 5);
         assert_eq!(editor.draft().mains[0], kept);
+        let (mains, score) = (editor.draft().mains.clone(), editor.score);
         editor.row = 1;
         editor.key(&press(Code::Right));
         assert_eq!(HARMONIES[editor.draft().harmony].name, "analogous");
-        assert_eq!(editor.draft().mains[0], kept);
+        assert_eq!(editor.draft().mains, mains);
+        assert_ne!(editor.score, score);
         // Back to the three colors of the start, the lock on the third again.
         for _ in 0..8 {
             editor.key(&typed("u"));

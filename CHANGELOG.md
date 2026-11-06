@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.48.0 — Another harmony keeps the colors
+
+### Changed
+
+- In the theme editor, choosing another harmony with Left and Right keeps the main colors as they are: only the harmony's score changes, and H then steps the colors toward the new one. It used to roll the colors not locked.
+
 ## 0.47.0 — Each response's timing recorded
 
 ### Added
