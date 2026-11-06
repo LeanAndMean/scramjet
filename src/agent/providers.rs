@@ -464,12 +464,18 @@ impl Reading {
 
     /// The logins a `models.json` in `directory` names; problems name it `what`.
     fn declare(&mut self, text: &[u8], directory: &Path, what: &str) {
-        // One that is no models.json is said so as its providers are read.
-        let Ok(Declared {
-            logins: Some(logins),
-        }) = serde_json::from_slice(text)
-        else {
-            return;
+        let logins = match serde_json::from_slice(text) {
+            Ok(Declared {
+                logins: Some(logins),
+            }) => logins,
+            Ok(Declared { logins: None }) => return,
+            // One that is no models.json is said so as its providers are read.
+            Err(_) if serde_json::from_slice::<Document>(text).is_err() => return,
+            Err(_) => {
+                return self
+                    .problems
+                    .push(format!("{what}: logins must be an object"));
+            }
         };
         for (provider, entry) in logins.0 {
             let what = format!("{what}: login {provider}");
@@ -1719,14 +1725,16 @@ mod tests {
         )
         .unwrap();
         super::super::login::save(&logins.auth, "other", json!({"type": "oauth"})).unwrap();
-        let files = vec![own, declared.clone(), again.clone()];
+        let listed = scratch.0.join("listed.json");
+        write(&listed, json!({"logins": [{"acme": {}}]})).unwrap();
+        let files = vec![own, declared.clone(), again.clone(), listed.clone()];
         let providers = Providers::read(files, Some(logins.clone()));
         let programs = providers.login_programs();
         let shown: Vec<(&str, &str)> = (programs.iter())
             .map(|program| (program.provider.as_str(), program.name.as_str()))
             .collect();
         assert_eq!(shown, [("acme", "acme"), ("other", "Other Co")]);
-        let (declared, again) = (declared.display(), again.display());
+        let (declared, again, listed) = (declared.display(), again.display(), listed.display());
         assert_eq!(
             providers.problems(),
             // In the order written, which json! sorts.
@@ -1744,6 +1752,7 @@ mod tests {
                      list of strings"
                 ),
                 format!("{again}: login acme: is logged in to already; not offered here"),
+                format!("{listed}: logins must be an object"),
                 "other (/login): no models were read for the login yet; they are asked for \
                  again in the full screen, or /login again"
                     .to_owned(),

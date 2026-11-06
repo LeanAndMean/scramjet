@@ -212,8 +212,10 @@ impl LoginProgram {
         // Apart, so that a program that reads none of it does not hold this one up.
         std::thread::spawn(move || input.write_all(line.as_bytes()));
         let lines = read_lines(child.stdout.take().expect("piped"));
-        let errors = read_errors(child.stderr.take().expect("piped"));
+        let (errors, errors_read) = read_errors(child.stderr.take().expect("piped"));
+        // Once the program ended: what it wrote last may not have been read yet.
         let said = || {
+            let _ = errors_read.recv_timeout(ENDING);
             let errors = errors.lock().unwrap_or_else(PoisonError::into_inner);
             let said = String::from_utf8_lossy(&errors);
             let said = said.lines().map(str::trim).find(|line| !line.is_empty());
@@ -354,11 +356,14 @@ fn read_lines(output: impl Read + Send + 'static) -> mpsc::Receiver<Result<Vec<u
     lines
 }
 
-/// What `errors` has had written, its first `ERROR_BYTES`, as it comes; the rest is dropped, as
-/// a closed pipe would end the program.
-fn read_errors(mut errors: impl Read + Send + 'static) -> Arc<Mutex<Vec<u8>>> {
+/// What `errors` has had written, its first `ERROR_BYTES`, as it comes, and what hears when it
+/// closed; the rest is dropped, as a closed pipe would end the program.
+fn read_errors(
+    mut errors: impl Read + Send + 'static,
+) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
     let kept = Arc::new(Mutex::new(Vec::new()));
     let keeping = kept.clone();
+    let (closed, ended) = mpsc::channel();
     std::thread::spawn(move || {
         let mut chunk = [0; 4096];
         while let Ok(read @ 1..) = errors.read(&mut chunk) {
@@ -366,8 +371,9 @@ fn read_errors(mut errors: impl Read + Send + 'static) -> Arc<Mutex<Vec<u8>>> {
             let room = ERROR_BYTES.saturating_sub(kept.len()).min(read);
             kept.extend_from_slice(&chunk[..room]);
         }
+        let _ = closed.send(());
     });
-    kept
+    (kept, ended)
 }
 
 #[cfg(test)]

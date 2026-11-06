@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.28.1 — What a login program says when it fails
+
+### Fixed
+
+- A package's login program that failed sometimes showed only its exit status, without the reason it wrote; the reason is now always shown.
+- A package's `models.json` whose `logins` is not an object now says so, where it was passed over without a word.
+
 ## 0.28.0 — Packages' logins
 
 ### Added
