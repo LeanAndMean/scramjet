@@ -309,6 +309,8 @@ pub(super) struct Terminal {
     pub(super) outcomes: VecDeque<(Outcome, Option<Duration>)>,
     /// How the call shown last went.
     outcome: Outcome,
+    /// A question ended with a pad, which the call's rows after it take as their own.
+    padded_above: bool,
     /// What goes before each row of the block streamed now.
     lead: Option<Lead>,
 }
@@ -633,7 +635,8 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     /// heading and any rows.
     fn padded(&mut self, outcome: Outcome, gutter: &Gutter, rows: &[String]) {
         let pad = self.pad(outcome);
-        let mut block = match rows.is_empty() {
+        let above = std::mem::take(&mut self.padded_above);
+        let mut block = match rows.is_empty() || above {
             true => String::new(),
             false => pad.clone(),
         };
@@ -706,6 +709,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             banner: Banner::Plain,
             outcomes: VecDeque::new(),
             outcome: Outcome::Running,
+            padded_above: false,
             lead: None,
         }
     }
@@ -1052,6 +1056,7 @@ impl AgentUi for Terminal {
             }
         };
         let pad = self.pad(outcome);
+        self.padded_above = false;
         self.err(&format!("{pad}{line}\n"));
     }
     fn tool_running(&mut self, since: Instant) {
@@ -1213,11 +1218,20 @@ impl AgentUi for Terminal {
             true => self.width().saturating_sub(gutter.columns).max(20),
             false => 0,
         };
+        // In panels, pads part the question from its heading and from its answer.
+        let pad = self.pad(self.outcome);
+        let mut block = pad.clone();
         for line in self.markdown_rows(message, width) {
-            let line = gutter.row(false, &line);
-            self.err(&format!("{line}\n"));
+            block += &gutter.row(false, &line);
+            block.push('\n');
         }
-        self.err("\n");
+        block += match pad.is_empty() {
+            true => format!("{}\n", gutter.blank),
+            false => pad,
+        }
+        .as_str();
+        self.padded_above = self.design == Design::Panels;
+        self.err(&block);
     }
     fn choose(
         &mut self,

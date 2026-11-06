@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.42.2 — Labeled replies in the margin look, padded questions
+
+### Fixed
+
+- In the margin look, a reply's first row is labeled `reply`, so it no longer reads as part of the call shown above it.
+- In the panels look, a question the agent asks (`get_scramjet_user_input`) has a padded row above and below it inside its call's panel, while it waits and once answered, rather than a row off the panel before the answer.
+
 ## 0.42.1 — Attached files in a box
 
 ### Fixed

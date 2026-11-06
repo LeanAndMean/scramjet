@@ -79,6 +79,8 @@ styles! {
     PROMPT_MARK: [] Accent;
     PROMPT_LABEL: [BOLD] Accent;
     PROMPT_TEXT: [BOLD] UserMessageText;
+    /// The margin's label beside a reply.
+    REPLY_LABEL: [BOLD];
     RAIL: [] BorderMuted;
     RAIL_FAILED: [] Error;
     RAIL_RUNNING: [] Warning;

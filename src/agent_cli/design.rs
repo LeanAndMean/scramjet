@@ -101,7 +101,13 @@ impl Design {
     pub(super) fn reply(self, marked: bool) -> Option<Gutter> {
         match self {
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
-            Self::Margin => Some(Gutter::same(MARGIN_BLANK, MARGIN, None, marked)),
+            Self::Margin => Some(Gutter::new(
+                &label("reply", style::REPLY_LABEL),
+                MARGIN_BLANK,
+                MARGIN,
+                None,
+                marked,
+            )),
             Self::Classic | Self::Rails => None,
         }
     }
@@ -474,5 +480,9 @@ mod tests {
         let margin = Design::Margin.reasoning(false).unwrap();
         assert_eq!(plain(&margin.row(true, "a")), " think a");
         assert_eq!(plain(&margin.row(false, "b")), "       b");
+        // A reply is labeled, so it does not read as part of the call before it.
+        let reply = Design::Margin.reply(false).unwrap();
+        assert_eq!(plain(&reply.row(true, "ok")), " reply ok");
+        assert_eq!(plain(&reply.row(false, "more")), "       more");
     }
 }

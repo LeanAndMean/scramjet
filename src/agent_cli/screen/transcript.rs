@@ -454,7 +454,7 @@ mod tests {
                 "     │ 1 failed",
                 "     │ Command exited with code 101",
                 "",
-                "       It fails.",
+                " reply It fails.",
                 "",
                 "   you again",
                 "",
@@ -498,6 +498,59 @@ mod tests {
                 (" building", running),
                 ("", running),
                 ("", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_question_in_a_panel_has_one_pad_above_and_one_below_while_asked_and_answered() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::default();
+        let call = Event::ToolCall("get_scramjet_user_input".into(), String::new(), None);
+        transcript.push(call);
+        transcript.push(Event::ToolRunning(Instant::now()));
+        transcript.push(Event::Question("Delete it?".into()));
+        let shown = |transcript: &mut Transcript| {
+            let look = Look {
+                design: Design::Panels,
+                ..look(40, false)
+            };
+            transcript.render(look, &hide);
+            let lines = transcript.window(0, 100).into_iter();
+            let rows = lines.map(|line| (plain(&line.shown).trim_end().to_owned(), line.band));
+            rows.filter(|(_, band)| band.is_some()).collect::<Vec<_>>()
+        };
+        let running = Some(Band::Running);
+        assert_eq!(
+            shown(&mut transcript),
+            [
+                ("".into(), running),
+                (" get_scramjet_user_input              ○".into(), running),
+                ("".into(), running),
+                (" Delete it?".into(), running),
+                ("".into(), running),
+            ]
+        );
+        let answer = "Answer: Yes".into();
+        let result = Event::ToolResult(
+            "get_scramjet_user_input".into(),
+            answer,
+            None,
+            false,
+            Instant::now(),
+        );
+        transcript.push(result);
+        let done = Some(Band::Done);
+        assert_eq!(
+            shown(&mut transcript),
+            [
+                ("".into(), done),
+                (" get_scramjet_user_input              ✓".into(), done),
+                ("".into(), done),
+                (" Delete it?".into(), done),
+                ("".into(), done),
+                (" Answer: Yes".into(), done),
+                ("".into(), done),
             ]
         );
     }
