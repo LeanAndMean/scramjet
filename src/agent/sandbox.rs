@@ -362,6 +362,31 @@ impl Hidden {
             false => Ok(()),
         }
     }
+
+    /// `file`, opened at `path`, refused as `check` refuses a path, checked on the file opened: a
+    /// symlink swapped in after a check by path (by a bash call running alongside) cannot lead a
+    /// read or write into a store.
+    pub(super) fn opened(
+        &self,
+        path: &Path,
+        file: std::io::Result<std::fs::File>,
+    ) -> Result<std::fs::File, String> {
+        use std::os::fd::AsRawFd;
+        let failed = |error: std::io::Error| format!("{}: {error}", path.display());
+        let file = file.map_err(failed)?;
+        let metadata = file.metadata().map_err(failed)?;
+        let opened = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()));
+        let real = opened.unwrap_or_else(|_| std::fs::canonicalize(path).unwrap_or_default());
+        let directories = real.ancestors().skip(1).filter_map(identity);
+        let mut found = std::iter::once((metadata.dev(), metadata.ino())).chain(directories);
+        match found.any(|found| self.identities.contains(&found)) {
+            true => Err(format!(
+                "{}: hidden, as it holds credentials",
+                path.display()
+            )),
+            false => Ok(file),
+        }
+    }
 }
 
 fn identity(path: &Path) -> Option<(u64, u64)> {
@@ -748,6 +773,40 @@ ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
         )
         .unwrap();
         assert!(super::write_beneath(&real_root, &real, b"x").is_err());
+    }
+
+    #[test]
+    fn a_read_does_not_follow_a_symlink_swapped_in_after_the_check_into_a_store() {
+        let home = std::env::temp_dir().join(format!("scramjet-read-swap-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::write(home.join(".netrc"), "SECRET-netrc\n").unwrap();
+        std::fs::write(home.join(".ssh/id_ed25519"), "SECRET-key\n").unwrap();
+        std::fs::write(root.join("a.txt"), "plain\n").unwrap();
+        std::fs::create_dir(root.join("keys")).unwrap();
+        std::fs::write(root.join("keys/id_ed25519"), "plain\n").unwrap();
+        let hidden = super::Hidden::under(&home, Vec::new());
+        let read = |path: &std::path::Path| {
+            let mut text = String::new();
+            let file = hidden.opened(path, std::fs::File::open(path))?;
+            std::io::Read::read_to_string(&mut &file, &mut text).unwrap();
+            Ok::<_, String>(text)
+        };
+        for path in [root.join("a.txt"), root.join("keys/id_ed25519")] {
+            hidden.check(&path).unwrap();
+            assert_eq!(read(&path).unwrap(), "plain\n");
+        }
+
+        std::fs::remove_file(root.join("a.txt")).unwrap();
+        std::os::unix::fs::symlink(home.join(".netrc"), root.join("a.txt")).unwrap();
+        std::fs::remove_dir_all(root.join("keys")).unwrap();
+        std::os::unix::fs::symlink(home.join(".ssh"), root.join("keys")).unwrap();
+        for path in [root.join("a.txt"), root.join("keys/id_ed25519")] {
+            let error = read(&path).unwrap_err();
+            assert!(error.contains("hidden, as it holds credentials"), "{error}");
+        }
     }
 
     #[test]

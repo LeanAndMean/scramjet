@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.53.3 — Credential stores stay hidden from a raced read
+
+### Fixed
+
+- With the credential stores hidden (`--sandbox`, unattended turns, subagents), `read` and `edit` check the file they opened rather than its path, and `write` and `edit` check the file before cutting it, so a bash command running at the same moment cannot swap in a symlink after the check and have a store's contents reach the model or a store overwritten.
+
 ## 0.53.2 — Sandboxed writes stay where they were checked
 
 ### Fixed

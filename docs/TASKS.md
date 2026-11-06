@@ -6,7 +6,6 @@ Last steer: b11ce00
 
 ## From review
 
-- **`read` and `edit` can be raced into a credential store under `--sandbox`** (review of c585637): `Hidden::check` canonicalizes the path (`src/agent/sandbox.rs`), then `read` and `edit` open it by path again (`src/agent/tools.rs`, `read`), in the unsandboxed main process. A bash call running alongside can swap the checked file for a symlink to `~/.ssh/…` or `auth.json` between the two, and the contents reach the model. `edit`'s write half refuses the symlink since 0.53.2; its read does not. Opening first and checking the opened file (`/proc/self/fd/N` and its device and inode against `Hidden`'s identities) would close it.
 - **Only the project's top-level `.git`, `.scramjet` and `.agents` stay read-only in `workspace-write`**: a nested repository's `.git` (a project holding other checkouts, `vendor/x/.git`) is writable by bash and `write`, and its hooks or `core.fsmonitor` run outside the sandbox at the user's next `git` there. Codex protects only the top level too; finding nested ones at start and binding each read-only would close it.
 
 ## Current focus
@@ -120,7 +119,7 @@ Not scheduled; fix them when they matter.
 - `tests/agent_editor_pty.py`'s file-reference journey needs `fd` on the `PATH` (its agent directory has no `bin`); here it is only in `~/.scramjet/agent/bin`, so run the tests with that directory on the `PATH`.
 - `agent::mcp::tests::http_servers_that_cannot_be_reached_or_refuse_say_why` failed once under the full run's load and passed alone and in three later runs (2026-11-06): `connection error` in place of `Connection refused`.
 - `agent::tests::a_fork_continues_from_before_a_prompt_in_a_new_session` failed once under the full run's load at `src/agent/tests.rs:1321` (the fork left before a prompt still existed) and passed alone three times (2026-11-06, 0.51.0). Not looked into; session files are named by millisecond and process id.
-- `agent::turn::tests::what_a_paused_turn_left_running_shows_from_another_thread_meanwhile` failed once under the full run's load at its outputs assertion (`src/agent/turn.rs:621`) and passed alone three times and in the next lib run (2026-11-06, 0.53.2). Not looked into; the bash output's chunks may split differently under load.
+- `agent::turn::tests::what_a_paused_turn_left_running_shows_from_another_thread_meanwhile` failed under the full run's load at its outputs assertion (`src/agent/turn.rs:621`), once in 0.53.2 and once in 0.53.3, and passed alone three times and in the next lib run each time (2026-11-06). Not looked into; the bash output's chunks may split differently under load.
 - A failing test can leave its directory in `/tmp`: the `autonomy`, `commands`, `agent_cli::clipboard`, `agent_cli::editor` and `agent_cli::file_search` tests remove theirs only at their end, where the other agent tests use the `agent::tests::ScratchDir` drop guard.
 
 ## Open questions

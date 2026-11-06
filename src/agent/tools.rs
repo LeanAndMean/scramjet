@@ -287,12 +287,17 @@ impl<'a> Call<'a> {
             self.check_path(root, hidden)?;
         }
         let text = match self.name {
-            "read" => return read(root, self),
+            "read" => return read(root, self, hidden),
             "ls" => ls(root, self)?,
             "grep" => grep(root, self, hidden, cancel)?,
             "find" => find(root, self, hidden, cancel)?,
-            "write" => return write(root, self, &put),
-            "edit" => return edit(root, self, &put),
+            "write" | "edit" => {
+                let put = |path: &Path, content: &str| put(path, content, hidden);
+                return match self.name {
+                    "write" => write(root, self, &put),
+                    _ => edit(root, self, hidden, &put),
+                };
+            }
             "bash" => return bash(root, self, hidden, cancel, progress),
             other => return Err(format!("Tool {other} not found")),
         };
@@ -323,7 +328,7 @@ impl<'a> Call<'a> {
                     |path: &Path, content: &str| sandbox.write(root, path, content.as_bytes());
                 match self.name {
                     "write" => write(root, self, &put),
-                    _ => edit(root, self, &put),
+                    _ => edit(root, self, Some(hidden), &put),
                 }
             }
             "bash" => {
@@ -348,7 +353,7 @@ impl<'a> Call<'a> {
     ) -> Result<Output, String> {
         self.check_path(root, hidden)?;
         let text = match self.name {
-            "read" => return read(root, self),
+            "read" => return read(root, self, Some(hidden)),
             "ls" => ls(root, self)?,
             "grep" => grep(root, self, Some(hidden), cancel)?,
             "find" => find(root, self, Some(hidden), cancel)?,
@@ -496,10 +501,22 @@ pub(super) fn resolve(root: &Path, path: &str) -> PathBuf {
     resolved
 }
 
-fn read(root: &Path, call: &Call) -> Result<Output, String> {
+/// The contents of the file at `path`, checked against the stores `hidden` as opened.
+fn contents(path: &Path, hidden: Option<&Hidden>) -> Result<Vec<u8>, String> {
+    let failed = |e: io::Error| format!("{}: {e}", path.display());
+    let mut file = match hidden {
+        Some(hidden) => hidden.opened(path, std::fs::File::open(path))?,
+        None => std::fs::File::open(path).map_err(failed)?,
+    };
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(failed)?;
+    Ok(bytes)
+}
+
+fn read(root: &Path, call: &Call, hidden: Option<&Hidden>) -> Result<Output, String> {
     let given = call.str("path")?;
     let path = resolve(root, given);
-    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let bytes = contents(&path, hidden)?;
     let (text, image) = match image::mime(&bytes) {
         Some(mime) => read_image(&bytes, mime),
         None => (read_text(bytes, call, &path)?, None),
@@ -570,11 +587,38 @@ fn read_text(bytes: Vec<u8>, call: &Call, path: &Path) -> Result<String, String>
 /// Writes a file, making the directories missing.
 type Put<'a> = dyn Fn(&Path, &str) -> Result<(), String> + 'a;
 
-fn put(path: &Path, content: &str) -> Result<(), String> {
+/// Writes `content` to `path`, checked against the stores `hidden` as opened, before the file
+/// is cut.
+fn put(path: &Path, content: &str, hidden: Option<&Hidden>) -> Result<(), String> {
+    use std::io::Write;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    std::fs::write(path, content).map_err(|e| format!("{}: {e}", path.display()))
+    let failed = |e: io::Error| format!("{}: {e}", path.display());
+    let Some(hidden) = hidden else {
+        return std::fs::write(path, content).map_err(failed);
+    };
+    use rustix::{
+        fs::{Mode, OFlags},
+        io::Errno,
+    };
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(format!("{}: not a file", path.display()));
+    };
+    // Made only in a directory checked as opened, and a symlink there followed only to a file
+    // that exists, so that nothing is made in a store before the check refuses it.
+    let directory = hidden.opened(parent, std::fs::File::open(parent))?;
+    let flags = OFlags::WRONLY | OFlags::CLOEXEC;
+    let made = OFlags::CREATE | OFlags::NOFOLLOW;
+    let file = match rustix::fs::openat(&directory, name, flags | made, Mode::from_raw_mode(0o666))
+    {
+        Err(Errno::LOOP) => rustix::fs::openat(&directory, name, flags, Mode::empty()),
+        opened => opened,
+    };
+    let file = file.map(std::fs::File::from).map_err(io::Error::from);
+    let mut file = hidden.opened(path, file)?;
+    file.set_len(0).map_err(failed)?;
+    file.write_all(content.as_bytes()).map_err(failed)
 }
 
 fn write(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
@@ -593,10 +637,10 @@ fn write(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
     })
 }
 
-fn edit(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
+fn edit(root: &Path, call: &Call, hidden: Option<&Hidden>, put: &Put) -> Result<Output, String> {
     let path = resolve(root, call.str("path")?);
-    let original =
-        std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let original = String::from_utf8(contents(&path, hidden)?)
+        .map_err(|_| format!("{}: stream did not contain valid UTF-8", path.display()))?;
     // As Scramjet's `prepareEditArguments`: `edits` may come as a JSON string, and one edit's
     // fields beside it.
     let parsed: Option<Value>;
@@ -2009,6 +2053,61 @@ to see full lines]",
             std::fs::read_to_string(root.join("a.txt")).unwrap(),
             "plain\nmore\n"
         );
+        assert_eq!(
+            std::fs::read_to_string(home.join(".netrc")).unwrap(),
+            "SECRET-netrc\n"
+        );
+    }
+
+    #[test]
+    fn a_symlink_swapped_in_alongside_never_leads_a_tool_into_a_store() {
+        use super::super::sandbox::{Sandbox, SandboxMode};
+        let home = std::env::temp_dir().join(format!("scramjet-tool-swap-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(home.join(".netrc"), "SECRET-netrc\n").unwrap();
+        let hidden = Hidden::under(&home, Vec::new());
+        let cancel = AtomicBool::new(false);
+        let sandbox = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: true,
+        };
+        let done = AtomicBool::new(false);
+        let (mut ran, mut shown) = (0, Vec::new());
+        std::thread::scope(|scope| {
+            // As a bash call running alongside would: the checked file, then a symlink to a
+            // store, each renamed into place.
+            scope.spawn(|| {
+                let (file, link) = (root.join("file"), root.join("link"));
+                while !done.load(Ordering::Relaxed) {
+                    std::os::unix::fs::symlink(home.join(".netrc"), &link).unwrap();
+                    std::fs::rename(&link, root.join("a.txt")).unwrap();
+                    std::fs::write(&file, "plain\n").unwrap();
+                    std::fs::rename(&file, root.join("a.txt")).unwrap();
+                }
+            });
+            let edits = json!([{"oldText":"plain","newText":"PLAIN"}]);
+            for round in 0..3000 {
+                let (name, arguments) = match round % 3 {
+                    0 => ("read", json!({"path":"a.txt"})),
+                    1 => ("edit", json!({"path":"a.txt","edits":edits})),
+                    _ => ("write", json!({"path":"a.txt","content":"x\n"})),
+                };
+                let call = call(name, arguments);
+                let output = match round % 2 {
+                    0 => call.run(&root, Some(&hidden), &cancel, &mut |_| {}),
+                    _ => call.run_in_sandbox(&root, sandbox, &hidden, &cancel, &mut |_| {}),
+                };
+                ran += usize::from(output.is_ok());
+                shown.push(output.map_or_else(|error| error, |output| output.text));
+            }
+            done.store(true, Ordering::Relaxed);
+        });
+        assert!(ran > 0);
+        let leaked = shown.iter().find(|text| text.contains("SECRET"));
+        assert!(leaked.is_none(), "{leaked:?}");
         assert_eq!(
             std::fs::read_to_string(home.join(".netrc")).unwrap(),
             "SECRET-netrc\n"
