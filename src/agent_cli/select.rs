@@ -11,7 +11,7 @@ use super::settings::scramjet_level;
 use super::style::{self, Band, Style};
 use super::text;
 use super::tree::{Filter, View};
-use scramjet_rs::agent::{Choice, Label, ModelOption};
+use scramjet_rs::agent::{Choice, FRESH_MARK, Label, ModelOption};
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -128,7 +128,7 @@ pub(super) struct Spot {
 }
 
 /// The model a next step runs with and its effort, which Left/Right and Shift+Tab choose in its
-/// list, as in Scramjet's selector.
+/// list, as in Scramjet's selector, and whether it starts a fresh session, which Tab flips.
 pub(super) struct Route {
     models: Vec<ModelOption>,
     /// The chosen model's index in `models`, and the session's.
@@ -137,6 +137,8 @@ pub(super) struct Route {
     /// The effort set: the session's, until Shift+Tab chose one.
     effort: Option<String>,
     cycled: bool,
+    /// Each row's fresh session (`fresh_sessions`); `None`: a text step, which has none.
+    fresh: Vec<Option<bool>>,
 }
 
 /// What a next step's list chose besides the step: `None` keeps the session's.
@@ -144,6 +146,8 @@ pub(super) struct Route {
 pub(super) struct Routed {
     pub(super) model: Option<String>,
     pub(super) effort: Option<String>,
+    /// Whether the chosen step starts a fresh session, when the list knows it.
+    pub(super) fresh: Option<bool>,
 }
 
 impl Route {
@@ -156,20 +160,33 @@ impl Route {
             current,
             effort,
             cycled: false,
+            fresh: Vec::new(),
         }
     }
 
-    pub(super) fn routed(&self) -> Routed {
+    /// Each row's fresh session, `None` for a row that cannot have one.
+    pub(super) fn fresh_sessions(mut self, rows: Vec<Option<bool>>) -> Self {
+        self.fresh = rows;
+        self
+    }
+
+    fn routed(&self, row: usize) -> Routed {
         Routed {
             model: (self.at != self.current).then(|| self.models[self.at].reference()),
             effort: self.effort.clone().filter(|_| self.cycled),
+            fresh: self.fresh.get(row).copied().flatten(),
         }
     }
 
-    /// Takes Left, Right and Shift+Tab; whether it took `key`.
-    fn key(&mut self, key: &Key) -> bool {
+    /// Takes Left, Right, Shift+Tab and, on `row`, Tab; whether it took `key`.
+    fn key(&mut self, key: &Key, row: usize) -> bool {
         let count = self.models.len();
         match key {
+            _ if !self.fresh.is_empty() && key.is(Binding::NextStepFresh) => {
+                if let Some(Some(fresh)) = self.fresh.get_mut(row) {
+                    *fresh = !*fresh;
+                }
+            }
             _ if count > 1 && key.is(Binding::CursorLeft) => {
                 self.at = (self.at + count - 1) % count;
             }
@@ -185,8 +202,26 @@ impl Route {
         true
     }
 
-    /// The chosen model, when there are others, and its effort, with the keys that change them.
-    fn lines(&self) -> Vec<String> {
+    /// The chosen model, when there are others, its effort and `row`'s session, with the keys
+    /// that change them.
+    fn lines(&self, row: usize) -> Vec<String> {
+        let mut lines = self.model_lines();
+        if let Some(fresh) = self.fresh.get(row) {
+            let flip = (fresh.is_some())
+                .then(|| keymap::part(&[Binding::NextStepFresh], "change"))
+                .flatten()
+                .map_or_else(String::new, |flip| format!(" · {flip}"));
+            let session = if *fresh == Some(true) {
+                "fresh"
+            } else {
+                "this one"
+            };
+            lines.push(format!("session: {session}{flip}"));
+        }
+        lines
+    }
+
+    fn model_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         let Some(model) = self.models.get(self.at) else {
             return lines;
@@ -210,6 +245,11 @@ impl Route {
             .map_or_else(String::new, |cycle| format!(" · {cycle}"));
         lines.push(format!("effort: {effort}{cycle}"));
         lines
+    }
+
+    /// Whether `row` starts a fresh session.
+    fn is_fresh(&self, row: usize) -> bool {
+        self.fresh.get(row) == Some(&Some(true))
     }
 }
 
@@ -526,12 +566,13 @@ impl Picker {
         self
     }
 
-    /// The model and effort chosen in a next step's list.
-    pub(super) fn routed(&self) -> Option<Routed> {
+    /// The model and effort chosen in a next step's list, and whether `row` starts a fresh
+    /// session.
+    pub(super) fn routed(&self, row: usize) -> Option<Routed> {
         match &self.shape {
             Shape::Question {
                 route: Some(route), ..
-            } => Some(route.routed()),
+            } => Some(route.routed(row)),
             _ => None,
         }
     }
@@ -627,7 +668,7 @@ impl Picker {
         if let Shape::Question {
             route: Some(route), ..
         } = &mut self.shape
-            && route.key(key)
+            && route.key(key, row.unwrap_or(0))
         {
             return None;
         }
@@ -774,7 +815,9 @@ impl Picker {
                 recommended,
                 route,
             } => {
-                let mut tail = route.as_ref().map_or_else(Vec::new, Route::lines);
+                let selected = self.list.rows[self.list.selected];
+                let mut tail =
+                    (route.as_ref()).map_or_else(Vec::new, |route| route.lines(selected));
                 let keys = hint("select", &[], "cancel");
                 let hint = match self.deadline {
                     Some(deadline) => {
@@ -788,7 +831,8 @@ impl Picker {
                 };
                 tail.push(hint);
                 let question = (title.as_str(), options.as_slice(), *recommended);
-                question_lines(question, &tail, &self.list, size)
+                let fresh = |row| route.as_ref().is_some_and(|route| route.is_fresh(row));
+                question_lines(question, &tail, &self.list, size, &fresh)
             }
         }
     }
@@ -1134,6 +1178,7 @@ fn question_lines(
     tail: &[String],
     list: &List,
     (width, height): (usize, usize),
+    fresh: &dyn Fn(usize) -> bool,
 ) -> Vec<String> {
     use style::{MUTED, QUESTION_BORDER, QUESTION_TITLE, RESET};
     let width = width.saturating_sub(1).max(8);
@@ -1142,6 +1187,18 @@ fn question_lines(
     let rows: Vec<Vec<String>> = (0..count)
         .map(|index| {
             let option = &options[index];
+            let marked;
+            let option = match fresh(index) {
+                true => {
+                    let label = format!("{}{FRESH_MARK}", option.label);
+                    marked = Choice {
+                        label,
+                        ..option.clone()
+                    };
+                    &marked
+                }
+                false => option,
+            };
             option_rows(option, index == selected, recommended == Some(index), width)
         })
         .collect();
@@ -1524,7 +1581,8 @@ mod tests {
                 ("Choose", &options, Some(2)),
                 &[HINT.to_owned()],
                 &list,
-                (31, 24)
+                (31, 24),
+                &|_| false,
             )),
             [
                 "─".repeat(30).as_str(),
@@ -1549,6 +1607,7 @@ mod tests {
             &[HINT.to_owned()],
             &first,
             (31, 8),
+            &|_| false,
         ));
         assert_eq!(
             short[1..6],
@@ -1638,7 +1697,7 @@ mod tests {
                 "effort: off · Shift+Tab cycle"
             ]
         );
-        assert_eq!(picker.routed(), Some(Routed::default()));
+        assert_eq!(picker.routed(1), Some(Routed::default()));
         // The next model has the session's effort fitted to its levels; Shift+Tab cycles them.
         assert_eq!(picker.key(&key("right")), None);
         assert_eq!(
@@ -1665,27 +1724,73 @@ mod tests {
         let chosen = Routed {
             model: Some("claude-opus-5-5".into()),
             effort: Some("medium".into()),
+            fresh: None,
         };
-        assert_eq!(picker.routed(), Some(chosen));
+        assert_eq!(picker.routed(1), Some(chosen));
         // Back at the session's model, only the effort changes.
         picker.key(&key("left"));
         let effort = Some("medium".to_owned());
         let only_effort = Routed {
             model: None,
             effort,
+            fresh: None,
         };
-        assert_eq!(picker.routed(), Some(only_effort));
+        assert_eq!(picker.routed(1), Some(only_effort));
         // With one model there is no model line.
         let alone = model("gpt-6-luna", None, &["low", "high"]);
         let route = Route::new(vec![alone], 0, Some("high".into()));
         let mut single = Picker::question("Select next step", &options, None).routing(route);
         assert_eq!(tail(&single), ["effort: high · Shift+Tab cycle"]);
         assert_eq!(single.key(&key("right")), None);
-        assert_eq!(single.routed(), Some(Routed::default()));
+        assert_eq!(single.routed(0), Some(Routed::default()));
         // Other questions have neither.
         let question = Picker::question("Which?", &options, None);
-        assert_eq!(question.routed(), None);
+        assert_eq!(question.routed(0), None);
         assert_eq!(plain(question.lines((80, 24))).len(), 6);
+    }
+
+    #[test]
+    fn tab_flips_the_selected_command_steps_fresh_session() {
+        let options = ["0: /rs:loop", "1: /rs:steer", "2: write the notes"].map(|label| Choice {
+            label: label.into(),
+            description: None,
+            value: String::new(),
+        });
+        let route =
+            Route::new(Vec::new(), 0, None).fresh_sessions(vec![Some(false), Some(true), None]);
+        let mut picker = Picker::question("Select next step", &options, Some(1)).routing(route);
+        let shown = |picker: &Picker| plain(picker.lines((80, 24)));
+        let lines = shown(&picker);
+        assert_eq!(
+            lines[2..6],
+            [
+                "  0: /rs:loop",
+                "→ 1: /rs:steer (fresh session)",
+                "  2: write the notes",
+                "session: fresh · Tab change",
+            ]
+        );
+        assert_eq!(picker.routed(1).and_then(|routed| routed.fresh), Some(true));
+        assert_eq!(picker.key(&key("tab")), None);
+        let lines = shown(&picker);
+        assert_eq!(lines[3], "→ 1: /rs:steer");
+        assert_eq!(lines[5], "session: this one · Tab change");
+        assert_eq!(
+            picker.routed(1).and_then(|routed| routed.fresh),
+            Some(false)
+        );
+        // Each row keeps its own; a text step has no session to start.
+        picker.key(&key("up"));
+        picker.key(&key("tab"));
+        assert_eq!(shown(&picker)[2], "→ 0: /rs:loop (fresh session)");
+        picker.key(&key("down"));
+        picker.key(&key("down"));
+        picker.key(&key("tab"));
+        let lines = shown(&picker);
+        assert_eq!(lines[4], "→ 2: write the notes");
+        assert_eq!(lines[5], "session: this one");
+        assert_eq!(picker.routed(2).and_then(|routed| routed.fresh), None);
+        assert_eq!(picker.key(&key("enter")), Some(Picked::Row(Some(2))));
     }
 
     #[test]

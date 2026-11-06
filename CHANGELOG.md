@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.46.0 — Fresh session shown and switched on next steps
+
+### Added
+
+- The next-step list marks each step that starts a fresh session `(fresh session)`, and Tab switches that for the selected step before it runs (`app.nextStep.toggleFreshSession` in `/hotkeys`). The record of the choice and the notices of steps that run by themselves carry the mark too.
+
 ## 0.45.0 — Running tools and replies shown while a list is open
 
 ### Changed

@@ -353,7 +353,7 @@ impl App {
                 None
             }
             Shown::Pick(picker) => picker.key(&key).map(|picked| match picked {
-                Picked::Row(Some(row)) if let Some(routed) = picker.routed() => {
+                Picked::Row(Some(row)) if let Some(routed) = picker.routed(row) => {
                     Answer::Routed(row, routed)
                 }
                 Picked::Row(row) => Answer::Picked(row),

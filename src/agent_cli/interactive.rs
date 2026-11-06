@@ -535,16 +535,26 @@ impl Interactive {
             let models = self.agent.model_options();
             let current = (models.iter()).position(|m| m.reference() == self.agent.model());
             let effort = self.agent.effort().map(str::to_owned);
+            let fresh = (steps.iter())
+                .map(|step| step.command.is_some().then_some(step.fresh_session))
+                .collect();
             let route = select::Route::new(models, current.unwrap_or(0), effort);
-            picker = picker.routing(route);
+            picker = picker.routing(route.fresh_sessions(fresh));
         }
         // After the models were read, which the countdown does not wait for.
         if autoselect {
             picker = picker.counting_down(AUTOSELECT);
         }
         let chosen = (self.screen.as_ref()).and_then(|screen| screen.pick_timed(picker));
-        self.record(source, steps, chosen.as_ref().map(|(at, ..)| *at));
-        let (at, timed, routed) = chosen?;
+        let mut steps = steps.to_vec();
+        if let Some((at, _, routed)) = &chosen
+            && let Some(fresh) = routed.fresh
+        {
+            steps[*at].fresh_session = fresh;
+        }
+        self.record(source, &steps, chosen.as_ref().map(|(at, ..)| *at));
+        let (at, timed, mut routed) = chosen?;
+        routed.fresh = None;
         let start = if timed {
             Start::Unattended
         } else {

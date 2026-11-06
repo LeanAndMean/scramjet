@@ -3276,8 +3276,13 @@ def next_steps(read, until, send, output):
     text = '\n'.join(rows)
     for expected in ['\u2192 0: /flow:step two', 'Do the second.', '1: /flow:done',
                      'model: GPT-6 Luna (test/gpt-6-luna) \u00b7 \u2190\u2192 change',
-                     'effort: medium \u00b7 Shift+Tab cycle']:
+                     'effort: medium \u00b7 Shift+Tab cycle', 'session: this one \u00b7 Tab change']:
         assert expected in text, (expected, text)
+    assert '(fresh session)' not in text, text
+    # Tab makes the step start a fresh session, which the model did not ask for.
+    send(b'\t')
+    on_screen('\u2192 0: /flow:step two (fresh session)')
+    on_screen('session: fresh \u00b7 Tab change')
     # Right chooses the model the step runs with, Shift+Tab its effort, among the model's levels.
     send(b'\x1b[C')
     on_screen('model: GPT-6 Sol (test/gpt-6-sol)')
@@ -3694,7 +3699,7 @@ route_models = [model(id, levels, name=name)
                 for id, name, levels in [('gpt-6-luna', 'GPT-6 Luna', ['low', 'medium', 'high']),
                                          ('gpt-6-sol', 'GPT-6 Sol', ['low', 'medium', 'high', 'xhigh'])]]
 run([], next_steps, serve_items([
-    [report('call_1', [('/flow:step two', True, 'Do the second.'), ('/flow:done', False, 'Stop here.')], 0)],
+    [report('call_1', [('/flow:step two', False, 'Do the second.'), ('/flow:done', False, 'Stop here.')], 0)],
     [message('Second done.')],
     [report('call_2', [('/flow:done', False, 'Finish.')], 0)],
     [message('All done.'), report('call_3')],
@@ -3718,6 +3723,9 @@ assert prompts(second) == ['/flow:step two', '/flow:done', '/flow:step three'], 
 records = lambda path: [(json.loads(line['arguments'])['outcome'], json.loads(line['arguments'])['selectedIndex'])
                         for line in map(json.loads, open(path)) if line.get('name') == 'scramjet_next_step_selection']
 assert records(first) == [('selected', 0)], records(first)
+chosen = [json.loads(line['arguments'])['options'][0] for line in map(json.loads, open(first))
+          if line.get('name') == 'scramjet_next_step_selection']
+assert chosen == [{'message': '/flow:step two', 'reason': 'Do the second.', 'freshSession': True}], chosen
 assert records(second) == [('selected', 0), ('dismissed', None)], records(second)
 # The chained command's model sees the record before the command's prompt.
 kinds = [item.get('name') or item.get('type') or item.get('role') for item in bodies[3]['input']]

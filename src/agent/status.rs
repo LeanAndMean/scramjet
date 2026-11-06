@@ -652,6 +652,10 @@ the user is asked to confirm."
         ),
     }
 }
+/// What a next step that starts a fresh session shows after its message, as Scramjet's notices
+/// say it.
+pub const FRESH_MARK: &str = " (fresh session)";
+
 /// A next step to take: a prompt to send, in a new session or not.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Step {
@@ -979,11 +983,7 @@ fn offered(
     };
     let step = &checked.valid[at];
     let message = clean_notice(&step.message);
-    let fresh = if step.fresh_session {
-        " (fresh session)"
-    } else {
-        ""
-    };
+    let fresh = step.fresh_mark();
     let notice = match (step.command.is_some(), edge, autopilot) {
         (false, _, true) => format!(
             "scramjet: recommended next step is not a slash command ({message}); automatic \
@@ -1032,7 +1032,11 @@ pub fn record(source: Source, steps: &[Step], chosen: Option<usize>) -> String {
             true => String::new(),
             false => format!(" — {reason}"),
         };
-        lines.push(format!("{mark}{}{reason}", clean_display(&step.message)));
+        let fresh = step.fresh_mark();
+        lines.push(format!(
+            "{mark}{}{fresh}{reason}",
+            clean_display(&step.message)
+        ));
     }
     if chosen.is_none() {
         lines.push("Cancelled".into());
@@ -1044,9 +1048,15 @@ pub fn record(source: Source, steps: &[Step], chosen: Option<usize>) -> String {
 /// `NextStepRecordParams`.
 pub(super) fn record_arguments(source: Source, steps: &[Step], chosen: Option<usize>) -> Value {
     let options: Vec<_> = (steps.iter())
-        .map(|step| match step.reason.is_empty() {
-            true => json!({"message":step.message}),
-            false => json!({"message":step.message,"reason":step.reason}),
+        .map(|step| {
+            let mut option = json!({"message":step.message});
+            if !step.reason.is_empty() {
+                option["reason"] = json!(step.reason);
+            }
+            if step.fresh() {
+                option["freshSession"] = json!(true);
+            }
+            option
         })
         .collect();
     let outcome = match chosen {
@@ -1078,6 +1088,16 @@ impl Step {
 
     pub fn description(&self) -> String {
         clean_display(&self.reason)
+    }
+
+    /// Whether taking it starts a fresh session: only a command does.
+    pub fn fresh(&self) -> bool {
+        self.fresh_session && self.command.is_some()
+    }
+
+    /// `FRESH_MARK` when it starts a fresh session.
+    pub fn fresh_mark(&self) -> &'static str {
+        if self.fresh() { FRESH_MARK } else { "" }
     }
 }
 
@@ -1685,7 +1705,7 @@ auto-dispatches it only when its message is a slash command."
     }
 
     #[test]
-    fn choices_are_recorded_as_scramjet_records_them() {
+    fn choices_are_recorded_as_scramjet_records_them_with_fresh_sessions_marked() {
         let steps = [
             Step {
                 index: 0,
@@ -1704,11 +1724,27 @@ auto-dispatches it only when its message is a slash command."
         ];
         assert_eq!(
             record(Source::Completion("rs:loop"), &steps, Some(1)),
-            "Next step (from rs:loop):\n  /rs:loop — Continue now.\n→ /rs:steer"
+            "Next step (from rs:loop):\n  /rs:loop (fresh session) — Continue now.\n→ /rs:steer"
         );
         assert_eq!(
             record(Source::Completion("rs:loop"), &steps, None),
-            "Next step (from rs:loop):\n- /rs:loop — Continue now.\n- /rs:steer\nCancelled"
+            "Next step (from rs:loop):\n- /rs:loop (fresh session) — Continue now.\n- /rs:steer\n\
+Cancelled"
+        );
+        assert_eq!(
+            record_arguments(Source::Completion("rs:loop"), &steps, Some(0))["options"],
+            json!([{"message":"/rs:loop","reason":"Continue\nnow.","freshSession":true},
+                {"message":"/rs:steer"}])
+        );
+        // A text step goes into the editor, in this session.
+        let text = Step {
+            command: None,
+            message: "write the notes".into(),
+            ..steps[0].clone()
+        };
+        assert_eq!(
+            record(Source::Suggestion, &[text], Some(0)),
+            "Agent-suggested next step:\n→ write the notes — Continue now."
         );
         assert_eq!(steps[1].label(), "2: /rs:steer");
         assert_eq!(
