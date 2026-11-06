@@ -4,6 +4,18 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.35.0 — Summaries and commands in Scramjet's message box
+
+### Changed
+
+- Compaction and branch summaries and what a command or skill sent show as Scramjet's message boxes: a bold `[compaction]`, `[branch]`, `[command]` or `[skill]` label in the theme's `customMessageLabel`, the text in `customMessageText`, and on the full screen a box on `customMessageBg` with a column and a row of padding around it (scramjet-dark and pi-light have one; the default terminal-colors theme shows the label and text without a box). A collapsed command or skill names itself and how many lines it sent.
+- A skill's text, once expanded, shows without its `<skill>` tags or the arguments already in the prompt.
+- The theme editor's sample session shows a compaction, so `customMessageBg`, `customMessageText` and `customMessageLabel` can be seen as they are edited.
+
+### Fixed
+
+- After `/compact` on the full screen, the next prompt follows the summary after a blank line; it came right under it.
+
 ## 0.34.0 — The selected row in `/resume` and `/tree`
 
 ### Changed

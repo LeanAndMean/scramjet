@@ -2995,7 +2995,7 @@ def command_sets_resumed(read, until, send, output):
     # The resumed conversation and Up show the prompts as typed.
     shown, on_screen = full_screen(rows=30)(read, output)
     rows = on_screen('Still here.')
-    assert '> /tools:echo a  b\n\u2026 (sent as 1 line, Ctrl+O to expand)' in '\n'.join(rows), rows
+    assert '> /tools:echo a  b\n[command] tools:echo, sent as 1 line (Ctrl+O to expand)' in '\n'.join(rows), rows
     assert '> /demo:greet Ada "the reader"' in rows, rows
     send(b'\x1b[A')
     ending(read, output, ['> /tools:echo a  b'], rows=30)
@@ -3014,11 +3014,13 @@ def skills(read, until, send, output):
     ending(read, output, ['> /skill:pdf'])
     send(b'form.pdf\r')
     rows = on_screen('Filled.')
-    # Shown as typed, as a command is, with what it sent behind Ctrl+O.
-    assert '> /skill:pdf form.pdf\n\u2026 (sent as 7 lines, Ctrl+O to expand)' in '\n'.join(rows), rows
+    # Shown as typed, as a command is, with what it sent behind Ctrl+O, without its tags or the
+    # arguments typed.
+    assert '> /skill:pdf form.pdf\n[skill] pdf, sent as 3 lines (Ctrl+O to expand)' in '\n'.join(rows), rows
     send(b'\x0f')
     rows = on_screen('Use ./fill.sh')
-    assert 'form.pdf' in rows, rows
+    assert '[skill] pdf' in rows and 'form.pdf' not in rows, rows
+    assert '<skill' not in '\n'.join(rows), rows
     send(b'\x04')
 
 
@@ -4059,7 +4061,7 @@ def fullscreen_queue(read, until, send, output):
     on_screen('Checked.')
     rows = ended(read, output)
     text = '\n'.join(rows)
-    assert (text.index('> steer this') < text.index('> /demo:greet Ann\n\u2026 (sent as 5 lines')
+    assert (text.index('> steer this') < text.index('> /demo:greet Ann\n[command] demo:greet, sent as 5 lines')
             < text.index('Steered.') < text.index('> after that') < text.index('Followed.')
             < text.index('Checked.')), text
     assert 'Steering:' not in text and 'Follow-up:' not in text, text
@@ -4485,7 +4487,7 @@ def fullscreen_collapsed(read, until, send, output):
     assert re.search(r'\n\u2026 \(\d+ more lines, \d+ total, Ctrl\+O to expand\)\n', '\n'.join(rows)), rows
     send(b'/demo:greet Ada\r')
     rows = on_screen('Greeted.')
-    assert '> /demo:greet Ada\n\u2026 (sent as 5 lines, Ctrl+O to expand)' in '\n'.join(rows), rows
+    assert '> /demo:greet Ada\n[command] demo:greet, sent as 5 lines (Ctrl+O to expand)' in '\n'.join(rows), rows
     # Ctrl+O shows both whole, in place, and again cut.
     send(b'\x0f')
     rows = on_screen('Greet Ada warmly.')
@@ -4499,7 +4501,7 @@ def fullscreen_collapsed(read, until, send, output):
 
 def fullscreen_collapsed_resumed(read, until, send, output):
     shown, on_screen = full_screen(rows=30)(read, output)
-    on_screen('\u2026 (sent as 5 lines, Ctrl+O to expand)')
+    on_screen('[command] demo:greet, sent as 5 lines (Ctrl+O to expand)')
     send(b'\x1b[5~')
     on_screen('more lines below')
     rows = on_screen('Point 1 of')

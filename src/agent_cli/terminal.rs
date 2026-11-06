@@ -8,7 +8,7 @@ use super::highlight::{self, Highlighter};
 use super::interactive::thinking;
 use super::keymap::{self, Binding};
 use super::settings::MarkdownReads;
-use super::style::{self, Style};
+use super::style::{self, Band, Style};
 use super::text::{FROM, RULE, Wrap, call_line, clip, printable, style_at, visible};
 use super::{children, diff, editor, job, markdown};
 use rustix::{
@@ -1086,24 +1086,19 @@ impl AgentUi for Terminal {
     /// an automatic one also says why it ran.
     fn compacted(&mut self, compaction: &Compaction, automatic: Option<AutoCompaction>) {
         self.clear();
-        let heading = format!(
-            "✓ Compacted: the context was about {} tokens; kept the last {} items",
-            context(compaction.tokens_before, None),
-            compaction.kept_items,
+        let mut heading = self.styled(
+            style::SUMMARY,
+            &format!(
+                "The context was about {} tokens; kept the last {} items",
+                context(compaction.tokens_before, None),
+                compaction.kept_items,
+            ),
         );
-        let reason = automatic
-            .map(|reason| format!("\n{}", self.dim(&self.wrapped(reason.reason()))))
-            .unwrap_or_default();
-        let block = format!(
-            "{}{reason}\n\n{}\n",
-            self.wrapped(&heading),
-            self.summary_block(&compaction.summary)
-        );
-        self.err(&block);
-        // During a turn, as after a tool block; after `/compact` the prompt's blank line follows.
-        if automatic.is_some() {
-            self.err("\n");
+        if let Some(reason) = automatic {
+            heading += &format!("\n{}", self.dim(reason.reason()));
         }
+        let block = self.message_box("compaction", &heading, Some(&compaction.summary));
+        self.err(&format!("{block}\n"));
     }
     fn compaction_failed(&mut self, error: &AgentError) {
         self.compaction_error(&error.to_string());
@@ -1112,18 +1107,36 @@ impl AgentUi for Terminal {
         self.prompt_rows(prompt);
         self.err("\n");
     }
-    /// As typed, and what it sent once results are shown whole.
+    /// As typed, and what it sent once results are shown whole: a command's or skill's text in
+    /// Scramjet's box, labeled as Scramjet's.
     fn command_prompt(&mut self, typed: &str, sent: &str) {
         self.prompt_rows(typed);
+        if let Some(framed) = framed(sent) {
+            let name = self.styled(style::SUMMARY, framed.name);
+            if self.full {
+                let block = self.message_box(framed.label, &name, Some(framed.body));
+                self.err(&format!("{block}\n"));
+            } else if self.expandable {
+                let sent =
+                    self.styled(style::SUMMARY, &format!(", sent as {}", lines(framed.body)));
+                let hint = match keymap::key(Binding::ToolsExpand) {
+                    Some(key) => self.dim(&format!(" ({key} to expand)")),
+                    None => String::new(),
+                };
+                let block = self.message_box(framed.label, &format!("{name}{sent}{hint}"), None);
+                self.err(&format!("{block}\n"));
+            } else {
+                self.err("\n");
+            }
+            return;
+        }
         let body = command_body(sent);
         if self.full {
-            let block = self.summary_block(body);
+            let width = if self.color { self.width() } else { 0 };
+            let block = self.summary_block(body, width);
             self.err(&format!("\n{block}\n"));
         } else if self.expandable {
-            let lines = match body.lines().count() {
-                1 => "1 line".to_owned(),
-                count => format!("{count} lines"),
-            };
+            let lines = lines(body);
             let hint = self.dim(&format!("… (sent as {lines}{})", self.expand_hint()));
             self.err(&format!("{hint}\n"));
         }
@@ -1131,21 +1144,18 @@ impl AgentUi for Terminal {
     }
     fn compaction_summary(&mut self, summary: &str) {
         self.clear();
-        let block = format!(
-            "{}\n\n{}\n\n",
-            self.wrapped("✓ Compacted: the earlier conversation is summarized"),
-            self.summary_block(summary)
-        );
-        self.err(&block);
+        let heading = self.styled(style::SUMMARY, "The earlier conversation is summarized");
+        let block = self.message_box("compaction", &heading, Some(summary));
+        self.err(&format!("{block}\n"));
     }
     fn branch_summary(&mut self, summary: &str) {
         self.clear();
-        let block = format!(
-            "{}\n\n{}\n\n",
-            self.wrapped("✓ Summarized the branch this conversation came back from"),
-            self.summary_block(summary)
+        let heading = self.styled(
+            style::SUMMARY,
+            "The branch this conversation came back from is summarized",
         );
-        self.err(&block);
+        let block = self.message_box("branch", &heading, Some(summary));
+        self.err(&format!("{block}\n"));
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         self.ask(question, cancel)
@@ -1434,10 +1444,39 @@ impl Terminal {
             None => self.out(&format!("\r\x1b[{rows}A\x1b[J")),
         }
     }
-    /// A compaction's summary as Scramjet shows it: dim markdown, wrapped to the terminal.
-    /// Its first lines while tool results are cut, as Scramjet previews a compaction's.
-    fn summary_block(&self, summary: &str) -> String {
-        let width = if self.color { self.width() } else { 0 };
+    /// A message of the harness's own in Scramjet's box: `label` in bold before `heading`, then
+    /// after a blank row `body` as a summary, wrapped to `box_width`; in `boxed` rows on the full
+    /// screen. Ends with its last row's newline.
+    fn message_box(&self, label: &str, heading: &str, body: Option<&str>) -> String {
+        let width = self.box_width();
+        let label = self.styled(style::MESSAGE_LABEL, &format!("[{label}]"));
+        let mut wrap = self.wrapper(width);
+        let mut text = wrap.push(&format!("{label} {heading}")) + &wrap.finish();
+        if let Some(body) = body {
+            text += "\n\n";
+            text += &self.summary_block(body, width);
+        }
+        match self.boxed() {
+            true => boxed(&text),
+            false => text + "\n",
+        }
+    }
+    /// The full screen shows messages in a box on the theme's `customMessageBg`, if it has one.
+    fn boxed(&self) -> bool {
+        self.marked && Band::Message.painted()
+    }
+    /// The columns a message's text takes: the terminal's, but a column at each side of a box.
+    fn box_width(&self) -> usize {
+        match (self.color, self.boxed()) {
+            (false, _) => 0,
+            (true, false) => self.width(),
+            (true, true) => self.width().saturating_sub(2).max(20),
+        }
+    }
+    /// A message's text as Scramjet shows a compaction's summary: markdown in the message's
+    /// color, wrapped to `width`. Its first lines while tool results are cut, as Scramjet
+    /// previews a compaction's.
+    fn summary_block(&self, summary: &str, width: usize) -> String {
         let mut markdown = self.markdown(self.color, style::SUMMARY.get(), width);
         let text = markdown.reopen() + &markdown.push(summary.trim_end()) + &markdown.finish();
         let reset = if self.color { style::RESET } else { "" };
@@ -1601,6 +1640,62 @@ pub(super) fn command_body(sent: &str) -> &str {
         .trim_end()
 }
 
+/// A command's or skill's expansion as Scramjet's boxes show it.
+#[derive(Debug, PartialEq)]
+struct Framed<'a> {
+    label: &'static str,
+    /// The name in its tag.
+    name: &'a str,
+    /// What is inside its tags; a skill's arguments after them are in the prompt as typed.
+    body: &'a str,
+}
+
+/// `sent` as a command's or skill's expansion, as Scramjet parses them; `None` for other text,
+/// such as files attached to a prompt.
+fn framed(sent: &str) -> Option<Framed<'_>> {
+    let (label, tag, rest) = match (
+        sent.strip_prefix("<scramjet-command"),
+        sent.strip_prefix("<skill"),
+    ) {
+        (Some(rest), _) => ("command", "scramjet-command", rest),
+        (None, Some(rest)) => ("skill", "skill", rest),
+        (None, None) => return None,
+    };
+    let (open, inner) = rest.split_once(">\n")?;
+    let name = open.strip_prefix(" name=\"")?.split('"').next()?;
+    let close = format!("\n</{tag}>");
+    let body = match label {
+        "skill" => inner.find(&close).map_or(inner, |end| &inner[..end]),
+        _ => (inner.trim_end().strip_suffix(&close[1..])).unwrap_or(inner),
+    };
+    Some(Framed {
+        label,
+        name,
+        body: body.trim_end(),
+    })
+}
+
+/// The full screen's rows of `text` in Scramjet's box: on the theme's `customMessageBg`, with a
+/// column at each side and a row above and below, which a copy leaves out.
+fn boxed(text: &str) -> String {
+    let gutter = Gutter::boxed(Band::Message, true);
+    let pad = format!("{}{RULE}\n", Band::Message.mark());
+    let mut block = pad.clone();
+    for row in text.split('\n') {
+        block += &gutter.row(false, row);
+        block.push('\n');
+    }
+    block + &pad
+}
+
+/// How many lines `text` has, in words.
+fn lines(text: &str) -> String {
+    match text.lines().count() {
+        1 => "1 line".to_owned(),
+        count => format!("{count} lines"),
+    }
+}
+
 /// A failed command's ending follows its output after a blank line, which is not worth one of
 /// the few lines shown.
 fn bash_shown(output: &str, failed: bool) -> String {
@@ -1659,7 +1754,8 @@ fn preview_shown(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_cli::text::{Escape, JOINED, SPACE};
+    use crate::agent_cli::selection;
+    use crate::agent_cli::text::{Escape, JOINED, SPACE, plain};
 
     #[test]
     fn previews_keep_the_end_of_bash_output_and_are_safe_to_print() {
@@ -1998,33 +2094,112 @@ to expand\n(exit 2)"
     }
 
     #[test]
-    fn summaries_and_command_texts_are_cut_until_expanded() {
+    fn summaries_and_command_texts_are_labeled_and_cut_until_expanded() {
         let summary: String = (1..=12).map(|n| format!("Point {n}\n")).collect();
         let sent = "<scramjet-command name=\"rs:loop\">\n# Build\n\nGo.\n</scramjet-command>";
+        let skill = "<skill name=\"pdf\" location=\"/s/pdf/SKILL.md\">\nReferences are relative to \
+                     /s/pdf.\n\nFill forms.\n</skill>\n\nform.pdf";
+        let attached = "<file name=\"/p/notes.md\">\nhi\n</file>\nWhat?";
         let shown = |full| {
-            let mut ui = Terminal::capture_shown(30, Arc::new(AtomicBool::new(false)), full);
+            let mut ui = Terminal::capture_shown(70, Arc::new(AtomicBool::new(false)), full);
             ui.command_prompt("/rs:loop", sent);
+            ui.command_prompt("/skill:pdf form.pdf", skill);
+            ui.command_prompt("@notes.md What?", attached);
             ui.compaction_summary(&summary);
             ui.branch_summary("Short");
+            let compaction = Compaction {
+                tokens_before: 52_600,
+                kept_items: 4,
+                summary: "Done.".into(),
+            };
+            ui.compacted(&compaction, Some(AutoCompaction::Threshold));
+            ui.compacted(&compaction, None);
             let text = ui.captured();
             let mut plain = String::new();
             let mut escape = Escape::None;
-            plain.extend(text.chars().filter(|&c| !escape.step(c) && c != FROM));
+            let marker = |c| [FROM, JOINED, SPACE].contains(&c);
+            plain.extend(text.chars().filter(|&c| !escape.step(c) && !marker(c)));
             plain
         };
+        // The terminal's colors give the box no background, so it has no padding.
         let cut = shown(false);
         let points: String = (1..=10).map(|n| format!("Point {n}\n")).collect();
-        assert!(cut.starts_with("> /rs:loop\n… (sent as 3 lines, Ctrl+O to expand)\n\n"));
+        assert!(
+            cut.starts_with(
+                "> /rs:loop\n[command] rs:loop, sent as 3 lines (Ctrl+O to expand)\n\n\
+                 > /skill:pdf form.pdf\n[skill] pdf, sent as 3 lines (Ctrl+O to expand)\n\n\
+                 > @notes.md What?\n… (sent as 4 lines, Ctrl+O to expand)\n\n\
+                 [compaction] The earlier conversation is summarized\n\n"
+            ),
+            "{cut:?}"
+        );
         assert!(cut.contains(&format!(
-            "{points}… (2 more lines, 12 total, Ctrl+O to expand)\n"
+            "{points}… (2 more lines, 12 total, Ctrl+O to expand)\n\n"
         )));
-        assert!(cut.ends_with("\n\nShort\n\n"), "{cut:?}");
+        // A compaction says how large the context was, and why it ran when automatic; the next
+        // block comes after a blank line, also after `/compact`.
+        assert!(
+            cut.ends_with(
+                "\n[branch] The branch this conversation came back from is summarized\n\nShort\n\n\
+                 [compaction] The context was about 53k tokens; kept the last 4 items\n\
+                 Automatic: the context was nearing the model's window.\n\nDone.\n\n\
+                 [compaction] The context was about 53k tokens; kept the last 4 items\n\nDone.\n\n"
+            ),
+            "{cut:?}"
+        );
         let whole = shown(true);
         assert!(
-            whole.starts_with("> /rs:loop\n\nBuild\n\nGo.\n\n"),
+            whole.starts_with(
+                "> /rs:loop\n[command] rs:loop\n\nBuild\n\nGo.\n\n> /skill:pdf form.pdf\n\
+                 [skill] pdf\n\nReferences are relative to /s/pdf.\n\nFill forms.\n\n\
+                 > @notes.md What?\n\n"
+            ),
             "{whole:?}"
         );
         assert!(whole.contains(&summary) && !whole.contains("Ctrl+O"));
+    }
+
+    #[test]
+    fn a_message_box_is_on_its_band_with_padding_a_copy_leaves_out() {
+        let rows = boxed("\x1b[1m[branch]\x1b[0m Went\n\nThere");
+        assert_eq!(
+            rows,
+            "\x16\x1c\n\x16 \x1d\x1b[1m[branch]\x1b[0m Went\n\x16 \n\x16 \x1dThere\n\x16\x1c\n"
+        );
+        let lines = selection::lines(&rows);
+        assert!(lines.iter().all(|line| line.band == Some(Band::Message)));
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| plain(&line.shown))
+                .collect::<Vec<_>>(),
+            ["", " [branch] Went", " ", " There", ""]
+        );
+    }
+
+    #[test]
+    fn commands_and_skills_are_framed_as_scramjet_parses_them() {
+        let command = "<scramjet-command name=\"rs:loop\">\n# Build\n\nGo.\n</scramjet-command>\n";
+        assert_eq!(
+            framed(command),
+            Some(Framed {
+                label: "command",
+                name: "rs:loop",
+                body: "# Build\n\nGo."
+            })
+        );
+        let skill = "<skill name=\"pdf\" location=\"/s/SKILL.md\">\nFill.\n</skill>\n\nform.pdf";
+        assert_eq!(
+            framed(skill),
+            Some(Framed {
+                label: "skill",
+                name: "pdf",
+                body: "Fill."
+            })
+        );
+        assert_eq!(framed("<file name=\"a.md\">\nhi\n</file>\nWhat?"), None);
+        assert_eq!(framed("<skill>\nno name\n</skill>"), None);
+        assert_eq!(framed("plain"), None);
     }
 
     #[test]

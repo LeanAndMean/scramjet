@@ -283,6 +283,10 @@ impl Gutter {
     fn same(gutter: &str, columns: usize, band: Option<Band>, marked: bool) -> Self {
         Self::new(gutter, gutter, columns, band, marked)
     }
+    /// A column of `band` before each row, as Scramjet's boxes pad their text.
+    pub(super) fn boxed(band: Band, marked: bool) -> Self {
+        Self::same(" ", 1, Some(band), marked)
+    }
     /// Row `row` of the block, the first if `first`.
     pub(super) fn row(&self, first: bool, row: &str) -> String {
         match (row.is_empty(), first) {

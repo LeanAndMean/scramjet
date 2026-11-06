@@ -372,7 +372,10 @@ impl Interactive {
     fn compact(&mut self, focus: &str) {
         let result = self.during_turn(|agent, ui, cancel| agent.compact(focus, None, ui, cancel));
         match result {
-            Ok(Some(compaction)) => self.ui().compacted(&compaction, None),
+            Ok(Some(compaction)) => {
+                self.ui().compacted(&compaction, None);
+                self.spaced = true;
+            }
             Ok(None) => self.say("Nothing to compact: the conversation is all recent."),
             Err(AgentError::Cancelled) => self.say_styled(style::MUTED, "(cancelled)"),
             Err(error) => self.say(&format!("Error: {error}")),

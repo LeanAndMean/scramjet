@@ -111,8 +111,10 @@ styles! {
     PROMPT_HIGH: [] ThinkingHigh;
     PROMPT_XHIGH: [] ThinkingXhigh;
     PROMPT_COMMAND: [] BashMode;
-    /// A compaction summary.
+    /// A message of the harness's own, as Scramjet's boxes show one: its text (compaction and
+    /// branch summaries, what a command or skill sent) and its bold label (`[compaction]`).
     SUMMARY: [] CustomMessageText;
+    MESSAGE_LABEL: [BOLD] CustomMessageLabel;
     /// A section heading in an information block such as `/session`'s.
     INFO_HEADING: [BOLD];
     /// A provider failure that is retried.
@@ -239,9 +241,9 @@ pub(super) fn base() -> &'static str {
 }
 
 /// A background across the full screen's rows: those a look puts blocks on (`design`), a
-/// prompt's, and a call's while it runs, once done and when it failed; and the selected row of
-/// `/resume` and `/tree`, as Scramjet's selectors paint it. A row is on one when it holds its
-/// `mark`.
+/// prompt's, and a call's while it runs, once done and when it failed; the selected row of
+/// `/resume` and `/tree`, as Scramjet's selectors paint it; and the box of a message of the
+/// harness's own, as Scramjet's. A row is on one when it holds its `mark`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Band {
     Prompt,
@@ -249,14 +251,16 @@ pub(super) enum Band {
     Done,
     Failed,
     Selected,
+    Message,
 }
 
-const BANDS: [(Band, Token, char); 5] = [
+const BANDS: [(Band, Token, char); 6] = [
     (Band::Prompt, Token::UserMessageBg, '\x11'),
     (Band::Running, Token::ToolPendingBg, '\x12'),
     (Band::Done, Token::ToolSuccessBg, '\x13'),
     (Band::Failed, Token::ToolErrorBg, '\x14'),
     (Band::Selected, Token::SelectedBg, '\x15'),
+    (Band::Message, Token::CustomMessageBg, '\x16'),
 ];
 
 impl Band {
@@ -274,6 +278,10 @@ impl Band {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         &table[SPECS.len() + 1 + self as usize]
+    }
+    /// Whether the theme in use gives the band a background of its own.
+    pub(super) fn painted(self) -> bool {
+        self.get() != base()
     }
 }
 

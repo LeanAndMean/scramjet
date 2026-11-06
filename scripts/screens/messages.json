@@ -1,0 +1,31 @@
+{
+  "size": "90x50",
+  "settings": {"theme": "scramjet-dark"},
+  "files": {
+    "src/lib.rs": "pub fn words(text: &str) -> Vec<&str> {\n    text.split_whitespace().collect()\n}\n",
+    ".scramjet/skills/release-notes/SKILL.md": "---\nname: release-notes\ndescription: Write release notes from the commits since the last tag.\n---\n\n# Release notes\n\nList the commits since the last tag, group them as Added, Changed and Fixed, and write one line for each.\n"
+  },
+  "prompt": "What does src/lib.rs do?",
+  "replies": [
+    [{"call": "bash", "arguments": {"command": "yes 'a filler line, so that the context is large enough to compact' | head -n 1500"}}],
+    [{"call": "bash", "arguments": {"command": "yes 'a filler line, so that the context is large enough to compact' | head -n 1500"}}],
+    [{"text": "It splits text into **words** on any run of whitespace, with `split_whitespace`."}],
+    [{"text": "## Goal\n\nUnderstand `src/lib.rs`.\n\n## Progress\n\n- `words` splits text on any run of whitespace.\n- Nothing was changed.\n\n## Next steps\n\n1. Add a test for tabs.\n2. Document the empty input.\n3. Look at the callers.\n4. Check the edition.\n5. Run Clippy.\n6. Write the release notes."}],
+    [{"text": "Release notes for **v1.2**:\n\n- Added: `words` splits on any whitespace."}]
+  ],
+  "steps": [
+    {"until": "split_whitespace"},
+    {"sleep": 0.3},
+    {"type": "/compact\r"},
+    {"until": "Understand"},
+    {"sleep": 0.3},
+    {"type": "/skill:release-notes v1.2\r"},
+    {"until": "Release notes for"},
+    {"sleep": 0.3},
+    {"shot": "messages"},
+    {"type": "\u000f"},
+    {"sleep": 0.3},
+    {"shot": "expanded"},
+    {"type": "\u0004"}
+  ]
+}

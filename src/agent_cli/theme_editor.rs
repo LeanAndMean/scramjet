@@ -15,7 +15,7 @@ use super::record::Event;
 use super::style::{self, RESET};
 use super::text::{self, Wrap};
 use super::theme::{self, Color, KEYS, Mode, TOKENS, Theme, Token};
-use scramjet_rs::agent::{Ending, StreamProgress, ToolDetail, UserCommand};
+use scramjet_rs::agent::{Compaction, Ending, StreamProgress, ToolDetail, UserCommand};
 use serde_json::{Map, Value, json};
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
@@ -890,9 +890,9 @@ fn about(token: Token) -> &'static str {
         T::SelectedBg => "Behind the selected row in /resume and /tree.",
         T::UserMessageBg => "Behind your prompts, in the panels look.",
         T::UserMessageText => "Your prompts, in the looks other than the classic one.",
-        T::CustomMessageBg => "Behind extensions' messages, in Scramjet; scramjet-rs does not show it.",
-        T::CustomMessageText => "Compaction summaries.",
-        T::CustomMessageLabel => "Extensions' message labels, in Scramjet; scramjet-rs does not show it.",
+        T::CustomMessageBg => "Behind compaction and branch summaries and what a command or skill sent.",
+        T::CustomMessageText => "Compaction and branch summaries, and what a command or skill sent.",
+        T::CustomMessageLabel => "The labels of compaction and branch summaries and of what a command or skill sent: [compaction].",
         T::ToolPendingBg => "Behind a call while it runs, in the panels look.",
         T::ToolSuccessBg => "Behind a call that went well, in the panels look.",
         T::ToolErrorBg => "Behind a call that failed, in the panels look.",
@@ -939,7 +939,7 @@ fn swatch((r, g, b): Rgb) -> String {
 
 /// A sample session with every element the theme colors, in parts as the screen keeps a
 /// conversation: a turn that thinks, runs a failing command, edits, runs it again and replies
-/// in markdown, a command the user ran and a notice.
+/// in markdown, a command the user ran, a compaction and a notice.
 pub(super) fn sample() -> Vec<Vec<Event>> {
     let start = Instant::now();
     let after = |seconds: f64| start + Duration::from_secs_f64(seconds);
@@ -987,6 +987,13 @@ pub(super) fn sample() -> Vec<Vec<Event>> {
         output: " M src/lib.rs\n".into(),
         ending: Ending::Done,
     };
+    let compaction = Compaction {
+        tokens_before: 48_200,
+        kept_items: 6,
+        summary: "The words test failed: `words` split on **single** spaces. It splits on any \
+                  whitespace now, and the test passes."
+            .into(),
+    };
     let notice = "/fix is waiting for you: it asked a question. Reply to continue.";
     vec![
         turn,
@@ -994,6 +1001,7 @@ pub(super) fn sample() -> Vec<Vec<Event>> {
             Event::CommandStarted(command.command.clone(), true),
             Event::CommandResult(command),
         ],
+        vec![Event::Compacted(compaction, None)],
         vec![Event::Notice(notice.into())],
     ]
 }
@@ -1505,7 +1513,7 @@ mod tests {
     #[test]
     fn the_sample_session_shows_a_failed_and_a_passing_call_a_diff_and_a_reply() {
         let parts = sample();
-        assert_eq!(parts.len(), 3);
+        assert_eq!(parts.len(), 4);
         let results: Vec<bool> = (parts[0].iter())
             .filter_map(|event| match event {
                 Event::ToolResult(_, _, _, failed, _) => Some(*failed),
