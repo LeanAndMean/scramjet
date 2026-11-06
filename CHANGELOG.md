@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.54.2 — Nested repositories kept read-only in the sandbox
+
+### Fixed
+
+- In `--sandbox workspace-write`, the `.git` of each repository inside the project (a submodule, a checkout in a directory holding several), and a Git directory a `.git` file points to, now stay read-only as the project's own `.git` does, and the directories leading to them cannot be renamed. A command could plant hooks or `core.fsmonitor` there, which ran outside the sandbox at the next `git` there, or at a top-level `git status` through a submodule. They are found when the first sandboxed command runs; a repository made later stays writable.
+
 ## 0.54.1 — Sandboxed MCP servers see new credential stores hidden
 
 ### Fixed

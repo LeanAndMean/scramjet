@@ -123,7 +123,10 @@ impl Sandbox {
         if !real.starts_with(&root) {
             return refused("outside the project, which the sandbox leaves read-only");
         }
-        match protected(&root).iter().any(|kept| real.starts_with(kept)) {
+        let in_git = real
+            .strip_prefix(&root)
+            .is_ok_and(|inside| inside.components().any(|name| name.as_os_str() == ".git"));
+        match in_git || protected(&root).iter().any(|kept| real.starts_with(kept)) {
             true => refused("kept read-only in the sandbox"),
             false => Ok((real, root)),
         }
@@ -214,22 +217,75 @@ fn real_path(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// What exists of `PROTECTED` in the real directory `root`, and the Git directory a `.git` file
-/// points to (a worktree's or a submodule's).
+/// What stays read-only in the real directory `root`: what exists of `PROTECTED` at its top,
+/// the `.git` of each repository nested in it (a submodule's, or a checkout's in a directory
+/// holding several), whose hooks and `core.fsmonitor` would run at the user's next `git` there,
+/// and the Git directory each `.git` file points to (a worktree's or a submodule's).
 fn protected(root: &Path) -> Vec<PathBuf> {
     let mut kept: Vec<PathBuf> = PROTECTED
         .iter()
         .map(|name| root.join(name))
-        .filter(|path| path.exists())
+        .chain(nested_repositories(root))
+        .filter(|path| path.symlink_metadata().is_ok())
         .collect();
-    let pointer = std::fs::read_to_string(root.join(".git")).ok();
-    if let Some(gitdir) = pointer
-        .as_deref()
-        .and_then(|text| text.trim().strip_prefix("gitdir:"))
-    {
-        kept.extend(std::fs::canonicalize(root.join(gitdir.trim())).ok());
-    }
+    let pointed: Vec<PathBuf> = kept.iter().filter_map(|path| pointed_to(path)).collect();
+    kept.extend(pointed);
     kept
+}
+
+/// The Git directory that the `.git` file `dotgit` names.
+fn pointed_to(dotgit: &Path) -> Option<PathBuf> {
+    if dotgit.file_name()? != ".git" {
+        return None;
+    }
+    let text = std::fs::read_to_string(dotgit).ok()?;
+    let gitdir = text.trim().strip_prefix("gitdir:")?.trim();
+    std::fs::canonicalize(dotgit.parent()?.join(gitdir)).ok()
+}
+
+/// The `.git` of each repository below the real directory `root`, found once per process, as a
+/// walk of a large tree takes about a second (830,000 entries); one made later stays writable.
+fn nested_repositories(root: &Path) -> Vec<PathBuf> {
+    use std::{
+        collections::BTreeMap,
+        sync::{Mutex, PoisonError},
+    };
+    static FOUND: Mutex<BTreeMap<PathBuf, Vec<PathBuf>>> = Mutex::new(BTreeMap::new());
+    fn walk(directory: &Path, top: bool, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name() == ".git" {
+                if !top {
+                    found.push(entry.path());
+                }
+            } else if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                walk(&entry.path(), false, found);
+            }
+        }
+    }
+    let mut found = FOUND.lock().unwrap_or_else(PoisonError::into_inner);
+    found
+        .entry(root.to_owned())
+        .or_insert_with(|| {
+            let mut found = Vec::new();
+            walk(root, true, &mut found);
+            found
+        })
+        .clone()
+}
+
+/// The directories between the real directory `root` and each path `kept` in it, to be mounted
+/// on themselves: a command can rename a directory holding a mount, then put another `.git`
+/// where the protected one was, but not rename a mount point itself.
+fn pinned(root: &Path, kept: &[PathBuf]) -> std::collections::BTreeSet<PathBuf> {
+    kept.iter()
+        .filter_map(|path| path.strip_prefix(root).ok())
+        .flat_map(|inside| inside.ancestors().skip(1))
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .map(|directory| root.join(directory))
+        .collect()
 }
 
 /// WSL2 mounts the root filesystem again here (`distro`), next to WSLg's X11 and audio sockets.
@@ -299,6 +355,18 @@ impl Hidden {
             self.files.iter().filter(outside),
             self.directories.iter().filter(outside),
         )
+    }
+
+    /// Whether `path` is in a hidden directory or holds a hidden store, which a mount there would
+    /// fail or uncover.
+    fn overlaps(&self, path: &Path) -> bool {
+        let mut directories = self.directories.iter();
+        directories.any(|directory| path.starts_with(directory))
+            || self
+                .files
+                .iter()
+                .chain(&self.directories)
+                .any(|store| store.starts_with(path))
     }
 
     /// Hides the sockets of tmux servers under `base` (as `TMUX_TMPDIR`), which run what a client
@@ -544,6 +612,17 @@ fn confined(
     let real_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
     process.arg(if writable { "--bind" } else { "--ro-bind" });
     process.arg(&real_root).arg(&real_root);
+    // Before what is hidden, which a mount of a directory above it would uncover.
+    let kept = if writable {
+        let mut kept = protected(&real_root);
+        kept.retain(|path| !hidden.overlaps(path));
+        kept
+    } else {
+        Vec::new()
+    };
+    for directory in pinned(&real_root, &kept) {
+        process.arg("--bind").arg(&directory).arg(&directory);
+    }
     if let Some(path) = also {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         process.arg("--ro-bind").arg(&real).arg(&real);
@@ -552,10 +631,8 @@ fn confined(
         process.args(["--tmpfs", WSLG]);
     }
     hide(&mut process, hidden);
-    if writable {
-        for kept in protected(&real_root) {
-            process.arg("--ro-bind").arg(&kept).arg(&kept);
-        }
+    for kept in &kept {
+        process.arg("--ro-bind").arg(kept).arg(kept);
     }
     // Servers that commands with the stores hidden started run what a client asks writable and
     // on the network.
@@ -789,6 +866,76 @@ ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
         for path in ["hook", "away", "away/a.rs", "loop"] {
             assert!(refused(write, path).contains("points nowhere"), "{path}");
         }
+    }
+
+    #[test]
+    fn the_main_agents_sandbox_keeps_nested_repositories_read_only() {
+        use super::{Sandbox, SandboxMode};
+        let home = std::env::temp_dir().join(format!("scramjet-nested-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        for directory in [
+            ".git/modules/sub",
+            "vendor/lib/.git/hooks",
+            "sub",
+            "inner",
+            "gitdirs/inner",
+            "secrets/.git",
+        ] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        std::fs::write(root.join("sub/.git"), "gitdir: ../.git/modules/sub\n").unwrap();
+        std::fs::write(root.join("inner/.git"), "gitdir: ../gitdirs/inner\n").unwrap();
+        std::fs::write(root.join("secrets/key"), "SECRET\n").unwrap();
+        let script = "touch vendor/lib/.git/hooks/post-checkout gitdirs/inner/config; \
+echo 'gitdir: /tmp/evil' > sub/.git; mv vendor v2; mv vendor/lib vendor/lib2; mv gitdirs g2; \
+mv inner inner2; cat secrets/key; echo made > vendor/lib/made && echo wrote";
+        let hidden = super::Hidden::under(&home, vec![root.join("secrets")]);
+        let sandbox = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+        };
+        let output = super::sandboxed(&root, script, &hidden, sandbox)
+            .output()
+            .unwrap();
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "wrote\n",
+            "{errors}"
+        );
+        assert!(!errors.contains("SECRET"), "{errors}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("sub/.git")).unwrap(),
+            "gitdir: ../.git/modules/sub\n"
+        );
+        for left in [
+            "vendor/lib/.git/hooks/post-checkout",
+            "gitdirs/inner/config",
+            "v2",
+            "vendor/lib2",
+            "g2",
+            "inner2",
+        ] {
+            assert!(!root.join(left).exists(), "{left}");
+        }
+        assert!(root.join("vendor/lib/made").exists());
+        for path in [
+            "vendor/lib/.git/config",
+            "gitdirs/inner/HEAD",
+            "sub/.git",
+            "new/.git/config",
+        ] {
+            let refused = sandbox
+                .check_write(&root, &root.join(path))
+                .expect_err(path);
+            assert!(refused.contains("kept read-only"), "{path}: {refused}");
+        }
+        assert!(
+            sandbox
+                .check_write(&root, &root.join("vendor/lib/a.rs"))
+                .is_ok()
+        );
     }
 
     #[test]
