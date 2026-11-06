@@ -10,7 +10,11 @@ use rmcp::{
         CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation, ProtocolVersion,
         ServerPeerInfo,
     },
-    service::RunningService,
+    service::{ClientInitializeError, Peer, RunningService, ServiceError},
+    transport::{
+        DynamicTransportError, StreamableHttpClientTransport,
+        streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpError},
+    },
 };
 use serde_json::{Value, json};
 use std::{
@@ -24,6 +28,8 @@ use std::{
     time::Duration,
 };
 use tokio::io::AsyncReadExt;
+
+mod http;
 
 pub const SEARCH: &str = "mcp_search";
 pub const CALL: &str = "mcp_call";
@@ -50,29 +56,102 @@ const LISTED_NAMES: usize = 200;
 /// A description in a list of tools, or a server's in the instructions, is cut to this.
 const ABOUT_CHARS: usize = 200;
 
-/// A server the settings list (`mcpServers`), as Claude Code's: a program speaking MCP over its
-/// standard input and output, run in the project directory with the environment and `env`.
+/// A server the settings list (`mcpServers`), as Claude Code's.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Server {
     pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
+    pub transport: Transport,
 }
 
+#[derive(Clone, PartialEq)]
+pub enum Transport {
+    /// A program speaking MCP over its standard input and output, run in the project directory
+    /// with the environment and `env`.
+    Program {
+        command: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    },
+    /// A server at `url` speaking MCP's streamable HTTP, sent `headers` with each request.
+    Http {
+        url: String,
+        headers: Vec<(String, String)>,
+    },
+}
+
+/// Leaves the headers' values out: they hold keys.
+impl std::fmt::Debug for Transport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Program { command, args, env } => (f.debug_struct("Program"))
+                .field("command", command)
+                .field("args", args)
+                .field("env", env)
+                .finish(),
+            Self::Http { url, headers } => (f.debug_struct("Http"))
+                .field("url", url)
+                .field(
+                    "headers",
+                    &headers.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+                )
+                .finish(),
+        }
+    }
+}
+
+/// Headers a server's entry cannot set: the transport sets them.
+const OWN_HEADERS: [&str; 7] = [
+    "host",
+    "content-type",
+    "content-length",
+    "accept",
+    "mcp-session-id",
+    "mcp-protocol-version",
+    "last-event-id",
+];
+
 impl Server {
-    /// How it is run, as `/mcp` shows it.
-    pub fn command_line(&self) -> String {
-        std::iter::once(&self.command)
-            .chain(&self.args)
-            .map(
-                |word| match word.contains(char::is_whitespace) || word.is_empty() {
-                    true => format!("'{word}'"),
-                    false => word.clone(),
-                },
-            )
-            .collect::<Vec<_>>()
-            .join(" ")
+    /// A server over HTTP, its URL and headers checked.
+    pub fn http(name: &str, url: &str, headers: Vec<(String, String)>) -> Result<Self, String> {
+        http::target(url).map_err(|why| format!("url: {why}"))?;
+        for (name, value) in &headers {
+            if hyper::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
+                return Err(format!("headers: {name:?} is not a header's name"));
+            }
+            if OWN_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+                return Err(format!("headers: {name} is set by the transport"));
+            }
+            if hyper::header::HeaderValue::from_str(value).is_err() {
+                return Err(format!("headers: {name}'s value is not a header's"));
+            }
+        }
+        Ok(Self {
+            name: name.to_owned(),
+            transport: Transport::Http {
+                url: url.to_owned(),
+                headers,
+            },
+        })
+    }
+
+    /// What `/mcp` shows of where it is, after its label: the program run, or the URL without
+    /// its query, which may hold a key.
+    pub fn address(&self) -> (&'static str, String) {
+        match &self.transport {
+            Transport::Program { command, args, .. } => {
+                let words = (std::iter::once(command).chain(args)).map(|word| {
+                    match word.contains(char::is_whitespace) || word.is_empty() {
+                        true => format!("'{word}'"),
+                        false => word.clone(),
+                    }
+                });
+                ("Command:", words.collect::<Vec<_>>().join(" "))
+            }
+            Transport::Http { url, .. } => match url.split_once('?') {
+                Some((url, _)) => ("URL:", format!("{url}?…")),
+                None => ("URL:", url.clone()),
+            },
+        }
     }
 }
 
@@ -110,6 +189,8 @@ struct Running {
     killed: AtomicBool,
     /// What waits for its process to end.
     watcher: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Its connection once started, closed when it is stopped, which ends an HTTP session.
+    service: Mutex<Option<RunningService<RoleClient, ClientConfig>>>,
     /// Whether the user was told it failed.
     reported: AtomicBool,
 }
@@ -122,7 +203,7 @@ enum Status {
 }
 
 struct Ready {
-    service: RunningService<RoleClient, ClientConfig>,
+    peer: Peer<RoleClient>,
     about: Option<String>,
     /// Its tools as it last listed them, as MCP describes them (`name`, `description`,
     /// `inputSchema`, …).
@@ -217,7 +298,8 @@ impl Servers {
         server
     }
 
-    /// Kills `servers`, and waits a moment for their processes so that none is left unreaped.
+    /// Kills `servers` and closes their connections, and waits a moment for their processes, so
+    /// that none is left unreaped, and for their HTTP sessions to end.
     fn end(&self, servers: &[Arc<Running>]) {
         for server in servers {
             server.kill();
@@ -228,12 +310,14 @@ impl Servers {
         let watchers: Vec<_> = (servers.iter())
             .filter_map(|server| lock(&server.watcher).take())
             .collect();
+        let mut services: Vec<_> = (servers.iter())
+            .filter_map(|server| lock(&server.service).take())
+            .collect();
         runtime.block_on(async {
-            let ended = async {
-                for watcher in watchers {
-                    let _ = watcher.await;
-                }
-            };
+            let closed =
+                futures_util::future::join_all(services.iter_mut().map(RunningService::close));
+            let ended = futures_util::future::join_all(watchers);
+            let ended = async { tokio::join!(closed, ended) };
             let _ = tokio::time::timeout(Duration::from_secs(1), ended).await;
         });
     }
@@ -395,9 +479,9 @@ with {SEARCH}, which shows how to call each, then run one with {CALL}.\n{}",
             .as_ref()
             .ok_or("the MCP servers are not running")?;
         let params = CallToolRequestParams::new(tool.to_owned()).with_arguments(given);
-        match until_cancelled(runtime, ready.service.call_tool(params), cancel) {
+        match until_cancelled(runtime, ready.peer.call_tool(params), cancel) {
             None => Err(format!("cancelled; {name}'s {tool} may have run in part")),
-            Some(Err(error)) => Err(format!("{name}: {error}")),
+            Some(Err(error)) => Err(format!("{name}: {}", service_failure(&error))),
             Some(Ok(result)) => Ok(output(serde_json::to_value(result).unwrap_or_default())),
         }
     }
@@ -424,7 +508,7 @@ with {SEARCH}, which shows how to call each, then run one with {CALL}.\n{}",
             .runtime
             .as_ref()
             .ok_or("the MCP servers are not running")?;
-        let list = ready.service.list_all_tools();
+        let list = ready.peer.list_all_tools();
         let listed = until_cancelled(
             runtime,
             async { tokio::time::timeout(LIST, list).await },
@@ -480,6 +564,7 @@ impl Running {
             group: Mutex::new(None),
             killed: AtomicBool::new(false),
             watcher: Mutex::new(None),
+            service: Mutex::new(None),
             reported: AtomicBool::new(false),
         })
     }
@@ -526,15 +611,82 @@ impl Running {
     }
 }
 
-/// Runs the server's program, keeps the end of its standard error, and connects to it as MCP's
-/// 2026-07-28 revision does, or with the `initialize` handshake of those before, as the server
-/// answers; then lists its tools.
+/// Starts the server, or reaches it over HTTP, and connects to it as MCP's 2026-07-28 revision
+/// does, or with the `initialize` handshake of those before, as the server answers; then lists
+/// its tools.
 async fn start(server: &Arc<Running>, root: PathBuf) -> Result<Ready, String> {
-    let config = &server.config;
-    let mut command = tokio::process::Command::new(&config.command);
+    let client = ClientConfig::new(
+        ClientCapabilities::default(),
+        Implementation::new("scramjet-rs", env!("CARGO_PKG_VERSION")),
+    );
+    let lifecycle = ClientLifecycleMode::Auto {
+        preferred_versions: vec![ProtocolVersion::LATEST],
+        legacy_version: Some(ProtocolVersion::LATEST_WITH_INITIALIZE),
+    };
+    let service = match &server.config.transport {
+        Transport::Program { command, args, env } => {
+            run(server, (command, args, env), root, client, lifecycle).await?
+        }
+        Transport::Http { url, headers } => {
+            let headers = (headers.iter())
+                .filter_map(|(name, value)| {
+                    let name = hyper::header::HeaderName::from_bytes(name.as_bytes()).ok()?;
+                    Some((name, hyper::header::HeaderValue::from_str(value).ok()?))
+                })
+                .collect();
+            let config =
+                StreamableHttpClientTransportConfig::with_uri(url.as_str()).custom_headers(headers);
+            let transport = StreamableHttpClientTransport::with_client(http::Https, config);
+            (client.serve_with_lifecycle(transport, lifecycle).await).map_err(
+                |error| match error {
+                    ClientInitializeError::TransportError { error, .. } => {
+                        transport_failure(&error)
+                    }
+                    error => format!("it did not answer as an MCP server: {error}"),
+                },
+            )?
+        }
+    };
+    let info = service.peer_info();
+    let tools = match info
+        .as_ref()
+        .is_some_and(|info| info.capabilities.tools.is_some())
+    {
+        true => (service.list_all_tools().await).map_err(|error| {
+            format!("its tools could not be listed: {}", service_failure(&error))
+        })?,
+        false => Vec::new(),
+    };
+    let ready = Ready {
+        peer: service.peer().clone(),
+        about: info.as_deref().and_then(about),
+        tools: Mutex::new(
+            (tools.iter())
+                .map(|tool| serde_json::to_value(tool).unwrap_or_default())
+                .collect(),
+        ),
+    };
+    let mut held = lock(&server.service);
+    if server.killed.load(Ordering::Relaxed) {
+        return Err("it was stopped as it started".to_owned());
+    }
+    *held = Some(service);
+    Ok(ready)
+}
+
+/// Runs the server's program, keeps the end of its standard error, and connects to it over its
+/// standard input and output.
+async fn run(
+    server: &Arc<Running>,
+    (program, args, env): (&str, &[String], &[(String, String)]),
+    root: PathBuf,
+    client: ClientConfig,
+    lifecycle: ClientLifecycleMode,
+) -> Result<RunningService<RoleClient, ClientConfig>, String> {
+    let mut command = tokio::process::Command::new(program);
     command
-        .args(&config.args)
-        .envs(config.env.iter().map(|(key, value)| (key, value)))
+        .args(args)
+        .envs(env.iter().map(|(key, value)| (key, value)))
         .current_dir(root)
         .process_group(0)
         .stdin(Stdio::piped())
@@ -547,7 +699,7 @@ async fn start(server: &Arc<Running>, root: PathBuf) -> Result<Ready, String> {
             .ok_or_else(|| std::io::Error::other("it ended at once"))?;
         Ok((child, id))
     })
-    .map_err(|error| format!("could not run {}: {error}", config.command))?;
+    .map_err(|error| format!("could not run {program}: {error}"))?;
     {
         let mut held = lock(&server.group);
         if server.killed.load(Ordering::Relaxed) {
@@ -597,19 +749,11 @@ async fn start(server: &Arc<Running>, root: PathBuf) -> Result<Ready, String> {
             watched.set(Status::Failed(why));
         }
     }));
-    let client = ClientConfig::new(
-        ClientCapabilities::default(),
-        Implementation::new("scramjet-rs", env!("CARGO_PKG_VERSION")),
-    );
-    let lifecycle = ClientLifecycleMode::Auto {
-        preferred_versions: vec![ProtocolVersion::LATEST],
-        legacy_version: Some(ProtocolVersion::LATEST_WITH_INITIALIZE),
-    };
-    let service = match client
+    match client
         .serve_with_lifecycle((stdout, stdin), lifecycle)
         .await
     {
-        Ok(service) => service,
+        Ok(service) => Ok(service),
         Err(error) => {
             // Its standard error says more once the process ended.
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -618,27 +762,28 @@ async fn start(server: &Arc<Running>, root: PathBuf) -> Result<Ready, String> {
                 false => format!("it did not answer as an MCP server: {error}"),
             };
             server.kill();
-            return Err(why);
+            Err(why)
         }
-    };
-    let info = service.peer_info();
-    let tools = match info
-        .as_ref()
-        .is_some_and(|info| info.capabilities.tools.is_some())
+    }
+}
+
+/// What a transport's failure says, without the transport's type, which rmcp names.
+fn transport_failure(error: &DynamicTransportError) -> String {
+    match error
+        .error
+        .downcast_ref::<StreamableHttpError<http::Failed>>()
     {
-        true => (service.list_all_tools().await)
-            .map_err(|error| format!("its tools could not be listed: {error}"))?,
-        false => Vec::new(),
-    };
-    Ok(Ready {
-        about: info.as_deref().and_then(about),
-        tools: Mutex::new(
-            (tools.iter())
-                .map(|tool| serde_json::to_value(tool).unwrap_or_default())
-                .collect(),
-        ),
-        service,
-    })
+        Some(StreamableHttpError::Client(failed)) => failed.to_string(),
+        Some(other) => other.to_string(),
+        None => error.error.to_string(),
+    }
+}
+
+fn service_failure(error: &ServiceError) -> String {
+    match error {
+        ServiceError::TransportSend(error) => transport_failure(error),
+        error => error.to_string(),
+    }
 }
 
 /// What a server says it is, in one line: its description, title, or the first line of its

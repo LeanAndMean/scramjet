@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.27.0 — MCP servers over HTTP
+
+### Added
+
+- MCP servers over streamable HTTP, written as Claude Code's `.mcp.json` lists them: `{"docs": {"type": "http", "url": "https://…", "headers": {"Authorization": "Bearer ${DOCS_TOKEN}"}}}`. Their sessions are started again when a server forgets them and ended when scramjet-rs stops; `/mcp` shows each server's URL without its query. A server that asks for authorization says to give a token in its `headers`, as OAuth sign-in is not supported yet.
+- `${VAR}` and `${VAR:-default}` in an MCP server's entry (its command, arguments, `env`, URL and headers) are the environment's variables, as in Claude Code, so a key need not be written in the settings.
+
 ## 0.26.1 — MCP servers that keep running
 
 ### Fixed

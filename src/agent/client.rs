@@ -488,7 +488,7 @@ pub(super) async fn fetch(
     }
 }
 
-type Connection = (
+pub(super) type Connection = (
     http1::SendRequest<Full<Bytes>>,
     JoinHandle<hyper::Result<()>>,
 );
@@ -496,13 +496,14 @@ type Connection = (
 /// An HTTP/1.1 connection to `route`'s host, in TLS for an `https://` base URL, with the task
 /// that drives it.
 async fn connect(route: &Route) -> Result<Connection, Failure> {
-    let (authority, provider) = (&route.authority, &route.provider);
-    let socket = (TcpStream::connect((route.host.as_str(), route.port)).await).map_err(|e| {
-        Failure::new(
-            format!("cannot connect to {authority} (provider {provider}): {e}"),
-            true,
-        )
-    })?;
+    connect_for(route, &format!(" (provider {})", route.provider)).await
+}
+
+/// As `connect`, its failures naming the host followed by `who`.
+pub(super) async fn connect_for(route: &Route, who: &str) -> Result<Connection, Failure> {
+    let authority = &route.authority;
+    let socket = (TcpStream::connect((route.host.as_str(), route.port)).await)
+        .map_err(|e| Failure::new(format!("cannot connect to {authority}{who}: {e}"), true))?;
     if !route.tls {
         return handshake(socket).await;
     }
@@ -516,7 +517,7 @@ async fn connect(route: &Route) -> Result<Connection, Failure> {
     let stream = (tokio_rustls::TlsConnector::from(config)
         .connect(name, socket)
         .await)
-        .map_err(|e| tls_failure(route, &e))?;
+        .map_err(|e| tls_failure(route, who, &e))?;
     handshake(stream).await
 }
 
@@ -558,8 +559,8 @@ fn tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
 
 /// A failed TLS handshake: TLS's own errors (an untrusted or invalid certificate, an alert)
 /// would fail again, unlike a connection that broke.
-fn tls_failure(route: &Route, error: &std::io::Error) -> Failure {
-    let (authority, provider) = (&route.authority, &route.provider);
+fn tls_failure(route: &Route, who: &str, error: &std::io::Error) -> Failure {
+    let authority = &route.authority;
     let untrusted = (error.get_ref())
         .and_then(|inner| inner.downcast_ref::<rustls::Error>())
         .is_some_and(|error| {
@@ -572,7 +573,7 @@ fn tls_failure(route: &Route, error: &std::io::Error) -> Failure {
         false => "",
     };
     Failure::new(
-        format!("TLS handshake with {authority} (provider {provider}) failed: {error}{hint}"),
+        format!("TLS handshake with {authority}{who} failed: {error}{hint}"),
         error.kind() != std::io::ErrorKind::InvalidData,
     )
 }

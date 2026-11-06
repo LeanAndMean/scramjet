@@ -11,15 +11,21 @@ fn scratch(name: &str) -> ScratchDir {
     ScratchDir::new(path)
 }
 
-fn test_server(name: &str, env: &[(&str, String)]) -> Server {
+fn program(name: &str, command: &str, args: Vec<String>, env: &[(&str, String)]) -> Server {
     Server {
         name: name.to_owned(),
-        command: "python3".to_owned(),
-        args: vec![SERVER.to_owned()],
-        env: (env.iter())
-            .map(|(key, value)| (key.to_string(), value.clone()))
-            .collect(),
+        transport: Transport::Program {
+            command: command.to_owned(),
+            args,
+            env: (env.iter())
+                .map(|(key, value)| (key.to_string(), value.clone()))
+                .collect(),
+        },
     }
+}
+
+fn test_server(name: &str, env: &[(&str, String)]) -> Server {
+    program(name, "python3", vec![SERVER.to_owned()], env)
 }
 
 /// `configs` started in `root` and settled, each given ten seconds.
@@ -217,12 +223,7 @@ fn a_call_stopped_cancels_its_request_and_ending_the_servers_kills_them() {
 #[test]
 fn servers_that_cannot_start_say_why_once_and_the_others_run() {
     let scratch = scratch("failing");
-    let missing = Server {
-        name: "missing".to_owned(),
-        command: "/nonexistent/mcp-server".to_owned(),
-        args: Vec::new(),
-        env: Vec::new(),
-    };
+    let missing = program("missing", "/nonexistent/mcp-server", Vec::new(), &[]);
     let configs = [
         test_server("exits", &[("MCP_TEST_MODE", "exit".to_owned())]),
         missing,
@@ -480,7 +481,10 @@ fn reload_starts_again_the_servers_that_ended_or_changed_and_keeps_the_others() 
     assert_eq!(pids(&log_b), first_b);
     // Only `b` changed.
     let mut changed = b.clone();
-    changed.env.push(("EXTRA".to_owned(), "1".to_owned()));
+    let Transport::Program { env, .. } = &mut changed.transport else {
+        unreachable!()
+    };
+    env.push(("EXTRA".to_owned(), "1".to_owned()));
     reload(&mut agent, vec![a.clone(), changed]);
     settle(&agent);
     assert_eq!(pids(&log_a).len(), 2);
@@ -543,15 +547,15 @@ fn servers_ended_as_they_start_leave_no_process() {
     let scratch = scratch("ended-early");
     let log = scratch.0.join("log");
     // A server that never reads its input, so that only killing it ends it.
-    let server = Server {
-        name: "sleeper".to_owned(),
-        command: "sh".to_owned(),
-        args: vec![
+    let server = program(
+        "sleeper",
+        "sh",
+        vec![
             "-c".to_owned(),
             format!("echo pid $$ >> '{}'; exec sleep 30", log.display()),
         ],
-        env: Vec::new(),
-    };
+        &[],
+    );
     for round in 0..40 {
         let servers = Servers::start(std::slice::from_ref(&server), &scratch.0);
         std::thread::sleep(Duration::from_micros(round * 50));
@@ -566,4 +570,235 @@ fn servers_ended_as_they_start_leave_no_process() {
             .status();
     }
     assert!(left.is_empty(), "{} of {} left", left.len(), started.len());
+}
+
+const HTTP_SERVER: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/support/mcp_http_server.py"
+);
+
+/// The test server over HTTP, run with `env`, and the port it listens on; killed on drop.
+struct Remote(std::process::Child, u16);
+
+impl Remote {
+    fn start(env: &[(&str, String)]) -> Self {
+        use std::io::BufRead;
+        let mut child = std::process::Command::new("python3")
+            .arg(HTTP_SERVER)
+            .envs(env.iter().map(|(key, value)| (key, value)))
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        let stdout = child.stdout.take().unwrap();
+        std::io::BufReader::new(stdout)
+            .read_line(&mut line)
+            .unwrap();
+        Self(child, line.trim().parse().unwrap())
+    }
+}
+
+impl Drop for Remote {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn an_http_servers_tools_are_called_in_its_session_which_ends_with_the_servers() {
+    let scratch = scratch("http");
+    let log = scratch.0.join("log");
+    let remote = Remote::start(&[
+        ("MCP_TEST_LOG", log.display().to_string()),
+        ("MCP_TEST_TOKEN", "secret".to_owned()),
+    ]);
+    let url = format!("http://127.0.0.1:{}/mcp?team=a", remote.1);
+    let headers = vec![("Authorization".to_owned(), "Bearer secret".to_owned())];
+    let server = Server::http("test", &url, headers).unwrap();
+    assert_eq!(
+        server.address(),
+        ("URL:", format!("http://127.0.0.1:{}/mcp?…", remote.1))
+    );
+    let servers = started(&[server], &scratch.0);
+    let [(_, State::Ready { tools, about })] = &servers.states()[..] else {
+        panic!("{:?}", servers.states());
+    };
+    assert_eq!(tools, &["echo", "fail", "slow"]);
+    assert_eq!(
+        about.as_deref(),
+        Some("Remote tools for scramjet-rs's tests")
+    );
+    let echoed = call(&servers, "echo", json!({"text": "over http"})).unwrap();
+    assert_eq!(
+        (echoed.text.as_str(), echoed.failed),
+        ("echo: over http", false)
+    );
+    let failed = call(&servers, "fail", json!({})).unwrap();
+    assert_eq!((failed.text.as_str(), failed.failed), ("it failed", true));
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stopper = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        stopper.store(true, Ordering::Relaxed);
+    });
+    let arguments = json!({"server": "test", "tool": "slow"});
+    let stopped = servers.call(&arguments, &cancel).unwrap_err();
+    assert_eq!(stopped, "cancelled; test's slow may have run in part");
+    let logged = || std::fs::read_to_string(&log).unwrap_or_default();
+    until(|| logged().contains("notifications/cancelled"));
+    drop(servers);
+    until(|| logged().contains("DELETE"));
+    let logged = logged();
+    let requests: Vec<&str> = (logged.lines())
+        .filter(|line| !line.starts_with("GET "))
+        .collect();
+    assert_eq!(
+        requests,
+        [
+            "POST /mcp?team=a server/discover session=- version=2026-07-28",
+            "POST /mcp?team=a initialize session=- version=-",
+            "POST /mcp?team=a notifications/initialized session=known version=2025-11-25",
+            "POST /mcp?team=a tools/list session=known version=2025-11-25",
+            "POST /mcp?team=a tools/call session=known version=2025-11-25",
+            "POST /mcp?team=a tools/call session=known version=2025-11-25",
+            "POST /mcp?team=a tools/call session=known version=2025-11-25",
+            "POST /mcp?team=a notifications/cancelled session=known version=2025-11-25",
+            "DELETE /mcp?team=a end session=known version=2025-11-25",
+        ],
+        "{logged}"
+    );
+}
+
+#[test]
+fn http_servers_that_cannot_be_reached_or_refuse_say_why() {
+    let scratch = scratch("http-failing");
+    let remote = Remote::start(&[("MCP_TEST_TOKEN", "secret".to_owned())]);
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = closed.local_addr().unwrap().port();
+    drop(closed);
+    let configs = [
+        Server::http(
+            "refused",
+            &format!("http://127.0.0.1:{}/mcp", remote.1),
+            Vec::new(),
+        )
+        .unwrap(),
+        Server::http(
+            "closed",
+            &format!("http://127.0.0.1:{port}/mcp"),
+            Vec::new(),
+        )
+        .unwrap(),
+    ];
+    let servers = started(&configs, &scratch.0);
+    let failures = servers.unreported_failures();
+    let [(refused, why_refused), (closed, why_closed)] = &failures[..] else {
+        panic!("{failures:?}");
+    };
+    assert_eq!((refused.as_str(), closed.as_str()), ("refused", "closed"));
+    assert_eq!(
+        why_refused,
+        "HTTP 401 Unauthorized ({\"error\": \"unauthorized\"}): it needs authorization, which \
+scramjet-rs gives it only as the headers of its entry in mcpServers (OAuth sign-in is not \
+supported yet)"
+    );
+    assert_eq!(
+        why_closed,
+        &format!("cannot connect to 127.0.0.1:{port}: Connection refused (os error 111)")
+    );
+}
+
+#[test]
+fn http_entries_are_checked_and_shown_without_their_query() {
+    let headers = |name: &str, value: &str| vec![(name.to_owned(), value.to_owned())];
+    let refused = |url: &str, headers| Server::http("x", url, headers).unwrap_err();
+    assert_eq!(
+        refused("ftp://host/mcp", Vec::new()),
+        "url: ftp://host/mcp: not an http:// or https:// URL"
+    );
+    assert_eq!(
+        refused("https://user@host/mcp", Vec::new()),
+        "url: https://user@host/mcp: must have no credentials, query or fragment"
+    );
+    assert_eq!(
+        refused("https://host/mcp", headers("Mcp-Session-Id", "1")),
+        "headers: Mcp-Session-Id is set by the transport"
+    );
+    assert_eq!(
+        refused("https://host/mcp", headers("bad name", "1")),
+        "headers: \"bad name\" is not a header's name"
+    );
+    assert_eq!(
+        refused("https://host/mcp", headers("X-Key", "a\nb")),
+        "headers: X-Key's value is not a header's"
+    );
+    let server = Server::http("x", "https://host/mcp/", headers("X-Key", "k")).unwrap();
+    assert_eq!(server.address(), ("URL:", "https://host/mcp/".to_owned()));
+    // Their values are keys.
+    assert!(!format!("{server:?}").contains("\"k\""), "{server:?}");
+    let (route, target) = http::target("https://Host:8443/mcp/?a=1&b=2#part").unwrap();
+    assert_eq!(
+        (
+            route.authority.as_str(),
+            route.port,
+            route.tls,
+            target.as_str()
+        ),
+        ("Host:8443", 8443, true, "/mcp/?a=1&b=2")
+    );
+    assert_eq!(http::target("http://host").unwrap().1, "/");
+}
+
+#[test]
+fn a_session_the_server_forgot_is_started_again() {
+    let scratch = scratch("http-restart");
+    let log = scratch.0.join("log");
+    let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = free.local_addr().unwrap().port();
+    drop(free);
+    let env = [
+        ("MCP_TEST_LOG", log.display().to_string()),
+        ("MCP_TEST_PORT", port.to_string()),
+    ];
+    let remote = Remote::start(&env);
+    let url = format!("http://127.0.0.1:{port}/mcp");
+    let servers = started(
+        &[Server::http("test", &url, Vec::new()).unwrap()],
+        &scratch.0,
+    );
+    assert_eq!(
+        call(&servers, "echo", json!({"text": "one"})).unwrap().text,
+        "echo: one"
+    );
+    drop(remote);
+    let _remote = Remote::start(&env);
+    assert_eq!(
+        call(&servers, "echo", json!({"text": "two"})).unwrap().text,
+        "echo: two"
+    );
+    let logged = std::fs::read_to_string(&log).unwrap();
+    let after: Vec<&str> = (logged.lines())
+        .skip_while(|line| !line.contains("tools/call"))
+        .skip(1)
+        .filter(|line| !line.starts_with("GET "))
+        .collect();
+    // The new server does not know the session: it starts another, and the call is sent again.
+    let [forgotten, rest @ ..] = &after[..] else {
+        panic!("{logged}");
+    };
+    assert!(
+        forgotten.starts_with("POST /mcp tools/call session=") && !forgotten.contains("=known"),
+        "{logged}"
+    );
+    assert_eq!(
+        rest,
+        [
+            "POST /mcp initialize session=- version=-",
+            "POST /mcp notifications/initialized session=known version=2025-11-25",
+            "POST /mcp tools/call session=known version=2025-11-25",
+        ],
+        "{logged}"
+    );
 }

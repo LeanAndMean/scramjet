@@ -1,6 +1,6 @@
 [package]
 name = "scramjet-rs"
-version = "0.26.1"
+version = "0.27.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "An independent Rust terminal coding harness"
@@ -29,4 +29,6 @@ pulldown-cmark = { version = "=0.13.6", default-features = false, features = ["h
 syntect = { version = "=5.3.0", default-features = false, features = ["parsing", "regex-onig"] }
 two-face = { version = "=0.5.2", default-features = false, features = ["syntect-onig"] }
 x11rb = { version = "=0.13.2", default-features = false }
-rmcp = { version = "=3.9.0", default-features = false, features = ["client", "transport-async-rw"] }
+sse-stream = { version = "=0.2.6", default-features = false }
+futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
+rmcp = { version = "=3.9.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }

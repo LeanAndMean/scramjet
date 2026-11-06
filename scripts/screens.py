@@ -18,6 +18,9 @@ A scenario (scripts/screens/*.json) holds:
     "settings": scramjet-rs's settings, which --set (a JSON value, else a string) adds to;
     "model":    the scripted server's model (default gpt-6-luna);
     "providers": more models.json providers, listed after the scripted server's ("screens");
+    "servers":  programs to run first in the repository, each {"run": [ARGUMENTS...], "port": PORT},
+                waited for until PORT on 127.0.0.1 takes connections, and stopped at the end;
+    "env":      more environment for scramjet-rs, `{root}` in a value being the repository;
     "prompt":   the first message;
     "replies":  each response's items, in turn: {"reasoning": TEXT}, {"text": TEXT} or
                 {"call": NAME, "arguments": {...}}; the tools run for real;
@@ -283,6 +286,7 @@ def main():
     os.makedirs(options.outdir, exist_ok=True)
 
     work = tempfile.mkdtemp(prefix='screens-')
+    servers = []
     try:
         project = os.path.join(work, 'project')
         for name, text in scenario.get('files', {}).items():
@@ -309,6 +313,7 @@ def main():
         for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'TMUX', 'VISUAL', 'EDITOR',
                      'SCRAMJET_CACHE']:
             env.pop(name, None)
+        env.update({name: text.replace('{root}', ROOT) for name, text in scenario.get('env', {}).items()})
 
         # The scripted server is the first provider, offering the scenario's model.
         model = scenario.get('model', 'gpt-6-luna')
@@ -316,6 +321,19 @@ def main():
                     'models': [{'id': model, 'reasoning': True, 'input': ['text', 'image']}]}
         with open(os.path.join(work, 'config/scramjet-rs/models.json'), 'w') as file:
             json.dump({'providers': dict({'screens': provider}, **scenario.get('providers', {}))}, file)
+
+        for server in scenario.get('servers', []):
+            servers.append(subprocess.Popen(server['run'], cwd=ROOT, stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.DEVNULL, start_new_session=True))
+            deadline = time.monotonic() + options.timeout
+            while True:
+                try:
+                    socket.create_connection(('127.0.0.1', server['port']), timeout=1).close()
+                    break
+                except OSError:
+                    if time.monotonic() > deadline or servers[-1].poll() is not None:
+                        sys.exit('screens: %r took no connections on port %d' % (server['run'], server['port']))
+                    time.sleep(.1)
 
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
@@ -379,6 +397,12 @@ def main():
         process.wait(10)
         os.close(master)
     finally:
+        for server in servers:
+            try:
+                os.killpg(server.pid, 15)
+            except ProcessLookupError:
+                pass
+            server.wait(10)
         shutil.rmtree(work, ignore_errors=True)
 
 

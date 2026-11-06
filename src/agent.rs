@@ -49,7 +49,10 @@ pub use commands::{Command, Commands, Origin, Set, Sets, sets_in};
 pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use listed::Listing;
-pub use mcp::{CALL as MCP_CALL, SEARCH as MCP_SEARCH, Server as McpServer, State as McpState};
+pub use mcp::{
+    CALL as MCP_CALL, SEARCH as MCP_SEARCH, Server as McpServer, State as McpState,
+    Transport as McpTransport,
+};
 pub use problem::{Problem, ProblemFile};
 pub use providers::{KeyFrom, Providers};
 pub use publish::TOOLS as PUBLICATION_TOOLS;

@@ -8,8 +8,8 @@ use super::packages::{self, Source};
 use super::theme::TERMINAL_COLORS;
 use super::tree::Filter;
 use scramjet_rs::agent::{
-    CODING_TOOLS, DEFAULT_TOOLS, McpServer, Origin, Set, search_program, sets_in, shortened,
-    state_directory, write_replacing,
+    CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, Set, search_program, sets_in,
+    shortened, state_directory, write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -1135,51 +1135,96 @@ fn recalled(path: &Path) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
-/// An entry of `mcpServers`, as Claude Code's: `command`, with `args` and `env`; `type`, if
-/// given, `stdio`.
+/// An entry of `mcpServers`, as Claude Code's: `command`, with `args` and `env`, or for a server
+/// over streamable HTTP (`type` `http`), `url` with `headers`. Their `${VAR}` and `${VAR:-default}`
+/// are the environment's variables, as Claude Code expands them.
 fn mcp_server(name: &str, entry: &Value) -> Result<McpServer, String> {
     let Value::Object(entry) = entry else {
-        return Err("must be an object with a command".to_owned());
+        return Err("must be an object with a command or a url".to_owned());
     };
-    match entry.get("type").map(Value::as_str) {
-        Some(Some("http" | "sse" | "streamable-http")) => {
-            return Err("servers over HTTP are not supported yet".to_owned());
-        }
-        None if entry.contains_key("url") => {
-            return Err("servers over HTTP are not supported yet".to_owned());
-        }
-        None | Some(Some("stdio")) => {}
-        Some(_) => return Err(r#"type must be "stdio""#.to_owned()),
-    }
     if name.trim().is_empty() {
         return Err("a server needs a name".to_owned());
     }
+    let http = match entry.get("type").map(Value::as_str) {
+        None => entry.contains_key("url") && !entry.contains_key("command"),
+        Some(Some("stdio")) => false,
+        Some(Some("http" | "streamable-http")) => true,
+        Some(Some("sse")) => {
+            return Err(r#"the older HTTP with SSE transport is not supported; give the server's streamable HTTP address with "type": "http""#.to_owned());
+        }
+        Some(_) => return Err(r#"type must be "stdio" or "http""#.to_owned()),
+    };
+    let strings = |key: &str| match entry.get(key) {
+        None => Ok(Vec::new()),
+        Some(Value::Object(values)) => (values.iter())
+            .map(|(name, value)| match value.as_str() {
+                Some(value) => Ok((name.clone(), expanded(value)?)),
+                None => Err(format!("the values of {key} must be strings")),
+            })
+            .collect(),
+        Some(_) => Err(format!("{key} must be an object of strings")),
+    };
+    if http {
+        let url = match entry.get("url") {
+            Some(Value::String(url)) if !url.trim().is_empty() => expanded(url.trim())?,
+            _ => return Err("url must be the server's address".to_owned()),
+        };
+        return McpServer::http(name, &url, strings("headers")?);
+    }
     let command = match entry.get("command") {
-        Some(Value::String(command)) if !command.trim().is_empty() => command.clone(),
+        Some(Value::String(command)) if !command.trim().is_empty() => expanded(command)?,
         _ => return Err("command must be the program to run".to_owned()),
     };
     let args = match entry.get("args") {
         None => Vec::new(),
         Some(Value::Array(args)) => (args.iter())
-            .map(|arg| arg.as_str().map(str::to_owned))
-            .collect::<Option<_>>()
-            .ok_or("args must be a list of strings")?,
+            .map(|arg| {
+                arg.as_str()
+                    .ok_or("args must be a list of strings".to_owned())
+            })
+            .map(|arg| expanded(arg?))
+            .collect::<Result<_, _>>()?,
         Some(_) => return Err("args must be a list of strings".to_owned()),
-    };
-    let env = match entry.get("env") {
-        None => Vec::new(),
-        Some(Value::Object(env)) => (env.iter())
-            .map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
-            .collect::<Option<_>>()
-            .ok_or("env's values must be strings")?,
-        Some(_) => return Err("env must be an object of strings".to_owned()),
     };
     Ok(McpServer {
         name: name.to_owned(),
-        command,
-        args,
-        env,
+        transport: McpTransport::Program {
+            command,
+            args,
+            env: strings("env")?,
+        },
     })
+}
+
+/// `text` with each `${VAR}` replaced by the environment's variable `VAR`, and each
+/// `${VAR:-default}` by it or, when it is not set, by `default`.
+fn expanded(text: &str) -> Result<String, String> {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("${") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 2..];
+        let inner = after.find('}').map(|end| &after[..end]);
+        let (name, default) = match inner.map(|inner| inner.split_once(":-")) {
+            Some(Some((name, default))) => (name, Some(default)),
+            _ => (inner.unwrap_or(""), None),
+        };
+        let named = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let Some(inner) = inner.filter(|_| named) else {
+            out.push_str("${");
+            rest = after;
+            continue;
+        };
+        match (std::env::var(name), default) {
+            (Ok(value), _) => out.push_str(&value),
+            (Err(_), Some(default)) => out.push_str(default),
+            (Err(_), None) => return Err(format!("${{{name}}} is not set")),
+        }
+        rest = &after[inner.len() + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 /// `commandSets`' entries; an error when it is not a list of strings.
@@ -1366,43 +1411,78 @@ mod tests {
             r#"{"mcpServers": {
                 "time": {"command": "uvx", "args": ["mcp-server-time"], "env": {"TZ": "UTC"}},
                 "plain": {"type": "stdio", "command": "server"},
-                "remote": {"type": "http", "url": "https://example.com/mcp"},
-                "bare": {"url": "https://example.com/mcp"},
+                "remote": {"type": "http", "url": "https://example.com/mcp",
+                           "headers": {"Authorization": "Bearer ${SCRAMJET_RS_TEST_UNSET:-none}"}},
+                "bare": {"url": "http://localhost:3001/mcp?home=${HOME}"},
+                "home": {"command": "${HOME}/bin/server", "args": ["$HOME", "${HOME", "${1x}"]},
+                "unset": {"type": "http", "url": "https://example.com/mcp",
+                          "headers": {"X-Key": "${SCRAMJET_RS_TEST_UNSET}"}},
+                "old": {"type": "sse", "url": "https://example.com/sse"},
+                "nowhere": {"type": "http"},
+                "own": {"url": "https://example.com/mcp", "headers": {"Accept": "text/html"}},
                 "nameless": {"args": ["x"]},
                 "odd": {"command": "x", "args": [1]},
                 "other": {"type": "websocket", "command": "x"}
             }}"#,
         );
-        let server = |name: &str, command: &str, args: &[&str], env: &[(&str, &str)]| McpServer {
+        let home = std::env::var("HOME").unwrap();
+        let program = |name: &str, command: &str, args: &[&str], env: &[(&str, &str)]| McpServer {
             name: name.to_owned(),
-            command: command.to_owned(),
-            args: args.iter().map(|arg| arg.to_string()).collect(),
-            env: (env.iter())
-                .map(|(key, value)| (key.to_string(), value.to_string()))
-                .collect(),
+            transport: McpTransport::Program {
+                command: command.to_owned(),
+                args: args.iter().map(|arg| arg.to_string()).collect(),
+                env: (env.iter())
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect(),
+            },
+        };
+        let http = |name: &str, url: &str, headers: &[(&str, &str)]| McpServer {
+            name: name.to_owned(),
+            transport: McpTransport::Http {
+                url: url.to_owned(),
+                headers: (headers.iter())
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect(),
+            },
         };
         assert_eq!(
             settings.mcp_servers,
             [
-                server("plain", "server", &[], &[]),
-                server("time", "uvx", &["mcp-server-time"], &[("TZ", "UTC")]),
+                http(
+                    "bare",
+                    &format!("http://localhost:3001/mcp?home={home}"),
+                    &[]
+                ),
+                program(
+                    "home",
+                    &format!("{home}/bin/server"),
+                    &["$HOME", "${HOME", "${1x}"],
+                    &[]
+                ),
+                program("plain", "server", &[], &[]),
+                http(
+                    "remote",
+                    "https://example.com/mcp",
+                    &[("Authorization", "Bearer none")]
+                ),
+                program("time", "uvx", &["mcp-server-time"], &[("TZ", "UTC")]),
             ]
         );
         let path = shown(&scratch.0.join("settings.json"));
+        let warning = |name: &str, why: &str| format!("{path}: mcpServers: {name}: {why}; ignored");
         assert_eq!(
             settings.warnings,
             [
-                format!(
-                    "{path}: mcpServers: bare: servers over HTTP are not supported yet; ignored"
+                warning("nameless", "command must be the program to run"),
+                warning("nowhere", "url must be the server's address"),
+                warning("odd", "args must be a list of strings"),
+                warning(
+                    "old",
+                    r#"the older HTTP with SSE transport is not supported; give the server's streamable HTTP address with "type": "http""#
                 ),
-                format!(
-                    "{path}: mcpServers: nameless: command must be the program to run; ignored"
-                ),
-                format!("{path}: mcpServers: odd: args must be a list of strings; ignored"),
-                format!("{path}: mcpServers: other: type must be \"stdio\"; ignored"),
-                format!(
-                    "{path}: mcpServers: remote: servers over HTTP are not supported yet; ignored"
-                ),
+                warning("other", r#"type must be "stdio" or "http""#),
+                warning("own", "headers: Accept is set by the transport"),
+                warning("unset", "${SCRAMJET_RS_TEST_UNSET} is not set"),
             ]
         );
         let wrong = settings_with(&scratch, r#"{"mcpServers": ["time"]}"#);

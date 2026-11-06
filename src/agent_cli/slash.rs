@@ -291,7 +291,8 @@ impl Interactive {
                     style::MUTED,
                     &format!(
                         "No MCP servers. Add them to mcpServers in {settings}, as Claude Code's \
-.mcp.json lists them: {{\"name\": {{\"command\": \"program\", \"args\": [\"…\"]}}}}"
+.mcp.json lists them: {{\"name\": {{\"command\": \"program\", \"args\": [\"…\"]}}}}, or \
+{{\"name\": {{\"type\": \"http\", \"url\": \"https://…\"}}}} for a server over HTTP"
                     ),
                 ),
                 false => self.say_styled(
@@ -314,7 +315,8 @@ impl Interactive {
             };
             let name = visible(&server.name);
             info += &format!("{name} {}\n", ui.dim(&format!("· {said}")));
-            info += &row("Command:", &server.command_line());
+            let (label, address) = server.address();
+            info += &row(label, &address);
             match &state {
                 McpState::Ready { tools, about } => {
                     if let Some(about) = about {

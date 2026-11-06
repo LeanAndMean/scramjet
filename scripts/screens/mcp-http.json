@@ -1,0 +1,34 @@
+{
+  "size": "100x50",
+  "servers": [
+    {"run": ["env", "PORT=3911", "npx", "-y", "@modelcontextprotocol/server-everything", "streamableHttp"], "port": 3911},
+    {"run": ["env", "MCP_TEST_PORT=3912", "MCP_TEST_TLS=tests/tls", "MCP_TEST_TOKEN=screens", "python3", "tests/support/mcp_http_server.py"], "port": 3912}
+  ],
+  "env": {"SSL_CERT_FILE": "{root}/tests/tls/ca.pem"},
+  "settings": {
+    "theme": "scramjet-dark",
+    "mcpServers": {
+      "everything": {"type": "http", "url": "http://127.0.0.1:3911/mcp"},
+      "remote": {"type": "http", "url": "https://localhost:3912/mcp?team=screens", "headers": {"Authorization": "Bearer ${MCP_SCREENS_TOKEN:-screens}"}},
+      "offline": {"type": "http", "url": "http://127.0.0.1:3913/mcp"}
+    }
+  },
+  "files": {
+    "README.md": "# Echoes\n"
+  },
+  "prompt": "Echo something through both servers.",
+  "replies": [
+    [{"call": "mcp_search", "arguments": {"query": "echo"}}],
+    [{"call": "mcp_call", "arguments": {"server": "everything", "tool": "echo", "arguments": {"message": "over HTTP"}}}],
+    [{"call": "mcp_call", "arguments": {"server": "remote", "tool": "echo", "arguments": {"text": "over HTTPS"}}}],
+    [{"text": "Both answered."}]
+  ],
+  "steps": [
+    {"until": "Both answered."},
+    {"shot": "turn"},
+    {"type": "/mcp\r"},
+    {"until": "MCP Servers"},
+    {"sleep": 0.5},
+    {"shot": "servers"}
+  ]
+}
